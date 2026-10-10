@@ -113,6 +113,21 @@ pub mod qobject {
         /// returns whether the view moved.
         #[qinvokable]
         fn edge_scroll(self: Pin<&mut GenomeController>, x: f64, y: f64) -> bool;
+        /// Rewrite a GenBank location with a direction (`forward`, `reverse`,
+        /// `none`, or `mixed` to keep it) and 5'/3' completeness. Returns an
+        /// empty string if the location can't be read.
+        #[qinvokable]
+        fn adjust_location(
+            self: &GenomeController,
+            text: &QString,
+            strand: &QString,
+            partial5: bool,
+            partial3: bool,
+        ) -> QString;
+        /// What a GenBank location says, as JSON: `valid`, `strand`,
+        /// `partial5`, `partial3`, `length`, `parts`.
+        #[qinvokable]
+        fn location_info(self: &GenomeController, text: &QString) -> QString;
         /// Feature description under the pointer, or an empty string.
         #[qinvokable]
         fn hover(self: &GenomeController, x: f64, y: f64) -> QString;
@@ -369,6 +384,18 @@ impl qobject::GenomeController {
             .rust_mut()
             .view
             .press(x as f32, y as f32, modifiers & SHIFT != 0, len);
+        // A clicked feature's span takes the feature's direction.
+        if let Some(id) = self.rust().view.selected {
+            let reverse = self
+                .with_doc(|s, d| {
+                    s.doc(d)
+                        .feature(id)
+                        .map(|f| f.location.strand() == Strand::Reverse)
+                })
+                .flatten()
+                .unwrap_or(false);
+            self.as_mut().rust_mut().view.selection_reverse = reverse;
+        }
         self.refresh();
     }
 
@@ -842,9 +869,15 @@ impl qobject::GenomeController {
             let c = v.cursor.unwrap_or(0);
             (c, c + 1)
         });
+        // A selection made right to left proposes the reverse strand.
+        let strand = if v.selection_reverse {
+            Strand::Reverse
+        } else {
+            Strand::Forward
+        };
         let f = Feature {
             kind: "misc_feature".into(),
-            location: Location::simple(a, b.max(a + 1), Strand::Forward),
+            location: Location::simple(a, b.max(a + 1), strand),
             qualifiers: vec![Qualifier::new("label", "")],
         };
         QString::from(&feature_to_json(-1, &f).to_string())
@@ -955,6 +988,31 @@ impl qobject::GenomeController {
         self.as_mut().rust_mut().view.pan_press(x as f32);
     }
 
+    pub fn adjust_location(
+        &self,
+        text: &QString,
+        strand: &QString,
+        partial5: bool,
+        partial3: bool,
+    ) -> QString {
+        let Some(mut loc) = parse_location(text.to_string().trim()) else {
+            return QString::default();
+        };
+        if let Some(st) = strand_from_name(&strand.to_string()) {
+            loc.set_strand(st);
+        }
+        loc.set_partial(partial5, partial3);
+        QString::from(&format_location(&loc))
+    }
+
+    pub fn location_info(&self, text: &QString) -> QString {
+        let info = match parse_location(text.to_string().trim()) {
+            Some(loc) if !loc.segments.is_empty() => location_summary(&loc),
+            _ => json!({ "valid": false }),
+        };
+        QString::from(&info.to_string())
+    }
+
     pub fn selected_feature(&self) -> i32 {
         self.rust()
             .view
@@ -1016,6 +1074,38 @@ fn complement(b: u8) -> u8 {
 /// Editor JSON: `{"id", "kind", "location": "GenBank syntax, 1-based",
 /// "qualifiers": [{"key", "value", "flag"}]}`. Internal `gff:` qualifiers
 /// are passed through untouched so a round trip keeps them.
+fn strand_name(loc: &Location) -> &'static str {
+    let first = loc.segments.first().map(|s| s.strand);
+    if loc.segments.iter().any(|s| Some(s.strand) != first) {
+        return "mixed";
+    }
+    match first {
+        Some(Strand::Forward) => "forward",
+        Some(Strand::Reverse) => "reverse",
+        _ => "none",
+    }
+}
+
+fn strand_from_name(name: &str) -> Option<Strand> {
+    match name {
+        "forward" => Some(Strand::Forward),
+        "reverse" => Some(Strand::Reverse),
+        "none" => Some(Strand::Unstranded),
+        _ => None,
+    }
+}
+
+fn location_summary(loc: &Location) -> Value {
+    json!({
+        "valid": true,
+        "strand": strand_name(loc),
+        "partial5": loc.partial_5(),
+        "partial3": loc.partial_3(),
+        "length": loc.len(),
+        "parts": loc.segments.len(),
+    })
+}
+
 fn feature_to_json(id: i32, f: &Feature) -> Value {
     let qualifiers: Vec<Value> = f
         .qualifiers
@@ -1026,7 +1116,7 @@ fn feature_to_json(id: i32, f: &Feature) -> Value {
         "id": id,
         "kind": f.kind,
         "location": format_location(&f.location),
-        "length": f.location.len(),
+        "info": location_summary(&f.location),
         "qualifiers": qualifiers,
     })
 }
@@ -1083,5 +1173,16 @@ mod tests {
         let j = feature_to_json(3, &f).to_string();
         assert_eq!(feature_from_json(&j).unwrap(), f);
         assert!(feature_from_json(r#"{"kind":"gene","location":"oops"}"#).is_err());
+    }
+
+    #[test]
+    fn direction_and_completeness_rewrite_locations() {
+        let mut loc = parse_location("join(10..20,30..40)").unwrap();
+        loc.set_strand(Strand::Reverse);
+        loc.set_partial(true, false);
+        assert_eq!(format_location(&loc), "complement(join(10..20,30..>40))");
+        loc.set_strand(Strand::Forward);
+        assert_eq!(format_location(&loc), "join(<10..20,30..40)");
+        assert_eq!(location_summary(&loc)["partial5"], json!(true));
     }
 }

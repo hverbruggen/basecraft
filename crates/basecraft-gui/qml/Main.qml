@@ -275,6 +275,11 @@ ApplicationWindow {
                 const y = r.length > 2 ? Number(r[2]) : 45
                 controller.press(Number(r[0]), y, 0); controller.drag(Number(r[1]), y); controller.release()
             }
+            if (arg("--add")) {
+                // --add LOCATION: add a misc_feature there, e.g. "<100..>400".
+                const err = controller.save_feature(-1, JSON.stringify({ kind: "misc_feature", location: arg("--add"), qualifiers: [{ key: "label", value: "partial test" }] }))
+                if (err.length > 0) console.log("add failed:", err)
+            }
             if (arg("--hover")) {
                 const h = arg("--hover").split(",")
                 console.log("hover:", controller.hover(Number(h[0]), Number(h[1])))

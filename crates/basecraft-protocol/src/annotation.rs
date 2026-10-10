@@ -89,6 +89,61 @@ impl Location {
         }
     }
 
+    /// Set every segment to `strand`, keeping biological order: changing
+    /// between forward and reverse reverses the segment list, so the 5'
+    /// segment stays first.
+    pub fn set_strand(&mut self, strand: Strand) {
+        let was_reverse = self.strand() == Strand::Reverse;
+        let now_reverse = strand == Strand::Reverse;
+        let (p5, p3) = (self.partial_5(), self.partial_3());
+        for s in &mut self.segments {
+            s.partial_start = false;
+            s.partial_end = false;
+        }
+        if was_reverse != now_reverse {
+            self.segments.reverse();
+        }
+        for s in &mut self.segments {
+            s.strand = strand;
+        }
+        self.set_partial(p5, p3);
+    }
+
+    /// The 5' end is incomplete: GenBank `<` on a forward feature, `>` on a
+    /// reverse one.
+    pub fn partial_5(&self) -> bool {
+        match (self.segments.first(), self.strand()) {
+            (Some(s), Strand::Reverse) => s.partial_end,
+            (Some(s), _) => s.partial_start,
+            (None, _) => false,
+        }
+    }
+
+    /// The 3' end is incomplete.
+    pub fn partial_3(&self) -> bool {
+        match (self.segments.last(), self.strand()) {
+            (Some(s), Strand::Reverse) => s.partial_start,
+            (Some(s), _) => s.partial_end,
+            (None, _) => false,
+        }
+    }
+
+    /// Mark the 5' and 3' ends complete or incomplete.
+    pub fn set_partial(&mut self, five: bool, three: bool) {
+        let reverse = self.strand() == Strand::Reverse;
+        let n = self.segments.len();
+        if n == 0 {
+            return;
+        }
+        if reverse {
+            self.segments[0].partial_end = five;
+            self.segments[n - 1].partial_start = three;
+        } else {
+            self.segments[0].partial_start = five;
+            self.segments[n - 1].partial_end = three;
+        }
+    }
+
     /// Total number of bases covered.
     pub fn len(&self) -> u64 {
         self.segments.iter().map(Segment::len).sum()
@@ -137,5 +192,45 @@ impl Feature {
         ["Name", "gene", "locus_tag", "product", "label", "ID"]
             .iter()
             .find_map(|k| self.qualifier(k))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn two(strand: Strand) -> Location {
+        let mut segments = vec![Segment::new(10, 20, strand), Segment::new(30, 40, strand)];
+        if strand == Strand::Reverse {
+            segments.reverse();
+        }
+        Location {
+            segments,
+            unordered: false,
+        }
+    }
+
+    #[test]
+    fn partial_ends_follow_the_strand() {
+        let mut f = two(Strand::Forward);
+        f.set_partial(true, false);
+        assert!(f.segments[0].partial_start && f.partial_5() && !f.partial_3());
+        let mut r = two(Strand::Reverse);
+        r.set_partial(true, false);
+        // The 5' end of a reverse feature is its highest coordinate.
+        assert_eq!((r.segments[0].start, r.segments[0].partial_end), (30, true));
+    }
+
+    #[test]
+    fn changing_strand_keeps_order_and_partial_ends() {
+        let mut l = two(Strand::Forward);
+        l.set_partial(true, false);
+        l.set_strand(Strand::Reverse);
+        assert_eq!(l.segments[0].start, 30);
+        assert!(l.partial_5() && !l.partial_3());
+        assert!(l.segments[0].partial_end);
+        l.set_strand(Strand::Unstranded);
+        assert_eq!(l.segments[0].start, 10);
+        assert!(l.partial_5());
     }
 }

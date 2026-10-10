@@ -140,6 +140,9 @@ pub struct GenomeView {
     /// Insertion point, between residues: `0..=len`.
     pub cursor: Option<u64>,
     pub selection: Option<(u64, u64)>,
+    /// The selection was made right to left (or is a reverse-strand
+    /// feature's span); new features over it default to the reverse strand.
+    pub selection_reverse: bool,
     pub selected: Option<FeatureId>,
     /// Features that didn't fit in the lanes on the last build.
     pub hidden: usize,
@@ -159,6 +162,7 @@ impl GenomeView {
             height: height.max(1.0),
             cursor: None,
             selection: None,
+            selection_reverse: false,
             selected: None,
             hidden: 0,
             drag: Drag::None,
@@ -433,6 +437,7 @@ impl GenomeView {
         };
         self.cursor = Some(p);
         self.selection = (anchor != p).then(|| (anchor.min(p), anchor.max(p)));
+        self.selection_reverse = p < anchor;
         self.drag = Drag::Select { anchor };
     }
 
@@ -454,6 +459,7 @@ impl GenomeView {
                 let p = self.position_at(x, y, len);
                 self.cursor = Some(p);
                 self.selection = (anchor != p).then(|| (anchor.min(p), anchor.max(p)));
+                self.selection_reverse = p < anchor;
             }
             Drag::Feature { x: px, y: py } => {
                 if (x - px).abs() > 4.0 {
@@ -481,6 +487,7 @@ impl GenomeView {
                 _ => c,
             };
             self.selection = (anchor != next).then(|| (anchor.min(next), anchor.max(next)));
+            self.selection_reverse = next < anchor;
         } else {
             self.selection = None;
         }
@@ -848,7 +855,7 @@ impl GenomeView {
                 let y = top + lane as f32 * (LANE_H + LANE_GAP);
                 let text_y = y + (LANE_H - LABEL_SIZE) / 2.0;
                 frame.text(
-                    item.x0.max(0.0) + 4.0,
+                    item.x0.max(0.0) + 7.0,
                     text_y,
                     LABEL_SIZE,
                     &item.label,
@@ -926,9 +933,28 @@ impl GenomeView {
                 }
             }
         }
+        // Incomplete ends look torn: a zigzag cut in the background colour.
+        let loc = &f.location;
+        let reverse = loc.strand() == Strand::Reverse;
+        let low_partial = if reverse {
+            loc.partial_3()
+        } else {
+            loc.partial_5()
+        };
+        let high_partial = if reverse {
+            loc.partial_5()
+        } else {
+            loc.partial_3()
+        };
+        if low_partial && x0 > -10.0 {
+            torn_edge(frame, x0, y, true, theme.background);
+        }
+        if high_partial && x1 < self.width + 10.0 {
+            torn_edge(frame, x1, y, false, theme.background);
+        }
         // Strand arrowhead at the 3' end, when the feature is wide enough
-        // for it not to swamp the feature itself.
-        if x1 - x0 < 10.0 {
+        // for it not to swamp the feature itself, and the end is complete.
+        if x1 - x0 < 10.0 || loc.partial_3() {
             return;
         }
         let h = LANE_H;
@@ -1155,8 +1181,14 @@ impl GenomeView {
         } else {
             String::new()
         };
+        let partial = match (f.location.partial_5(), f.location.partial_3()) {
+            (true, true) => " · both ends incomplete",
+            (true, false) => " · 5′ incomplete",
+            (false, true) => " · 3′ incomplete",
+            (false, false) => "",
+        };
         Some(format!(
-            "{name}{} · {}..{}{strand} · {}{exons}",
+            "{name}{} · {}..{}{strand} · {}{exons}{partial}",
             f.kind,
             format_thousands(s + 1),
             format_thousands(e),
@@ -1251,6 +1283,29 @@ fn window_gc(doc: &SequenceDoc, start: u64, end: u64, bins: usize) -> Vec<f32> {
 fn mean_gc(doc: &SequenceDoc) -> f32 {
     let v = doc.summary().gc(0, doc.len().max(1), 1);
     v.first().copied().filter(|x| !x.is_nan()).unwrap_or(0.5)
+}
+
+/// A zigzag notch at `x`, cut into a feature box spanning `y..y + LANE_H`;
+/// `left` puts the teeth on the box's left edge.
+fn torn_edge(frame: &mut Frame, x: f32, y: f32, left: bool, background: Rgba) {
+    let teeth = 2;
+    let h = LANE_H / teeth as f32;
+    let depth = 6.0;
+    let d = if left { depth } else { -depth };
+    for i in 0..teeth {
+        let top = y + i as f32 * h;
+        // A triangle: point inside the box, base on the edge.
+        frame.quad(
+            [
+                [x, top],
+                [x + d, top + h / 2.0],
+                [x, top + h],
+                [x + d, top + h / 2.0],
+            ],
+            background,
+            [0.0; 4],
+        );
+    }
 }
 
 fn outline(frame: &mut Frame, x: f32, y: f32, w: f32, h: f32, color: Rgba) {

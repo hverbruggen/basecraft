@@ -217,6 +217,17 @@ fn set_phase_candidate(f: &mut Feature, start: u64, phase: &str) {
 /// Sort segments into biological order, split segments that run past the
 /// origin of a circular sequence, and settle the phase qualifier.
 fn finish_location(f: &mut Feature, circular_len: Option<u64>) {
+    // GFF3 marks incomplete ends with start_range=.,N and end_range=N,.
+    let partial_low = f.qualifiers.iter().any(|q| q.key == "start_range");
+    let partial_high = f.qualifiers.iter().any(|q| q.key == "end_range");
+    f.qualifiers
+        .retain(|q| q.key != "start_range" && q.key != "end_range");
+    if let Some(s) = f.location.segments.iter_mut().min_by_key(|s| s.start) {
+        s.partial_start |= partial_low;
+    }
+    if let Some(s) = f.location.segments.iter_mut().max_by_key(|s| s.end) {
+        s.partial_end |= partial_high;
+    }
     let first_start = f.location.segments[0].start;
     let reverse = f.location.strand() == Strand::Reverse;
     f.location.segments.sort_by_key(|s| s.start);
@@ -384,6 +395,20 @@ fn write_feature(
             None => attrs.push((q.key.clone(), vec![value])),
         }
     }
+    let segs = &f.location.segments;
+    if let Some(low) = segs.iter().min_by_key(|s| s.start)
+        && low.partial_start
+    {
+        attrs.push((
+            "start_range".into(),
+            vec![".".into(), (low.start + 1).to_string()],
+        ));
+    }
+    if let Some(high) = segs.iter().max_by_key(|s| s.end)
+        && high.partial_end
+    {
+        attrs.push(("end_range".into(), vec![high.end.to_string(), ".".into()]));
+    }
     if segments.len() > 1 && !attrs.iter().any(|(k, _)| k == "ID") {
         *auto_id += 1;
         attrs.insert(
@@ -485,6 +510,20 @@ chr1\tsrc\tCDS\t301\t380\t.\t-\t0\tID=g1.cds;Parent=g1.t1
         write(&mut out, &[(&gff.sequences[0], 1000)]).unwrap();
         let text = String::from_utf8(out).unwrap();
         assert_eq!(text, SAMPLE);
+    }
+
+    #[test]
+    fn incomplete_ends_roundtrip() {
+        let src = "##gff-version 3
+##sequence-region c 1 1000
+c\t.\tCDS\t101\t400\t.\t-\t0\tID=x;start_range=.,101;end_range=400,.
+";
+        let gff = parse(src.as_bytes()).unwrap();
+        let loc = &gff.sequences[0].features[0].location;
+        assert!(loc.partial_5() && loc.partial_3());
+        let mut out = Vec::new();
+        write(&mut out, &[(&gff.sequences[0], 1000)]).unwrap();
+        assert_eq!(String::from_utf8(out).unwrap(), src);
     }
 
     #[test]

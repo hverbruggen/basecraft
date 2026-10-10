@@ -25,6 +25,7 @@ Dialog {
         kind.currentIndex = i
         if (i < 0) kind.editText = f.kind
         location.text = f.location
+        refreshFromLocation()
         quals.clear()
         for (const q of f.qualifiers) {
             if (q.key.startsWith("gff:")) hidden.push(q); else quals.append({ key: q.key, value: q.value, flag: q.flag })
@@ -33,6 +34,28 @@ Dialog {
         return true
     }
     property var hidden: []
+    readonly property var strands: ["forward", "reverse", "none"]
+
+    // The location text is the source of truth; the direction and
+    // completeness controls read it and rewrite it.
+    function refreshFromLocation() {
+        const info = JSON.parse(controller.location_info(location.text))
+        if (!info.valid) {
+            locationInfo.text = "Can't read this location yet"
+            return
+        }
+        direction.currentIndex = strands.indexOf(info.strand)
+        partial5.checked = info.partial5
+        partial3.checked = info.partial3
+        locationInfo.text = info.length + " bp" + (info.parts > 1 ? " in " + info.parts + " parts" : "")
+            + (info.strand === "mixed" ? " · mixed directions" : "")
+    }
+    function applyControls() {
+        const strand = direction.currentIndex >= 0 ? strands[direction.currentIndex] : "mixed"
+        const text = controller.adjust_location(location.text, strand, partial5.checked, partial3.checked)
+        if (text.length > 0) location.text = text
+        refreshFromLocation()
+    }
 
     function openFeature(id) { hidden = []; if (load(controller.feature_json(id))) open() }
     function openSelected() {
@@ -75,6 +98,36 @@ Dialog {
                 font.family: "monospace"
                 placeholderText: "e.g. 120..560, complement(join(10..80,200..300))"
                 onAccepted: dialog.save()
+                onTextEdited: dialog.refreshFromLocation()
+            }
+            Label { text: "Direction" }
+            RowLayout {
+                spacing: 12
+                ComboBox {
+                    id: direction
+                    model: ["Forward  →", "Reverse  ←", "None"]
+                    displayText: currentIndex < 0 ? "Mixed" : currentText
+                    onActivated: dialog.applyControls()
+                }
+                Label { id: locationInfo; opacity: 0.7 }
+            }
+            Label { text: "Incomplete" }
+            RowLayout {
+                spacing: 12
+                CheckBox {
+                    id: partial5
+                    text: "5′ end"
+                    ToolTip.text: "The feature continues beyond its 5′ end (GenBank < or >)"
+                    ToolTip.visible: hovered
+                    onToggled: dialog.applyControls()
+                }
+                CheckBox {
+                    id: partial3
+                    text: "3′ end"
+                    ToolTip.text: "The feature continues beyond its 3′ end"
+                    ToolTip.visible: hovered
+                    onToggled: dialog.applyControls()
+                }
             }
         }
         Label { text: "Qualifiers"; font.bold: true }
