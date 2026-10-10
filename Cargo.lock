@@ -78,6 +78,12 @@ dependencies = [
 [[package]]
 name = "basecraft-docs"
 version = "0.0.0"
+dependencies = [
+ "basecraft-io",
+ "basecraft-protocol",
+ "basecraft-query",
+ "serde",
+]
 
 [[package]]
 name = "basecraft-gui"

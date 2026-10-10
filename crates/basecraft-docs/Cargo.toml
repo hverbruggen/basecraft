@@ -8,6 +8,10 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
+basecraft-io.workspace = true
+basecraft-protocol.workspace = true
+basecraft-query.workspace = true
+serde.workspace = true
 
 [lints]
 workspace = true
