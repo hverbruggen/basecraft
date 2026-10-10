@@ -1,3 +1,4 @@
+import QtCore
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Dialogs
@@ -37,6 +38,16 @@ ApplicationWindow {
     property bool sidebarOpen: true
     property bool showGc: true
     property int ribbonTab: 0
+    property string defaultLayout: "wrapped"
+    readonly property var ribbonTabs: ["File", "View", "Annotations", "Settings", "Help"]
+
+    // Preferences, kept between sessions (~/.config/Basecraft).
+    Settings {
+        category: "ui"
+        property alias showGc: window.showGc
+        property alias sidebarOpen: window.sidebarOpen
+        property alias defaultLayout: window.defaultLayout
+    }
 
     function fileName(path) { return path.split("/").pop() }
     function localPath(url) { return decodeURIComponent(url.toString().replace(/^file:\/\//, "")) }
@@ -100,6 +111,17 @@ ApplicationWindow {
             opacity: 0.55
         }
     }
+    // The same last group on every ribbon tab.
+    component ShortcutsGroup: RibbonGroup {
+        title: "Keys"
+        RibbonButton {
+            text: "Shortcuts…"
+            enabled: true
+            ToolTip.text: "Keyboard shortcuts for the commands on this tab"
+            ToolTip.visible: hovered
+            onClicked: shortcuts.show(window.ribbonTabs[window.ribbonTab])
+        }
+    }
     component RibbonTabButton: ToolButton {
         id: tabButton
         required property int tabIndex
@@ -137,6 +159,8 @@ ApplicationWindow {
                 RibbonTabButton { tabIndex: 0; text: "File" }
                 RibbonTabButton { tabIndex: 1; text: "View" }
                 RibbonTabButton { tabIndex: 2; text: "Annotations" }
+                RibbonTabButton { tabIndex: 3; text: "Settings" }
+                RibbonTabButton { tabIndex: 4; text: "Help" }
                 Item { Layout.preferredWidth: 16 }
                 RibbonButton { text: "Undo"; ToolTip.text: "Undo (Ctrl+Z)"; ToolTip.visible: hovered; onClicked: window.current.undo() }
                 RibbonButton { text: "Redo"; ToolTip.text: "Redo (Ctrl+Shift+Z)"; ToolTip.visible: hovered; onClicked: window.current.redo() }
@@ -174,6 +198,7 @@ ApplicationWindow {
                         RibbonButton { text: "Open project…"; enabled: true; ToolTip.text: "Choose a folder, or create a new one"; ToolTip.visible: hovered; onClicked: projectDialog.open() }
                     }
                     Item { Layout.fillWidth: true }
+                    ShortcutsGroup {}
                 }
 
                 RowLayout {
@@ -208,6 +233,7 @@ ApplicationWindow {
                         }
                     }
                     Item { Layout.fillWidth: true }
+                    ShortcutsGroup {}
                 }
 
                 RowLayout {
@@ -249,8 +275,76 @@ ApplicationWindow {
                         RibbonButton { text: "Extract"; ToolTip.text: "Extract the selection as a new sequence (Ctrl+E)"; ToolTip.visible: hovered; onClicked: window.current.extract_selection() }
                     }
                     Item { Layout.fillWidth: true }
+                    ShortcutsGroup {}
+                }
+
+                RowLayout {
+                    spacing: 6
+                    RibbonGroup {
+                        title: "New files"
+                        Label { text: "Open in"; opacity: 0.8 }
+                        ComboBox {
+                            model: ["wrapped", "linear", "circular"]
+                            currentIndex: Math.max(0, model.indexOf(window.defaultLayout))
+                            focusPolicy: Qt.NoFocus
+                            implicitHeight: 24
+                            onActivated: window.defaultLayout = currentText
+                        }
+                        Label { text: "layout, fitted"; opacity: 0.8 }
+                    }
+                    ToolSeparator { Layout.fillHeight: true }
+                    RibbonGroup {
+                        title: "Window"
+                        CheckBox {
+                            text: "Files sidebar open"
+                            checked: window.sidebarOpen
+                            focusPolicy: Qt.NoFocus
+                            onToggled: window.sidebarOpen = checked
+                        }
+                    }
+                    ToolSeparator { Layout.fillHeight: true }
+                    RibbonGroup {
+                        title: "Appearance"
+                        Label { text: "Colours and font follow the Omarchy theme"; opacity: 0.7 }
+                    }
+                    Item { Layout.fillWidth: true }
+                    ShortcutsGroup {}
+                }
+
+                RowLayout {
+                    spacing: 6
+                    RibbonGroup {
+                        title: "Learn"
+                        RibbonButton { text: "Keyboard shortcuts…"; enabled: true; onClicked: shortcuts.show("") }
+                        RibbonButton { text: "About Basecraft…"; enabled: true; onClicked: about.open() }
+                    }
+                    ToolSeparator { Layout.fillHeight: true }
+                    RibbonGroup {
+                        title: "Online"
+                        RibbonButton { text: "Project page"; enabled: true; onClicked: Qt.openUrlExternally("https://github.com/hverbruggen/basecraft") }
+                        RibbonButton { text: "Report a problem"; enabled: true; onClicked: Qt.openUrlExternally("https://github.com/hverbruggen/basecraft/issues/new") }
+                    }
+                    Item { Layout.fillWidth: true }
+                    ShortcutsGroup {}
                 }
             }
+        }
+    }
+
+    ShortcutsDialog { id: shortcuts }
+
+    Dialog {
+        id: about
+        title: "About Basecraft"
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        standardButtons: Dialog.Close
+        ColumnLayout {
+            spacing: 6
+            Label { text: "Basecraft " + shell.version(); font.bold: true }
+            Label { text: "A workbench for sequences and their annotations." }
+            Label { text: "Every edit is logged in .basecraft/ next to your files, and can be replayed."; opacity: 0.7 }
+            Label { text: "GPL-3.0-or-later; plugin protocol and Python SDK Apache-2.0."; opacity: 0.7 }
         }
     }
 
@@ -411,6 +505,7 @@ ApplicationWindow {
                     onItemRemoved: Qt.callLater(window.refreshCurrent)
                     DocumentView {
                         showGc: window.showGc
+                        defaultLayout: window.defaultLayout
                         onDirtyChanged: openFiles.setProperty(index, "dirty", dirty)
                         onContextMenu: (info) => { menu.info = info; menu.popup() }
                         onEditFeature: (id) => editor.openFeature(id)
@@ -576,6 +671,8 @@ ApplicationWindow {
                 menu.itemAt(5).triggered()
                 menu.close()
             }
+            if (arg("--ribbon")) window.ribbonTab = Number(arg("--ribbon"))
+            if (arg("--shortcuts")) shortcuts.show(window.ribbonTabs[window.ribbonTab])
             if (arg("--edit")) {
                 if (arg("--edit") === "new") editor.openNew(); else editor.openFeature(Number(arg("--edit")))
             }

@@ -13,6 +13,8 @@ Item {
     property alias view: view
     readonly property bool dirty: ctl.dirty
     property bool showGc: true
+    // Layout a newly opened file starts in: "wrapped", "linear" or "circular".
+    property string defaultLayout: "wrapped"
     onShowGcChanged: ctl.set_show_gc(showGc)
 
     signal contextMenu(var info)
@@ -29,6 +31,10 @@ Item {
         ctl.resize(view.width, view.height)
         ctl.set_show_gc(doc.showGc)
         ctl.open_file(doc.path)
+        if (doc.defaultLayout !== "wrapped") {
+            ctl.switch_view(doc.defaultLayout)
+            ctl.fit()
+        }
     })
 
     InstanceView {

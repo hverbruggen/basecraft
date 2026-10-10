@@ -18,6 +18,15 @@ fn main() {
     // A stable Wayland app-id (X11 class): desktop entries and window rules
     // match on it.
     QGuiApplication::set_desktop_file_name(&QString::from("org.basecraft.Basecraft"));
+    // Settings are stored under these names (~/.config/Basecraft/).
+    if let Some(mut app) = app.as_mut() {
+        app.as_mut()
+            .set_organization_name(&QString::from("Basecraft"));
+        app.as_mut()
+            .set_organization_domain(&QString::from("basecraft.org"));
+        app.as_mut()
+            .set_application_name(&QString::from("Basecraft"));
+    }
     let mut engine = QQmlApplicationEngine::new();
     if let Some(engine) = engine.as_mut() {
         engine.load(&QUrl::from("qrc:/qt/qml/Basecraft/qml/Main.qml"));

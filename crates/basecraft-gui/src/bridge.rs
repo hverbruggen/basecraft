@@ -160,6 +160,9 @@ pub mod qobject {
         /// Select the next (or previous) annotation; false if there's none.
         #[qinvokable]
         fn step_feature(self: Pin<&mut GenomeController>, forward: bool) -> bool;
+        /// The Basecraft version.
+        #[qinvokable]
+        fn version(self: &GenomeController) -> QString;
         /// Id of the selected feature, or -1.
         #[qinvokable]
         fn selected_feature(self: &GenomeController) -> i32;
@@ -1308,6 +1311,10 @@ impl qobject::GenomeController {
         }
         self.refresh();
         found
+    }
+
+    pub fn version(&self) -> QString {
+        QString::from(env!("CARGO_PKG_VERSION"))
     }
 
     pub fn selected_feature(&self) -> i32 {

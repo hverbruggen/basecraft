@@ -73,6 +73,7 @@ fn main() {
         "qml/Main.qml",
         "qml/FeatureEditor.qml",
         "qml/DocumentView.qml",
+        "qml/ShortcutsDialog.qml",
     ]))
     .qt_module("Quick")
     .files(["src/bridge.rs"])
