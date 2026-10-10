@@ -25,6 +25,8 @@ pub mod qobject {
         #[qproperty(QString, accent)]
         #[qproperty(bool, circular)]
         #[qproperty(QString, mode)]
+        #[qproperty(QString, project_dir)]
+        #[qproperty(QString, file_path)]
         #[qproperty(bool, dirty)]
         #[qproperty(QString, zoom_text)]
         #[qproperty(f64, scroll_pos)]
@@ -108,6 +110,13 @@ pub mod qobject {
         /// The selected residues, for the clipboard.
         #[qinvokable]
         fn selection_text(self: &GenomeController) -> QString;
+        /// Write the selection, with its annotations, to a new GenBank file
+        /// next to the open one. Returns the new file's path, or empty.
+        #[qinvokable]
+        fn extract_selection(self: Pin<&mut GenomeController>) -> QString;
+        /// The same for the span of an annotation.
+        #[qinvokable]
+        fn extract_feature(self: Pin<&mut GenomeController>, id: i32) -> QString;
         /// An annotation's own sequence: its parts joined in biological
         /// order, reverse-complemented on the reverse strand.
         #[qinvokable]
@@ -197,6 +206,8 @@ pub struct ControllerRust {
     accent: QString,
     circular: bool,
     mode: QString,
+    project_dir: QString,
+    file_path: QString,
     dirty: bool,
     zoom_text: QString,
     scroll_pos: f64,
@@ -222,6 +233,8 @@ impl Default for ControllerRust {
             accent: QString::default(),
             circular: false,
             mode: QString::from("wrapped"),
+            project_dir: QString::default(),
+            file_path: QString::default(),
             dirty: false,
             zoom_text: QString::default(),
             scroll_pos: 0.0,
@@ -326,7 +339,8 @@ impl qobject::GenomeController {
 
     pub fn open_file(mut self: Pin<&mut Self>, path: &QString) -> bool {
         let path = PathBuf::from(path.to_string());
-        let mut session = Session::new(project_root(&path));
+        let root = project_root(&path);
+        let mut session = Session::new(&root);
         match session.open(&path) {
             Ok(doc) => {
                 let (name, len, circular) = {
@@ -349,6 +363,12 @@ impl qobject::GenomeController {
                 self.as_mut()
                     .set_title(QString::from(&format!("{file} — {name} — Basecraft")));
                 self.as_mut().sync_mode();
+                let abs = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+                let root_abs = std::fs::canonicalize(&root).unwrap_or(root);
+                self.as_mut()
+                    .set_file_path(QString::from(&abs.to_string_lossy().into_owned()));
+                self.as_mut()
+                    .set_project_dir(QString::from(&root_abs.to_string_lossy().into_owned()));
                 self.as_mut().set_dirty(false);
                 self.as_mut().notify("");
                 self.refresh();
@@ -1012,6 +1032,63 @@ impl qobject::GenomeController {
             .with_doc(|s, d| String::from_utf8_lossy(&s.doc(d).read(a, b)).into_owned())
             .unwrap_or_default();
         QString::from(&text)
+    }
+
+    /// Extract `start..end` to a new file named after the open one and the
+    /// range, next to it; returns the path.
+    fn extract_range(mut self: Pin<&mut Self>, start: u64, end: u64) -> QString {
+        let source = PathBuf::from(self.rust().file_path.to_string());
+        let dir = source.parent().map(Path::to_path_buf).unwrap_or_default();
+        let stem = source.file_stem().map_or_else(
+            || "extract".to_string(),
+            |s| s.to_string_lossy().into_owned(),
+        );
+        let base = format!("{stem}_{}-{end}", start + 1);
+        let mut target = dir.join(format!("{base}.gb"));
+        let mut n = 2;
+        while target.exists() {
+            target = dir.join(format!("{base}_{n}.gb"));
+            n += 1;
+        }
+        let result = {
+            let mut r = self.as_mut().rust_mut();
+            let r = &mut *r;
+            let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
+                return QString::default();
+            };
+            session.extract(doc, start, end, &target)
+        };
+        match result {
+            Ok(()) => {
+                let name = target
+                    .file_name()
+                    .map_or_else(String::new, |f| f.to_string_lossy().into_owned());
+                self.as_mut().notify(&format!(
+                    "Extracted {} bp to {name}",
+                    basecraft_viewmodel::genome::format_thousands(end - start)
+                ));
+                QString::from(&target.to_string_lossy().into_owned())
+            }
+            Err(e) => {
+                self.as_mut().notify(&format!("Extract failed: {e}"));
+                QString::default()
+            }
+        }
+    }
+
+    pub fn extract_selection(mut self: Pin<&mut Self>) -> QString {
+        let Some((a, b)) = self.rust().view.selection else {
+            self.as_mut().notify("Select bases to extract");
+            return QString::default();
+        };
+        self.extract_range(a, b)
+    }
+
+    pub fn extract_feature(self: Pin<&mut Self>, id: i32) -> QString {
+        match self.feature_bounds(id) {
+            Some((a, b)) => self.extract_range(a, b),
+            None => QString::default(),
+        }
     }
 
     pub fn feature_sequence(&self, id: i32) -> QString {

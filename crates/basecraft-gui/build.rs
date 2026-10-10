@@ -75,7 +75,9 @@ fn main() {
     .qt_module("Quick")
     .files(["src/bridge.rs"])
     .cpp_file("cpp/instanceview.h")
-    .cpp_file("cpp/instanceview.cpp");
+    .cpp_file("cpp/instanceview.cpp")
+    .cpp_file("cpp/filetreemodel.h")
+    .cpp_file("cpp/filetreemodel.cpp");
     // SAFETY: not a memory-safety concern; cxx-qt marks this unsafe because
     // its cc::Build may change between minor versions.
     let builder = unsafe {

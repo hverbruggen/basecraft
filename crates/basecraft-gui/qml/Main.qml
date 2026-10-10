@@ -43,6 +43,8 @@ ApplicationWindow {
             anchors.fill: parent
             anchors.leftMargin: 6
             spacing: 2
+            Tool { text: "Files"; checkable: true; checked: window.sidebarOpen; ToolTip.text: "Show or hide the project's files (Ctrl+B)"; ToolTip.visible: hovered; onClicked: window.sidebarOpen = !window.sidebarOpen }
+            ToolSeparator {}
             Tool { text: "Wrapped"; checkable: true; checked: controller.mode === "wrapped"; onClicked: controller.switch_view("wrapped") }
             Tool { text: "Linear"; checkable: true; checked: controller.mode === "linear"; onClicked: controller.switch_view("linear") }
             Tool { text: "Circular"; checkable: true; checked: controller.mode === "circular"; onClicked: controller.switch_view("circular") }
@@ -87,154 +89,217 @@ ApplicationWindow {
         }
     }
 
-    InstanceView {
-        id: view
+    property bool sidebarOpen: true
+
+    // Opening another file asks about unsaved changes first.
+    function openPath(path) {
+        if (path === controller.file_path) return
+        if (controller.dirty) { confirmSwitch.pending = path; confirmSwitch.open() }
+        else controller.open_file(path)
+    }
+
+    SplitView {
         anchors.fill: parent
         anchors.topMargin: 6
-        clearColor: controller.background
-        instances: controller.frame
-        focus: true
-        onWidthChanged: controller.resize(width, height)
-        onHeightChanged: controller.resize(width, height)
+        orientation: Qt.Horizontal
 
-        MouseArea {
-            id: mouse
-            anchors.fill: parent
-            acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
-            hoverEnabled: true
-            property string hoverText: ""
-            onPressed: (mouse) => {
-                view.forceActiveFocus()
-                hoverText = ""
-                if (mouse.button === Qt.RightButton) {
-                    menu.info = JSON.parse(controller.context_press(mouse.x, mouse.y))
-                    menu.popup()
-                } else if (mouse.button === Qt.MiddleButton) {
-                    controller.pan_press(mouse.x, mouse.y)
-                } else {
-                    controller.press(mouse.x, mouse.y, mouse.modifiers)
-                }
-            }
-            property real lastX: 0
-            property real lastY: 0
-            onPositionChanged: (mouse) => {
-                lastX = mouse.x; lastY = mouse.y
-                if (mouse.buttons & (Qt.LeftButton | Qt.MiddleButton)) {
-                    controller.drag(mouse.x, mouse.y)
-                    edgeTimer.running = (mouse.buttons & Qt.LeftButton) && (mouse.x < 24 || mouse.x > view.width - 24)
-                } else {
-                    hoverText = controller.hover(mouse.x, mouse.y)
-                }
-            }
-            onExited: hoverText = ""
-            onReleased: { edgeTimer.running = false; controller.release() }
-            // Keeps scrolling while a selection drag sits at or past an edge.
-            Timer {
-                id: edgeTimer
-                interval: 16
-                repeat: true
-                onTriggered: running = controller.edge_scroll(parent.lastX, parent.lastY) && parent.pressed
-            }
-            onDoubleClicked: (mouse) => {
-                const info = JSON.parse(controller.context_press(mouse.x, mouse.y))
-                if (info.feature >= 0) editor.openFeature(info.feature)
-                else controller.double_click(mouse.x, mouse.y)
-            }
-            onWheel: (wheel) => controller.wheel(wheel.x, wheel.angleDelta.y, wheel.angleDelta.x, wheel.modifiers)
-        }
-
-        // Annotation tooltip, following the pointer.
+        // The project's files, from Qt's QFileSystemModel; collapsible.
         Rectangle {
-            visible: mouse.hoverText.length > 0
-            x: Math.min(mouse.lastX + 14, view.width - width - 4)
-            y: mouse.lastY + 18
-            width: tipLabel.implicitWidth + 16
-            height: tipLabel.implicitHeight + 10
-            radius: 4
-            color: controller.foreground
-            opacity: 0.92
+            id: sidebar
+            visible: window.sidebarOpen
+            SplitView.preferredWidth: 240
+            SplitView.minimumWidth: 140
+            color: Qt.alpha(controller.foreground, 0.03)
+
+            FileTreeModel {
+                id: files
+                rootDir: controller.project_dir
+            }
+
             Label {
-                id: tipLabel
-                anchors.centerIn: parent
-                text: mouse.hoverText
-                color: controller.background
-                font.pixelSize: 13
+                id: projectName
+                anchors { top: parent.top; left: parent.left; right: parent.right; margins: 8 }
+                text: controller.project_dir.length ? controller.project_dir.split("/").pop() : "No project"
+                font.bold: true
+                elide: Text.ElideMiddle
+            }
+
+            TreeView {
+                id: tree
+                anchors { top: projectName.bottom; topMargin: 6; left: parent.left; right: parent.right; bottom: parent.bottom }
+                clip: true
+                model: files
+                rootIndex: files.rootIndex
+                selectionModel: ItemSelectionModel {}
+                delegate: TreeViewDelegate {
+                    id: entry
+                    implicitWidth: tree.width
+                    readonly property string path: files.pathAt(treeView.index(row, column))
+                    highlighted: path === controller.file_path
+                    font.pixelSize: 13
+                    onClicked: {
+                        if (files.isDirAt(treeView.index(row, column))) treeView.toggleExpanded(row)
+                        else window.openPath(path)
+                    }
+                }
+                ScrollBar.vertical: ScrollBar {}
             }
         }
 
-        ScrollBar {
-            id: hbar
-            orientation: Qt.Horizontal
-            anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
-            policy: ScrollBar.AlwaysOn
-            visible: controller.mode === "linear" && controller.scroll_size < 0.999
-            size: controller.scroll_size
-            minimumSize: 0.04
-            contentItem: Rectangle {
-                implicitHeight: 10
-                radius: 5
-                color: Qt.alpha(controller.foreground, hbar.pressed ? 0.65 : 0.4)
-            }
-            background: Rectangle { color: Qt.alpha(controller.foreground, 0.06) }
-            onPositionChanged: if (pressed) controller.scroll_to(position)
-        }
-        ScrollBar {
-            id: vbar
-            orientation: Qt.Vertical
-            anchors { top: parent.top; right: parent.right; bottom: parent.bottom }
-            policy: ScrollBar.AlwaysOn
-            visible: controller.mode === "wrapped" && controller.scroll_size < 0.999
-            size: controller.scroll_size
-            minimumSize: 0.04
-            contentItem: Rectangle {
-                implicitWidth: 10
-                radius: 5
-                color: Qt.alpha(controller.foreground, vbar.pressed ? 0.65 : 0.4)
-            }
-            background: Rectangle { color: Qt.alpha(controller.foreground, 0.06) }
-            onPositionChanged: if (pressed) controller.scroll_to(position)
-        }
-        Binding {
-            target: vbar
-            property: "position"
-            value: controller.scroll_pos
-            when: !vbar.pressed
-            restoreMode: Binding.RestoreNone
-        }
-        // Follow the controller except while the user drags the bar, so the
-        // binding survives interaction.
-        Binding {
-            target: hbar
-            property: "position"
-            value: controller.scroll_pos
-            when: !hbar.pressed
-            restoreMode: Binding.RestoreNone
-        }
+        InstanceView {
+            id: view
+            SplitView.fillWidth: true
+            clearColor: controller.background
+            instances: controller.frame
+            focus: true
+            onWidthChanged: controller.resize(width, height)
+            onHeightChanged: controller.resize(width, height)
 
-        PinchHandler {
-            id: pinch
-            target: null
-            property real last: 1
-            onActiveChanged: last = 1
-            onActiveScaleChanged: {
-                controller.zoom_by(centroid.position.x, activeScale / last)
-                last = activeScale
+            MouseArea {
+                id: mouse
+                anchors.fill: parent
+                acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
+                hoverEnabled: true
+                property string hoverText: ""
+                onPressed: (mouse) => {
+                    view.forceActiveFocus()
+                    hoverText = ""
+                    if (mouse.button === Qt.RightButton) {
+                        menu.info = JSON.parse(controller.context_press(mouse.x, mouse.y))
+                        menu.popup()
+                    } else if (mouse.button === Qt.MiddleButton) {
+                        controller.pan_press(mouse.x, mouse.y)
+                    } else {
+                        controller.press(mouse.x, mouse.y, mouse.modifiers)
+                    }
+                }
+                property real lastX: 0
+                property real lastY: 0
+                onPositionChanged: (mouse) => {
+                    lastX = mouse.x; lastY = mouse.y
+                    if (mouse.buttons & (Qt.LeftButton | Qt.MiddleButton)) {
+                        controller.drag(mouse.x, mouse.y)
+                        edgeTimer.running = (mouse.buttons & Qt.LeftButton) && (mouse.x < 24 || mouse.x > view.width - 24)
+                    } else {
+                        hoverText = controller.hover(mouse.x, mouse.y)
+                    }
+                }
+                onExited: hoverText = ""
+                onReleased: { edgeTimer.running = false; controller.release() }
+                // Keeps scrolling while a selection drag sits at or past an edge.
+                Timer {
+                    id: edgeTimer
+                    interval: 16
+                    repeat: true
+                    onTriggered: running = controller.edge_scroll(parent.lastX, parent.lastY) && parent.pressed
+                }
+                onDoubleClicked: (mouse) => {
+                    const info = JSON.parse(controller.context_press(mouse.x, mouse.y))
+                    if (info.feature >= 0) editor.openFeature(info.feature)
+                    else controller.double_click(mouse.x, mouse.y)
+                }
+                onWheel: (wheel) => controller.wheel(wheel.x, wheel.angleDelta.y, wheel.angleDelta.x, wheel.modifiers)
             }
-        }
 
-        Keys.onPressed: (event) => {
-            if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && controller.selected_feature() >= 0) {
-                editor.openSelected(); event.accepted = true; return
+            // Annotation tooltip, following the pointer.
+            Rectangle {
+                visible: mouse.hoverText.length > 0
+                x: Math.min(mouse.lastX + 14, view.width - width - 4)
+                y: mouse.lastY + 18
+                width: tipLabel.implicitWidth + 16
+                height: tipLabel.implicitHeight + 10
+                radius: 4
+                color: controller.foreground
+                opacity: 0.92
+                Label {
+                    id: tipLabel
+                    anchors.centerIn: parent
+                    text: mouse.hoverText
+                    color: controller.background
+                    font.pixelSize: 13
+                }
+            }
+
+            ScrollBar {
+                id: hbar
+                orientation: Qt.Horizontal
+                anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
+                policy: ScrollBar.AlwaysOn
+                visible: controller.mode === "linear" && controller.scroll_size < 0.999
+                size: controller.scroll_size
+                minimumSize: 0.04
+                contentItem: Rectangle {
+                    implicitHeight: 10
+                    radius: 5
+                    color: Qt.alpha(controller.foreground, hbar.pressed ? 0.65 : 0.4)
+                }
+                background: Rectangle { color: Qt.alpha(controller.foreground, 0.06) }
+                onPositionChanged: if (pressed) controller.scroll_to(position)
+            }
+            ScrollBar {
+                id: vbar
+                orientation: Qt.Vertical
+                anchors { top: parent.top; right: parent.right; bottom: parent.bottom }
+                policy: ScrollBar.AlwaysOn
+                visible: controller.mode === "wrapped" && controller.scroll_size < 0.999
+                size: controller.scroll_size
+                minimumSize: 0.04
+                contentItem: Rectangle {
+                    implicitWidth: 10
+                    radius: 5
+                    color: Qt.alpha(controller.foreground, vbar.pressed ? 0.65 : 0.4)
+                }
+                background: Rectangle { color: Qt.alpha(controller.foreground, 0.06) }
+                onPositionChanged: if (pressed) controller.scroll_to(position)
+            }
+            Binding {
+                target: vbar
+                property: "position"
+                value: controller.scroll_pos
+                when: !vbar.pressed
+                restoreMode: Binding.RestoreNone
+            }
+            // Follow the controller except while the user drags the bar, so the
+            // binding survives interaction.
+            Binding {
+                target: hbar
+                property: "position"
+                value: controller.scroll_pos
+                when: !hbar.pressed
+                restoreMode: Binding.RestoreNone
+            }
+
+            PinchHandler {
+                id: pinch
+                target: null
+                property real last: 1
+                onActiveChanged: last = 1
+                onActiveScaleChanged: {
+                    controller.zoom_by(centroid.position.x, activeScale / last)
+                    last = activeScale
+                }
+            }
+
+            Keys.onPressed: (event) => {
+                if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && controller.selected_feature() >= 0) {
+                    editor.openSelected(); event.accepted = true; return
+                }
+                if (event.key === Qt.Key_B && (event.modifiers & Qt.ControlModifier)) {
+                window.sidebarOpen = !window.sidebarOpen; event.accepted = true; return
+            }
+            if (event.key === Qt.Key_E && (event.modifiers & Qt.ControlModifier)) {
+                controller.extract_selection(); event.accepted = true; return
             }
             if (event.key === Qt.Key_N && (event.modifiers & Qt.ControlModifier)) {
-                editor.openNew(); event.accepted = true; return
+                    editor.openNew(); event.accepted = true; return
+                }
+                if (event.key === Qt.Key_C && (event.modifiers & Qt.ControlModifier)) {
+                    const t = controller.selection_text()
+                    if (t.length > 0) clipboard.copy(t)
+                    event.accepted = true; return
+                }
+                event.accepted = controller.key(event.key, event.text, event.modifiers)
             }
-            if (event.key === Qt.Key_C && (event.modifiers & Qt.ControlModifier)) {
-                const t = controller.selection_text()
-                if (t.length > 0) clipboard.copy(t)
-                event.accepted = true; return
-            }
-            event.accepted = controller.key(event.key, event.text, event.modifiers)
         }
     }
 
@@ -253,6 +318,7 @@ ApplicationWindow {
             visible: menu.onAnnotation
             onTriggered: clipboard.copy(controller.feature_sequence(menu.info.feature))
         }
+        Item { text: "Extract as new sequence"; visible: menu.onAnnotation; onTriggered: controller.extract_feature(menu.info.feature) }
         Item { text: "Zoom to annotation"; visible: menu.onAnnotation; onTriggered: controller.zoom_to_feature(menu.info.feature) }
 
         Item { text: "Add annotation…"; visible: !menu.onAnnotation; enabled: menu.info.selection; onTriggered: editor.openNew() }
@@ -262,7 +328,20 @@ ApplicationWindow {
             enabled: menu.info.selection
             onTriggered: clipboard.copy(controller.selection_text())
         }
+        Item { text: "Extract as new sequence"; visible: !menu.onAnnotation; enabled: menu.info.selection; onTriggered: controller.extract_selection() }
         Item { text: "Zoom to selection"; visible: !menu.onAnnotation; enabled: menu.info.selection; onTriggered: controller.zoom_to_selection() }
+    }
+
+    Dialog {
+        id: confirmSwitch
+        property string pending
+        title: "Save changes?"
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        standardButtons: Dialog.Save | Dialog.Discard | Dialog.Cancel
+        Label { text: "The open sequence has unsaved changes." }
+        onAccepted: { controller.save(); controller.open_file(pending) }
+        onDiscarded: { close(); controller.open_file(pending) }
     }
 
     FeatureEditor {
@@ -314,6 +393,7 @@ ApplicationWindow {
                 const err = controller.save_feature(-1, JSON.stringify({ kind: "misc_feature", location: arg("--add"), qualifiers: [{ key: "label", value: "partial test" }] }))
                 if (err.length > 0) console.log("add failed:", err)
             }
+            if (arg("--extract")) console.log("extracted:", controller.extract_selection(), "|", controller.message)
             if (arg("--hover")) {
                 const h = arg("--hover").split(",")
                 console.log("hover:", controller.hover(Number(h[0]), Number(h[1])))
