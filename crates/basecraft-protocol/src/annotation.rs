@@ -4,9 +4,10 @@
 //! Readers and writers convert from and to the 1-based inclusive
 //! coordinates of GenBank and GFF3.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Strand {
     Forward,
@@ -15,7 +16,7 @@ pub enum Strand {
 }
 
 /// One contiguous piece of a feature's location.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Segment {
     pub start: u64,
     pub end: u64,
@@ -57,7 +58,7 @@ impl Segment {
 /// feature. A reverse-strand two-exon gene lists its downstream exon first.
 /// Locations crossing the origin of a circular sequence are split into two
 /// segments at the origin.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Location {
     pub segments: Vec<Segment>,
     /// GenBank `order()`: the segments' order is unknown, as opposed to
@@ -98,7 +99,7 @@ impl Location {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Qualifier {
     pub key: String,
     /// `None` for flag qualifiers like GenBank `/pseudo`.
@@ -116,7 +117,7 @@ impl Qualifier {
 
 /// A feature: a type, a location and qualifiers. GFF3 attributes map to
 /// qualifiers too, with `ID` and `Parent` kept as ordinary qualifiers.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Feature {
     pub kind: String,
     pub location: Location,

@@ -17,6 +17,13 @@ struct Cli {
 enum Command {
     /// Index a FASTA file (or load its cached index) and print a summary.
     Index { file: PathBuf },
+    /// Replay a project's operation log and check every step.
+    Replay {
+        #[arg(default_value = ".")]
+        project: PathBuf,
+    },
+    /// Write JSON Schemas for the protocol types into a directory.
+    Schemas { dir: PathBuf },
     /// Print residues `start..end` (0-based, half-open) of one record.
     Fetch {
         file: PathBuf,
@@ -59,6 +66,39 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 },
                 elapsed.as_secs_f64() * 1e3
             );
+        }
+        Command::Replay { project } => {
+            let report = basecraft_ops::replay::replay(&project)?;
+            for p in &report.problems {
+                println!("problem: {p}");
+            }
+            println!(
+                "{} sessions, {} entries, {} problems",
+                report.sessions,
+                report.entries,
+                report.problems.len()
+            );
+            if !report.ok() {
+                return Err("replay found problems".into());
+            }
+        }
+        Command::Schemas { dir } => {
+            std::fs::create_dir_all(&dir)?;
+            let schemas = [
+                (
+                    "log-entry",
+                    schemars::schema_for!(basecraft_protocol::LogEntry),
+                ),
+                (
+                    "feature",
+                    schemars::schema_for!(basecraft_protocol::Feature),
+                ),
+            ];
+            for (name, schema) in schemas {
+                let mut json = serde_json::to_string_pretty(&schema)?;
+                json.push('\n');
+                std::fs::write(dir.join(format!("{name}.schema.json")), json)?;
+            }
         }
         Command::Fetch {
             file,

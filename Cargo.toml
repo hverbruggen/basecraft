@@ -9,6 +9,8 @@ version = "0.0.0"
 edition = "2024"
 rust-version = "1.85"
 license = "GPL-3.0-or-later"
+# Nothing is published to crates.io yet.
+publish = false
 repository = "https://github.com/hverbruggen/basecraft"
 
 [workspace.dependencies]
@@ -24,7 +26,8 @@ basecraft-plugin-host = { path = "crates/basecraft-plugin-host" }
 blake3 = "1.8"
 memchr = "2.8"
 memmap2 = "0.9"
-postcard = { version = "1.1", features = ["use-std"] }
+schemars = "1.2"
+ulid = "3.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tempfile = "3.27"

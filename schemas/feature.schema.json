@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Feature",
+  "description": "A feature: a type, a location and qualifiers. GFF3 attributes map to\nqualifiers too, with `ID` and `Parent` kept as ordinary qualifiers.",
+  "type": "object",
+  "properties": {
+    "kind": {
+      "type": "string"
+    },
+    "location": {
+      "$ref": "#/$defs/Location"
+    },
+    "qualifiers": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Qualifier"
+      }
+    }
+  },
+  "required": [
+    "kind",
+    "location",
+    "qualifiers"
+  ],
+  "$defs": {
+    "Location": {
+      "description": "A feature location: segments in biological order, 5' to 3' of the\nfeature. A reverse-strand two-exon gene lists its downstream exon first.\nLocations crossing the origin of a circular sequence are split into two\nsegments at the origin.",
+      "type": "object",
+      "properties": {
+        "segments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Segment"
+          }
+        },
+        "unordered": {
+          "description": "GenBank `order()`: the segments' order is unknown, as opposed to\n`join()`, where they are joined in the given order.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "segments"
+      ]
+    },
+    "Qualifier": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "value": {
+          "description": "`None` for flag qualifiers like GenBank `/pseudo`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "key"
+      ]
+    },
+    "Segment": {
+      "description": "One contiguous piece of a feature's location.",
+      "type": "object",
+      "properties": {
+        "end": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "partial_end": {
+          "description": "The feature extends beyond `end` (GenBank `>`).",
+          "type": "boolean"
+        },
+        "partial_start": {
+          "description": "The feature extends beyond `start` (GenBank `<`).",
+          "type": "boolean"
+        },
+        "start": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "strand": {
+          "$ref": "#/$defs/Strand"
+        }
+      },
+      "required": [
+        "start",
+        "end",
+        "strand"
+      ]
+    },
+    "Strand": {
+      "type": "string",
+      "enum": [
+        "forward",
+        "reverse",
+        "unstranded"
+      ]
+    }
+  }
+}

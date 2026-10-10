@@ -1,0 +1,512 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LogEntry",
+  "description": "One line of the operation log.",
+  "type": "object",
+  "properties": {
+    "actor": {
+      "$ref": "#/$defs/Actor"
+    },
+    "doc": {
+      "description": "Project-relative path of the document the op applies to.",
+      "type": "string"
+    },
+    "host": {
+      "type": "string"
+    },
+    "id": {
+      "description": "ULID: unique, and sorts by time.",
+      "type": "string"
+    },
+    "result": {
+      "$ref": "#/$defs/OpResult"
+    },
+    "session": {
+      "type": "string"
+    },
+    "state": {
+      "$ref": "#/$defs/DocState"
+    },
+    "t": {
+      "description": "RFC 3339 UTC.",
+      "type": "string"
+    },
+    "v": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "oneOf": [
+    {
+      "description": "Open a file. Records its content hash, so replay can check it starts\nfrom the same input.",
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "doc.open"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ]
+    },
+    {
+      "description": "Save a document. Records the hash of each file written.",
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "doc.save"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ]
+    },
+    {
+      "description": "Replace residues `start..end` with `residues`. Insertions and\ndeletions are replacements with an empty side.",
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "seq.replace"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "end": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "residues": {
+              "type": "string"
+            },
+            "start": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "start",
+            "end",
+            "residues"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "feature.add"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "feature": {
+              "$ref": "#/$defs/Feature"
+            }
+          },
+          "required": [
+            "feature"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "feature.remove"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "id"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "feature.update"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "feature": {
+              "$ref": "#/$defs/Feature"
+            },
+            "id": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "id",
+            "feature"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ]
+    },
+    {
+      "description": "Undo the operation with log id `of`.",
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "history.undo"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "of": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "of"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ]
+    },
+    {
+      "description": "Redo the operation with log id `of`.",
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "history.redo"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "of": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "of"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ]
+    }
+  ],
+  "required": [
+    "v",
+    "id",
+    "t",
+    "host",
+    "session",
+    "actor",
+    "doc",
+    "state"
+  ],
+  "$defs": {
+    "Actor": {
+      "description": "Who made a change.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "human"
+            },
+            "user": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "user"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "tool"
+            },
+            "tool": {
+              "type": "string"
+            },
+            "version": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "tool",
+            "version"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "plugin"
+            },
+            "version": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "version"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "agent"
+            },
+            "model": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "model"
+          ]
+        },
+        {
+          "description": "A change Basecraft detected on disk but didn't make.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "external"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        }
+      ]
+    },
+    "DocState": {
+      "description": "A cheap fingerprint of a document after an operation. Replay compares\nit at every step; full content hashes are compared at open and save.",
+      "type": "object",
+      "properties": {
+        "features": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "len": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "len",
+        "features"
+      ]
+    },
+    "Feature": {
+      "description": "A feature: a type, a location and qualifiers. GFF3 attributes map to\nqualifiers too, with `ID` and `Parent` kept as ordinary qualifiers.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "location": {
+          "$ref": "#/$defs/Location"
+        },
+        "qualifiers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Qualifier"
+          }
+        }
+      },
+      "required": [
+        "kind",
+        "location",
+        "qualifiers"
+      ]
+    },
+    "Location": {
+      "description": "A feature location: segments in biological order, 5' to 3' of the\nfeature. A reverse-strand two-exon gene lists its downstream exon first.\nLocations crossing the origin of a circular sequence are split into two\nsegments at the origin.",
+      "type": "object",
+      "properties": {
+        "segments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Segment"
+          }
+        },
+        "unordered": {
+          "description": "GenBank `order()`: the segments' order is unknown, as opposed to\n`join()`, where they are joined in the given order.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "segments"
+      ]
+    },
+    "OpResult": {
+      "type": "object",
+      "properties": {
+        "feature": {
+          "description": "Id assigned to a new feature.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "hashes": {
+          "description": "Content hashes of files read or written, by project-relative path.",
+          "type": "array",
+          "items": {
+            "type": "array",
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "Qualifier": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "value": {
+          "description": "`None` for flag qualifiers like GenBank `/pseudo`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "key"
+      ]
+    },
+    "Segment": {
+      "description": "One contiguous piece of a feature's location.",
+      "type": "object",
+      "properties": {
+        "end": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "partial_end": {
+          "description": "The feature extends beyond `end` (GenBank `>`).",
+          "type": "boolean"
+        },
+        "partial_start": {
+          "description": "The feature extends beyond `start` (GenBank `<`).",
+          "type": "boolean"
+        },
+        "start": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "strand": {
+          "$ref": "#/$defs/Strand"
+        }
+      },
+      "required": [
+        "start",
+        "end",
+        "strand"
+      ]
+    },
+    "Strand": {
+      "type": "string",
+      "enum": [
+        "forward",
+        "reverse",
+        "unstranded"
+      ]
+    }
+  }
+}

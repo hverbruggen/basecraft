@@ -22,7 +22,7 @@ ci: check schemas-check deny protocol-license replay
 
 # Generate JSON Schema and Arrow schemas from basecraft-protocol.
 schemas:
-    @echo "schema generation: not set up yet"
+    cargo run -q -p basecraft-cli -- schemas schemas
 
 # Fail if the committed schemas differ from freshly generated ones.
 schemas-check: schemas
@@ -45,7 +45,7 @@ protocol-license:
 
 # Replay tests for every operation type.
 replay:
-    @echo "replay tests: not set up yet"
+    cargo test -q -p basecraft-ops --test replay
 
 # Wall-clock and frame-time budgets on this machine.
 bench:
