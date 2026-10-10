@@ -11,10 +11,13 @@
 
 mod bridge;
 
-use cxx_qt_lib::{QGuiApplication, QQmlApplicationEngine, QUrl};
+use cxx_qt_lib::{QGuiApplication, QQmlApplicationEngine, QString, QUrl};
 
 fn main() {
     let mut app = QGuiApplication::new();
+    // A stable Wayland app-id (X11 class): desktop entries and window rules
+    // match on it.
+    QGuiApplication::set_desktop_file_name(&QString::from("org.basecraft.Basecraft"));
     let mut engine = QQmlApplicationEngine::new();
     if let Some(engine) = engine.as_mut() {
         engine.load(&QUrl::from("qrc:/qt/qml/Basecraft/qml/Main.qml"));
