@@ -380,6 +380,53 @@ impl GenomeView {
         self.clamp(len);
     }
 
+    /// Zoom by `factor` around the point `(x, y)`: the base under the
+    /// pointer stays under it as closely as line breaks allow. In the
+    /// wrapped view its line keeps its height on screen.
+    pub fn zoom_at_point(&mut self, x: f32, y: f32, factor: f64, len: u64) {
+        if self.mode != Mode::Wrapped || self.wrap.is_none() {
+            self.zoom_at(x, factor, len);
+            return;
+        }
+        let bp = self.position_at(x, y, len);
+        self.zoom_around(bp, y, factor, len);
+    }
+
+    /// Wrapped view: zoom by `factor`, keeping base `bp` at screen height
+    /// `y` (its line moves so that its row lands there).
+    pub fn zoom_around(&mut self, bp: u64, y: f32, factor: f64, len: u64) {
+        let Some(w) = &self.wrap else {
+            self.zoom_at(self.width / 2.0, factor, len);
+            return;
+        };
+        let k = ((bp / w.line_bp) as usize).min(w.offsets.len().saturating_sub(2));
+        let within = y - (w.offsets[k] - self.scroll_y);
+        self.auto_fit = false;
+        self.bp_per_px /= factor;
+        self.clamp(len);
+        self.anchor = Some((bp, y - within));
+    }
+
+    /// Zoom by `factor` for the zoom buttons: around the cursor when it's
+    /// on screen, else keeping the top of the view in place.
+    pub fn zoom_step(&mut self, factor: f64, len: u64) {
+        if self.mode == Mode::Wrapped
+            && let (Some(c), Some(w)) = (self.cursor, &self.wrap)
+        {
+            let k = ((c / w.line_bp) as usize).min(w.offsets.len().saturating_sub(2));
+            let top = w.offsets[k] - self.scroll_y;
+            if top >= 0.0 && top < self.height {
+                self.zoom_around(c, top + SEQ_Y, factor, len);
+                return;
+            }
+        }
+        let x = self
+            .cursor
+            .map_or(self.width / 2.0, |c| self.x_of(c as f64))
+            .clamp(0.0, self.width);
+        self.zoom_at(x, factor, len);
+    }
+
     /// Wrapped view: scroll down by `dy` pixels (negative scrolls up).
     pub fn scroll_by(&mut self, dy: f32) {
         self.auto_fit = false;
@@ -2200,6 +2247,26 @@ mod tests {
         assert!(v.status(&d).contains("2 parts (200 bp)"));
         v.move_cursor(1, false, d.len());
         assert_eq!(v.selection_parts, None);
+    }
+
+    #[test]
+    fn wrapped_zoom_keeps_the_pointed_base_in_view() {
+        let d = doc();
+        let mut v = GenomeView::new(1000.0, 600.0);
+        v.fit_doc(&d);
+        let mut f = Frame::new();
+        v.build(&d, &Theme::default(), &mut f);
+        // Point at a base on a later line, then zoom in a lot.
+        let w = v.wrap.clone().unwrap();
+        let y = w.offsets[2] - v.scroll_y + SEQ_Y + 5.0;
+        let bp = v.position_at(500.0, y, d.len());
+        v.zoom_at_point(500.0, y, 8.0, d.len());
+        v.build(&d, &Theme::default(), &mut f);
+        let line = v.line_at(y) as u64 * v.line_bp();
+        assert!(
+            line <= bp && bp <= line + v.line_bp(),
+            "base {bp} not on the line under the pointer"
+        );
     }
 
     #[test]

@@ -89,7 +89,7 @@ Item {
                 if (info.feature >= 0) doc.editFeature(info.feature)
                 else ctl.double_click(mouse.x, mouse.y)
             }
-            onWheel: (wheel) => ctl.wheel(wheel.x, wheel.angleDelta.y, wheel.angleDelta.x, wheel.modifiers)
+            onWheel: (wheel) => ctl.wheel(wheel.x, wheel.y, wheel.angleDelta.y, wheel.angleDelta.x, wheel.modifiers)
         }
 
         // Annotation tooltip, following the pointer.
@@ -152,7 +152,7 @@ Item {
             property real last: 1
             onActiveChanged: last = 1
             onActiveScaleChanged: {
-                ctl.zoom_by(centroid.position.x, activeScale / last)
+                ctl.zoom_by(centroid.position.x, centroid.position.y, activeScale / last)
                 last = activeScale
             }
         }

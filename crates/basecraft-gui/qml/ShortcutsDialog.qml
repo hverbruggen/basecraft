@@ -2,11 +2,11 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-// Keyboard and pointer shortcuts, grouped like the ribbon. `show(name)`
-// opens it with that ribbon tab's group first.
+// Keyboard shortcuts, grouped like the ribbon. `show(name)` opens it with
+// only that ribbon tab's shortcuts; `show("")` lists them all.
 Dialog {
     id: dialog
-    title: "Keyboard shortcuts"
+    title: first.length && first !== "Help" ? first + " shortcuts" : "Keyboard shortcuts"
     modal: true
     anchors.centerIn: Overlay.overlay
     width: Math.min(560, parent ? parent.width - 40 : 560)
@@ -15,6 +15,8 @@ Dialog {
 
     property string first: ""
 
+    // Keyboard only, grouped by ribbon tab; "Editing" has no tab of its
+    // own and shows in the full list.
     readonly property var groups: [
         { name: "File", keys: [
             ["Ctrl+S", "Save"],
@@ -24,48 +26,40 @@ Dialog {
         { name: "View", keys: [
             ["+  /  −", "Zoom in / out"],
             ["Ctrl+0", "Fit the whole sequence"],
-            ["Double-click", "Zoom in there"],
-            ["Wheel", "Scroll lines (wrapped) or zoom (linear)"],
-            ["Ctrl+wheel, pinch", "Zoom"],
-            ["Shift+wheel", "Scroll sideways (linear)"],
-            ["Middle-drag", "Move the view"],
-            ["Page Up / Page Down", "Scroll a screen (wrapped)"],
-            ["F2", "Next layout: wrapped, linear, circular"],
-            ["Ctrl+B", "Show or hide the files"],
+            ["Page Up / Page Down", "Scroll a screen"],
         ] },
         { name: "Annotations", keys: [
-            ["Click", "Select an annotation and its bases"],
-            ["Double-click", "Edit an annotation"],
+            ["Ctrl+N", "Annotate the selection"],
+            ["Ctrl+Shift+N", "Annotate the selection on the reverse strand"],
             ["Enter", "Edit the selected annotation"],
-            ["Ctrl+N", "Annotate the selection (Shift: reverse strand)"],
             ["Delete", "Delete the selected annotation"],
             ["Ctrl+C", "Copy the selected bases"],
             ["Ctrl+E", "Extract the selection as a new sequence"],
-            ["Right-click", "Actions for what's under the pointer"],
         ] },
-        { name: "Bases", keys: [
-            ["Click", "Place the cursor"],
-            ["Drag", "Select bases (past an edge scrolls)"],
-            ["Shift+click", "Extend the selection"],
+        { name: "Settings", keys: [
+            ["Ctrl+B", "Show or hide the files sidebar"],
+        ] },
+        { name: "Editing", keys: [
             ["Letters", "Type bases at the cursor, replacing a selection"],
             ["Backspace / Delete", "Delete before / after the cursor, or the selection"],
-            ["← →", "Move the cursor (Ctrl: 10 bases, Shift: extend)"],
-            ["↑ ↓", "Move a line (wrapped)"],
+            ["← →", "Move the cursor"],
+            ["Ctrl+← →", "Move the cursor 10 bases"],
+            ["Shift+arrows", "Extend the selection"],
+            ["↑ ↓", "Move the cursor a line"],
             ["Home / End", "Start / end of the sequence"],
             ["Escape", "Clear the selection"],
         ] },
     ]
 
+    // A tab's name shows only its group; "" (Help) shows them all.
+    function shown() {
+        const g = groups.filter(x => x.name === first)
+        return g.length ? g : groups
+    }
+
     function show(name) {
         first = name
         open()
-    }
-
-    function ordered() {
-        const g = groups.slice()
-        const i = g.findIndex(x => x.name === first)
-        if (i > 0) g.unshift(g.splice(i, 1)[0])
-        return g
     }
 
     ScrollView {
@@ -75,7 +69,7 @@ Dialog {
             width: dialog.availableWidth
             spacing: 14
             Repeater {
-                model: dialog.opened ? dialog.ordered() : []
+                model: dialog.opened ? dialog.shown() : []
                 ColumnLayout {
                     required property var modelData
                     Layout.fillWidth: true
@@ -83,7 +77,7 @@ Dialog {
                     Label {
                         text: modelData.name
                         font.bold: true
-                        color: modelData.name === dialog.first ? palette.highlight : palette.windowText
+                        color: palette.windowText
                     }
                     GridLayout {
                         columns: 2

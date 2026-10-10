@@ -43,7 +43,14 @@ pub mod qobject {
         #[qinvokable]
         fn resize(self: Pin<&mut GenomeController>, width: f64, height: f64);
         #[qinvokable]
-        fn wheel(self: Pin<&mut GenomeController>, x: f64, dy: f64, dx: f64, modifiers: i32);
+        fn wheel(
+            self: Pin<&mut GenomeController>,
+            x: f64,
+            y: f64,
+            dy: f64,
+            dx: f64,
+            modifiers: i32,
+        );
         #[qinvokable]
         fn press(self: Pin<&mut GenomeController>, x: f64, y: f64, modifiers: i32);
         #[qinvokable]
@@ -87,7 +94,7 @@ pub mod qobject {
         fn double_click(self: Pin<&mut GenomeController>, x: f64, y: f64);
         /// Zoom by `factor` around `x` (pinch gestures).
         #[qinvokable]
-        fn zoom_by(self: Pin<&mut GenomeController>, x: f64, factor: f64);
+        fn zoom_by(self: Pin<&mut GenomeController>, x: f64, y: f64, factor: f64);
         #[qinvokable]
         fn zoom_in(self: Pin<&mut GenomeController>);
         #[qinvokable]
@@ -437,7 +444,7 @@ impl qobject::GenomeController {
     }
 
     #[allow(clippy::cast_possible_truncation)]
-    pub fn wheel(mut self: Pin<&mut Self>, x: f64, dy: f64, dx: f64, modifiers: i32) {
+    pub fn wheel(mut self: Pin<&mut Self>, x: f64, y: f64, dy: f64, dx: f64, modifiers: i32) {
         let len = self.len();
         {
             let mut r = self.as_mut().rust_mut();
@@ -447,7 +454,8 @@ impl qobject::GenomeController {
             if r.view.mode == Mode::Wrapped {
                 // The wheel scrolls lines; Ctrl+wheel zooms.
                 if modifiers & CTRL != 0 {
-                    r.view.zoom_at(x as f32, 1.0015f64.powf(dy), len);
+                    r.view
+                        .zoom_at_point(x as f32, y as f32, 1.0015f64.powf(dy), len);
                 } else {
                     r.view.scroll_by((-dy * 0.5) as f32);
                 }
@@ -661,16 +669,15 @@ impl qobject::GenomeController {
                 }
                 true
             }
-            KEY_F2 => {
+            // F2 cycled layouts; only the wrapped layout is offered for now.
+            KEY_F2 if false => {
                 self.as_mut().toggle_mode();
                 true
             }
             KEY_PLUS | KEY_EQUAL | KEY_MINUS if !ctrl => {
                 let factor = if key == KEY_MINUS { 1.0 / 1.6 } else { 1.6 };
-                let mut r = self.as_mut().rust_mut();
-                #[allow(clippy::cast_precision_loss)]
-                let x = cursor.map_or(r.view.width / 2.0, |c| r.view.x_of(c as f64));
-                r.view.zoom_at(x, factor, len);
+                let _ = cursor;
+                self.as_mut().rust_mut().view.zoom_step(factor, len);
                 true
             }
             KEY_UP | KEY_DOWN if self.rust().view.mode == Mode::Wrapped => {
@@ -933,17 +940,23 @@ impl qobject::GenomeController {
     }
 
     #[allow(clippy::cast_possible_truncation)]
-    pub fn double_click(mut self: Pin<&mut Self>, x: f64, _y: f64) {
+    pub fn double_click(mut self: Pin<&mut Self>, x: f64, y: f64) {
         let len = self.len();
-        self.as_mut().rust_mut().view.zoom_at(x as f32, 3.0, len);
+        self.as_mut()
+            .rust_mut()
+            .view
+            .zoom_at_point(x as f32, y as f32, 3.0, len);
         self.refresh();
     }
 
     #[allow(clippy::cast_possible_truncation)]
-    pub fn zoom_by(mut self: Pin<&mut Self>, x: f64, factor: f64) {
+    pub fn zoom_by(mut self: Pin<&mut Self>, x: f64, y: f64, factor: f64) {
         let len = self.len();
         if factor > 0.0 {
-            self.as_mut().rust_mut().view.zoom_at(x as f32, factor, len);
+            self.as_mut()
+                .rust_mut()
+                .view
+                .zoom_at_point(x as f32, y as f32, factor, len);
         }
         self.refresh();
     }
@@ -952,16 +965,10 @@ impl qobject::GenomeController {
         let len = self.len();
         {
             let mut r = self.as_mut().rust_mut();
-            #[allow(clippy::cast_precision_loss)]
-            let x = r
-                .view
-                .cursor
-                .map_or(r.view.width / 2.0, |c| r.view.x_of(c as f64));
-            let x = x.clamp(0.0, r.view.width);
             if r.view.mode == Mode::Circular {
                 r.view.mode = Mode::Linear;
             }
-            r.view.zoom_at(x, factor, len);
+            r.view.zoom_step(factor, len);
         }
         self.as_mut().sync_mode();
         self.refresh();

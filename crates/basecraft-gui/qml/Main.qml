@@ -40,13 +40,13 @@ ApplicationWindow {
     property int ribbonTab: 0
     property string defaultLayout: "wrapped"
     readonly property var ribbonTabs: ["File", "View", "Annotations", "Settings", "Help"]
+    // Only the wrapped layout is offered for now; files always open in it.
 
     // Preferences, kept between sessions (~/.config/Basecraft).
     Settings {
         category: "ui"
         property alias showGc: window.showGc
         property alias sidebarOpen: window.sidebarOpen
-        property alias defaultLayout: window.defaultLayout
     }
 
     function fileName(path) { return path.split("/").pop() }
@@ -147,7 +147,7 @@ ApplicationWindow {
     header: ColumnLayout {
         spacing: 0
 
-        // Ribbon tabs, with undo, redo and save always at hand.
+        // Ribbon tabs. Undo, redo and save are Ctrl+Z, Ctrl+Shift+Z, Ctrl+S.
         Rectangle {
             Layout.fillWidth: true
             implicitHeight: 26
@@ -161,10 +161,6 @@ ApplicationWindow {
                 RibbonTabButton { tabIndex: 2; text: "Annotations" }
                 RibbonTabButton { tabIndex: 3; text: "Settings" }
                 RibbonTabButton { tabIndex: 4; text: "Help" }
-                Item { Layout.preferredWidth: 16 }
-                RibbonButton { text: "Undo"; ToolTip.text: "Undo (Ctrl+Z)"; ToolTip.visible: hovered; onClicked: window.current.undo() }
-                RibbonButton { text: "Redo"; ToolTip.text: "Redo (Ctrl+Shift+Z)"; ToolTip.visible: hovered; onClicked: window.current.redo() }
-                RibbonButton { text: window.current?.dirty ? "Save •" : "Save"; ToolTip.text: "Save (Ctrl+S)"; ToolTip.visible: hovered; onClicked: window.current.save() }
                 Label {
                     Layout.fillWidth: true
                     horizontalAlignment: Text.AlignRight
@@ -216,13 +212,8 @@ ApplicationWindow {
                         }
                     }
                     ToolSeparator { Layout.fillHeight: true }
-                    RibbonGroup {
-                        title: "Layout"
-                        RibbonButton { text: "Wrapped"; checkable: true; checked: window.current?.mode === "wrapped"; onClicked: window.current.switch_view("wrapped") }
-                        RibbonButton { text: "Linear"; checkable: true; checked: window.current?.mode === "linear"; onClicked: window.current.switch_view("linear") }
-                        RibbonButton { text: "Circular"; checkable: true; checked: window.current?.mode === "circular"; onClicked: window.current.switch_view("circular") }
-                    }
-                    ToolSeparator { Layout.fillHeight: true }
+                    // Linear and circular layouts exist in the code but are
+                    // not offered for now; the wrapped layout is the view.
                     RibbonGroup {
                         title: "Show"
                         CheckBox {
@@ -280,19 +271,6 @@ ApplicationWindow {
 
                 RowLayout {
                     spacing: 6
-                    RibbonGroup {
-                        title: "New files"
-                        Label { text: "Open in"; opacity: 0.8 }
-                        ComboBox {
-                            model: ["wrapped", "linear", "circular"]
-                            currentIndex: Math.max(0, model.indexOf(window.defaultLayout))
-                            focusPolicy: Qt.NoFocus
-                            implicitHeight: 24
-                            onActivated: window.defaultLayout = currentText
-                        }
-                        Label { text: "layout, fitted"; opacity: 0.8 }
-                    }
-                    ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
                         title: "Window"
                         CheckBox {
