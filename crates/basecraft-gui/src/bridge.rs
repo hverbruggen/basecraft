@@ -88,6 +88,10 @@ pub mod qobject {
         fn flush(self: Pin<&mut GenomeController>);
         #[qinvokable]
         fn memory_report(self: &GenomeController) -> QString;
+        /// `path` relative to the open project folder, or to the file's own
+        /// project when it lies outside it.
+        #[qinvokable]
+        fn relative_path(self: &GenomeController, path: &QString) -> QString;
         /// Write a readable account of this run's activity in the projects
         /// of `files` (one path per line) to a text file; returns its path.
         #[qinvokable]
@@ -964,6 +968,18 @@ impl qobject::GenomeController {
             Ok(()) => QString::from(&path.to_string_lossy().into_owned()),
             Err(_) => QString::default(),
         }
+    }
+
+    pub fn relative_path(&self, path: &QString) -> QString {
+        let path = PathBuf::from(path.to_string());
+        let project = PathBuf::from(self.rust().project_dir.to_string());
+        let rel = path
+            .strip_prefix(&project)
+            .ok()
+            .filter(|_| !project.as_os_str().is_empty())
+            .or_else(|| path.strip_prefix(project_root(&path)).ok())
+            .unwrap_or(&path);
+        QString::from(&rel.to_string_lossy().into_owned())
     }
 
     pub fn memory_report(&self) -> QString {

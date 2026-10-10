@@ -538,14 +538,15 @@ ApplicationWindow {
                             spacing: 6
                             Label {
                                 // Long names shorten in the middle, keeping
-                                // the extension; the full name is a hover away.
+                                // the extension; the path in the project is a
+                                // hover away.
                                 text: window.fileName(path) + (dirty ? " •" : "")
                                 font.pixelSize: 10
                                 width: Math.min(implicitWidth, 180)
                                 elide: Text.ElideMiddle
                                 anchors.verticalCenter: parent.verticalCenter
-                                ToolTip.text: path
-                                ToolTip.visible: tabHover.hovered && truncated
+                                ToolTip.text: shell.relative_path(path)
+                                ToolTip.visible: tabHover.hovered
                                 HoverHandler { id: tabHover }
                             }
                             ToolButton {
