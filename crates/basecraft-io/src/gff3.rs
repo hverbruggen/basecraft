@@ -57,7 +57,8 @@ pub fn parse(data: &[u8]) -> Result<Gff3> {
     let mut out = Gff3::default();
     let mut seq_index: HashMap<String, usize> = HashMap::new();
     // (sequence, ID, type) -> feature index, for merging multi-line features.
-    let mut by_id: HashMap<(usize, String, String), usize> = HashMap::new();
+    // Keys borrow the raw columns, so merging costs no allocations.
+    let mut by_id: HashMap<(usize, &str, &str), usize> = HashMap::new();
     let mut seen_feature = false;
     let mut pos = 0;
     let mut line_no = 0;
@@ -146,12 +147,9 @@ pub fn parse(data: &[u8]) -> Result<Gff3> {
             out.sequences[si].circular = true;
         }
         let segment = Segment::new(start - 1, end, strand);
-        let id = attrs
-            .iter()
-            .find(|q| q.key == "ID")
-            .and_then(|q| q.value.clone());
-        if let Some(id) = &id
-            && let Some(&fi) = by_id.get(&(si, id.clone(), kind.clone()))
+        let raw_id = raw_attribute(cols[8], "ID");
+        if let Some(id) = raw_id
+            && let Some(&fi) = by_id.get(&(si, id, cols[2]))
         {
             let f = &mut out.sequences[si].features[fi];
             f.location.segments.push(segment);
@@ -173,8 +171,8 @@ pub fn parse(data: &[u8]) -> Result<Gff3> {
         }
         qualifiers.extend(attrs);
         let features = &mut out.sequences[si].features;
-        if let Some(id) = id {
-            by_id.insert((si, id, kind.clone()), features.len());
+        if let Some(id) = raw_id {
+            by_id.insert((si, id, cols[2]), features.len());
         }
         features.push(Feature {
             kind,
@@ -186,6 +184,13 @@ pub fn parse(data: &[u8]) -> Result<Gff3> {
         });
     }
 
+    for seq in &mut out.sequences {
+        seq.features.shrink_to_fit();
+        for f in &mut seq.features {
+            f.qualifiers.shrink_to_fit();
+            f.location.segments.shrink_to_fit();
+        }
+    }
     let lengths: HashMap<&str, u64> = out
         .regions
         .iter()
@@ -263,6 +268,13 @@ fn finish_location(f: &mut Feature, circular_len: Option<u64>) {
         f.qualifiers.retain(|q| q.key != PHASE);
         f.qualifiers.push(Qualifier::new(PHASE, phase));
     }
+}
+
+/// An attribute's value as written, still percent-encoded.
+fn raw_attribute<'a>(col: &'a str, key: &str) -> Option<&'a str> {
+    col.split(';')
+        .map(str::trim)
+        .find_map(|pair| pair.strip_prefix(key)?.strip_prefix('='))
 }
 
 fn parse_attributes(col: &str) -> Vec<Qualifier> {

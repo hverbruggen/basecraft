@@ -71,8 +71,8 @@ pub fn open(path: &Path) -> Result<Opened> {
             } else {
                 None
             };
-            let name = &file.index.records[0].name;
-            let features = gff.as_ref().and_then(|g| g.get(name));
+            let name = file.index.records[0].name.clone();
+            let features = gff.and_then(|g| g.sequences.into_iter().find(|s| s.seqid == name));
             let doc = SequenceDoc::from_fasta(Arc::clone(&file), 0, features);
             Ok(Opened {
                 doc,

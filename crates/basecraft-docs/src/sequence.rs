@@ -103,11 +103,10 @@ impl SequenceDoc {
     pub fn from_fasta(
         file: Arc<IndexedFasta>,
         record: usize,
-        gff: Option<&gff3::SeqFeatures>,
+        gff: Option<gff3::SeqFeatures>,
     ) -> Self {
         let name = file.index.records[record].name.clone();
-        let (features, circular) =
-            gff.map_or((Vec::new(), false), |g| (g.features.clone(), g.circular));
+        let (features, circular) = gff.map_or((Vec::new(), false), |g| (g.features, g.circular));
         Self::new(
             name,
             Arc::new(FastaResidues { file, record }),
@@ -168,11 +167,13 @@ impl SequenceDoc {
         FeatureId(u32::try_from(i).expect("fewer than 2^32 features"))
     }
 
-    /// Features overlapping `start..end`, in order of start.
+    /// Features overlapping `start..end`, by id.
     pub fn features_in(&self, start: u64, end: u64) -> Vec<FeatureId> {
         let index = self.index();
         let mut ids = Vec::new();
         index.query(start, end, &mut ids);
+        // Multi-segment features appear once per overlapping segment.
+        ids.sort_unstable();
         ids.dedup();
         ids.into_iter().map(FeatureId).collect()
     }
