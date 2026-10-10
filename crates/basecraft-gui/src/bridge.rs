@@ -119,6 +119,11 @@ pub mod qobject {
         fn save_feature(self: Pin<&mut GenomeController>, id: i32, json: &QString) -> QString;
         #[qinvokable]
         fn delete_feature(self: Pin<&mut GenomeController>, id: i32);
+        /// Run the ORF finder plugin and add the open reading frames of at
+        /// least `min_codons` codons it finds, as one undoable step.
+        /// Returns a summary for the status bar.
+        #[qinvokable]
+        fn find_orfs(self: Pin<&mut GenomeController>, min_codons: i32) -> QString;
         /// The selected residues, for the clipboard.
         #[qinvokable]
         fn selection_text(self: &GenomeController) -> QString;
@@ -179,6 +184,7 @@ pub mod qobject {
     }
 }
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::time::SystemTime;
@@ -314,6 +320,17 @@ fn css(c: [f32; 4]) -> String {
 
 /// The project a file belongs to: the nearest ancestor with a `.basecraft`
 /// directory, else the file's own directory.
+/// A bundled plugin's directory: under `$BASECRAFT_PLUGINS` if set, else
+/// the source tree's `plugins/` (development builds).
+fn plugin_dir(name: &str) -> PathBuf {
+    std::env::var_os("BASECRAFT_PLUGINS")
+        .map_or_else(
+            || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins"),
+            PathBuf::from,
+        )
+        .join(name)
+}
+
 fn project_root(file: &Path) -> PathBuf {
     let dir = file.parent().unwrap_or(Path::new(".")).to_path_buf();
     let mut cur = Some(dir.as_path());
@@ -1046,9 +1063,23 @@ impl qobject::GenomeController {
         } else {
             Strand::Forward
         };
+        let mut location = Location::simple(a, b.max(a + 1), strand);
+        // Selected parts (a spliced annotation) give a joined location, in
+        // biological order.
+        if let Some(parts) = &v.selection_parts {
+            let mut parts = parts.clone();
+            parts.sort_unstable();
+            if strand == Strand::Reverse {
+                parts.reverse();
+            }
+            location.segments = parts
+                .into_iter()
+                .map(|(s, e)| basecraft_protocol::Segment::new(s, e, strand))
+                .collect();
+        }
         let f = Feature {
             kind: "misc_feature".into(),
-            location: Location::simple(a, b.max(a + 1), strand),
+            location,
             qualifiers: vec![Qualifier::new("label", "")],
         };
         QString::from(&feature_to_json(-1, &f).to_string())
@@ -1092,10 +1123,89 @@ impl qobject::GenomeController {
         self.refresh();
     }
 
+    /// The selected bases. A selected annotation is copied as itself:
+    /// spliced if it has parts, reverse-complemented on the reverse strand.
+    pub fn find_orfs(mut self: Pin<&mut Self>, min_codons: i32) -> QString {
+        let msg = match self.as_mut().run_orf_finder(min_codons.max(1)) {
+            Ok(m) => m,
+            Err(e) => format!("ORF finder: {e}"),
+        };
+        self.as_mut().notify(&msg);
+        self.refresh();
+        QString::from(&msg)
+    }
+
+    fn run_orf_finder(mut self: Pin<&mut Self>, min_codons: i32) -> Result<String, String> {
+        use basecraft_plugin_host::{Manifest, PluginProcess, Snapshot, apply};
+        let dir = plugin_dir("orf-finder");
+        let manifest = Manifest::load(&dir).map_err(|e| format!("{e} ({})", dir.display()))?;
+        let mut plugin = PluginProcess::spawn(&manifest).map_err(|e| e.to_string())?;
+        let actor = basecraft_protocol::Actor::Plugin {
+            id: plugin.info.id.clone(),
+            version: plugin.info.version.clone(),
+        };
+        let report = {
+            let mut r = self.as_mut().rust_mut();
+            let r = &mut *r;
+            let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
+                return Err("no open file".into());
+            };
+            let snap =
+                Snapshot::of(session.doc_key(doc), session.doc(doc)).map_err(|e| e.to_string())?;
+            let result = plugin
+                .invoke(
+                    "find_orfs",
+                    json!({ "min_codons": min_codons }),
+                    Some(&snap),
+                )
+                .map_err(|e| e.to_string())?;
+            // Running it again adds only ORFs that aren't annotated yet.
+            let found = result.ops.len();
+            let ops: Vec<Op> = result
+                .ops
+                .into_iter()
+                .filter(|op| match op {
+                    Op::FeatureAdd { feature } => !session
+                        .doc(doc)
+                        .features()
+                        .any(|(_, f)| f.kind == feature.kind && f.location == feature.location),
+                    _ => true,
+                })
+                .collect();
+            let known = found - ops.len();
+            let report = apply::apply_proposals(session, doc, snap.version, ops, &actor)
+                .map_err(|e| e.to_string())?;
+            (report, known)
+        };
+        let (report, known) = report;
+        if report.applied > 0 {
+            self.as_mut().set_dirty(true);
+        }
+        let mut msg = match report.applied {
+            0 => format!("No new ORFs of at least {min_codons} codons"),
+            1 => format!("Added 1 ORF of at least {min_codons} codons"),
+            n => format!("Added {n} ORFs of at least {min_codons} codons"),
+        };
+        if known > 0 {
+            let _ = write!(msg, "; {known} already annotated");
+        }
+        if report.applied > 0 {
+            msg.push_str(" (Ctrl+Z removes them)");
+        }
+        Ok(msg)
+    }
+
     pub fn selection_text(&self) -> QString {
-        let Some((a, b)) = self.rust().view.selection else {
+        let v = &self.rust().view;
+        let Some((a, b)) = v.selection else {
             return QString::default();
         };
+        if let Some(FeatureId(id)) = v.selected
+            && let Ok(id) = i32::try_from(id)
+            && self.feature_bounds(id) == Some((a, b))
+        {
+            return self.feature_sequence(id);
+        }
         let text = self
             .with_doc(|s, d| String::from_utf8_lossy(&s.doc(d).read(a, b)).into_owned())
             .unwrap_or_default();

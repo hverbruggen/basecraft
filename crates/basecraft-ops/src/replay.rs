@@ -101,9 +101,9 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut Report) -> Re
             },
             Op::Undo { of } | Op::Redo { of } => {
                 let r = if matches!(e.op, Op::Undo { .. }) {
-                    session.undo(doc)
+                    session.undo_single(doc)
                 } else {
-                    session.redo(doc)
+                    session.redo_single(doc)
                 };
                 match r {
                     Ok(replayed) if ids.get(&replayed) == Some(of) => {}

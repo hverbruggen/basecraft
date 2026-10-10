@@ -198,6 +198,49 @@ fn extracts_spliced_cds_and_reverse_complements() {
 }
 
 #[test]
+fn grouped_operations_undo_together_and_replay() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join("seqs")).unwrap();
+    std::fs::write(root.join("seqs/test.gb"), GB).unwrap();
+    {
+        let mut s = Session::new(root);
+        let d = s.open(&root.join("seqs/test.gb")).unwrap();
+        let before = s.doc(d).feature_count();
+        s.begin_group();
+        for i in 0..3 {
+            s.apply(
+                d,
+                Op::FeatureAdd {
+                    feature: feature(i * 10, i * 10 + 5),
+                },
+            )
+            .unwrap();
+        }
+        s.end_group();
+        s.apply(
+            d,
+            Op::FeatureAdd {
+                feature: feature(50, 60),
+            },
+        )
+        .unwrap();
+        s.undo(d).unwrap();
+        assert_eq!(
+            s.doc(d).feature_count(),
+            before + 3,
+            "the single op undoes alone"
+        );
+        s.undo(d).unwrap();
+        assert_eq!(s.doc(d).feature_count(), before, "the group undoes as one");
+        s.redo(d).unwrap();
+        assert_eq!(s.doc(d).feature_count(), before + 3);
+    }
+    let report = replay::replay(root).unwrap();
+    assert!(report.ok(), "{:#?}", report.problems);
+}
+
+#[test]
 fn replay_detects_divergence() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();

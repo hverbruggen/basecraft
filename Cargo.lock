@@ -212,6 +212,7 @@ dependencies = [
  "basecraft-docs",
  "basecraft-io",
  "basecraft-ops",
+ "basecraft-plugin-host",
  "basecraft-protocol",
  "basecraft-viewmodel",
  "cxx",

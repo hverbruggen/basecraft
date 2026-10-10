@@ -45,6 +45,9 @@ struct Applied {
     entry_id: String,
     op: Op,
     inverse: Inverse,
+    /// Operations applied together (a plugin's results) share a group and
+    /// undo and redo together.
+    group: Option<u64>,
 }
 
 struct Slot {
@@ -80,6 +83,9 @@ pub struct Session {
     /// Merge typing bursts. Off for replay, where each logged entry must
     /// stay one operation.
     merge: bool,
+    /// The open undo group, if any, and the next group number.
+    group: Option<u64>,
+    next_group: u64,
     /// Monotonic, so entries made within one millisecond still sort in order.
     ids: Mutex<ulid::Generator>,
 }
@@ -102,6 +108,8 @@ impl Session {
             pending: None,
             store_objects: true,
             merge: true,
+            group: None,
+            next_group: 1,
             ids: Mutex::new(ulid::Generator::new()),
         }
     }
@@ -417,6 +425,7 @@ impl Session {
             entry_id: entry_id.clone(),
             op,
             inverse,
+            group: self.group,
         });
         if is_insert && self.merge {
             self.pending = Some(Pending {
@@ -567,7 +576,50 @@ impl Session {
     }
 
     /// Undo the last operation on a document; returns the undone entry's id.
+    /// Start an undo group: operations applied until [`Session::end_group`]
+    /// undo and redo as one step. Each is still logged on its own, so the
+    /// log replays exactly.
+    pub fn begin_group(&mut self) {
+        self.group = Some(self.next_group);
+        self.next_group += 1;
+    }
+
+    pub fn end_group(&mut self) {
+        self.group = None;
+    }
+
+    /// Undo the last step on a document (one operation, or a whole group);
+    /// returns the id of the last entry undone.
     pub fn undo(&mut self, id: DocId) -> Result<String> {
+        let group = self.docs[id.0].undo.last().and_then(|a| a.group);
+        let mut last = self.undo_one(id)?;
+        while group.is_some() && self.docs[id.0].undo.last().and_then(|a| a.group) == group {
+            last = self.undo_one(id)?;
+        }
+        Ok(last)
+    }
+
+    /// Redo the last undone step (one operation, or a whole group).
+    pub fn redo(&mut self, id: DocId) -> Result<String> {
+        let group = self.docs[id.0].redo.last().and_then(|a| a.group);
+        let mut last = self.redo_one(id)?;
+        while group.is_some() && self.docs[id.0].redo.last().and_then(|a| a.group) == group {
+            last = self.redo_one(id)?;
+        }
+        Ok(last)
+    }
+
+    /// Undo exactly one operation, ignoring groups. Replay uses this: the
+    /// log holds one undo entry per operation.
+    pub fn undo_single(&mut self, id: DocId) -> Result<String> {
+        self.undo_one(id)
+    }
+
+    pub fn redo_single(&mut self, id: DocId) -> Result<String> {
+        self.redo_one(id)
+    }
+
+    fn undo_one(&mut self, id: DocId) -> Result<String> {
         self.flush()?;
         let applied = self.docs[id.0].undo.pop().ok_or(Error::NothingTo("undo"))?;
         let doc = &mut self.docs[id.0].opened.doc;
@@ -593,8 +645,7 @@ impl Session {
         Ok(of)
     }
 
-    /// Redo the last undone operation; returns its entry's id.
-    pub fn redo(&mut self, id: DocId) -> Result<String> {
+    fn redo_one(&mut self, id: DocId) -> Result<String> {
         self.flush()?;
         let applied = self.docs[id.0].redo.pop().ok_or(Error::NothingTo("redo"))?;
         let inverse = match (&applied.op, &applied.inverse) {

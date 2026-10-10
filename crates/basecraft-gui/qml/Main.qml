@@ -39,6 +39,7 @@ ApplicationWindow {
     property bool showGc: true
     property int ribbonTab: 0
     property string defaultLayout: "wrapped"
+    property int orfMinCodons: 100
     readonly property var ribbonTabs: ["File", "View", "Annotations", "Settings", "Help"]
     // Only the wrapped layout is offered for now; files always open in it.
 
@@ -47,6 +48,7 @@ ApplicationWindow {
         category: "ui"
         property alias showGc: window.showGc
         property alias sidebarOpen: window.sidebarOpen
+        property alias orfMinCodons: window.orfMinCodons
     }
 
     function fileName(path) { return path.split("/").pop() }
@@ -265,6 +267,16 @@ ApplicationWindow {
                         }
                         RibbonButton { text: "Extract"; ToolTip.text: "Extract the selection as a new sequence (Ctrl+E)"; ToolTip.visible: hovered; onClicked: window.current.extract_selection() }
                     }
+                    ToolSeparator { Layout.fillHeight: true }
+                    RibbonGroup {
+                        title: "Find"
+                        RibbonButton {
+                            text: "Find ORFs…"
+                            ToolTip.text: "Annotate open reading frames on both strands"
+                            ToolTip.visible: hovered
+                            onClicked: orfDialog.open()
+                        }
+                    }
                     Item { Layout.fillWidth: true }
                     ShortcutsGroup {}
                 }
@@ -310,6 +322,40 @@ ApplicationWindow {
     }
 
     ShortcutsDialog { id: shortcuts }
+
+    Dialog {
+        id: orfDialog
+        title: "Find open reading frames"
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        onOpened: codons.forceActiveFocus()
+        onAccepted: {
+            window.orfMinCodons = codons.value
+            window.current.find_orfs(codons.value)
+        }
+        ColumnLayout {
+            spacing: 8
+            RowLayout {
+                Label { text: "At least" }
+                SpinBox {
+                    id: codons
+                    from: 10
+                    to: 10000
+                    stepSize: 10
+                    editable: true
+                    value: window.orfMinCodons
+                    Keys.onReturnPressed: orfDialog.accept()
+                    Keys.onEnterPressed: orfDialog.accept()
+                }
+                Label { text: "codons, start to stop" }
+            }
+            Label {
+                text: "Searches both strands. Each ORF is added as a misc_feature with the note \"ORF\";\none Undo removes them all."
+                opacity: 0.7
+            }
+        }
+    }
 
     Dialog {
         id: about
@@ -650,6 +696,7 @@ ApplicationWindow {
                 menu.close()
             }
             if (arg("--ribbon")) window.ribbonTab = Number(arg("--ribbon"))
+            if (arg("--orfs")) console.log(window.current.find_orfs(Number(arg("--orfs"))))
             if (arg("--shortcuts")) shortcuts.show(window.ribbonTabs[window.ribbonTab])
             if (arg("--edit")) {
                 if (arg("--edit") === "new") editor.openNew(); else editor.openFeature(Number(arg("--edit")))

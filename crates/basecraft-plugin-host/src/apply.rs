@@ -25,6 +25,8 @@ pub fn apply_proposals(
     actor: &Actor,
 ) -> Result<Report> {
     let mut report = Report::default();
+    // One group: a single Undo removes everything the plugin added.
+    session.begin_group();
     for op in ops {
         let changes: Vec<_> = session
             .doc(doc)
@@ -60,6 +62,7 @@ pub fn apply_proposals(
             report.dropped += 1;
         }
     }
+    session.end_group();
     Ok(report)
 }
 
