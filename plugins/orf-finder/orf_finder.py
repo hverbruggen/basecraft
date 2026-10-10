@@ -48,15 +48,20 @@ def orfs_on(seq: np.ndarray, min_codons: int):
 
 @plugin.operation("find_orfs")
 def find_orfs(snapshot, params):
+    """ORFs of at least `min_codons` codons on both strands, optionally only
+    within `start`..`end` (0-based, end exclusive)."""
     min_codons = int(params.get("min_codons", 100))
-    seq = snapshot.residues
+    full = snapshot.residues
+    lo = max(0, int(params.get("start", 0)))
+    hi = min(len(full), int(params.get("end", len(full))))
+    seq = full[lo:hi]
     length = len(seq)
     out = []
     for s, e in orfs_on(seq, min_codons):
-        out.append(feature("misc_feature", s, e, "+", note="ORF", label=f"orf_{len(out) + 1}"))
+        out.append(feature("misc_feature", lo + s, lo + e, "+", note="ORF", label=f"orf_{len(out) + 1}"))
     rc = COMPLEMENT[seq[::-1]]
     for s, e in orfs_on(rc, min_codons):
-        out.append(feature("misc_feature", length - e, length - s, "-", note="ORF", label=f"orf_{len(out) + 1}"))
+        out.append(feature("misc_feature", lo + length - e, lo + length - s, "-", note="ORF", label=f"orf_{len(out) + 1}"))
     return {"ops": out, "message": f"{len(out)} ORFs of at least {min_codons} codons"}
 
 

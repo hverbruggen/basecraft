@@ -120,10 +120,15 @@ pub mod qobject {
         #[qinvokable]
         fn delete_feature(self: Pin<&mut GenomeController>, id: i32);
         /// Run the ORF finder plugin and add the open reading frames of at
-        /// least `min_codons` codons it finds, as one undoable step.
-        /// Returns a summary for the status bar.
+        /// least `min_codons` codons it finds, in the whole sequence or only
+        /// the selection, as one undoable step. Returns a summary for the
+        /// status bar.
         #[qinvokable]
-        fn find_orfs(self: Pin<&mut GenomeController>, min_codons: i32) -> QString;
+        fn find_orfs(
+            self: Pin<&mut GenomeController>,
+            min_codons: i32,
+            in_selection: bool,
+        ) -> QString;
         /// The selected residues, for the clipboard.
         #[qinvokable]
         fn selection_text(self: &GenomeController) -> QString;
@@ -1125,8 +1130,17 @@ impl qobject::GenomeController {
 
     /// The selected bases. A selected annotation is copied as itself:
     /// spliced if it has parts, reverse-complemented on the reverse strand.
-    pub fn find_orfs(mut self: Pin<&mut Self>, min_codons: i32) -> QString {
-        let msg = match self.as_mut().run_orf_finder(min_codons.max(1)) {
+    pub fn find_orfs(mut self: Pin<&mut Self>, min_codons: i32, in_selection: bool) -> QString {
+        let range = if in_selection {
+            self.rust().view.selection
+        } else {
+            None
+        };
+        if in_selection && range.is_none() {
+            self.as_mut().notify("Select bases to search for ORFs");
+            return QString::default();
+        }
+        let msg = match self.as_mut().run_orf_finder(min_codons.max(1), range) {
             Ok(m) => m,
             Err(e) => format!("ORF finder: {e}"),
         };
@@ -1135,7 +1149,11 @@ impl qobject::GenomeController {
         QString::from(&msg)
     }
 
-    fn run_orf_finder(mut self: Pin<&mut Self>, min_codons: i32) -> Result<String, String> {
+    fn run_orf_finder(
+        mut self: Pin<&mut Self>,
+        min_codons: i32,
+        range: Option<(u64, u64)>,
+    ) -> Result<String, String> {
         use basecraft_plugin_host::{Manifest, PluginProcess, Snapshot, apply};
         let dir = plugin_dir("orf-finder");
         let manifest = Manifest::load(&dir).map_err(|e| format!("{e} ({})", dir.display()))?;
@@ -1150,14 +1168,15 @@ impl qobject::GenomeController {
             let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
                 return Err("no open file".into());
             };
+            let mut params = json!({ "min_codons": min_codons });
+            if let Some((a, b)) = range {
+                params["start"] = json!(a);
+                params["end"] = json!(b);
+            }
             let snap =
                 Snapshot::of(session.doc_key(doc), session.doc(doc)).map_err(|e| e.to_string())?;
             let result = plugin
-                .invoke(
-                    "find_orfs",
-                    json!({ "min_codons": min_codons }),
-                    Some(&snap),
-                )
+                .invoke("find_orfs", params, Some(&snap))
                 .map_err(|e| e.to_string())?;
             // Running it again adds only ORFs that aren't annotated yet.
             let found = result.ops.len();
@@ -1181,12 +1200,22 @@ impl qobject::GenomeController {
         if report.applied > 0 {
             self.as_mut().set_dirty(true);
         }
-        let mut msg = match report.applied {
-            0 => format!("No new ORFs of at least {min_codons} codons"),
-            1 => format!("Added 1 ORF of at least {min_codons} codons"),
-            n => format!("Added {n} ORFs of at least {min_codons} codons"),
+        let place = if range.is_some() {
+            " in the selection"
+        } else {
+            ""
         };
-        if known > 0 {
+        let mut msg = match (report.applied, known) {
+            (0, 0) => {
+                format!("No ORFs of at least {min_codons} codons{place}; try a lower minimum")
+            }
+            (0, k) => format!(
+                "No new ORFs{place}: all {k} of at least {min_codons} codons are already annotated"
+            ),
+            (1, _) => format!("Added 1 ORF of at least {min_codons} codons{place}"),
+            (n, _) => format!("Added {n} ORFs of at least {min_codons} codons{place}"),
+        };
+        if report.applied > 0 && known > 0 {
             let _ = write!(msg, "; {known} already annotated");
         }
         if report.applied > 0 {

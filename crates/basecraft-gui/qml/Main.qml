@@ -274,7 +274,7 @@ ApplicationWindow {
                             text: "Find ORFs…"
                             ToolTip.text: "Annotate open reading frames on both strands"
                             ToolTip.visible: hovered
-                            onClicked: orfDialog.open()
+                            onClicked: orfDialog.search(false)
                         }
                     }
                     Item { Layout.fillWidth: true }
@@ -325,14 +325,16 @@ ApplicationWindow {
 
     Dialog {
         id: orfDialog
-        title: "Find open reading frames"
+        property bool inSelection: false
+        function search(selectionOnly) { inSelection = selectionOnly; open() }
+        title: inSelection ? "Find open reading frames in the selection" : "Find open reading frames"
         modal: true
         anchors.centerIn: Overlay.overlay
         standardButtons: Dialog.Ok | Dialog.Cancel
         onOpened: codons.forceActiveFocus()
         onAccepted: {
             window.orfMinCodons = codons.value
-            window.current.find_orfs(codons.value)
+            window.current.find_orfs(codons.value, orfDialog.inSelection)
         }
         ColumnLayout {
             spacing: 8
@@ -594,6 +596,7 @@ ApplicationWindow {
         }
         Item { text: "Extract as new sequence"; visible: !menu.onAnnotation; enabled: menu.info.selection; onTriggered: window.current.extract_selection() }
         Item { text: "Zoom to selection"; visible: !menu.onAnnotation; enabled: menu.info.selection; onTriggered: window.current.zoom_to_selection() }
+        Item { text: "Find ORFs in selection…"; visible: !menu.onAnnotation; enabled: menu.info.selection; onTriggered: orfDialog.search(true) }
     }
 
     Dialog {
@@ -696,7 +699,7 @@ ApplicationWindow {
                 menu.close()
             }
             if (arg("--ribbon")) window.ribbonTab = Number(arg("--ribbon"))
-            if (arg("--orfs")) console.log(window.current.find_orfs(Number(arg("--orfs"))))
+            if (arg("--orfs")) console.log(window.current.find_orfs(Number(arg("--orfs")), arg("--select") !== undefined))
             if (arg("--shortcuts")) shortcuts.show(window.ribbonTabs[window.ribbonTab])
             if (arg("--edit")) {
                 if (arg("--edit") === "new") editor.openNew(); else editor.openFeature(Number(arg("--edit")))
