@@ -26,6 +26,7 @@ pub mod qobject {
         #[qproperty(bool, circular)]
         #[qproperty(QString, mode)]
         #[qproperty(QString, project_dir)]
+        #[qproperty(QString, mono_font)]
         #[qproperty(QString, file_path)]
         #[qproperty(bool, dirty)]
         #[qproperty(QString, zoom_text)]
@@ -207,6 +208,7 @@ pub struct ControllerRust {
     circular: bool,
     mode: QString,
     project_dir: QString,
+    mono_font: QString,
     file_path: QString,
     dirty: bool,
     zoom_text: QString,
@@ -234,6 +236,7 @@ impl Default for ControllerRust {
             circular: false,
             mode: QString::from("wrapped"),
             project_dir: QString::default(),
+            mono_font: QString::from(&monospace_font()),
             file_path: QString::default(),
             dirty: false,
             zoom_text: QString::default(),
@@ -255,6 +258,19 @@ impl Default for ControllerRust {
         c.accent = QString::from(&css(c.theme.accent));
         c
     }
+}
+
+/// The desktop's monospace font: Omarchy's current font when available,
+/// else whatever fontconfig calls monospace.
+fn monospace_font() -> String {
+    std::process::Command::new("omarchy")
+        .args(["font", "current"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|f| !f.is_empty())
+        .unwrap_or_else(|| "monospace".to_string())
 }
 
 fn omarchy_theme_path() -> Option<PathBuf> {

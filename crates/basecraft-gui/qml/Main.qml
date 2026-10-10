@@ -118,10 +118,24 @@ ApplicationWindow {
 
             Label {
                 id: projectName
-                anchors { top: parent.top; left: parent.left; right: parent.right; margins: 8 }
+                anchors { top: parent.top; left: parent.left; right: collapse.left; margins: 8 }
                 text: controller.project_dir.length ? controller.project_dir.split("/").pop() : "No project"
+                font.family: controller.mono_font
+                font.pixelSize: 12
                 font.bold: true
                 elide: Text.ElideMiddle
+            }
+            ToolButton {
+                id: collapse
+                anchors { verticalCenter: projectName.verticalCenter; right: parent.right; rightMargin: 2 }
+                text: "◀"
+                font.pixelSize: 10
+                implicitWidth: 24
+                implicitHeight: 24
+                focusPolicy: Qt.NoFocus
+                ToolTip.text: "Hide files (Ctrl+B)"
+                ToolTip.visible: hovered
+                onClicked: window.sidebarOpen = false
             }
 
             TreeView {
@@ -136,7 +150,11 @@ ApplicationWindow {
                     implicitWidth: tree.width
                     readonly property string path: files.pathAt(treeView.index(row, column))
                     highlighted: path === controller.file_path
-                    font.pixelSize: 13
+                    font.family: controller.mono_font
+                    font.pixelSize: 12
+                    implicitHeight: 22
+                    topPadding: 0
+                    bottomPadding: 0
                     onClicked: {
                         if (files.isDirAt(treeView.index(row, column))) treeView.toggleExpanded(row)
                         else window.openPath(path)
@@ -146,10 +164,31 @@ ApplicationWindow {
             }
         }
 
+        // Collapsed sidebar: a thin strip to bring it back.
+        Rectangle {
+            visible: !window.sidebarOpen
+            SplitView.preferredWidth: 18
+            SplitView.minimumWidth: 18
+            SplitView.maximumWidth: 18
+            color: Qt.alpha(controller.foreground, 0.03)
+            ToolButton {
+                anchors { top: parent.top; horizontalCenter: parent.horizontalCenter; topMargin: 4 }
+                text: "▶"
+                font.pixelSize: 10
+                implicitWidth: 18
+                implicitHeight: 24
+                focusPolicy: Qt.NoFocus
+                ToolTip.text: "Show files (Ctrl+B)"
+                ToolTip.visible: hovered
+                onClicked: window.sidebarOpen = true
+            }
+        }
+
         InstanceView {
             id: view
             SplitView.fillWidth: true
             clearColor: controller.background
+            fontFamily: controller.mono_font
             instances: controller.frame
             focus: true
             onWidthChanged: controller.resize(width, height)
@@ -376,6 +415,7 @@ ApplicationWindow {
         onTriggered: {
             if (arg("--goto")) { const r = arg("--goto").split(","); controller.show_range(Number(r[0]), Number(r[1])) }
             if (arg("--mode")) controller.switch_view(arg("--mode"))
+            if (arg("--no-sidebar")) window.sidebarOpen = false
             if (arg("--circular") && !controller.circular) controller.switch_view("circular")
             if (arg("--type")) {
                 controller.press(view.width / 2, 45, 0)
