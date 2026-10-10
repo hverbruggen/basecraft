@@ -2,3 +2,7 @@
 # so this path is specific to this machine. Override with CARGO_TARGET_DIR.
 [build]
 target-dir = "/private/local-path"
+
+# cxx-qt finds Qt through qmake. Arch ships Qt 6's as qmake6.
+[env]
+QMAKE = "/usr/bin/qmake6"
