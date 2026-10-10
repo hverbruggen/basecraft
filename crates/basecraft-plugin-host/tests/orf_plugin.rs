@@ -1,0 +1,119 @@
+//! End to end: the ORF finder plugin in a real Python process.
+//! Skips when no Python with pyarrow and numpy is available.
+
+use std::path::Path;
+use std::time::{Duration, Instant};
+
+use basecraft_ops::Session;
+use basecraft_plugin_host::apply::apply_proposals;
+use basecraft_plugin_host::process::python_interpreter;
+use basecraft_plugin_host::{Manifest, PluginProcess, Snapshot};
+use basecraft_protocol::{Actor, Op};
+use serde_json::json;
+
+fn plugin() -> Option<PluginProcess> {
+    let python = python_interpreter();
+    let ok = std::process::Command::new(&python)
+        .args(["-c", "import pyarrow, numpy"])
+        .status()
+        .is_ok_and(|s| s.success());
+    if !ok {
+        eprintln!("skipping: {} lacks pyarrow or numpy", python.display());
+        return None;
+    }
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/orf-finder");
+    let manifest = Manifest::load(&dir).expect("manifest");
+    Some(PluginProcess::spawn_with(&manifest, &python).expect("spawn"))
+}
+
+/// A GenBank record: poly-C background with one forward ORF of 121 codons
+/// (ATG + 120 × AAA + TAA) at 0-based position 10.
+fn record(dir: &Path) -> std::path::PathBuf {
+    let mut seq = "C".repeat(10);
+    seq.push_str("ATG");
+    seq.push_str(&"AAA".repeat(120));
+    seq.push_str("TAA");
+    seq.push_str(&"C".repeat(200));
+    let rec = basecraft_io::genbank::Record {
+        name: "orftest".into(),
+        molecule: "DNA".into(),
+        circular: false,
+        division: "SYN".into(),
+        date: "10-OCT-2026".into(),
+        header: Vec::new(),
+        features: Vec::new(),
+        sequence: seq.into_bytes(),
+    };
+    let path = dir.join("orf.gb");
+    basecraft_io::write_atomic(&path, |w| basecraft_io::genbank::write(w, &rec)).unwrap();
+    path
+}
+
+#[test]
+fn finds_orfs_and_maps_them_onto_a_newer_version() {
+    let Some(mut p) = plugin() else { return };
+    assert_eq!(p.info.operations, vec!["find_orfs", "noop", "selftest"]);
+    eprintln!("plugin startup: {:?}", p.startup);
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = Session::unlogged(dir.path());
+    let doc = session.open(&record(dir.path())).unwrap();
+    let snap = Snapshot::of(session.doc_key(doc), session.doc(doc)).unwrap();
+
+    let result = p
+        .invoke("find_orfs", json!({ "min_codons": 100 }), Some(&snap))
+        .unwrap();
+    assert_eq!(result.ops.len(), 1, "{:?}", result.message);
+    let Op::FeatureAdd { feature } = &result.ops[0] else {
+        panic!("not a feature.add")
+    };
+    let seg = &feature.location.segments[0];
+    assert_eq!((seg.start, seg.end), (10, 10 + 3 + 360 + 3));
+
+    // The user inserts 5 residues upstream while the plugin was working.
+    session
+        .apply(
+            doc,
+            Op::SeqReplace {
+                start: 2,
+                end: 2,
+                residues: "GGGGG".into(),
+            },
+        )
+        .unwrap();
+    let actor = Actor::Plugin {
+        id: p.info.id.clone(),
+        version: p.info.version.clone(),
+    };
+    let report = apply_proposals(&mut session, doc, snap.version, result.ops, &actor).unwrap();
+    assert_eq!((report.applied, report.dropped), (1, 0));
+    let (_, f) = session.doc(doc).features().last().unwrap();
+    let seg = &f.location.segments[0];
+    assert_eq!((seg.start, seg.end), (15, 15 + 366));
+    assert_eq!(&session.doc(doc).read(seg.start, seg.start + 3), b"ATG");
+}
+
+#[test]
+fn call_overhead() {
+    let Some(mut p) = plugin() else { return };
+    let n = 2000;
+    let t = Instant::now();
+    for _ in 0..n {
+        p.ping().unwrap();
+    }
+    let ping = t.elapsed() / n;
+    let t = Instant::now();
+    for _ in 0..n {
+        p.invoke("noop", json!({}), None).unwrap();
+    }
+    let noop = t.elapsed() / n;
+    eprintln!(
+        "startup {:?}, ping {ping:?}, no-op invoke {noop:?}",
+        p.startup
+    );
+    // The budget is 1 ms; leave room for a loaded machine.
+    assert!(
+        noop < Duration::from_millis(1),
+        "no-op invoke took {noop:?}"
+    );
+}

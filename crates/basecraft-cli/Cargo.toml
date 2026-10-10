@@ -11,6 +11,7 @@ license.workspace = true
 [dependencies]
 basecraft-io.workspace = true
 basecraft-ops.workspace = true
+basecraft-plugin-host.workspace = true
 basecraft-protocol.workspace = true
 schemars.workspace = true
 serde_json.workspace = true

@@ -9,6 +9,7 @@ platforms = ["linux-64"]
 [dependencies]
 python = "3.13.*"
 pyarrow = "*"
+numpy = "*"
 maturin = "*"
 ruff = "*"
 pyright = "*"

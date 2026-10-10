@@ -5,6 +5,7 @@
 
 pub mod annotation;
 pub mod ops;
+pub mod plugin;
 
 pub use annotation::{Feature, Location, Qualifier, Segment, Strand};
 pub use ops::{Actor, DocState, LogEntry, Op, OpResult};
