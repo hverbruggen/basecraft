@@ -9,6 +9,8 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
+basecraft-docs.workspace = true
+basecraft-protocol.workspace = true
 
 [lints]
 workspace = true

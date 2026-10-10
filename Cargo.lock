@@ -90,6 +90,9 @@ dependencies = [
 name = "basecraft-gui"
 version = "0.0.0"
 dependencies = [
+ "basecraft-docs",
+ "basecraft-ops",
+ "basecraft-protocol",
  "basecraft-viewmodel",
  "cxx",
  "cxx-qt",
@@ -159,6 +162,10 @@ dependencies = [
 [[package]]
 name = "basecraft-viewmodel"
 version = "0.0.0"
+dependencies = [
+ "basecraft-docs",
+ "basecraft-protocol",
+]
 
 [[package]]
 name = "bitflags"

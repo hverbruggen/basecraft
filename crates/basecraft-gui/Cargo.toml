@@ -9,6 +9,9 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
+basecraft-docs.workspace = true
+basecraft-ops.workspace = true
+basecraft-protocol.workspace = true
 basecraft-viewmodel.workspace = true
 cxx = "1.0"
 cxx-qt = "0.10"

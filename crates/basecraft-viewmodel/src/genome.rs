@@ -1,0 +1,1181 @@
+//! The genome view: a sequence with its annotations, linear or circular.
+//!
+//! [`GenomeView`] holds the viewport and the interaction state, builds a
+//! [`Frame`] for the visible region, and answers hit tests. It reads the
+//! document but never edits it; edits go through operations.
+
+// Pixel geometry mixes f32 screen coordinates with u64/f64 sequence
+// coordinates; the conversions are deliberate and bounded by the viewport.
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::many_single_char_names
+)]
+
+use std::collections::{HashMap, HashSet};
+use std::f32::consts::{PI, TAU};
+
+use basecraft_docs::{FeatureId, SequenceDoc};
+use basecraft_protocol::{Feature, Strand};
+
+use crate::frame::{Frame, Rgba, text_width};
+use crate::theme::{Theme, alpha, mix};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    Linear,
+    Circular,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Region {
+    Ruler,
+    Sequence,
+    Features,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Drag {
+    None,
+    Pan { last_x: f32 },
+    Select { anchor: u64 },
+}
+
+const RULER_H: f32 = 30.0;
+const SEQ_Y: f32 = 38.0;
+const SEQ_H: f32 = 20.0;
+const LANE_H: f32 = 14.0;
+const LANE_GAP: f32 = 9.0;
+const LABEL_SIZE: f32 = 13.0;
+/// Most pixels per base when zoomed in.
+const MAX_PX_PER_BP: f64 = 28.0;
+/// Pixels per base from which residue letters are drawn.
+const LETTERS_FROM: f64 = 9.0;
+/// Above this many visible features, draw their density instead.
+const MAX_DRAWN_FEATURES: usize = 4000;
+
+fn is_transcript(kind: &str) -> bool {
+    matches!(
+        kind,
+        "mRNA" | "transcript" | "tRNA" | "rRNA" | "ncRNA" | "lnc_RNA"
+    )
+}
+
+/// Whole-sequence features that would only cover everything.
+fn is_backdrop(f: &Feature) -> bool {
+    matches!(f.kind.as_str(), "source" | "region" | "chromosome")
+}
+
+/// A feature placed on a row of the linear view.
+struct Item {
+    id: FeatureId,
+    x0: f32,
+    x1: f32,
+    label: String,
+    label_inside: bool,
+    /// Right edge including an outside label, for row packing.
+    reach: f32,
+}
+
+#[derive(Clone, Debug)]
+pub struct GenomeView {
+    pub mode: Mode,
+    /// Sequence coordinate at the left edge.
+    pub start: f64,
+    pub bp_per_px: f64,
+    pub width: f32,
+    pub height: f32,
+    /// Insertion point, between residues: `0..=len`.
+    pub cursor: Option<u64>,
+    pub selection: Option<(u64, u64)>,
+    pub selected: Option<FeatureId>,
+    /// Features that didn't fit in the lanes on the last build.
+    pub hidden: usize,
+    drag: Drag,
+    hits: Vec<([f32; 4], FeatureId)>,
+    arc_hits: Vec<(f32, f32, f32, f32, FeatureId)>,
+}
+
+impl GenomeView {
+    pub fn new(width: f32, height: f32) -> Self {
+        Self {
+            mode: Mode::Linear,
+            start: 0.0,
+            bp_per_px: 1.0,
+            width: width.max(1.0),
+            height: height.max(1.0),
+            cursor: None,
+            selection: None,
+            selected: None,
+            hidden: 0,
+            drag: Drag::None,
+            hits: Vec::new(),
+            arc_hits: Vec::new(),
+        }
+    }
+
+    // Viewport.
+
+    pub fn resize(&mut self, width: f32, height: f32, len: u64) {
+        let centre = self.start + f64::from(self.width) * self.bp_per_px / 2.0;
+        self.width = width.max(1.0);
+        self.height = height.max(1.0);
+        self.start = centre - f64::from(self.width) * self.bp_per_px / 2.0;
+        self.clamp(len);
+    }
+
+    pub fn fit(&mut self, len: u64) {
+        self.bp_per_px = (len.max(1) as f64 / f64::from(self.width)).max(1.0 / MAX_PX_PER_BP);
+        self.start = 0.0;
+        self.clamp(len);
+    }
+
+    fn span(&self) -> f64 {
+        f64::from(self.width) * self.bp_per_px
+    }
+
+    fn clamp(&mut self, len: u64) {
+        let len = len as f64;
+        let max_bpp = (len / f64::from(self.width)).max(1.0 / MAX_PX_PER_BP);
+        self.bp_per_px = self.bp_per_px.clamp(1.0 / MAX_PX_PER_BP, max_bpp);
+        let span = self.span();
+        if span >= len {
+            self.start = (len - span) / 2.0;
+        } else {
+            let margin = span * 0.05;
+            self.start = self.start.clamp(-margin, len - span + margin);
+        }
+    }
+
+    /// Zoom by `factor` (> 1 zooms in), keeping the position under `x` fixed.
+    pub fn zoom_at(&mut self, x: f32, factor: f64, len: u64) {
+        let anchor = self.bp_at(x);
+        self.bp_per_px /= factor;
+        self.clamp(len);
+        self.start = anchor - f64::from(x) * self.bp_per_px;
+        self.clamp(len);
+    }
+
+    pub fn pan(&mut self, dx: f32, len: u64) {
+        self.start -= f64::from(dx) * self.bp_per_px;
+        self.clamp(len);
+    }
+
+    /// Scroll so that `pos` is visible.
+    pub fn reveal(&mut self, pos: u64, len: u64) {
+        let p = pos as f64;
+        let span = self.span();
+        if p < self.start || p > self.start + span {
+            self.start = p - span / 2.0;
+            self.clamp(len);
+        }
+    }
+
+    pub fn x_of(&self, bp: f64) -> f32 {
+        ((bp - self.start) / self.bp_per_px) as f32
+    }
+
+    pub fn bp_at(&self, x: f32) -> f64 {
+        self.start + f64::from(x) * self.bp_per_px
+    }
+
+    /// The residue boundary nearest to `x`, for placing the cursor.
+    pub fn boundary_at(&self, x: f32, len: u64) -> u64 {
+        self.bp_at(x).round().clamp(0.0, len as f64) as u64
+    }
+
+    fn px_per_bp(&self) -> f64 {
+        1.0 / self.bp_per_px
+    }
+
+    fn letters(&self) -> bool {
+        self.px_per_bp() >= LETTERS_FROM
+    }
+
+    fn feature_top(&self) -> f32 {
+        let rows = if self.letters() { 2.0 } else { 1.0 };
+        SEQ_Y + SEQ_H * rows + 18.0
+    }
+
+    pub fn region_at(&self, y: f32) -> Region {
+        if y < SEQ_Y - 2.0 {
+            Region::Ruler
+        } else if y < self.feature_top() - 6.0 {
+            Region::Sequence
+        } else {
+            Region::Features
+        }
+    }
+
+    // Circular geometry: origin at the top, clockwise.
+
+    fn centre(&self) -> (f32, f32) {
+        (self.width / 2.0, self.height / 2.0 + 8.0)
+    }
+
+    fn radius(&self) -> f32 {
+        (self.width.min(self.height) * 0.30).max(40.0)
+    }
+
+    fn angle(bp: f64, len: u64) -> f32 {
+        -PI / 2.0 + TAU * (bp / len.max(1) as f64) as f32
+    }
+
+    fn bp_at_angle(a: f32, len: u64) -> f64 {
+        let t = ((a + PI / 2.0).rem_euclid(TAU)) / TAU;
+        f64::from(t) * len as f64
+    }
+
+    // Hit tests.
+
+    pub fn feature_at(&self, x: f32, y: f32, len: u64) -> Option<FeatureId> {
+        match self.mode {
+            Mode::Linear => self
+                .hits
+                .iter()
+                .rev()
+                .find(|(r, _)| x >= r[0] - 2.0 && x <= r[2] + 2.0 && y >= r[1] && y <= r[3])
+                .map(|(_, id)| *id),
+            Mode::Circular => {
+                let (cx, cy) = self.centre();
+                let (dx, dy) = (x - cx, y - cy);
+                let r = (dx * dx + dy * dy).sqrt();
+                let bp = Self::bp_at_angle(dy.atan2(dx), len) as f32;
+                self.arc_hits
+                    .iter()
+                    .find(|(b0, b1, r0, r1, _)| {
+                        bp >= *b0 && bp <= *b1 && r >= *r0 - 2.0 && r <= *r1 + 2.0
+                    })
+                    .map(|h| h.4)
+            }
+        }
+    }
+
+    fn position_at(&self, x: f32, y: f32, len: u64) -> u64 {
+        match self.mode {
+            Mode::Linear => self.boundary_at(x, len),
+            Mode::Circular => {
+                let (cx, cy) = self.centre();
+                Self::bp_at_angle((y - cy).atan2(x - cx), len)
+                    .round()
+                    .clamp(0.0, len as f64) as u64
+            }
+        }
+    }
+
+    // Input.
+
+    /// Mouse press. Clicking a feature selects it; clicking the sequence or
+    /// ruler places the cursor and starts a selection; anywhere else starts
+    /// a pan.
+    pub fn press(&mut self, x: f32, y: f32, shift: bool, len: u64) {
+        if let Some(id) = self.feature_at(x, y, len) {
+            self.selected = Some(id);
+            self.drag = Drag::Pan { last_x: x };
+            return;
+        }
+        let on_sequence = match self.mode {
+            Mode::Linear => self.region_at(y) != Region::Features,
+            Mode::Circular => true,
+        };
+        if on_sequence {
+            let p = self.position_at(x, y, len);
+            let anchor = match (shift, self.cursor) {
+                (true, Some(c)) => c,
+                _ => p,
+            };
+            self.selected = None;
+            self.cursor = Some(p);
+            self.selection = (anchor != p).then(|| (anchor.min(p), anchor.max(p)));
+            self.drag = Drag::Select { anchor };
+        } else {
+            self.selected = None;
+            self.drag = Drag::Pan { last_x: x };
+        }
+    }
+
+    pub fn drag_to(&mut self, x: f32, y: f32, len: u64) {
+        match self.drag {
+            Drag::None => {}
+            Drag::Pan { last_x } => {
+                if self.mode == Mode::Linear {
+                    self.pan(x - last_x, len);
+                }
+                self.drag = Drag::Pan { last_x: x };
+            }
+            Drag::Select { anchor } => {
+                let p = self.position_at(x, y, len);
+                self.cursor = Some(p);
+                self.selection = (anchor != p).then(|| (anchor.min(p), anchor.max(p)));
+            }
+        }
+    }
+
+    pub fn release(&mut self) {
+        self.drag = Drag::None;
+    }
+
+    /// Move the cursor by `delta` residues; with `extend`, grow the selection.
+    pub fn move_cursor(&mut self, delta: i64, extend: bool, len: u64) {
+        let c = self.cursor.unwrap_or(0);
+        let next = (c as i64 + delta).clamp(0, len as i64) as u64;
+        if extend {
+            let anchor = match self.selection {
+                Some((a, b)) if b == c => a,
+                Some((a, b)) if a == c => b,
+                _ => c,
+            };
+            self.selection = (anchor != next).then(|| (anchor.min(next), anchor.max(next)));
+        } else {
+            self.selection = None;
+        }
+        self.cursor = Some(next);
+        if self.mode == Mode::Linear {
+            self.reveal(next, len);
+        }
+    }
+
+    // Drawing.
+
+    pub fn build(&mut self, doc: &SequenceDoc, theme: &Theme, frame: &mut Frame) {
+        frame.clear();
+        self.hits.clear();
+        self.arc_hits.clear();
+        self.hidden = 0;
+        match self.mode {
+            Mode::Linear => self.build_linear(doc, theme, frame),
+            Mode::Circular => self.build_circular(doc, theme, frame),
+        }
+    }
+
+    fn visible_range(&self, len: u64) -> (u64, u64) {
+        let b0 = self.start.floor().max(0.0) as u64;
+        let b1 = ((self.start + self.span()).ceil().max(0.0) as u64).min(len);
+        (b0.min(len), b1)
+    }
+
+    fn build_linear(&mut self, doc: &SequenceDoc, theme: &Theme, frame: &mut Frame) {
+        let len = doc.len();
+        let (b0, b1) = self.visible_range(len);
+        let x_end = self.x_of(len as f64);
+        let x_start = self.x_of(0.0);
+
+        // Beyond the sequence ends.
+        frame.rect(0.0, 0.0, x_start.max(0.0), self.height, theme.surface);
+        frame.rect(x_end, 0.0, self.width - x_end, self.height, theme.surface);
+
+        self.draw_ruler(len, theme, frame);
+
+        if let Some((a, b)) = self.selection {
+            let (xa, xb) = (self.x_of(a as f64), self.x_of(b as f64));
+            frame.rect(
+                xa,
+                RULER_H,
+                (xb - xa).max(1.0),
+                self.height - RULER_H,
+                alpha(theme.selection, 0.55),
+            );
+        }
+
+        self.draw_sequence(doc, b0, b1, theme, frame);
+        self.draw_features(doc, b0, b1, theme, frame);
+
+        if let Some(c) = self.cursor {
+            let x = self.x_of(c as f64);
+            let bottom = self.feature_top() - 12.0;
+            frame.rect(
+                x - 1.0,
+                SEQ_Y - 5.0,
+                2.0,
+                bottom - SEQ_Y + 5.0,
+                theme.accent,
+            );
+        }
+    }
+
+    fn draw_ruler(&self, len: u64, theme: &Theme, frame: &mut Frame) {
+        let base_y = RULER_H - 6.0;
+        let x0 = self.x_of(0.0).max(0.0);
+        let x1 = self.x_of(len as f64).min(self.width);
+        frame.rect(x0, base_y, x1 - x0, 1.0, theme.foreground_muted);
+        let step = nice_step(self.bp_per_px * 110.0);
+        let minor = step / 5.0;
+        let (lo, hi) = (
+            self.start.max(0.0),
+            (self.start + self.span()).min(len as f64),
+        );
+        if minor / self.bp_per_px >= 7.0 {
+            let mut t = (lo / minor).ceil() * minor;
+            while t <= hi {
+                frame.rect(self.x_of(t), base_y - 3.0, 1.0, 3.0, theme.foreground_muted);
+                t += minor;
+            }
+        }
+        let mut t = (lo / step).ceil() * step;
+        while t <= hi {
+            let x = self.x_of(t);
+            frame.rect(x, base_y - 7.0, 1.0, 7.0, theme.foreground);
+            frame.text(
+                x + 3.0,
+                2.0,
+                12.0,
+                &format_bp(t as u64, step),
+                theme.foreground_muted,
+            );
+            t += step;
+        }
+    }
+
+    fn draw_sequence(&self, doc: &SequenceDoc, b0: u64, b1: u64, theme: &Theme, frame: &mut Frame) {
+        if b1 <= b0 {
+            return;
+        }
+        let ppb = self.px_per_bp() as f32;
+        if self.px_per_bp() >= 1.0 {
+            let residues = doc.read(b0, b1);
+            let letters = self.letters();
+            for (i, &b) in residues.iter().enumerate() {
+                let x = self.x_of((b0 + i as u64) as f64);
+                let c = theme.residue(b);
+                if letters {
+                    let size = (SEQ_H - 3.0).min(ppb * 1.7);
+                    let gx = x + (ppb - size * crate::frame::GLYPH_ADVANCE) / 2.0;
+                    frame.rect(
+                        x + 0.5,
+                        SEQ_Y,
+                        ppb - 1.0,
+                        SEQ_H,
+                        mix(theme.background, c, 0.22),
+                    );
+                    frame.glyph(gx, SEQ_Y + (SEQ_H - size) / 2.0, size, b, c);
+                    let comp = complement(b);
+                    let cc = theme.residue(comp);
+                    frame.rect(
+                        x + 0.5,
+                        SEQ_Y + SEQ_H + 2.0,
+                        ppb - 1.0,
+                        SEQ_H,
+                        mix(theme.background, cc, 0.10),
+                    );
+                    frame.glyph(
+                        gx,
+                        SEQ_Y + SEQ_H + 2.0 + (SEQ_H - size) / 2.0,
+                        size,
+                        comp,
+                        alpha(cc, 0.7),
+                    );
+                } else {
+                    frame.rect(x, SEQ_Y, ppb.max(1.0), SEQ_H, alpha(c, 0.85));
+                }
+            }
+            return;
+        }
+        // Zoomed out: GC content per bin, scaled to the visible range so
+        // local variation shows; colour runs from AT-rich to GC-rich.
+        let bins = (self.x_of(b1 as f64) - self.x_of(b0 as f64)).max(1.0) as usize / 2;
+        let gc = doc.summary().gc(b0, b1, bins.max(1));
+        let bin_w = (self.x_of(b1 as f64) - self.x_of(b0 as f64)) / gc.len() as f32;
+        let x0 = self.x_of(b0 as f64);
+        let finite = gc.iter().copied().filter(|v| !v.is_nan());
+        let (lo, hi) = finite.fold((f32::MAX, f32::MIN), |(lo, hi), v| (lo.min(v), hi.max(v)));
+        let (lo, hi) = if hi - lo < 0.02 {
+            (f32::midpoint(lo, hi) - 0.01, f32::midpoint(lo, hi) + 0.01)
+        } else {
+            (lo, hi)
+        };
+        frame.rect(
+            x0,
+            SEQ_Y,
+            bin_w * gc.len() as f32,
+            SEQ_H,
+            alpha(theme.surface, 0.6),
+        );
+        for (i, &v) in gc.iter().enumerate() {
+            if v.is_nan() {
+                continue;
+            }
+            let t = ((v - lo) / (hi - lo)).clamp(0.0, 1.0);
+            let h = 2.0 + t * (SEQ_H - 2.0);
+            let x = x0 + i as f32 * bin_w;
+            frame.rect(
+                x,
+                SEQ_Y + SEQ_H - h,
+                bin_w.max(1.0),
+                h,
+                alpha(mix(theme.orange, theme.blue, t), 0.8),
+            );
+        }
+        let label = format!("GC {:.0}-{:.0}%", lo * 100.0, hi * 100.0);
+        frame.text(
+            self.width - text_width(&label, 11.0) - 6.0,
+            SEQ_Y + SEQ_H + 2.0,
+            11.0,
+            &label,
+            theme.foreground_muted,
+        );
+    }
+
+    fn draw_features(
+        &mut self,
+        doc: &SequenceDoc,
+        b0: u64,
+        b1: u64,
+        theme: &Theme,
+        frame: &mut Frame,
+    ) {
+        let top = self.feature_top();
+        let mut ids = doc.features_in(b0, b1);
+        ids.retain(|id| doc.feature(*id).is_some_and(|f| !is_backdrop(f)));
+        if ids.len() > MAX_DRAWN_FEATURES {
+            let bins = (self.width / 3.0) as usize;
+            let counts = doc.index().density(b0, b1, bins);
+            let max = counts.iter().copied().max().unwrap_or(1).max(1) as f32;
+            let (x0, x1) = (self.x_of(b0 as f64), self.x_of(b1 as f64));
+            let w = (x1 - x0) / bins as f32;
+            for (i, &c) in counts.iter().enumerate() {
+                let h = 60.0 * c as f32 / max;
+                frame.rect(
+                    x0 + i as f32 * w,
+                    top + 60.0 - h,
+                    w.max(1.0),
+                    h,
+                    alpha(theme.green, 0.7),
+                );
+            }
+            frame.text(
+                8.0,
+                top + 68.0,
+                LABEL_SIZE,
+                &format!("{} features here; zoom in to see them", ids.len()),
+                theme.foreground_muted,
+            );
+            return;
+        }
+
+        // Gene models: exons and CDS whose parent transcript is in view are
+        // drawn inside the transcript's glyph, not on rows of their own.
+        let mut by_gff_id: HashMap<&str, FeatureId> = HashMap::new();
+        for &id in &ids {
+            if let Some(gid) = doc.feature(id).and_then(|f| f.qualifier("ID")) {
+                by_gff_id.insert(gid, id);
+            }
+        }
+        let mut parts: HashMap<FeatureId, Vec<FeatureId>> = HashMap::new();
+        let mut absorbed: HashSet<FeatureId> = HashSet::new();
+        for &id in &ids {
+            let Some(f) = doc.feature(id) else { continue };
+            if !matches!(
+                f.kind.as_str(),
+                "exon" | "CDS" | "five_prime_UTR" | "three_prime_UTR"
+            ) {
+                continue;
+            }
+            let parent = f
+                .qualifier("Parent")
+                .and_then(|p| by_gff_id.get(p))
+                .copied();
+            if let Some(pid) = parent
+                && doc.feature(pid).is_some_and(|p| is_transcript(&p.kind))
+            {
+                parts.entry(pid).or_default().push(id);
+                absorbed.insert(id);
+            }
+        }
+        ids.retain(|id| !absorbed.contains(id));
+
+        // Labels beside features cost lane space; only when there's room.
+        let outside_labels = ids.len() <= 250;
+        let mut items: Vec<Item> = Vec::with_capacity(ids.len());
+        for id in ids {
+            let Some(f) = doc.feature(id) else { continue };
+            let Some((s, e)) = f.location.bounds() else {
+                continue;
+            };
+            let x0 = self.x_of(s as f64);
+            let x1 = self.x_of(e as f64).max(x0 + 1.0);
+            let label = f.label().unwrap_or(&f.kind).to_string();
+            let lw = text_width(&label, LABEL_SIZE);
+            // Gene models have lines and boxes inside; label them beside.
+            let label_inside = x1 - x0 >= lw + 8.0 && !parts.contains_key(&id);
+            let reach = if label_inside || !outside_labels {
+                x1 + 8.0
+            } else {
+                x1 + 12.0 + lw
+            };
+            items.push(Item {
+                id,
+                x0,
+                x1,
+                label,
+                label_inside,
+                reach,
+            });
+        }
+        items.sort_by(|a, b| a.x0.total_cmp(&b.x0));
+        let max_lanes = (((self.height - top) / (LANE_H + LANE_GAP)).floor() as usize).max(1);
+        let mut lane_ends: Vec<f32> = Vec::new();
+        for item in &items {
+            let lane = lane_ends.iter().position(|&end| end + 4.0 < item.x0);
+            let lane = match lane {
+                Some(l) => l,
+                None if lane_ends.len() < max_lanes => {
+                    lane_ends.push(f32::NEG_INFINITY);
+                    lane_ends.len() - 1
+                }
+                None => {
+                    self.hidden += 1;
+                    continue;
+                }
+            };
+            lane_ends[lane] = item.reach;
+            let y = top + lane as f32 * (LANE_H + LANE_GAP);
+            let Some(f) = doc.feature(item.id) else {
+                continue;
+            };
+            let children: Vec<&Feature> = parts
+                .get(&item.id)
+                .map(|c| c.iter().filter_map(|id| doc.feature(*id)).collect())
+                .unwrap_or_default();
+            self.draw_feature(f, &children, item.x0, item.x1, y, theme, frame);
+            if self.selected == Some(item.id) {
+                outline(
+                    frame,
+                    item.x0 - 2.0,
+                    y - 2.0,
+                    item.x1 - item.x0 + 4.0,
+                    LANE_H + 4.0,
+                    theme.accent,
+                );
+            }
+            let text_y = y + (LANE_H - LABEL_SIZE) / 2.0;
+            if item.label_inside {
+                frame.text(
+                    item.x0 + 4.0,
+                    text_y,
+                    LABEL_SIZE,
+                    &item.label,
+                    theme.background,
+                );
+            } else if item.reach > item.x1 + 8.0 {
+                frame.text(
+                    item.x1 + 10.0,
+                    text_y,
+                    LABEL_SIZE,
+                    &item.label,
+                    theme.foreground,
+                );
+            }
+            self.hits.push(([item.x0, y, item.x1, y + LANE_H], item.id));
+        }
+        if self.hidden > 0 {
+            frame.text(
+                8.0,
+                self.height - 18.0,
+                LABEL_SIZE,
+                &format!("+{} features not shown", self.hidden),
+                theme.foreground_muted,
+            );
+        }
+    }
+
+    /// One feature on one row. A transcript with `parts` (its exons and
+    /// CDS) is drawn as a gene model: a line for introns, thin boxes for
+    /// exons and full-height boxes for coding segments.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_feature(
+        &self,
+        f: &Feature,
+        parts: &[&Feature],
+        x0: f32,
+        x1: f32,
+        y: f32,
+        theme: &Theme,
+        frame: &mut Frame,
+    ) {
+        let color = theme.feature(&f.kind);
+        let segs = &f.location.segments;
+        let mid = y + LANE_H / 2.0;
+        if parts.is_empty() {
+            if segs.len() > 1 {
+                frame.rect(x0, mid - 1.0, x1 - x0, 2.0, alpha(color, 0.6));
+            }
+            for s in segs {
+                let sx0 = self.x_of(s.start as f64);
+                let sx1 = self.x_of(s.end as f64).max(sx0 + 1.0);
+                frame.rect(sx0, y, sx1 - sx0, LANE_H, color);
+            }
+        } else {
+            frame.rect(x0, mid - 1.0, x1 - x0, 2.0, alpha(color, 0.7));
+            for p in parts {
+                let coding = p.kind == "CDS";
+                let (h, c) = if coding {
+                    (LANE_H, theme.feature("CDS"))
+                } else {
+                    (LANE_H * 0.55, color)
+                };
+                for s in &p.location.segments {
+                    let sx0 = self.x_of(s.start as f64);
+                    let sx1 = self.x_of(s.end as f64).max(sx0 + 1.0);
+                    frame.rect(sx0, mid - h / 2.0, sx1 - sx0, h, c);
+                }
+            }
+        }
+        // Strand arrowhead at the 3' end, when the feature is wide enough
+        // for it not to swamp the feature itself.
+        if x1 - x0 < 10.0 {
+            return;
+        }
+        let h = LANE_H;
+        match f.location.strand() {
+            Strand::Forward => frame.quad(
+                [[x1, y], [x1 + 6.0, mid], [x1, y + h], [x1 + 6.0, mid]],
+                color,
+                [0.0; 4],
+            ),
+            Strand::Reverse => frame.quad(
+                [[x0 - 6.0, mid], [x0, y], [x0 - 6.0, mid], [x0, y + h]],
+                color,
+                [0.0; 4],
+            ),
+            Strand::Unstranded => {}
+        }
+    }
+
+    // Circular.
+
+    fn build_circular(&mut self, doc: &SequenceDoc, theme: &Theme, frame: &mut Frame) {
+        let len = doc.len().max(1);
+        let (cx, cy) = self.centre();
+        let r = self.radius();
+
+        if let Some((a, b)) = self.selection {
+            arc(
+                frame,
+                (cx, cy),
+                Self::angle(a as f64, len),
+                Self::angle(b as f64, len),
+                r * 0.45,
+                r + 70.0,
+                alpha(theme.selection, 0.6),
+            );
+        }
+
+        // GC ring.
+        let gc = doc.summary().gc(0, len, 360);
+        let baseline = mean_gc(doc);
+        let gc_r = r * 0.62;
+        for (i, &v) in gc.iter().enumerate() {
+            if v.is_nan() {
+                continue;
+            }
+            let a0 = -PI / 2.0 + TAU * i as f32 / 360.0;
+            let a1 = a0 + TAU / 360.0;
+            let dev = ((v - baseline) * r * 1.5).clamp(-r * 0.12, r * 0.12);
+            let (r0, r1, c) = if dev >= 0.0 {
+                (gc_r, gc_r + dev, theme.blue)
+            } else {
+                (gc_r + dev, gc_r, theme.orange)
+            };
+            arc(frame, (cx, cy), a0, a1, r0, r1.max(r0 + 0.5), alpha(c, 0.7));
+        }
+
+        // Backbone and ticks.
+        arc(
+            frame,
+            (cx, cy),
+            0.0,
+            TAU,
+            r - 1.0,
+            r + 1.0,
+            theme.foreground,
+        );
+        let step = nice_step(len as f64 / 12.0);
+        let mut t = 0.0;
+        while t < len as f64 {
+            let a = Self::angle(t, len);
+            radial(frame, (cx, cy), a, r + 2.0, r + 8.0, 1.0, theme.foreground);
+            let label = format_bp(t as u64, step);
+            let (lx, ly) = (cx + a.cos() * (r + 14.0), cy + a.sin() * (r + 14.0));
+            let w = text_width(&label, 12.0);
+            let lx = if a.cos() < -0.1 {
+                lx - w
+            } else if a.cos() < 0.1 {
+                lx - w / 2.0
+            } else {
+                lx
+            };
+            let ly = if a.sin() < 0.0 { ly - 12.0 } else { ly };
+            frame.text(lx, ly, 12.0, &label, theme.foreground_muted);
+            t += step;
+        }
+
+        // Features: forward strand outside the backbone, reverse inside.
+        let mut feats: Vec<(FeatureId, &Feature)> =
+            doc.features().filter(|(_, f)| !is_backdrop(f)).collect();
+        if feats.len() > MAX_DRAWN_FEATURES {
+            let counts = doc.index().density(0, len, 360);
+            let max = counts.iter().copied().max().unwrap_or(1).max(1) as f32;
+            for (i, &c) in counts.iter().enumerate() {
+                let a0 = -PI / 2.0 + TAU * i as f32 / 360.0;
+                arc(
+                    frame,
+                    (cx, cy),
+                    a0,
+                    a0 + TAU / 360.0,
+                    r + 30.0,
+                    r + 30.0 + 40.0 * c as f32 / max,
+                    alpha(theme.green, 0.7),
+                );
+            }
+            feats.clear();
+        }
+        feats.sort_by_key(|(_, f)| f.location.bounds().map_or(0, |b| b.0));
+        let lane_w = 9.0;
+        let mut lanes: [Vec<f64>; 2] = [Vec::new(), Vec::new()];
+        let mut labels: Vec<(f32, String, f32)> = Vec::new();
+        for (id, f) in &feats {
+            let reverse = f.location.strand() == Strand::Reverse;
+            let side = usize::from(reverse);
+            let Some((s, e)) = f.location.bounds() else {
+                continue;
+            };
+            // A feature crossing the origin has segments at both ends; its
+            // packing extent is the whole circle, which is rare and fine.
+            let (s, e) = (s as f64, e as f64);
+            let lane = lanes[side]
+                .iter()
+                .position(|&end| end < s)
+                .unwrap_or_else(|| {
+                    lanes[side].push(0.0);
+                    lanes[side].len() - 1
+                });
+            if lane >= 5 {
+                self.hidden += 1;
+                continue;
+            }
+            lanes[side][lane] = e + len as f64 * 0.002;
+            let (r0, r1) = if reverse {
+                let outer = r - 6.0 - lane as f32 * (lane_w + 3.0);
+                (outer - lane_w, outer)
+            } else {
+                let inner = r + 26.0 + lane as f32 * (lane_w + 3.0);
+                (inner, inner + lane_w)
+            };
+            let mut color = theme.feature(&f.kind);
+            if self.selected == Some(*id) {
+                color = theme.accent;
+            }
+            for seg in &f.location.segments {
+                let (a0, a1) = (
+                    Self::angle(seg.start as f64, len),
+                    Self::angle(seg.end as f64, len),
+                );
+                arc(frame, (cx, cy), a0, a1.max(a0 + 0.002), r0, r1, color);
+                self.arc_hits
+                    .push((seg.start as f32, seg.end as f32, r0, r1, *id));
+            }
+            if matches!(f.kind.as_str(), "gene" | "tRNA" | "rRNA") || self.selected == Some(*id) {
+                let mid = Self::angle(f64::midpoint(s, e), len);
+                labels.push((
+                    mid,
+                    f.label().unwrap_or(&f.kind).to_string(),
+                    if reverse { r * 0.40 } else { r + 96.0 },
+                ));
+            }
+        }
+        // Labels, skipping any that would overlap one already placed.
+        let mut placed: Vec<[f32; 4]> = Vec::new();
+        for (a, text, lr) in labels {
+            let inner = lr < r;
+            let (x, y) = (cx + a.cos() * lr, cy + a.sin() * lr);
+            let w = text_width(&text, 11.0);
+            let flip = if inner { a.cos() > 0.0 } else { a.cos() < 0.0 };
+            let x = if flip { x - w } else { x };
+            let rect = [x - 2.0, y - 7.0, x + w + 2.0, y + 7.0];
+            if placed
+                .iter()
+                .any(|p| rect[0] < p[2] && rect[2] > p[0] && rect[1] < p[3] && rect[3] > p[1])
+            {
+                continue;
+            }
+            placed.push(rect);
+            frame.text(x, y - 6.0, 11.0, &text, theme.foreground_muted);
+        }
+
+        if let Some(c) = self.cursor {
+            radial(
+                frame,
+                (cx, cy),
+                Self::angle(c as f64, len),
+                r * 0.45,
+                r + 80.0,
+                2.0,
+                theme.accent,
+            );
+        }
+
+        let name = &doc.name;
+        frame.text(
+            cx - text_width(name, 18.0) / 2.0,
+            cy - 20.0,
+            18.0,
+            name,
+            theme.foreground,
+        );
+        let size = format!("{} bp", format_thousands(len));
+        frame.text(
+            cx - text_width(&size, 13.0) / 2.0,
+            cy + 4.0,
+            13.0,
+            &size,
+            theme.foreground_muted,
+        );
+    }
+
+    /// One line describing the view, the cursor, the selection and the
+    /// selected feature.
+    pub fn status(&self, doc: &SequenceDoc) -> String {
+        let mut parts = vec![format!(
+            "{}  {} bp, {} features",
+            doc.name,
+            format_thousands(doc.len()),
+            format_thousands(doc.feature_count() as u64)
+        )];
+        if let Some(c) = self.cursor {
+            parts.push(format!("cursor {}", format_thousands(c)));
+        }
+        if let Some((a, b)) = self.selection {
+            parts.push(format!(
+                "selected {}..{} ({} bp)",
+                format_thousands(a + 1),
+                format_thousands(b),
+                format_thousands(b - a)
+            ));
+        }
+        if let Some(f) = self.selected.and_then(|id| doc.feature(id)) {
+            let (s, e) = f.location.bounds().unwrap_or((0, 0));
+            let strand = match f.location.strand() {
+                Strand::Forward => "+",
+                Strand::Reverse => "-",
+                Strand::Unstranded => ".",
+            };
+            parts.push(format!(
+                "{} {} {}..{} {strand}",
+                f.kind,
+                f.label().unwrap_or(""),
+                format_thousands(s + 1),
+                format_thousands(e)
+            ));
+        }
+        parts.join("   ·   ")
+    }
+}
+
+/// Mean GC fraction over the whole sequence, the baseline the circular GC
+/// ring deviates from; 0.5 if there are no informative residues.
+fn mean_gc(doc: &SequenceDoc) -> f32 {
+    let v = doc.summary().gc(0, doc.len().max(1), 1);
+    v.first().copied().filter(|x| !x.is_nan()).unwrap_or(0.5)
+}
+
+fn complement(b: u8) -> u8 {
+    match b {
+        b'A' => b'T',
+        b'T' | b'U' => b'A',
+        b'C' => b'G',
+        b'G' => b'C',
+        b'a' => b't',
+        b't' => b'a',
+        b'c' => b'g',
+        b'g' => b'c',
+        other => other,
+    }
+}
+
+fn outline(frame: &mut Frame, x: f32, y: f32, w: f32, h: f32, color: Rgba) {
+    frame.rect(x, y, w, 2.0, color);
+    frame.rect(x, y + h - 2.0, w, 2.0, color);
+    frame.rect(x, y, 2.0, h, color);
+    frame.rect(x + w - 2.0, y, 2.0, h, color);
+}
+
+/// A ring segment from angle `a0` to `a1` between radii `r0` and `r1`.
+fn arc(frame: &mut Frame, c: (f32, f32), a0: f32, a1: f32, r0: f32, r1: f32, color: Rgba) {
+    let (a0, a1) = if a1 < a0 { (a1, a0) } else { (a0, a1) };
+    let steps = ((a1 - a0) / (PI / 180.0)).ceil().max(1.0) as usize;
+    let da = (a1 - a0) / steps as f32;
+    let p = |a: f32, r: f32| [c.0 + a.cos() * r, c.1 + a.sin() * r];
+    for i in 0..steps {
+        let (s, e) = (a0 + da * i as f32, a0 + da * (i + 1) as f32);
+        frame.quad([p(s, r1), p(e, r1), p(s, r0), p(e, r0)], color, [0.0; 4]);
+    }
+}
+
+/// A radial line of the given width at angle `a`.
+fn radial(frame: &mut Frame, c: (f32, f32), a: f32, r0: f32, r1: f32, width: f32, color: Rgba) {
+    let (dx, dy) = (a.cos(), a.sin());
+    let (nx, ny) = (-dy * width / 2.0, dx * width / 2.0);
+    let p = |r: f32, s: f32| [c.0 + dx * r + nx * s, c.1 + dy * r + ny * s];
+    frame.quad(
+        [p(r1, -1.0), p(r1, 1.0), p(r0, -1.0), p(r0, 1.0)],
+        color,
+        [0.0; 4],
+    );
+}
+
+/// The smallest 1, 2 or 5 × 10^k that is at least `raw`.
+pub fn nice_step(raw: f64) -> f64 {
+    let raw = raw.max(1.0);
+    let mag = 10f64.powf(raw.log10().floor());
+    for m in [1.0, 2.0, 5.0, 10.0] {
+        if m * mag >= raw {
+            return m * mag;
+        }
+    }
+    10.0 * mag
+}
+
+/// Compact position labels: 950, 12k, 1.5M, with enough decimals that
+/// labels `step` apart differ.
+pub fn format_bp(n: u64, step: f64) -> String {
+    let (unit, suffix) = if n >= 1_000_000 {
+        (1e6, "M")
+    } else if n >= 10_000 {
+        (1e3, "k")
+    } else {
+        return n.to_string();
+    };
+    let decimals = if step >= unit {
+        0
+    } else {
+        (unit / step).log10().ceil() as usize
+    };
+    if decimals > 3 {
+        // Base-pair zoom: full positions read better than 1.000123M.
+        return format_thousands(n);
+    }
+    format!("{:.*}{suffix}", decimals, n as f64 / unit)
+}
+
+pub fn format_thousands(n: u64) -> String {
+    let s = n.to_string();
+    let mut out = String::with_capacity(s.len() + s.len() / 3);
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use basecraft_protocol::{Location, Qualifier};
+    use std::sync::Arc;
+
+    fn doc() -> SequenceDoc {
+        let seq: Vec<u8> = b"ACGT".iter().copied().cycle().take(10_000).collect();
+        let feats = (0..20)
+            .map(|i| Feature {
+                kind: "gene".into(),
+                location: Location::simple(
+                    i * 500,
+                    i * 500 + 300,
+                    if i % 2 == 0 {
+                        Strand::Forward
+                    } else {
+                        Strand::Reverse
+                    },
+                ),
+                qualifiers: vec![Qualifier::new("gene", format!("g{i}"))],
+            })
+            .collect();
+        SequenceDoc::new("t", Arc::new(seq), feats, true)
+    }
+
+    #[test]
+    fn zoom_keeps_anchor_and_clamps() {
+        let mut v = GenomeView::new(1000.0, 600.0);
+        v.fit(10_000);
+        assert!((v.bp_per_px - 10.0).abs() < 1e-9);
+        let before = v.bp_at(250.0);
+        v.zoom_at(250.0, 4.0, 10_000);
+        assert!((v.bp_at(250.0) - before).abs() < 1e-6);
+        v.zoom_at(250.0, 1e9, 10_000);
+        assert!((v.px_per_bp() - MAX_PX_PER_BP).abs() < 1e-9);
+        v.zoom_at(250.0, 1e-9, 10_000);
+        assert!((v.bp_per_px - 10.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn linear_build_draws_and_hit_tests_features() {
+        let d = doc();
+        let mut v = GenomeView::new(1000.0, 600.0);
+        v.fit(d.len());
+        let mut f = Frame::new();
+        v.build(&d, &Theme::default(), &mut f);
+        assert!(f.len() > 40);
+        assert_eq!(v.hits.len(), 20);
+        let (r, id) = v.hits[3];
+        assert_eq!(
+            v.feature_at(
+                f32::midpoint(r[0], r[2]),
+                f32::midpoint(r[1], r[3]),
+                d.len()
+            ),
+            Some(id)
+        );
+        // Zoomed in to letters: residues are read and drawn as glyphs.
+        v.zoom_at(10.0, 1000.0, d.len());
+        v.build(&d, &Theme::default(), &mut f);
+        assert!(v.letters());
+        assert!(f.len() > 100);
+    }
+
+    #[test]
+    fn circular_hit_test_finds_arc() {
+        let d = doc();
+        let mut v = GenomeView::new(800.0, 800.0);
+        v.mode = Mode::Circular;
+        let mut f = Frame::new();
+        v.build(&d, &Theme::default(), &mut f);
+        // Gene 0 is forward, 0..300, on the outer lane, right after the top.
+        let (cx, cy) = v.centre();
+        let a = GenomeView::angle(150.0, d.len());
+        let rr = v.radius() + 30.0;
+        assert_eq!(
+            v.feature_at(cx + a.cos() * rr, cy + a.sin() * rr, d.len()),
+            Some(FeatureId(0))
+        );
+    }
+
+    #[test]
+    fn press_and_drag_select_a_range() {
+        let d = doc();
+        let mut v = GenomeView::new(1000.0, 600.0);
+        v.fit(d.len());
+        v.press(100.0, SEQ_Y + 5.0, false, d.len());
+        v.drag_to(200.0, SEQ_Y + 5.0, d.len());
+        v.release();
+        assert_eq!(v.selection, Some((1000, 2000)));
+        assert_eq!(v.cursor, Some(2000));
+        v.move_cursor(5, true, d.len());
+        assert_eq!(v.selection, Some((1000, 2005)));
+    }
+
+    #[test]
+    fn labels() {
+        assert_eq!(nice_step(130.0), 200.0);
+        assert_eq!(nice_step(0.3), 1.0);
+        assert_eq!(format_bp(950, 50.0), "950");
+        assert_eq!(format_bp(12_000, 1000.0), "12k");
+        assert_eq!(format_bp(1_500_000, 500_000.0), "1.5M");
+        assert_eq!(format_bp(1_050_000, 50_000.0), "1.05M");
+        assert_eq!(format_bp(1_000_420, 20.0), "1,000,420");
+        assert_eq!(format_thousands(1_234_567), "1,234,567");
+    }
+}

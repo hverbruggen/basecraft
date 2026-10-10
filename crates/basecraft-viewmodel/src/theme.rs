@@ -1,0 +1,154 @@
+//! Colours. Reads an Omarchy theme (`colors.toml`) when present; otherwise
+//! uses a built-in light palette.
+
+use crate::frame::{Rgba, hex};
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Theme {
+    pub dark: bool,
+    pub background: Rgba,
+    pub surface: Rgba,
+    pub surface_strong: Rgba,
+    pub foreground: Rgba,
+    pub foreground_muted: Rgba,
+    pub accent: Rgba,
+    pub selection: Rgba,
+    pub muted: Rgba,
+    pub red: Rgba,
+    pub orange: Rgba,
+    pub yellow: Rgba,
+    pub green: Rgba,
+    pub cyan: Rgba,
+    pub blue: Rgba,
+    pub magenta: Rgba,
+    pub brown: Rgba,
+}
+
+impl Default for Theme {
+    fn default() -> Self {
+        let c = |s| hex(s).unwrap_or([0.5, 0.5, 0.5, 1.0]);
+        Self {
+            dark: false,
+            background: c("#f4f1ea"),
+            surface: c("#e8e3d8"),
+            surface_strong: c("#d9d2c3"),
+            foreground: c("#2b2620"),
+            foreground_muted: c("#6f665a"),
+            accent: c("#9a4a24"),
+            selection: c("#d8c8a6"),
+            muted: c("#8a7f6e"),
+            red: c("#b03a2e"),
+            orange: c("#a8571c"),
+            yellow: c("#8a6a12"),
+            green: c("#3f7a4c"),
+            cyan: c("#2f6f74"),
+            blue: c("#3d5a8a"),
+            magenta: c("#8f3c60"),
+            brown: c("#6e4c2e"),
+        }
+    }
+}
+
+impl Theme {
+    /// Parse an Omarchy `colors.toml`. Unknown or missing keys keep their
+    /// defaults, so a partial theme still works.
+    pub fn from_omarchy(text: &str) -> Self {
+        let mut t = Theme::default();
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with('#') {
+                continue;
+            }
+            let Some((key, rest)) = trimmed.split_once('=') else {
+                continue;
+            };
+            let key = key.trim();
+            let value = rest.trim();
+            if key == "mode" {
+                t.dark = value.trim_matches('"') == "dark";
+                continue;
+            }
+            // `"#rrggbb"  # comment`: take the quoted part.
+            let Some(quoted) = value.strip_prefix('"').and_then(|v| v.split('"').next()) else {
+                continue;
+            };
+            let Some(color) = hex(quoted) else { continue };
+            let slot = match key {
+                "background" => &mut t.background,
+                "dark_background" => &mut t.surface,
+                "darker_background" => &mut t.surface_strong,
+                "foreground" => &mut t.foreground,
+                "dark_foreground" => &mut t.foreground_muted,
+                "accent" => &mut t.accent,
+                "selection" => &mut t.selection,
+                "muted" => &mut t.muted,
+                "red" => &mut t.red,
+                "orange" => &mut t.orange,
+                "yellow" => &mut t.yellow,
+                "green" => &mut t.green,
+                "cyan" => &mut t.cyan,
+                "blue" => &mut t.blue,
+                "magenta" => &mut t.magenta,
+                "brown" => &mut t.brown,
+                _ => continue,
+            };
+            *slot = color;
+        }
+        t
+    }
+
+    /// Residue colour: the usual A green, C blue, G amber, T red.
+    pub fn residue(&self, b: u8) -> Rgba {
+        match b.to_ascii_uppercase() {
+            b'A' => self.green,
+            b'C' => self.blue,
+            b'G' => self.yellow,
+            b'T' | b'U' => self.red,
+            b'-' => self.background,
+            _ => self.muted,
+        }
+    }
+
+    pub fn feature(&self, kind: &str) -> Rgba {
+        match kind {
+            "gene" => self.green,
+            "CDS" => self.yellow,
+            "mRNA" | "transcript" => self.blue,
+            "exon" => self.cyan,
+            "tRNA" => self.magenta,
+            "rRNA" | "ncRNA" => self.orange,
+            "repeat_region" | "mobile_element" => self.brown,
+            _ => self.muted,
+        }
+    }
+}
+
+/// `color` with alpha multiplied by `a`.
+pub fn alpha(color: Rgba, a: f32) -> Rgba {
+    [color[0], color[1], color[2], color[3] * a]
+}
+
+/// Linear mix of two colours.
+pub fn mix(a: Rgba, b: Rgba, t: f32) -> Rgba {
+    [
+        a[0] + (b[0] - a[0]) * t,
+        a[1] + (b[1] - a[1]) * t,
+        a[2] + (b[2] - a[2]) * t,
+        a[3] + (b[3] - a[3]) * t,
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_omarchy_colours() {
+        let t = Theme::from_omarchy(
+            "# comment\nmode = \"dark\"\naccent = \"#ff0000\"  # vermilion\nhyprland_active_border = \"rgba(8a4a2cee)\"\n",
+        );
+        assert!(t.dark);
+        assert_eq!(t.accent, [1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(t.green, Theme::default().green);
+    }
+}
