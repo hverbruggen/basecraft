@@ -1,0 +1,36 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+# Spikes are separate Cargo workspaces so their dependencies stay out of this lockfile.
+exclude = ["spikes"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/hverbruggen/basecraft"
+
+[workspace.dependencies]
+basecraft-protocol = { path = "crates/basecraft-protocol" }
+basecraft-io = { path = "crates/basecraft-io" }
+basecraft-docs = { path = "crates/basecraft-docs" }
+basecraft-ops = { path = "crates/basecraft-ops" }
+basecraft-query = { path = "crates/basecraft-query" }
+basecraft-platform = { path = "crates/basecraft-platform" }
+basecraft-viewmodel = { path = "crates/basecraft-viewmodel" }
+basecraft-plugin-host = { path = "crates/basecraft-plugin-host" }
+
+# basecraft-io and basecraft-platform can't inherit these because they allow
+# unsafe code. Mirror any change here in their Cargo.toml.
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+
+[profile.release]
+debug = "line-tables-only"
+
+[profile.bench]
+debug = true

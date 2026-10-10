@@ -1,0 +1,4 @@
+# Keep build output out of the synced folder. Cargo doesn't expand ~ here,
+# so this path is specific to this machine. Override with CARGO_TARGET_DIR.
+[build]
+target-dir = "/private/local-path"

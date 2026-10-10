@@ -1,0 +1,13 @@
+[package]
+name = "basecraft-py"
+description = "PyO3 module basecraft-core for scripts and notebooks"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

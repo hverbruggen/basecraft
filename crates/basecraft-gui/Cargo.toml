@@ -1,0 +1,15 @@
+[package]
+name = "basecraft-gui"
+description = "Qt/QML desktop application"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true
+
+# cxx-qt, cxx-qt-lib and cxx-qt-build get added in spike 1.

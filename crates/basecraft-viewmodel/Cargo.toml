@@ -1,0 +1,13 @@
+[package]
+name = "basecraft-viewmodel"
+description = "Editor view models and input models, free of Qt and GPU code"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

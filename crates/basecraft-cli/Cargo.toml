@@ -1,0 +1,17 @@
+[package]
+name = "basecraft-cli"
+description = "The basecraft command-line tool"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "basecraft"
+path = "src/main.rs"

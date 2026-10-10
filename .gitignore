@@ -1,0 +1,69 @@
+# Build output and environments normally live in ~/.cache (see
+# .cargo/config.toml and .pixi/config.toml). These catch anything that
+# lands in the repo anyway, e.g. when CARGO_TARGET_DIR is overridden.
+target/
+.pixi/*
+!.pixi/config.toml
+
+# Rust
+*.profraw
+*.profdata
+perf.data*
+flamegraph.svg
+criterion/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+*.so
+
+# Qt, C++
+*.qmlc
+*.jsc
+.qmlls.ini
+compile_commands.json
+.cache/
+
+# Basecraft project state, created when running against test data
+.basecraft/
+
+# Large data formats. Generated test data goes to ~/.cache/basecraft-testdata.
+# Small files under testdata/fixtures/ are allowed. The pre-commit hook
+# blocks any file over 5 MB, whatever its type.
+*.bam
+*.bai
+*.cram
+*.crai
+*.sam
+*.bcf
+*.csi
+*.tbi
+*.fastq
+*.fq
+*.gz
+*.bgz
+*.gzi
+*.zst
+*.sra
+!testdata/fixtures/**
+
+# Local scratch space
+/scratch/
+
+# Editors and OS
+.idea/
+.vscode/
+*.swp
+*~
+*.kate-swp
+.DS_Store
+.claude/settings.local.json
+
+# Brainstorming notes, kept local until a proper design doc replaces them
+/PLAN.md

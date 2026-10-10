@@ -1,0 +1,31 @@
+# cargo-deny configuration. Run through `just ci`.
+
+[licenses]
+allow = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "MIT",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-3.0",
+  "Zlib",
+  "MPL-2.0",
+  "LGPL-3.0-only",
+  "GPL-3.0-or-later",
+]
+confidence-threshold = 0.9
+
+# basecraft-protocol is Apache-2.0 and must not pull in GPL code.
+# `just ci` checks its dependency tree separately with `cargo tree`, see the justfile.
+
+[bans]
+multiple-versions = "warn"
+wildcard-dependencies = "deny"
+
+[advisories]
+yanked = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

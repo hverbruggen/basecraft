@@ -1,0 +1,4 @@
+# Pin to an exact version (e.g. "1.90.0") once the first real dependencies land.
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]
