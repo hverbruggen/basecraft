@@ -136,6 +136,7 @@ ApplicationWindow {
                 id: projectName
                 anchors { top: parent.top; left: parent.left; right: collapse.left; margins: 8 }
                 text: shell.project_dir.length ? window.fileName(shell.project_dir) : "No project"
+                font.pixelSize: 10
                 font.bold: true
                 elide: Text.ElideMiddle
             }
@@ -163,7 +164,8 @@ ApplicationWindow {
                     implicitWidth: tree.width
                     readonly property string path: files.pathAt(treeView.index(row, column))
                     highlighted: path === window.currentPath
-                    implicitHeight: 18
+                    font.pixelSize: 10
+                    implicitHeight: 17
                     topPadding: 0
                     bottomPadding: 0
                     onClicked: {
@@ -219,6 +221,7 @@ ApplicationWindow {
                                 // Long names shorten in the middle, keeping
                                 // the extension; the full name is a hover away.
                                 text: window.fileName(path) + (dirty ? " •" : "")
+                                font.pixelSize: 10
                                 width: Math.min(implicitWidth, 180)
                                 elide: Text.ElideMiddle
                                 anchors.verticalCenter: parent.verticalCenter
@@ -281,6 +284,7 @@ ApplicationWindow {
                 Label {
                     anchors { verticalCenter: parent.verticalCenter; left: parent.left; leftMargin: 10; right: parent.right; rightMargin: 10 }
                     elide: Text.ElideRight
+                    font.pixelSize: 10
                     text: window.current ? window.current.status : ""
                 }
             }

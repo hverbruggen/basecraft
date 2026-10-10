@@ -62,7 +62,7 @@ const SEQ_Y: f32 = 38.0;
 const SEQ_H: f32 = 20.0;
 const LANE_H: f32 = 14.0;
 const LANE_GAP: f32 = 9.0;
-const LABEL_SIZE: f32 = 13.0;
+const LABEL_SIZE: f32 = 12.0;
 /// Most pixels per base when zoomed in.
 const MAX_PX_PER_BP: f64 = 28.0;
 /// Zoom 100 %: bases comfortably readable.
@@ -1112,8 +1112,8 @@ impl GenomeView {
                 // their gene row carries it.
                 let visible = x1.min(self.width) - x0.max(0.0);
                 let label_inside = visible >= lw + 8.0 && !parts.contains_key(&id);
-                // Room for the strand arrowhead.
-                let reach = x1 + 8.0;
+                // The arrowhead is inside the box; a little air between boxes.
+                let reach = x1 + 3.0;
                 items.push(Item {
                     id,
                     span: (s, e),
@@ -1263,13 +1263,40 @@ impl GenomeView {
         let color = theme.feature(&f.kind);
         let segs = &f.location.segments;
         let mid = y + LANE_H / 2.0;
+        // The strand arrowhead sits inside the annotation: the box at the 3'
+        // end stops short and the point lands on the last base. Only when
+        // the annotation is wide enough and its 3' end is complete.
+        let strand = f.location.strand();
+        let head = if x1 - x0 >= 10.0 && !f.location.partial_3() && strand != Strand::Unstranded {
+            6.0f32.min((x1 - x0) / 3.0)
+        } else {
+            0.0
+        };
+        let (cut_lo, cut_hi) = match strand {
+            Strand::Forward => (0.0, head),
+            Strand::Reverse => (head, 0.0),
+            Strand::Unstranded => (0.0, 0.0),
+        };
+        let trim = |sx0: f32, sx1: f32| -> (f32, f32) {
+            let a = if (sx0 - x0).abs() < 0.5 {
+                sx0 + cut_lo
+            } else {
+                sx0
+            };
+            let b = if (sx1 - x1).abs() < 0.5 {
+                sx1 - cut_hi
+            } else {
+                sx1
+            };
+            (a, b.max(a))
+        };
         if parts.is_empty() {
             if segs.len() > 1 {
                 frame.rect(x0, mid - 1.0, x1 - x0, 2.0, alpha(color, 0.6));
             }
             for s in segs.iter().filter(|s| within(s, span)) {
                 let sx0 = self.x_of(s.start as f64);
-                let sx1 = self.x_of(s.end as f64).max(sx0 + 1.0);
+                let (sx0, sx1) = trim(sx0, self.x_of(s.end as f64).max(sx0 + 1.0));
                 frame.rect(sx0, y, sx1 - sx0, LANE_H, color);
             }
         } else {
@@ -1286,7 +1313,7 @@ impl GenomeView {
                 };
                 for s in segs.iter().filter(|s| within(s, span)) {
                     let sx0 = self.x_of(s.start as f64);
-                    let sx1 = self.x_of(s.end as f64).max(sx0 + 1.0);
+                    let (sx0, sx1) = trim(sx0, self.x_of(s.end as f64).max(sx0 + 1.0));
                     frame.rect(sx0, mid - h / 2.0, sx1 - sx0, h, color);
                 }
             }
@@ -1299,7 +1326,7 @@ impl GenomeView {
                 };
                 for s in p.location.segments.iter().filter(|s| within(s, span)) {
                     let sx0 = self.x_of(s.start as f64);
-                    let sx1 = self.x_of(s.end as f64).max(sx0 + 1.0);
+                    let (sx0, sx1) = trim(sx0, self.x_of(s.end as f64).max(sx0 + 1.0));
                     frame.rect(sx0, mid - h / 2.0, sx1 - sx0, h, c);
                 }
             }
@@ -1323,20 +1350,18 @@ impl GenomeView {
         if high_partial && x1 < self.width + 10.0 {
             torn_edge(frame, x1, y, false, theme.background);
         }
-        // Strand arrowhead at the 3' end, when the feature is wide enough
-        // for it not to swamp the feature itself, and the end is complete.
-        if x1 - x0 < 10.0 || loc.partial_3() {
+        if head == 0.0 {
             return;
         }
         let h = LANE_H;
-        match f.location.strand() {
+        match strand {
             Strand::Forward => frame.quad(
-                [[x1, y], [x1 + 6.0, mid], [x1, y + h], [x1 + 6.0, mid]],
+                [[x1 - head, y], [x1, mid], [x1 - head, y + h], [x1, mid]],
                 color,
                 [0.0; 4],
             ),
             Strand::Reverse => frame.quad(
-                [[x0 - 6.0, mid], [x0, y], [x0 - 6.0, mid], [x0, y + h]],
+                [[x0, mid], [x0 + head, y], [x0, mid], [x0 + head, y + h]],
                 color,
                 [0.0; 4],
             ),
