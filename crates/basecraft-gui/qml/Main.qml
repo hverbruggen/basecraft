@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Dialogs
 import QtQuick.Layouts
 import QtQuick.Window
 import Basecraft
@@ -34,8 +35,11 @@ ApplicationWindow {
     property var currentView: null
     property string currentPath: ""
     property bool sidebarOpen: true
+    property bool showGc: true
+    property int ribbonTab: 0
 
     function fileName(path) { return path.split("/").pop() }
+    function localPath(url) { return decodeURIComponent(url.toString().replace(/^file:\/\//, "")) }
 
     function refreshCurrent() {
         const d = docs.itemAt(tabs.currentIndex)
@@ -69,49 +73,200 @@ ApplicationWindow {
         function copy(text) { clipboard.text = text; clipboard.selectAll(); clipboard.copy() }
     }
 
-    component Tool: ToolButton {
+    // Ribbon pieces: a labelled group of controls, and its buttons.
+    component RibbonButton: ToolButton {
         focusPolicy: Qt.NoFocus
         enabled: window.current !== null
+        display: AbstractButton.TextOnly
+        topPadding: 4
+        bottomPadding: 4
     }
-
-    header: ToolBar {
-        background: Rectangle { color: Qt.alpha(shell.foreground, 0.04) }
+    component RibbonGroup: ColumnLayout {
+        id: group
+        property string title
+        default property alias content: row.data
+        spacing: 0
+        Layout.fillHeight: true
         RowLayout {
-            anchors.fill: parent
-            anchors.leftMargin: 6
+            id: row
             spacing: 2
-            Tool { text: "Files"; enabled: true; checkable: true; checked: window.sidebarOpen; ToolTip.text: "Show or hide the project's files (Ctrl+B)"; ToolTip.visible: hovered; onClicked: window.sidebarOpen = !window.sidebarOpen }
-            ToolSeparator {}
-            Tool { text: "Wrapped"; checkable: true; checked: window.current?.mode === "wrapped"; onClicked: window.current.switch_view("wrapped") }
-            Tool { text: "Linear"; checkable: true; checked: window.current?.mode === "linear"; onClicked: window.current.switch_view("linear") }
-            Tool { text: "Circular"; checkable: true; checked: window.current?.mode === "circular"; onClicked: window.current.switch_view("circular") }
-            ToolSeparator {}
-            Tool { text: "−"; ToolTip.text: "Zoom out (−)"; ToolTip.visible: hovered; onClicked: window.current.zoom_out() }
-            Tool { text: "+"; ToolTip.text: "Zoom in (+, double-click)"; ToolTip.visible: hovered; onClicked: window.current.zoom_in() }
-            Tool { text: "Fit"; ToolTip.text: "Whole sequence (Ctrl+0)"; ToolTip.visible: hovered; onClicked: window.current.fit() }
-            Tool { text: "Zoom to selection"; onClicked: window.current.zoom_to_selection() }
-            Label {
-                text: window.current ? window.current.zoom_text : ""
-                leftPadding: 8
-                rightPadding: 4
-                opacity: 0.75
-            }
-            ToolSeparator {}
-            Tool { text: "Add annotation…"; ToolTip.text: "Annotate the selection (Ctrl+N)"; ToolTip.visible: hovered; onClicked: editor.openNew() }
-            Tool { text: "Edit annotation…"; ToolTip.text: "Edit the selected annotation (Enter)"; ToolTip.visible: hovered; onClicked: editor.openSelected() }
-            ToolSeparator {}
-            Tool { text: "Undo"; onClicked: window.current.undo() }
-            Tool { text: "Redo"; onClicked: window.current.redo() }
-            Tool { text: window.current?.dirty ? "Save •" : "Save"; onClicked: window.current.save() }
-            Label {
-                Layout.fillWidth: true
-                horizontalAlignment: Text.AlignRight
-                rightPadding: 10
-                elide: Text.ElideLeft
-                text: window.current ? window.current.message : ""
+            Layout.fillHeight: true
+            Layout.alignment: Qt.AlignVCenter
+        }
+        Label {
+            text: group.title
+            Layout.alignment: Qt.AlignHCenter
+            font.pixelSize: 9
+            opacity: 0.55
+        }
+    }
+    component RibbonTabButton: ToolButton {
+        id: tabButton
+        required property int tabIndex
+        focusPolicy: Qt.NoFocus
+        checkable: true
+        checked: window.ribbonTab === tabIndex
+        onClicked: window.ribbonTab = tabIndex
+        topPadding: 3
+        bottomPadding: 3
+        leftPadding: 12
+        rightPadding: 12
+        background: Rectangle {
+            color: tabButton.checked ? Qt.alpha(shell.foreground, 0.07) : (tabButton.hovered ? Qt.alpha(shell.foreground, 0.04) : "transparent")
+            Rectangle {
+                visible: tabButton.checked
+                anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
+                height: 2
                 color: shell.accent
             }
         }
+    }
+
+    header: ColumnLayout {
+        spacing: 0
+
+        // Ribbon tabs, with undo, redo and save always at hand.
+        Rectangle {
+            Layout.fillWidth: true
+            implicitHeight: 26
+            color: Qt.alpha(shell.foreground, 0.05)
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 6
+                spacing: 0
+                RibbonTabButton { tabIndex: 0; text: "File" }
+                RibbonTabButton { tabIndex: 1; text: "View" }
+                RibbonTabButton { tabIndex: 2; text: "Annotations" }
+                Item { Layout.preferredWidth: 16 }
+                RibbonButton { text: "Undo"; ToolTip.text: "Undo (Ctrl+Z)"; ToolTip.visible: hovered; onClicked: window.current.undo() }
+                RibbonButton { text: "Redo"; ToolTip.text: "Redo (Ctrl+Shift+Z)"; ToolTip.visible: hovered; onClicked: window.current.redo() }
+                RibbonButton { text: window.current?.dirty ? "Save •" : "Save"; ToolTip.text: "Save (Ctrl+S)"; ToolTip.visible: hovered; onClicked: window.current.save() }
+                Label {
+                    Layout.fillWidth: true
+                    horizontalAlignment: Text.AlignRight
+                    rightPadding: 10
+                    elide: Text.ElideLeft
+                    text: window.current ? window.current.message : ""
+                    color: shell.accent
+                }
+            }
+        }
+
+        // The ribbon panel for the chosen tab.
+        Rectangle {
+            Layout.fillWidth: true
+            implicitHeight: 54
+            color: Qt.alpha(shell.foreground, 0.025)
+            StackLayout {
+                anchors { fill: parent; leftMargin: 8; topMargin: 4; bottomMargin: 2 }
+                currentIndex: window.ribbonTab
+
+                RowLayout {
+                    spacing: 6
+                    RibbonGroup {
+                        title: "Sequence"
+                        RibbonButton { text: "Open…"; enabled: true; onClicked: openDialog.open() }
+                        RibbonButton { text: "Save"; onClicked: window.current.save() }
+                    }
+                    ToolSeparator { Layout.fillHeight: true }
+                    RibbonGroup {
+                        title: "Project"
+                        RibbonButton { text: "Open project…"; enabled: true; ToolTip.text: "Choose a folder, or create a new one"; ToolTip.visible: hovered; onClicked: projectDialog.open() }
+                    }
+                    Item { Layout.fillWidth: true }
+                }
+
+                RowLayout {
+                    spacing: 6
+                    RibbonGroup {
+                        title: "Zoom"
+                        RibbonButton { text: "−"; ToolTip.text: "Zoom out (−)"; ToolTip.visible: hovered; onClicked: window.current.zoom_out() }
+                        RibbonButton { text: "+"; ToolTip.text: "Zoom in (+, double-click)"; ToolTip.visible: hovered; onClicked: window.current.zoom_in() }
+                        RibbonButton { text: "Fit"; ToolTip.text: "Whole sequence (Ctrl+0)"; ToolTip.visible: hovered; onClicked: window.current.fit() }
+                        RibbonButton { text: "Selection"; ToolTip.text: "Zoom to the selection"; ToolTip.visible: hovered; onClicked: window.current.zoom_to_selection() }
+                        Label {
+                            text: window.current ? window.current.zoom_text : ""
+                            leftPadding: 6
+                            opacity: 0.7
+                        }
+                    }
+                    ToolSeparator { Layout.fillHeight: true }
+                    RibbonGroup {
+                        title: "Layout"
+                        RibbonButton { text: "Wrapped"; checkable: true; checked: window.current?.mode === "wrapped"; onClicked: window.current.switch_view("wrapped") }
+                        RibbonButton { text: "Linear"; checkable: true; checked: window.current?.mode === "linear"; onClicked: window.current.switch_view("linear") }
+                        RibbonButton { text: "Circular"; checkable: true; checked: window.current?.mode === "circular"; onClicked: window.current.switch_view("circular") }
+                    }
+                    ToolSeparator { Layout.fillHeight: true }
+                    RibbonGroup {
+                        title: "Show"
+                        CheckBox {
+                            text: "GC content"
+                            checked: window.showGc
+                            focusPolicy: Qt.NoFocus
+                            onToggled: window.showGc = checked
+                        }
+                    }
+                    Item { Layout.fillWidth: true }
+                }
+
+                RowLayout {
+                    spacing: 6
+                    RibbonGroup {
+                        title: "Annotation"
+                        RibbonButton { text: "Add…"; ToolTip.text: "Annotate the selection (Ctrl+N)"; ToolTip.visible: hovered; onClicked: editor.openNew() }
+                        RibbonButton { text: "Edit…"; ToolTip.text: "Edit the selected annotation (Enter)"; ToolTip.visible: hovered; onClicked: editor.openSelected() }
+                        RibbonButton {
+                            text: "Delete"
+                            ToolTip.text: "Delete the selected annotation (Delete)"
+                            ToolTip.visible: hovered
+                            onClicked: {
+                                const id = window.current.selected_feature()
+                                if (id >= 0) window.current.delete_feature(id)
+                                else window.current.message = "Click an annotation first"
+                            }
+                        }
+                    }
+                    ToolSeparator { Layout.fillHeight: true }
+                    RibbonGroup {
+                        title: "Go to"
+                        RibbonButton { text: "◀ Previous"; ToolTip.text: "Select the previous annotation"; ToolTip.visible: hovered; onClicked: window.current.step_feature(false) }
+                        RibbonButton { text: "Next ▶"; ToolTip.text: "Select the next annotation"; ToolTip.visible: hovered; onClicked: window.current.step_feature(true) }
+                    }
+                    ToolSeparator { Layout.fillHeight: true }
+                    RibbonGroup {
+                        title: "Sequence"
+                        RibbonButton {
+                            text: "Copy"
+                            ToolTip.text: "Copy the selected annotation's sequence, spliced and in its own direction"
+                            ToolTip.visible: hovered
+                            onClicked: {
+                                const id = window.current.selected_feature()
+                                if (id >= 0) clipboard.copy(window.current.feature_sequence(id))
+                                else window.current.message = "Click an annotation first"
+                            }
+                        }
+                        RibbonButton { text: "Extract"; ToolTip.text: "Extract the selection as a new sequence (Ctrl+E)"; ToolTip.visible: hovered; onClicked: window.current.extract_selection() }
+                    }
+                    Item { Layout.fillWidth: true }
+                }
+            }
+        }
+    }
+
+    FileDialog {
+        id: openDialog
+        title: "Open a sequence"
+        currentFolder: shell.project_dir.length ? "file://" + shell.project_dir : ""
+        nameFilters: ["Sequences (*.gb *.gbk *.genbank *.gbff *.fasta *.fa *.fna *.fas *.ffn)", "All files (*)"]
+        onAccepted: window.openPath(window.localPath(selectedFile))
+    }
+
+    FolderDialog {
+        id: projectDialog
+        title: "Open or create a project folder"
+        currentFolder: shell.project_dir.length ? "file://" + shell.project_dir : ""
+        onAccepted: shell.project_dir = window.localPath(selectedFolder)
     }
 
     SplitView {
@@ -255,6 +410,8 @@ ApplicationWindow {
                     onItemAdded: Qt.callLater(window.refreshCurrent)
                     onItemRemoved: Qt.callLater(window.refreshCurrent)
                     DocumentView {
+                        showGc: window.showGc
+                        onDirtyChanged: openFiles.setProperty(index, "dirty", dirty)
                         onContextMenu: (info) => { menu.info = info; menu.popup() }
                         onEditFeature: (id) => editor.openFeature(id)
                         onEditSelected: editor.openSelected()

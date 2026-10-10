@@ -11,6 +11,9 @@ Item {
     required property int index
     property alias controller: ctl
     property alias view: view
+    readonly property bool dirty: ctl.dirty
+    property bool showGc: true
+    onShowGcChanged: ctl.set_show_gc(showGc)
 
     signal contextMenu(var info)
     signal editFeature(int id)
@@ -19,14 +22,12 @@ Item {
     signal copyText(string text)
     signal toggleSidebar
 
-    GenomeController {
-        id: ctl
-        onDirtyChanged: openFiles.setProperty(doc.index, "dirty", ctl.dirty)
-    }
+    GenomeController { id: ctl }
 
     // Open once the view has its real size, so the fitted zoom is right.
     Component.onCompleted: Qt.callLater(() => {
         ctl.resize(view.width, view.height)
+        ctl.set_show_gc(doc.showGc)
         ctl.open_file(doc.path)
     })
 

@@ -77,16 +77,21 @@ fn within(s: &basecraft_protocol::Segment, span: (u64, u64)) -> bool {
 }
 
 /// Bounds of the contiguous pieces a feature is drawn as on a linear view:
-/// one, or two for a feature crossing the origin of a circular sequence.
+/// one, or two for a feature crossing the origin of a circular sequence,
+/// whether a part touches the origin or an intron spans it.
 fn pieces(f: &Feature, len: u64, circular: bool) -> Vec<(u64, u64)> {
     let segs = &f.location.segments;
     let mut groups: Vec<Vec<&basecraft_protocol::Segment>> = vec![Vec::new()];
     for (i, s) in segs.iter().enumerate() {
         if i > 0 && circular {
+            // Segments run 5' to 3'; on a circular sequence, going back
+            // past the origin shows as a jump the wrong way round. That
+            // covers parts that touch the origin and introns that span it.
             let prev = &segs[i - 1];
+            let _ = len;
             let wraps = match s.strand {
-                Strand::Reverse => prev.start == 0 && s.end == len,
-                _ => prev.end == len && s.start == 0,
+                Strand::Reverse => s.start >= prev.end,
+                _ => s.end <= prev.start,
             };
             if wraps {
                 groups.push(Vec::new());
@@ -185,6 +190,10 @@ pub struct GenomeView {
     /// Feature boxes on the linear view, with the residue span each covers.
     hits: Vec<([f32; 4], FeatureId, (u64, u64))>,
     arc_hits: Vec<(f32, f32, f32, f32, FeatureId)>,
+    /// Draw the GC content plot (zoomed out) and ring (circular).
+    pub show_gc: bool,
+    /// The zoom was set by Fit and nothing since; resizing fits again.
+    pub auto_fit: bool,
     /// Wrapped view: pixels scrolled down from the first line.
     scroll_y: f32,
     wrap: Option<WrapCache>,
@@ -210,6 +219,8 @@ impl GenomeView {
             drag: Drag::None,
             hits: Vec::new(),
             arc_hits: Vec::new(),
+            show_gc: true,
+            auto_fit: false,
             scroll_y: 0.0,
             wrap: None,
             anchor: None,
@@ -266,6 +277,38 @@ impl GenomeView {
         self.scroll_y = 0.0;
         self.anchor = Some((0, 0.0));
         self.clamp(len);
+        self.auto_fit = true;
+    }
+
+    /// Select the next (or previous) annotation after the current position:
+    /// the one starting after the selection's start, or the cursor. Spans
+    /// shared by several annotations (a gene and its CDS) count once.
+    /// Returns whether one was found.
+    pub fn step_feature(&mut self, doc: &SequenceDoc, forward: bool) -> bool {
+        let here = self.selection.map(|(a, _)| a).or(self.cursor).unwrap_or(0);
+        let mut spans: Vec<(u64, u64, FeatureId)> = doc
+            .features()
+            .filter(|(_, f)| !is_backdrop(f))
+            .filter_map(|(id, f)| f.location.bounds().map(|(s, e)| (s, e, id)))
+            .collect();
+        spans.sort_unstable_by_key(|&(s, e, id)| (s, std::cmp::Reverse(e), id));
+        spans.dedup_by_key(|&mut (s, e, _)| (s, e));
+        let pick = if forward {
+            spans.iter().find(|&&(s, _, _)| s > here).copied()
+        } else {
+            spans.iter().rev().find(|&&(s, _, _)| s < here).copied()
+        };
+        let Some((s, e, id)) = pick else { return false };
+        self.selected = Some(id);
+        self.selection = Some((s, e));
+        self.selection_reverse = doc
+            .feature(id)
+            .is_some_and(|f| f.location.strand() == Strand::Reverse);
+        self.cursor = Some(s);
+        if self.mode != Mode::Circular {
+            self.reveal(s, doc.len());
+        }
+        true
     }
 
     /// 100 % zoom from the start of the sequence.
@@ -296,6 +339,7 @@ impl GenomeView {
 
     /// Zoom by `factor` (> 1 zooms in), keeping the position under `x` fixed.
     pub fn zoom_at(&mut self, x: f32, factor: f64, len: u64) {
+        self.auto_fit = false;
         if self.mode == Mode::Wrapped {
             // Line breaks move when zooming; keep the top line's start put.
             self.anchor_top_line();
@@ -312,17 +356,20 @@ impl GenomeView {
 
     /// Wrapped view: scroll down by `dy` pixels (negative scrolls up).
     pub fn scroll_by(&mut self, dy: f32) {
+        self.auto_fit = false;
         self.scroll_y += dy;
         self.clamp_scroll();
     }
 
     pub fn pan(&mut self, dx: f32, len: u64) {
+        self.auto_fit = false;
         self.start -= f64::from(dx) * self.bp_per_px;
         self.clamp(len);
     }
 
     /// Show `start..end` with a small margin on both sides.
     pub fn zoom_to(&mut self, start: u64, end: u64, len: u64) {
+        self.auto_fit = false;
         let span = (end.saturating_sub(start)).max(1) as f64;
         let margin = span * 0.05;
         if self.mode == Mode::Circular {
@@ -400,6 +447,7 @@ impl GenomeView {
     }
 
     pub fn scroll_to(&mut self, fraction: f64, len: u64) {
+        self.auto_fit = false;
         if self.mode == Mode::Wrapped {
             self.scroll_y = (fraction * f64::from(self.wrap_total())) as f32;
             self.clamp_scroll();
@@ -966,6 +1014,18 @@ impl GenomeView {
             }
             return;
         }
+        if !self.show_gc {
+            // A plain band marks where the sequence runs.
+            let (xa, xb) = (self.x_of(b0 as f64), self.x_of(b1 as f64));
+            frame.rect(
+                xa,
+                seq_y + SEQ_H / 2.0 - 2.0,
+                xb - xa,
+                4.0,
+                alpha(theme.foreground_muted, 0.5),
+            );
+            return;
+        }
         // Zoomed out: GC content per bin, scaled to the visible range so
         // local variation shows; colour runs from AT-rich to GC-rich.
         let bins = (self.x_of(b1 as f64) - self.x_of(b0 as f64)).max(1.0) as usize / 2;
@@ -1389,7 +1449,11 @@ impl GenomeView {
         }
 
         // GC ring.
-        let gc = doc.summary().gc(0, len, 360);
+        let gc = if self.show_gc {
+            doc.summary().gc(0, len, 360)
+        } else {
+            Vec::new()
+        };
         let baseline = mean_gc(doc);
         let gc_r = r * 0.62;
         for (i, &v) in gc.iter().enumerate() {
@@ -1597,8 +1661,9 @@ impl GenomeView {
     pub fn status(&self, doc: &SequenceDoc) -> String {
         // The tab names the file; the status line describes the sequence.
         let mut parts = vec![format!(
-            "{} bp · {} annotations",
+            "{} bp · {} · {} annotations",
             format_thousands(doc.len()),
+            if doc.circular { "circular" } else { "linear" },
             format_thousands(doc.feature_count() as u64)
         )];
         if let Some(c) = self.cursor {
@@ -2017,6 +2082,57 @@ mod tests {
         assert!(lines > 1, "uses several lines");
         assert!(w.offsets[lines] - BLOCK_GAP <= 900.0, "all on screen");
         assert_eq!(v.scroll_fraction(d.len()).1, 1.0);
+    }
+
+    #[test]
+    fn stepping_through_annotations() {
+        let d = doc();
+        let mut v = GenomeView::new(1000.0, 600.0);
+        v.cursor = Some(0);
+        assert!(v.step_feature(&d, true));
+        assert_eq!(v.selection, Some((500, 800)));
+        assert!(v.step_feature(&d, true));
+        assert_eq!(v.selection, Some((1000, 1300)));
+        assert!(v.step_feature(&d, false));
+        assert_eq!(v.selection, Some((500, 800)));
+        assert!(v.status(&d).contains("circular"));
+    }
+
+    #[test]
+    fn origin_spanning_intron_splits_into_two_pieces() {
+        use basecraft_protocol::Segment;
+        // rpl2 on the reverse strand: 5' exon at the start of the sequence,
+        // intron across the origin, 3' exon near the end.
+        let f = Feature {
+            kind: "CDS".into(),
+            location: Location {
+                segments: vec![
+                    Segment::new(550, 841, Strand::Reverse),
+                    Segment::new(149_159, 149_663, Strand::Reverse),
+                ],
+                unordered: false,
+            },
+            qualifiers: vec![],
+        };
+        assert_eq!(
+            pieces(&f, 150_000, true),
+            vec![(550, 841), (149_159, 149_663)]
+        );
+        // Not circular: one piece, as before.
+        assert_eq!(pieces(&f, 150_000, false), vec![(550, 149_663)]);
+        // An ordinary reverse-strand two-exon gene stays whole.
+        let g = Feature {
+            kind: "CDS".into(),
+            location: Location {
+                segments: vec![
+                    Segment::new(500, 600, Strand::Reverse),
+                    Segment::new(100, 200, Strand::Reverse),
+                ],
+                unordered: false,
+            },
+            qualifiers: vec![],
+        };
+        assert_eq!(pieces(&g, 150_000, true), vec![(100, 600)]);
     }
 
     #[test]

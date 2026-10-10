@@ -154,6 +154,12 @@ pub mod qobject {
         /// Start panning (middle button).
         #[qinvokable]
         fn pan_press(self: Pin<&mut GenomeController>, x: f64, y: f64);
+        /// Show or hide the GC content plot.
+        #[qinvokable]
+        fn set_show_gc(self: Pin<&mut GenomeController>, show: bool);
+        /// Select the next (or previous) annotation; false if there's none.
+        #[qinvokable]
+        fn step_feature(self: Pin<&mut GenomeController>, forward: bool) -> bool;
         /// Id of the selected feature, or -1.
         #[qinvokable]
         fn selected_feature(self: &GenomeController) -> i32;
@@ -412,10 +418,18 @@ impl qobject::GenomeController {
     #[allow(clippy::cast_possible_truncation)]
     pub fn resize(mut self: Pin<&mut Self>, width: f64, height: f64) {
         let len = self.len();
-        self.as_mut()
-            .rust_mut()
-            .view
-            .resize(width as f32, height as f32, len);
+        {
+            let mut r = self.as_mut().rust_mut();
+            let r = &mut *r;
+            r.view.resize(width as f32, height as f32, len);
+            // Until the user zooms or scrolls, keep the whole sequence fitted:
+            // the pane often settles into its final size after opening.
+            if r.view.auto_fit
+                && let (Some(s), Some(d)) = (&r.session, r.doc)
+            {
+                r.view.fit_doc(s.doc(d));
+            }
+        }
         self.refresh();
     }
 
@@ -1205,6 +1219,31 @@ impl qobject::GenomeController {
             _ => json!({ "valid": false }),
         };
         QString::from(&info.to_string())
+    }
+
+    pub fn set_show_gc(mut self: Pin<&mut Self>, show: bool) {
+        self.as_mut().rust_mut().view.show_gc = show;
+        self.refresh();
+    }
+
+    pub fn step_feature(mut self: Pin<&mut Self>, forward: bool) -> bool {
+        let found = {
+            let mut r = self.as_mut().rust_mut();
+            let r = &mut *r;
+            match (&r.session, r.doc) {
+                (Some(s), Some(d)) => r.view.step_feature(s.doc(d), forward),
+                _ => false,
+            }
+        };
+        if !found {
+            self.as_mut().notify(if forward {
+                "No annotation further on"
+            } else {
+                "No annotation before this"
+            });
+        }
+        self.refresh();
+        found
     }
 
     pub fn selected_feature(&self) -> i32 {
