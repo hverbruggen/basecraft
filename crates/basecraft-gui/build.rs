@@ -69,9 +69,11 @@ fn main() {
         .join("QtGui")
         .join(qmake_query("QT_VERSION"));
     let shader_dir = out_dir.join("shaders");
-    let builder = CxxQtBuilder::new_qml_module(
-        QmlModule::new("Basecraft").qml_files(["qml/Main.qml", "qml/FeatureEditor.qml"]),
-    )
+    let builder = CxxQtBuilder::new_qml_module(QmlModule::new("Basecraft").qml_files([
+        "qml/Main.qml",
+        "qml/FeatureEditor.qml",
+        "qml/DocumentView.qml",
+    ]))
     .qt_module("Quick")
     .files(["src/bridge.rs"])
     .cpp_file("cpp/instanceview.h")

@@ -1542,9 +1542,9 @@ impl GenomeView {
     /// One line describing the view, the cursor, the selection and the
     /// selected feature.
     pub fn status(&self, doc: &SequenceDoc) -> String {
+        // The tab names the file; the status line describes the sequence.
         let mut parts = vec![format!(
-            "{}  {} bp, {} annotations",
-            doc.name,
+            "{} bp · {} annotations",
             format_thousands(doc.len()),
             format_thousands(doc.feature_count() as u64)
         )];

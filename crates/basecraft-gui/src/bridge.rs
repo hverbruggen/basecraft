@@ -36,6 +36,10 @@ pub mod qobject {
 
         #[qinvokable]
         fn open_file(self: Pin<&mut GenomeController>, path: &QString) -> bool;
+        /// Set `project_dir` to the project a file belongs to, without
+        /// opening it.
+        #[qinvokable]
+        fn use_project_of(self: Pin<&mut GenomeController>, path: &QString);
         #[qinvokable]
         fn resize(self: Pin<&mut GenomeController>, width: f64, height: f64);
         #[qinvokable]
@@ -367,11 +371,11 @@ impl qobject::GenomeController {
                     let mut r = self.as_mut().rust_mut();
                     r.session = Some(session);
                     r.doc = Some(doc);
-                    // Wrapped at 100 % by default, circular molecules too;
+                    // Wrapped, fitted to the window, circular molecules too;
                     // the other views are a switch away.
                     let _ = circular;
                     r.view.mode = Mode::Wrapped;
-                    r.view.reset_zoom(len);
+                    r.view.fit(len);
                 }
                 let file = path
                     .file_name()
@@ -395,6 +399,13 @@ impl qobject::GenomeController {
                 false
             }
         }
+    }
+
+    pub fn use_project_of(mut self: Pin<&mut Self>, path: &QString) {
+        let root = project_root(Path::new(&path.to_string()));
+        let abs = std::fs::canonicalize(&root).unwrap_or(root);
+        self.as_mut()
+            .set_project_dir(QString::from(&abs.to_string_lossy().into_owned()));
     }
 
     #[allow(clippy::cast_possible_truncation)]
