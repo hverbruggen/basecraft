@@ -126,16 +126,13 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut Report) -> Re
                 Err(err) => problem(err.to_string()),
             },
         }
-        let state = session.doc(doc);
-        if state.len() != e.state.len || state.feature_count() as u64 != e.state.features {
+        let state = session.state(doc);
+        if state != e.state {
             report.problems.push(format!(
-                "{} {}: state len={} features={}, expected len={} features={}",
+                "{} {}: state {state:?}, expected {:?}",
                 e.id,
                 e.op.name(),
-                state.len(),
-                state.feature_count(),
-                e.state.len,
-                e.state.features
+                e.state
             ));
         }
     }

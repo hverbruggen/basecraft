@@ -268,6 +268,352 @@
       ]
     },
     {
+      "description": "Replace columns `start..end` of one row with `residues`.",
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "aln.replace"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "end": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "residues": {
+              "type": "string"
+            },
+            "row": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "start": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "row",
+            "start",
+            "end",
+            "residues"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ]
+    },
+    {
+      "description": "Insert `count` gaps before column `col`. Rows use up their own\ntrailing gaps first, unless every row gets gaps: that's a new column.",
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "aln.insert_gaps"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "col": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "count": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "rows": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0
+                  }
+                ]
+              }
+            }
+          },
+          "required": [
+            "rows",
+            "col",
+            "count"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ]
+    },
+    {
+      "description": "Delete columns `start..end` of `rows`; what follows moves left.",
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "aln.delete"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "end": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "rows": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0
+                  }
+                ]
+              }
+            },
+            "start": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "rows",
+            "start",
+            "end"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ]
+    },
+    {
+      "description": "Slide the block `rows` × `start..end` by `by` columns into the gaps\nbeside it.",
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "aln.shift"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "by": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "end": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "rows": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0
+                  }
+                ]
+              }
+            },
+            "start": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "rows",
+            "start",
+            "end",
+            "by"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ]
+    },
+    {
+      "description": "Delete every column that is a gap in all rows.",
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "aln.remove_gap_columns"
+        },
+        "params": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ]
+    },
+    {
+      "description": "Move `rows`, in order, so the first lands at index `to` among the\nrows that remain.",
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "aln.move_rows"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "rows": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0
+                  }
+                ]
+              }
+            },
+            "to": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "rows",
+            "to"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "aln.rename_row"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "row": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "row",
+            "name"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "aln.remove_rows"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "rows": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0
+                  }
+                ]
+              }
+            }
+          },
+          "required": [
+            "rows"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ]
+    },
+    {
       "description": "Undo the operation with log id `of`.",
       "type": "object",
       "properties": {
@@ -429,7 +775,17 @@
           "minimum": 0
         },
         "len": {
+          "description": "Residues of a sequence, columns of an alignment.",
           "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "rows": {
+          "description": "Rows of an alignment.",
+          "type": [
+            "integer",
+            "null"
+          ],
           "format": "uint64",
           "minimum": 0
         }

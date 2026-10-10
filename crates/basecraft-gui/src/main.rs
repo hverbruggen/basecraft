@@ -9,6 +9,7 @@
     clippy::float_cmp
 )]
 
+mod alignment_bridge;
 mod bridge;
 
 use cxx_qt_lib::{QGuiApplication, QQmlApplicationEngine, QString, QUrl};

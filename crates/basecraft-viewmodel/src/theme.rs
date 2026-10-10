@@ -138,6 +138,24 @@ impl Theme {
         }
     }
 
+    /// Amino acid colour, by side-chain class as in Clustal X: hydrophobic
+    /// blue, positive red, negative magenta, polar green, and their own
+    /// colours for cysteine, glycine, proline and the aromatic H and Y.
+    pub fn amino(&self, b: u8) -> Rgba {
+        match b.to_ascii_uppercase() {
+            b'A' | b'I' | b'L' | b'M' | b'F' | b'W' | b'V' => self.blue,
+            b'K' | b'R' => self.red,
+            b'E' | b'D' => self.magenta,
+            b'N' | b'Q' | b'S' | b'T' => self.green,
+            b'C' => self.orange,
+            b'G' => self.yellow,
+            b'P' => self.brown,
+            b'H' | b'Y' => self.cyan,
+            b'-' | b'.' => self.background,
+            _ => self.muted,
+        }
+    }
+
     pub fn feature(&self, kind: &str) -> Rgba {
         match kind {
             "gene" => self.green,

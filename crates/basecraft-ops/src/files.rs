@@ -4,7 +4,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use basecraft_docs::SequenceDoc;
+use basecraft_docs::{AlignmentDoc, SequenceDoc};
 use basecraft_io::{cache, fasta, genbank, gff3};
 use basecraft_protocol::{Feature, Location, Qualifier, Segment};
 
@@ -26,10 +26,103 @@ impl Format {
             .unwrap_or_default();
         match ext.as_str() {
             "gb" | "gbk" | "genbank" | "gbff" => Ok(Format::GenBank),
-            "fa" | "fasta" | "fna" | "fas" | "ffn" => Ok(Format::Fasta),
+            "fa" | "fasta" | "fna" | "fas" | "ffn" | "faa" | "afa" => Ok(Format::Fasta),
             _ => Err(Error::UnknownFormat(path.to_path_buf())),
         }
     }
+}
+
+/// What a file opens as.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    Sequence,
+    Alignment,
+}
+
+/// Whether a file opens as a sequence or an alignment. A FASTA file is an
+/// alignment when it's named `*.afa` or `*.aln.<fasta extension>`, or when
+/// it holds two or more records of the same length. Only the index is read.
+pub fn kind(path: &Path) -> Result<Kind> {
+    if Format::from_path(path)? != Format::Fasta {
+        return Ok(Kind::Sequence);
+    }
+    let file = cache::open_fasta(path)?;
+    Ok(fasta_kind(path, &file))
+}
+
+fn fasta_kind(path: &Path, file: &cache::IndexedFasta) -> Kind {
+    let named = path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("afa"))
+        || path
+            .file_stem()
+            .and_then(|s| Path::new(s).extension())
+            .is_some_and(|e| e.eq_ignore_ascii_case("aln"));
+    let records = &file.index.records;
+    let equal = records.len() >= 2 && records.iter().all(|r| r.len == records[0].len);
+    if named || equal {
+        Kind::Alignment
+    } else {
+        Kind::Sequence
+    }
+}
+
+/// An open alignment plus what's needed to write its file back.
+pub struct OpenedAlignment {
+    pub doc: AlignmentDoc,
+    pub format: Format,
+}
+
+pub enum Loaded {
+    Sequence(Opened),
+    Alignment(OpenedAlignment),
+}
+
+/// Open a file as whatever it holds: see [`kind`].
+pub fn load(path: &Path) -> Result<Loaded> {
+    if Format::from_path(path)? == Format::Fasta {
+        let file = Arc::new(cache::open_fasta(path)?);
+        if file.index.records.is_empty() {
+            return Err(Error::Empty(path.to_path_buf()));
+        }
+        if fasta_kind(path, &file) == Kind::Alignment {
+            let name = path
+                .file_name()
+                .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+            return Ok(Loaded::Alignment(OpenedAlignment {
+                doc: AlignmentDoc::from_fasta(name, &file),
+                format: Format::Fasta,
+            }));
+        }
+    }
+    open(path).map(Loaded::Sequence)
+}
+
+/// Write an alignment as FASTA, 60 columns a line, streamed row by row.
+pub fn write_alignment(doc: &AlignmentDoc, w: &mut dyn Write) -> io::Result<()> {
+    let mut buf = Vec::new();
+    let chunk = 60 * 16_384;
+    for (i, row) in doc.rows().enumerate() {
+        w.write_all(b">")?;
+        w.write_all(row.name.as_bytes())?;
+        if !row.description.is_empty() {
+            w.write_all(b" ")?;
+            w.write_all(row.description.as_bytes())?;
+        }
+        w.write_all(b"\n")?;
+        let mut pos = 0;
+        while pos < doc.width() {
+            let end = (pos + chunk).min(doc.width());
+            buf.clear();
+            doc.read_into(i, pos, end, &mut buf);
+            for line in buf.chunks(60) {
+                w.write_all(line)?;
+                w.write_all(b"\n")?;
+            }
+            pos = end;
+        }
+    }
+    Ok(())
 }
 
 pub fn gff_sidecar(path: &Path) -> PathBuf {

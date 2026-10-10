@@ -12,6 +12,7 @@ Item {
     property alias controller: ctl
     property alias view: view
     readonly property bool dirty: ctl.dirty
+    readonly property string kind: "sequence"
     property bool showGc: true
     // Layout a newly opened file starts in: "wrapped", "linear" or "circular".
     property string defaultLayout: "wrapped"

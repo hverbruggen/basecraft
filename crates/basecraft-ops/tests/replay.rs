@@ -298,3 +298,145 @@ fn fasta_with_gff_sidecar_saves_and_replays() {
     let report = replay::replay(root).unwrap();
     assert!(report.ok(), "{:#?}", report.problems);
 }
+
+const ALN: &str = ">a first row\nAC-GT-A--\n>b\nAC-GTTA--\n>c\n--CGT-AC-\n>d\nACCGT-A--\n";
+
+fn shift(rows: &[(u32, u32)], start: u64, end: u64, by: i64) -> Op {
+    Op::AlnShift {
+        rows: rows.to_vec(),
+        start,
+        end,
+        by,
+    }
+}
+
+fn rows_text(s: &Session, d: basecraft_ops::DocId) -> Vec<String> {
+    let a = s.alignment(d);
+    (0..a.row_count())
+        .map(|r| {
+            format!(
+                "{} {}",
+                a.row(r).name,
+                String::from_utf8(a.read(r, 0, a.width())).unwrap()
+            )
+        })
+        .collect()
+}
+
+/// Every alignment operation type, with merged bursts, undo and redo, then
+/// a save; replay must reproduce each step.
+#[test]
+fn alignment_session_replays_exactly() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::write(root.join("x.aln.fasta"), ALN).unwrap();
+    {
+        let mut s = Session::new(root);
+        let d = s.open(&root.join("x.aln.fasta")).unwrap();
+        assert!(s.is_alignment(d));
+        assert_eq!(s.alignment(d).width(), 9);
+        // Typing over residues along row 0: one entry.
+        for (i, c) in "TT".chars().enumerate() {
+            s.apply(
+                d,
+                Op::AlnReplace {
+                    row: 0,
+                    start: 3 + i as u64,
+                    end: 4 + i as u64,
+                    residues: c.to_string(),
+                },
+            )
+            .unwrap();
+        }
+        // Two gaps typed one after the other in rows 1..3: one entry.
+        for i in 0..2 {
+            s.apply(
+                d,
+                Op::AlnInsertGaps {
+                    rows: vec![(1, 3)],
+                    col: 2 + i,
+                    count: 1,
+                },
+            )
+            .unwrap();
+        }
+        // A block slid left in two steps: one entry.
+        s.apply(d, shift(&[(2, 3)], 4, 6, -1)).unwrap();
+        s.apply(d, shift(&[(2, 3)], 3, 5, -1)).unwrap();
+        // Residues in the way.
+        assert!(s.apply(d, shift(&[(0, 1)], 1, 3, 1)).is_err());
+        s.apply(
+            d,
+            Op::AlnDelete {
+                rows: vec![(0, 4)],
+                start: 0,
+                end: 1,
+            },
+        )
+        .unwrap();
+        s.apply(
+            d,
+            Op::AlnMoveRows {
+                rows: vec![(3, 4)],
+                to: 0,
+            },
+        )
+        .unwrap();
+        s.apply(
+            d,
+            Op::AlnRenameRow {
+                row: 0,
+                name: "dee".into(),
+            },
+        )
+        .unwrap();
+        s.apply(d, Op::AlnRemoveRows { rows: vec![(2, 3)] })
+            .unwrap();
+        s.undo(d).unwrap();
+        s.undo(d).unwrap();
+        s.redo(d).unwrap();
+        s.apply(d, Op::AlnRemoveGapColumns {}).unwrap();
+        // Sequence operations don't apply to an alignment.
+        assert!(s.apply(d, replace(0, 0, "A")).is_err());
+        s.save(d, None).unwrap();
+        let want = rows_text(&s, d);
+        let reopened = {
+            let mut s2 = Session::unlogged(root);
+            let d2 = s2.open(&root.join("x.aln.fasta")).unwrap();
+            rows_text(&s2, d2)
+        };
+        assert_eq!(reopened, want);
+    }
+    let entries = basecraft_ops::log::read_all(root).unwrap();
+    let names: Vec<&str> = entries.iter().map(|e| e.op.name()).collect();
+    assert_eq!(
+        names.iter().filter(|n| **n == "aln.replace").count(),
+        1,
+        "{names:?}"
+    );
+    assert_eq!(names.iter().filter(|n| **n == "aln.insert_gaps").count(), 1);
+    assert_eq!(names.iter().filter(|n| **n == "aln.shift").count(), 1);
+    let saved = std::fs::read_to_string(root.join("x.aln.fasta")).unwrap();
+    assert!(saved.starts_with(">dee\n"), "{saved}");
+    assert!(saved.contains(">a first row\n"), "{saved}");
+    let report = replay::replay(root).unwrap();
+    assert!(report.ok(), "{:#?}", report.problems);
+    assert_eq!(report.entries, entries.len());
+}
+
+#[test]
+fn equal_length_fasta_opens_as_alignment() {
+    use basecraft_ops::files::Kind;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::write(root.join("set.fasta"), ">a\nACGT\n>b\nACG\n").unwrap();
+    std::fs::write(root.join("aln.fasta"), ">a\nAC-T\n>b\nACGT\n").unwrap();
+    std::fs::write(root.join("ragged.afa"), ">a\nAC\n>b\nACGT\n").unwrap();
+    let kind = |f: &str| basecraft_ops::files::kind(&root.join(f)).unwrap();
+    assert_eq!(kind("set.fasta"), Kind::Sequence);
+    assert_eq!(kind("aln.fasta"), Kind::Alignment);
+    assert_eq!(kind("ragged.afa"), Kind::Alignment);
+    let mut s = Session::unlogged(root);
+    let d = s.open(&root.join("ragged.afa")).unwrap();
+    assert_eq!(rows_text(&s, d), ["a AC--", "b ACGT"]);
+}

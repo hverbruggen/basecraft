@@ -160,9 +160,63 @@ fn describe(op: &Op) -> String {
         Op::FeatureAdd { feature } => format!("Added {}", feature_name(feature)),
         Op::FeatureUpdate { feature, .. } => format!("Edited {}", feature_name(feature)),
         Op::FeatureRemove { id } => format!("Deleted annotation #{id}"),
+        Op::AlnReplace {
+            row,
+            start,
+            end,
+            residues,
+        } => format!(
+            "Replaced columns {} of row {} with {residues}",
+            range(*start, *end),
+            row + 1
+        ),
+        Op::AlnInsertGaps {
+            rows: r,
+            col,
+            count,
+        } => {
+            format!("Inserted {count} gaps at column {} in {}", col + 1, rows(r))
+        }
+        Op::AlnDelete {
+            rows: r,
+            start,
+            end,
+        } => format!("Deleted columns {} in {}", range(*start, *end), rows(r)),
+        Op::AlnShift {
+            rows: r,
+            start,
+            end,
+            by,
+        } => format!(
+            "Slid columns {} of {} {} by {}",
+            range(*start, *end),
+            rows(r),
+            if *by < 0 { "left" } else { "right" },
+            by.unsigned_abs()
+        ),
+        Op::AlnRemoveGapColumns {} => "Removed gap-only columns".into(),
+        Op::AlnMoveRows { rows: r, to } => format!("Moved {} to row {}", rows(r), to + 1),
+        Op::AlnRenameRow { row, name } => format!("Renamed row {} to {name}", row + 1),
+        Op::AlnRemoveRows { rows: r } => format!("Deleted {}", rows(r)),
         Op::Undo { .. } => "Undo".into(),
         Op::Redo { .. } => "Redo".into(),
     }
+}
+
+/// Alignment rows as people count them: "row 3", "rows 3–5".
+fn rows(ranges: &[(u32, u32)]) -> String {
+    let parts: Vec<String> = ranges
+        .iter()
+        .map(|&(a, b)| {
+            if b == a + 1 {
+                (a + 1).to_string()
+            } else {
+                format!("{}–{b}", a + 1)
+            }
+        })
+        .collect();
+    let one = ranges.len() == 1 && ranges[0].1 == ranges[0].0 + 1;
+    format!("{} {}", if one { "row" } else { "rows" }, parts.join(", "))
 }
 
 /// Who acted, when it wasn't the user.
@@ -201,5 +255,14 @@ mod activity_tests {
             residues: String::new(),
         };
         assert_eq!(describe(&op), "Deleted 3 bp at 10–12");
+        let op = Op::AlnShift {
+            rows: vec![(2, 5)],
+            start: 9,
+            end: 12,
+            by: -2,
+        };
+        assert_eq!(describe(&op), "Slid columns 10–12 of rows 3–5 left by 2");
+        let op = Op::AlnRemoveRows { rows: vec![(0, 1)] };
+        assert_eq!(describe(&op), "Deleted row 1");
     }
 }

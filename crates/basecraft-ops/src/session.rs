@@ -5,17 +5,20 @@
 //! [`Session::redo`], so the log is complete. Consecutive single-place
 //! insertions by the same actor within a second merge into one operation,
 //! like an editor's undo grouping, so a burst of typing is one log entry.
+//! Alignment edits merge the same way: typing over residues along a row,
+//! gaps inserted one after another, a block slid step by step.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use basecraft_docs::{EditResult, FeatureId, SequenceDoc};
+use basecraft_docs::alignment::Undo as AlnUndo;
+use basecraft_docs::{AlignmentDoc, EditResult, FeatureId, SequenceDoc};
 use basecraft_protocol::ops::LOG_VERSION;
 use basecraft_protocol::{Actor, DocState, Feature, LogEntry, Op, OpResult};
 
 use crate::error::invalid;
-use crate::files::{self, HashingWriter, Opened};
+use crate::files::{self, HashingWriter, Loaded, Opened, OpenedAlignment};
 use crate::log::LogWriter;
 use crate::{Error, Result};
 
@@ -39,6 +42,7 @@ enum Inverse {
         id: FeatureId,
         before: Option<Feature>,
     },
+    Alignment(Vec<AlnUndo>),
 }
 
 struct Applied {
@@ -52,7 +56,7 @@ struct Applied {
 
 struct Slot {
     key: String,
-    opened: Opened,
+    content: Loaded,
     undo: Vec<Applied>,
     redo: Vec<Applied>,
 }
@@ -135,8 +139,31 @@ impl Session {
         self.actor = actor;
     }
 
+    /// A sequence document. Panics if `id` is an alignment.
     pub fn doc(&self, id: DocId) -> &SequenceDoc {
-        &self.docs[id.0].opened.doc
+        match &self.docs[id.0].content {
+            Loaded::Sequence(o) => &o.doc,
+            Loaded::Alignment(_) => panic!("document {} is an alignment", id.0),
+        }
+    }
+
+    /// An alignment document. Panics if `id` is a sequence.
+    pub fn alignment(&self, id: DocId) -> &AlignmentDoc {
+        match &self.docs[id.0].content {
+            Loaded::Alignment(o) => &o.doc,
+            Loaded::Sequence(_) => panic!("document {} is a sequence", id.0),
+        }
+    }
+
+    pub fn is_alignment(&self, id: DocId) -> bool {
+        matches!(self.docs[id.0].content, Loaded::Alignment(_))
+    }
+
+    fn sequence_of(&self, id: DocId) -> Result<&Opened> {
+        match &self.docs[id.0].content {
+            Loaded::Sequence(o) => Ok(o),
+            Loaded::Alignment(_) => Err(invalid("this needs a sequence, not an alignment")),
+        }
     }
 
     pub fn doc_key(&self, id: DocId) -> &str {
@@ -170,11 +197,19 @@ impl Session {
         }
     }
 
-    fn state(&self, id: DocId) -> DocState {
-        let doc = self.doc(id);
-        DocState {
-            len: doc.len(),
-            features: doc.feature_count() as u64,
+    /// The fingerprint the log records after each operation.
+    pub fn state(&self, id: DocId) -> DocState {
+        match &self.docs[id.0].content {
+            Loaded::Sequence(o) => DocState {
+                len: o.doc.len(),
+                features: o.doc.feature_count() as u64,
+                rows: None,
+            },
+            Loaded::Alignment(o) => DocState {
+                len: o.doc.width(),
+                features: 0,
+                rows: Some(o.doc.row_count() as u64),
+            },
         }
     }
 
@@ -222,11 +257,13 @@ impl Session {
 
     pub fn open(&mut self, path: &Path) -> Result<DocId> {
         self.flush()?;
-        let opened = files::open(path)?;
+        let content = files::load(path)?;
         let key = self.relative(path);
         let mut hashes = vec![(key.clone(), basecraft_io::cache::content_hash(path)?)];
         let sidecar = files::gff_sidecar(path);
-        if opened.format == files::Format::Fasta && sidecar.exists() {
+        if matches!(&content, Loaded::Sequence(o) if o.format == files::Format::Fasta)
+            && sidecar.exists()
+        {
             hashes.push((
                 self.relative(&sidecar),
                 basecraft_io::cache::content_hash(&sidecar)?,
@@ -239,7 +276,7 @@ impl Session {
         }
         self.docs.push(Slot {
             key: key.clone(),
-            opened,
+            content,
             undo: Vec::new(),
             redo: Vec::new(),
         });
@@ -275,13 +312,28 @@ impl Session {
     pub fn save(&mut self, id: DocId, path: Option<&Path>) -> Result<()> {
         self.flush()?;
         let target = path.map_or_else(|| self.resolve(&self.docs[id.0].key), Path::to_path_buf);
-        let opened = &self.docs[id.0].opened;
         let format = files::Format::from_path(&target)?;
+        let mut hashes = Vec::new();
+        let mut main_hash = String::new();
+        let opened = match &self.docs[id.0].content {
+            Loaded::Alignment(a) => {
+                if format != a.format {
+                    return Err(invalid("saving to a different format isn't supported yet"));
+                }
+                basecraft_io::write_atomic(&target, |w| {
+                    let mut hw = HashingWriter::new(w);
+                    files::write_alignment(&a.doc, &mut hw)?;
+                    main_hash = hw.hash();
+                    Ok(())
+                })?;
+                hashes.push((self.relative(&target), main_hash));
+                return self.log_save(id, &target, hashes);
+            }
+            Loaded::Sequence(o) => o,
+        };
         if format != opened.format {
             return Err(invalid("saving to a different format isn't supported yet"));
         }
-        let mut hashes = Vec::new();
-        let mut main_hash = String::new();
         basecraft_io::write_atomic(&target, |w| {
             let mut hw = HashingWriter::new(w);
             files::write_main(opened, &mut hw)?;
@@ -304,7 +356,11 @@ impl Session {
         if let Some(h) = side_hash {
             hashes.push((self.relative(&sidecar), h));
         }
-        let key = self.relative(&target);
+        self.log_save(id, &target, hashes)
+    }
+
+    fn log_save(&mut self, id: DocId, target: &Path, hashes: Vec<(String, String)>) -> Result<()> {
+        let key = self.relative(target);
         let entry = self.entry(
             id,
             self.actor.clone(),
@@ -328,7 +384,7 @@ impl Session {
         path: &Path,
     ) -> Result<()> {
         self.flush()?;
-        let doc = &self.docs[id.0].opened.doc;
+        let doc = &self.sequence_of(id)?.doc;
         if start >= end || end > doc.len() {
             return Err(invalid(format!(
                 "range {start}..{end} outside 0..{}",
@@ -370,7 +426,7 @@ impl Session {
         segments: &[(u64, u64)],
         reverse: bool,
     ) -> Result<String> {
-        let rec = files::extract_record(&self.docs[id.0].opened.doc, start, end, segments, reverse);
+        let rec = files::extract_record(&self.sequence_of(id)?.doc, start, end, segments, reverse);
         let mut hw = HashingWriter::new(std::io::sink());
         basecraft_io::genbank::write(&mut hw, &rec)?;
         Ok(hw.hash())
@@ -378,7 +434,14 @@ impl Session {
 
     /// Hashes the files a save would write, without writing them.
     pub fn save_hashes(&self, id: DocId) -> Result<Vec<String>> {
-        let opened = &self.docs[id.0].opened;
+        let opened = match &self.docs[id.0].content {
+            Loaded::Sequence(o) => o,
+            Loaded::Alignment(a) => {
+                let mut hw = HashingWriter::new(std::io::sink());
+                files::write_alignment(&a.doc, &mut hw)?;
+                return Ok(vec![hw.hash()]);
+            }
+        };
         let mut hw = HashingWriter::new(std::io::sink());
         files::write_main(opened, &mut hw)?;
         let mut out = vec![hw.hash()];
@@ -420,14 +483,14 @@ impl Session {
         let entry_id = entry.id.clone();
         let slot = &mut self.docs[doc.0];
         slot.redo.clear();
-        let is_insert = matches!(&op, Op::SeqReplace { start, end, residues } if start == end && !residues.is_empty());
+        let mergeable = mergeable(&op);
         slot.undo.push(Applied {
             entry_id: entry_id.clone(),
             op,
             inverse,
             group: self.group,
         });
-        if is_insert && self.merge {
+        if mergeable && self.merge {
             self.pending = Some(Pending {
                 doc,
                 entry,
@@ -441,6 +504,33 @@ impl Session {
 
     /// Merge an insertion into the pending burst if it continues it.
     fn try_merge(&mut self, doc: DocId, op: &Op, actor: &Actor) -> Result<bool> {
+        if let Some(p) = &self.pending
+            && p.doc == doc
+            && p.entry.actor == *actor
+            && p.last.elapsed() < MERGE_WINDOW
+            && let Some(merged) = merge_alignment(&p.entry.op, op)
+        {
+            let (Inverse::Alignment(steps), _) = self.execute(doc, op)? else {
+                return Err(invalid("alignment edit without alignment undo"));
+            };
+            let state = self.state(doc);
+            let slot = &mut self.docs[doc.0];
+            slot.redo.clear();
+            let top = slot
+                .undo
+                .last_mut()
+                .ok_or_else(|| invalid("pending burst without undo entry"))?;
+            if let Inverse::Alignment(first) = &mut top.inverse {
+                first.extend(steps);
+            }
+            top.op = merged.clone();
+            if let Some(p) = &mut self.pending {
+                p.entry.op = merged;
+                p.entry.state = state;
+                p.last = Instant::now();
+            }
+            return Ok(true);
+        }
         let Op::SeqReplace {
             start,
             end,
@@ -470,10 +560,10 @@ impl Session {
             return Ok(false);
         }
         let residues = normalise(residues)?;
-        let result = self.docs[doc.0]
-            .opened
-            .doc
-            .insert(*start, residues.as_bytes());
+        let Loaded::Sequence(opened) = &mut self.docs[doc.0].content else {
+            return Ok(false);
+        };
+        let result = opened.doc.insert(*start, residues.as_bytes());
         let state = self.state(doc);
         let slot = &mut self.docs[doc.0];
         slot.redo.clear();
@@ -511,7 +601,12 @@ impl Session {
 
     /// Carry out an edit on the document; returns its inverse.
     fn execute(&mut self, id: DocId, op: &Op) -> Result<(Inverse, Option<FeatureId>)> {
-        let doc = &mut self.docs[id.0].opened.doc;
+        let doc = match &mut self.docs[id.0].content {
+            Loaded::Sequence(o) => &mut o.doc,
+            Loaded::Alignment(a) => {
+                return execute_alignment(a, op).map(|u| (Inverse::Alignment(u), None));
+            }
+        };
         match op {
             Op::SeqReplace {
                 start,
@@ -567,6 +662,14 @@ impl Session {
                 let before = doc.update_feature(fid, feature.clone());
                 Ok((Inverse::Feature { id: fid, before }, None))
             }
+            Op::AlnReplace { .. }
+            | Op::AlnInsertGaps { .. }
+            | Op::AlnDelete { .. }
+            | Op::AlnShift { .. }
+            | Op::AlnRemoveGapColumns {}
+            | Op::AlnMoveRows { .. }
+            | Op::AlnRenameRow { .. }
+            | Op::AlnRemoveRows { .. } => Err(invalid(format!("{} needs an alignment", op.name()))),
             Op::Open { .. }
             | Op::Save { .. }
             | Op::Extract { .. }
@@ -622,16 +725,10 @@ impl Session {
     fn undo_one(&mut self, id: DocId) -> Result<String> {
         self.flush()?;
         let applied = self.docs[id.0].undo.pop().ok_or(Error::NothingTo("undo"))?;
-        let doc = &mut self.docs[id.0].opened.doc;
-        match &applied.inverse {
-            Inverse::Residues { inserted, result } => {
-                let pos = result.change.pos;
-                doc.replace(pos, pos + inserted, &result.removed);
-                for (fid, f) in &result.before {
-                    doc.restore_feature(*fid, Some(f.clone()));
-                }
-            }
-            Inverse::Feature { id: fid, before } => doc.restore_feature(*fid, before.clone()),
+        match (&mut self.docs[id.0].content, &applied.inverse) {
+            (Loaded::Alignment(a), Inverse::Alignment(steps)) => a.doc.undo(steps),
+            (Loaded::Sequence(o), inverse) => undo_sequence(&mut o.doc, inverse),
+            (Loaded::Alignment(_), _) => return Err(invalid("sequence undo on an alignment")),
         }
         let of = applied.entry_id.clone();
         let entry = self.entry(
@@ -651,10 +748,10 @@ impl Session {
         let inverse = match (&applied.op, &applied.inverse) {
             // A re-added feature keeps its id.
             (Op::FeatureAdd { feature }, Inverse::Feature { id: fid, .. }) => {
-                self.docs[id.0]
-                    .opened
-                    .doc
-                    .restore_feature(*fid, Some(feature.clone()));
+                let Loaded::Sequence(o) = &mut self.docs[id.0].content else {
+                    return Err(invalid("feature redo on an alignment"));
+                };
+                o.doc.restore_feature(*fid, Some(feature.clone()));
                 Inverse::Feature {
                     id: *fid,
                     before: None,
@@ -678,6 +775,138 @@ impl Session {
 impl Drop for Session {
     fn drop(&mut self) {
         let _ = self.flush();
+    }
+}
+
+fn undo_sequence(doc: &mut SequenceDoc, inverse: &Inverse) {
+    match inverse {
+        Inverse::Residues { inserted, result } => {
+            let pos = result.change.pos;
+            doc.replace(pos, pos + inserted, &result.removed);
+            for (fid, f) in &result.before {
+                doc.restore_feature(*fid, Some(f.clone()));
+            }
+        }
+        Inverse::Feature { id: fid, before } => doc.restore_feature(*fid, before.clone()),
+        Inverse::Alignment(_) => {}
+    }
+}
+
+fn execute_alignment(a: &mut OpenedAlignment, op: &Op) -> Result<Vec<AlnUndo>> {
+    let doc = &mut a.doc;
+    let edit = match op {
+        Op::AlnReplace {
+            row,
+            start,
+            end,
+            residues,
+        } => {
+            let residues = normalise(residues)?;
+            doc.replace(*row as usize, *start, *end, residues.as_bytes())
+        }
+        Op::AlnInsertGaps { rows, col, count } => doc.insert_gaps(rows, *col, *count),
+        Op::AlnDelete { rows, start, end } => doc.delete(rows, *start, *end),
+        Op::AlnShift {
+            rows,
+            start,
+            end,
+            by,
+        } => doc.shift(rows, *start, *end, *by),
+        Op::AlnRemoveGapColumns {} => Ok(doc.remove_gap_columns().0),
+        Op::AlnMoveRows { rows, to } => doc.move_rows(rows, *to),
+        Op::AlnRenameRow { row, name } => doc.rename(*row as usize, name),
+        Op::AlnRemoveRows { rows } => doc.remove_rows(rows),
+        _ => return Err(invalid(format!("{} needs a sequence", op.name()))),
+    };
+    edit.map_err(|e| invalid(e.0))
+}
+
+/// Edits whose log entries can grow into a burst.
+fn mergeable(op: &Op) -> bool {
+    match op {
+        Op::SeqReplace {
+            start,
+            end,
+            residues,
+        } => start == end && !residues.is_empty(),
+        Op::AlnReplace {
+            start,
+            end,
+            residues,
+            ..
+        } => end - start == residues.len() as u64,
+        Op::AlnInsertGaps { .. } | Op::AlnShift { .. } => true,
+        _ => false,
+    }
+}
+
+/// One alignment edit that does what `prev` then `next` do, if there is one:
+/// typing over residues along a row, gaps inserted after the previous ones,
+/// or a block slid on from where it was left.
+fn merge_alignment(prev: &Op, next: &Op) -> Option<Op> {
+    match (prev, next) {
+        (
+            Op::AlnReplace {
+                row,
+                start,
+                end,
+                residues,
+            },
+            Op::AlnReplace {
+                row: row2,
+                start: start2,
+                end: end2,
+                residues: residues2,
+            },
+        ) if row == row2
+            && end - start == residues.len() as u64
+            && end2 - start2 == residues2.len() as u64
+            && start2 == end =>
+        {
+            Some(Op::AlnReplace {
+                row: *row,
+                start: *start,
+                end: *end2,
+                residues: format!("{residues}{residues2}"),
+            })
+        }
+        (
+            Op::AlnInsertGaps { rows, col, count },
+            Op::AlnInsertGaps {
+                rows: rows2,
+                col: col2,
+                count: count2,
+            },
+        ) if rows == rows2 && *col2 == col + count => Some(Op::AlnInsertGaps {
+            rows: rows.clone(),
+            col: *col,
+            count: count + count2,
+        }),
+        (
+            Op::AlnShift {
+                rows,
+                start,
+                end,
+                by,
+            },
+            Op::AlnShift {
+                rows: rows2,
+                start: start2,
+                end: end2,
+                by: by2,
+            },
+        ) if rows == rows2
+            && start.checked_add_signed(*by) == Some(*start2)
+            && end.checked_add_signed(*by) == Some(*end2) =>
+        {
+            Some(Op::AlnShift {
+                rows: rows.clone(),
+                start: *start,
+                end: *end,
+                by: by + by2,
+            })
+        }
+        _ => None,
     }
 }
 

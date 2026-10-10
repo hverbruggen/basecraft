@@ -73,10 +73,11 @@ fn main() {
         "qml/Main.qml",
         "qml/FeatureEditor.qml",
         "qml/DocumentView.qml",
+        "qml/AlignmentView.qml",
         "qml/ShortcutsDialog.qml",
     ]))
     .qt_module("Quick")
-    .files(["src/bridge.rs"])
+    .files(["src/bridge.rs", "src/alignment_bridge.rs"])
     .cpp_file("cpp/instanceview.h")
     .cpp_file("cpp/instanceview.cpp")
     .cpp_file("cpp/filetreemodel.h")

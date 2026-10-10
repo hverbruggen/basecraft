@@ -52,6 +52,53 @@ pub enum Op {
         #[serde(default, skip_serializing_if = "is_false")]
         reverse: bool,
     },
+    // Alignment edits. Columns are 0-based, half-open; `rows` are half-open
+    // row ranges, `[[first, past_last], ...]`. Every edit keeps the
+    // alignment rectangular: rows that end up shorter than the widest get
+    // trailing gaps.
+    /// Replace columns `start..end` of one row with `residues`.
+    #[serde(rename = "aln.replace")]
+    AlnReplace {
+        row: u32,
+        start: u64,
+        end: u64,
+        residues: String,
+    },
+    /// Insert `count` gaps before column `col`. Rows use up their own
+    /// trailing gaps first, unless every row gets gaps: that's a new column.
+    #[serde(rename = "aln.insert_gaps")]
+    AlnInsertGaps {
+        rows: Vec<(u32, u32)>,
+        col: u64,
+        count: u64,
+    },
+    /// Delete columns `start..end` of `rows`; what follows moves left.
+    #[serde(rename = "aln.delete")]
+    AlnDelete {
+        rows: Vec<(u32, u32)>,
+        start: u64,
+        end: u64,
+    },
+    /// Slide the block `rows` × `start..end` by `by` columns into the gaps
+    /// beside it.
+    #[serde(rename = "aln.shift")]
+    AlnShift {
+        rows: Vec<(u32, u32)>,
+        start: u64,
+        end: u64,
+        by: i64,
+    },
+    /// Delete every column that is a gap in all rows.
+    #[serde(rename = "aln.remove_gap_columns")]
+    AlnRemoveGapColumns {},
+    /// Move `rows`, in order, so the first lands at index `to` among the
+    /// rows that remain.
+    #[serde(rename = "aln.move_rows")]
+    AlnMoveRows { rows: Vec<(u32, u32)>, to: u32 },
+    #[serde(rename = "aln.rename_row")]
+    AlnRenameRow { row: u32, name: String },
+    #[serde(rename = "aln.remove_rows")]
+    AlnRemoveRows { rows: Vec<(u32, u32)> },
     /// Undo the operation with log id `of`.
     #[serde(rename = "history.undo")]
     Undo { of: String },
@@ -70,6 +117,14 @@ impl Op {
             Op::FeatureAdd { .. } => "feature.add",
             Op::FeatureRemove { .. } => "feature.remove",
             Op::FeatureUpdate { .. } => "feature.update",
+            Op::AlnReplace { .. } => "aln.replace",
+            Op::AlnInsertGaps { .. } => "aln.insert_gaps",
+            Op::AlnDelete { .. } => "aln.delete",
+            Op::AlnShift { .. } => "aln.shift",
+            Op::AlnRemoveGapColumns {} => "aln.remove_gap_columns",
+            Op::AlnMoveRows { .. } => "aln.move_rows",
+            Op::AlnRenameRow { .. } => "aln.rename_row",
+            Op::AlnRemoveRows { .. } => "aln.remove_rows",
             Op::Undo { .. } => "history.undo",
             Op::Redo { .. } => "history.redo",
         }
@@ -102,8 +157,12 @@ pub enum Actor {
 /// it at every step; full content hashes are compared at open and save.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct DocState {
+    /// Residues of a sequence, columns of an alignment.
     pub len: u64,
     pub features: u64,
+    /// Rows of an alignment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rows: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -168,6 +227,7 @@ mod tests {
             state: DocState {
                 len: 101,
                 features: 3,
+                rows: None,
             },
         };
         let json = serde_json::to_string(&e).unwrap();
@@ -180,6 +240,28 @@ mod tests {
             "{json}"
         );
         assert!(!json.contains("result"));
+        assert!(!json.contains("rows"));
         assert_eq!(serde_json::from_str::<LogEntry>(&json).unwrap(), e);
+    }
+
+    #[test]
+    fn alignment_op_json_shape() {
+        let op = Op::AlnShift {
+            rows: vec![(12, 15)],
+            start: 402,
+            end: 418,
+            by: -2,
+        };
+        let json = serde_json::to_string(&op).unwrap();
+        assert_eq!(
+            json,
+            r#"{"op":"aln.shift","params":{"rows":[[12,15]],"start":402,"end":418,"by":-2}}"#
+        );
+        let gaps = serde_json::to_string(&Op::AlnRemoveGapColumns {}).unwrap();
+        assert_eq!(gaps, r#"{"op":"aln.remove_gap_columns","params":{}}"#);
+        assert_eq!(
+            serde_json::from_str::<Op>(&gaps).unwrap(),
+            Op::AlnRemoveGapColumns {}
+        );
     }
 }

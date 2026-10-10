@@ -4,6 +4,7 @@ import QtQuick.Controls
 import QtQuick.Dialogs
 import QtQuick.Layouts
 import QtQuick.Window
+import Qt.labs.qmlmodels
 import Basecraft
 
 ApplicationWindow {
@@ -35,12 +36,15 @@ ApplicationWindow {
     property var current: null
     property var currentView: null
     property string currentPath: ""
+    // "sequence" or "alignment", for the active tab.
+    property string currentKind: ""
     property bool sidebarOpen: true
     property bool showGc: true
     property int ribbonTab: 0
     property string defaultLayout: "wrapped"
     property int orfMinCodons: 100
-    readonly property var ribbonTabs: ["File", "View", "Annotations", "Settings", "Help"]
+    readonly property bool alignmentOpen: currentKind === "alignment"
+    readonly property var ribbonTabs: ["File", "View", alignmentOpen ? "Alignment" : "Annotations", "Settings", "Help"]
     // Only the wrapped layout is offered for now; files always open in it.
 
     // Preferences, kept between sessions (~/.config/Basecraft).
@@ -68,6 +72,7 @@ ApplicationWindow {
         current = d ? d.controller : null
         currentView = d ? d.view : null
         currentPath = d ? d.path : ""
+        currentKind = d ? d.kind : ""
         if (currentView) currentView.forceActiveFocus()
     }
 
@@ -77,7 +82,7 @@ ApplicationWindow {
             if (openFiles.get(i).path === path) { tabs.currentIndex = i; return }
         }
         if (!shell.project_dir.length) shell.use_project_of(path)
-        openFiles.append({ path: path, dirty: false })
+        openFiles.append({ path: path, dirty: false, kind: shell.file_kind(path) })
         tabs.currentIndex = openFiles.count - 1
     }
 
@@ -174,7 +179,7 @@ ApplicationWindow {
                 spacing: 0
                 RibbonTabButton { tabIndex: 0; text: "File" }
                 RibbonTabButton { tabIndex: 1; text: "View" }
-                RibbonTabButton { tabIndex: 2; text: "Annotations" }
+                RibbonTabButton { tabIndex: 2; text: window.ribbonTabs[2] }
                 RibbonTabButton { tabIndex: 3; text: "Settings" }
                 RibbonTabButton { tabIndex: 4; text: "Help" }
                 Label {
@@ -220,13 +225,15 @@ ApplicationWindow {
             color: Qt.alpha(shell.foreground, 0.025)
             StackLayout {
                 anchors { fill: parent; leftMargin: 8; topMargin: 4; bottomMargin: 2 }
-                currentIndex: window.ribbonTab
+                // The third tab is Annotations for a sequence, Alignment
+                // for an alignment; the Alignment panel sits last.
+                currentIndex: window.ribbonTab === 2 && window.alignmentOpen ? 5 : window.ribbonTab
 
                 RowLayout {
                     spacing: 6
                     RibbonGroup {
-                        title: "Sequence"
-                        RibbonButton { text: "Open…"; tip: "Open a sequence file"; enabled: true; onClicked: openDialog.open() }
+                        title: "File"
+                        RibbonButton { text: "Open…"; tip: "Open a sequence or alignment file"; enabled: true; onClicked: openDialog.open() }
                         RibbonButton { text: "Save"; tip: "Save the current file"; keys: "Ctrl+S"; onClicked: window.current.save() }
                     }
                     ToolSeparator { Layout.fillHeight: true }
@@ -244,7 +251,7 @@ ApplicationWindow {
                         title: "Zoom"
                         RibbonButton { text: "−"; tip: "Zoom out"; keys: "−"; onClicked: window.current.zoom_out() }
                         RibbonButton { text: "+"; tip: "Zoom in"; keys: "+"; onClicked: window.current.zoom_in() }
-                        RibbonButton { text: "Fit"; tip: "Show the whole sequence"; keys: "Ctrl+0"; onClicked: window.current.fit() }
+                        RibbonButton { text: "Fit"; tip: window.alignmentOpen ? "Show the whole width of the alignment" : "Show the whole sequence"; keys: "Ctrl+0"; onClicked: window.current.fit() }
                         RibbonButton { text: "Selection"; tip: "Zoom to the selection"; onClicked: window.current.zoom_to_selection() }
                         Label {
                             text: window.current ? window.current.zoom_text : ""
@@ -259,6 +266,7 @@ ApplicationWindow {
                         title: "Show"
                         CheckBox {
                             text: "GC content"
+                            enabled: !window.alignmentOpen
                             ToolTip.text: "Show the GC content plot"
                             ToolTip.visible: hovered
                             ToolTip.delay: 400
@@ -361,6 +369,48 @@ ApplicationWindow {
                     Item { Layout.fillWidth: true }
                     ShortcutsGroup {}
                 }
+
+                // Alignment: edits on the selected block, its columns and rows.
+                RowLayout {
+                    spacing: 6
+                    RibbonGroup {
+                        title: "Gaps"
+                        RibbonButton { text: "Insert"; tip: "Insert a gap before the selection"; keys: "Space"; onClicked: window.current.insert_gap() }
+                        RibbonButton { text: "Remove"; tip: "Remove the gaps just left of the selection"; keys: "Backspace"; onClicked: window.current.remove_gap() }
+                        RibbonButton { text: "◀ Slide"; tip: "Slide the selection left into gaps, or drag it"; keys: "Alt+←"; onClicked: window.current.slide(-1) }
+                        RibbonButton { text: "Slide ▶"; tip: "Slide the selection right into gaps, or drag it"; keys: "Alt+→"; onClicked: window.current.slide(1) }
+                        RibbonButton { text: "Delete"; tip: "Delete the selected residues; the rows close up"; keys: "Delete"; onClicked: window.current.delete_selection() }
+                    }
+                    ToolSeparator { Layout.fillHeight: true }
+                    RibbonGroup {
+                        title: "Columns"
+                        RibbonButton { text: "Insert"; tip: "Insert a gap column before the selection"; onClicked: window.current.insert_column() }
+                        RibbonButton { text: "Delete"; tip: "Delete the selected columns from every row"; onClicked: window.current.delete_columns() }
+                        RibbonButton { text: "Strip gaps"; tip: "Delete every column that is a gap in all rows"; onClicked: window.current.remove_gap_columns() }
+                    }
+                    ToolSeparator { Layout.fillHeight: true }
+                    RibbonGroup {
+                        title: "Rows"
+                        RibbonButton { text: "▲"; tip: "Move the selected rows up"; keys: "Alt+↑"; onClicked: window.current.move_rows(true) }
+                        RibbonButton { text: "▼"; tip: "Move the selected rows down"; keys: "Alt+↓"; onClicked: window.current.move_rows(false) }
+                        RibbonButton { text: "To top"; tip: "Move the selected rows to the top"; onClicked: window.current.rows_to_top() }
+                        RibbonButton { text: "Rename…"; tip: "Rename the cursor's row"; keys: "F2"; onClicked: renameDialog.ask() }
+                        RibbonButton { text: "Delete"; tip: "Delete the selected rows"; onClicked: window.current.remove_rows() }
+                    }
+                    ToolSeparator { Layout.fillHeight: true }
+                    RibbonGroup {
+                        title: "Selection"
+                        RibbonButton { text: "All"; tip: "Select everything"; keys: "Ctrl+A"; onClicked: window.current.select_all() }
+                        RibbonButton {
+                            text: "Copy"
+                            tip: "Copy the selected block as FASTA"
+                            keys: "Ctrl+C"
+                            onClicked: clipboard.copy(window.current.selection_text())
+                        }
+                    }
+                    Item { Layout.fillWidth: true }
+                    ShortcutsGroup {}
+                }
             }
         }
     }
@@ -420,9 +470,9 @@ ApplicationWindow {
 
     FileDialog {
         id: openDialog
-        title: "Open a sequence"
+        title: "Open a sequence or alignment"
         currentFolder: shell.project_dir.length ? "file://" + shell.project_dir : ""
-        nameFilters: ["Sequences (*.gb *.gbk *.genbank *.gbff *.fasta *.fa *.fna *.fas *.ffn)", "All files (*)"]
+        nameFilters: ["Sequences and alignments (*.gb *.gbk *.genbank *.gbff *.fasta *.fa *.fna *.fas *.ffn *.faa *.afa)", "All files (*)"]
         onAccepted: window.openPath(window.localPath(selectedFile))
     }
 
@@ -574,16 +624,32 @@ ApplicationWindow {
                     model: openFiles
                     onItemAdded: Qt.callLater(window.refreshCurrent)
                     onItemRemoved: Qt.callLater(window.refreshCurrent)
-                    DocumentView {
-                        showGc: window.showGc
-                        defaultLayout: window.defaultLayout
-                        onDirtyChanged: openFiles.setProperty(index, "dirty", dirty)
-                        onContextMenu: (info) => { menu.info = info; menu.popup() }
-                        onEditFeature: (id) => editor.openFeature(id)
-                        onEditSelected: editor.openSelected()
-                        onNewAnnotation: editor.openNew()
-                        onCopyText: (text) => clipboard.copy(text)
-                        onToggleSidebar: window.sidebarOpen = !window.sidebarOpen
+                    // Each file opens in the editor for what it holds.
+                    delegate: DelegateChooser {
+                        role: "kind"
+                        DelegateChoice {
+                            roleValue: "alignment"
+                            AlignmentView {
+                                onDirtyChanged: openFiles.setProperty(index, "dirty", dirty)
+                                onContextMenu: (info) => { alnMenu.info = info; alnMenu.popup() }
+                                onCopyText: (text) => clipboard.copy(text)
+                                onToggleSidebar: window.sidebarOpen = !window.sidebarOpen
+                                onRenameRow: renameDialog.ask()
+                            }
+                        }
+                        DelegateChoice {
+                            DocumentView {
+                                showGc: window.showGc
+                                defaultLayout: window.defaultLayout
+                                onDirtyChanged: openFiles.setProperty(index, "dirty", dirty)
+                                onContextMenu: (info) => { menu.info = info; menu.popup() }
+                                onEditFeature: (id) => editor.openFeature(id)
+                                onEditSelected: editor.openSelected()
+                                onNewAnnotation: editor.openNew()
+                                onCopyText: (text) => clipboard.copy(text)
+                                onToggleSidebar: window.sidebarOpen = !window.sidebarOpen
+                            }
+                        }
                     }
                 }
             }
@@ -594,7 +660,7 @@ ApplicationWindow {
                 Layout.fillHeight: true
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter
-                text: "Open a sequence from the files on the left"
+                text: "Open a sequence or an alignment from the files on the left"
                 opacity: 0.6
             }
 
@@ -644,6 +710,58 @@ ApplicationWindow {
         Item { text: "Find ORFs in selection…"; visible: !menu.onAnnotation; enabled: menu.info.selection; onTriggered: orfDialog.search(true) }
     }
 
+    // Alignment context menu: what applies to the cells, rows or columns
+    // under the pointer.
+    Menu {
+        id: alnMenu
+        property var info: ({ region: "grid", rows: 1, columns: 1, rowName: "" })
+        readonly property bool cells: info.region === "grid"
+        readonly property bool rows: info.region === "names" || info.region === "corner"
+        readonly property bool columns: info.region === "header"
+        component AlnItem: MenuItem { height: visible ? implicitHeight : 0 }
+
+        AlnItem { text: "Insert gap"; visible: alnMenu.cells; onTriggered: window.current.insert_gap() }
+        AlnItem { text: "Remove gap to the left"; visible: alnMenu.cells; onTriggered: window.current.remove_gap() }
+        AlnItem { text: "Delete " + alnMenu.info.rows + " × " + alnMenu.info.columns + " residues"; visible: alnMenu.cells; onTriggered: window.current.delete_selection() }
+        AlnItem { text: "Rename “" + alnMenu.info.rowName + "”…"; visible: alnMenu.info.rows === 1 && !alnMenu.columns; onTriggered: renameDialog.ask() }
+        AlnItem { text: "Move to top"; visible: alnMenu.rows; onTriggered: window.current.rows_to_top() }
+        AlnItem { text: alnMenu.info.rows === 1 ? "Delete row" : "Delete " + alnMenu.info.rows + " rows"; visible: alnMenu.rows; onTriggered: window.current.remove_rows() }
+        AlnItem { text: "Insert gap column"; visible: alnMenu.columns; onTriggered: window.current.insert_column() }
+        AlnItem { text: alnMenu.info.columns === 1 ? "Delete column" : "Delete " + alnMenu.info.columns + " columns"; visible: alnMenu.columns; onTriggered: window.current.delete_columns() }
+        AlnItem { text: "Strip gap-only columns"; visible: alnMenu.columns || alnMenu.rows; onTriggered: window.current.remove_gap_columns() }
+        AlnItem { text: "Copy as FASTA"; onTriggered: clipboard.copy(window.current.selection_text()) }
+    }
+
+    Dialog {
+        id: renameDialog
+        title: "Rename row"
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        function ask() {
+            if (!window.alignmentOpen) return
+            rowName.text = window.current.row_name()
+            renameError.text = ""
+            open()
+        }
+        onOpened: { rowName.forceActiveFocus(); rowName.selectAll() }
+        onAccepted: {
+            const err = window.current.rename_row(rowName.text)
+            if (err.length > 0) { renameError.text = err; open() }
+        }
+        onClosed: if (window.currentView) window.currentView.forceActiveFocus()
+        ColumnLayout {
+            spacing: 6
+            TextField {
+                id: rowName
+                Layout.preferredWidth: 320
+                Keys.onReturnPressed: renameDialog.accept()
+                Keys.onEnterPressed: renameDialog.accept()
+            }
+            Label { id: renameError; visible: text.length > 0; color: shell.accent }
+        }
+    }
+
     Dialog {
         id: confirmClose
         property int index: -1
@@ -666,7 +784,8 @@ ApplicationWindow {
 
     FeatureEditor {
         id: editor
-        controller: window.current
+        // Annotations belong to sequences; alignments have none yet.
+        controller: window.alignmentOpen ? null : window.current
         onClosed: if (window.currentView) window.currentView.forceActiveFocus()
     }
 
@@ -701,7 +820,7 @@ ApplicationWindow {
     // Scripted runs, on the active tab: --goto START,END  --mode wrapped|linear|circular
     // --type TEXT  --select X0,X1[,Y]  --menu X,Y  --menu-add X  --edit new|ID
     // --label TEXT [--no-click 1]  --add LOCATION  --extract 1  --hover X,Y
-    // --no-sidebar 1  --screenshot FILE
+    // --no-sidebar 1  --fit 1  --aln STEPS  --screenshot FILE
     Timer {
         interval: 900
         running: arg("--screenshot") !== undefined
@@ -709,6 +828,27 @@ ApplicationWindow {
             const c = window.current
             const v = window.currentView
             if (!c) { console.log("no document open"); shot.start(); return }
+            if (arg("--fit")) c.fit()
+            // Alignment edits, ';'-separated: sel:R0,C0,R1,C1  gap  rmgap
+            // slide:N  type:TEXT  del  undo  redo  up  down  strip  zoomsel
+            if (arg("--aln")) {
+                for (const step of arg("--aln").split(";")) {
+                    const [cmd, a] = step.split(":")
+                    if (cmd === "sel") { const n = a.split(",").map(Number); c.select_block(n[0], n[1], n[2], n[3]) }
+                    else if (cmd === "gap") c.insert_gap()
+                    else if (cmd === "rmgap") c.remove_gap()
+                    else if (cmd === "slide") c.slide(Number(a))
+                    else if (cmd === "type") { for (const ch of a) c.key(ch.toUpperCase().charCodeAt(0), ch, 0) }
+                    else if (cmd === "del") c.delete_selection()
+                    else if (cmd === "undo") c.undo()
+                    else if (cmd === "redo") c.redo()
+                    else if (cmd === "up") c.move_rows(true)
+                    else if (cmd === "down") c.move_rows(false)
+                    else if (cmd === "strip") c.remove_gap_columns()
+                    else if (cmd === "zoomsel") c.zoom_to_selection()
+                    console.log("aln", step, "|", c.message)
+                }
+            }
             if (arg("--goto")) { const r = arg("--goto").split(","); c.show_range(Number(r[0]), Number(r[1])) }
             if (arg("--mode")) c.switch_view(arg("--mode"))
             if (arg("--no-sidebar")) window.sidebarOpen = false
@@ -779,7 +919,7 @@ ApplicationWindow {
         interval: 400
         onTriggered: {
             const c = window.current
-            if (c) console.log(c.memory_report(), "|", c.status)
+            if (c) console.log(c.memory_report(), "|", c.status, "|", c.hscroll_size, c.vscroll_size)
             const v = window.currentView
             console.log("saved", v ? v.saveWindow(arg("--screenshot")) : false)
             Qt.quit()

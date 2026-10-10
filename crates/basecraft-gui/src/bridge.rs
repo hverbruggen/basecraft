@@ -96,6 +96,9 @@ pub mod qobject {
         /// of `files` (one path per line) to a text file; returns its path.
         #[qinvokable]
         fn activity_log(self: &GenomeController, files: &QString, utc_offset_min: i32) -> QString;
+        /// "alignment" or "sequence": which editor a file opens in.
+        #[qinvokable]
+        fn file_kind(self: &GenomeController, path: &QString) -> QString;
 
         /// Right-click at a point. Returns JSON describing what the context
         /// menu should offer: `{"feature": id or -1, "label", "selection": bool,
@@ -215,29 +218,29 @@ use cxx_qt_lib::{QByteArray, QString};
 use serde_json::{Value, json};
 
 // Qt key codes and modifiers used below.
-const KEY_ESCAPE: i32 = 0x0100_0000;
-const KEY_BACKSPACE: i32 = 0x0100_0003;
-const KEY_DELETE: i32 = 0x0100_0007;
-const KEY_HOME: i32 = 0x0100_0010;
-const KEY_END: i32 = 0x0100_0011;
-const KEY_LEFT: i32 = 0x0100_0012;
-const KEY_RIGHT: i32 = 0x0100_0014;
-const KEY_UP: i32 = 0x0100_0013;
-const KEY_DOWN: i32 = 0x0100_0015;
-const KEY_PAGE_UP: i32 = 0x0100_0016;
-const KEY_PAGE_DOWN: i32 = 0x0100_0017;
-const KEY_F2: i32 = 0x0100_0031;
-const KEY_PLUS: i32 = 0x2b;
-const KEY_MINUS: i32 = 0x2d;
-const KEY_EQUAL: i32 = 0x3d;
-const KEY_0: i32 = 0x30;
-const KEY_N: i32 = 0x4e;
-const KEY_S: i32 = 0x53;
-const KEY_Y: i32 = 0x59;
-const KEY_Z: i32 = 0x5a;
-const SHIFT: i32 = 0x0200_0000;
-const CTRL: i32 = 0x0400_0000;
-const ALT: i32 = 0x0800_0000;
+pub(crate) const KEY_ESCAPE: i32 = 0x0100_0000;
+pub(crate) const KEY_BACKSPACE: i32 = 0x0100_0003;
+pub(crate) const KEY_DELETE: i32 = 0x0100_0007;
+pub(crate) const KEY_HOME: i32 = 0x0100_0010;
+pub(crate) const KEY_END: i32 = 0x0100_0011;
+pub(crate) const KEY_LEFT: i32 = 0x0100_0012;
+pub(crate) const KEY_RIGHT: i32 = 0x0100_0014;
+pub(crate) const KEY_UP: i32 = 0x0100_0013;
+pub(crate) const KEY_DOWN: i32 = 0x0100_0015;
+pub(crate) const KEY_PAGE_UP: i32 = 0x0100_0016;
+pub(crate) const KEY_PAGE_DOWN: i32 = 0x0100_0017;
+pub(crate) const KEY_F2: i32 = 0x0100_0031;
+pub(crate) const KEY_PLUS: i32 = 0x2b;
+pub(crate) const KEY_MINUS: i32 = 0x2d;
+pub(crate) const KEY_EQUAL: i32 = 0x3d;
+pub(crate) const KEY_0: i32 = 0x30;
+pub(crate) const KEY_N: i32 = 0x4e;
+pub(crate) const KEY_S: i32 = 0x53;
+pub(crate) const KEY_Y: i32 = 0x59;
+pub(crate) const KEY_Z: i32 = 0x5a;
+pub(crate) const SHIFT: i32 = 0x0200_0000;
+pub(crate) const CTRL: i32 = 0x0400_0000;
+pub(crate) const ALT: i32 = 0x0800_0000;
 
 pub struct ControllerRust {
     frame: QByteArray,
@@ -313,7 +316,7 @@ impl Default for ControllerRust {
 
 /// The desktop's monospace font: Omarchy's current font when available,
 /// else whatever fontconfig calls monospace.
-fn monospace_font() -> String {
+pub(crate) fn monospace_font() -> String {
     std::process::Command::new("omarchy")
         .args(["font", "current"])
         .output()
@@ -324,20 +327,20 @@ fn monospace_font() -> String {
         .unwrap_or_else(|| "monospace".to_string())
 }
 
-fn omarchy_theme_path() -> Option<PathBuf> {
+pub(crate) fn omarchy_theme_path() -> Option<PathBuf> {
     let home = std::env::var_os("HOME")?;
     let p = PathBuf::from(home).join(".local/state/omarchy/current/theme/colors.toml");
     p.exists().then_some(p)
 }
 
-fn load_theme() -> Option<(Theme, Option<SystemTime>)> {
+pub(crate) fn load_theme() -> Option<(Theme, Option<SystemTime>)> {
     let path = omarchy_theme_path()?;
     let text = std::fs::read_to_string(&path).ok()?;
     let stamp = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
     Some((Theme::from_omarchy(&text), stamp))
 }
 
-fn css(c: [f32; 4]) -> String {
+pub(crate) fn css(c: [f32; 4]) -> String {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let b = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
     format!("#{:02x}{:02x}{:02x}", b(c[0]), b(c[1]), b(c[2]))
@@ -362,7 +365,7 @@ fn plugin_dir(name: &str) -> PathBuf {
 
 /// The project a file belongs to: the nearest ancestor with a `.basecraft`
 /// directory, else the file's own directory.
-fn project_root(file: &Path) -> PathBuf {
+pub(crate) fn project_root(file: &Path) -> PathBuf {
     let dir = file.parent().unwrap_or(Path::new(".")).to_path_buf();
     let mut cur = Some(dir.as_path());
     while let Some(d) = cur {
@@ -983,22 +986,15 @@ impl qobject::GenomeController {
     }
 
     pub fn memory_report(&self) -> QString {
-        let text = std::fs::read_to_string("/proc/self/smaps_rollup").unwrap_or_default();
-        let field = |name: &str| -> f64 {
-            text.lines()
-                .find(|l| l.starts_with(name))
-                .and_then(|l| l.split_whitespace().nth(1)?.parse::<f64>().ok())
-                .map_or(0.0, |kb| kb / 1024.0)
-        };
-        // Private_Clean is mostly pages of memory-mapped files, which the
-        // kernel can drop at any time; anonymous memory is what we own.
-        QString::from(&format!(
-            "rss {:.1} MB, pss {:.1} MB, private {:.1} MB, of which anonymous {:.1} MB",
-            field("Rss:"),
-            field("Pss:"),
-            field("Private_Clean:") + field("Private_Dirty:"),
-            field("Anonymous:")
-        ))
+        QString::from(&memory_text())
+    }
+
+    pub fn file_kind(&self, path: &QString) -> QString {
+        let kind = basecraft_ops::files::kind(Path::new(&path.to_string()));
+        QString::from(match kind {
+            Ok(basecraft_ops::files::Kind::Alignment) => "alignment",
+            _ => "sequence",
+        })
     }
 
     /// Run `f` on the open document's session, if any.
@@ -1555,6 +1551,26 @@ impl qobject::GenomeController {
     pub fn feature_kinds(&self) -> QString {
         QString::from(&json!(FEATURE_KINDS).to_string())
     }
+}
+
+/// Memory use of this process, for scripted runs.
+pub(crate) fn memory_text() -> String {
+    let text = std::fs::read_to_string("/proc/self/smaps_rollup").unwrap_or_default();
+    let field = |name: &str| -> f64 {
+        text.lines()
+            .find(|l| l.starts_with(name))
+            .and_then(|l| l.split_whitespace().nth(1)?.parse::<f64>().ok())
+            .map_or(0.0, |kb| kb / 1024.0)
+    };
+    // Private_Clean is mostly pages of memory-mapped files, which the
+    // kernel can drop at any time; anonymous memory is what we own.
+    format!(
+        "rss {:.1} MB, pss {:.1} MB, private {:.1} MB, of which anonymous {:.1} MB",
+        field("Rss:"),
+        field("Pss:"),
+        field("Private_Clean:") + field("Private_Dirty:"),
+        field("Anonymous:")
+    )
 }
 
 /// Feature keys offered in the editor; any other key can still be typed.
