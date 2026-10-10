@@ -103,14 +103,7 @@ fn main() -> io::Result<()> {
 
     let mut plastid_rng = next();
     if wanted(&dir, "plastid.gb", args.force) {
-        let spec = GenomeSpec {
-            id: "plastid1",
-            length: 150_000,
-            genes: 130,
-            circular: true,
-            gc: 0.37,
-        };
-        let g = genome::generate(&spec, &mut plastid_rng);
+        let g = genome::generate_plastid("plastid1", 150_000, 0.37, &mut plastid_rng);
         write(&dir, "plastid.gb", |w| genome::write_genbank(&g, w))?;
         write(&dir, "plastid.fasta", |w| genome::write_fasta(&g, w))?;
         write(&dir, "plastid.gff3", |w| genome::write_gff3(&g, w))?;
