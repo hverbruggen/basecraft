@@ -311,7 +311,14 @@ impl Session {
 
     /// Extract residues `start..end` with their annotations to a new
     /// GenBank file at `path`, and log it.
-    pub fn extract(&mut self, id: DocId, start: u64, end: u64, path: &Path) -> Result<()> {
+    pub fn extract(
+        &mut self,
+        id: DocId,
+        (start, end): (u64, u64),
+        segments: &[(u64, u64)],
+        reverse: bool,
+        path: &Path,
+    ) -> Result<()> {
         self.flush()?;
         let doc = &self.docs[id.0].opened.doc;
         if start >= end || end > doc.len() {
@@ -320,7 +327,7 @@ impl Session {
                 doc.len()
             )));
         }
-        let rec = files::extract_record(doc, start, end);
+        let rec = files::extract_record(doc, start, end, segments, reverse);
         let mut hash = String::new();
         basecraft_io::write_atomic(path, |w| {
             let mut hw = HashingWriter::new(w);
@@ -336,6 +343,8 @@ impl Session {
                 start,
                 end,
                 path: key.clone(),
+                segments: segments.to_vec(),
+                reverse,
             },
             OpResult {
                 hashes: vec![(key, hash)],
@@ -346,8 +355,14 @@ impl Session {
     }
 
     /// The hash of the file an extract would write, without writing it.
-    pub fn extract_hash(&self, id: DocId, start: u64, end: u64) -> Result<String> {
-        let rec = files::extract_record(&self.docs[id.0].opened.doc, start, end);
+    pub fn extract_hash(
+        &self,
+        id: DocId,
+        (start, end): (u64, u64),
+        segments: &[(u64, u64)],
+        reverse: bool,
+    ) -> Result<String> {
+        let rec = files::extract_record(&self.docs[id.0].opened.doc, start, end, segments, reverse);
         let mut hw = HashingWriter::new(std::io::sink());
         basecraft_io::genbank::write(&mut hw, &rec)?;
         Ok(hw.hash())

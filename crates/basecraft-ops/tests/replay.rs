@@ -70,7 +70,19 @@ fn record_session(root: &Path) {
     s.apply(d, Op::FeatureRemove { id: 0 }).unwrap();
     s.undo(d).unwrap();
     s.apply(d, replace(0, 3, "NNNN")).unwrap();
-    s.extract(d, 15, 50, &root.join("seqs/part.gb")).unwrap();
+    s.extract(d, (15, 50), &[], false, &root.join("seqs/part.gb"))
+        .unwrap();
+    // The CDS spliced, and the reverse-strand ori gene reverse-complemented.
+    s.extract(
+        d,
+        (19, 70),
+        &[(19, 40), (49, 70)],
+        false,
+        &root.join("seqs/cds.gb"),
+    )
+    .unwrap();
+    s.extract(d, (90, 110), &[], true, &root.join("seqs/rc.gb"))
+        .unwrap();
     s.save(d, None).unwrap();
 }
 
@@ -105,7 +117,8 @@ fn extract_clips_annotations_and_marks_cuts_incomplete() {
     let mut s = Session::new(root);
     let d = s.open(&root.join("seqs/test.gb")).unwrap();
     // CDS join(20..40,50..70); extract 1-based 30..60.
-    s.extract(d, 29, 60, &root.join("seqs/part.gb")).unwrap();
+    s.extract(d, (29, 60), &[], false, &root.join("seqs/part.gb"))
+        .unwrap();
     let text = std::fs::read_to_string(root.join("seqs/part.gb")).unwrap();
     let rec = &basecraft_io::genbank::parse(text.as_bytes()).unwrap()[0];
     assert_eq!(rec.sequence.len(), 31);
@@ -115,6 +128,73 @@ fn extract_clips_annotations_and_marks_cuts_incomplete() {
         "join(<1..11,21..>31)"
     );
     assert!(!rec.circular);
+}
+
+#[test]
+fn extracts_spliced_cds_and_reverse_complements() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join("seqs")).unwrap();
+    std::fs::write(root.join("seqs/test.gb"), GB).unwrap();
+    let mut s = Session::new(root);
+    let d = s.open(&root.join("seqs/test.gb")).unwrap();
+    let original = s.doc(d).read(0, 120);
+
+    // Spliced CDS join(20..40,50..70): 42 bases, one CDS over all of them.
+    s.extract(
+        d,
+        (19, 70),
+        &[(19, 40), (49, 70)],
+        false,
+        &root.join("seqs/cds.gb"),
+    )
+    .unwrap();
+    let rec = &basecraft_io::genbank::parse(&std::fs::read(root.join("seqs/cds.gb")).unwrap())
+        .unwrap()[0];
+    let mut want = original[19..40].to_vec();
+    want.extend_from_slice(&original[49..70]);
+    assert_eq!(rec.sequence, want);
+    let cds = rec.features.iter().find(|f| f.kind == "CDS").unwrap();
+    assert_eq!(
+        basecraft_io::genbank::format_location(&cds.location),
+        "1..42"
+    );
+    assert_eq!(rec.name, "TEST_abc");
+
+    // A reverse-strand range comes out reverse-complemented, its
+    // annotation on the forward strand.
+    s.apply(
+        d,
+        Op::FeatureAdd {
+            feature: Feature {
+                kind: "misc_feature".into(),
+                location: basecraft_protocol::Location::simple(79, 90, Strand::Reverse),
+                qualifiers: vec![],
+            },
+        },
+    )
+    .unwrap();
+    s.extract(d, (79, 90), &[], true, &root.join("seqs/rc.gb"))
+        .unwrap();
+    let rec =
+        &basecraft_io::genbank::parse(&std::fs::read(root.join("seqs/rc.gb")).unwrap()).unwrap()[0];
+    let rc: Vec<u8> = original[79..90]
+        .iter()
+        .rev()
+        .map(|&b| match b {
+            b'A' => b'T',
+            b'T' => b'A',
+            b'C' => b'G',
+            _ => b'C',
+        })
+        .collect();
+    assert_eq!(rec.sequence, rc);
+    let f = rec
+        .features
+        .iter()
+        .find(|f| f.kind == "misc_feature")
+        .unwrap();
+    assert_eq!(basecraft_io::genbank::format_location(&f.location), "1..11");
 }
 
 #[test]

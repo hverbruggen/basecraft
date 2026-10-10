@@ -224,6 +224,31 @@
             "path": {
               "type": "string"
             },
+            "reverse": {
+              "description": "Write the reverse complement, so a reverse-strand annotation\nreads 5' to 3' in the new file.",
+              "type": "boolean"
+            },
+            "segments": {
+              "description": "Parts to splice together, 5' to 3', instead of `start..end`.",
+              "type": "array",
+              "items": {
+                "type": "array",
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0
+                  }
+                ]
+              }
+            },
             "start": {
               "type": "integer",
               "format": "uint64",

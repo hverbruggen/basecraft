@@ -173,10 +173,185 @@ impl<W: Write> Write for HashingWriter<W> {
     }
 }
 
-/// A new GenBank record for residues `start..end` of `doc`, with every
-/// annotation that overlaps the range, clipped to it and shifted. A part
-/// cut by the range is marked incomplete on that side (GenBank `<`/`>`).
-pub fn extract_record(doc: &SequenceDoc, start: u64, end: u64) -> genbank::Record {
+/// A new GenBank record for an extract of `doc`:
+/// - `segments` empty: bases `start..end`, with every annotation that
+///   overlaps them, clipped and shifted; an annotation reaching past the
+///   range is marked incomplete at that end (GenBank `<`/`>`).
+/// - `segments` given (5' to 3'): those parts spliced together, carrying
+///   the annotations whose parts are exactly these, as one continuous
+///   annotation. This is how a spliced CDS is extracted.
+///
+/// With `reverse`, the record is the reverse complement, so a reverse-
+/// strand annotation reads 5' to 3' and lies on the forward strand.
+pub fn extract_record(
+    doc: &SequenceDoc,
+    start: u64,
+    end: u64,
+    segments: &[(u64, u64)],
+    reverse: bool,
+) -> genbank::Record {
+    let mut rec = if segments.len() > 1 {
+        extract_spliced(doc, segments, reverse)
+    } else {
+        let mut r = extract_range(doc, start, end);
+        if reverse {
+            reverse_complement_record(&mut r);
+        }
+        r
+    };
+    rec.name = if reverse && segments.len() <= 1 {
+        format!("{}_rc", rec.name)
+    } else {
+        rec.name
+    };
+    rec
+}
+
+fn complement(b: u8) -> u8 {
+    match b {
+        b'A' => b'T',
+        b'T' | b'U' => b'A',
+        b'C' => b'G',
+        b'G' => b'C',
+        b'a' => b't',
+        b't' | b'u' => b'a',
+        b'c' => b'g',
+        b'g' => b'c',
+        b'R' => b'Y',
+        b'Y' => b'R',
+        b'K' => b'M',
+        b'M' => b'K',
+        b'B' => b'V',
+        b'V' => b'B',
+        b'D' => b'H',
+        b'H' => b'D',
+        other => other,
+    }
+}
+
+/// Reverse-complement a record's sequence and mirror its annotations onto
+/// the other strand. Segment order (5' to 3') carries over unchanged.
+fn reverse_complement_record(rec: &mut genbank::Record) {
+    let n = rec.sequence.len() as u64;
+    rec.sequence.reverse();
+    for b in &mut rec.sequence {
+        *b = complement(*b);
+    }
+    for f in &mut rec.features {
+        if f.kind == "source" {
+            f.location = Location::simple(0, n, basecraft_protocol::Strand::Forward);
+            continue;
+        }
+        for s in &mut f.location.segments {
+            let (a, b) = (n - s.end, n - s.start);
+            s.start = a;
+            s.end = b;
+            s.strand = match s.strand {
+                basecraft_protocol::Strand::Forward => basecraft_protocol::Strand::Reverse,
+                basecraft_protocol::Strand::Reverse => basecraft_protocol::Strand::Forward,
+                basecraft_protocol::Strand::Unstranded => basecraft_protocol::Strand::Unstranded,
+            };
+            std::mem::swap(&mut s.partial_start, &mut s.partial_end);
+        }
+    }
+    rec.header = vec![format!(
+        "{} Reverse complement.",
+        rec.header.join(" ").trim_end()
+    )];
+}
+
+fn extract_spliced(doc: &SequenceDoc, segments: &[(u64, u64)], reverse: bool) -> genbank::Record {
+    let mut sequence = Vec::new();
+    for &(a, b) in segments {
+        let mut part = doc.read(a, b);
+        if reverse {
+            part.reverse();
+            for x in &mut part {
+                *x = complement(*x);
+            }
+        }
+        sequence.extend(part);
+    }
+    let n = sequence.len() as u64;
+    let lo = segments.iter().map(|s| s.0).min().unwrap_or(0);
+    let hi = segments.iter().map(|s| s.1).max().unwrap_or(0);
+    // The annotations made of exactly these parts (a CDS, and perhaps its
+    // mRNA): one continuous annotation over the spliced sequence.
+    let mut features = vec![Feature {
+        kind: "source".into(),
+        location: Location::simple(0, n, basecraft_protocol::Strand::Forward),
+        qualifiers: vec![Qualifier::new(
+            "note",
+            format!(
+                "{} spliced parts of {} between bases {}..{}",
+                segments.len(),
+                doc.name,
+                lo + 1,
+                hi
+            ),
+        )],
+    }];
+    let mut label = None;
+    for id in doc.features_in(lo, hi) {
+        let Some(f) = doc.feature(id) else { continue };
+        let same: Vec<(u64, u64)> = f
+            .location
+            .segments
+            .iter()
+            .map(|s| (s.start, s.end))
+            .collect();
+        if same != segments {
+            continue;
+        }
+        label = label.or_else(|| f.label().map(str::to_string));
+        let mut seg = Segment::new(0, n, basecraft_protocol::Strand::Forward);
+        seg.partial_start = f.location.partial_5();
+        seg.partial_end = f.location.partial_3();
+        features.push(Feature {
+            kind: f.kind.clone(),
+            location: Location {
+                segments: vec![seg],
+                unordered: false,
+            },
+            qualifiers: f.qualifiers.clone(),
+        });
+    }
+    let meta = doc.genbank.clone().unwrap_or_default();
+    let name = match &label {
+        Some(l) => format!("{}_{l}", doc.name),
+        None => format!("{}_{}-{}_spliced", doc.name, lo + 1, hi),
+    };
+    genbank::Record {
+        name,
+        molecule: if meta.molecule.is_empty() {
+            "DNA".into()
+        } else {
+            meta.molecule
+        },
+        circular: false,
+        division: if meta.division.is_empty() {
+            "UNK".into()
+        } else {
+            meta.division
+        },
+        date: if meta.date.is_empty() {
+            "01-JAN-1970".into()
+        } else {
+            meta.date
+        },
+        header: vec![format!(
+            "DEFINITION  {}{} parts of {} spliced together, extracted with Basecraft.",
+            label.map(|l| format!("{l}: ")).unwrap_or_default(),
+            segments.len(),
+            doc.name
+        )],
+        features,
+        sequence,
+    }
+}
+
+/// Bases `start..end` with their annotations, clipped and shifted.
+fn extract_range(doc: &SequenceDoc, start: u64, end: u64) -> genbank::Record {
     let name = format!("{}_{}-{}", doc.name, start + 1, end);
     let mut features = Vec::new();
     for id in doc.features_in(start, end) {

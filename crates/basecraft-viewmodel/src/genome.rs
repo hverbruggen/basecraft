@@ -183,6 +183,9 @@ pub struct GenomeView {
     /// The selection was made right to left (or is a reverse-strand
     /// feature's span); new features over it default to the reverse strand.
     pub selection_reverse: bool,
+    /// When a multi-part annotation (a spliced CDS) is selected, its parts,
+    /// 5' to 3'; `selection` is then their overall span.
+    pub selection_parts: Option<Vec<(u64, u64)>>,
     pub selected: Option<FeatureId>,
     /// Features that didn't fit in the lanes on the last build.
     pub hidden: usize,
@@ -214,6 +217,7 @@ impl GenomeView {
             cursor: None,
             selection: None,
             selection_reverse: false,
+            selection_parts: None,
             selected: None,
             hidden: 0,
             drag: Drag::None,
@@ -280,6 +284,27 @@ impl GenomeView {
         self.auto_fit = true;
     }
 
+    /// After an annotation was selected: if it has several parts (exons of a
+    /// spliced CDS), select those parts rather than the whole span. For an
+    /// annotation crossing the origin, only the parts in the clicked piece.
+    pub fn adopt_feature_parts(&mut self, doc: &SequenceDoc) {
+        self.selection_parts = None;
+        let (Some(id), Some((a, b))) = (self.selected, self.selection) else {
+            return;
+        };
+        let Some(f) = doc.feature(id) else { return };
+        let parts: Vec<(u64, u64)> = f
+            .location
+            .segments
+            .iter()
+            .filter(|s| s.start >= a && s.end <= b && !s.is_empty())
+            .map(|s| (s.start, s.end))
+            .collect();
+        if parts.len() > 1 {
+            self.selection_parts = Some(parts);
+        }
+    }
+
     /// Select the next (or previous) annotation after the current position:
     /// the one starting after the selection's start, or the cursor. Spans
     /// shared by several annotations (a gene and its CDS) count once.
@@ -301,6 +326,7 @@ impl GenomeView {
         let Some((s, e, id)) = pick else { return false };
         self.selected = Some(id);
         self.selection = Some((s, e));
+        self.adopt_feature_parts(doc);
         self.selection_reverse = doc
             .feature(id)
             .is_some_and(|f| f.location.strand() == Strand::Reverse);
@@ -403,6 +429,7 @@ impl GenomeView {
         let p = self.position_at(x, y, len);
         let inside = self.selection.is_some_and(|(a, b)| p >= a && p <= b);
         if !inside {
+            self.selection_parts = None;
             self.selection = None;
             self.cursor = Some(p);
         }
@@ -652,6 +679,7 @@ impl GenomeView {
             return;
         }
         self.selected = None;
+        self.selection_parts = None;
         let p = self.position_at(x, y, len);
         let anchor = match (shift, self.cursor) {
             (true, Some(c)) => c,
@@ -686,6 +714,7 @@ impl GenomeView {
                 };
             }
             Drag::Select { anchor } => {
+                self.selection_parts = None;
                 let p = self.position_at(x, y, len);
                 self.cursor = Some(p);
                 self.selection = (anchor != p).then(|| (anchor.min(p), anchor.max(p)));
@@ -708,6 +737,7 @@ impl GenomeView {
 
     /// Move the cursor by `delta` residues; with `extend`, grow the selection.
     pub fn move_cursor(&mut self, delta: i64, extend: bool, len: u64) {
+        self.selection_parts = None;
         let c = self.cursor.unwrap_or(0);
         let next = (c as i64 + delta).clamp(0, len as i64) as u64;
         if extend {
@@ -913,7 +943,12 @@ impl GenomeView {
         max_lanes: usize,
     ) {
         self.draw_ruler(b0, b1, oy, theme, frame);
-        if let Some((a, b)) = self.selection {
+        let ranges: Vec<(u64, u64)> = match (&self.selection_parts, self.selection) {
+            (Some(parts), _) => parts.clone(),
+            (None, Some(r)) => vec![r],
+            (None, None) => Vec::new(),
+        };
+        for (a, b) in ranges {
             let (a, b) = (a.max(b0), b.min(b1));
             if a < b {
                 let (xa, xb) = (self.x_of(a as f64), self.x_of(b as f64));
@@ -1669,7 +1704,14 @@ impl GenomeView {
         if let Some(c) = self.cursor {
             parts.push(format!("cursor {}", format_thousands(c)));
         }
-        if let Some((a, b)) = self.selection {
+        if let Some(sel) = &self.selection_parts {
+            let total: u64 = sel.iter().map(|(a, b)| b - a).sum();
+            parts.push(format!(
+                "selected {} parts ({} bp)",
+                sel.len(),
+                format_thousands(total)
+            ));
+        } else if let Some((a, b)) = self.selection {
             parts.push(format!(
                 "selected {}..{} ({} bp)",
                 format_thousands(a + 1),
@@ -2133,6 +2175,31 @@ mod tests {
             qualifiers: vec![],
         };
         assert_eq!(pieces(&g, 150_000, true), vec![(100, 600)]);
+    }
+
+    #[test]
+    fn selecting_a_spliced_annotation_selects_its_parts() {
+        use basecraft_protocol::Segment;
+        let mut d = doc();
+        let cds = d.add_feature(Feature {
+            kind: "CDS".into(),
+            location: Location {
+                segments: vec![
+                    Segment::new(9100, 9200, Strand::Forward),
+                    Segment::new(9400, 9500, Strand::Forward),
+                ],
+                unordered: false,
+            },
+            qualifiers: vec![],
+        });
+        let mut v = GenomeView::new(1000.0, 600.0);
+        v.selected = Some(cds);
+        v.selection = Some((9100, 9500));
+        v.adopt_feature_parts(&d);
+        assert_eq!(v.selection_parts, Some(vec![(9100, 9200), (9400, 9500)]));
+        assert!(v.status(&d).contains("2 parts (200 bp)"));
+        v.move_cursor(1, false, d.len());
+        assert_eq!(v.selection_parts, None);
     }
 
     #[test]

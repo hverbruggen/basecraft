@@ -476,8 +476,18 @@ impl qobject::GenomeController {
                 .flatten()
                 .unwrap_or(false);
             self.as_mut().rust_mut().view.selection_reverse = reverse;
+            self.as_mut().adopt_parts();
         }
         self.refresh();
+    }
+
+    /// A selected multi-part annotation selects its parts.
+    fn adopt_parts(mut self: Pin<&mut Self>) {
+        let mut r = self.as_mut().rust_mut();
+        let r = &mut *r;
+        if let (Some(s), Some(d)) = (&r.session, r.doc) {
+            r.view.adopt_feature_parts(s.doc(d));
+        }
     }
 
     #[allow(clippy::cast_possible_truncation)]
@@ -889,6 +899,7 @@ impl qobject::GenomeController {
             .rust_mut()
             .view
             .context_press(x as f32, y as f32, len);
+        self.as_mut().adopt_parts();
         self.as_mut().refresh();
         let (selected, selection) = {
             let v = &self.rust().view;
@@ -1083,14 +1094,35 @@ impl qobject::GenomeController {
 
     /// Extract `start..end` to a new file named after the open one and the
     /// range, next to it; returns the path.
-    fn extract_range(mut self: Pin<&mut Self>, start: u64, end: u64) -> QString {
+    fn extract_range(
+        mut self: Pin<&mut Self>,
+        (start, end): (u64, u64),
+        segments: &[(u64, u64)],
+        reverse: bool,
+        label: Option<&str>,
+    ) -> QString {
         let source = PathBuf::from(self.rust().file_path.to_string());
         let dir = source.parent().map(Path::to_path_buf).unwrap_or_default();
         let stem = source.file_stem().map_or_else(
             || "extract".to_string(),
             |s| s.to_string_lossy().into_owned(),
         );
-        let base = format!("{stem}_{}-{end}", start + 1);
+        let clean = |l: &str| {
+            l.chars()
+                .map(|c| {
+                    if c.is_alphanumeric() || "-_.".contains(c) {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
+                .collect::<String>()
+        };
+        let base = match &label {
+            Some(l) => format!("{stem}_{}", clean(l)),
+            None if reverse => format!("{stem}_{}-{end}_rc", start + 1),
+            None => format!("{stem}_{}-{end}", start + 1),
+        };
         let mut target = dir.join(format!("{base}.gb"));
         let mut n = 2;
         while target.exists() {
@@ -1103,7 +1135,7 @@ impl qobject::GenomeController {
             let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
                 return QString::default();
             };
-            session.extract(doc, start, end, &target)
+            session.extract(doc, (start, end), segments, reverse, &target)
         };
         match result {
             Ok(()) => {
@@ -1123,17 +1155,49 @@ impl qobject::GenomeController {
         }
     }
 
+    /// Extract the selection. A selected annotation is extracted as itself:
+    /// spliced if it has several parts, reverse-complemented if it lies on
+    /// the reverse strand.
     pub fn extract_selection(mut self: Pin<&mut Self>) -> QString {
-        let Some((a, b)) = self.rust().view.selection else {
+        let (selection, selected) = {
+            let v = &self.rust().view;
+            (v.selection, v.selected)
+        };
+        let Some((a, b)) = selection else {
             self.as_mut().notify("Select bases to extract");
             return QString::default();
         };
-        self.extract_range(a, b)
+        if let Some(FeatureId(id)) = selected
+            && let Ok(id) = i32::try_from(id)
+        {
+            return self.extract_feature(id);
+        }
+        self.extract_range((a, b), &[], false, None)
     }
 
     pub fn extract_feature(self: Pin<&mut Self>, id: i32) -> QString {
-        match self.feature_bounds(id) {
-            Some((a, b)) => self.extract_range(a, b),
+        let Ok(fid) = u32::try_from(id) else {
+            return QString::default();
+        };
+        let info = self
+            .with_doc(|s, d| {
+                let f = s.doc(d).feature(FeatureId(fid))?;
+                let segs: Vec<(u64, u64)> = f
+                    .location
+                    .segments
+                    .iter()
+                    .map(|s| (s.start, s.end))
+                    .collect();
+                let bounds = f.location.bounds()?;
+                let label = f.label().map(|l| format!("{l}_{}", f.kind));
+                Some((bounds, segs, f.location.strand() == Strand::Reverse, label))
+            })
+            .flatten();
+        match info {
+            Some((bounds, segs, reverse, label)) => {
+                let segs = if segs.len() > 1 { segs } else { Vec::new() };
+                self.extract_range(bounds, &segs, reverse, label.as_deref())
+            }
             None => QString::default(),
         }
     }

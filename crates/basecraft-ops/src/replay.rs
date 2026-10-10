@@ -84,7 +84,13 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut Report) -> Re
                 }
                 Err(err) => problem(err.to_string()),
             },
-            Op::Extract { start, end, .. } => match session.extract_hash(doc, *start, *end) {
+            Op::Extract {
+                start,
+                end,
+                segments,
+                reverse,
+                ..
+            } => match session.extract_hash(doc, (*start, *end), segments, *reverse) {
                 Ok(got) => {
                     let want = e.result.hashes.first().map(|(_, h)| h.as_str());
                     if Some(got.as_str()) != want {

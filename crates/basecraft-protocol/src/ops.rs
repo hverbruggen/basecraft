@@ -40,7 +40,18 @@ pub enum Op {
     /// file at `path`. Annotations cut by the range are clipped and marked
     /// incomplete at the cut. Records the new file's hash.
     #[serde(rename = "doc.extract")]
-    Extract { start: u64, end: u64, path: String },
+    Extract {
+        start: u64,
+        end: u64,
+        path: String,
+        /// Parts to splice together, 5' to 3', instead of `start..end`.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        segments: Vec<(u64, u64)>,
+        /// Write the reverse complement, so a reverse-strand annotation
+        /// reads 5' to 3' in the new file.
+        #[serde(default, skip_serializing_if = "is_false")]
+        reverse: bool,
+    },
     /// Undo the operation with log id `of`.
     #[serde(rename = "history.undo")]
     Undo { of: String },
@@ -123,6 +134,11 @@ pub struct LogEntry {
     #[serde(default, skip_serializing_if = "is_default")]
     pub result: OpResult,
     pub state: DocState,
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 fn is_default(r: &OpResult) -> bool {
