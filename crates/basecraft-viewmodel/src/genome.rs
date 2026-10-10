@@ -25,6 +25,9 @@ use crate::theme::{Theme, alpha, mix};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
+    /// The sequence wraps across lines, like text, scrolling vertically.
+    Wrapped,
+    /// One line, scrolling horizontally.
     Linear,
     Circular,
 }
@@ -41,6 +44,7 @@ enum Drag {
     None,
     Pan {
         last_x: f32,
+        last_y: f32,
     },
     Select {
         anchor: u64,
@@ -115,6 +119,37 @@ fn is_backdrop(f: &Feature) -> bool {
     matches!(f.kind.as_str(), "source" | "region" | "chromosome")
 }
 
+/// Space between wrapped lines.
+const BLOCK_GAP: f32 = 16.0;
+/// Most feature rows per wrapped line.
+const WRAP_MAX_LANES: usize = 12;
+/// Up to this many wrapped lines get exact heights; beyond, a fixed
+/// estimate keeps layout cheap for chromosome-sized sequences.
+const WRAP_EXACT_LINES: usize = 3000;
+const WRAP_ESTIMATED_LANES: usize = 3;
+
+/// Heights of the wrapped lines for one document version, line length and
+/// width: `offsets[k]` is the top of line `k`, `offsets[n]` the total.
+#[derive(Clone, Debug)]
+struct WrapCache {
+    version: u64,
+    len: u64,
+    line_bp: u64,
+    width: f32,
+    offsets: Vec<f32>,
+}
+
+/// Rows the density plot occupies when features are too many to draw.
+const DENSE_ROWS: usize = 4;
+
+enum FeatureLayout {
+    Items {
+        items: Vec<Item>,
+        parts: HashMap<FeatureId, Vec<FeatureId>>,
+    },
+    Dense(usize),
+}
+
 /// A feature placed on a row of the linear view.
 struct Item {
     id: FeatureId,
@@ -150,12 +185,19 @@ pub struct GenomeView {
     /// Feature boxes on the linear view, with the residue span each covers.
     hits: Vec<([f32; 4], FeatureId, (u64, u64))>,
     arc_hits: Vec<(f32, f32, f32, f32, FeatureId)>,
+    /// Wrapped view: pixels scrolled down from the first line.
+    scroll_y: f32,
+    wrap: Option<WrapCache>,
+    /// Wrapped view: after the next layout, put the line holding this
+    /// position at this height. Used to keep the view steady across zoom
+    /// and resize, when line breaks move.
+    anchor: Option<(u64, f32)>,
 }
 
 impl GenomeView {
     pub fn new(width: f32, height: f32) -> Self {
         Self {
-            mode: Mode::Linear,
+            mode: Mode::Wrapped,
             start: 0.0,
             bp_per_px: 1.0,
             width: width.max(1.0),
@@ -168,12 +210,22 @@ impl GenomeView {
             drag: Drag::None,
             hits: Vec::new(),
             arc_hits: Vec::new(),
+            scroll_y: 0.0,
+            wrap: None,
+            anchor: None,
         }
     }
 
     // Viewport.
 
     pub fn resize(&mut self, width: f32, height: f32, len: u64) {
+        if self.mode == Mode::Wrapped {
+            self.anchor_top_line();
+            self.width = width.max(1.0);
+            self.height = height.max(1.0);
+            self.clamp(len);
+            return;
+        }
         let centre = self.start + f64::from(self.width) * self.bp_per_px / 2.0;
         self.width = width.max(1.0);
         self.height = height.max(1.0);
@@ -184,6 +236,16 @@ impl GenomeView {
     pub fn fit(&mut self, len: u64) {
         self.bp_per_px = (len.max(1) as f64 / f64::from(self.width)).max(1.0 / MAX_PX_PER_BP);
         self.start = 0.0;
+        self.anchor = Some((0, 0.0));
+        self.clamp(len);
+    }
+
+    /// 100 % zoom from the start of the sequence: the opening view.
+    pub fn reset_zoom(&mut self, len: u64) {
+        self.bp_per_px = 1.0 / PX_PER_BP_AT_100;
+        self.start = 0.0;
+        self.scroll_y = 0.0;
+        self.anchor = Some((0, 0.0));
         self.clamp(len);
     }
 
@@ -206,11 +268,24 @@ impl GenomeView {
 
     /// Zoom by `factor` (> 1 zooms in), keeping the position under `x` fixed.
     pub fn zoom_at(&mut self, x: f32, factor: f64, len: u64) {
+        if self.mode == Mode::Wrapped {
+            // Line breaks move when zooming; keep the top line's start put.
+            self.anchor_top_line();
+            self.bp_per_px /= factor;
+            self.clamp(len);
+            return;
+        }
         let anchor = self.bp_at(x);
         self.bp_per_px /= factor;
         self.clamp(len);
         self.start = anchor - f64::from(x) * self.bp_per_px;
         self.clamp(len);
+    }
+
+    /// Wrapped view: scroll down by `dy` pixels (negative scrolls up).
+    pub fn scroll_by(&mut self, dy: f32) {
+        self.scroll_y += dy;
+        self.clamp_scroll();
     }
 
     pub fn pan(&mut self, dx: f32, len: u64) {
@@ -222,9 +297,12 @@ impl GenomeView {
     pub fn zoom_to(&mut self, start: u64, end: u64, len: u64) {
         let span = (end.saturating_sub(start)).max(1) as f64;
         let margin = span * 0.05;
-        self.mode = Mode::Linear;
+        if self.mode == Mode::Circular {
+            self.mode = Mode::Linear;
+        }
         self.bp_per_px = (span + 2.0 * margin) / f64::from(self.width);
         self.start = start as f64 - margin;
+        self.anchor = Some((start, 8.0));
         self.clamp(len);
     }
 
@@ -257,12 +335,26 @@ impl GenomeView {
             let digits = (1.0 - percent.log10().floor()).max(1.0) as usize;
             format!("{percent:.digits$}%")
         };
-        let shown = self.span().min(len as f64) as u64;
+        let shown = match (self.mode, &self.wrap) {
+            (Mode::Wrapped, Some(w)) => {
+                let lines = self.visible_lines().len() as u64;
+                (lines * w.line_bp).min(len)
+            }
+            _ => self.span().min(len as f64) as u64,
+        };
         format!("{level} · {} shown", format_length(shown))
     }
 
     /// Scrollbar position and size, as fractions of the sequence.
     pub fn scroll_fraction(&self, len: u64) -> (f64, f64) {
+        if self.mode == Mode::Wrapped {
+            let total = f64::from(self.wrap_total().max(1.0));
+            let size = (f64::from(self.height) / total).min(1.0);
+            return (
+                (f64::from(self.scroll_y) / total).clamp(0.0, 1.0 - size),
+                size,
+            );
+        }
         let len = len.max(1) as f64;
         let size = (self.span() / len).min(1.0);
         let pos = (self.start / len).clamp(0.0, (1.0 - size).max(0.0));
@@ -270,6 +362,11 @@ impl GenomeView {
     }
 
     pub fn scroll_to(&mut self, fraction: f64, len: u64) {
+        if self.mode == Mode::Wrapped {
+            self.scroll_y = (fraction * f64::from(self.wrap_total())) as f32;
+            self.clamp_scroll();
+            return;
+        }
         self.start = fraction * len as f64;
         self.clamp(len);
     }
@@ -279,8 +376,24 @@ impl GenomeView {
     /// Returns whether it scrolled, so the caller keeps ticking.
     pub fn edge_scroll(&mut self, x: f32, y: f32, len: u64) -> bool {
         const EDGE: f32 = 24.0;
-        if !matches!(self.drag, Drag::Select { .. }) || self.mode != Mode::Linear {
+        if !matches!(self.drag, Drag::Select { .. }) || self.mode == Mode::Circular {
             return false;
+        }
+        if self.mode == Mode::Wrapped {
+            let over = if y < EDGE {
+                y - EDGE
+            } else if y > self.height - EDGE {
+                y - (self.height - EDGE)
+            } else {
+                0.0
+            };
+            if over == 0.0 {
+                return false;
+            }
+            let before = self.scroll_y;
+            self.scroll_by(over.signum() * (2.0 + over.abs() * 0.6));
+            self.drag_to(x, y.clamp(0.0, self.height), len);
+            return (self.scroll_y - before).abs() > f32::EPSILON;
         }
         let over = if x < EDGE {
             x - EDGE
@@ -301,6 +414,20 @@ impl GenomeView {
 
     /// Scroll so that `pos` is visible.
     pub fn reveal(&mut self, pos: u64, len: u64) {
+        if self.mode == Mode::Wrapped {
+            if let Some(w) = &self.wrap {
+                let k = ((pos / w.line_bp) as usize).min(w.offsets.len().saturating_sub(2));
+                let top = w.offsets[k] - self.scroll_y;
+                let bottom = w.offsets[k + 1] - self.scroll_y;
+                if top < 0.0 || bottom > self.height {
+                    self.scroll_y = w.offsets[k] - self.height / 3.0;
+                    self.clamp_scroll();
+                }
+            } else {
+                self.anchor = Some((pos, self.height / 3.0));
+            }
+            return;
+        }
         let p = pos as f64;
         let span = self.span();
         if p < self.start || p > self.start + span {
@@ -368,7 +495,7 @@ impl GenomeView {
 
     pub fn feature_at(&self, x: f32, y: f32, len: u64) -> Option<FeatureId> {
         match self.mode {
-            Mode::Linear => self.feature_hit_at(x, y).map(|(id, _)| id),
+            Mode::Linear | Mode::Wrapped => self.feature_hit_at(x, y).map(|(id, _)| id),
             Mode::Circular => {
                 let (cx, cy) = self.centre();
                 let (dx, dy) = (x - cx, y - cy);
@@ -396,6 +523,15 @@ impl GenomeView {
     fn position_at(&self, x: f32, y: f32, len: u64) -> u64 {
         match self.mode {
             Mode::Linear => self.boundary_at(x, len),
+            Mode::Wrapped => {
+                let Some(w) = &self.wrap else { return 0 };
+                let k = self.line_at(y);
+                let b0 = k as u64 * w.line_bp;
+                let b1 = (b0 + w.line_bp).min(len);
+                (b0 as f64 + f64::from(x) * self.bp_per_px)
+                    .round()
+                    .clamp(b0 as f64, b1 as f64) as u64
+            }
             Mode::Circular => {
                 let (cx, cy) = self.centre();
                 Self::bp_at_angle((y - cy).atan2(x - cx), len)
@@ -416,7 +552,7 @@ impl GenomeView {
     /// extends. Shift-click extends the selection from the cursor instead.
     pub fn press(&mut self, x: f32, y: f32, shift: bool, len: u64) {
         let hit = match self.mode {
-            Mode::Linear => self.feature_hit_at(x, y),
+            Mode::Linear | Mode::Wrapped => self.feature_hit_at(x, y),
             Mode::Circular => self
                 .feature_at(x, y, len)
                 .and_then(|id| self.arc_hits.iter().find(|h| h.4 == id))
@@ -442,18 +578,26 @@ impl GenomeView {
     }
 
     /// Start panning with the pointer (middle button).
-    pub fn pan_press(&mut self, x: f32) {
-        self.drag = Drag::Pan { last_x: x };
+    pub fn pan_press(&mut self, x: f32, y: f32) {
+        self.drag = Drag::Pan {
+            last_x: x,
+            last_y: y,
+        };
     }
 
     pub fn drag_to(&mut self, x: f32, y: f32, len: u64) {
         match self.drag {
             Drag::None => {}
-            Drag::Pan { last_x } => {
-                if self.mode == Mode::Linear {
-                    self.pan(x - last_x, len);
+            Drag::Pan { last_x, last_y } => {
+                match self.mode {
+                    Mode::Linear => self.pan(x - last_x, len),
+                    Mode::Wrapped => self.scroll_by(last_y - y),
+                    Mode::Circular => {}
                 }
-                self.drag = Drag::Pan { last_x: x };
+                self.drag = Drag::Pan {
+                    last_x: x,
+                    last_y: y,
+                };
             }
             Drag::Select { anchor } => {
                 let p = self.position_at(x, y, len);
@@ -492,7 +636,7 @@ impl GenomeView {
             self.selection = None;
         }
         self.cursor = Some(next);
-        if self.mode == Mode::Linear {
+        if self.mode != Mode::Circular {
             self.reveal(next, len);
         }
     }
@@ -506,6 +650,7 @@ impl GenomeView {
         self.hidden = 0;
         match self.mode {
             Mode::Linear => self.build_linear(doc, theme, frame),
+            Mode::Wrapped => self.build_wrapped(doc, theme, frame),
             Mode::Circular => self.build_circular(doc, theme, frame),
         }
     }
@@ -514,6 +659,134 @@ impl GenomeView {
         let b0 = self.start.floor().max(0.0) as u64;
         let b1 = ((self.start + self.span()).ceil().max(0.0) as u64).min(len);
         (b0.min(len), b1)
+    }
+
+    // Wrapped layout.
+
+    /// Residues per wrapped line at the current zoom and width.
+    pub fn line_bp(&self) -> u64 {
+        (f64::from(self.width) * self.bp_per_px).floor().max(1.0) as u64
+    }
+
+    fn line_height(&self, lanes: usize) -> f32 {
+        if lanes == 0 {
+            self.feature_top() - 10.0 + BLOCK_GAP
+        } else {
+            self.feature_top() + lanes as f32 * (LANE_H + LANE_GAP) - LANE_GAP + BLOCK_GAP
+        }
+    }
+
+    fn wrap_total(&self) -> f32 {
+        self.wrap
+            .as_ref()
+            .and_then(|w| w.offsets.last().copied())
+            .unwrap_or(0.0)
+    }
+
+    fn clamp_scroll(&mut self) {
+        let max = (self.wrap_total() - self.height).max(0.0);
+        self.scroll_y = self.scroll_y.clamp(0.0, max);
+    }
+
+    /// The wrapped line under screen height `y`.
+    fn line_at(&self, y: f32) -> usize {
+        let Some(w) = &self.wrap else { return 0 };
+        let lines = w.offsets.len().saturating_sub(1).max(1);
+        w.offsets
+            .partition_point(|&o| o <= y + self.scroll_y)
+            .saturating_sub(1)
+            .min(lines - 1)
+    }
+
+    /// Wrapped lines at least partly on screen.
+    fn visible_lines(&self) -> std::ops::Range<usize> {
+        let Some(w) = &self.wrap else { return 0..0 };
+        let lines = w.offsets.len().saturating_sub(1);
+        let first = self.line_at(0.0);
+        let end = w
+            .offsets
+            .partition_point(|&o| o < self.scroll_y + self.height)
+            .min(lines);
+        first..end.max(first + 1).min(lines)
+    }
+
+    /// Keep the top visible line's first residue at its current height
+    /// through the next relayout.
+    fn anchor_top_line(&mut self) {
+        if self.anchor.is_some() {
+            return;
+        }
+        if let Some(w) = &self.wrap {
+            let k = self.line_at(0.0);
+            self.anchor = Some((k as u64 * w.line_bp, w.offsets[k] - self.scroll_y));
+        }
+    }
+
+    /// Lay out wrapped lines for this document, zoom and width, unless the
+    /// cached layout still holds.
+    fn ensure_wrap(&mut self, doc: &SequenceDoc) {
+        let (line_bp, len) = (self.line_bp(), doc.len());
+        if let Some(w) = &self.wrap
+            && w.version == doc.version()
+            && w.len == len
+            && w.line_bp == line_bp
+            && (w.width - self.width).abs() < 0.5
+        {
+            return;
+        }
+        let lines = (len.div_ceil(line_bp) as usize).max(1);
+        let saved = self.start;
+        let mut offsets = Vec::with_capacity(lines + 1);
+        let mut acc = 0.0;
+        offsets.push(acc);
+        for k in 0..lines {
+            let lanes = if lines <= WRAP_EXACT_LINES {
+                let b0 = k as u64 * line_bp;
+                self.start = b0 as f64;
+                self.lanes_needed(doc, b0, (b0 + line_bp).min(len))
+                    .min(WRAP_MAX_LANES)
+            } else {
+                WRAP_ESTIMATED_LANES
+            };
+            acc += self.line_height(lanes);
+            offsets.push(acc);
+        }
+        self.start = saved;
+        self.wrap = Some(WrapCache {
+            version: doc.version(),
+            len,
+            line_bp,
+            width: self.width,
+            offsets,
+        });
+    }
+
+    fn build_wrapped(&mut self, doc: &SequenceDoc, theme: &Theme, frame: &mut Frame) {
+        self.ensure_wrap(doc);
+        let len = doc.len();
+        let Some(w) = self.wrap.clone() else { return };
+        if let Some((pos, y)) = self.anchor.take() {
+            let k = ((pos / w.line_bp) as usize).min(w.offsets.len() - 2);
+            self.scroll_y = w.offsets[k] - y;
+        }
+        self.clamp_scroll();
+        for k in self.visible_lines() {
+            let b0 = k as u64 * w.line_bp;
+            let b1 = (b0 + w.line_bp).min(len);
+            let oy = w.offsets[k] - self.scroll_y;
+            let height = w.offsets[k + 1] - w.offsets[k] - BLOCK_GAP;
+            self.start = b0 as f64;
+            self.draw_track(doc, theme, frame, (b0, b1), oy, height, WRAP_MAX_LANES);
+        }
+        if self.hidden > 0 {
+            frame.text(
+                self.width - 220.0,
+                self.height - 18.0,
+                LABEL_SIZE,
+                &format!("+{} features not shown", self.hidden),
+                theme.foreground_muted,
+            );
+        }
     }
 
     fn build_linear(&mut self, doc: &SequenceDoc, theme: &Theme, frame: &mut Frame) {
@@ -526,46 +799,73 @@ impl GenomeView {
         frame.rect(0.0, 0.0, x_start.max(0.0), self.height, theme.surface);
         frame.rect(x_end, 0.0, self.width - x_end, self.height, theme.surface);
 
-        self.draw_ruler(len, theme, frame);
-
-        if let Some((a, b)) = self.selection {
-            let (xa, xb) = (self.x_of(a as f64), self.x_of(b as f64));
-            frame.rect(
-                xa,
-                RULER_H,
-                (xb - xa).max(1.0),
-                self.height - RULER_H,
-                alpha(theme.selection, 0.55),
+        let top = self.feature_top();
+        let max_lanes = (((self.height - top) / (LANE_H + LANE_GAP)).floor() as usize).max(1);
+        self.draw_track(doc, theme, frame, (b0, b1), 0.0, self.height, max_lanes);
+        if self.hidden > 0 {
+            frame.text(
+                8.0,
+                self.height - 18.0,
+                LABEL_SIZE,
+                &format!("+{} features not shown", self.hidden),
+                theme.foreground_muted,
             );
         }
+    }
 
-        self.draw_sequence(doc, b0, b1, theme, frame);
-        self.draw_features(doc, b0, b1, theme, frame);
-
-        if let Some(c) = self.cursor {
+    /// One track: ruler, residues and features for `b0..b1`, drawn from
+    /// `oy` down, `height` tall, using the current `start` for x.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_track(
+        &mut self,
+        doc: &SequenceDoc,
+        theme: &Theme,
+        frame: &mut Frame,
+        (b0, b1): (u64, u64),
+        oy: f32,
+        height: f32,
+        max_lanes: usize,
+    ) {
+        self.draw_ruler(b0, b1, oy, theme, frame);
+        if let Some((a, b)) = self.selection {
+            let (a, b) = (a.max(b0), b.min(b1));
+            if a < b {
+                let (xa, xb) = (self.x_of(a as f64), self.x_of(b as f64));
+                frame.rect(
+                    xa,
+                    oy + RULER_H,
+                    (xb - xa).max(1.0),
+                    height - RULER_H,
+                    alpha(theme.selection, 0.55),
+                );
+            }
+        }
+        self.draw_sequence(doc, b0, b1, oy, theme, frame);
+        self.draw_features(doc, b0, b1, oy, max_lanes, theme, frame);
+        if let Some(c) = self.cursor
+            && c >= b0
+            && c <= b1
+        {
             let x = self.x_of(c as f64);
-            let bottom = self.feature_top() - 12.0;
+            let bottom = oy + self.feature_top() - 12.0;
             frame.rect(
                 x - 1.0,
-                SEQ_Y - 5.0,
+                oy + SEQ_Y - 5.0,
                 2.0,
-                bottom - SEQ_Y + 5.0,
+                bottom - oy - SEQ_Y + 5.0,
                 theme.accent,
             );
         }
     }
 
-    fn draw_ruler(&self, len: u64, theme: &Theme, frame: &mut Frame) {
-        let base_y = RULER_H - 6.0;
-        let x0 = self.x_of(0.0).max(0.0);
-        let x1 = self.x_of(len as f64).min(self.width);
+    fn draw_ruler(&self, b0: u64, b1: u64, oy: f32, theme: &Theme, frame: &mut Frame) {
+        let base_y = oy + RULER_H - 6.0;
+        let x0 = self.x_of(b0 as f64).max(0.0);
+        let x1 = self.x_of(b1 as f64).min(self.width);
         frame.rect(x0, base_y, x1 - x0, 1.0, theme.foreground_muted);
         let step = nice_step(self.bp_per_px * 110.0);
         let minor = step / 5.0;
-        let (lo, hi) = (
-            self.start.max(0.0),
-            (self.start + self.span()).min(len as f64),
-        );
+        let (lo, hi) = (b0 as f64, b1 as f64);
         if minor / self.bp_per_px >= 7.0 {
             let mut t = (lo / minor).ceil() * minor;
             while t <= hi {
@@ -579,7 +879,7 @@ impl GenomeView {
             frame.rect(x, base_y - 7.0, 1.0, 7.0, theme.foreground);
             frame.text(
                 x + 3.0,
-                2.0,
+                oy + 2.0,
                 12.0,
                 &format_bp(t as u64, step),
                 theme.foreground_muted,
@@ -588,10 +888,19 @@ impl GenomeView {
         }
     }
 
-    fn draw_sequence(&self, doc: &SequenceDoc, b0: u64, b1: u64, theme: &Theme, frame: &mut Frame) {
+    fn draw_sequence(
+        &self,
+        doc: &SequenceDoc,
+        b0: u64,
+        b1: u64,
+        oy: f32,
+        theme: &Theme,
+        frame: &mut Frame,
+    ) {
         if b1 <= b0 {
             return;
         }
+        let seq_y = oy + SEQ_Y;
         let ppb = self.px_per_bp() as f32;
         if self.px_per_bp() >= 1.0 {
             let residues = doc.read(b0, b1);
@@ -607,14 +916,14 @@ impl GenomeView {
                     let gap = if ppb >= 9.0 { 1.0 } else { 0.0 };
                     frame.rect(
                         x + gap / 2.0,
-                        SEQ_Y,
+                        seq_y,
                         ppb - gap,
                         SEQ_H,
                         mix(theme.background, c, 0.22),
                     );
-                    frame.glyph(gx, SEQ_Y + (SEQ_H - size) / 2.0, size, b, c);
+                    frame.glyph(gx, seq_y + (SEQ_H - size) / 2.0, size, b, c);
                 } else {
-                    frame.rect(x, SEQ_Y, ppb.max(1.0), SEQ_H, alpha(c, 0.85));
+                    frame.rect(x, seq_y, ppb.max(1.0), SEQ_H, alpha(c, 0.85));
                 }
             }
             return;
@@ -641,7 +950,7 @@ impl GenomeView {
         };
         frame.rect(
             x0,
-            SEQ_Y,
+            seq_y,
             bin_w * gc.len() as f32,
             SEQ_H,
             alpha(theme.surface, 0.6),
@@ -655,7 +964,7 @@ impl GenomeView {
             let x = x0 + i as f32 * bin_w;
             frame.rect(
                 x,
-                SEQ_Y + SEQ_H - h,
+                seq_y + SEQ_H - h,
                 bin_w.max(1.0),
                 h,
                 alpha(mix(theme.orange, theme.blue, t), 0.8),
@@ -664,48 +973,21 @@ impl GenomeView {
         let label = format!("GC {:.0}-{:.0}%", lo * 100.0, hi * 100.0);
         frame.text(
             self.width - text_width(&label, 11.0) - 6.0,
-            SEQ_Y + SEQ_H + 2.0,
+            seq_y + SEQ_H + 2.0,
             11.0,
             &label,
             theme.foreground_muted,
         );
     }
 
-    fn draw_features(
-        &mut self,
-        doc: &SequenceDoc,
-        b0: u64,
-        b1: u64,
-        theme: &Theme,
-        frame: &mut Frame,
-    ) {
-        let top = self.feature_top();
+    /// Features overlapping `b0..b1` as items ready for row packing, with
+    /// exon/intron/CDS children grouped under their transcripts, or just a
+    /// count when there are too many to draw.
+    fn feature_layout(&self, doc: &SequenceDoc, b0: u64, b1: u64) -> FeatureLayout {
         let mut ids = doc.features_in(b0, b1);
         ids.retain(|id| doc.feature(*id).is_some_and(|f| !is_backdrop(f)));
         if ids.len() > MAX_DRAWN_FEATURES {
-            let bins = (self.width / 3.0) as usize;
-            let counts = doc.index().density(b0, b1, bins);
-            let max = counts.iter().copied().max().unwrap_or(1).max(1) as f32;
-            let (x0, x1) = (self.x_of(b0 as f64), self.x_of(b1 as f64));
-            let w = (x1 - x0) / bins as f32;
-            for (i, &c) in counts.iter().enumerate() {
-                let h = 60.0 * c as f32 / max;
-                frame.rect(
-                    x0 + i as f32 * w,
-                    top + 60.0 - h,
-                    w.max(1.0),
-                    h,
-                    alpha(theme.green, 0.7),
-                );
-            }
-            frame.text(
-                8.0,
-                top + 68.0,
-                LABEL_SIZE,
-                &format!("{} features here; zoom in to see them", ids.len()),
-                theme.foreground_muted,
-            );
-            return;
+            return FeatureLayout::Dense(ids.len());
         }
 
         // Gene models: exons and CDS whose parent transcript is in view are
@@ -806,7 +1088,67 @@ impl GenomeView {
             }
         }
         items.sort_by(|a, b| a.x0.total_cmp(&b.x0));
-        let max_lanes = (((self.height - top) / (LANE_H + LANE_GAP)).floor() as usize).max(1);
+        FeatureLayout::Items { items, parts }
+    }
+
+    /// Rows needed to pack the features of `b0..b1` without hiding any.
+    fn lanes_needed(&self, doc: &SequenceDoc, b0: u64, b1: u64) -> usize {
+        match self.feature_layout(doc, b0, b1) {
+            FeatureLayout::Dense(_) => DENSE_ROWS,
+            FeatureLayout::Items { items, .. } => {
+                let mut ends: Vec<f32> = Vec::new();
+                for item in &items {
+                    match ends.iter().position(|&end| end + 4.0 < item.x0) {
+                        Some(l) => ends[l] = item.reach,
+                        None => ends.push(item.reach),
+                    }
+                }
+                ends.len()
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_features(
+        &mut self,
+        doc: &SequenceDoc,
+        b0: u64,
+        b1: u64,
+        oy: f32,
+        max_lanes: usize,
+        theme: &Theme,
+        frame: &mut Frame,
+    ) {
+        let top = oy + self.feature_top();
+        let (items, parts) = match self.feature_layout(doc, b0, b1) {
+            FeatureLayout::Items { items, parts } => (items, parts),
+            FeatureLayout::Dense(count) => {
+                let bins = (self.width / 3.0) as usize;
+                let counts = doc.index().density(b0, b1, bins);
+                let max = counts.iter().copied().max().unwrap_or(1).max(1) as f32;
+                let (x0, x1) = (self.x_of(b0 as f64), self.x_of(b1 as f64));
+                let w = (x1 - x0) / bins as f32;
+                for (i, &c) in counts.iter().enumerate() {
+                    let h = 60.0 * c as f32 / max;
+                    frame.rect(
+                        x0 + i as f32 * w,
+                        top + 60.0 - h,
+                        w.max(1.0),
+                        h,
+                        alpha(theme.green, 0.7),
+                    );
+                }
+                frame.text(
+                    8.0,
+                    top + 68.0,
+                    LABEL_SIZE,
+                    &format!("{count} features here; zoom in to see them"),
+                    theme.foreground_muted,
+                );
+
+                return;
+            }
+        };
         let mut lane_ends: Vec<f32> = Vec::new();
         // (lane, item) in drawing order, for placing labels afterwards.
         let mut placed: Vec<(usize, usize)> = Vec::new();
@@ -862,15 +1204,6 @@ impl GenomeView {
                     theme.background,
                 );
             }
-        }
-        if self.hidden > 0 {
-            frame.text(
-                8.0,
-                self.height - 18.0,
-                LABEL_SIZE,
-                &format!("+{} features not shown", self.hidden),
-                theme.foreground_muted,
-            );
         }
     }
 
@@ -1425,6 +1758,7 @@ mod tests {
     #[test]
     fn zoom_keeps_anchor_and_clamps() {
         let mut v = GenomeView::new(1000.0, 600.0);
+        v.mode = Mode::Linear;
         v.fit(10_000);
         assert!((v.bp_per_px - 10.0).abs() < 1e-9);
         let before = v.bp_at(250.0);
@@ -1440,6 +1774,7 @@ mod tests {
     fn linear_build_draws_and_hit_tests_features() {
         let d = doc();
         let mut v = GenomeView::new(1000.0, 600.0);
+        v.mode = Mode::Linear;
         v.fit(d.len());
         let mut f = Frame::new();
         v.build(&d, &Theme::default(), &mut f);
@@ -1482,6 +1817,7 @@ mod tests {
     fn press_and_drag_select_a_range() {
         let d = doc();
         let mut v = GenomeView::new(1000.0, 600.0);
+        v.mode = Mode::Linear;
         v.fit(d.len());
         v.press(100.0, SEQ_Y + 5.0, false, d.len());
         v.drag_to(200.0, SEQ_Y + 5.0, d.len());
@@ -1496,6 +1832,7 @@ mod tests {
     fn dragging_past_the_edge_scrolls_and_extends() {
         let d = doc();
         let mut v = GenomeView::new(1000.0, 600.0);
+        v.mode = Mode::Linear;
         v.zoom_to(5000, 6000, d.len());
         v.press(500.0, SEQ_Y + 5.0, false, d.len());
         let start = v.start;
@@ -1512,6 +1849,7 @@ mod tests {
     fn clicks_replace_the_selection() {
         let d = doc();
         let mut v = GenomeView::new(1000.0, 600.0);
+        v.mode = Mode::Linear;
         v.fit(d.len());
         let mut f = Frame::new();
         v.build(&d, &Theme::default(), &mut f);
@@ -1571,6 +1909,37 @@ mod tests {
             "{}",
             v.zoom_text(100_000_000)
         );
+    }
+
+    #[test]
+    fn wrapped_lines_hit_test_and_select_across_lines() {
+        let d = doc();
+        let mut v = GenomeView::new(1000.0, 400.0);
+        v.reset_zoom(d.len());
+        let mut f = Frame::new();
+        v.build(&d, &Theme::default(), &mut f);
+        let line = v.line_bp();
+        assert_eq!(line, (1000.0 * (1.0 / PX_PER_BP_AT_100)).floor() as u64);
+        let w = v.wrap.clone().unwrap();
+        assert_eq!(w.offsets.len() - 1, d.len().div_ceil(line) as usize);
+        // Drag from the first line into the second selects across the break.
+        let y0 = SEQ_Y + 5.0;
+        let y1 = w.offsets[1] + SEQ_Y + 5.0;
+        v.press(500.0, y0, false, d.len());
+        v.drag_to(100.0, y1, d.len());
+        let (a, b) = v.selection.unwrap();
+        assert!(a < line && b > line, "{a}..{b} across {line}");
+        // Scrolling moves line 1 to the top; positions follow.
+        v.release();
+        v.scroll_by(w.offsets[1]);
+        v.build(&d, &Theme::default(), &mut f);
+        assert_eq!(v.line_at(1.0), 1);
+        assert_eq!(v.position_at(0.0, SEQ_Y, d.len()), line);
+        // Zoom keeps the top line's start in place.
+        v.zoom_at(500.0, 2.0, d.len());
+        v.build(&d, &Theme::default(), &mut f);
+        let top = v.line_at(1.0) as u64 * v.line_bp();
+        assert!(top <= line && line < top + v.line_bp());
     }
 
     #[test]

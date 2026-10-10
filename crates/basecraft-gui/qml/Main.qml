@@ -43,8 +43,9 @@ ApplicationWindow {
             anchors.fill: parent
             anchors.leftMargin: 6
             spacing: 2
-            Tool { text: "Linear"; checkable: true; checked: !controller.circular; onClicked: if (controller.circular) controller.toggle_mode() }
-            Tool { text: "Circular"; checkable: true; checked: controller.circular; onClicked: if (!controller.circular) controller.toggle_mode() }
+            Tool { text: "Wrapped"; checkable: true; checked: controller.mode === "wrapped"; onClicked: controller.switch_view("wrapped") }
+            Tool { text: "Linear"; checkable: true; checked: controller.mode === "linear"; onClicked: controller.switch_view("linear") }
+            Tool { text: "Circular"; checkable: true; checked: controller.mode === "circular"; onClicked: controller.switch_view("circular") }
             ToolSeparator {}
             Tool { text: "−"; ToolTip.text: "Zoom out (−)"; ToolTip.visible: hovered; onClicked: controller.zoom_out() }
             Tool { text: "+"; ToolTip.text: "Zoom in (+, double-click)"; ToolTip.visible: hovered; onClicked: controller.zoom_in() }
@@ -109,7 +110,7 @@ ApplicationWindow {
                     menu.info = JSON.parse(controller.context_press(mouse.x, mouse.y))
                     menu.popup()
                 } else if (mouse.button === Qt.MiddleButton) {
-                    controller.pan_press(mouse.x)
+                    controller.pan_press(mouse.x, mouse.y)
                 } else {
                     controller.press(mouse.x, mouse.y, mouse.modifiers)
                 }
@@ -166,7 +167,7 @@ ApplicationWindow {
             orientation: Qt.Horizontal
             anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
             policy: ScrollBar.AlwaysOn
-            visible: !controller.circular && controller.scroll_size < 0.999
+            visible: controller.mode === "linear" && controller.scroll_size < 0.999
             size: controller.scroll_size
             minimumSize: 0.04
             contentItem: Rectangle {
@@ -176,6 +177,29 @@ ApplicationWindow {
             }
             background: Rectangle { color: Qt.alpha(controller.foreground, 0.06) }
             onPositionChanged: if (pressed) controller.scroll_to(position)
+        }
+        ScrollBar {
+            id: vbar
+            orientation: Qt.Vertical
+            anchors { top: parent.top; right: parent.right; bottom: parent.bottom }
+            policy: ScrollBar.AlwaysOn
+            visible: controller.mode === "wrapped" && controller.scroll_size < 0.999
+            size: controller.scroll_size
+            minimumSize: 0.04
+            contentItem: Rectangle {
+                implicitWidth: 10
+                radius: 5
+                color: Qt.alpha(controller.foreground, vbar.pressed ? 0.65 : 0.4)
+            }
+            background: Rectangle { color: Qt.alpha(controller.foreground, 0.06) }
+            onPositionChanged: if (pressed) controller.scroll_to(position)
+        }
+        Binding {
+            target: vbar
+            property: "position"
+            value: controller.scroll_pos
+            when: !vbar.pressed
+            restoreMode: Binding.RestoreNone
         }
         // Follow the controller except while the user drags the bar, so the
         // binding survives interaction.
@@ -256,14 +280,15 @@ ApplicationWindow {
         controller.resize(view.width, view.height)
     }
 
-    // Scripted runs: --goto START,END  --circular 1  --type TEXT
+    // Scripted runs: --goto START,END  --mode wrapped|linear|circular  --circular 1  --type TEXT
     // --select START,END  --menu X,Y  --edit FEATURE  --screenshot FILE
     Timer {
         interval: 700
         running: arg("--screenshot") !== undefined
         onTriggered: {
             if (arg("--goto")) { const r = arg("--goto").split(","); controller.show_range(Number(r[0]), Number(r[1])) }
-            if (arg("--circular") && !controller.circular) controller.toggle_mode()
+            if (arg("--mode")) controller.switch_view(arg("--mode"))
+            if (arg("--circular") && !controller.circular) controller.switch_view("circular")
             if (arg("--type")) {
                 controller.press(view.width / 2, 45, 0)
                 controller.release()

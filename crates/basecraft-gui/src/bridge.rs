@@ -24,6 +24,7 @@ pub mod qobject {
         #[qproperty(QString, foreground)]
         #[qproperty(QString, accent)]
         #[qproperty(bool, circular)]
+        #[qproperty(QString, mode)]
         #[qproperty(bool, dirty)]
         #[qproperty(QString, zoom_text)]
         #[qproperty(f64, scroll_pos)]
@@ -47,6 +48,9 @@ pub mod qobject {
         fn key(self: Pin<&mut GenomeController>, key: i32, text: &QString, modifiers: i32) -> bool;
         #[qinvokable]
         fn toggle_mode(self: Pin<&mut GenomeController>);
+        /// Switch view: "wrapped", "linear" or "circular".
+        #[qinvokable]
+        fn switch_view(self: Pin<&mut GenomeController>, mode: &QString);
         #[qinvokable]
         fn fit(self: Pin<&mut GenomeController>);
         /// Show residues `start..end`.
@@ -133,7 +137,7 @@ pub mod qobject {
         fn hover(self: &GenomeController, x: f64, y: f64) -> QString;
         /// Start panning (middle button).
         #[qinvokable]
-        fn pan_press(self: Pin<&mut GenomeController>, x: f64);
+        fn pan_press(self: Pin<&mut GenomeController>, x: f64, y: f64);
         /// Id of the selected feature, or -1.
         #[qinvokable]
         fn selected_feature(self: &GenomeController) -> i32;
@@ -164,6 +168,10 @@ const KEY_HOME: i32 = 0x0100_0010;
 const KEY_END: i32 = 0x0100_0011;
 const KEY_LEFT: i32 = 0x0100_0012;
 const KEY_RIGHT: i32 = 0x0100_0014;
+const KEY_UP: i32 = 0x0100_0013;
+const KEY_DOWN: i32 = 0x0100_0015;
+const KEY_PAGE_UP: i32 = 0x0100_0016;
+const KEY_PAGE_DOWN: i32 = 0x0100_0017;
 const KEY_F2: i32 = 0x0100_0031;
 const KEY_PLUS: i32 = 0x2b;
 const KEY_MINUS: i32 = 0x2d;
@@ -186,6 +194,7 @@ pub struct ControllerRust {
     foreground: QString,
     accent: QString,
     circular: bool,
+    mode: QString,
     dirty: bool,
     zoom_text: QString,
     scroll_pos: f64,
@@ -210,6 +219,7 @@ impl Default for ControllerRust {
             foreground: QString::default(),
             accent: QString::default(),
             circular: false,
+            mode: QString::from("wrapped"),
             dirty: false,
             zoom_text: QString::default(),
             scroll_pos: 0.0,
@@ -325,18 +335,18 @@ impl qobject::GenomeController {
                     let mut r = self.as_mut().rust_mut();
                     r.session = Some(session);
                     r.doc = Some(doc);
-                    // Linear by default; circular is a view you switch to.
+                    // Wrapped at 100 % by default, circular molecules too;
+                    // the other views are a switch away.
                     let _ = circular;
-                    r.view.mode = Mode::Linear;
-                    r.view.fit(len);
+                    r.view.mode = Mode::Wrapped;
+                    r.view.reset_zoom(len);
                 }
                 let file = path
                     .file_name()
                     .map_or_else(String::new, |f| f.to_string_lossy().into_owned());
                 self.as_mut()
                     .set_title(QString::from(&format!("{file} — {name} — Basecraft")));
-                let circ = self.rust().view.mode == Mode::Circular;
-                self.as_mut().set_circular(circ);
+                self.as_mut().sync_mode();
                 self.as_mut().set_dirty(false);
                 self.as_mut().notify("");
                 self.refresh();
@@ -367,7 +377,14 @@ impl qobject::GenomeController {
             if r.view.mode == Mode::Circular {
                 return;
             }
-            if modifiers & SHIFT != 0 || dx.abs() > dy.abs() {
+            if r.view.mode == Mode::Wrapped {
+                // The wheel scrolls lines; Ctrl+wheel zooms.
+                if modifiers & CTRL != 0 {
+                    r.view.zoom_at(x as f32, 1.0015f64.powf(dy), len);
+                } else {
+                    r.view.scroll_by((-dy * 0.5) as f32);
+                }
+            } else if modifiers & SHIFT != 0 || dx.abs() > dy.abs() {
                 let d = if dx.abs() > dy.abs() { dx } else { dy };
                 r.view.pan((d / 2.0) as f32, len);
             } else {
@@ -413,16 +430,62 @@ impl qobject::GenomeController {
         self.as_mut().rust_mut().view.release();
     }
 
-    pub fn toggle_mode(mut self: Pin<&mut Self>) {
-        let circ = {
-            let mut r = self.as_mut().rust_mut();
-            r.view.mode = match r.view.mode {
-                Mode::Linear => Mode::Circular,
-                Mode::Circular => Mode::Linear,
-            };
-            r.view.mode == Mode::Circular
+    /// Mirror the view mode into the `mode` and `circular` properties.
+    fn sync_mode(mut self: Pin<&mut Self>) {
+        let mode = self.rust().view.mode;
+        let name = match mode {
+            Mode::Wrapped => "wrapped",
+            Mode::Linear => "linear",
+            Mode::Circular => "circular",
         };
-        self.as_mut().set_circular(circ);
+        self.as_mut().set_mode(QString::from(name));
+        self.as_mut().set_circular(mode == Mode::Circular);
+    }
+
+    /// Cycle wrapped → linear → circular.
+    pub fn toggle_mode(mut self: Pin<&mut Self>) {
+        let next = match self.rust().view.mode {
+            Mode::Wrapped => "linear",
+            Mode::Linear => "circular",
+            Mode::Circular => "wrapped",
+        };
+        self.as_mut().switch_view(&QString::from(next));
+    }
+
+    pub fn switch_view(mut self: Pin<&mut Self>, mode: &QString) {
+        let len = self.len();
+        {
+            let mut r = self.as_mut().rust_mut();
+            let (cursor, selection) = (r.view.cursor, r.view.selection);
+            let new = match mode.to_string().as_str() {
+                "linear" => Mode::Linear,
+                "circular" => Mode::Circular,
+                _ => Mode::Wrapped,
+            };
+            if new == r.view.mode {
+                return;
+            }
+            r.view.mode = new;
+            // Keep what the user was looking at in view.
+            let focus = selection.map(|(a, _)| a).or(cursor);
+            match new {
+                Mode::Wrapped => {
+                    let w = r.view.width;
+                    let h = r.view.height;
+                    r.view.resize(w, h, len);
+                    if let Some(p) = focus {
+                        r.view.reveal(p, len);
+                    }
+                }
+                Mode::Linear => {
+                    if let Some(p) = focus {
+                        r.view.reveal(p, len);
+                    }
+                }
+                Mode::Circular => {}
+            }
+        }
+        self.as_mut().sync_mode();
         self.refresh();
     }
 
@@ -437,14 +500,11 @@ impl qobject::GenomeController {
         let len = self.len();
         {
             let mut r = self.as_mut().rust_mut();
-            r.view.mode = Mode::Linear;
-            r.view.bp_per_px = (end - start).max(1.0) / f64::from(r.view.width);
-            r.view.start = start;
-            let w = r.view.width;
-            let h = r.view.height;
-            r.view.resize(w, h, len);
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            r.view
+                .zoom_to(start.max(0.0) as u64, end.max(0.0) as u64, len);
         }
-        self.as_mut().set_circular(false);
+        self.as_mut().sync_mode();
         self.refresh();
     }
 
@@ -529,6 +589,20 @@ impl qobject::GenomeController {
                 #[allow(clippy::cast_precision_loss)]
                 let x = cursor.map_or(r.view.width / 2.0, |c| r.view.x_of(c as f64));
                 r.view.zoom_at(x, factor, len);
+                true
+            }
+            KEY_UP | KEY_DOWN if self.rust().view.mode == Mode::Wrapped => {
+                // A line up or down in the wrapped view.
+                let line = i64::try_from(self.rust().view.line_bp()).unwrap_or(1);
+                let delta = if key == KEY_UP { -line } else { line };
+                self.as_mut().rust_mut().view.move_cursor(delta, shift, len);
+                true
+            }
+            KEY_PAGE_UP | KEY_PAGE_DOWN if self.rust().view.mode == Mode::Wrapped => {
+                let mut r = self.as_mut().rust_mut();
+                let page = r.view.height * 0.9;
+                r.view
+                    .scroll_by(if key == KEY_PAGE_UP { -page } else { page });
                 true
             }
             KEY_LEFT | KEY_RIGHT => {
@@ -796,10 +870,12 @@ impl qobject::GenomeController {
                 .cursor
                 .map_or(r.view.width / 2.0, |c| r.view.x_of(c as f64));
             let x = x.clamp(0.0, r.view.width);
-            r.view.mode = Mode::Linear;
+            if r.view.mode == Mode::Circular {
+                r.view.mode = Mode::Linear;
+            }
             r.view.zoom_at(x, factor, len);
         }
-        self.as_mut().set_circular(false);
+        self.as_mut().sync_mode();
         self.refresh();
     }
 
@@ -818,7 +894,7 @@ impl qobject::GenomeController {
             return;
         };
         self.as_mut().rust_mut().view.zoom_to(a, b, len);
-        self.as_mut().set_circular(false);
+        self.as_mut().sync_mode();
         self.refresh();
     }
 
@@ -832,7 +908,7 @@ impl qobject::GenomeController {
         let len = self.len();
         if let Some((a, b)) = self.feature_bounds(id) {
             self.as_mut().rust_mut().view.zoom_to(a, b, len);
-            self.as_mut().set_circular(false);
+            self.as_mut().sync_mode();
             self.refresh();
         }
     }
@@ -984,8 +1060,8 @@ impl qobject::GenomeController {
     }
 
     #[allow(clippy::cast_possible_truncation)]
-    pub fn pan_press(mut self: Pin<&mut Self>, x: f64) {
-        self.as_mut().rust_mut().view.pan_press(x as f32);
+    pub fn pan_press(mut self: Pin<&mut Self>, x: f64, y: f64) {
+        self.as_mut().rust_mut().view.pan_press(x as f32, y as f32);
     }
 
     pub fn adjust_location(
