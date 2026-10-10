@@ -348,6 +348,18 @@ fn alignment_session_replays_exactly() {
             )
             .unwrap();
         }
+        // Typing in insert mode along row 3: one entry.
+        for (i, c) in "GA".chars().enumerate() {
+            s.apply(
+                d,
+                Op::AlnInsert {
+                    row: 3,
+                    col: 2 + i as u64,
+                    residues: c.to_string(),
+                },
+            )
+            .unwrap();
+        }
         // Two gaps typed one after the other in rows 1..3: one entry.
         for i in 0..2 {
             s.apply(
@@ -396,6 +408,20 @@ fn alignment_session_replays_exactly() {
         s.undo(d).unwrap();
         s.redo(d).unwrap();
         s.apply(d, Op::AlnRemoveGapColumns {}).unwrap();
+        // A tool run that wrote a new file.
+        std::fs::write(root.join("x.mafft.fasta"), ">a\nAC\n>b\nAC\n").unwrap();
+        s.log_tool_run(
+            d,
+            basecraft_protocol::Actor::Tool {
+                tool: "mafft".into(),
+                version: "v7.526".into(),
+            },
+            ("basecraft.mafft", "align"),
+            serde_json::json!({}),
+            &[("x.aln.fasta (ungapped)".into(), "b3:00".into())],
+            &[root.join("x.mafft.fasta")],
+        )
+        .unwrap();
         // Sequence operations don't apply to an alignment.
         assert!(s.apply(d, replace(0, 0, "A")).is_err());
         s.save(d, None).unwrap();
@@ -415,6 +441,8 @@ fn alignment_session_replays_exactly() {
         "{names:?}"
     );
     assert_eq!(names.iter().filter(|n| **n == "aln.insert_gaps").count(), 1);
+    assert_eq!(names.iter().filter(|n| **n == "aln.insert").count(), 1);
+    assert_eq!(names.iter().filter(|n| **n == "tool.run").count(), 1);
     assert_eq!(names.iter().filter(|n| **n == "aln.shift").count(), 1);
     let saved = std::fs::read_to_string(root.join("x.aln.fasta")).unwrap();
     assert!(saved.starts_with(">dee\n"), "{saved}");
@@ -425,15 +453,25 @@ fn alignment_session_replays_exactly() {
 }
 
 #[test]
-fn equal_length_fasta_opens_as_alignment() {
+fn multi_record_fasta_opens_as_alignment() {
     use basecraft_ops::files::Kind;
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     std::fs::write(root.join("set.fasta"), ">a\nACGT\n>b\nACG\n").unwrap();
+    std::fs::write(root.join("annotated.fasta"), ">a\nACGT\n>b\nACG\n").unwrap();
+    std::fs::write(root.join("annotated.gff3"), "##gff-version 3\n").unwrap();
+    let chromosome = "A".repeat(1_000_001);
+    std::fs::write(
+        root.join("genome.fasta"),
+        format!(">c1\n{chromosome}\n>c2\nACGT\n"),
+    )
+    .unwrap();
     std::fs::write(root.join("aln.fasta"), ">a\nAC-T\n>b\nACGT\n").unwrap();
     std::fs::write(root.join("ragged.afa"), ">a\nAC\n>b\nACGT\n").unwrap();
     let kind = |f: &str| basecraft_ops::files::kind(&root.join(f)).unwrap();
-    assert_eq!(kind("set.fasta"), Kind::Sequence);
+    assert_eq!(kind("set.fasta"), Kind::Alignment);
+    assert_eq!(kind("annotated.fasta"), Kind::Sequence);
+    assert_eq!(kind("genome.fasta"), Kind::Sequence);
     assert_eq!(kind("aln.fasta"), Kind::Alignment);
     assert_eq!(kind("ragged.afa"), Kind::Alignment);
     let mut s = Session::unlogged(root);

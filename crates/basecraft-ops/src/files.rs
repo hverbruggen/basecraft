@@ -41,7 +41,10 @@ pub enum Kind {
 
 /// Whether a file opens as a sequence or an alignment. A FASTA file is an
 /// alignment when it's named `*.afa` or `*.aln.<fasta extension>`, or when
-/// it holds two or more records of the same length. Only the index is read.
+/// it holds two or more records and none is longer than
+/// [`LONGEST_ALIGNMENT_ROW`]: aligned or not, a set of genes or organelle
+/// genomes reads best as rows. A GFF3 sidecar makes it a sequence: its
+/// annotations belong to sequences. Only the index is read.
 pub fn kind(path: &Path) -> Result<Kind> {
     if Format::from_path(path)? != Format::Fasta {
         return Ok(Kind::Sequence);
@@ -59,13 +62,19 @@ fn fasta_kind(path: &Path, file: &cache::IndexedFasta) -> Kind {
             .and_then(|s| Path::new(s).extension())
             .is_some_and(|e| e.eq_ignore_ascii_case("aln"));
     let records = &file.index.records;
-    let equal = records.len() >= 2 && records.iter().all(|r| r.len == records[0].len);
-    if named || equal {
+    let rows = records.len() >= 2
+        && records.iter().all(|r| r.len <= LONGEST_ALIGNMENT_ROW)
+        && !gff_sidecar(path).exists();
+    if named || rows {
         Kind::Alignment
     } else {
         Kind::Sequence
     }
 }
+
+/// Multi-record FASTA files with a longer record, such as a genome's
+/// chromosomes, open as sequences.
+pub const LONGEST_ALIGNMENT_ROW: u64 = 1_000_000;
 
 /// An open alignment plus what's needed to write its file back.
 pub struct OpenedAlignment {
@@ -121,6 +130,18 @@ pub fn write_alignment(doc: &AlignmentDoc, w: &mut dyn Write) -> io::Result<()> 
             }
             pos = end;
         }
+    }
+    Ok(())
+}
+
+/// The alignment's rows without gaps, as FASTA: the input for an aligner.
+pub fn write_ungapped(doc: &AlignmentDoc, w: &mut dyn Write) -> io::Result<()> {
+    let mut buf = Vec::new();
+    for (i, row) in doc.rows().enumerate() {
+        buf.clear();
+        doc.read_into(i, 0, doc.width(), &mut buf);
+        buf.retain(|&b| !basecraft_docs::alignment::is_gap(b));
+        fasta::write_record(w, row.name.as_bytes(), &buf, 60)?;
     }
     Ok(())
 }

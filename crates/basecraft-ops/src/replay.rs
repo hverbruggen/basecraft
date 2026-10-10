@@ -99,6 +99,9 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut Report) -> Re
                 }
                 Err(err) => problem(err.to_string()),
             },
+            // External tools aren't re-run: their outputs are new files,
+            // and opening one later checks it against its stored copy.
+            Op::ToolRun { .. } => {}
             Op::Undo { of } | Op::Redo { of } => {
                 let r = if matches!(e.op, Op::Undo { .. }) {
                     session.undo_single(doc)

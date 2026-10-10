@@ -64,6 +64,14 @@ pub enum Op {
         end: u64,
         residues: String,
     },
+    /// Insert `residues` before column `col` of one row, using up the row's
+    /// trailing gaps first.
+    #[serde(rename = "aln.insert")]
+    AlnInsert {
+        row: u32,
+        col: u64,
+        residues: String,
+    },
     /// Insert `count` gaps before column `col`. Rows use up their own
     /// trailing gaps first, unless every row gets gaps: that's a new column.
     #[serde(rename = "aln.insert_gaps")]
@@ -99,6 +107,18 @@ pub enum Op {
     AlnRenameRow { row: u32, name: String },
     #[serde(rename = "aln.remove_rows")]
     AlnRemoveRows { rows: Vec<(u32, u32)> },
+    /// A plugin operation that reads and writes files, such as an aligner.
+    /// `inputs` and `outputs` are project-relative paths; the result holds
+    /// their content hashes. The actor names the tool and its version.
+    #[serde(rename = "tool.run")]
+    ToolRun {
+        plugin: String,
+        operation: String,
+        #[serde(default)]
+        params: serde_json::Value,
+        inputs: Vec<String>,
+        outputs: Vec<String>,
+    },
     /// Undo the operation with log id `of`.
     #[serde(rename = "history.undo")]
     Undo { of: String },
@@ -118,6 +138,8 @@ impl Op {
             Op::FeatureRemove { .. } => "feature.remove",
             Op::FeatureUpdate { .. } => "feature.update",
             Op::AlnReplace { .. } => "aln.replace",
+            Op::AlnInsert { .. } => "aln.insert",
+            Op::ToolRun { .. } => "tool.run",
             Op::AlnInsertGaps { .. } => "aln.insert_gaps",
             Op::AlnDelete { .. } => "aln.delete",
             Op::AlnShift { .. } => "aln.shift",

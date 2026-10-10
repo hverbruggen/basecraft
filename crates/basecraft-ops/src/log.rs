@@ -170,6 +170,17 @@ fn describe(op: &Op) -> String {
             range(*start, *end),
             row + 1
         ),
+        Op::AlnInsert { row, col, residues } => format!(
+            "Inserted {residues} at column {} of row {}",
+            col + 1,
+            row + 1
+        ),
+        Op::ToolRun {
+            plugin,
+            operation,
+            outputs,
+            ..
+        } => format!("Ran {plugin} {operation}, wrote {}", outputs.join(", ")),
         Op::AlnInsertGaps {
             rows: r,
             col,

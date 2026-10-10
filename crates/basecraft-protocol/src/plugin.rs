@@ -96,11 +96,24 @@ pub struct Invoke {
     pub snapshot: Option<SequenceSnapshot>,
 }
 
-/// `invoke` result: proposed operations against the snapshot's version.
+/// `invoke` result: proposed operations against the snapshot's version,
+/// and for operations that write files, what they wrote and with which tool.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct InvokeResult {
     #[serde(default)]
     pub ops: Vec<Op>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+    /// Paths of the files the operation wrote, as given in its parameters.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outputs: Vec<String>,
+    /// The external program that did the work.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<ToolInfo>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ToolInfo {
+    pub name: String,
+    pub version: String,
 }

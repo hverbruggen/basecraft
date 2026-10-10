@@ -37,9 +37,10 @@ Dialog {
             ["Ctrl+E", "Extract the selection as a new sequence"],
         ] },
         { name: "Alignment", keys: [
-            ["Letters", "Type over the residue at the cursor"],
+            ["Insert", "Switch between inserting and typing over residues"],
+            ["Letters", "Insert at the cursor, or type over the residue there"],
             ["Space", "Insert a gap before the selection"],
-            ["Backspace", "Remove the gaps left of the selection"],
+            ["Backspace", "Remove the gaps left of the selection; in insert mode, residues too"],
             ["Delete", "Delete the selected residues; the rows close up"],
             ["Alt+← →, or drag", "Slide the selection into gaps"],
             ["Alt+↑ ↓", "Move the selected rows"],

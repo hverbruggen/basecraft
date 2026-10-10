@@ -328,16 +328,50 @@ impl AlignmentDoc {
         let every_row = rows.len() == self.rows.len();
         let mut undo = Vec::new();
         for r in rows {
-            if !every_row {
-                let len = self.rows[r].len();
-                let used = self.trailing_gaps(r, count.min(len - col));
-                self.splice(r, len - used, len, &[], &mut undo);
-            }
-            self.splice(r, col, col, &gaps(count), &mut undo);
+            self.insert_cells(r, col, &gaps(count), !every_row, &mut undo);
         }
         self.square(&mut undo);
         self.edited();
         Ok(undo)
+    }
+
+    /// Insert `residues` before column `col` of one row, using up the row's
+    /// trailing gaps first: typing in insert mode.
+    pub fn insert(
+        &mut self,
+        row: usize,
+        col: u64,
+        residues: &[u8],
+    ) -> Result<Vec<Undo>, EditError> {
+        if row >= self.rows.len() {
+            return err(format!("no row {row}"));
+        }
+        if col > self.width {
+            return err(format!("column {col} outside 0..={}", self.width));
+        }
+        let mut undo = Vec::new();
+        self.insert_cells(row, col, residues, true, &mut undo);
+        self.square(&mut undo);
+        self.edited();
+        Ok(undo)
+    }
+
+    /// Insert `cells` before `col` in one row; with `use_trailing`, first
+    /// remove as many of the row's trailing gaps (after `col`) as cells go in.
+    fn insert_cells(
+        &mut self,
+        row: usize,
+        col: u64,
+        cells: &[u8],
+        use_trailing: bool,
+        undo: &mut Vec<Undo>,
+    ) {
+        if use_trailing {
+            let len = self.rows[row].len();
+            let used = self.trailing_gaps(row, (cells.len() as u64).min(len - col));
+            self.splice(row, len - used, len, &[], undo);
+        }
+        self.splice(row, col, col, cells, undo);
     }
 
     /// Delete columns `start..end` of `rows`; what follows moves left. Deleting
@@ -800,7 +834,8 @@ mod tests {
             let s = rnd(w);
             let e = (s + 1 + rnd(6)).min(w);
             let r = match rnd(8) {
-                0 => d.replace(a as usize, s, e, b"ACG"),
+                0 if rnd(2) == 0 => d.replace(a as usize, s, e, b"ACG"),
+                0 => d.insert(a as usize, s, b"TT"),
                 1 => d.insert_gaps(&[(a, b)], s, 1 + rnd(3)),
                 2 => d.delete(&[(a, b)], s, e),
                 3 => d.shift(&[(a, b)], s, e, rnd(5) as i64 - 2),
@@ -855,6 +890,44 @@ mod tests {
             one.insert_gaps(&range, col, c1 + c2).unwrap();
             assert_eq!(text(&one), text(&two), "{refs:?} {range:?} {col} {c1} {c2}");
         }
+    }
+
+    /// Typing in insert mode, a residue at a time, ends the same as inserting
+    /// the whole burst at once.
+    #[test]
+    fn consecutive_inserts_merge() {
+        let mut x = 0x1234_5678u64;
+        let mut rnd = |n: u64| {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x % n.max(1)
+        };
+        for _ in 0..300 {
+            let rows: Vec<String> = (0..3)
+                .map(|_| {
+                    let mut row: String = (0..2 + rnd(8))
+                        .map(|_| "AC-".as_bytes()[rnd(3) as usize] as char)
+                        .collect();
+                    row.extend((0..rnd(4)).map(|_| '-'));
+                    row
+                })
+                .collect();
+            let refs: Vec<&str> = rows.iter().map(String::as_str).collect();
+            let row = rnd(3) as usize;
+            let mut one = aln(&refs);
+            let col = rnd(one.width() + 1);
+            let typed = &b"GTGA"[..=(rnd(4) as usize)];
+            let mut steps = aln(&refs);
+            for (i, b) in typed.iter().enumerate() {
+                steps.insert(row, col + i as u64, &[*b]).unwrap();
+            }
+            one.insert(row, col, typed).unwrap();
+            assert_eq!(text(&one), text(&steps), "{refs:?} {row} {col}");
+        }
+        let mut d = aln(&["AC--", "ACGT"]);
+        d.insert(0, 1, b"G").unwrap();
+        assert_eq!(text(&d), ["AGC-", "ACGT"]);
     }
 
     /// Likewise for a block slid in steps.

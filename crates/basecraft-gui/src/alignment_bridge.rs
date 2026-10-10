@@ -6,6 +6,8 @@
 
 #[cxx_qt::bridge]
 pub mod qobject {
+    impl cxx_qt::Threading for AlignmentController {}
+
     unsafe extern "C++" {
         include!("cxx-qt-lib/qbytearray.h");
         type QByteArray = cxx_qt_lib::QByteArray;
@@ -36,7 +38,21 @@ pub mod qobject {
         #[qproperty(f64, vscroll_size)]
         /// Width of the row names column, in pixels.
         #[qproperty(f64, names_width)]
+        /// Typing inserts residues rather than replacing them.
+        #[qproperty(bool, insert_mode)]
+        /// A tool is running on this alignment.
+        #[qproperty(bool, busy)]
         type AlignmentController = super::AlignmentRust;
+
+        /// A tool wrote a new file, to open in a tab.
+        #[qsignal]
+        #[cxx_name = "fileCreated"]
+        fn file_created(self: Pin<&mut AlignmentController>, path: QString);
+
+        /// Realign the rows with MAFFT's default settings, in the
+        /// background, into a new file beside this one.
+        #[qinvokable]
+        fn align_mafft(self: Pin<&mut AlignmentController>);
 
         #[qinvokable]
         fn open_file(self: Pin<&mut AlignmentController>, path: &QString) -> bool;
@@ -159,10 +175,12 @@ use std::time::SystemTime;
 
 use basecraft_docs::AlignmentDoc;
 use basecraft_ops::{DocId, Session};
+use basecraft_plugin_host::FileJob;
+use basecraft_plugin_host::file_tool::output_beside;
 use basecraft_protocol::Op;
 use basecraft_viewmodel::alignment::Region;
 use basecraft_viewmodel::{AlignmentView, Frame, Theme};
-use cxx_qt::CxxQtType;
+use cxx_qt::{CxxQtType, Threading};
 use cxx_qt_lib::{QByteArray, QString};
 use serde_json::json;
 
@@ -170,7 +188,7 @@ use crate::bridge::{
     ALT, CTRL, KEY_0, KEY_BACKSPACE, KEY_DELETE, KEY_DOWN, KEY_END, KEY_EQUAL, KEY_ESCAPE,
     KEY_HOME, KEY_LEFT, KEY_MINUS, KEY_PAGE_DOWN, KEY_PAGE_UP, KEY_PLUS, KEY_RIGHT, KEY_S, KEY_UP,
     KEY_Y, KEY_Z, SHIFT, css, load_theme, memory_text, monospace_font, omarchy_theme_path,
-    project_root,
+    plugin_dir, project_root,
 };
 
 const KEY_A: i32 = 0x41;
@@ -195,6 +213,8 @@ pub struct AlignmentRust {
     vscroll_pos: f64,
     vscroll_size: f64,
     names_width: f64,
+    insert_mode: bool,
+    busy: bool,
 
     session: Option<Session>,
     doc: Option<DocId>,
@@ -225,6 +245,8 @@ impl Default for AlignmentRust {
             vscroll_pos: 0.0,
             vscroll_size: 1.0,
             names_width: 0.0,
+            insert_mode: false,
+            busy: false,
             session: None,
             doc: None,
             view: AlignmentView::new(800.0, 600.0),
@@ -525,7 +547,7 @@ impl qobject::AlignmentController {
                         .all(|b| b.is_ascii_alphabetic() || b == b'-' || b == b'*');
                 if residue && !ctrl && !alt {
                     let ch = t.to_ascii_uppercase().chars().next().unwrap_or('N');
-                    let op = self.rust().view.type_op(ch);
+                    let op = self.rust().view.type_op(ch, self.rust().insert_mode);
                     if self.as_mut().edit(op) {
                         self.as_mut().rust_mut().view.move_cursor(0, 1, false);
                     }
@@ -720,6 +742,57 @@ impl qobject::AlignmentController {
         self.refresh();
     }
 
+    pub fn align_mafft(mut self: Pin<&mut Self>) {
+        if self.rust().busy {
+            return;
+        }
+        if self.with_doc(AlignmentDoc::row_count).unwrap_or(0) < 2 {
+            self.fail("MAFFT needs at least two sequences");
+            return;
+        }
+        let job = {
+            let r = self.rust();
+            let (Some(session), Some(doc)) = (&r.session, r.doc) else {
+                return;
+            };
+            let output = output_beside(&PathBuf::from(r.file_path.to_string()), "mafft");
+            FileJob::from_alignment(session, doc, (&plugin_dir("mafft"), "align"), output)
+        };
+        let job = match job {
+            Ok(job) => job,
+            Err(e) => {
+                self.fail(&format!("MAFFT: {e}"));
+                return;
+            }
+        };
+        self.as_mut().set_busy(true);
+        self.as_mut().notify("Aligning with MAFFT…");
+        let qt_thread = self.qt_thread();
+        std::thread::spawn(move || {
+            let result = job.run();
+            let _ = qt_thread.queue(move |mut this| {
+                this.as_mut().set_busy(false);
+                let result = result.and_then(|res| {
+                    let mut r = this.as_mut().rust_mut();
+                    let r = &mut *r;
+                    if let (Some(session), Some(doc)) = (&mut r.session, r.doc) {
+                        job.record(session, doc, &res)?;
+                    }
+                    Ok(res)
+                });
+                match result {
+                    Ok(res) => {
+                        let msg = res.message.unwrap_or_else(|| "Aligned".into());
+                        this.as_mut().done(&format!("{msg} with MAFFT"));
+                        let path = job.output.to_string_lossy().into_owned();
+                        this.as_mut().file_created(QString::from(&path));
+                    }
+                    Err(e) => this.as_mut().fail(&format!("MAFFT: {}", short_error(&e))),
+                }
+            });
+        });
+    }
+
     pub fn select_block(mut self: Pin<&mut Self>, r0: i32, c0: i32, r1: i32, c1: i32) {
         let u = |v: i32| usize::try_from(v).unwrap_or(0);
         let w = |v: i32| u64::try_from(v).unwrap_or(0);
@@ -740,7 +813,7 @@ impl qobject::AlignmentController {
 
     pub fn remove_gap(mut self: Pin<&mut Self>) {
         let op = self
-            .with_doc(|d| self.rust().view.remove_gap_op(d))
+            .with_doc(|d| self.rust().view.remove_left_op(d, self.rust().insert_mode))
             .unwrap_or_else(|| Err(String::new()));
         match op {
             Ok(op) => {
@@ -849,5 +922,16 @@ impl qobject::AlignmentController {
         };
         self.refresh();
         QString::from(&msg)
+    }
+}
+
+/// A plugin error without the transport's wrapping: "MAFFT failed: …".
+fn short_error(e: &basecraft_plugin_host::Error) -> String {
+    match e {
+        basecraft_plugin_host::Error::Remote { message, .. } => message
+            .split_once(": ")
+            .map_or(message.as_str(), |(_, m)| m)
+            .to_string(),
+        other => other.to_string(),
     }
 }

@@ -354,7 +354,7 @@ fn started() -> &'static str {
 
 /// A bundled plugin's directory: under `$BASECRAFT_PLUGINS` if set, else
 /// the source tree's `plugins/` (development builds).
-fn plugin_dir(name: &str) -> PathBuf {
+pub(crate) fn plugin_dir(name: &str) -> PathBuf {
     std::env::var_os("BASECRAFT_PLUGINS")
         .map_or_else(
             || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins"),

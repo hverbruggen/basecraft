@@ -6,6 +6,7 @@
 //! current document version and applies through the ops session.
 
 pub mod apply;
+pub mod file_tool;
 pub mod manifest;
 pub mod process;
 pub mod snapshot;
@@ -13,6 +14,7 @@ pub mod snapshot;
 mod error;
 
 pub use error::{Error, Result};
+pub use file_tool::FileJob;
 pub use manifest::Manifest;
 pub use process::PluginProcess;
 pub use snapshot::Snapshot;

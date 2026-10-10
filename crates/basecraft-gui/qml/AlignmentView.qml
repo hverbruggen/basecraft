@@ -13,13 +13,23 @@ Item {
     property alias view: view
     readonly property bool dirty: ctl.dirty
     readonly property string kind: "alignment"
+    // Typing inserts rather than overwrites; set by the window.
+    property bool insertMode: false
 
     signal contextMenu(var info)
     signal copyText(string text)
     signal toggleSidebar
     signal renameRow
+    signal toggleInsert
+    // A tool wrote a new file, to open in a tab.
+    signal openFile(string path)
 
     AlignmentController { id: ctl }
+    Binding { target: ctl; property: "insert_mode"; value: doc.insertMode }
+    Connections {
+        target: ctl
+        function onFileCreated(path) { doc.openFile(path) }
+    }
 
     // Open once the view has its real size.
     Component.onCompleted: Qt.callLater(() => {
@@ -152,6 +162,7 @@ Item {
                 event.accepted = true; return
             }
             if (event.key === Qt.Key_F2) { doc.renameRow(); event.accepted = true; return }
+            if (event.key === Qt.Key_Insert) { doc.toggleInsert(); event.accepted = true; return }
             event.accepted = ctl.key(event.key, event.text, event.modifiers)
         }
     }

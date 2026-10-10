@@ -43,6 +43,9 @@ ApplicationWindow {
     property int ribbonTab: 0
     property string defaultLayout: "wrapped"
     property int orfMinCodons: 100
+    // Typing in the alignment editor inserts residues (true) or types over
+    // them (false). Shared by all alignment tabs.
+    property bool alignmentInsert: false
     readonly property bool alignmentOpen: currentKind === "alignment"
     readonly property var ribbonTabs: ["File", "View", alignmentOpen ? "Alignment" : "Annotations", "Settings", "Help"]
     // Only the wrapped layout is offered for now; files always open in it.
@@ -53,6 +56,7 @@ ApplicationWindow {
         property alias showGc: window.showGc
         property alias sidebarOpen: window.sidebarOpen
         property alias orfMinCodons: window.orfMinCodons
+        property alias alignmentInsert: window.alignmentInsert
     }
 
     function fileName(path) { return path.split("/").pop() }
@@ -134,6 +138,17 @@ ApplicationWindow {
         }
     }
     // The same last group on every ribbon tab.
+    // A ribbon button that shows whether its mode is on.
+    component ModeButton: RibbonButton {
+        id: modeButton
+        property bool active
+        background: Rectangle {
+            radius: 3
+            color: modeButton.active ? Qt.alpha(shell.accent, 0.18)
+                : modeButton.hovered ? Qt.alpha(shell.foreground, 0.05) : "transparent"
+            border.color: modeButton.active ? shell.accent : "transparent"
+        }
+    }
     component ShortcutsGroup: RibbonGroup {
         title: "Keys"
         RibbonButton {
@@ -374,6 +389,24 @@ ApplicationWindow {
                 RowLayout {
                     spacing: 6
                     RibbonGroup {
+                        title: "Typing"
+                        ModeButton {
+                            text: "Insert"
+                            active: window.alignmentInsert
+                            tip: "Typing inserts residues; the rest of the row moves right"
+                            keys: "Insert"
+                            onClicked: window.alignmentInsert = true
+                        }
+                        ModeButton {
+                            text: "Overwrite"
+                            active: !window.alignmentInsert
+                            tip: "Typing replaces the residue at the cursor"
+                            keys: "Insert"
+                            onClicked: window.alignmentInsert = false
+                        }
+                    }
+                    ToolSeparator { Layout.fillHeight: true }
+                    RibbonGroup {
                         title: "Gaps"
                         RibbonButton { text: "Insert"; tip: "Insert a gap before the selection"; keys: "Space"; onClicked: window.current.insert_gap() }
                         RibbonButton { text: "Remove"; tip: "Remove the gaps just left of the selection"; keys: "Backspace"; onClicked: window.current.remove_gap() }
@@ -396,6 +429,16 @@ ApplicationWindow {
                         RibbonButton { text: "To top"; tip: "Move the selected rows to the top"; onClicked: window.current.rows_to_top() }
                         RibbonButton { text: "Rename…"; tip: "Rename the cursor's row"; keys: "F2"; onClicked: renameDialog.ask() }
                         RibbonButton { text: "Delete"; tip: "Delete the selected rows"; onClicked: window.current.remove_rows() }
+                    }
+                    ToolSeparator { Layout.fillHeight: true }
+                    RibbonGroup {
+                        title: "Align"
+                        RibbonButton {
+                            text: window.current && window.current.busy ? "Aligning…" : "MAFFT"
+                            enabled: window.current !== null && !window.current.busy
+                            tip: "Realign the sequences with MAFFT, default settings, into a new file"
+                            onClicked: window.current.align_mafft()
+                        }
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
@@ -630,6 +673,9 @@ ApplicationWindow {
                         DelegateChoice {
                             roleValue: "alignment"
                             AlignmentView {
+                                insertMode: window.alignmentInsert
+                                onToggleInsert: window.alignmentInsert = !window.alignmentInsert
+                                onOpenFile: (path) => window.openPath(path)
                                 onDirtyChanged: openFiles.setProperty(index, "dirty", dirty)
                                 onContextMenu: (info) => { alnMenu.info = info; alnMenu.popup() }
                                 onCopyText: (text) => clipboard.copy(text)
@@ -820,7 +866,7 @@ ApplicationWindow {
     // Scripted runs, on the active tab: --goto START,END  --mode wrapped|linear|circular
     // --type TEXT  --select X0,X1[,Y]  --menu X,Y  --menu-add X  --edit new|ID
     // --label TEXT [--no-click 1]  --add LOCATION  --extract 1  --hover X,Y
-    // --no-sidebar 1  --fit 1  --aln STEPS  --screenshot FILE
+    // --no-sidebar 1  --fit 1  --aln STEPS  --shot-delay MS  --screenshot FILE
     Timer {
         interval: 900
         running: arg("--screenshot") !== undefined
@@ -831,6 +877,7 @@ ApplicationWindow {
             if (arg("--fit")) c.fit()
             // Alignment edits, ';'-separated: sel:R0,C0,R1,C1  gap  rmgap
             // slide:N  type:TEXT  del  undo  redo  up  down  strip  zoomsel
+            // insert  overwrite  mafft
             if (arg("--aln")) {
                 for (const step of arg("--aln").split(";")) {
                     const [cmd, a] = step.split(":")
@@ -846,6 +893,9 @@ ApplicationWindow {
                     else if (cmd === "down") c.move_rows(false)
                     else if (cmd === "strip") c.remove_gap_columns()
                     else if (cmd === "zoomsel") c.zoom_to_selection()
+                    else if (cmd === "insert") window.alignmentInsert = true
+                    else if (cmd === "overwrite") window.alignmentInsert = false
+                    else if (cmd === "mafft") c.align_mafft()
                     console.log("aln", step, "|", c.message)
                 }
             }
@@ -916,7 +966,7 @@ ApplicationWindow {
     }
     Timer {
         id: shot
-        interval: 400
+        interval: arg("--shot-delay") ? Number(arg("--shot-delay")) : 400
         onTriggered: {
             const c = window.current
             if (c) console.log(c.memory_report(), "|", c.status, "|", c.hscroll_size, c.vscroll_size)

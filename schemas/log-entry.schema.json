@@ -311,6 +311,43 @@
       ]
     },
     {
+      "description": "Insert `residues` before column `col` of one row, using up the row's\ntrailing gaps first.",
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "aln.insert"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "col": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "residues": {
+              "type": "string"
+            },
+            "row": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "row",
+            "col",
+            "residues"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ]
+    },
+    {
       "description": "Insert `count` gaps before column `col`. Rows use up their own\ntrailing gaps first, unless every row gets gaps: that's a new column.",
       "type": "object",
       "properties": {
@@ -605,6 +642,52 @@
           },
           "required": [
             "rows"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ]
+    },
+    {
+      "description": "A plugin operation that reads and writes files, such as an aligner.\n`inputs` and `outputs` are project-relative paths; the result holds\ntheir content hashes. The actor names the tool and its version.",
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "tool.run"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "inputs": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "operation": {
+              "type": "string"
+            },
+            "outputs": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "params": {
+              "default": null
+            },
+            "plugin": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "plugin",
+            "operation",
+            "inputs",
+            "outputs"
           ]
         }
       },

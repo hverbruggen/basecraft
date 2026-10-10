@@ -418,6 +418,44 @@ impl Session {
         self.write(&entry)
     }
 
+    /// Log a plugin run that read and wrote files, such as an aligner. Its
+    /// `inputs` come with the hashes of exactly what the tool was given;
+    /// the outputs are hashed here. The run changes no open document.
+    pub fn log_tool_run(
+        &mut self,
+        id: DocId,
+        actor: Actor,
+        (plugin, operation): (&str, &str),
+        params: serde_json::Value,
+        inputs: &[(String, String)],
+        outputs: &[PathBuf],
+    ) -> Result<()> {
+        self.flush()?;
+        let mut hashes = inputs.to_vec();
+        let mut keys = Vec::new();
+        for path in outputs {
+            let key = self.relative(path);
+            hashes.push((key.clone(), basecraft_io::hash_file(path)?));
+            keys.push(key);
+        }
+        let entry = self.entry(
+            id,
+            actor,
+            Op::ToolRun {
+                plugin: plugin.to_string(),
+                operation: operation.to_string(),
+                params,
+                inputs: inputs.iter().map(|(k, _)| k.clone()).collect(),
+                outputs: keys,
+            },
+            OpResult {
+                hashes,
+                feature: None,
+            },
+        );
+        self.write(&entry)
+    }
+
     /// The hash of the file an extract would write, without writing it.
     pub fn extract_hash(
         &self,
@@ -663,6 +701,7 @@ impl Session {
                 Ok((Inverse::Feature { id: fid, before }, None))
             }
             Op::AlnReplace { .. }
+            | Op::AlnInsert { .. }
             | Op::AlnInsertGaps { .. }
             | Op::AlnDelete { .. }
             | Op::AlnShift { .. }
@@ -673,6 +712,7 @@ impl Session {
             Op::Open { .. }
             | Op::Save { .. }
             | Op::Extract { .. }
+            | Op::ToolRun { .. }
             | Op::Undo { .. }
             | Op::Redo { .. } => Err(invalid(format!("{} is not an edit", op.name()))),
         }
@@ -804,6 +844,10 @@ fn execute_alignment(a: &mut OpenedAlignment, op: &Op) -> Result<Vec<AlnUndo>> {
             let residues = normalise(residues)?;
             doc.replace(*row as usize, *start, *end, residues.as_bytes())
         }
+        Op::AlnInsert { row, col, residues } => {
+            let residues = normalise(residues)?;
+            doc.insert(*row as usize, *col, residues.as_bytes())
+        }
         Op::AlnInsertGaps { rows, col, count } => doc.insert_gaps(rows, *col, *count),
         Op::AlnDelete { rows, start, end } => doc.delete(rows, *start, *end),
         Op::AlnShift {
@@ -835,7 +879,7 @@ fn mergeable(op: &Op) -> bool {
             residues,
             ..
         } => end - start == residues.len() as u64,
-        Op::AlnInsertGaps { .. } | Op::AlnShift { .. } => true,
+        Op::AlnInsert { .. } | Op::AlnInsertGaps { .. } | Op::AlnShift { .. } => true,
         _ => false,
     }
 }
@@ -870,6 +914,18 @@ fn merge_alignment(prev: &Op, next: &Op) -> Option<Op> {
                 residues: format!("{residues}{residues2}"),
             })
         }
+        (
+            Op::AlnInsert { row, col, residues },
+            Op::AlnInsert {
+                row: row2,
+                col: col2,
+                residues: residues2,
+            },
+        ) if row == row2 && *col2 == col + residues.len() as u64 => Some(Op::AlnInsert {
+            row: *row,
+            col: *col,
+            residues: format!("{residues}{residues2}"),
+        }),
         (
             Op::AlnInsertGaps { rows, col, count },
             Op::AlnInsertGaps {

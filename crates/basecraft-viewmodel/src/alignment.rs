@@ -669,13 +669,23 @@ impl AlignmentView {
     // Operations for the current selection. The caller applies them, and
     // on success moves the view along as each says.
 
-    /// Type over the cursor's cell; then the cursor moves right.
-    pub fn type_op(&self, residue: char) -> Op {
-        Op::AlnReplace {
-            row: self.cursor.0 as u32,
-            start: self.cursor.1,
-            end: self.cursor.1 + 1,
-            residues: residue.to_string(),
+    /// Type at the cursor: insert before its cell, or type over it. Either
+    /// way the cursor then moves right.
+    pub fn type_op(&self, residue: char, insert: bool) -> Op {
+        let (row, col) = (self.cursor.0 as u32, self.cursor.1);
+        if insert {
+            Op::AlnInsert {
+                row,
+                col,
+                residues: residue.to_string(),
+            }
+        } else {
+            Op::AlnReplace {
+                row,
+                start: col,
+                end: col + 1,
+                residues: residue.to_string(),
+            }
         }
     }
 
@@ -689,15 +699,19 @@ impl AlignmentView {
         }
     }
 
-    /// Remove the gaps just left of the selection, pulling it left one.
-    /// Refuses when one of them is a residue.
-    pub fn remove_gap_op(&self, doc: &AlignmentDoc) -> Result<Op, String> {
+    /// Backspace: remove the cells just left of the selection, pulling it
+    /// left one. In overwrite mode only gaps go, and a residue there
+    /// refuses; in insert mode residues go too.
+    pub fn remove_left_op(&self, doc: &AlignmentDoc, insert: bool) -> Result<Op, String> {
         let b = self.block();
         if b.cols.0 == 0 {
-            return Err("No gaps to the left of the selection".into());
+            return Err("Nothing to the left of the selection".into());
         }
         let col = b.cols.0 - 1;
         for r in b.rows.0..b.rows.1 {
+            if insert {
+                break;
+            }
             if !doc
                 .read(r, col, col + 1)
                 .first()
@@ -1408,8 +1422,25 @@ mod tests {
                 end: 34
             }
         );
-        // Row 2 has a residue at column 29.
-        assert!(v.remove_gap_op(&d).is_err());
+        // Row 2 has a residue at column 29: only insert mode removes it.
+        assert!(v.remove_left_op(&d, false).is_err());
+        assert_eq!(
+            v.remove_left_op(&d, true),
+            Ok(Op::AlnDelete {
+                rows: vec![(2, 5)],
+                start: 29,
+                end: 30
+            })
+        );
+        v.collapse();
+        assert!(matches!(
+            v.type_op('A', true),
+            Op::AlnInsert { col: 33, .. }
+        ));
+        assert!(matches!(
+            v.type_op('A', false),
+            Op::AlnReplace { start: 33, .. }
+        ));
         v.select_rows(0, 10);
         assert_eq!(v.move_rows_op(false), None);
     }
