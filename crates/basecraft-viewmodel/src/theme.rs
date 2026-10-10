@@ -50,6 +50,35 @@ impl Default for Theme {
 }
 
 impl Theme {
+    /// The theme colour whose hue is nearest `hue` (degrees: 0 red, 120
+    /// green), among its saturated palette colours. Status messages use it
+    /// so that success and failure read as green and red in any theme.
+    pub fn nearest_hue(&self, hue: f32) -> Rgba {
+        let palette = [
+            self.red,
+            self.orange,
+            self.yellow,
+            self.green,
+            self.cyan,
+            self.blue,
+            self.magenta,
+            self.brown,
+            self.accent,
+        ];
+        let distance = |c: &Rgba| {
+            let (h, s) = hue_saturation(*c);
+            if s < 0.15 {
+                return f32::MAX;
+            }
+            let d = (h - hue).rem_euclid(360.0);
+            d.min(360.0 - d)
+        };
+        palette
+            .into_iter()
+            .min_by(|a, b| distance(a).total_cmp(&distance(b)))
+            .unwrap_or(self.foreground)
+    }
+
     /// Parse an Omarchy `colors.toml`. Unknown or missing keys keep their
     /// defaults, so a partial theme still works.
     pub fn from_omarchy(text: &str) -> Self {
@@ -150,5 +179,45 @@ mod tests {
         assert!(t.dark);
         assert_eq!(t.accent, [1.0, 0.0, 0.0, 1.0]);
         assert_eq!(t.green, Theme::default().green);
+    }
+}
+
+/// Hue in degrees and HSL saturation of a colour.
+fn hue_saturation([red, green, blue, _]: Rgba) -> (f32, f32) {
+    let max = red.max(green).max(blue);
+    let min = red.min(green).min(blue);
+    let delta = max - min;
+    if delta < 1e-6 {
+        return (0.0, 0.0);
+    }
+    let lightness = f32::midpoint(max, min);
+    let saturation = delta / (1.0 - (2.0 * lightness - 1.0).abs()).max(1e-6);
+    let hue = if (max - red).abs() < 1e-6 {
+        60.0 * ((green - blue) / delta).rem_euclid(6.0)
+    } else if (max - green).abs() < 1e-6 {
+        60.0 * ((blue - red) / delta + 2.0)
+    } else {
+        60.0 * ((red - green) / delta + 4.0)
+    };
+    (hue, saturation)
+}
+
+#[cfg(test)]
+mod hue_tests {
+    use super::*;
+
+    #[test]
+    fn nearest_hue_picks_green_and_red() {
+        let mut t = Theme {
+            green: [0.2, 0.7, 0.3, 1.0],
+            red: [0.8, 0.2, 0.2, 1.0],
+            ..Theme::default()
+        };
+        assert_eq!(t.nearest_hue(120.0), t.green);
+        assert_eq!(t.nearest_hue(0.0), t.red);
+        // A theme whose "green" is grey falls back to the nearest real hue.
+        t.green = [0.5, 0.5, 0.5, 1.0];
+        t.cyan = [0.1, 0.7, 0.6, 1.0];
+        assert_eq!(t.nearest_hue(120.0), t.cyan);
     }
 }

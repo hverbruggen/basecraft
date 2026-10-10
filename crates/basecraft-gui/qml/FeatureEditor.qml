@@ -60,7 +60,7 @@ Dialog {
     function openFeature(id) { hidden = []; if (load(controller.feature_json(id))) open() }
     function openSelected() {
         const id = controller.selected_feature()
-        if (id >= 0) openFeature(id); else controller.message = "Click an annotation first, or select bases and use Add annotation"
+        if (id >= 0) openFeature(id); else { controller.message_kind = ""; controller.message = "Click an annotation first, or select bases and use Add annotation" }
     }
     function openNew() { hidden = []; load(controller.new_feature_json()); open(); location.forceActiveFocus() }
 

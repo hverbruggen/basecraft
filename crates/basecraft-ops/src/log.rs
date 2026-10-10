@@ -1,11 +1,12 @@
 //! Append-only JSON Lines log, one stream per machine, rotated monthly:
 //! `<project>/.basecraft/log/<host>/<YYYY-MM>.jsonl`.
 
+use std::fmt::Write as _;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 
-use basecraft_protocol::LogEntry;
+use basecraft_protocol::{Actor, LogEntry, Op};
 
 use crate::Result;
 
@@ -75,4 +76,130 @@ pub fn read_all(root: &Path) -> Result<Vec<LogEntry>> {
         }
     }
     Ok(entries)
+}
+
+/// A readable account of what happened in the projects under `roots` since
+/// `since` (RFC 3339 UTC, as in log entries), oldest first. Times are shown
+/// shifted by `utc_offset_min` minutes, to the viewer's local time.
+pub fn activity_text(roots: &[PathBuf], since: &str, utc_offset_min: i32) -> Result<String> {
+    let mut entries = Vec::new();
+    for root in roots {
+        entries.extend(
+            read_all(root)?
+                .into_iter()
+                .filter(|e| e.t.as_str() >= since),
+        );
+    }
+    entries.sort_by(|a, b| a.t.cmp(&b.t));
+    let mut out = format!(
+        "Basecraft activity since {}\n",
+        local_time(since, utc_offset_min)
+    );
+    for root in roots {
+        let _ = writeln!(out, "Full log: {}", log_dir(root).display());
+    }
+    out.push('\n');
+    if entries.is_empty() {
+        out.push_str("Nothing yet.\n");
+    }
+    for e in &entries {
+        let _ = writeln!(
+            out,
+            "{}  {}  {}{}",
+            local_time(&e.t, utc_offset_min),
+            e.doc,
+            describe(&e.op),
+            actor_note(&e.actor)
+        );
+    }
+    Ok(out)
+}
+
+/// "HH:MM:SS" of an RFC 3339 UTC time, shifted by `offset_min` minutes.
+fn local_time(t: &str, offset_min: i32) -> String {
+    let field =
+        |r: std::ops::Range<usize>| t.get(r).and_then(|s| s.parse::<i32>().ok()).unwrap_or(0);
+    let secs = field(11..13) * 3600 + field(14..16) * 60 + field(17..19) + offset_min * 60;
+    let secs = secs.rem_euclid(86_400);
+    format!("{:02}:{:02}:{:02}", secs / 3600, secs / 60 % 60, secs % 60)
+}
+
+fn range(start: u64, end: u64) -> String {
+    format!("{}–{end}", start + 1)
+}
+
+fn feature_name(f: &basecraft_protocol::Feature) -> String {
+    let span = f
+        .location
+        .bounds()
+        .map(|(a, b)| format!(" {}", range(a, b)))
+        .unwrap_or_default();
+    match f.label() {
+        Some(l) if !l.is_empty() => format!("{} “{l}”{span}", f.kind),
+        _ => format!("{}{span}", f.kind),
+    }
+}
+
+/// One line for an operation.
+fn describe(op: &Op) -> String {
+    match op {
+        Op::Open { .. } => "Opened".into(),
+        Op::Save { .. } => "Saved".into(),
+        Op::Extract {
+            start, end, path, ..
+        } => format!("Extracted {} to {path}", range(*start, *end)),
+        Op::SeqReplace {
+            start,
+            end,
+            residues,
+        } => match (end - start, residues.len()) {
+            (0, n) => format!("Inserted {n} bp at {}", start + 1),
+            (d, 0) => format!("Deleted {d} bp at {}", range(*start, *end)),
+            (_, n) => format!("Replaced {} with {n} bp", range(*start, *end)),
+        },
+        Op::FeatureAdd { feature } => format!("Added {}", feature_name(feature)),
+        Op::FeatureUpdate { feature, .. } => format!("Edited {}", feature_name(feature)),
+        Op::FeatureRemove { id } => format!("Deleted annotation #{id}"),
+        Op::Undo { .. } => "Undo".into(),
+        Op::Redo { .. } => "Redo".into(),
+    }
+}
+
+/// Who acted, when it wasn't the user.
+fn actor_note(actor: &Actor) -> String {
+    match actor {
+        Actor::Human { .. } => String::new(),
+        Actor::Plugin { id, .. } => format!("  [plugin {id}]"),
+        Actor::Tool { tool, .. } => format!("  [{tool}]"),
+        Actor::Agent { model } => format!("  [agent {model}]"),
+        Actor::External => "  [changed on disk]".into(),
+    }
+}
+
+#[cfg(test)]
+mod activity_tests {
+    use super::*;
+
+    #[test]
+    fn local_time_shifts_and_wraps() {
+        assert_eq!(local_time("2026-10-10T13:04:05.025Z", 600), "23:04:05");
+        assert_eq!(local_time("2026-10-10T23:30:00Z", 60), "00:30:00");
+        assert_eq!(local_time("2026-10-10T01:00:00Z", -120), "23:00:00");
+    }
+
+    #[test]
+    fn describes_edits() {
+        let op = Op::SeqReplace {
+            start: 9,
+            end: 9,
+            residues: "ACG".into(),
+        };
+        assert_eq!(describe(&op), "Inserted 3 bp at 10");
+        let op = Op::SeqReplace {
+            start: 9,
+            end: 12,
+            residues: String::new(),
+        };
+        assert_eq!(describe(&op), "Deleted 3 bp at 10–12");
+    }
 }

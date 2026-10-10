@@ -52,6 +52,15 @@ ApplicationWindow {
     }
 
     function fileName(path) { return path.split("/").pop() }
+
+    // This run's activity in the open files' projects, as a text file in
+    // the default text editor.
+    function showActivity() {
+        const files = []
+        for (let i = 0; i < openFiles.count; i++) files.push(openFiles.get(i).path)
+        const path = shell.activity_log(files.join("\n"), -new Date().getTimezoneOffset())
+        if (path.length > 0) Qt.openUrlExternally("file://" + path)
+    }
     function localPath(url) { return decodeURIComponent(url.toString().replace(/^file:\/\//, "")) }
 
     function refreshCurrent() {
@@ -87,7 +96,13 @@ ApplicationWindow {
     }
 
     // Ribbon pieces: a labelled group of controls, and its buttons.
+    // `tip` says in a few words what the button does; `keys` is its shortcut.
     component RibbonButton: ToolButton {
+        property string tip
+        property string keys
+        ToolTip.text: keys.length > 0 ? tip + "   " + keys : tip
+        ToolTip.visible: hovered && tip.length > 0
+        ToolTip.delay: 400
         focusPolicy: Qt.NoFocus
         enabled: window.current !== null
         display: AbstractButton.TextOnly
@@ -118,9 +133,8 @@ ApplicationWindow {
         title: "Keys"
         RibbonButton {
             text: "Shortcuts…"
+            tip: "Keyboard shortcuts for this tab"
             enabled: true
-            ToolTip.text: "Keyboard shortcuts for the commands on this tab"
-            ToolTip.visible: hovered
             onClicked: shortcuts.show(window.ribbonTabs[window.ribbonTab])
         }
     }
@@ -169,7 +183,32 @@ ApplicationWindow {
                     rightPadding: 10
                     elide: Text.ElideLeft
                     text: window.current ? window.current.message : ""
-                    color: shell.accent
+                    // Green for done, red for failed, plain for hints.
+                    color: !window.current ? shell.foreground
+                        : window.current.message_kind === "ok" ? window.current.ok_color
+                        : window.current.message_kind === "error" ? window.current.error_color
+                        : shell.foreground
+                    // A message goes away by itself after 10 seconds.
+                    Timer {
+                        id: messageTimer
+                        interval: 10000
+                        onTriggered: if (window.current) window.current.message = ""
+                    }
+                    onTextChanged: if (text.length > 0) messageTimer.restart()
+                }
+                ToolButton {
+                    text: "⋯"
+                    focusPolicy: Qt.NoFocus
+                    ToolTip.text: "More"
+                    ToolTip.visible: hovered
+                    onClicked: moreMenu.popup(this, 0, height)
+                    Menu {
+                        id: moreMenu
+                        MenuItem { text: "Activity log"; onTriggered: window.showActivity() }
+                        MenuItem { text: "Keyboard shortcuts"; onTriggered: shortcuts.show("") }
+                        MenuSeparator {}
+                        MenuItem { text: "About Basecraft"; onTriggered: about.open() }
+                    }
                 }
             }
         }
@@ -187,13 +226,13 @@ ApplicationWindow {
                     spacing: 6
                     RibbonGroup {
                         title: "Sequence"
-                        RibbonButton { text: "Open…"; enabled: true; onClicked: openDialog.open() }
-                        RibbonButton { text: "Save"; onClicked: window.current.save() }
+                        RibbonButton { text: "Open…"; tip: "Open a sequence file"; enabled: true; onClicked: openDialog.open() }
+                        RibbonButton { text: "Save"; tip: "Save the current file"; keys: "Ctrl+S"; onClicked: window.current.save() }
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
                         title: "Project"
-                        RibbonButton { text: "Open project…"; enabled: true; ToolTip.text: "Choose a folder, or create a new one"; ToolTip.visible: hovered; onClicked: projectDialog.open() }
+                        RibbonButton { text: "Open project…"; tip: "Choose or create a project folder"; enabled: true; onClicked: projectDialog.open() }
                     }
                     Item { Layout.fillWidth: true }
                     ShortcutsGroup {}
@@ -203,10 +242,10 @@ ApplicationWindow {
                     spacing: 6
                     RibbonGroup {
                         title: "Zoom"
-                        RibbonButton { text: "−"; ToolTip.text: "Zoom out (−)"; ToolTip.visible: hovered; onClicked: window.current.zoom_out() }
-                        RibbonButton { text: "+"; ToolTip.text: "Zoom in (+, double-click)"; ToolTip.visible: hovered; onClicked: window.current.zoom_in() }
-                        RibbonButton { text: "Fit"; ToolTip.text: "Whole sequence (Ctrl+0)"; ToolTip.visible: hovered; onClicked: window.current.fit() }
-                        RibbonButton { text: "Selection"; ToolTip.text: "Zoom to the selection"; ToolTip.visible: hovered; onClicked: window.current.zoom_to_selection() }
+                        RibbonButton { text: "−"; tip: "Zoom out"; keys: "−"; onClicked: window.current.zoom_out() }
+                        RibbonButton { text: "+"; tip: "Zoom in"; keys: "+"; onClicked: window.current.zoom_in() }
+                        RibbonButton { text: "Fit"; tip: "Show the whole sequence"; keys: "Ctrl+0"; onClicked: window.current.fit() }
+                        RibbonButton { text: "Selection"; tip: "Zoom to the selection"; onClicked: window.current.zoom_to_selection() }
                         Label {
                             text: window.current ? window.current.zoom_text : ""
                             leftPadding: 6
@@ -220,6 +259,9 @@ ApplicationWindow {
                         title: "Show"
                         CheckBox {
                             text: "GC content"
+                            ToolTip.text: "Show the GC content plot"
+                            ToolTip.visible: hovered
+                            ToolTip.delay: 400
                             checked: window.showGc
                             focusPolicy: Qt.NoFocus
                             onToggled: window.showGc = checked
@@ -233,47 +275,46 @@ ApplicationWindow {
                     spacing: 6
                     RibbonGroup {
                         title: "Annotation"
-                        RibbonButton { text: "Add…"; ToolTip.text: "Annotate the selection (Ctrl+N)"; ToolTip.visible: hovered; onClicked: editor.openNew() }
-                        RibbonButton { text: "Edit…"; ToolTip.text: "Edit the selected annotation (Enter)"; ToolTip.visible: hovered; onClicked: editor.openSelected() }
+                        RibbonButton { text: "Add…"; tip: "Annotate the selection"; keys: "Ctrl+N"; onClicked: editor.openNew() }
+                        RibbonButton { text: "Edit…"; tip: "Edit the selected annotation"; keys: "Enter"; onClicked: editor.openSelected() }
                         RibbonButton {
                             text: "Delete"
-                            ToolTip.text: "Delete the selected annotation (Delete)"
-                            ToolTip.visible: hovered
+                            tip: "Delete the selected annotation"
+                            keys: "Delete"
                             onClicked: {
                                 const id = window.current.selected_feature()
                                 if (id >= 0) window.current.delete_feature(id)
-                                else window.current.message = "Click an annotation first"
+                                else { window.current.message_kind = ""; window.current.message = "Click an annotation first" }
                             }
                         }
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
                         title: "Go to"
-                        RibbonButton { text: "◀ Previous"; ToolTip.text: "Select the previous annotation"; ToolTip.visible: hovered; onClicked: window.current.step_feature(false) }
-                        RibbonButton { text: "Next ▶"; ToolTip.text: "Select the next annotation"; ToolTip.visible: hovered; onClicked: window.current.step_feature(true) }
+                        RibbonButton { text: "◀ Previous"; tip: "Select the previous annotation"; onClicked: window.current.step_feature(false) }
+                        RibbonButton { text: "Next ▶"; tip: "Select the next annotation"; onClicked: window.current.step_feature(true) }
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
                         title: "Sequence"
                         RibbonButton {
                             text: "Copy"
-                            ToolTip.text: "Copy the selected annotation's sequence, spliced and in its own direction"
-                            ToolTip.visible: hovered
+                            tip: "Copy the selected annotation's sequence"
+                            keys: "Ctrl+C"
                             onClicked: {
                                 const id = window.current.selected_feature()
                                 if (id >= 0) clipboard.copy(window.current.feature_sequence(id))
-                                else window.current.message = "Click an annotation first"
+                                else { window.current.message_kind = ""; window.current.message = "Click an annotation first" }
                             }
                         }
-                        RibbonButton { text: "Extract"; ToolTip.text: "Extract the selection as a new sequence (Ctrl+E)"; ToolTip.visible: hovered; onClicked: window.current.extract_selection() }
+                        RibbonButton { text: "Extract"; tip: "Save the selection as a new file"; keys: "Ctrl+E"; onClicked: window.current.extract_selection() }
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
                         title: "Find"
                         RibbonButton {
                             text: "Find ORFs…"
-                            ToolTip.text: "Annotate open reading frames on both strands"
-                            ToolTip.visible: hovered
+                            tip: "Annotate open reading frames"
                             onClicked: orfDialog.search(false)
                         }
                     }
@@ -287,6 +328,9 @@ ApplicationWindow {
                         title: "Window"
                         CheckBox {
                             text: "Files sidebar open"
+                            ToolTip.text: "Show the files sidebar   Ctrl+B"
+                            ToolTip.visible: hovered
+                            ToolTip.delay: 400
                             checked: window.sidebarOpen
                             focusPolicy: Qt.NoFocus
                             onToggled: window.sidebarOpen = checked
@@ -305,14 +349,14 @@ ApplicationWindow {
                     spacing: 6
                     RibbonGroup {
                         title: "Learn"
-                        RibbonButton { text: "Keyboard shortcuts…"; enabled: true; onClicked: shortcuts.show("") }
-                        RibbonButton { text: "About Basecraft…"; enabled: true; onClicked: about.open() }
+                        RibbonButton { text: "Keyboard shortcuts…"; tip: "List all keyboard shortcuts"; enabled: true; onClicked: shortcuts.show("") }
+                        RibbonButton { text: "About Basecraft…"; tip: "Version and licence"; enabled: true; onClicked: about.open() }
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
                         title: "Online"
-                        RibbonButton { text: "Project page"; enabled: true; onClicked: Qt.openUrlExternally("https://github.com/hverbruggen/basecraft") }
-                        RibbonButton { text: "Report a problem"; enabled: true; onClicked: Qt.openUrlExternally("https://github.com/hverbruggen/basecraft/issues/new") }
+                        RibbonButton { text: "Project page"; tip: "Open the project on GitHub"; enabled: true; onClicked: Qt.openUrlExternally("https://github.com/hverbruggen/basecraft") }
+                        RibbonButton { text: "Report a problem"; tip: "Open a new GitHub issue"; enabled: true; onClicked: Qt.openUrlExternally("https://github.com/hverbruggen/basecraft/issues/new") }
                     }
                     Item { Layout.fillWidth: true }
                     ShortcutsGroup {}
@@ -700,6 +744,11 @@ ApplicationWindow {
             }
             if (arg("--ribbon")) window.ribbonTab = Number(arg("--ribbon"))
             if (arg("--orfs")) console.log(window.current.find_orfs(Number(arg("--orfs")), arg("--select") !== undefined))
+            if (arg("--activity")) {
+                const files = []
+                for (let i = 0; i < openFiles.count; i++) files.push(openFiles.get(i).path)
+                console.log("activity:", shell.activity_log(files.join("\n"), -new Date().getTimezoneOffset()))
+            }
             if (arg("--shortcuts")) shortcuts.show(window.ribbonTabs[window.ribbonTab])
             if (arg("--edit")) {
                 if (arg("--edit") === "new") editor.openNew(); else editor.openFeature(Number(arg("--edit")))

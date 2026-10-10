@@ -20,6 +20,10 @@ pub mod qobject {
         #[qproperty(QString, status)]
         #[qproperty(QString, title)]
         #[qproperty(QString, message)]
+        /// "ok", "error", or "" for a neutral hint.
+        #[qproperty(QString, message_kind)]
+        #[qproperty(QString, ok_color)]
+        #[qproperty(QString, error_color)]
         #[qproperty(QString, background)]
         #[qproperty(QString, foreground)]
         #[qproperty(QString, accent)]
@@ -84,6 +88,10 @@ pub mod qobject {
         fn flush(self: Pin<&mut GenomeController>);
         #[qinvokable]
         fn memory_report(self: &GenomeController) -> QString;
+        /// Write a readable account of this run's activity in the projects
+        /// of `files` (one path per line) to a text file; returns its path.
+        #[qinvokable]
+        fn activity_log(self: &GenomeController, files: &QString, utc_offset_min: i32) -> QString;
 
         /// Right-click at a point. Returns JSON describing what the context
         /// menu should offer: `{"feature": id or -1, "label", "selection": bool,
@@ -189,7 +197,6 @@ pub mod qobject {
     }
 }
 
-use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::time::SystemTime;
@@ -233,6 +240,9 @@ pub struct ControllerRust {
     status: QString,
     title: QString,
     message: QString,
+    message_kind: QString,
+    ok_color: QString,
+    error_color: QString,
     background: QString,
     foreground: QString,
     accent: QString,
@@ -261,6 +271,9 @@ impl Default for ControllerRust {
             status: QString::default(),
             title: QString::from("Basecraft"),
             message: QString::default(),
+            message_kind: QString::default(),
+            ok_color: QString::default(),
+            error_color: QString::default(),
             background: QString::default(),
             foreground: QString::default(),
             accent: QString::default(),
@@ -280,6 +293,7 @@ impl Default for ControllerRust {
             theme_stamp: None,
             scratch: Frame::new(),
         };
+        started();
         if let Some((theme, stamp)) = load_theme() {
             c.theme = theme;
             c.theme_stamp = stamp;
@@ -287,6 +301,8 @@ impl Default for ControllerRust {
         c.background = QString::from(&css(c.theme.background));
         c.foreground = QString::from(&css(c.theme.foreground));
         c.accent = QString::from(&css(c.theme.accent));
+        c.ok_color = QString::from(&css(c.theme.nearest_hue(120.0)));
+        c.error_color = QString::from(&css(c.theme.nearest_hue(0.0)));
         c
     }
 }
@@ -323,8 +339,12 @@ fn css(c: [f32; 4]) -> String {
     format!("#{:02x}{:02x}{:02x}", b(c[0]), b(c[1]), b(c[2]))
 }
 
-/// The project a file belongs to: the nearest ancestor with a `.basecraft`
-/// directory, else the file's own directory.
+/// When this run of the app started (RFC 3339 UTC, as in log entries).
+fn started() -> &'static str {
+    static STARTED: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    STARTED.get_or_init(basecraft_platform::now_rfc3339)
+}
+
 /// A bundled plugin's directory: under `$BASECRAFT_PLUGINS` if set, else
 /// the source tree's `plugins/` (development builds).
 fn plugin_dir(name: &str) -> PathBuf {
@@ -336,6 +356,8 @@ fn plugin_dir(name: &str) -> PathBuf {
         .join(name)
 }
 
+/// The project a file belongs to: the nearest ancestor with a `.basecraft`
+/// directory, else the file's own directory.
 fn project_root(file: &Path) -> PathBuf {
     let dir = file.parent().unwrap_or(Path::new(".")).to_path_buf();
     let mut cur = Some(dir.as_path());
@@ -391,7 +413,21 @@ impl qobject::GenomeController {
         self.as_mut().set_scroll_pos(pos);
     }
 
+    /// A neutral hint. Messages stay brief: say what happened, nothing more.
     fn notify(mut self: Pin<&mut Self>, msg: &str) {
+        self.as_mut().set_message_kind(QString::default());
+        self.as_mut().set_message(QString::from(msg));
+    }
+
+    /// Something completed.
+    fn done(mut self: Pin<&mut Self>, msg: &str) {
+        self.as_mut().set_message_kind(QString::from("ok"));
+        self.as_mut().set_message(QString::from(msg));
+    }
+
+    /// Something failed.
+    fn fail(mut self: Pin<&mut Self>, msg: &str) {
+        self.as_mut().set_message_kind(QString::from("error"));
         self.as_mut().set_message(QString::from(msg));
     }
 
@@ -434,7 +470,7 @@ impl qobject::GenomeController {
                 true
             }
             Err(e) => {
-                self.notify(&format!("Can't open {}: {e}", path.display()));
+                self.fail(&format!("Can't open {}: {e}", path.display()));
                 false
             }
         }
@@ -633,10 +669,12 @@ impl qobject::GenomeController {
         match result {
             Ok(out) => {
                 self.as_mut().set_dirty(true);
+                // A new edit makes the last message stale.
+                self.as_mut().notify("");
                 Some(out)
             }
             Err(e) => {
-                self.notify(&e.to_string());
+                self.fail(&e.to_string());
                 None
             }
         }
@@ -829,7 +867,11 @@ impl qobject::GenomeController {
             }
         };
         match result {
-            Ok(_) => self.as_mut().set_dirty(true),
+            Ok(_) => {
+                self.as_mut().set_dirty(true);
+                // Undoing or redoing makes the last message stale.
+                self.as_mut().notify("");
+            }
             Err(e) => self.as_mut().notify(&e.to_string()),
         }
         self.as_mut().clamp_cursor();
@@ -856,11 +898,11 @@ impl qobject::GenomeController {
                 .map(|()| session.doc_key(doc).to_string())
         };
         match result {
-            Ok(key) => {
+            Ok(_key) => {
                 self.as_mut().set_dirty(false);
-                self.notify(&format!("Saved {key}"));
+                self.done("Saved");
             }
-            Err(e) => self.notify(&format!("Save failed: {e}")),
+            Err(e) => self.fail(&format!("Save failed: {e}")),
         }
     }
 
@@ -886,6 +928,12 @@ impl qobject::GenomeController {
             self.as_mut().set_background(QString::from(&bg));
             self.as_mut().set_foreground(QString::from(&fg));
             self.as_mut().set_accent(QString::from(&ac));
+            let (ok, err) = {
+                let t = &self.rust().theme;
+                (css(t.nearest_hue(120.0)), css(t.nearest_hue(0.0)))
+            };
+            self.as_mut().set_ok_color(QString::from(&ok));
+            self.as_mut().set_error_color(QString::from(&err));
             self.refresh();
         }
     }
@@ -893,6 +941,28 @@ impl qobject::GenomeController {
     pub fn flush(mut self: Pin<&mut Self>) {
         if let Some(s) = &mut self.as_mut().rust_mut().session {
             let _ = s.flush();
+        }
+    }
+
+    pub fn activity_log(&self, files: &QString, utc_offset_min: i32) -> QString {
+        let mut roots: Vec<PathBuf> = files
+            .to_string()
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(|f| project_root(Path::new(f)))
+            .collect();
+        roots.sort();
+        roots.dedup();
+        let text = basecraft_ops::log::activity_text(&roots, started(), utc_offset_min)
+            .unwrap_or_else(|e| format!("Couldn't read the log: {e}\n"));
+        let Some(home) = std::env::var_os("HOME") else {
+            return QString::default();
+        };
+        let dir = PathBuf::from(home).join(".cache/basecraft/activity");
+        let path = dir.join(format!("activity-{}.txt", started().replace(':', "")));
+        match std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&path, text)) {
+            Ok(()) => QString::from(&path.to_string_lossy().into_owned()),
+            Err(_) => QString::default(),
         }
     }
 
@@ -1141,11 +1211,21 @@ impl qobject::GenomeController {
             return QString::default();
         }
         let msg = match self.as_mut().run_orf_finder(min_codons.max(1), range) {
-            Ok(m) => m,
-            Err(e) => format!("ORF finder: {e}"),
+            Ok((m, true)) => {
+                self.as_mut().done(&m);
+                m
+            }
+            Ok((m, false)) => {
+                self.as_mut().notify(&m);
+                m
+            }
+            Err(e) => {
+                let m = format!("ORF finder failed: {e}");
+                self.as_mut().fail(&m);
+                m
+            }
         };
-        self.as_mut().notify(&msg);
-        self.refresh();
+        self.as_mut().refresh();
         QString::from(&msg)
     }
 
@@ -1153,7 +1233,7 @@ impl qobject::GenomeController {
         mut self: Pin<&mut Self>,
         min_codons: i32,
         range: Option<(u64, u64)>,
-    ) -> Result<String, String> {
+    ) -> Result<(String, bool), String> {
         use basecraft_plugin_host::{Manifest, PluginProcess, Snapshot, apply};
         let dir = plugin_dir("orf-finder");
         let manifest = Manifest::load(&dir).map_err(|e| format!("{e} ({})", dir.display()))?;
@@ -1200,28 +1280,12 @@ impl qobject::GenomeController {
         if report.applied > 0 {
             self.as_mut().set_dirty(true);
         }
-        let place = if range.is_some() {
-            " in the selection"
-        } else {
-            ""
-        };
-        let mut msg = match (report.applied, known) {
-            (0, 0) => {
-                format!("No ORFs of at least {min_codons} codons{place}; try a lower minimum")
-            }
-            (0, k) => format!(
-                "No new ORFs{place}: all {k} of at least {min_codons} codons are already annotated"
-            ),
-            (1, _) => format!("Added 1 ORF of at least {min_codons} codons{place}"),
-            (n, _) => format!("Added {n} ORFs of at least {min_codons} codons{place}"),
-        };
-        if report.applied > 0 && known > 0 {
-            let _ = write!(msg, "; {known} already annotated");
-        }
-        if report.applied > 0 {
-            msg.push_str(" (Ctrl+Z removes them)");
-        }
-        Ok(msg)
+        Ok(match (report.applied, known) {
+            (0, 0) => (String::from("No ORFs found"), false),
+            (0, _) => (String::from("No new ORFs"), false),
+            (1, _) => (String::from("Added 1 ORF"), true),
+            (n, _) => (format!("Added {n} ORFs"), true),
+        })
     }
 
     pub fn selection_text(&self) -> QString {
@@ -1291,14 +1355,15 @@ impl qobject::GenomeController {
                 let name = target
                     .file_name()
                     .map_or_else(String::new, |f| f.to_string_lossy().into_owned());
-                self.as_mut().notify(&format!(
-                    "Extracted {} bp to {name}",
+                let _ = name;
+                self.as_mut().done(&format!(
+                    "Extracted {} bp",
                     basecraft_viewmodel::genome::format_thousands(end - start)
                 ));
                 QString::from(&target.to_string_lossy().into_owned())
             }
             Err(e) => {
-                self.as_mut().notify(&format!("Extract failed: {e}"));
+                self.as_mut().fail(&format!("Extract failed: {e}"));
                 QString::default()
             }
         }
