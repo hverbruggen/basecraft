@@ -51,6 +51,8 @@ const LANE_GAP: f32 = 9.0;
 const LABEL_SIZE: f32 = 13.0;
 /// Most pixels per base when zoomed in.
 const MAX_PX_PER_BP: f64 = 28.0;
+/// Zoom 100 %: bases comfortably readable.
+const PX_PER_BP_AT_100: f64 = 6.1;
 /// Pixels per base from which residue letters are drawn.
 const LETTERS_FROM: f64 = 3.5;
 /// Above this many visible features, draw their density instead.
@@ -132,7 +134,8 @@ pub struct GenomeView {
     /// Features that didn't fit in the lanes on the last build.
     pub hidden: usize,
     drag: Drag,
-    hits: Vec<([f32; 4], FeatureId)>,
+    /// Feature boxes on the linear view, with the residue span each covers.
+    hits: Vec<([f32; 4], FeatureId, (u64, u64))>,
     arc_hits: Vec<(f32, f32, f32, f32, FeatureId)>,
 }
 
@@ -232,11 +235,13 @@ impl GenomeView {
     /// Zoom level for display: pixels per base when bases are wider than a
     /// pixel, else bases per pixel, plus how much sequence is shown.
     pub fn zoom_text(&self, len: u64) -> String {
-        let ppb = self.px_per_bp();
-        let level = if ppb >= 1.0 {
-            format!("{ppb:.1} px/bp")
+        let percent = self.px_per_bp() / PX_PER_BP_AT_100 * 100.0;
+        let level = if percent >= 10.0 {
+            format!("{percent:.0}%")
         } else {
-            format!("{} bp/px", format_thousands(self.bp_per_px.round() as u64))
+            // Two significant digits: 2.5%, 0.16%, 0.0016%.
+            let digits = (1.0 - percent.log10().floor()).max(1.0) as usize;
+            format!("{percent:.digits$}%")
         };
         let shown = self.span().min(len as f64) as u64;
         format!("{level} · {} shown", format_length(shown))
@@ -349,12 +354,7 @@ impl GenomeView {
 
     pub fn feature_at(&self, x: f32, y: f32, len: u64) -> Option<FeatureId> {
         match self.mode {
-            Mode::Linear => self
-                .hits
-                .iter()
-                .rev()
-                .find(|(r, _)| x >= r[0] - 2.0 && x <= r[2] + 2.0 && y >= r[1] && y <= r[3])
-                .map(|(_, id)| *id),
+            Mode::Linear => self.feature_hit_at(x, y).map(|(id, _)| id),
             Mode::Circular => {
                 let (cx, cy) = self.centre();
                 let (dx, dy) = (x - cx, y - cy);
@@ -368,6 +368,15 @@ impl GenomeView {
                     .map(|h| h.4)
             }
         }
+    }
+
+    /// The feature box under a point on the linear view, with its span.
+    fn feature_hit_at(&self, x: f32, y: f32) -> Option<(FeatureId, (u64, u64))> {
+        self.hits
+            .iter()
+            .rev()
+            .find(|(r, _, _)| x >= r[0] - 2.0 && x <= r[2] + 2.0 && y >= r[1] && y <= r[3])
+            .map(|(_, id, span)| (*id, *span))
     }
 
     fn position_at(&self, x: f32, y: f32, len: u64) -> u64 {
@@ -387,9 +396,23 @@ impl GenomeView {
     /// Mouse press. Clicking a feature selects it; clicking the sequence or
     /// ruler places the cursor and starts a selection; anywhere else starts
     /// a pan.
+    /// Mouse press. A plain click always replaces the selection: on a
+    /// feature it selects the feature and its residues; on the sequence or
+    /// ruler it places the cursor and starts a new selection; on empty space
+    /// it clears the selection and starts a pan. Shift-click on the sequence
+    /// extends the selection from the cursor instead.
     pub fn press(&mut self, x: f32, y: f32, shift: bool, len: u64) {
-        if let Some(id) = self.feature_at(x, y, len) {
+        let hit = match self.mode {
+            Mode::Linear => self.feature_hit_at(x, y),
+            Mode::Circular => self
+                .feature_at(x, y, len)
+                .and_then(|id| self.arc_hits.iter().find(|h| h.4 == id))
+                .map(|h| (h.4, (h.0 as u64, h.1 as u64))),
+        };
+        if let Some((id, span)) = hit {
             self.selected = Some(id);
+            self.selection = Some(span);
+            self.cursor = Some(span.1);
             self.drag = Drag::Pan { last_x: x };
             return;
         }
@@ -397,18 +420,18 @@ impl GenomeView {
             Mode::Linear => self.region_at(y) != Region::Features,
             Mode::Circular => true,
         };
+        self.selected = None;
         if on_sequence {
             let p = self.position_at(x, y, len);
             let anchor = match (shift, self.cursor) {
                 (true, Some(c)) => c,
                 _ => p,
             };
-            self.selected = None;
             self.cursor = Some(p);
             self.selection = (anchor != p).then(|| (anchor.min(p), anchor.max(p)));
             self.drag = Drag::Select { anchor };
         } else {
-            self.selected = None;
+            self.selection = None;
             self.drag = Drag::Pan { last_x: x };
         }
     }
@@ -805,7 +828,8 @@ impl GenomeView {
                     theme.accent,
                 );
             }
-            self.hits.push(([item.x0, y, item.x1, y + LANE_H], item.id));
+            self.hits
+                .push(([item.x0, y, item.x1, y + LANE_H], item.id, item.span));
         }
         // Names: inside the feature when they fit, else beside it when the
         // gap to the next feature on the row is wide enough.
@@ -1346,7 +1370,7 @@ mod tests {
         v.build(&d, &Theme::default(), &mut f);
         assert!(f.len() > 40);
         assert_eq!(v.hits.len(), 20);
-        let (r, id) = v.hits[3];
+        let (r, id, _) = v.hits[3];
         assert_eq!(
             v.feature_at(
                 f32::midpoint(r[0], r[2]),
@@ -1407,6 +1431,54 @@ mod tests {
         // Not dragging: no scrolling.
         v.release();
         assert!(!v.edge_scroll(-50.0, SEQ_Y + 5.0, d.len()));
+    }
+
+    #[test]
+    fn clicks_replace_the_selection() {
+        let d = doc();
+        let mut v = GenomeView::new(1000.0, 600.0);
+        v.fit(d.len());
+        let mut f = Frame::new();
+        v.build(&d, &Theme::default(), &mut f);
+        // A manual selection, then a click on gene 3 (1500..1800).
+        v.press(100.0, SEQ_Y + 5.0, false, d.len());
+        v.drag_to(200.0, SEQ_Y + 5.0, d.len());
+        v.release();
+        let (r, id, _) = v.hits[3];
+        v.press(
+            f32::midpoint(r[0], r[2]),
+            f32::midpoint(r[1], r[3]),
+            false,
+            d.len(),
+        );
+        assert_eq!(v.selected, Some(id));
+        assert_eq!(v.selection, Some((1500, 1800)));
+        // A plain click on the sequence starts over.
+        v.press(400.0, SEQ_Y + 5.0, false, d.len());
+        assert_eq!((v.selection, v.selected), (None, None));
+        // A click on empty space clears too.
+        v.selection = Some((1, 2));
+        v.press(990.0, 590.0, false, d.len());
+        assert_eq!(v.selection, None);
+    }
+
+    #[test]
+    fn zoom_percentages() {
+        let mut v = GenomeView::new(1000.0, 600.0);
+        v.bp_per_px = 1.0 / 6.1;
+        assert!(v.zoom_text(10_000).starts_with("100%"));
+        v.bp_per_px = 100.0;
+        assert!(
+            v.zoom_text(1_000_000).starts_with("0.16%"),
+            "{}",
+            v.zoom_text(1_000_000)
+        );
+        v.bp_per_px = 10_000.0;
+        assert!(
+            v.zoom_text(100_000_000).starts_with("0.0016%"),
+            "{}",
+            v.zoom_text(100_000_000)
+        );
     }
 
     #[test]
