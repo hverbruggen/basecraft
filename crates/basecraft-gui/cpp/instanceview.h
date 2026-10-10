@@ -27,6 +27,11 @@ public:
 
     // Save the whole window as an image, for scripted screenshots.
     Q_INVOKABLE bool saveWindow(const QString &path);
+    // Deliver key presses for `text` to the window as if typed, for
+    // scripted tests of focus and key handling.
+    Q_INVOKABLE void typeText(const QString &text);
+    // Deliver a left click at window coordinates, likewise.
+    Q_INVOKABLE void clickAt(qreal x, qreal y);
 
     QByteArray instances() const { return m_instances; }
     void setInstances(const QByteArray &data);

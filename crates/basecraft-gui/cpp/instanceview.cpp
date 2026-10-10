@@ -3,6 +3,9 @@
 #include <memory>
 
 #include <QtGui/QFont>
+#include <QtGui/QGuiApplication>
+#include <QtGui/QKeyEvent>
+#include <QtGui/QMouseEvent>
 #include <QtGui/QImage>
 #include <QtGui/QMatrix4x4>
 #include <QtGui/QPainter>
@@ -93,6 +96,31 @@ QQuickRhiItemRenderer *InstanceView::createRenderer()
 bool InstanceView::saveWindow(const QString &path)
 {
     return window() && window()->grabWindow().save(path);
+}
+
+void InstanceView::typeText(const QString &text)
+{
+    if (!window())
+        return;
+    for (const QChar c : text) {
+        const int key = c == u'\t' ? int(Qt::Key_Tab) : c.isLetter() ? c.toUpper().unicode() : c.unicode();
+        QKeyEvent press(QEvent::KeyPress, key, Qt::NoModifier, QString(c));
+        QGuiApplication::sendEvent(window(), &press);
+        QKeyEvent release(QEvent::KeyRelease, key, Qt::NoModifier, QString(c));
+        QGuiApplication::sendEvent(window(), &release);
+    }
+}
+
+void InstanceView::clickAt(qreal x, qreal y)
+{
+    if (!window())
+        return;
+    const QPointF p(x, y);
+    const QPointF g = window()->mapToGlobal(p);
+    QMouseEvent press(QEvent::MouseButtonPress, p, g, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QGuiApplication::sendEvent(window(), &press);
+    QMouseEvent release(QEvent::MouseButtonRelease, p, g, Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QGuiApplication::sendEvent(window(), &release);
 }
 
 void InstanceView::setInstances(const QByteArray &data)

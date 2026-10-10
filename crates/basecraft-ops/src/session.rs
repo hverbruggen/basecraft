@@ -579,7 +579,7 @@ fn normalise(residues: &str) -> Result<String> {
         .chars()
         .find(|c| !(c.is_ascii_alphabetic() || *c == '-' || *c == '*'))
     {
-        return Err(invalid(format!("{c:?} is not a residue")));
+        return Err(invalid(format!("{c:?} is not a base or residue code")));
     }
     Ok(residues.to_ascii_uppercase())
 }

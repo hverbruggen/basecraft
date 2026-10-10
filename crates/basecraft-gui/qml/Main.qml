@@ -59,8 +59,8 @@ ApplicationWindow {
                 opacity: 0.75
             }
             ToolSeparator {}
-            Tool { text: "Add feature…"; ToolTip.text: "Annotate the selection (Ctrl+N)"; ToolTip.visible: hovered; onClicked: editor.openNew() }
-            Tool { text: "Edit feature…"; enabled: true; ToolTip.text: "Edit the selected feature (Enter)"; ToolTip.visible: hovered; onClicked: editor.openSelected() }
+            Tool { text: "Add annotation…"; ToolTip.text: "Annotate the selection (Ctrl+N)"; ToolTip.visible: hovered; onClicked: editor.openNew() }
+            Tool { text: "Edit annotation…"; ToolTip.text: "Edit the selected annotation (Enter)"; ToolTip.visible: hovered; onClicked: editor.openSelected() }
             ToolSeparator {}
             Tool { text: "Undo"; onClicked: controller.undo() }
             Tool { text: "Redo"; onClicked: controller.redo() }
@@ -143,7 +143,7 @@ ApplicationWindow {
             onWheel: (wheel) => controller.wheel(wheel.x, wheel.angleDelta.y, wheel.angleDelta.x, wheel.modifiers)
         }
 
-        // Feature tooltip, following the pointer.
+        // Annotation tooltip, following the pointer.
         Rectangle {
             visible: mouse.hoverText.length > 0
             x: Math.min(mouse.lastX + 14, view.width - width - 4)
@@ -238,22 +238,31 @@ ApplicationWindow {
         }
     }
 
+    // Only what applies where you clicked: an annotation, or the selection.
+    // Global actions (zoom, whole sequence) live in the toolbar.
     Menu {
         id: menu
-        property var info: ({ feature: -1, label: "", selection: false, length: 0 })
-        MenuItem { text: "Add feature from selection…"; enabled: menu.info.selection; onTriggered: editor.openNew() }
-        MenuItem { text: "Edit “" + menu.info.label + "”…"; visible: menu.info.feature >= 0; height: visible ? implicitHeight : 0; onTriggered: editor.openFeature(menu.info.feature) }
-        MenuItem { text: "Delete “" + menu.info.label + "”"; visible: menu.info.feature >= 0; height: visible ? implicitHeight : 0; onTriggered: controller.delete_feature(menu.info.feature) }
-        MenuItem { text: "Select its residues"; visible: menu.info.feature >= 0; height: visible ? implicitHeight : 0; onTriggered: controller.select_feature_range(menu.info.feature) }
-        MenuItem { text: "Zoom to feature"; visible: menu.info.feature >= 0; height: visible ? implicitHeight : 0; onTriggered: controller.zoom_to_feature(menu.info.feature) }
-        MenuSeparator {}
-        MenuItem { text: "Copy sequence (" + menu.info.length + " bp)"; enabled: menu.info.selection; onTriggered: clipboard.copy(controller.selection_text()) }
-        MenuItem { text: "Reverse-complement selection"; enabled: menu.info.selection; onTriggered: controller.reverse_complement_selection() }
-        MenuItem { text: "Zoom to selection"; enabled: menu.info.selection; onTriggered: controller.zoom_to_selection() }
-        MenuSeparator {}
-        MenuItem { text: "Zoom in"; onTriggered: controller.zoom_in() }
-        MenuItem { text: "Zoom out"; onTriggered: controller.zoom_out() }
-        MenuItem { text: "Whole sequence"; onTriggered: controller.fit() }
+        property var info: ({ feature: -1, label: "", featureLength: 0, selection: false, length: 0 })
+        readonly property bool onAnnotation: info.feature >= 0
+        component Item: MenuItem { height: visible ? implicitHeight : 0 }
+
+        Item { text: "Edit “" + menu.info.label + "”…"; visible: menu.onAnnotation; onTriggered: editor.openFeature(menu.info.feature) }
+        Item { text: "Delete “" + menu.info.label + "”"; visible: menu.onAnnotation; onTriggered: controller.delete_feature(menu.info.feature) }
+        Item {
+            text: "Copy annotation sequence (" + menu.info.featureLength + " bp)"
+            visible: menu.onAnnotation
+            onTriggered: clipboard.copy(controller.feature_sequence(menu.info.feature))
+        }
+        Item { text: "Zoom to annotation"; visible: menu.onAnnotation; onTriggered: controller.zoom_to_feature(menu.info.feature) }
+
+        Item { text: "Add annotation…"; visible: !menu.onAnnotation; enabled: menu.info.selection; onTriggered: editor.openNew() }
+        Item {
+            text: "Copy sequence (" + menu.info.length + " bp)"
+            visible: !menu.onAnnotation
+            enabled: menu.info.selection
+            onTriggered: clipboard.copy(controller.selection_text())
+        }
+        Item { text: "Zoom to selection"; visible: !menu.onAnnotation; enabled: menu.info.selection; onTriggered: controller.zoom_to_selection() }
     }
 
     FeatureEditor {
@@ -314,11 +323,50 @@ ApplicationWindow {
                 menu.info = JSON.parse(controller.context_press(Number(p[0]), Number(p[1])))
                 menu.popup(Number(p[0]), Number(p[1]) + view.y)
             }
+            if (arg("--menu-add")) {
+                // Open the context menu and choose Add annotation, as a user would.
+                menu.info = JSON.parse(controller.context_press(Number(arg("--menu-add")), 45))
+                menu.popup(Number(arg("--menu-add")), 45 + view.y)
+                menu.itemAt(4).triggered()
+                menu.close()
+            }
             if (arg("--edit")) {
                 if (arg("--edit") === "new") editor.openNew(); else editor.openFeature(Number(arg("--edit")))
             }
+            if (arg("--label")) {
+                // --label TEXT: in the open editor, click the first
+                // qualifier value field and type TEXT through the window.
+                labelTyper.start()
+                return
+            }
+
             shot.start()
         }
+    }
+    Timer {
+        id: labelTyper
+        interval: 300
+        onTriggered: {
+            const field = editor.valueField(0)
+            if (!field) { console.log("no value field"); Qt.quit(); return }
+            const keys = arg("--label").replace(/\\t/g, "\t")
+            if (arg("--no-click") === undefined) {
+                const p = field.mapToItem(null, field.width / 2, field.height / 2)
+                view.clickAt(p.x, p.y)
+            }
+            view.typeText(keys)
+            console.log("field text:", JSON.stringify(field.text), "focus:", field.activeFocus, "activeFocusItem:", window.activeFocusItem)
+            shot.start()
+        }
+    }
+    function findField(item, name) {
+        if (item.objectName === name) return item
+        for (let i = 0; i < item.children.length; i++) {
+            const r = findField(item.children[i], name)
+            if (r) return r
+        }
+        if (item.contentItem && item.contentItem !== item) return findField(item.contentItem, name)
+        return null
     }
     Timer {
         id: shot

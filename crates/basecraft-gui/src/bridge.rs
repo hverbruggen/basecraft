@@ -108,8 +108,10 @@ pub mod qobject {
         /// The selected residues, for the clipboard.
         #[qinvokable]
         fn selection_text(self: &GenomeController) -> QString;
+        /// An annotation's own sequence: its parts joined in biological
+        /// order, reverse-complemented on the reverse strand.
         #[qinvokable]
-        fn reverse_complement_selection(self: Pin<&mut GenomeController>);
+        fn feature_sequence(self: &GenomeController, id: i32) -> QString;
         /// Scroll the linear view to a fraction of the sequence.
         #[qinvokable]
         fn scroll_to(self: Pin<&mut GenomeController>, fraction: f64);
@@ -835,9 +837,14 @@ impl qobject::GenomeController {
             })
             .flatten()
             .unwrap_or_default();
+        let feature_length = selected
+            .and_then(|id| self.with_doc(|s, d| s.doc(d).feature(id).map(|f| f.location.len())))
+            .flatten()
+            .unwrap_or(0);
         let info = json!({
             "feature": selected.map_or(-1, |FeatureId(i)| i64::from(i)),
             "label": label,
+            "featureLength": feature_length,
             "selection": selection.is_some(),
             "length": selection.map_or(0, |(a, b)| b - a),
         });
@@ -1007,27 +1014,28 @@ impl qobject::GenomeController {
         QString::from(&text)
     }
 
-    pub fn reverse_complement_selection(mut self: Pin<&mut Self>) {
-        let Some((a, b)) = self.rust().view.selection else {
-            self.notify("Select a range to reverse-complement");
-            return;
+    pub fn feature_sequence(&self, id: i32) -> QString {
+        let Ok(fid) = u32::try_from(id) else {
+            return QString::default();
         };
-        let rc: String = self
-            .with_doc(|s, d| s.doc(d).read(a, b))
-            .unwrap_or_default()
-            .iter()
-            .rev()
-            .map(|&c| char::from(complement(c)))
-            .collect();
-        let op = Op::SeqReplace {
-            start: a,
-            end: b,
-            residues: rc,
-        };
-        if self.as_mut().edit(op).is_some() {
-            self.as_mut().rust_mut().view.selection = Some((a, b));
-        }
-        self.refresh();
+        let text = self
+            .with_doc(|s, d| {
+                let doc = s.doc(d);
+                let f = doc.feature(FeatureId(fid))?;
+                let mut out = String::with_capacity(usize::try_from(f.location.len()).unwrap_or(0));
+                for seg in &f.location.segments {
+                    let bases = doc.read(seg.start, seg.end);
+                    if seg.strand == Strand::Reverse {
+                        out.extend(bases.iter().rev().map(|&b| char::from(complement(b))));
+                    } else {
+                        out.push_str(&String::from_utf8_lossy(&bases));
+                    }
+                }
+                Some(out)
+            })
+            .flatten()
+            .unwrap_or_default();
+        QString::from(&text)
     }
 
     pub fn scroll_to(mut self: Pin<&mut Self>, fraction: f64) {

@@ -306,13 +306,23 @@ impl GenomeView {
         self.clamp(len);
     }
 
-    /// Right-click: select the feature under the pointer, or move the cursor
+    /// Right-click: select the annotation under the pointer, or move the cursor
     /// there unless the click falls inside the current selection, which a
     /// context menu then acts on.
     pub fn context_press(&mut self, x: f32, y: f32, len: u64) {
         self.drag = Drag::None;
-        if let Some(id) = self.feature_at(x, y, len) {
+        let hit = match self.mode {
+            Mode::Linear | Mode::Wrapped => self.feature_hit_at(x, y),
+            Mode::Circular => self
+                .feature_at(x, y, len)
+                .and_then(|id| self.arc_hits.iter().find(|h| h.4 == id))
+                .map(|h| (h.4, (h.0 as u64, h.1 as u64))),
+        };
+        if let Some((id, span)) = hit {
+            // Like a left click: the annotation and its bases.
             self.selected = Some(id);
+            self.selection = Some(span);
+            self.cursor = Some(span.1);
             return;
         }
         let p = self.position_at(x, y, len);
@@ -783,7 +793,7 @@ impl GenomeView {
                 self.width - 220.0,
                 self.height - 18.0,
                 LABEL_SIZE,
-                &format!("+{} features not shown", self.hidden),
+                &format!("+{} annotations not shown", self.hidden),
                 theme.foreground_muted,
             );
         }
@@ -807,7 +817,7 @@ impl GenomeView {
                 8.0,
                 self.height - 18.0,
                 LABEL_SIZE,
-                &format!("+{} features not shown", self.hidden),
+                &format!("+{} annotations not shown", self.hidden),
                 theme.foreground_muted,
             );
         }
@@ -1142,7 +1152,7 @@ impl GenomeView {
                     8.0,
                     top + 68.0,
                     LABEL_SIZE,
-                    &format!("{count} features here; zoom in to see them"),
+                    &format!("{count} annotations here; zoom in to see them"),
                     theme.foreground_muted,
                 );
 
@@ -1533,7 +1543,7 @@ impl GenomeView {
     /// selected feature.
     pub fn status(&self, doc: &SequenceDoc) -> String {
         let mut parts = vec![format!(
-            "{}  {} bp, {} features",
+            "{}  {} bp, {} annotations",
             doc.name,
             format_thousands(doc.len()),
             format_thousands(doc.feature_count() as u64)

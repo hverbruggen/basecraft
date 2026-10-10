@@ -2,14 +2,14 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-// Add or edit one feature: type, location in GenBank syntax (1-based, with
+// Add or edit one annotation (a GenBank/GFF feature): type, location in GenBank syntax (1-based, with
 // complement() and join()), and qualifiers. Saving is one operation.
 Dialog {
     id: dialog
     property var controller
     property int featureId: -1
 
-    title: featureId < 0 ? "Add feature" : "Edit feature"
+    title: featureId < 0 ? "Add annotation" : "Edit annotation"
     modal: true
     anchors.centerIn: Overlay.overlay
     width: Math.min(640, parent ? parent.width - 40 : 640)
@@ -60,7 +60,7 @@ Dialog {
     function openFeature(id) { hidden = []; if (load(controller.feature_json(id))) open() }
     function openSelected() {
         const id = controller.selected_feature()
-        if (id >= 0) openFeature(id); else controller.message = "Click a feature first, or select residues and use Add feature"
+        if (id >= 0) openFeature(id); else controller.message = "Click an annotation first, or select bases and use Add annotation"
     }
     function openNew() { hidden = []; load(controller.new_feature_json()); open(); location.forceActiveFocus() }
 
@@ -76,6 +76,12 @@ Dialog {
     }
 
     ListModel { id: quals }
+
+    // The value field of qualifier row `i`, for scripted tests.
+    function valueField(i) {
+        const row = list.itemAtIndex(i)
+        return row ? row.children[1] : null
+    }
 
     contentItem: ColumnLayout {
         spacing: 10
@@ -117,14 +123,14 @@ Dialog {
                 CheckBox {
                     id: partial5
                     text: "5′ end"
-                    ToolTip.text: "The feature continues beyond its 5′ end (GenBank < or >)"
+                    ToolTip.text: "The annotation continues beyond its 5′ end (GenBank < or >)"
                     ToolTip.visible: hovered
                     onToggled: dialog.applyControls()
                 }
                 CheckBox {
                     id: partial3
                     text: "3′ end"
-                    ToolTip.text: "The feature continues beyond its 3′ end"
+                    ToolTip.text: "The annotation continues beyond its 3′ end"
                     ToolTip.visible: hovered
                     onToggled: dialog.applyControls()
                 }
@@ -145,12 +151,14 @@ Dialog {
                 required property string key
                 required property string value
                 TextField {
+                    objectName: "qualifierKey" + index
                     Layout.preferredWidth: 150
                     text: key
                     placeholderText: "key"
                     onTextEdited: quals.setProperty(index, "key", text)
                 }
                 TextField {
+                    objectName: "qualifierValue" + index
                     Layout.fillWidth: true
                     text: value
                     placeholderText: "value"
@@ -164,7 +172,7 @@ Dialog {
             Button { text: "Add qualifier"; onClicked: quals.append({ key: "", value: "", flag: false }) }
             Item { Layout.fillWidth: true }
             Button {
-                text: "Delete feature"
+                text: "Delete annotation"
                 visible: dialog.featureId >= 0
                 onClicked: { dialog.controller.delete_feature(dialog.featureId); dialog.close() }
             }

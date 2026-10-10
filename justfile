@@ -17,7 +17,7 @@ check:
     pixi run ruff check python plugins
 
 # Everything. Run before every push.
-ci: check schemas-check deny protocol-license replay
+ci: check schemas-check deny protocol-license replay qml-test
     @echo "instruction-count benchmarks: not set up yet"
 
 # Generate JSON Schema and Arrow schemas from basecraft-protocol.
@@ -42,6 +42,10 @@ protocol-license:
         echo "$gpl" >&2
         exit 1
     fi
+
+# QML component tests, headless.
+qml-test:
+    QT_QPA_PLATFORM=offscreen "$(qmake6 -query QT_HOST_BINS)/qmltestrunner" -input crates/basecraft-gui/tests/qml
 
 # Replay tests for every operation type.
 replay:
