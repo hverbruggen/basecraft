@@ -69,12 +69,13 @@ fn main() {
         .join("QtGui")
         .join(qmake_query("QT_VERSION"));
     let shader_dir = out_dir.join("shaders");
-    let builder =
-        CxxQtBuilder::new_qml_module(QmlModule::new("Basecraft").qml_files(["qml/Main.qml"]))
-            .qt_module("Quick")
-            .files(["src/bridge.rs"])
-            .cpp_file("cpp/instanceview.h")
-            .cpp_file("cpp/instanceview.cpp");
+    let builder = CxxQtBuilder::new_qml_module(
+        QmlModule::new("Basecraft").qml_files(["qml/Main.qml", "qml/FeatureEditor.qml"]),
+    )
+    .qt_module("Quick")
+    .files(["src/bridge.rs"])
+    .cpp_file("cpp/instanceview.h")
+    .cpp_file("cpp/instanceview.cpp");
     // SAFETY: not a memory-safety concern; cxx-qt marks this unsafe because
     // its cc::Build may change between minor versions.
     let builder = unsafe {

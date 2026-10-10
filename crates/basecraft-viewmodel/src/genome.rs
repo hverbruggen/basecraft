@@ -56,6 +56,41 @@ const LETTERS_FROM: f64 = 9.0;
 /// Above this many visible features, draw their density instead.
 const MAX_DRAWN_FEATURES: usize = 4000;
 
+fn within(s: &basecraft_protocol::Segment, span: (u64, u64)) -> bool {
+    s.start >= span.0 && s.end <= span.1
+}
+
+/// Bounds of the contiguous pieces a feature is drawn as on a linear view:
+/// one, or two for a feature crossing the origin of a circular sequence.
+fn pieces(f: &Feature, len: u64, circular: bool) -> Vec<(u64, u64)> {
+    let segs = &f.location.segments;
+    let mut groups: Vec<Vec<&basecraft_protocol::Segment>> = vec![Vec::new()];
+    for (i, s) in segs.iter().enumerate() {
+        if i > 0 && circular {
+            let prev = &segs[i - 1];
+            let wraps = match s.strand {
+                Strand::Reverse => prev.start == 0 && s.end == len,
+                _ => prev.end == len && s.start == 0,
+            };
+            if wraps {
+                groups.push(Vec::new());
+            }
+        }
+        if let Some(g) = groups.last_mut() {
+            g.push(s);
+        }
+    }
+    groups
+        .into_iter()
+        .filter(|g| !g.is_empty())
+        .map(|g| {
+            let start = g.iter().map(|s| s.start).min().unwrap_or(0);
+            let end = g.iter().map(|s| s.end).max().unwrap_or(0);
+            (start, end)
+        })
+        .collect()
+}
+
 fn is_transcript(kind: &str) -> bool {
     matches!(
         kind,
@@ -71,6 +106,9 @@ fn is_backdrop(f: &Feature) -> bool {
 /// A feature placed on a row of the linear view.
 struct Item {
     id: FeatureId,
+    /// The part of the feature this item draws: all of it, or one side of
+    /// a feature that crosses the origin of a circular sequence.
+    span: (u64, u64),
     x0: f32,
     x1: f32,
     label: String,
@@ -161,6 +199,34 @@ impl GenomeView {
     pub fn pan(&mut self, dx: f32, len: u64) {
         self.start -= f64::from(dx) * self.bp_per_px;
         self.clamp(len);
+    }
+
+    /// Show `start..end` with a small margin on both sides.
+    pub fn zoom_to(&mut self, start: u64, end: u64, len: u64) {
+        let span = (end.saturating_sub(start)).max(1) as f64;
+        let margin = span * 0.05;
+        self.mode = Mode::Linear;
+        self.bp_per_px = (span + 2.0 * margin) / f64::from(self.width);
+        self.start = start as f64 - margin;
+        self.clamp(len);
+    }
+
+    /// Right-click: select the feature under the pointer, or move the cursor
+    /// there unless the click falls inside the current selection, which a
+    /// context menu then acts on.
+    pub fn context_press(&mut self, x: f32, y: f32, len: u64) {
+        self.drag = Drag::None;
+        if let Some(id) = self.feature_at(x, y, len) {
+            self.selected = Some(id);
+            return;
+        }
+        let p = self.position_at(x, y, len);
+        let inside = self.selection.is_some_and(|(a, b)| p >= a && p <= b);
+        if !inside {
+            self.selection = None;
+            self.cursor = Some(p);
+        }
+        self.selected = None;
     }
 
     /// Scroll so that `pos` is visible.
@@ -475,7 +541,14 @@ impl GenomeView {
         // Zoomed out: GC content per bin, scaled to the visible range so
         // local variation shows; colour runs from AT-rich to GC-rich.
         let bins = (self.x_of(b1 as f64) - self.x_of(b0 as f64)).max(1.0) as usize / 2;
-        let gc = doc.summary().gc(b0, b1, bins.max(1));
+        let bins = bins.max(1);
+        // Summary bins are 256 bp; below that, a sliding window over the
+        // residues themselves gives a continuous curve.
+        let gc = if b1 - b0 <= 4_000_000 && (b1 - b0) / (bins as u64) < 512 {
+            window_gc(doc, b0, b1, bins)
+        } else {
+            doc.summary().gc(b0, b1, bins)
+        };
         let bin_w = (self.x_of(b1 as f64) - self.x_of(b0 as f64)) / gc.len() as f32;
         let x0 = self.x_of(b0 as f64);
         let finite = gc.iter().copied().filter(|v| !v.is_nan());
@@ -590,28 +663,28 @@ impl GenomeView {
         let mut items: Vec<Item> = Vec::with_capacity(ids.len());
         for id in ids {
             let Some(f) = doc.feature(id) else { continue };
-            let Some((s, e)) = f.location.bounds() else {
-                continue;
-            };
-            let x0 = self.x_of(s as f64);
-            let x1 = self.x_of(e as f64).max(x0 + 1.0);
-            let label = f.label().unwrap_or(&f.kind).to_string();
-            let lw = text_width(&label, LABEL_SIZE);
-            // Gene models have lines and boxes inside; label them beside.
-            let label_inside = x1 - x0 >= lw + 8.0 && !parts.contains_key(&id);
-            let reach = if label_inside || !outside_labels {
-                x1 + 8.0
-            } else {
-                x1 + 12.0 + lw
-            };
-            items.push(Item {
-                id,
-                x0,
-                x1,
-                label,
-                label_inside,
-                reach,
-            });
+            for (s, e) in pieces(f, doc.len(), doc.circular) {
+                let x0 = self.x_of(s as f64);
+                let x1 = self.x_of(e as f64).max(x0 + 1.0);
+                let label = f.label().unwrap_or(&f.kind).to_string();
+                let lw = text_width(&label, LABEL_SIZE);
+                // Gene models have lines and boxes inside; label them beside.
+                let label_inside = x1 - x0 >= lw + 8.0 && !parts.contains_key(&id);
+                let reach = if label_inside || !outside_labels {
+                    x1 + 8.0
+                } else {
+                    x1 + 12.0 + lw
+                };
+                items.push(Item {
+                    id,
+                    span: (s, e),
+                    x0,
+                    x1,
+                    label,
+                    label_inside,
+                    reach,
+                });
+            }
         }
         items.sort_by(|a, b| a.x0.total_cmp(&b.x0));
         let max_lanes = (((self.height - top) / (LANE_H + LANE_GAP)).floor() as usize).max(1);
@@ -638,7 +711,7 @@ impl GenomeView {
                 .get(&item.id)
                 .map(|c| c.iter().filter_map(|id| doc.feature(*id)).collect())
                 .unwrap_or_default();
-            self.draw_feature(f, &children, item.x0, item.x1, y, theme, frame);
+            self.draw_feature(f, &children, item.span, item.x0, item.x1, y, theme, frame);
             if self.selected == Some(item.id) {
                 outline(
                     frame,
@@ -688,6 +761,7 @@ impl GenomeView {
         &self,
         f: &Feature,
         parts: &[&Feature],
+        span: (u64, u64),
         x0: f32,
         x1: f32,
         y: f32,
@@ -701,7 +775,7 @@ impl GenomeView {
             if segs.len() > 1 {
                 frame.rect(x0, mid - 1.0, x1 - x0, 2.0, alpha(color, 0.6));
             }
-            for s in segs {
+            for s in segs.iter().filter(|s| within(s, span)) {
                 let sx0 = self.x_of(s.start as f64);
                 let sx1 = self.x_of(s.end as f64).max(sx0 + 1.0);
                 frame.rect(sx0, y, sx1 - sx0, LANE_H, color);
@@ -715,7 +789,7 @@ impl GenomeView {
                 } else {
                     (LANE_H * 0.55, color)
                 };
-                for s in &p.location.segments {
+                for s in p.location.segments.iter().filter(|s| within(s, span)) {
                     let sx0 = self.x_of(s.start as f64);
                     let sx1 = self.x_of(s.end as f64).max(sx0 + 1.0);
                     frame.rect(sx0, mid - h / 2.0, sx1 - sx0, h, c);
@@ -971,6 +1045,49 @@ impl GenomeView {
         }
         parts.join("   ·   ")
     }
+}
+
+/// GC fraction in `bins` bins over `start..end`, each averaged over a
+/// window of at least 100 bp centred on the bin.
+fn window_gc(doc: &SequenceDoc, start: u64, end: u64, bins: usize) -> Vec<f32> {
+    let span = end - start;
+    let bin = span as f64 / bins as f64;
+    let half = (100.0f64.max(bin) / 2.0).ceil() as u64;
+    let lo = start.saturating_sub(half);
+    let hi = (end + half).min(doc.len());
+    let residues = doc.read(lo, hi);
+    // Prefix sums of GC and ACGT counts.
+    let mut gc = Vec::with_capacity(residues.len() + 1);
+    let mut acgt = Vec::with_capacity(residues.len() + 1);
+    let (mut g, mut a) = (0u32, 0u32);
+    gc.push(0);
+    acgt.push(0);
+    for &b in &residues {
+        match b | 0x20 {
+            b'g' | b'c' | b's' => {
+                g += 1;
+                a += 1;
+            }
+            b'a' | b't' | b'u' | b'w' => a += 1,
+            _ => {}
+        }
+        gc.push(g);
+        acgt.push(a);
+    }
+    (0..bins)
+        .map(|i| {
+            let centre = start as f64 + (i as f64 + 0.5) * bin;
+            let w0 = ((centre as u64).saturating_sub(half)).max(lo) - lo;
+            let w1 = ((centre as u64 + half).min(hi)) - lo;
+            let (w0, w1) = (w0 as usize, (w1 as usize).max(w0 as usize));
+            let n = acgt[w1] - acgt[w0];
+            if n == 0 {
+                f32::NAN
+            } else {
+                (gc[w1] - gc[w0]) as f32 / n as f32
+            }
+        })
+        .collect()
 }
 
 /// Mean GC fraction over the whole sequence, the baseline the circular GC

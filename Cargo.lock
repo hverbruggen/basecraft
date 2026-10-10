@@ -210,6 +210,7 @@ name = "basecraft-gui"
 version = "0.0.0"
 dependencies = [
  "basecraft-docs",
+ "basecraft-io",
  "basecraft-ops",
  "basecraft-protocol",
  "basecraft-viewmodel",
@@ -217,6 +218,7 @@ dependencies = [
  "cxx-qt",
  "cxx-qt-build",
  "cxx-qt-lib",
+ "serde_json",
 ]
 
 [[package]]

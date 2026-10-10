@@ -63,6 +63,52 @@ pub mod qobject {
         fn flush(self: Pin<&mut GenomeController>);
         #[qinvokable]
         fn memory_report(self: &GenomeController) -> QString;
+
+        /// Right-click at a point. Returns JSON describing what the context
+        /// menu should offer: `{"feature": id or -1, "label", "selection": bool,
+        /// "length"}`.
+        #[qinvokable]
+        fn context_press(self: Pin<&mut GenomeController>, x: f64, y: f64) -> QString;
+        #[qinvokable]
+        fn double_click(self: Pin<&mut GenomeController>, x: f64, y: f64);
+        /// Zoom by `factor` around `x` (pinch gestures).
+        #[qinvokable]
+        fn zoom_by(self: Pin<&mut GenomeController>, x: f64, factor: f64);
+        #[qinvokable]
+        fn zoom_in(self: Pin<&mut GenomeController>);
+        #[qinvokable]
+        fn zoom_out(self: Pin<&mut GenomeController>);
+        #[qinvokable]
+        fn zoom_to_selection(self: Pin<&mut GenomeController>);
+        #[qinvokable]
+        fn zoom_to_feature(self: Pin<&mut GenomeController>, id: i32);
+        /// Select the residues a feature covers.
+        #[qinvokable]
+        fn select_feature_range(self: Pin<&mut GenomeController>, id: i32);
+        /// A feature as JSON for the editor dialog: kind, GenBank-style
+        /// location, qualifiers.
+        #[qinvokable]
+        fn feature_json(self: &GenomeController, id: i32) -> QString;
+        /// A new feature over the selection, as JSON, not yet added.
+        #[qinvokable]
+        fn new_feature_json(self: &GenomeController) -> QString;
+        /// Add (`id` < 0) or replace a feature from editor JSON. Returns an
+        /// error message, or an empty string on success.
+        #[qinvokable]
+        fn save_feature(self: Pin<&mut GenomeController>, id: i32, json: &QString) -> QString;
+        #[qinvokable]
+        fn delete_feature(self: Pin<&mut GenomeController>, id: i32);
+        /// The selected residues, for the clipboard.
+        #[qinvokable]
+        fn selection_text(self: &GenomeController) -> QString;
+        #[qinvokable]
+        fn reverse_complement_selection(self: Pin<&mut GenomeController>);
+        /// Id of the selected feature, or -1.
+        #[qinvokable]
+        fn selected_feature(self: &GenomeController) -> i32;
+        /// Common INSDC feature keys, as a JSON array.
+        #[qinvokable]
+        fn feature_kinds(self: &GenomeController) -> QString;
     }
 }
 
@@ -71,11 +117,13 @@ use std::pin::Pin;
 use std::time::SystemTime;
 
 use basecraft_docs::FeatureId;
+use basecraft_io::genbank::{format_location, parse_location};
 use basecraft_ops::{DocId, Session};
 use basecraft_protocol::{Feature, Location, Op, Qualifier, Strand};
 use basecraft_viewmodel::{Frame, GenomeView, Mode, Theme};
 use cxx_qt::CxxQtType;
 use cxx_qt_lib::{QByteArray, QString};
+use serde_json::{Value, json};
 
 // Qt key codes and modifiers used below.
 const KEY_ESCAPE: i32 = 0x0100_0000;
@@ -222,11 +270,9 @@ impl qobject::GenomeController {
                     let mut r = self.as_mut().rust_mut();
                     r.session = Some(session);
                     r.doc = Some(doc);
-                    r.view.mode = if circular && len < 2_000_000 {
-                        Mode::Circular
-                    } else {
-                        Mode::Linear
-                    };
+                    // Linear by default; circular is a view you switch to.
+                    let _ = circular;
+                    r.view.mode = Mode::Linear;
                     r.view.fit(len);
                 }
                 let file = path
@@ -615,5 +661,353 @@ impl qobject::GenomeController {
             field("Private_Clean:") + field("Private_Dirty:"),
             field("Anonymous:")
         ))
+    }
+
+    /// Run `f` on the open document's session, if any.
+    fn with_doc<T>(&self, f: impl FnOnce(&Session, DocId) -> T) -> Option<T> {
+        let r = self.rust();
+        match (&r.session, r.doc) {
+            (Some(s), Some(d)) => Some(f(s, d)),
+            _ => None,
+        }
+    }
+
+    #[allow(clippy::cast_possible_truncation)]
+    pub fn context_press(mut self: Pin<&mut Self>, x: f64, y: f64) -> QString {
+        let len = self.len();
+        self.as_mut()
+            .rust_mut()
+            .view
+            .context_press(x as f32, y as f32, len);
+        self.as_mut().refresh();
+        let (selected, selection) = {
+            let v = &self.rust().view;
+            (v.selected, v.selection)
+        };
+        let label = selected
+            .and_then(|id| {
+                self.with_doc(|s, d| {
+                    s.doc(d)
+                        .feature(id)
+                        .map(|f| f.label().unwrap_or(&f.kind).to_string())
+                })
+            })
+            .flatten()
+            .unwrap_or_default();
+        let info = json!({
+            "feature": selected.map_or(-1, |FeatureId(i)| i64::from(i)),
+            "label": label,
+            "selection": selection.is_some(),
+            "length": selection.map_or(0, |(a, b)| b - a),
+        });
+        QString::from(&info.to_string())
+    }
+
+    #[allow(clippy::cast_possible_truncation)]
+    pub fn double_click(mut self: Pin<&mut Self>, x: f64, _y: f64) {
+        let len = self.len();
+        self.as_mut().rust_mut().view.zoom_at(x as f32, 3.0, len);
+        self.refresh();
+    }
+
+    #[allow(clippy::cast_possible_truncation)]
+    pub fn zoom_by(mut self: Pin<&mut Self>, x: f64, factor: f64) {
+        let len = self.len();
+        if factor > 0.0 {
+            self.as_mut().rust_mut().view.zoom_at(x as f32, factor, len);
+        }
+        self.refresh();
+    }
+
+    fn zoom_centre(mut self: Pin<&mut Self>, factor: f64) {
+        let len = self.len();
+        {
+            let mut r = self.as_mut().rust_mut();
+            #[allow(clippy::cast_precision_loss)]
+            let x = r
+                .view
+                .cursor
+                .map_or(r.view.width / 2.0, |c| r.view.x_of(c as f64));
+            let x = x.clamp(0.0, r.view.width);
+            r.view.mode = Mode::Linear;
+            r.view.zoom_at(x, factor, len);
+        }
+        self.as_mut().set_circular(false);
+        self.refresh();
+    }
+
+    pub fn zoom_in(self: Pin<&mut Self>) {
+        self.zoom_centre(2.0);
+    }
+
+    pub fn zoom_out(self: Pin<&mut Self>) {
+        self.zoom_centre(0.5);
+    }
+
+    pub fn zoom_to_selection(mut self: Pin<&mut Self>) {
+        let len = self.len();
+        let Some((a, b)) = self.rust().view.selection else {
+            self.notify("Nothing selected");
+            return;
+        };
+        self.as_mut().rust_mut().view.zoom_to(a, b, len);
+        self.as_mut().set_circular(false);
+        self.refresh();
+    }
+
+    fn feature_bounds(&self, id: i32) -> Option<(u64, u64)> {
+        let id = FeatureId(u32::try_from(id).ok()?);
+        self.with_doc(|s, d| s.doc(d).feature(id).and_then(|f| f.location.bounds()))
+            .flatten()
+    }
+
+    pub fn zoom_to_feature(mut self: Pin<&mut Self>, id: i32) {
+        let len = self.len();
+        if let Some((a, b)) = self.feature_bounds(id) {
+            self.as_mut().rust_mut().view.zoom_to(a, b, len);
+            self.as_mut().set_circular(false);
+            self.refresh();
+        }
+    }
+
+    pub fn select_feature_range(mut self: Pin<&mut Self>, id: i32) {
+        if let Some((a, b)) = self.feature_bounds(id) {
+            {
+                let mut r = self.as_mut().rust_mut();
+                r.view.selection = Some((a, b));
+                r.view.cursor = Some(b);
+            }
+            self.refresh();
+        }
+    }
+
+    pub fn feature_json(&self, id: i32) -> QString {
+        let Ok(fid) = u32::try_from(id) else {
+            return QString::default();
+        };
+        let out = self
+            .with_doc(|s, d| {
+                s.doc(d)
+                    .feature(FeatureId(fid))
+                    .map(|f| feature_to_json(id, f))
+            })
+            .flatten()
+            .unwrap_or(Value::Null);
+        QString::from(&out.to_string())
+    }
+
+    pub fn new_feature_json(&self) -> QString {
+        let v = &self.rust().view;
+        let (a, b) = v.selection.unwrap_or_else(|| {
+            let c = v.cursor.unwrap_or(0);
+            (c, c + 1)
+        });
+        let f = Feature {
+            kind: "misc_feature".into(),
+            location: Location::simple(a, b.max(a + 1), Strand::Forward),
+            qualifiers: vec![Qualifier::new("label", "")],
+        };
+        QString::from(&feature_to_json(-1, &f).to_string())
+    }
+
+    pub fn save_feature(mut self: Pin<&mut Self>, id: i32, json: &QString) -> QString {
+        let feature = match feature_from_json(&json.to_string()) {
+            Ok(f) => f,
+            Err(e) => return QString::from(&e),
+        };
+        let op = match u32::try_from(id) {
+            Ok(i) => Op::FeatureUpdate { id: i, feature },
+            Err(_) => Op::FeatureAdd { feature },
+        };
+        let result = {
+            let mut r = self.as_mut().rust_mut();
+            let r = &mut *r;
+            let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
+                return QString::from("No document open");
+            };
+            session.apply(doc, op)
+        };
+        match result {
+            Ok(out) => {
+                if let Some(fid) = out.feature {
+                    self.as_mut().rust_mut().view.selected = Some(fid);
+                }
+                self.as_mut().set_dirty(true);
+                self.refresh();
+                QString::default()
+            }
+            Err(e) => QString::from(&e.to_string()),
+        }
+    }
+
+    pub fn delete_feature(mut self: Pin<&mut Self>, id: i32) {
+        let Ok(i) = u32::try_from(id) else { return };
+        if self.as_mut().edit(Op::FeatureRemove { id: i }).is_some() {
+            self.as_mut().rust_mut().view.selected = None;
+        }
+        self.refresh();
+    }
+
+    pub fn selection_text(&self) -> QString {
+        let Some((a, b)) = self.rust().view.selection else {
+            return QString::default();
+        };
+        let text = self
+            .with_doc(|s, d| String::from_utf8_lossy(&s.doc(d).read(a, b)).into_owned())
+            .unwrap_or_default();
+        QString::from(&text)
+    }
+
+    pub fn reverse_complement_selection(mut self: Pin<&mut Self>) {
+        let Some((a, b)) = self.rust().view.selection else {
+            self.notify("Select a range to reverse-complement");
+            return;
+        };
+        let rc: String = self
+            .with_doc(|s, d| s.doc(d).read(a, b))
+            .unwrap_or_default()
+            .iter()
+            .rev()
+            .map(|&c| char::from(complement(c)))
+            .collect();
+        let op = Op::SeqReplace {
+            start: a,
+            end: b,
+            residues: rc,
+        };
+        if self.as_mut().edit(op).is_some() {
+            self.as_mut().rust_mut().view.selection = Some((a, b));
+        }
+        self.refresh();
+    }
+
+    pub fn selected_feature(&self) -> i32 {
+        self.rust()
+            .view
+            .selected
+            .and_then(|FeatureId(i)| i32::try_from(i).ok())
+            .unwrap_or(-1)
+    }
+
+    pub fn feature_kinds(&self) -> QString {
+        QString::from(&json!(FEATURE_KINDS).to_string())
+    }
+}
+
+/// Feature keys offered in the editor; any other key can still be typed.
+const FEATURE_KINDS: &[&str] = &[
+    "gene",
+    "CDS",
+    "mRNA",
+    "exon",
+    "intron",
+    "tRNA",
+    "rRNA",
+    "ncRNA",
+    "misc_RNA",
+    "5'UTR",
+    "3'UTR",
+    "promoter",
+    "regulatory",
+    "repeat_region",
+    "mobile_element",
+    "rep_origin",
+    "primer_bind",
+    "protein_bind",
+    "misc_binding",
+    "misc_feature",
+    "variation",
+    "misc_difference",
+    "source",
+];
+
+fn complement(b: u8) -> u8 {
+    match b.to_ascii_uppercase() {
+        b'A' => b'T',
+        b'T' | b'U' => b'A',
+        b'C' => b'G',
+        b'G' => b'C',
+        b'R' => b'Y',
+        b'Y' => b'R',
+        b'K' => b'M',
+        b'M' => b'K',
+        b'B' => b'V',
+        b'V' => b'B',
+        b'D' => b'H',
+        b'H' => b'D',
+        other => other,
+    }
+}
+
+/// Editor JSON: `{"id", "kind", "location": "GenBank syntax, 1-based",
+/// "qualifiers": [{"key", "value", "flag"}]}`. Internal `gff:` qualifiers
+/// are passed through untouched so a round trip keeps them.
+fn feature_to_json(id: i32, f: &Feature) -> Value {
+    let qualifiers: Vec<Value> = f
+        .qualifiers
+        .iter()
+        .map(|q| json!({ "key": q.key, "value": q.value.clone().unwrap_or_default(), "flag": q.value.is_none() }))
+        .collect();
+    json!({
+        "id": id,
+        "kind": f.kind,
+        "location": format_location(&f.location),
+        "length": f.location.len(),
+        "qualifiers": qualifiers,
+    })
+}
+
+fn feature_from_json(text: &str) -> Result<Feature, String> {
+    let v: Value = serde_json::from_str(text).map_err(|e| format!("Bad editor data: {e}"))?;
+    let kind = v["kind"].as_str().unwrap_or("").trim().to_string();
+    if kind.is_empty() {
+        return Err("The feature needs a type".into());
+    }
+    let loc_text = v["location"].as_str().unwrap_or("").trim();
+    let location =
+        parse_location(loc_text).ok_or_else(|| format!("Can't read location {loc_text:?}"))?;
+    if location.segments.is_empty() {
+        return Err("The location is empty".into());
+    }
+    let mut qualifiers = Vec::new();
+    for q in v["qualifiers"].as_array().into_iter().flatten() {
+        let key = q["key"].as_str().unwrap_or("").trim();
+        if key.is_empty() {
+            continue;
+        }
+        let value = q["value"].as_str().unwrap_or("");
+        let flag = q["flag"].as_bool().unwrap_or(false) && value.is_empty();
+        qualifiers.push(Qualifier {
+            key: key.to_string(),
+            value: (!flag).then(|| value.to_string()),
+        });
+    }
+    Ok(Feature {
+        kind,
+        location,
+        qualifiers,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn feature_json_roundtrip() {
+        let f = Feature {
+            kind: "CDS".into(),
+            location: parse_location("complement(join(10..20,30..40))").unwrap(),
+            qualifiers: vec![
+                Qualifier::new("gene", "abc"),
+                Qualifier {
+                    key: "pseudo".into(),
+                    value: None,
+                },
+            ],
+        };
+        let j = feature_to_json(3, &f).to_string();
+        assert_eq!(feature_from_json(&j).unwrap(), f);
+        assert!(feature_from_json(r#"{"kind":"gene","location":"oops"}"#).is_err());
     }
 }
