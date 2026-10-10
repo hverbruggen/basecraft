@@ -25,6 +25,9 @@ pub mod qobject {
         #[qproperty(QString, accent)]
         #[qproperty(bool, circular)]
         #[qproperty(bool, dirty)]
+        #[qproperty(QString, zoom_text)]
+        #[qproperty(f64, scroll_pos)]
+        #[qproperty(f64, scroll_size)]
         type GenomeController = super::ControllerRust;
 
         #[qinvokable]
@@ -103,6 +106,13 @@ pub mod qobject {
         fn selection_text(self: &GenomeController) -> QString;
         #[qinvokable]
         fn reverse_complement_selection(self: Pin<&mut GenomeController>);
+        /// Scroll the linear view to a fraction of the sequence.
+        #[qinvokable]
+        fn scroll_to(self: Pin<&mut GenomeController>, fraction: f64);
+        /// Called repeatedly while a selection drag is near or past an edge;
+        /// returns whether the view moved.
+        #[qinvokable]
+        fn edge_scroll(self: Pin<&mut GenomeController>, x: f64, y: f64) -> bool;
         /// Id of the selected feature, or -1.
         #[qinvokable]
         fn selected_feature(self: &GenomeController) -> i32;
@@ -156,6 +166,9 @@ pub struct ControllerRust {
     accent: QString,
     circular: bool,
     dirty: bool,
+    zoom_text: QString,
+    scroll_pos: f64,
+    scroll_size: f64,
 
     session: Option<Session>,
     doc: Option<DocId>,
@@ -177,6 +190,9 @@ impl Default for ControllerRust {
             accent: QString::default(),
             circular: false,
             dirty: false,
+            zoom_text: QString::default(),
+            scroll_pos: 0.0,
+            scroll_size: 1.0,
             session: None,
             doc: None,
             view: GenomeView::new(800.0, 600.0),
@@ -249,8 +265,26 @@ impl qobject::GenomeController {
             r.view.build(d, &r.theme, &mut r.scratch);
             (r.scratch.to_bytes(), r.view.status(d))
         };
+        let (zoom, (pos, size)) = {
+            let len = self.len();
+            let v = &self.rust().view;
+            let zoom = if v.mode == Mode::Linear {
+                v.zoom_text(len)
+            } else {
+                String::new()
+            };
+            let scroll = if v.mode == Mode::Linear {
+                v.scroll_fraction(len)
+            } else {
+                (0.0, 1.0)
+            };
+            (zoom, scroll)
+        };
         self.as_mut().set_frame(QByteArray::from(bytes.as_slice()));
         self.as_mut().set_status(QString::from(&status));
+        self.as_mut().set_zoom_text(QString::from(&zoom));
+        self.as_mut().set_scroll_size(size);
+        self.as_mut().set_scroll_pos(pos);
     }
 
     fn notify(mut self: Pin<&mut Self>, msg: &str) {
@@ -879,6 +913,26 @@ impl qobject::GenomeController {
             self.as_mut().rust_mut().view.selection = Some((a, b));
         }
         self.refresh();
+    }
+
+    pub fn scroll_to(mut self: Pin<&mut Self>, fraction: f64) {
+        let len = self.len();
+        self.as_mut().rust_mut().view.scroll_to(fraction, len);
+        self.refresh();
+    }
+
+    #[allow(clippy::cast_possible_truncation)]
+    pub fn edge_scroll(mut self: Pin<&mut Self>, x: f64, y: f64) -> bool {
+        let len = self.len();
+        let moved = self
+            .as_mut()
+            .rust_mut()
+            .view
+            .edge_scroll(x as f32, y as f32, len);
+        if moved {
+            self.refresh();
+        }
+        moved
     }
 
     pub fn selected_feature(&self) -> i32 {

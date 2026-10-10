@@ -52,7 +52,7 @@ const LABEL_SIZE: f32 = 13.0;
 /// Most pixels per base when zoomed in.
 const MAX_PX_PER_BP: f64 = 28.0;
 /// Pixels per base from which residue letters are drawn.
-const LETTERS_FROM: f64 = 9.0;
+const LETTERS_FROM: f64 = 3.5;
 /// Above this many visible features, draw their density instead.
 const MAX_DRAWN_FEATURES: usize = 4000;
 
@@ -229,6 +229,57 @@ impl GenomeView {
         self.selected = None;
     }
 
+    /// Zoom level for display: pixels per base when bases are wider than a
+    /// pixel, else bases per pixel, plus how much sequence is shown.
+    pub fn zoom_text(&self, len: u64) -> String {
+        let ppb = self.px_per_bp();
+        let level = if ppb >= 1.0 {
+            format!("{ppb:.1} px/bp")
+        } else {
+            format!("{} bp/px", format_thousands(self.bp_per_px.round() as u64))
+        };
+        let shown = self.span().min(len as f64) as u64;
+        format!("{level} · {} shown", format_length(shown))
+    }
+
+    /// Scrollbar position and size, as fractions of the sequence.
+    pub fn scroll_fraction(&self, len: u64) -> (f64, f64) {
+        let len = len.max(1) as f64;
+        let size = (self.span() / len).min(1.0);
+        let pos = (self.start / len).clamp(0.0, (1.0 - size).max(0.0));
+        (pos, size)
+    }
+
+    pub fn scroll_to(&mut self, fraction: f64, len: u64) {
+        self.start = fraction * len as f64;
+        self.clamp(len);
+    }
+
+    /// While a selection drag is past either edge of the view, scroll that
+    /// way, faster the further out the pointer is, and extend the selection.
+    /// Returns whether it scrolled, so the caller keeps ticking.
+    pub fn edge_scroll(&mut self, x: f32, y: f32, len: u64) -> bool {
+        const EDGE: f32 = 24.0;
+        if !matches!(self.drag, Drag::Select { .. }) || self.mode != Mode::Linear {
+            return false;
+        }
+        let over = if x < EDGE {
+            x - EDGE
+        } else if x > self.width - EDGE {
+            x - (self.width - EDGE)
+        } else {
+            0.0
+        };
+        if over == 0.0 {
+            return false;
+        }
+        let before = self.start;
+        // Pixels per tick: a slow crawl near the edge, fast far beyond it.
+        self.pan(-(over.signum() * (2.0 + over.abs() * 0.6)), len);
+        self.drag_to(x.clamp(0.0, self.width), y, len);
+        (self.start - before).abs() > f64::EPSILON
+    }
+
     /// Scroll so that `pos` is visible.
     pub fn reveal(&mut self, pos: u64, len: u64) {
         let p = pos as f64;
@@ -260,9 +311,9 @@ impl GenomeView {
         self.px_per_bp() >= LETTERS_FROM
     }
 
+    #[allow(clippy::unused_self)] // Will depend on track settings.
     fn feature_top(&self) -> f32 {
-        let rows = if self.letters() { 2.0 } else { 1.0 };
-        SEQ_Y + SEQ_H * rows + 18.0
+        SEQ_Y + SEQ_H + 18.0
     }
 
     pub fn region_at(&self, y: f32) -> Region {
@@ -506,32 +557,19 @@ impl GenomeView {
                 let x = self.x_of((b0 + i as u64) as f64);
                 let c = theme.residue(b);
                 if letters {
-                    let size = (SEQ_H - 3.0).min(ppb * 1.7);
+                    // The forward strand only; leave a gap between cells
+                    // once there's room for one.
+                    let size = (SEQ_H - 3.0).min(ppb * 2.0);
                     let gx = x + (ppb - size * crate::frame::GLYPH_ADVANCE) / 2.0;
+                    let gap = if ppb >= 9.0 { 1.0 } else { 0.0 };
                     frame.rect(
-                        x + 0.5,
+                        x + gap / 2.0,
                         SEQ_Y,
-                        ppb - 1.0,
+                        ppb - gap,
                         SEQ_H,
                         mix(theme.background, c, 0.22),
                     );
                     frame.glyph(gx, SEQ_Y + (SEQ_H - size) / 2.0, size, b, c);
-                    let comp = complement(b);
-                    let cc = theme.residue(comp);
-                    frame.rect(
-                        x + 0.5,
-                        SEQ_Y + SEQ_H + 2.0,
-                        ppb - 1.0,
-                        SEQ_H,
-                        mix(theme.background, cc, 0.10),
-                    );
-                    frame.glyph(
-                        gx,
-                        SEQ_Y + SEQ_H + 2.0 + (SEQ_H - size) / 2.0,
-                        size,
-                        comp,
-                        alpha(cc, 0.7),
-                    );
                 } else {
                     frame.rect(x, SEQ_Y, ppb.max(1.0), SEQ_H, alpha(c, 0.85));
                 }
@@ -656,6 +694,46 @@ impl GenomeView {
                 absorbed.insert(id);
             }
         }
+        // GenBank has no Parent links: group exon, intron and CDS features
+        // under the transcript (or CDS) of the same /gene.
+        let rank = |kind: &str| match kind {
+            "mRNA" | "transcript" => 3,
+            "tRNA" | "rRNA" | "ncRNA" | "misc_RNA" => 2,
+            "CDS" => 1,
+            _ => 0,
+        };
+        let mut by_gene: HashMap<&str, FeatureId> = HashMap::new();
+        for &id in &ids {
+            let Some(f) = doc.feature(id) else { continue };
+            let (Some(g), r) = (f.qualifier("gene"), rank(&f.kind)) else {
+                continue;
+            };
+            if r > 0
+                && by_gene
+                    .get(g)
+                    .and_then(|o| doc.feature(*o))
+                    .is_none_or(|o| rank(&o.kind) < r)
+            {
+                by_gene.insert(g, id);
+            }
+        }
+        for &id in &ids {
+            let Some(f) = doc.feature(id) else { continue };
+            if absorbed.contains(&id) || f.qualifier("Parent").is_some() {
+                continue;
+            }
+            if !matches!(f.kind.as_str(), "exon" | "intron" | "CDS") {
+                continue;
+            }
+            let Some(&pid) = f.qualifier("gene").and_then(|g| by_gene.get(g)) else {
+                continue;
+            };
+            let parent_rank = doc.feature(pid).map_or(0, |p| rank(&p.kind));
+            if pid != id && parent_rank > rank(&f.kind) {
+                parts.entry(pid).or_default().push(id);
+                absorbed.insert(id);
+            }
+        }
         ids.retain(|id| !absorbed.contains(id));
 
         // Labels beside features cost lane space; only when there's room.
@@ -669,7 +747,9 @@ impl GenomeView {
                 let label = f.label().unwrap_or(&f.kind).to_string();
                 let lw = text_width(&label, LABEL_SIZE);
                 // Gene models have lines and boxes inside; label them beside.
-                let label_inside = x1 - x0 >= lw + 8.0 && !parts.contains_key(&id);
+                // Measured on the visible part, so long features keep a name.
+                let visible = x1.min(self.width) - x0.max(0.0);
+                let label_inside = visible >= lw + 8.0 && !parts.contains_key(&id);
                 let reach = if label_inside || !outside_labels {
                     x1 + 8.0
                 } else {
@@ -689,7 +769,9 @@ impl GenomeView {
         items.sort_by(|a, b| a.x0.total_cmp(&b.x0));
         let max_lanes = (((self.height - top) / (LANE_H + LANE_GAP)).floor() as usize).max(1);
         let mut lane_ends: Vec<f32> = Vec::new();
-        for item in &items {
+        // (lane, item) in drawing order, for placing labels afterwards.
+        let mut placed: Vec<(usize, usize)> = Vec::new();
+        for (index, item) in items.iter().enumerate() {
             let lane = lane_ends.iter().position(|&end| end + 4.0 < item.x0);
             let lane = match lane {
                 Some(l) => l,
@@ -703,6 +785,7 @@ impl GenomeView {
                 }
             };
             lane_ends[lane] = item.reach;
+            placed.push((lane, index));
             let y = top + lane as f32 * (LANE_H + LANE_GAP);
             let Some(f) = doc.feature(item.id) else {
                 continue;
@@ -722,16 +805,30 @@ impl GenomeView {
                     theme.accent,
                 );
             }
+            self.hits.push(([item.x0, y, item.x1, y + LANE_H], item.id));
+        }
+        // Names: inside the feature when they fit, else beside it when the
+        // gap to the next feature on the row is wide enough.
+        for (k, &(lane, index)) in placed.iter().enumerate() {
+            let item = &items[index];
+            let y = top + lane as f32 * (LANE_H + LANE_GAP);
             let text_y = y + (LANE_H - LABEL_SIZE) / 2.0;
             if item.label_inside {
                 frame.text(
-                    item.x0 + 4.0,
+                    item.x0.max(0.0) + 4.0,
                     text_y,
                     LABEL_SIZE,
                     &item.label,
                     theme.background,
                 );
-            } else if item.reach > item.x1 + 8.0 {
+                continue;
+            }
+            let next_x0 = placed[k + 1..]
+                .iter()
+                .find(|(l, _)| *l == lane)
+                .map_or(self.width, |&(_, i)| items[i].x0);
+            let room = next_x0 - (item.x1 + 10.0) - 6.0;
+            if room >= text_width(&item.label, LABEL_SIZE) && item.x1 + 10.0 >= 0.0 {
                 frame.text(
                     item.x1 + 10.0,
                     text_y,
@@ -740,7 +837,6 @@ impl GenomeView {
                     theme.foreground,
                 );
             }
-            self.hits.push(([item.x0, y, item.x1, y + LANE_H], item.id));
         }
         if self.hidden > 0 {
             frame.text(
@@ -782,12 +878,28 @@ impl GenomeView {
             }
         } else {
             frame.rect(x0, mid - 1.0, x1 - x0, 2.0, alpha(color, 0.7));
-            for p in parts {
-                let coding = p.kind == "CDS";
-                let (h, c) = if coding {
-                    (LANE_H, theme.feature("CDS"))
+            // The parent's own segments, when they carry the structure (a
+            // CDS or tRNA with join(), or a spliced mRNA); a single-span
+            // transcript relies on its exon children instead.
+            let own = segs.len() > 1 || !is_transcript(&f.kind);
+            if own {
+                let h = if f.kind == "CDS" {
+                    LANE_H
                 } else {
-                    (LANE_H * 0.55, color)
+                    LANE_H * 0.75
+                };
+                for s in segs.iter().filter(|s| within(s, span)) {
+                    let sx0 = self.x_of(s.start as f64);
+                    let sx1 = self.x_of(s.end as f64).max(sx0 + 1.0);
+                    frame.rect(sx0, mid - h / 2.0, sx1 - sx0, h, color);
+                }
+            }
+            for p in parts {
+                let (h, c) = match p.kind.as_str() {
+                    "CDS" => (LANE_H, theme.feature("CDS")),
+                    "intron" => continue,
+                    _ if own => continue,
+                    _ => (LANE_H * 0.55, color),
                 };
                 for s in p.location.segments.iter().filter(|s| within(s, span)) {
                     let sx0 = self.x_of(s.start as f64);
@@ -1097,20 +1209,6 @@ fn mean_gc(doc: &SequenceDoc) -> f32 {
     v.first().copied().filter(|x| !x.is_nan()).unwrap_or(0.5)
 }
 
-fn complement(b: u8) -> u8 {
-    match b {
-        b'A' => b'T',
-        b'T' | b'U' => b'A',
-        b'C' => b'G',
-        b'G' => b'C',
-        b'a' => b't',
-        b't' => b'a',
-        b'c' => b'g',
-        b'g' => b'c',
-        other => other,
-    }
-}
-
 fn outline(frame: &mut Frame, x: f32, y: f32, w: f32, h: f32, color: Rgba) {
     frame.rect(x, y, w, 2.0, color);
     frame.rect(x, y + h - 2.0, w, 2.0, color);
@@ -1174,6 +1272,17 @@ pub fn format_bp(n: u64, step: f64) -> String {
         return format_thousands(n);
     }
     format!("{:.*}{suffix}", decimals, n as f64 / unit)
+}
+
+/// A length with a unit: 950 bp, 12.5 kb, 1.50 Mb.
+pub fn format_length(n: u64) -> String {
+    if n >= 1_000_000 {
+        format!("{:.2} Mb", n as f64 / 1e6)
+    } else if n >= 1_000 {
+        format!("{:.1} kb", n as f64 / 1e3)
+    } else {
+        format!("{n} bp")
+    }
 }
 
 pub fn format_thousands(n: u64) -> String {
@@ -1282,6 +1391,22 @@ mod tests {
         assert_eq!(v.cursor, Some(2000));
         v.move_cursor(5, true, d.len());
         assert_eq!(v.selection, Some((1000, 2005)));
+    }
+
+    #[test]
+    fn dragging_past_the_edge_scrolls_and_extends() {
+        let d = doc();
+        let mut v = GenomeView::new(1000.0, 600.0);
+        v.zoom_to(5000, 6000, d.len());
+        v.press(500.0, SEQ_Y + 5.0, false, d.len());
+        let start = v.start;
+        assert!(v.edge_scroll(-50.0, SEQ_Y + 5.0, d.len()));
+        assert!(v.start < start);
+        let (a, _) = v.selection.unwrap();
+        assert!(a as f64 <= v.start + 1.0);
+        // Not dragging: no scrolling.
+        v.release();
+        assert!(!v.edge_scroll(-50.0, SEQ_Y + 5.0, d.len()));
     }
 
     #[test]

@@ -1,8 +1,13 @@
 //! Qt/QML desktop application.
 
 // cxx-qt's generated constructors box their return values, and QML
-// invokables are methods even when they don't need `self`.
-#![allow(clippy::unnecessary_box_returns, clippy::unused_self)]
+// invokables are methods even when they don't need `self`; its generated
+// property setters compare floats exactly.
+#![allow(
+    clippy::unnecessary_box_returns,
+    clippy::unused_self,
+    clippy::float_cmp
+)]
 
 mod bridge;
 

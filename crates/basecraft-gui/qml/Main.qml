@@ -50,6 +50,13 @@ ApplicationWindow {
             Tool { text: "+"; ToolTip.text: "Zoom in (+, double-click)"; ToolTip.visible: hovered; onClicked: controller.zoom_in() }
             Tool { text: "Fit"; ToolTip.text: "Whole sequence (Ctrl+0)"; ToolTip.visible: hovered; onClicked: controller.fit() }
             Tool { text: "Zoom to selection"; onClicked: controller.zoom_to_selection() }
+            Label {
+                text: controller.zoom_text
+                leftPadding: 8
+                rightPadding: 4
+                font.pixelSize: 12
+                opacity: 0.75
+            }
             ToolSeparator {}
             Tool { text: "Add feature…"; ToolTip.text: "Annotate the selection (Ctrl+N)"; ToolTip.visible: hovered; onClicked: editor.openNew() }
             Tool { text: "Edit feature…"; enabled: true; ToolTip.text: "Edit the selected feature (Enter)"; ToolTip.visible: hovered; onClicked: editor.openSelected() }
@@ -101,14 +108,54 @@ ApplicationWindow {
                     controller.press(mouse.x, mouse.y, mouse.modifiers)
                 }
             }
-            onPositionChanged: (mouse) => { if (mouse.buttons & Qt.LeftButton) controller.drag(mouse.x, mouse.y) }
-            onReleased: controller.release()
+            property real lastX: 0
+            property real lastY: 0
+            onPositionChanged: (mouse) => {
+                if (!(mouse.buttons & Qt.LeftButton)) return
+                lastX = mouse.x; lastY = mouse.y
+                controller.drag(mouse.x, mouse.y)
+                edgeTimer.running = mouse.x < 24 || mouse.x > view.width - 24
+            }
+            onReleased: { edgeTimer.running = false; controller.release() }
+            // Keeps scrolling while a selection drag sits at or past an edge.
+            Timer {
+                id: edgeTimer
+                interval: 16
+                repeat: true
+                onTriggered: running = controller.edge_scroll(parent.lastX, parent.lastY) && parent.pressed
+            }
             onDoubleClicked: (mouse) => {
                 const info = JSON.parse(controller.context_press(mouse.x, mouse.y))
                 if (info.feature >= 0) editor.openFeature(info.feature)
                 else controller.double_click(mouse.x, mouse.y)
             }
             onWheel: (wheel) => controller.wheel(wheel.x, wheel.angleDelta.y, wheel.angleDelta.x, wheel.modifiers)
+        }
+
+        ScrollBar {
+            id: hbar
+            orientation: Qt.Horizontal
+            anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
+            policy: ScrollBar.AlwaysOn
+            visible: !controller.circular && controller.scroll_size < 0.999
+            size: controller.scroll_size
+            minimumSize: 0.04
+            contentItem: Rectangle {
+                implicitHeight: 10
+                radius: 5
+                color: Qt.alpha(controller.foreground, hbar.pressed ? 0.65 : 0.4)
+            }
+            background: Rectangle { color: Qt.alpha(controller.foreground, 0.06) }
+            onPositionChanged: if (pressed) controller.scroll_to(position)
+        }
+        // Follow the controller except while the user drags the bar, so the
+        // binding survives interaction.
+        Binding {
+            target: hbar
+            property: "position"
+            value: controller.scroll_pos
+            when: !hbar.pressed
+            restoreMode: Binding.RestoreNone
         }
 
         PinchHandler {
