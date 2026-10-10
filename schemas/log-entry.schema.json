@@ -206,6 +206,43 @@
       ]
     },
     {
+      "description": "Write residues `start..end` and the annotations within them to a new\nfile at `path`. Annotations cut by the range are clipped and marked\nincomplete at the cut. Records the new file's hash.",
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "doc.extract"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "end": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "path": {
+              "type": "string"
+            },
+            "start": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "start",
+            "end",
+            "path"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ]
+    },
+    {
       "description": "Undo the operation with log id `of`.",
       "type": "object",
       "properties": {

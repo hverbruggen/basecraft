@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use basecraft_docs::SequenceDoc;
 use basecraft_io::{cache, fasta, genbank, gff3};
+use basecraft_protocol::{Feature, Location, Qualifier, Segment};
 
 use crate::{Error, Result};
 
@@ -169,5 +170,103 @@ impl<W: Write> Write for HashingWriter<W> {
 
     fn flush(&mut self) -> io::Result<()> {
         self.inner.flush()
+    }
+}
+
+/// A new GenBank record for residues `start..end` of `doc`, with every
+/// annotation that overlaps the range, clipped to it and shifted. A part
+/// cut by the range is marked incomplete on that side (GenBank `<`/`>`).
+pub fn extract_record(doc: &SequenceDoc, start: u64, end: u64) -> genbank::Record {
+    let name = format!("{}_{}-{}", doc.name, start + 1, end);
+    let mut features = Vec::new();
+    for id in doc.features_in(start, end) {
+        let Some(f) = doc.feature(id) else { continue };
+        let mut segments = Vec::new();
+        for s in &f.location.segments {
+            let (a, b) = (s.start.max(start), s.end.min(end));
+            let inside = if s.is_empty() {
+                s.start >= start && s.start <= end
+            } else {
+                b > a
+            };
+            if !inside {
+                continue;
+            }
+            segments.push(Segment {
+                start: a - start,
+                end: b.max(a) - start,
+                strand: s.strand,
+                partial_start: s.partial_start || s.start < start,
+                partial_end: s.partial_end || s.end > end,
+            });
+        }
+        if segments.is_empty() {
+            continue;
+        }
+        // Parts dropped entirely count too: an annotation reaching past the
+        // range is incomplete at that end.
+        if let Some((lo, hi)) = f.location.bounds() {
+            if lo < start
+                && let Some(s) = segments.iter_mut().min_by_key(|s| s.start)
+            {
+                s.partial_start = true;
+            }
+            if hi > end
+                && let Some(s) = segments.iter_mut().max_by_key(|s| s.end)
+            {
+                s.partial_end = true;
+            }
+        }
+        features.push(Feature {
+            kind: f.kind.clone(),
+            location: Location {
+                segments,
+                unordered: f.location.unordered,
+            },
+            qualifiers: f.qualifiers.clone(),
+        });
+    }
+    features.insert(
+        0,
+        Feature {
+            kind: "source".into(),
+            location: Location::simple(0, end - start, basecraft_protocol::Strand::Forward),
+            qualifiers: vec![Qualifier::new(
+                "note",
+                format!("bases {}..{} of {}", start + 1, end, doc.name),
+            )],
+        },
+    );
+    // A source feature from the original no longer describes the extract.
+    features.retain(|f| {
+        !(f.kind == "source" && f.qualifier("note").is_none_or(|n| !n.starts_with("bases ")))
+    });
+    let meta = doc.genbank.clone().unwrap_or_default();
+    genbank::Record {
+        name,
+        molecule: if meta.molecule.is_empty() {
+            "DNA".into()
+        } else {
+            meta.molecule
+        },
+        circular: false,
+        division: if meta.division.is_empty() {
+            "UNK".into()
+        } else {
+            meta.division
+        },
+        date: if meta.date.is_empty() {
+            "01-JAN-1970".into()
+        } else {
+            meta.date
+        },
+        header: vec![format!(
+            "DEFINITION  Bases {}..{} of {}, extracted with Basecraft.",
+            start + 1,
+            end,
+            doc.name
+        )],
+        features,
+        sequence: doc.read(start, end),
     }
 }

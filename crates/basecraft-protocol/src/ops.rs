@@ -36,6 +36,11 @@ pub enum Op {
     FeatureRemove { id: u32 },
     #[serde(rename = "feature.update")]
     FeatureUpdate { id: u32, feature: Feature },
+    /// Write residues `start..end` and the annotations within them to a new
+    /// file at `path`. Annotations cut by the range are clipped and marked
+    /// incomplete at the cut. Records the new file's hash.
+    #[serde(rename = "doc.extract")]
+    Extract { start: u64, end: u64, path: String },
     /// Undo the operation with log id `of`.
     #[serde(rename = "history.undo")]
     Undo { of: String },
@@ -49,6 +54,7 @@ impl Op {
         match self {
             Op::Open { .. } => "doc.open",
             Op::Save { .. } => "doc.save",
+            Op::Extract { .. } => "doc.extract",
             Op::SeqReplace { .. } => "seq.replace",
             Op::FeatureAdd { .. } => "feature.add",
             Op::FeatureRemove { .. } => "feature.remove",

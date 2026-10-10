@@ -309,6 +309,50 @@ impl Session {
         self.write(&entry)
     }
 
+    /// Extract residues `start..end` with their annotations to a new
+    /// GenBank file at `path`, and log it.
+    pub fn extract(&mut self, id: DocId, start: u64, end: u64, path: &Path) -> Result<()> {
+        self.flush()?;
+        let doc = &self.docs[id.0].opened.doc;
+        if start >= end || end > doc.len() {
+            return Err(invalid(format!(
+                "range {start}..{end} outside 0..{}",
+                doc.len()
+            )));
+        }
+        let rec = files::extract_record(doc, start, end);
+        let mut hash = String::new();
+        basecraft_io::write_atomic(path, |w| {
+            let mut hw = HashingWriter::new(w);
+            basecraft_io::genbank::write(&mut hw, &rec)?;
+            hash = hw.hash();
+            Ok(())
+        })?;
+        let key = self.relative(path);
+        let entry = self.entry(
+            id,
+            self.actor.clone(),
+            Op::Extract {
+                start,
+                end,
+                path: key.clone(),
+            },
+            OpResult {
+                hashes: vec![(key, hash)],
+                feature: None,
+            },
+        );
+        self.write(&entry)
+    }
+
+    /// The hash of the file an extract would write, without writing it.
+    pub fn extract_hash(&self, id: DocId, start: u64, end: u64) -> Result<String> {
+        let rec = files::extract_record(&self.docs[id.0].opened.doc, start, end);
+        let mut hw = HashingWriter::new(std::io::sink());
+        basecraft_io::genbank::write(&mut hw, &rec)?;
+        Ok(hw.hash())
+    }
+
     /// Hashes the files a save would write, without writing them.
     pub fn save_hashes(&self, id: DocId) -> Result<Vec<String>> {
         let opened = &self.docs[id.0].opened;
@@ -499,9 +543,11 @@ impl Session {
                 let before = doc.update_feature(fid, feature.clone());
                 Ok((Inverse::Feature { id: fid, before }, None))
             }
-            Op::Open { .. } | Op::Save { .. } | Op::Undo { .. } | Op::Redo { .. } => {
-                Err(invalid(format!("{} is not an edit", op.name())))
-            }
+            Op::Open { .. }
+            | Op::Save { .. }
+            | Op::Extract { .. }
+            | Op::Undo { .. }
+            | Op::Redo { .. } => Err(invalid(format!("{} is not an edit", op.name()))),
         }
     }
 
