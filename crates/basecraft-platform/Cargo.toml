@@ -9,6 +9,8 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
+memmap2.workspace = true
+rustix.workspace = true
 
 # This crate may use unsafe code (mmap, signal handling), so it can't
 # inherit the workspace lints, which deny it. Keep this list in sync.

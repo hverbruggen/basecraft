@@ -1,5 +1,10 @@
 //! Platform-specific pieces behind portable functions: host and user names,
-//! and later file watching, shared memory and SIGBUS handling.
+//! shared memory and descriptor passing, and later file watching and SIGBUS
+//! handling.
+
+#[cfg(unix)]
+pub mod fdpass;
+pub mod shm;
 
 /// This machine's host name, used to keep one log stream per machine.
 pub fn hostname() -> String {
