@@ -12,7 +12,7 @@ ApplicationWindow {
     title: current ? fileName(currentPath) + " — Basecraft" : "Basecraft"
     color: shell.background
     font.family: shell.mono_font
-    font.pixelSize: 12
+    font.pixelSize: 11
 
     palette.window: shell.background
     palette.base: Qt.lighter(shell.background, 1.04)
@@ -163,7 +163,7 @@ ApplicationWindow {
                     implicitWidth: tree.width
                     readonly property string path: files.pathAt(treeView.index(row, column))
                     highlighted: path === window.currentPath
-                    implicitHeight: 20
+                    implicitHeight: 18
                     topPadding: 0
                     bottomPadding: 0
                     onClicked: {
@@ -216,8 +216,15 @@ ApplicationWindow {
                         contentItem: Row {
                             spacing: 6
                             Label {
+                                // Long names shorten in the middle, keeping
+                                // the extension; the full name is a hover away.
                                 text: window.fileName(path) + (dirty ? " •" : "")
+                                width: Math.min(implicitWidth, 180)
+                                elide: Text.ElideMiddle
                                 anchors.verticalCenter: parent.verticalCenter
+                                ToolTip.text: path
+                                ToolTip.visible: tabHover.hovered && truncated
+                                HoverHandler { id: tabHover }
                             }
                             ToolButton {
                                 text: "×"
@@ -269,7 +276,7 @@ ApplicationWindow {
             Rectangle {
                 visible: openFiles.count > 0
                 Layout.fillWidth: true
-                implicitHeight: 22
+                implicitHeight: 20
                 color: Qt.alpha(shell.foreground, 0.06)
                 Label {
                     anchors { verticalCenter: parent.verticalCenter; left: parent.left; leftMargin: 10; right: parent.right; rightMargin: 10 }

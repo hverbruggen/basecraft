@@ -369,13 +369,14 @@ impl qobject::GenomeController {
                 };
                 {
                     let mut r = self.as_mut().rust_mut();
-                    r.session = Some(session);
-                    r.doc = Some(doc);
+                    let r = &mut *r;
                     // Wrapped, fitted to the window, circular molecules too;
                     // the other views are a switch away.
-                    let _ = circular;
+                    let _ = (circular, len);
                     r.view.mode = Mode::Wrapped;
-                    r.view.fit(len);
+                    r.view.fit_doc(session.doc(doc));
+                    r.session = Some(session);
+                    r.doc = Some(doc);
                 }
                 let file = path
                     .file_name()
@@ -539,8 +540,13 @@ impl qobject::GenomeController {
     }
 
     pub fn fit(mut self: Pin<&mut Self>) {
-        let len = self.len();
-        self.as_mut().rust_mut().view.fit(len);
+        {
+            let mut r = self.as_mut().rust_mut();
+            let r = &mut *r;
+            if let (Some(s), Some(d)) = (&r.session, r.doc) {
+                r.view.fit_doc(s.doc(d));
+            }
+        }
         self.refresh();
     }
 

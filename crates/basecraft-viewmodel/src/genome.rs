@@ -240,7 +240,35 @@ impl GenomeView {
         self.clamp(len);
     }
 
-    /// 100 % zoom from the start of the sequence: the opening view.
+    /// Fit the whole sequence in the view. Linear: across the width.
+    /// Wrapped: the zoom whose wrapped lines fill the height as well,
+    /// found by trying line counts from the most that could fit down.
+    pub fn fit_doc(&mut self, doc: &SequenceDoc) {
+        let len = doc.len().max(1);
+        if self.mode != Mode::Wrapped {
+            self.fit(len);
+            return;
+        }
+        let min_line = self.line_height(0);
+        let most = ((self.height / min_line).floor() as u64).clamp(1, len);
+        let mut best = 1;
+        for lines in (1..=most).rev() {
+            self.bp_per_px = len as f64 / (lines as f64 * f64::from(self.width));
+            self.clamp(len);
+            self.ensure_wrap(doc);
+            if self.wrap_total() - BLOCK_GAP <= self.height {
+                best = lines;
+                break;
+            }
+        }
+        self.bp_per_px = len as f64 / (best as f64 * f64::from(self.width));
+        self.start = 0.0;
+        self.scroll_y = 0.0;
+        self.anchor = Some((0, 0.0));
+        self.clamp(len);
+    }
+
+    /// 100 % zoom from the start of the sequence.
     pub fn reset_zoom(&mut self, len: u64) {
         self.bp_per_px = 1.0 / PX_PER_BP_AT_100;
         self.start = 0.0;
@@ -1950,6 +1978,20 @@ mod tests {
         v.build(&d, &Theme::default(), &mut f);
         let top = v.line_at(1.0) as u64 * v.line_bp();
         assert!(top <= line && line < top + v.line_bp());
+    }
+
+    #[test]
+    fn wrapped_fit_fills_the_height() {
+        let d = doc();
+        let mut v = GenomeView::new(1000.0, 900.0);
+        v.fit_doc(&d);
+        let mut f = Frame::new();
+        v.build(&d, &Theme::default(), &mut f);
+        let w = v.wrap.clone().unwrap();
+        let lines = w.offsets.len() - 1;
+        assert!(lines > 1, "uses several lines");
+        assert!(w.offsets[lines] - BLOCK_GAP <= 900.0, "all on screen");
+        assert_eq!(v.scroll_fraction(d.len()).1, 1.0);
     }
 
     #[test]
