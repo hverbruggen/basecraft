@@ -33,6 +33,11 @@ compile_commands.json
 # Basecraft project state, created when running against test data
 .basecraft/
 
+# Only fixtures and generator code live under testdata/.
+/testdata/*
+!/testdata/fixtures/
+!/testdata/generate/
+
 # Large data formats. Generated test data goes to ~/.cache/basecraft-testdata.
 # Small files under testdata/fixtures/ are allowed. The pre-commit hook
 # blocks any file over 5 MB, whatever its type.

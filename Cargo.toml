@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*"]
+members = ["crates/*", "testdata/generate"]
 # Spikes are separate Cargo workspaces so their dependencies stay out of this lockfile.
 exclude = ["spikes"]
 

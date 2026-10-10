@@ -51,10 +51,9 @@ replay:
 bench:
     @echo "wall-clock benchmarks: not set up yet"
 
-# Generate large synthetic test data outside the synced folder.
-testdata:
-    mkdir -p {{testdata_dir}}
-    @echo "generators in testdata/generate: not written yet"
+# Generate synthetic test data outside the synced folder. scale: small or full.
+testdata scale="small":
+    cargo run --release -q -p basecraft-testgen -- --out {{testdata_dir}} --scale {{scale}}
 
 # Build the basecraft-core Python module into the pixi environment.
 py:
