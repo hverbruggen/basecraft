@@ -97,13 +97,19 @@ ApplicationWindow {
         onHeightChanged: controller.resize(width, height)
 
         MouseArea {
+            id: mouse
             anchors.fill: parent
-            acceptedButtons: Qt.LeftButton | Qt.RightButton
+            acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
+            hoverEnabled: true
+            property string hoverText: ""
             onPressed: (mouse) => {
                 view.forceActiveFocus()
+                hoverText = ""
                 if (mouse.button === Qt.RightButton) {
                     menu.info = JSON.parse(controller.context_press(mouse.x, mouse.y))
                     menu.popup()
+                } else if (mouse.button === Qt.MiddleButton) {
+                    controller.pan_press(mouse.x)
                 } else {
                     controller.press(mouse.x, mouse.y, mouse.modifiers)
                 }
@@ -111,11 +117,15 @@ ApplicationWindow {
             property real lastX: 0
             property real lastY: 0
             onPositionChanged: (mouse) => {
-                if (!(mouse.buttons & Qt.LeftButton)) return
                 lastX = mouse.x; lastY = mouse.y
-                controller.drag(mouse.x, mouse.y)
-                edgeTimer.running = mouse.x < 24 || mouse.x > view.width - 24
+                if (mouse.buttons & (Qt.LeftButton | Qt.MiddleButton)) {
+                    controller.drag(mouse.x, mouse.y)
+                    edgeTimer.running = (mouse.buttons & Qt.LeftButton) && (mouse.x < 24 || mouse.x > view.width - 24)
+                } else {
+                    hoverText = controller.hover(mouse.x, mouse.y)
+                }
             }
+            onExited: hoverText = ""
             onReleased: { edgeTimer.running = false; controller.release() }
             // Keeps scrolling while a selection drag sits at or past an edge.
             Timer {
@@ -130,6 +140,25 @@ ApplicationWindow {
                 else controller.double_click(mouse.x, mouse.y)
             }
             onWheel: (wheel) => controller.wheel(wheel.x, wheel.angleDelta.y, wheel.angleDelta.x, wheel.modifiers)
+        }
+
+        // Feature tooltip, following the pointer.
+        Rectangle {
+            visible: mouse.hoverText.length > 0
+            x: Math.min(mouse.lastX + 14, view.width - width - 4)
+            y: mouse.lastY + 18
+            width: tipLabel.implicitWidth + 16
+            height: tipLabel.implicitHeight + 10
+            radius: 4
+            color: controller.foreground
+            opacity: 0.92
+            Label {
+                id: tipLabel
+                anchors.centerIn: parent
+                text: mouse.hoverText
+                color: controller.background
+                font.pixelSize: 13
+            }
         }
 
         ScrollBar {
@@ -241,8 +270,14 @@ ApplicationWindow {
                 for (const ch of arg("--type")) controller.key(ch.toUpperCase().charCodeAt(0), ch, 0)
             }
             if (arg("--select")) {
+                // X0,X1[,Y]: a left-button drag at height Y (default: the sequence).
                 const r = arg("--select").split(",")
-                controller.press(Number(r[0]), 45, 0); controller.drag(Number(r[1]), 45); controller.release()
+                const y = r.length > 2 ? Number(r[2]) : 45
+                controller.press(Number(r[0]), y, 0); controller.drag(Number(r[1]), y); controller.release()
+            }
+            if (arg("--hover")) {
+                const h = arg("--hover").split(",")
+                console.log("hover:", controller.hover(Number(h[0]), Number(h[1])))
             }
             if (arg("--menu")) {
                 const p = arg("--menu").split(",")

@@ -113,6 +113,12 @@ pub mod qobject {
         /// returns whether the view moved.
         #[qinvokable]
         fn edge_scroll(self: Pin<&mut GenomeController>, x: f64, y: f64) -> bool;
+        /// Feature description under the pointer, or an empty string.
+        #[qinvokable]
+        fn hover(self: &GenomeController, x: f64, y: f64) -> QString;
+        /// Start panning (middle button).
+        #[qinvokable]
+        fn pan_press(self: Pin<&mut GenomeController>, x: f64);
         /// Id of the selected feature, or -1.
         #[qinvokable]
         fn selected_feature(self: &GenomeController) -> i32;
@@ -933,6 +939,20 @@ impl qobject::GenomeController {
             self.refresh();
         }
         moved
+    }
+
+    #[allow(clippy::cast_possible_truncation)]
+    pub fn hover(&self, x: f64, y: f64) -> QString {
+        let text = self
+            .with_doc(|s, d| self.rust().view.hover_text(x as f32, y as f32, s.doc(d)))
+            .flatten()
+            .unwrap_or_default();
+        QString::from(&text)
+    }
+
+    #[allow(clippy::cast_possible_truncation)]
+    pub fn pan_press(mut self: Pin<&mut Self>, x: f64) {
+        self.as_mut().rust_mut().view.pan_press(x as f32);
     }
 
     pub fn selected_feature(&self) -> i32 {

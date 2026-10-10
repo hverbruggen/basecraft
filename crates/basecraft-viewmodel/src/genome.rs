@@ -39,8 +39,18 @@ pub enum Region {
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Drag {
     None,
-    Pan { last_x: f32 },
-    Select { anchor: u64 },
+    Pan {
+        last_x: f32,
+    },
+    Select {
+        anchor: u64,
+    },
+    /// Pressed on a feature: a click selects it; moving turns into a range
+    /// selection from the press point.
+    Feature {
+        x: f32,
+        y: f32,
+    },
 }
 
 const RULER_H: f32 = 30.0;
@@ -115,7 +125,7 @@ struct Item {
     x1: f32,
     label: String,
     label_inside: bool,
-    /// Right edge including an outside label, for row packing.
+    /// Right edge including the arrowhead, for row packing.
     reach: f32,
 }
 
@@ -396,11 +406,10 @@ impl GenomeView {
     /// Mouse press. Clicking a feature selects it; clicking the sequence or
     /// ruler places the cursor and starts a selection; anywhere else starts
     /// a pan.
-    /// Mouse press. A plain click always replaces the selection: on a
-    /// feature it selects the feature and its residues; on the sequence or
-    /// ruler it places the cursor and starts a new selection; on empty space
-    /// it clears the selection and starts a pan. Shift-click on the sequence
-    /// extends the selection from the cursor instead.
+    /// Left press. A plain click always replaces the selection: on a
+    /// feature it selects the feature and its residues; anywhere else it
+    /// places the cursor and starts a new range selection, which dragging
+    /// extends. Shift-click extends the selection from the cursor instead.
     pub fn press(&mut self, x: f32, y: f32, shift: bool, len: u64) {
         let hit = match self.mode {
             Mode::Linear => self.feature_hit_at(x, y),
@@ -413,27 +422,23 @@ impl GenomeView {
             self.selected = Some(id);
             self.selection = Some(span);
             self.cursor = Some(span.1);
-            self.drag = Drag::Pan { last_x: x };
+            self.drag = Drag::Feature { x, y };
             return;
         }
-        let on_sequence = match self.mode {
-            Mode::Linear => self.region_at(y) != Region::Features,
-            Mode::Circular => true,
-        };
         self.selected = None;
-        if on_sequence {
-            let p = self.position_at(x, y, len);
-            let anchor = match (shift, self.cursor) {
-                (true, Some(c)) => c,
-                _ => p,
-            };
-            self.cursor = Some(p);
-            self.selection = (anchor != p).then(|| (anchor.min(p), anchor.max(p)));
-            self.drag = Drag::Select { anchor };
-        } else {
-            self.selection = None;
-            self.drag = Drag::Pan { last_x: x };
-        }
+        let p = self.position_at(x, y, len);
+        let anchor = match (shift, self.cursor) {
+            (true, Some(c)) => c,
+            _ => p,
+        };
+        self.cursor = Some(p);
+        self.selection = (anchor != p).then(|| (anchor.min(p), anchor.max(p)));
+        self.drag = Drag::Select { anchor };
+    }
+
+    /// Start panning with the pointer (middle button).
+    pub fn pan_press(&mut self, x: f32) {
+        self.drag = Drag::Pan { last_x: x };
     }
 
     pub fn drag_to(&mut self, x: f32, y: f32, len: u64) {
@@ -449,6 +454,14 @@ impl GenomeView {
                 let p = self.position_at(x, y, len);
                 self.cursor = Some(p);
                 self.selection = (anchor != p).then(|| (anchor.min(p), anchor.max(p)));
+            }
+            Drag::Feature { x: px, y: py } => {
+                if (x - px).abs() > 4.0 {
+                    let anchor = self.position_at(px, py, len);
+                    self.selected = None;
+                    self.drag = Drag::Select { anchor };
+                    self.drag_to(x, y, len);
+                }
             }
         }
     }
@@ -759,8 +772,6 @@ impl GenomeView {
         }
         ids.retain(|id| !absorbed.contains(id));
 
-        // Labels beside features cost lane space; only when there's room.
-        let outside_labels = ids.len() <= 250;
         let mut items: Vec<Item> = Vec::with_capacity(ids.len());
         for id in ids {
             let Some(f) = doc.feature(id) else { continue };
@@ -769,15 +780,13 @@ impl GenomeView {
                 let x1 = self.x_of(e as f64).max(x0 + 1.0);
                 let label = f.label().unwrap_or(&f.kind).to_string();
                 let lw = text_width(&label, LABEL_SIZE);
-                // Gene models have lines and boxes inside; label them beside.
                 // Measured on the visible part, so long features keep a name.
+                // Gene models have lines and boxes inside, so no name there;
+                // their gene row carries it.
                 let visible = x1.min(self.width) - x0.max(0.0);
                 let label_inside = visible >= lw + 8.0 && !parts.contains_key(&id);
-                let reach = if label_inside || !outside_labels {
-                    x1 + 8.0
-                } else {
-                    x1 + 12.0 + lw
-                };
+                // Room for the strand arrowhead.
+                let reach = x1 + 8.0;
                 items.push(Item {
                     id,
                     span: (s, e),
@@ -831,34 +840,19 @@ impl GenomeView {
             self.hits
                 .push(([item.x0, y, item.x1, y + LANE_H], item.id, item.span));
         }
-        // Names: inside the feature when they fit, else beside it when the
-        // gap to the next feature on the row is wide enough.
-        for (k, &(lane, index)) in placed.iter().enumerate() {
+        // Names only inside features wide enough for them; hovering shows
+        // the rest.
+        for &(lane, index) in &placed {
             let item = &items[index];
-            let y = top + lane as f32 * (LANE_H + LANE_GAP);
-            let text_y = y + (LANE_H - LABEL_SIZE) / 2.0;
             if item.label_inside {
+                let y = top + lane as f32 * (LANE_H + LANE_GAP);
+                let text_y = y + (LANE_H - LABEL_SIZE) / 2.0;
                 frame.text(
                     item.x0.max(0.0) + 4.0,
                     text_y,
                     LABEL_SIZE,
                     &item.label,
                     theme.background,
-                );
-                continue;
-            }
-            let next_x0 = placed[k + 1..]
-                .iter()
-                .find(|(l, _)| *l == lane)
-                .map_or(self.width, |&(_, i)| items[i].x0);
-            let room = next_x0 - (item.x1 + 10.0) - 6.0;
-            if room >= text_width(&item.label, LABEL_SIZE) && item.x1 + 10.0 >= 0.0 {
-                frame.text(
-                    item.x1 + 10.0,
-                    text_y,
-                    LABEL_SIZE,
-                    &item.label,
-                    theme.foreground,
                 );
             }
         }
@@ -1142,6 +1136,32 @@ impl GenomeView {
             &size,
             theme.foreground_muted,
         );
+    }
+
+    /// What to show when hovering over a feature: name, type, location
+    /// (1-based) and length.
+    pub fn hover_text(&self, x: f32, y: f32, doc: &SequenceDoc) -> Option<String> {
+        let id = self.feature_at(x, y, doc.len())?;
+        let f = doc.feature(id)?;
+        let (s, e) = f.location.bounds()?;
+        let strand = match f.location.strand() {
+            Strand::Forward => " (+)",
+            Strand::Reverse => " (−)",
+            Strand::Unstranded => "",
+        };
+        let name = f.label().map_or(String::new(), |l| format!("{l} · "));
+        let exons = if f.location.segments.len() > 1 {
+            format!(" · {} parts", f.location.segments.len())
+        } else {
+            String::new()
+        };
+        Some(format!(
+            "{name}{} · {}..{}{strand} · {}{exons}",
+            f.kind,
+            format_thousands(s + 1),
+            format_thousands(e),
+            format_length(f.location.len())
+        ))
     }
 
     /// One line describing the view, the cursor, the selection and the
@@ -1456,10 +1476,27 @@ mod tests {
         // A plain click on the sequence starts over.
         v.press(400.0, SEQ_Y + 5.0, false, d.len());
         assert_eq!((v.selection, v.selected), (None, None));
-        // A click on empty space clears too.
+        // A click on empty space clears too, and dragging from there selects.
         v.selection = Some((1, 2));
         v.press(990.0, 590.0, false, d.len());
         assert_eq!(v.selection, None);
+        v.drag_to(900.0, 590.0, d.len());
+        assert_eq!(v.selection, Some((9000, 9900)));
+        v.release();
+        // Dragging that starts on a feature becomes a range selection.
+        v.press(
+            f32::midpoint(r[0], r[2]),
+            f32::midpoint(r[1], r[3]),
+            false,
+            d.len(),
+        );
+        v.drag_to(
+            f32::midpoint(r[0], r[2]) + 50.0,
+            f32::midpoint(r[1], r[3]),
+            d.len(),
+        );
+        assert_eq!(v.selected, None);
+        assert_eq!(v.selection.map(|(a, b)| b - a), Some(500));
     }
 
     #[test]
