@@ -2,3 +2,7 @@
 //!
 //! Apache-2.0, so plugins and the Python SDK can use any license.
 //! This crate must never depend on a GPL crate.
+
+pub mod annotation;
+
+pub use annotation::{Feature, Location, Qualifier, Segment, Strand};

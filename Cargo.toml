@@ -21,6 +21,16 @@ basecraft-platform = { path = "crates/basecraft-platform" }
 basecraft-viewmodel = { path = "crates/basecraft-viewmodel" }
 basecraft-plugin-host = { path = "crates/basecraft-plugin-host" }
 
+blake3 = "1.8"
+memchr = "2.8"
+memmap2 = "0.9"
+postcard = { version = "1.1", features = ["use-std"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tempfile = "3.27"
+clap = { version = "4.6", features = ["derive"] }
+thiserror = "2.0"
+
 # basecraft-io and basecraft-platform can't inherit these because they allow
 # unsafe code. Mirror any change here in their Cargo.toml.
 [workspace.lints.rust]
@@ -28,6 +38,13 @@ unsafe_code = "deny"
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
+# Pedantic lints that cost more than they catch.
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+module_name_repetitions = "allow"
+similar_names = "allow"
+too_many_lines = "allow"
 
 [profile.release]
 debug = "line-tables-only"
