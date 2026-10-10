@@ -43,6 +43,26 @@ fn key(path: &Path) -> Result<String> {
     Ok(h.finalize().to_hex()[..32].to_string())
 }
 
+/// BLAKE3 content hash of a file, cached under the same stat-based key as
+/// indexes, so a large unchanged file is hashed once.
+pub fn content_hash(path: &Path) -> Result<String> {
+    content_hash_in(path, &cache_dir())
+}
+
+pub fn content_hash_in(path: &Path, cache: &Path) -> Result<String> {
+    let entry = cache.join("hash").join(format!("{}.b3", key(path)?));
+    if let Ok(h) = fs::read_to_string(&entry)
+        && h.starts_with("b3:")
+    {
+        return Ok(h);
+    }
+    let h = crate::hash_file(path)?;
+    if fs::create_dir_all(entry.parent().unwrap_or(cache)).is_ok() {
+        let _ = crate::write_atomic(&entry, |w| w.write_all(h.as_bytes()));
+    }
+    Ok(h)
+}
+
 /// An open, indexed FASTA file.
 pub struct IndexedFasta {
     pub source: Source,

@@ -4,6 +4,7 @@ description = "Plugin loading, JSON-RPC and Arrow transfer"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+publish.workspace = true
 repository.workspace = true
 license.workspace = true
 

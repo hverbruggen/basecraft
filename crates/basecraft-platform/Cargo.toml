@@ -4,6 +4,7 @@ description = "Platform traits over file watching, shared memory, signals and so
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+publish.workspace = true
 repository.workspace = true
 license.workspace = true
 

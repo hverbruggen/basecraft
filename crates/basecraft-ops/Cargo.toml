@@ -4,10 +4,21 @@ description = "Operation registry, undo and redo, operation log, replay"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+publish.workspace = true
 repository.workspace = true
 license.workspace = true
 
 [dependencies]
+basecraft-docs.workspace = true
+basecraft-io.workspace = true
+basecraft-platform.workspace = true
+basecraft-protocol.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+ulid.workspace = true
+
 
 [lints]
 workspace = true

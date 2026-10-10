@@ -41,3 +41,21 @@ pub fn hash_file(path: &Path) -> Result<String> {
 pub fn hash_bytes(bytes: &[u8]) -> String {
     format!("b3:{}", blake3::hash(bytes).to_hex())
 }
+
+/// Incremental BLAKE3, giving the same `b3:<hex>` form as [`hash_bytes`].
+#[derive(Default)]
+pub struct Hasher(blake3::Hasher);
+
+impl Hasher {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn update(&mut self, bytes: &[u8]) {
+        self.0.update(bytes);
+    }
+
+    pub fn finish(&self) -> String {
+        format!("b3:{}", self.0.finalize().to_hex())
+    }
+}

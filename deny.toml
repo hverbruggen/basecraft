@@ -15,13 +15,17 @@ allow = [
   "GPL-3.0-or-later",
 ]
 confidence-threshold = 0.9
+# The list covers licenses we accept, not only the ones in use today.
+unused-allowed-license = "allow"
 
 # basecraft-protocol is Apache-2.0 and must not pull in GPL code.
 # `just ci` checks its dependency tree separately with `cargo tree`, see the justfile.
 
 [bans]
 multiple-versions = "warn"
-wildcard-dependencies = "deny"
+wildcards = "deny"
+# Workspace crates depend on each other by path, without versions.
+allow-wildcard-paths = true
 
 [advisories]
 yanked = "deny"

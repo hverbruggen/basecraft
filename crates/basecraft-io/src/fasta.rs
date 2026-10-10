@@ -7,12 +7,11 @@
 use std::io::{self, Write};
 
 use memchr::memchr;
-use serde::{Deserialize, Serialize};
 
 use crate::error::parse_error;
 use crate::{Error, Result};
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Layout {
     /// Every line but the last holds `residues` residues and takes `bytes`
     /// bytes including the line terminator.
@@ -21,7 +20,7 @@ pub enum Layout {
     Ragged(Vec<(u64, u64)>),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecordIndex {
     /// The header up to the first whitespace.
     pub name: String,
@@ -34,7 +33,7 @@ pub struct RecordIndex {
     pub layout: Layout,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FastaIndex {
     pub records: Vec<RecordIndex>,
 }
@@ -181,21 +180,93 @@ impl FastaIndex {
         self.records.iter().find(|r| r.name == name)
     }
 
+    /// Serialise for the index cache: little-endian, length-prefixed.
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut out = INDEX_MAGIC.to_vec();
-        out.extend(postcard::to_stdvec(self).unwrap_or_default());
+        let put = |out: &mut Vec<u8>, v: u64| out.extend_from_slice(&v.to_le_bytes());
+        put(&mut out, self.records.len() as u64);
+        for r in &self.records {
+            put(&mut out, r.name.len() as u64);
+            out.extend_from_slice(r.name.as_bytes());
+            put(&mut out, r.header_offset);
+            put(&mut out, r.seq_offset);
+            put(&mut out, r.len);
+            match &r.layout {
+                Layout::Uniform { residues, bytes } => {
+                    out.push(0);
+                    put(&mut out, *residues);
+                    put(&mut out, *bytes);
+                }
+                Layout::Ragged(lines) => {
+                    out.push(1);
+                    put(&mut out, lines.len() as u64);
+                    for &(first, offset) in lines {
+                        put(&mut out, first);
+                        put(&mut out, offset);
+                    }
+                }
+            }
+        }
         out
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
-        let body = bytes.strip_prefix(INDEX_MAGIC)?;
-        postcard::from_bytes(body).ok()
+        let mut r = Reader(bytes.strip_prefix(INDEX_MAGIC)?);
+        let n = r.u64()?;
+        let mut records = Vec::new();
+        for _ in 0..n {
+            let name_len = usize::try_from(r.u64()?).ok()?;
+            let name = String::from_utf8(r.take(name_len)?.to_vec()).ok()?;
+            let header_offset = r.u64()?;
+            let seq_offset = r.u64()?;
+            let len = r.u64()?;
+            let layout = match r.take(1)?[0] {
+                0 => Layout::Uniform {
+                    residues: r.u64()?,
+                    bytes: r.u64()?,
+                },
+                1 => {
+                    let count = usize::try_from(r.u64()?).ok()?;
+                    let mut lines = Vec::with_capacity(count.min(1 << 24));
+                    for _ in 0..count {
+                        lines.push((r.u64()?, r.u64()?));
+                    }
+                    Layout::Ragged(lines)
+                }
+                _ => return None,
+            };
+            records.push(RecordIndex {
+                name,
+                header_offset,
+                seq_offset,
+                len,
+                layout,
+            });
+        }
+        r.0.is_empty().then_some(Self { records })
+    }
+}
+
+struct Reader<'a>(&'a [u8]);
+
+impl<'a> Reader<'a> {
+    fn take(&mut self, n: usize) -> Option<&'a [u8]> {
+        if self.0.len() < n {
+            return None;
+        }
+        let (head, tail) = self.0.split_at(n);
+        self.0 = tail;
+        Some(head)
+    }
+
+    fn u64(&mut self) -> Option<u64> {
+        Some(u64::from_le_bytes(self.take(8)?.try_into().ok()?))
     }
 }
 
 /// Magic and format version for serialised indexes. Bump the version when
 /// the structure changes; old cache entries then get rebuilt.
-const INDEX_MAGIC: &[u8] = b"BCFAI\x01";
+const INDEX_MAGIC: &[u8] = b"BCFAI\x02";
 
 fn finish_record(name: String, header_offset: u64, b: LayoutBuilder) -> RecordIndex {
     let len = b.residues;
@@ -350,7 +421,7 @@ mod tests {
         // More than 1024 uniform lines, then a ragged tail: the builder must
         // still produce correct offsets after discarding early line starts.
         let mut data = b">x\n".to_vec();
-        let mut expect = Vec::new();
+        let mut expect: Vec<u8> = Vec::new();
         for i in 0..2000 {
             let line: Vec<u8> = (0..10).map(|j| b"ACGT"[(i + j) % 4]).collect();
             expect.extend(&line);

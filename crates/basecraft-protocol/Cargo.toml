@@ -4,11 +4,14 @@ description = "Shared types, operation schemas and the plugin protocol"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+publish.workspace = true
 repository.workspace = true
 license = "Apache-2.0"
 
 [dependencies]
+schemars.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

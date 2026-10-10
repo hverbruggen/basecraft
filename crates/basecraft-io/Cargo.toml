@@ -4,6 +4,7 @@ description = "Format readers and writers, indexes, memory mapping"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+publish.workspace = true
 repository.workspace = true
 license.workspace = true
 
@@ -12,8 +13,6 @@ basecraft-protocol.workspace = true
 blake3.workspace = true
 memchr.workspace = true
 memmap2.workspace = true
-postcard.workspace = true
-serde.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
 
