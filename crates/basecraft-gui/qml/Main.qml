@@ -17,6 +17,24 @@ ApplicationWindow {
     font.family: shell.mono_font
     font.pixelSize: 11
 
+    // Closing the window (or Ctrl+Q) asks about unsaved changes first.
+    property bool closeConfirmed: false
+    onClosing: (close) => {
+        if (closeConfirmed) return
+        const unsaved = window.unsavedTabs()
+        if (unsaved.length === 0) return
+        close.accepted = false
+        quitDialog.ask(unsaved)
+    }
+    function unsavedTabs() {
+        const out = []
+        for (let i = 0; i < openFiles.count; i++) {
+            const d = docs.itemAt(i)
+            if (d && d.controller.dirty) out.push(i)
+        }
+        return out
+    }
+
     palette.window: shell.background
     palette.base: Qt.lighter(shell.background, 1.04)
     palette.button: Qt.darker(shell.background, 1.05)
@@ -232,6 +250,7 @@ ApplicationWindow {
                     RibbonTabButton {}
                 }
                 Label {
+                    id: messageLabel
                     Layout.fillWidth: true
                     horizontalAlignment: Text.AlignRight
                     rightPadding: 10
@@ -248,7 +267,7 @@ ApplicationWindow {
                         interval: 10000
                         onTriggered: if (window.current) window.current.message = ""
                     }
-                    onTextChanged: if (text.length > 0) messageTimer.restart()
+                    onTextChanged: if (messageLabel.text.length > 0) messageTimer.restart()
                 }
                 ToolButton {
                     text: "⋯"
@@ -501,11 +520,11 @@ ApplicationWindow {
                     spacing: 6
                     RibbonGroup {
                         title: "Clade"
-                        RibbonButton { text: "Annotate…"; tip: "Name the selected clade, with a bar or a coloured field"; keys: "Enter"; enabled: window.current !== null && window.current.has_selection; onClicked: cladeEditor.openSelected() }
-                        RibbonButton { text: "Reroot"; tip: "Root the tree on the branch above the selection"; enabled: window.current !== null && window.current.has_selection; onClicked: window.current.reroot() }
+                        RibbonButton { text: "Annotate…"; tip: "Name the selected clade, with a bar or a coloured field"; keys: "Enter"; enabled: window.current !== null && window.current.has_selection === true; onClicked: cladeEditor.openSelected() }
+                        RibbonButton { text: "Reroot"; tip: "Root the tree on the branch above the selection"; enabled: window.current !== null && window.current.has_selection === true; onClicked: window.current.reroot() }
                         RibbonButton { text: "Root position…"; tip: "Move the root along its branch"; onClicked: rootDialog.ask() }
-                        RibbonButton { text: "Flip"; tip: "Reverse the order of the branches in the selected subtree (for a tip, its parent's)"; enabled: window.current !== null && window.current.has_selection; onClicked: window.current.rotate() }
-                        RibbonButton { text: "Rename…"; tip: "Rename the selected tip"; keys: "F2"; enabled: window.current !== null && window.current.tip_selected; onClicked: tipDialog.ask() }
+                        RibbonButton { text: "Flip"; tip: "Reverse the order of the branches in the selected subtree (for a tip, its parent's)"; enabled: window.current !== null && window.current.has_selection === true; onClicked: window.current.rotate() }
+                        RibbonButton { text: "Rename…"; tip: "Rename the selected tip"; keys: "F2"; enabled: window.current !== null && window.current.tip_selected === true; onClicked: tipDialog.ask() }
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
@@ -619,6 +638,7 @@ ApplicationWindow {
         saveDialog.open()
     }
     Shortcut { sequence: "Ctrl+Shift+S"; onActivated: window.saveAs() }
+    Shortcut { sequence: "Ctrl+Q"; onActivated: window.close() }
     // Close the active tab, asking first if it has unsaved changes.
     Shortcut { sequence: "Ctrl+W"; onActivated: if (openFiles.count > 0) window.closeTab(tabs.currentIndex) }
     FileDialog {
@@ -1083,6 +1103,54 @@ ApplicationWindow {
         onAccepted: window.current.export_svg(window.localPath(selectedFile))
     }
 
+    // Quitting with unsaved changes: save them all, throw them away, or
+    // stay.
+    Dialog {
+        id: quitDialog
+        property var unsaved: []
+        title: "Save changes before closing?"
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        standardButtons: Dialog.Save | Dialog.Discard | Dialog.Cancel
+        function ask(indexes) {
+            unsaved = indexes
+            quitError.text = ""
+            open()
+        }
+        ColumnLayout {
+            spacing: 6
+            Label { text: quitDialog.unsaved.length === 1 ? "This file has unsaved changes:" : "These files have unsaved changes:" }
+            Repeater {
+                model: quitDialog.unsaved
+                Label {
+                    required property int modelData
+                    text: "  " + window.fileName(openFiles.get(modelData).path)
+                    font.bold: true
+                }
+            }
+            Label { id: quitError; visible: text.length > 0; color: shell.accent; wrapMode: Text.Wrap }
+        }
+        onAccepted: {
+            for (const i of unsaved) docs.itemAt(i).controller.save()
+            // A save that failed leaves its tab unsaved: stay open and say so.
+            const left = window.unsavedTabs()
+            if (left.length > 0) {
+                unsaved = left
+                quitError.text = "Couldn't save " + left.map(i => window.fileName(openFiles.get(i).path)).join(", ")
+                    + ": " + docs.itemAt(left[0]).controller.message
+                open()
+                return
+            }
+            window.closeConfirmed = true
+            window.close()
+        }
+        onDiscarded: {
+            close()
+            window.closeConfirmed = true
+            window.close()
+        }
+    }
+
     Dialog {
         id: confirmClose
         property int index: -1
@@ -1177,7 +1245,8 @@ ApplicationWindow {
                 }
             }
             // Key presses through the window, ';'-separated: ctrl+=  alt+-
-            // ctrl+shift+=  (a modifier list, then one character).
+            // ctrl+shift+=  enter  escape  (modifiers, then a character or
+            // a key's name).
             if (arg("--keys")) {
                 const mods = { ctrl: Qt.ControlModifier, alt: Qt.AltModifier, shift: Qt.ShiftModifier }
                 for (const k of arg("--keys").split(";")) {
@@ -1185,7 +1254,9 @@ ApplicationWindow {
                     const ch = parts.pop() || "+"
                     let m = 0
                     for (const p of parts) m |= mods[p] || 0
-                    v.pressKey(ch.toUpperCase().charCodeAt(0), m, ch)
+                    const named = { enter: [Qt.Key_Return, "\r"], escape: [Qt.Key_Escape, ""] }[ch]
+                    if (named) v.pressKey(named[0], m, named[1])
+                    else v.pressKey(ch.toUpperCase().charCodeAt(0), m, ch)
                     console.log("keys", k, "|", c.zoom_text, c.hscroll_size, c.vscroll_size)
                 }
             }
