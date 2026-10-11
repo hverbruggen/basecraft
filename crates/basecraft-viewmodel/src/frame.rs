@@ -3,7 +3,8 @@
 //! Each instance is 16 `f32`s: four corners (top-left, top-right,
 //! bottom-left, bottom-right), an RGBA colour with straight alpha, and a
 //! texture rectangle `(u, v, du, dv)` into the glyph atlas. `du == 0` means
-//! a solid quad. The C++ item uploads the buffer as-is.
+//! a solid quad; `du < 0` a gradient, its opacity running from `u` at the
+//! left edge to `v` at the right. The C++ item uploads the buffer as-is.
 //!
 //! The atlas holds printable ASCII (32..=126) in a 16 × 6 grid of square
 //! cells, so glyph texture coordinates are computed here. The last cell
@@ -71,6 +72,27 @@ impl Frame {
             [[x, y], [x + w, y], [x, y + h], [x + w, y + h]],
             color,
             [0.0; 4],
+        );
+    }
+
+    /// A rectangle whose opacity runs smoothly from `from` (times the
+    /// colour's alpha) at its left edge to `to` at its right.
+    pub fn gradient(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        color: Rgba,
+        (from, to): (f32, f32),
+    ) {
+        if w <= 0.0 || h <= 0.0 || color[3] <= 0.0 {
+            return;
+        }
+        self.quad(
+            [[x, y], [x + w, y], [x, y + h], [x + w, y + h]],
+            color,
+            [from, to, -1.0, 0.0],
         );
     }
 

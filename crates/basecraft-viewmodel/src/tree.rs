@@ -918,23 +918,7 @@ fn draw(frame: &mut Frame, s: &Shape, dx: f32, dy: f32) {
             from,
             to,
         } => {
-            if (from - to).abs() < 0.005 {
-                frame.rect(x + dx, y + dy, *w, *h, alpha(*color, *from));
-            } else {
-                let strips = 48;
-                let sw = w / strips as f32;
-                for k in 0..strips {
-                    let t = (k as f32 + 0.5) / strips as f32;
-                    let a = from + (to - from) * t;
-                    frame.rect(
-                        x + dx + sw * k as f32,
-                        y + dy,
-                        sw + 0.5,
-                        *h,
-                        alpha(*color, a),
-                    );
-                }
-            }
+            frame.gradient(x + dx, y + dy, *w, *h, *color, (*from, *to));
         }
         Shape::Disc { cx, cy, r, color } => frame.disc(cx + dx, cy + dy, *r, *color),
         Shape::Text {
@@ -1170,7 +1154,12 @@ mod tests {
         for s in &shapes {
             draw(&mut f, s, 0.0, 0.0);
         }
-        assert!(f.len() > 48, "the gradient draws as strips");
+        let gradients = f
+            .floats()
+            .chunks(16)
+            .filter(|i| i[14] < 0.0 && i[12] == 0.0 && (i[13] - 0.4).abs() < 1e-6)
+            .count();
+        assert_eq!(gradients, 1, "the field is one gradient quad");
     }
 
     #[test]
