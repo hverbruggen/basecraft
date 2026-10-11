@@ -108,8 +108,11 @@ ApplicationWindow {
     // Ribbon pieces: a labelled group of controls, and its buttons.
     // `tip` says in a few words what the button does; `keys` is its shortcut.
     component RibbonButton: ToolButton {
+        id: ribbonButton
         property string tip
         property string keys
+        // A Nerd Font glyph shown before the text, or alone.
+        property string glyph
         ToolTip.text: keys.length > 0 ? tip + "   " + keys : tip
         ToolTip.visible: hovered && tip.length > 0
         ToolTip.delay: 400
@@ -118,6 +121,25 @@ ApplicationWindow {
         display: AbstractButton.TextOnly
         topPadding: 4
         bottomPadding: 4
+        contentItem: Row {
+            spacing: 5
+            opacity: ribbonButton.enabled ? 1 : 0.4
+            Label {
+                visible: ribbonButton.glyph.length > 0
+                anchors.verticalCenter: parent.verticalCenter
+                text: ribbonButton.glyph
+                font.family: "JetBrainsMono Nerd Font"
+                font.pixelSize: ribbonButton.font.pixelSize + 3
+                color: ribbonButton.palette.buttonText
+            }
+            Label {
+                visible: ribbonButton.text.length > 0
+                anchors.verticalCenter: parent.verticalCenter
+                text: ribbonButton.text
+                font: ribbonButton.font
+                color: ribbonButton.palette.buttonText
+            }
+        }
     }
     component RibbonGroup: ColumnLayout {
         id: group
@@ -154,6 +176,7 @@ ApplicationWindow {
         title: "Keys"
         RibbonButton {
             text: "Shortcuts…"
+            glyph: "\uea65"
             tip: "Keyboard shortcuts for this tab"
             enabled: true
             onClicked: shortcuts.show(window.ribbonTabs[window.ribbonTab])
@@ -251,14 +274,14 @@ ApplicationWindow {
                     spacing: 6
                     RibbonGroup {
                         title: "File"
-                        RibbonButton { text: "Open…"; tip: "Open a sequence or alignment file"; enabled: true; onClicked: openDialog.open() }
-                        RibbonButton { text: "Save"; tip: "Save the current file"; keys: "Ctrl+S"; onClicked: window.current.save() }
-                        RibbonButton { text: "Save as…"; tip: "Save as a new file and carry on in that one"; keys: "Ctrl+Shift+S"; onClicked: window.saveAs() }
+                        RibbonButton { text: "Open…"; glyph: "\ueaf7"; tip: "Open a sequence or alignment file"; enabled: true; onClicked: openDialog.open() }
+                        RibbonButton { text: "Save"; glyph: "\ueb4b"; tip: "Save the current file"; keys: "Ctrl+S"; onClicked: window.current.save() }
+                        RibbonButton { text: "Save as…"; glyph: "\ueb4a"; tip: "Save as a new file and carry on in that one"; keys: "Ctrl+Shift+S"; onClicked: window.saveAs() }
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
                         title: "Project"
-                        RibbonButton { text: "Open project…"; tip: "Choose or create a project folder"; enabled: true; onClicked: projectDialog.open() }
+                        RibbonButton { text: "Open project…"; glyph: "\uebdf"; tip: "Choose or create a project folder"; enabled: true; onClicked: projectDialog.open() }
                     }
                     Item { Layout.fillWidth: true }
                     ShortcutsGroup {}
@@ -268,15 +291,16 @@ ApplicationWindow {
                     spacing: 6
                     RibbonGroup {
                         title: "Zoom"
-                        RibbonButton { text: "−"; tip: "Zoom out"; keys: "Ctrl+−"; onClicked: window.current.zoom_out() }
-                        RibbonButton { text: "+"; tip: "Zoom in"; keys: "Ctrl++"; onClicked: window.current.zoom_in() }
+                        RibbonButton { glyph: "\ueb82"; tip: "Zoom out"; keys: "Ctrl+−"; onClicked: window.current.zoom_out() }
+                        RibbonButton { glyph: "\ueb81"; tip: "Zoom in"; keys: "Ctrl++"; onClicked: window.current.zoom_in() }
                         RibbonButton {
                             text: "Fit"
+                            glyph: "\ueb4c"
                             tip: window.alignmentOpen ? "Show the whole width of the alignment" : window.treeOpen ? "Show the whole tree" : "Show the whole sequence"
                             keys: "Ctrl+0"
                             onClicked: window.current.fit()
                         }
-                        RibbonButton { text: "Selection"; visible: !window.treeOpen; tip: "Zoom to the selection"; onClicked: window.current.zoom_to_selection() }
+                        RibbonButton { text: "Selection"; glyph: "\uebf8"; visible: !window.treeOpen; tip: "Zoom to the selection"; onClicked: window.current.zoom_to_selection() }
                         Label {
                             text: window.current ? window.current.zoom_text : ""
                             leftPadding: 6
@@ -381,14 +405,14 @@ ApplicationWindow {
                     spacing: 6
                     RibbonGroup {
                         title: "Learn"
-                        RibbonButton { text: "Keyboard shortcuts…"; tip: "List all keyboard shortcuts"; enabled: true; onClicked: shortcuts.show("") }
-                        RibbonButton { text: "About Basecraft…"; tip: "Version and licence"; enabled: true; onClicked: about.open() }
+                        RibbonButton { text: "Keyboard shortcuts…"; glyph: "\uea65"; tip: "List all keyboard shortcuts"; enabled: true; onClicked: shortcuts.show("") }
+                        RibbonButton { text: "About Basecraft…"; glyph: "\uea74"; tip: "Version and licence"; enabled: true; onClicked: about.open() }
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
                         title: "Online"
-                        RibbonButton { text: "Project page"; tip: "Open the project on GitHub"; enabled: true; onClicked: Qt.openUrlExternally("https://github.com/hverbruggen/basecraft") }
-                        RibbonButton { text: "Report a problem"; tip: "Open a new GitHub issue"; enabled: true; onClicked: Qt.openUrlExternally("https://github.com/hverbruggen/basecraft/issues/new") }
+                        RibbonButton { text: "Project page"; glyph: "\uea84"; tip: "Open the project on GitHub"; enabled: true; onClicked: Qt.openUrlExternally("https://github.com/hverbruggen/basecraft") }
+                        RibbonButton { text: "Report a problem"; glyph: "\ueaaf"; tip: "Open a new GitHub issue"; enabled: true; onClicked: Qt.openUrlExternally("https://github.com/hverbruggen/basecraft/issues/new") }
                     }
                     Item { Layout.fillWidth: true }
                     ShortcutsGroup {}
@@ -572,6 +596,8 @@ ApplicationWindow {
         saveDialog.open()
     }
     Shortcut { sequence: "Ctrl+Shift+S"; onActivated: window.saveAs() }
+    // Close the active tab, asking first if it has unsaved changes.
+    Shortcut { sequence: "Ctrl+W"; onActivated: if (openFiles.count > 0) window.closeTab(tabs.currentIndex) }
     FileDialog {
         id: saveDialog
         property int index: -1

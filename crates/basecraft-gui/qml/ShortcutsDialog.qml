@@ -21,6 +21,7 @@ Dialog {
         { name: "File", keys: [
             ["Ctrl+S", "Save"],
             ["Ctrl+Shift+S", "Save as a new file"],
+            ["Ctrl+W", "Close the tab"],
             ["Ctrl+Z", "Undo"],
             ["Ctrl+Shift+Z, Ctrl+Y", "Redo"],
         ] },
