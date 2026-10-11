@@ -147,6 +147,19 @@ pub mod qobject {
             min_codons: i32,
             in_selection: bool,
         ) -> QString;
+        /// Predict protein-coding genes with the Pyrodigal plugin, using
+        /// genetic code `code`, and add them as CDS features in one
+        /// undoable step. Returns a summary for the status bar.
+        #[qinvokable]
+        fn predict_genes(
+            self: Pin<&mut GenomeController>,
+            code: i32,
+            in_selection: bool,
+        ) -> QString;
+        /// The genetic code of the open file: the first CDS's
+        /// `transl_table`, else 11.
+        #[qinvokable]
+        fn genetic_code(self: &GenomeController) -> i32;
         /// The selected residues, for the clipboard.
         #[qinvokable]
         fn selection_text(self: &GenomeController) -> QString;
@@ -1264,23 +1277,67 @@ impl qobject::GenomeController {
         self.refresh();
     }
 
-    /// The selected bases. A selected annotation is copied as itself:
-    /// spliced if it has parts, reverse-complemented on the reverse strand.
-    pub fn find_orfs(mut self: Pin<&mut Self>, min_codons: i32, in_selection: bool) -> QString {
+    pub fn find_orfs(self: Pin<&mut Self>, min_codons: i32, in_selection: bool) -> QString {
+        let params = json!({ "min_codons": min_codons.max(1) });
+        self.run_annotator(
+            ("orf-finder", "find_orfs", "ORF finder"),
+            params,
+            in_selection,
+            ("ORF", "ORFs"),
+        )
+    }
+
+    pub fn predict_genes(self: Pin<&mut Self>, code: i32, in_selection: bool) -> QString {
+        let params = json!({ "translation_table": code });
+        self.run_annotator(
+            ("pyrodigal", "predict_genes", "Gene prediction"),
+            params,
+            in_selection,
+            ("gene", "genes"),
+        )
+    }
+
+    pub fn genetic_code(&self) -> i32 {
+        self.with_doc(|s, d| {
+            s.doc(d)
+                .features()
+                .filter(|(_, f)| f.kind == "CDS")
+                .find_map(|(_, f)| f.qualifier("transl_table")?.trim().parse().ok())
+        })
+        .flatten()
+        .unwrap_or(11)
+    }
+
+    /// Run an annotating plugin operation over the sequence or the
+    /// selection, add what it proposes that isn't annotated yet, and report
+    /// in the status bar.
+    fn run_annotator(
+        mut self: Pin<&mut Self>,
+        (plugin, operation, title): (&str, &str, &str),
+        params: serde_json::Value,
+        in_selection: bool,
+        (one, many): (&str, &str),
+    ) -> QString {
         let range = if in_selection {
             self.rust().view.selection
         } else {
             None
         };
         if in_selection && range.is_none() {
-            self.as_mut().notify("Select bases to search for ORFs");
+            self.as_mut().notify("Select bases first");
             return QString::default();
         }
         let started = Instant::now();
-        let msg = match self.as_mut().run_orf_finder(min_codons.max(1), range) {
-            Ok((m, added)) => {
+        let msg = match self.as_mut().run_plugin(plugin, operation, params, range) {
+            Ok((added, known)) => {
+                let m = match (added, known) {
+                    (0, 0) => format!("No {many} found"),
+                    (0, _) => format!("No new {many}"),
+                    (1, _) => format!("Added 1 {one}"),
+                    (n, _) => format!("Added {n} {many}"),
+                };
                 let m = format!("{m}{}", took(started));
-                if added {
+                if added > 0 {
                     self.as_mut().done(&m);
                 } else {
                     self.as_mut().notify(&m);
@@ -1288,7 +1345,7 @@ impl qobject::GenomeController {
                 m
             }
             Err(e) => {
-                let m = format!("ORF finder failed: {e}");
+                let m = format!("{title} failed: {e}");
                 self.as_mut().fail(&m);
                 m
             }
@@ -1297,26 +1354,29 @@ impl qobject::GenomeController {
         QString::from(&msg)
     }
 
-    fn run_orf_finder(
+    /// Returns how many features were added and how many proposals were
+    /// already annotated.
+    fn run_plugin(
         mut self: Pin<&mut Self>,
-        min_codons: i32,
+        name: &str,
+        operation: &str,
+        mut params: serde_json::Value,
         range: Option<(u64, u64)>,
-    ) -> Result<(String, bool), String> {
+    ) -> Result<(usize, usize), String> {
         use basecraft_plugin_host::{Manifest, PluginProcess, Snapshot, apply};
-        let dir = plugin_dir("orf-finder");
+        let dir = plugin_dir(name);
         let manifest = Manifest::load(&dir).map_err(|e| format!("{e} ({})", dir.display()))?;
         let mut plugin = PluginProcess::spawn(&manifest).map_err(|e| e.to_string())?;
         let actor = basecraft_protocol::Actor::Plugin {
             id: plugin.info.id.clone(),
             version: plugin.info.version.clone(),
         };
-        let report = {
+        let (report, known) = {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
             let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
                 return Err("no open file".into());
             };
-            let mut params = json!({ "min_codons": min_codons });
             if let Some((a, b)) = range {
                 params["start"] = json!(a);
                 params["end"] = json!(b);
@@ -1324,9 +1384,9 @@ impl qobject::GenomeController {
             let snap =
                 Snapshot::of(session.doc_key(doc), session.doc(doc)).map_err(|e| e.to_string())?;
             let result = plugin
-                .invoke("find_orfs", params, Some(&snap))
+                .invoke(operation, params, Some(&snap))
                 .map_err(|e| e.to_string())?;
-            // Running it again adds only ORFs that aren't annotated yet.
+            // Running it again adds only features that aren't annotated yet.
             let found = result.ops.len();
             let ops: Vec<Op> = result
                 .ops
@@ -1344,18 +1404,14 @@ impl qobject::GenomeController {
                 .map_err(|e| e.to_string())?;
             (report, known)
         };
-        let (report, known) = report;
         if report.applied > 0 {
             self.as_mut().set_dirty(true);
         }
-        Ok(match (report.applied, known) {
-            (0, 0) => (String::from("No ORFs found"), false),
-            (0, _) => (String::from("No new ORFs"), false),
-            (1, _) => (String::from("Added 1 ORF"), true),
-            (n, _) => (format!("Added {n} ORFs"), true),
-        })
+        Ok((report.applied, known))
     }
 
+    /// The selected bases. A selected annotation is copied as itself:
+    /// spliced if it has parts, reverse-complemented on the reverse strand.
     pub fn selection_text(&self) -> QString {
         let v = &self.rust().view;
         let Some((a, b)) = v.selection else {
