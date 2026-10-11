@@ -1092,7 +1092,8 @@ ApplicationWindow {
     // Scripted runs, on the active tab: --goto START,END  --mode wrapped|linear|circular
     // --type TEXT  --select X0,X1[,Y]  --menu X,Y  --menu-add X  --edit new|ID
     // --label TEXT [--no-click 1]  --add LOCATION  --extract 1  --hover X,Y
-    // --no-sidebar 1  --fit 1  --aln STEPS  --shot-delay MS  --screenshot FILE
+    // --no-sidebar 1  --fit 1  --aln STEPS  --keys KEYS  --shot-delay MS
+    // --screenshot FILE
     Timer {
         interval: 900
         running: arg("--screenshot") !== undefined
@@ -1123,6 +1124,19 @@ ApplicationWindow {
                     else if (cmd === "overwrite") window.alignmentInsert = false
                     else if (cmd === "mafft") c.align_mafft()
                     console.log("aln", step, "|", c.message)
+                }
+            }
+            // Key presses through the window, ';'-separated: ctrl+=  alt+-
+            // ctrl+shift+=  (a modifier list, then one character).
+            if (arg("--keys")) {
+                const mods = { ctrl: Qt.ControlModifier, alt: Qt.AltModifier, shift: Qt.ShiftModifier }
+                for (const k of arg("--keys").split(";")) {
+                    const parts = k.split("+")
+                    const ch = parts.pop() || "+"
+                    let m = 0
+                    for (const p of parts) m |= mods[p] || 0
+                    v.pressKey(ch.toUpperCase().charCodeAt(0), m, ch)
+                    console.log("keys", k, "|", c.zoom_text, c.hscroll_size, c.vscroll_size)
                 }
             }
             if (arg("--goto")) { const r = arg("--goto").split(","); c.show_range(Number(r[0]), Number(r[1])) }

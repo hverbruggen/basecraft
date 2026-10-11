@@ -45,6 +45,9 @@ pub mod qobject {
         fn open_file(self: Pin<&mut TreeController>, path: &QString) -> bool;
         #[qinvokable]
         fn resize(self: Pin<&mut TreeController>, width: f64, height: f64);
+        /// Screen pixels per QML pixel, so lines draw on whole pixels.
+        #[qinvokable]
+        fn set_pixel_ratio(self: Pin<&mut TreeController>, ratio: f64);
         #[qinvokable]
         fn wheel(self: Pin<&mut TreeController>, x: f64, y: f64, dy: f64, dx: f64, modifiers: i32);
         /// Select what's under the pointer.
@@ -374,6 +377,11 @@ impl qobject::TreeController {
         self.refresh();
     }
 
+    pub fn set_pixel_ratio(mut self: Pin<&mut Self>, ratio: f64) {
+        self.as_mut().rust_mut().view.set_pixel_ratio(f(ratio));
+        self.refresh();
+    }
+
     pub fn wheel(mut self: Pin<&mut Self>, x: f64, y: f64, dy: f64, dx: f64, modifiers: i32) {
         {
             let mut r = self.as_mut().rust_mut();
@@ -382,12 +390,21 @@ impl qobject::TreeController {
                 return;
             };
             let d = session.tree(doc);
-            if modifiers & CTRL != 0 {
-                // Ctrl: rows closer or further apart; with Shift, the tree
-                // wider or narrower.
-                let factor = f(WHEEL_ZOOM.powf(dy));
-                r.view
-                    .zoom_at(d, f(x), f(y), factor, modifiers & SHIFT == 0);
+            if modifiers & (CTRL | ALT) != 0 {
+                // Ctrl zooms both ways about the pointer, Ctrl+Shift only the
+                // width, Alt only the rows. Qt may turn Alt+wheel into a
+                // sideways wheel, so take whichever axis moved.
+                let delta = if dy == 0.0 { dx } else { dy };
+                let factor = f(WHEEL_ZOOM.powf(delta));
+                let (px, py) = (f(x), f(y));
+                if modifiers & CTRL == 0 {
+                    r.view.zoom_at(d, px, py, factor, true);
+                } else if modifiers & SHIFT != 0 {
+                    r.view.zoom_at(d, px, py, factor, false);
+                } else {
+                    r.view.zoom_at(d, px, py, factor, true);
+                    r.view.zoom_at(d, px, py, factor, false);
+                }
             } else if modifiers & SHIFT != 0 || dx.abs() > dy.abs() {
                 let d = if dx.abs() > dy.abs() { dx } else { dy };
                 r.view.scroll_by(f(-d / 2.0), 0.0);

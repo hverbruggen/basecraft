@@ -30,6 +30,9 @@ public:
     // Deliver key presses for `text` to the window as if typed, for
     // scripted tests of focus and key handling.
     Q_INVOKABLE void typeText(const QString &text);
+    // Deliver one key press with modifiers (Qt::KeyboardModifiers bits),
+    // likewise.
+    Q_INVOKABLE void pressKey(int key, int modifiers, const QString &text);
     // Deliver a left click at window coordinates, likewise.
     Q_INVOKABLE void clickAt(qreal x, qreal y);
 

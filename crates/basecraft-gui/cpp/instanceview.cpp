@@ -10,6 +10,7 @@
 #include <QtGui/QMatrix4x4>
 #include <QtGui/QPainter>
 #include <QtQuick/QQuickWindow>
+#include <qpa/qwindowsysteminterface.h>
 #include <rhi/qrhi.h>
 
 #include "basecraft_shaders.h"
@@ -117,6 +118,19 @@ void InstanceView::typeText(const QString &text)
         QKeyEvent release(QEvent::KeyRelease, key, Qt::NoModifier, QString(c));
         QGuiApplication::sendEvent(window(), &release);
     }
+}
+
+void InstanceView::pressKey(int key, int modifiers, const QString &text)
+{
+    if (!window())
+        return;
+    // The platform's entry point, as a real keyboard: shortcut handling
+    // sees the press first.
+    const auto mods = Qt::KeyboardModifiers(modifiers);
+    QWindowSystemInterface::handleKeyEvent<QWindowSystemInterface::SynchronousDelivery>(
+        window(), QEvent::KeyPress, key, mods, text);
+    QWindowSystemInterface::handleKeyEvent<QWindowSystemInterface::SynchronousDelivery>(
+        window(), QEvent::KeyRelease, key, mods, text);
 }
 
 void InstanceView::clickAt(qreal x, qreal y)

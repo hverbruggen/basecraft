@@ -134,6 +134,8 @@ pub struct TreeView {
     scroll_x: f32,
     scroll_y: f32,
     pub selected: Option<usize>,
+    /// Screen pixels per layout pixel; lines snap to screen pixels.
+    pixel_ratio: f32,
     layout: Layout,
     /// What the layout was computed for: document version, size, zooms.
     layout_key: Option<(u64, u32, u32, u32, u32)>,
@@ -149,9 +151,14 @@ impl TreeView {
             scroll_x: 0.0,
             scroll_y: 0.0,
             selected: None,
+            pixel_ratio: 1.0,
             layout: Layout::default(),
             layout_key: None,
         }
+    }
+
+    pub fn set_pixel_ratio(&mut self, ratio: f32) {
+        self.pixel_ratio = if ratio > 0.0 { ratio } else { 1.0 };
     }
 
     pub fn size(&self) -> (f32, f32) {
@@ -417,7 +424,7 @@ impl TreeView {
         let shapes = shapes(doc, &self.layout, &pal, self.selected, Some(clip));
         let (dx, dy) = (-self.scroll_x, -self.scroll_y);
         for s in &shapes {
-            draw(frame, s, dx, dy);
+            draw(frame, s, dx, dy, self.pixel_ratio);
         }
     }
 }
@@ -926,10 +933,20 @@ fn shapes(
     out
 }
 
-/// Draw one shape into the frame, shifted by `(dx, dy)`.
-fn draw(frame: &mut Frame, s: &Shape, dx: f32, dy: f32) {
+/// Draw one shape into the frame, shifted by `(dx, dy)`. Rectangles (branches,
+/// bars) snap to whole screen pixels at `ratio` screen pixels per layout
+/// pixel, so every line of a width draws equally thick.
+fn draw(frame: &mut Frame, s: &Shape, dx: f32, dy: f32, ratio: f32) {
     match s {
-        Shape::Rect { x, y, w, h, color } => frame.rect(x + dx, y + dy, *w, *h, *color),
+        Shape::Rect { x, y, w, h, color } => {
+            let snap = |v: f32| (v * ratio).round() / ratio;
+            let (x0, y0) = (snap(x + dx), snap(y + dy));
+            // At least one screen pixel, and the width rounded on its own,
+            // not by where the edges fall.
+            let w = (w * ratio).round().max(1.0) / ratio;
+            let h = (h * ratio).round().max(1.0) / ratio;
+            frame.rect(x0, y0, w, h, *color);
+        }
         Shape::Gradient {
             x,
             y,
@@ -1173,7 +1190,7 @@ mod tests {
         );
         let mut f = Frame::new();
         for s in &shapes {
-            draw(&mut f, s, 0.0, 0.0);
+            draw(&mut f, s, 0.0, 0.0, 1.0);
         }
         let gradients = f
             .floats()
@@ -1181,6 +1198,42 @@ mod tests {
             .filter(|i| i[14] < 0.0 && i[12] == 0.0 && (i[13] - 0.4).abs() < 1e-6)
             .count();
         assert_eq!(gradients, 1, "the field is one gradient quad");
+    }
+
+    #[test]
+    fn zooming_both_ways_widens_and_spreads() {
+        let t = tree("((A:1,B:2)90:1,C:1);");
+        let mut v = TreeView::new(600.0, 300.0);
+        v.sync(&t);
+        let (w0, h0) = (v.layout.width, v.layout.height);
+        let x0 = v.layout.x[t.tips_in_order()[1]];
+        v.zoom_both(&t, 1.25);
+        v.sync(&t);
+        assert!(v.layout.height > h0 * 1.1, "{} vs {h0}", v.layout.height);
+        assert!(v.layout.width > w0 * 1.1, "{} vs {w0}", v.layout.width);
+        assert!(v.layout.x[t.tips_in_order()[1]] > x0 * 1.1);
+    }
+
+    #[test]
+    fn lines_snap_to_whole_screen_pixels() {
+        // At 1.92 screen pixels per layout pixel, a 1 px line must cover
+        // two screen pixels wherever it falls.
+        let mut f = Frame::new();
+        for k in 0..20 {
+            let shape = Shape::Rect {
+                x: 3.0,
+                y: 10.0 + k as f32 * 0.37,
+                w: 50.0,
+                h: 1.0,
+                color: [0.0, 0.0, 0.0, 1.0],
+            };
+            draw(&mut f, &shape, 0.0, 0.0, 1.92);
+        }
+        for i in f.floats().chunks(16) {
+            let (top, bottom) = (i[1] * 1.92, i[5] * 1.92);
+            assert!((top - top.round()).abs() < 1e-3, "{top}");
+            assert!((bottom - top - 2.0).abs() < 1e-3, "{}", bottom - top);
+        }
     }
 
     #[test]
