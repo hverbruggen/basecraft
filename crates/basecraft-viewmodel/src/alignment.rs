@@ -524,6 +524,18 @@ impl AlignmentView {
         self.update_block();
     }
 
+    /// After typing, move the selection right by its width, staying in the
+    /// alignment.
+    pub fn advance(&mut self) {
+        let width = self.block().col_count();
+        let last = self.cols.saturating_sub(1);
+        let move_col = |c: u64| c.saturating_add(width).min(last);
+        self.cursor.1 = move_col(self.cursor.1);
+        self.anchor.1 = move_col(self.anchor.1);
+        self.update_block();
+        self.reveal(self.cursor);
+    }
+
     /// Likewise by `by` rows, after rows moved.
     pub fn offset_rows(&mut self, by: i64) {
         let move_row = |r: usize| r.saturating_add_signed(by as isize);
@@ -669,22 +681,38 @@ impl AlignmentView {
     // Operations for the current selection. The caller applies them, and
     // on success moves the view along as each says.
 
-    /// Type at the cursor: insert before its cell, or type over it. Either
-    /// way the cursor then moves right.
+    /// Type `residue` (a gap for `-`) into the selection: insert as many as
+    /// it is wide before it, or type over every cell of it. Either way the
+    /// selection then moves right by its width.
     pub fn type_op(&self, residue: char, insert: bool) -> Op {
-        let (row, col) = (self.cursor.0 as u32, self.cursor.1);
-        if insert {
+        let b = self.block();
+        let width = b.col_count();
+        if insert && residue == '-' {
+            Op::AlnInsertGaps {
+                rows: b.row_ranges(),
+                col: b.cols.0,
+                count: width,
+            }
+        } else if insert {
             Op::AlnInsert {
-                row,
-                col,
-                residues: residue.to_string(),
+                rows: b.row_ranges(),
+                col: b.cols.0,
+                residues: residue.to_string().repeat(width as usize),
+            }
+        } else if b.row_count() == 1 {
+            // One row stays a replace, so typing along it merges.
+            Op::AlnReplace {
+                row: b.rows.0 as u32,
+                start: b.cols.0,
+                end: b.cols.1,
+                residues: residue.to_string().repeat(width as usize),
             }
         } else {
-            Op::AlnReplace {
-                row,
-                start: col,
-                end: col + 1,
-                residues: residue.to_string(),
+            Op::AlnFill {
+                rows: b.row_ranges(),
+                start: b.cols.0,
+                end: b.cols.1,
+                residue: residue.to_string(),
             }
         }
     }
@@ -719,8 +747,13 @@ impl AlignmentView {
                 .is_some_and(is_gap)
             {
                 return Err(format!(
-                    "{} has a residue at column {}; Backspace only removes gaps",
+                    "{} has {} at column {}; Backspace only removes gaps",
                     doc.row(r).name,
+                    if doc.is_protein() {
+                        "an amino acid"
+                    } else {
+                        "a base"
+                    },
                     format_thousands(col + 1)
                 ));
             }
@@ -1179,7 +1212,12 @@ impl AlignmentView {
                 } else {
                     let before = doc.read(r, 0, c).iter().filter(|&&b| !is_gap(b)).count();
                     format!(
-                        "residue {} ({})",
+                        "{} {} ({})",
+                        if doc.is_protein() {
+                            "amino acid"
+                        } else {
+                            "base"
+                        },
                         format_thousands(before as u64 + 1),
                         b as char
                     )
@@ -1432,14 +1470,42 @@ mod tests {
                 end: 30
             })
         );
+        // Typing applies to the whole 3 × 4 selection.
+        assert_eq!(
+            v.type_op('-', true),
+            Op::AlnInsertGaps {
+                rows: vec![(2, 5)],
+                col: 30,
+                count: 4
+            }
+        );
+        assert_eq!(
+            v.type_op('A', true),
+            Op::AlnInsert {
+                rows: vec![(2, 5)],
+                col: 30,
+                residues: "AAAA".into()
+            }
+        );
+        assert_eq!(
+            v.type_op('-', false),
+            Op::AlnFill {
+                rows: vec![(2, 5)],
+                start: 30,
+                end: 34,
+                residue: "-".into()
+            }
+        );
+        v.advance();
+        assert_eq!((v.block().rows, v.block().cols), ((2, 5), (34, 38)));
         v.collapse();
         assert!(matches!(
             v.type_op('A', true),
-            Op::AlnInsert { col: 33, .. }
+            Op::AlnInsert { col: 37, .. }
         ));
         assert!(matches!(
             v.type_op('A', false),
-            Op::AlnReplace { start: 33, .. }
+            Op::AlnReplace { start: 37, .. }
         ));
         v.select_rows(0, 10);
         assert_eq!(v.move_rows_op(false), None);
@@ -1475,7 +1541,7 @@ mod tests {
         let y = v.y_of(1) + v.row_height() / 2.0;
         // Row 1 is "CTAG-..." from column 0; column 2 is the third residue.
         let t = v.hover_text(v.x_of(2.5), y, &d).unwrap();
-        assert!(t.starts_with("row1 · column 3 · residue 3"), "{t}");
+        assert!(t.starts_with("row1 · column 3 · base 3"), "{t}");
         let t = v.hover_text(v.x_of(6.5), y, &d).unwrap();
         assert!(t.ends_with("gap"), "{t}");
         assert!(

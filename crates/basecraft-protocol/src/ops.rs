@@ -64,13 +64,21 @@ pub enum Op {
         end: u64,
         residues: String,
     },
-    /// Insert `residues` before column `col` of one row, using up the row's
-    /// trailing gaps first.
+    /// Insert `residues` before column `col` in `rows`. Like gaps, they use
+    /// up each row's trailing gaps first, unless every row gets them.
     #[serde(rename = "aln.insert")]
     AlnInsert {
-        row: u32,
+        rows: Vec<(u32, u32)>,
         col: u64,
         residues: String,
+    },
+    /// Type one residue, or a gap, over the block `rows` × `start..end`.
+    #[serde(rename = "aln.fill")]
+    AlnFill {
+        rows: Vec<(u32, u32)>,
+        start: u64,
+        end: u64,
+        residue: String,
     },
     /// Insert `count` gaps before column `col`. Rows use up their own
     /// trailing gaps first, unless every row gets gaps: that's a new column.
@@ -139,6 +147,7 @@ impl Op {
             Op::FeatureUpdate { .. } => "feature.update",
             Op::AlnReplace { .. } => "aln.replace",
             Op::AlnInsert { .. } => "aln.insert",
+            Op::AlnFill { .. } => "aln.fill",
             Op::ToolRun { .. } => "tool.run",
             Op::AlnInsertGaps { .. } => "aln.insert_gaps",
             Op::AlnDelete { .. } => "aln.delete",

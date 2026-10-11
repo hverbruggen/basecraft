@@ -43,7 +43,7 @@ ApplicationWindow {
     property int ribbonTab: 0
     property string defaultLayout: "wrapped"
     property int orfMinCodons: 100
-    // Typing in the alignment editor inserts residues (true) or types over
+    // Typing in the alignment editor inserts bases (true) or types over
     // them (false). Shared by all alignment tabs.
     property bool alignmentInsert: false
     readonly property bool alignmentOpen: currentKind === "alignment"
@@ -264,8 +264,8 @@ ApplicationWindow {
                     spacing: 6
                     RibbonGroup {
                         title: "Zoom"
-                        RibbonButton { text: "−"; tip: "Zoom out"; keys: "−"; onClicked: window.current.zoom_out() }
-                        RibbonButton { text: "+"; tip: "Zoom in"; keys: "+"; onClicked: window.current.zoom_in() }
+                        RibbonButton { text: "−"; tip: "Zoom out"; keys: "Ctrl+−"; onClicked: window.current.zoom_out() }
+                        RibbonButton { text: "+"; tip: "Zoom in"; keys: "Ctrl++"; onClicked: window.current.zoom_in() }
                         RibbonButton { text: "Fit"; tip: window.alignmentOpen ? "Show the whole width of the alignment" : "Show the whole sequence"; keys: "Ctrl+0"; onClicked: window.current.fit() }
                         RibbonButton { text: "Selection"; tip: "Zoom to the selection"; onClicked: window.current.zoom_to_selection() }
                         Label {
@@ -393,14 +393,14 @@ ApplicationWindow {
                         ModeButton {
                             text: "Insert"
                             active: window.alignmentInsert
-                            tip: "Typing inserts residues; the rest of the row moves right"
+                            tip: "Typing inserts bases; the rest of the row moves right"
                             keys: "Insert"
                             onClicked: window.alignmentInsert = true
                         }
                         ModeButton {
                             text: "Overwrite"
                             active: !window.alignmentInsert
-                            tip: "Typing replaces the residue at the cursor"
+                            tip: "Typing replaces the selected bases"
                             keys: "Insert"
                             onClicked: window.alignmentInsert = false
                         }
@@ -412,7 +412,7 @@ ApplicationWindow {
                         RibbonButton { text: "Remove"; tip: "Remove the gaps just left of the selection"; keys: "Backspace"; onClicked: window.current.remove_gap() }
                         RibbonButton { text: "◀ Slide"; tip: "Slide the selection left into gaps, or drag it"; keys: "Alt+←"; onClicked: window.current.slide(-1) }
                         RibbonButton { text: "Slide ▶"; tip: "Slide the selection right into gaps, or drag it"; keys: "Alt+→"; onClicked: window.current.slide(1) }
-                        RibbonButton { text: "Delete"; tip: "Delete the selected residues; the rows close up"; keys: "Delete"; onClicked: window.current.delete_selection() }
+                        RibbonButton { text: "Delete"; tip: "Delete the selected bases; the rows close up"; keys: "Delete"; onClicked: window.current.delete_selection() }
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
@@ -768,7 +768,7 @@ ApplicationWindow {
 
         AlnItem { text: "Insert gap"; visible: alnMenu.cells; onTriggered: window.current.insert_gap() }
         AlnItem { text: "Remove gap to the left"; visible: alnMenu.cells; onTriggered: window.current.remove_gap() }
-        AlnItem { text: "Delete " + alnMenu.info.rows + " × " + alnMenu.info.columns + " residues"; visible: alnMenu.cells; onTriggered: window.current.delete_selection() }
+        AlnItem { text: "Delete " + alnMenu.info.rows + " × " + alnMenu.info.columns + " bases"; visible: alnMenu.cells; onTriggered: window.current.delete_selection() }
         AlnItem { text: "Rename “" + alnMenu.info.rowName + "”…"; visible: alnMenu.info.rows === 1 && !alnMenu.columns; onTriggered: renameDialog.ask() }
         AlnItem { text: "Move to top"; visible: alnMenu.rows; onTriggered: window.current.rows_to_top() }
         AlnItem { text: alnMenu.info.rows === 1 ? "Delete row" : "Delete " + alnMenu.info.rows + " rows"; visible: alnMenu.rows; onTriggered: window.current.remove_rows() }

@@ -353,13 +353,33 @@ fn alignment_session_replays_exactly() {
             s.apply(
                 d,
                 Op::AlnInsert {
-                    row: 3,
+                    rows: vec![(3, 4)],
                     col: 2 + i as u64,
                     residues: c.to_string(),
                 },
             )
             .unwrap();
         }
+        // A letter typed into a block in insert mode, then gaps typed over it.
+        s.apply(
+            d,
+            Op::AlnInsert {
+                rows: vec![(0, 2)],
+                col: 1,
+                residues: "CC".into(),
+            },
+        )
+        .unwrap();
+        s.apply(
+            d,
+            Op::AlnFill {
+                rows: vec![(0, 2)],
+                start: 1,
+                end: 3,
+                residue: "-".into(),
+            },
+        )
+        .unwrap();
         // Two gaps typed one after the other in rows 1..3: one entry.
         for i in 0..2 {
             s.apply(
@@ -441,7 +461,9 @@ fn alignment_session_replays_exactly() {
         "{names:?}"
     );
     assert_eq!(names.iter().filter(|n| **n == "aln.insert_gaps").count(), 1);
-    assert_eq!(names.iter().filter(|n| **n == "aln.insert").count(), 1);
+    // Typing along row 3, and the letter typed into a block.
+    assert_eq!(names.iter().filter(|n| **n == "aln.insert").count(), 2);
+    assert_eq!(names.iter().filter(|n| **n == "aln.fill").count(), 1);
     assert_eq!(names.iter().filter(|n| **n == "tool.run").count(), 1);
     assert_eq!(names.iter().filter(|n| **n == "aln.shift").count(), 1);
     let saved = std::fs::read_to_string(root.join("x.aln.fasta")).unwrap();

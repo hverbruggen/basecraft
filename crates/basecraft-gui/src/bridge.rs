@@ -741,7 +741,7 @@ impl qobject::GenomeController {
                 self.as_mut().toggle_mode();
                 true
             }
-            KEY_PLUS | KEY_EQUAL | KEY_MINUS if !ctrl => {
+            KEY_PLUS | KEY_EQUAL | KEY_MINUS if ctrl => {
                 let factor = if key == KEY_MINUS { 1.0 / 1.6 } else { 1.6 };
                 let _ = cursor;
                 self.as_mut().rust_mut().view.zoom_step(factor, len);
@@ -810,8 +810,7 @@ impl qobject::GenomeController {
             }
             _ => {
                 let t = text.to_string();
-                let residue =
-                    t.len() == 1 && t.bytes().all(|b| b.is_ascii_alphabetic() || b == b'-');
+                let residue = t.len() == 1 && t.bytes().all(|b| b.is_ascii_alphabetic());
                 if residue && !ctrl && modifiers & ALT == 0 {
                     if let Some(c) = cursor {
                         let (start, end) = selection.unwrap_or((c, c));

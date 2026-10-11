@@ -170,10 +170,20 @@ fn describe(op: &Op) -> String {
             range(*start, *end),
             row + 1
         ),
-        Op::AlnInsert { row, col, residues } => format!(
-            "Inserted {residues} at column {} of row {}",
-            col + 1,
-            row + 1
+        Op::AlnInsert {
+            rows: r,
+            col,
+            residues,
+        } => format!("Inserted {residues} at column {} in {}", col + 1, rows(r)),
+        Op::AlnFill {
+            rows: r,
+            start,
+            end,
+            residue,
+        } => format!(
+            "Filled columns {} of {} with {residue}",
+            range(*start, *end),
+            rows(r)
         ),
         Op::ToolRun {
             plugin,

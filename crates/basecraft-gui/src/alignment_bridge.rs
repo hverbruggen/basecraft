@@ -481,7 +481,7 @@ impl qobject::AlignmentController {
                 self.as_mut().rust_mut().view.select_all();
                 true
             }
-            KEY_PLUS | KEY_EQUAL | KEY_MINUS if !ctrl => {
+            KEY_PLUS | KEY_EQUAL | KEY_MINUS if ctrl => {
                 let factor = if key == KEY_MINUS { 1.0 / 1.6 } else { 1.6 };
                 self.as_mut().rust_mut().view.zoom_step(factor);
                 true
@@ -549,7 +549,7 @@ impl qobject::AlignmentController {
                     let ch = t.to_ascii_uppercase().chars().next().unwrap_or('N');
                     let op = self.rust().view.type_op(ch, self.rust().insert_mode);
                     if self.as_mut().edit(op) {
-                        self.as_mut().rust_mut().view.move_cursor(0, 1, false);
+                        self.as_mut().rust_mut().view.advance();
                     }
                     true
                 } else {

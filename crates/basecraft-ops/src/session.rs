@@ -702,6 +702,7 @@ impl Session {
             }
             Op::AlnReplace { .. }
             | Op::AlnInsert { .. }
+            | Op::AlnFill { .. }
             | Op::AlnInsertGaps { .. }
             | Op::AlnDelete { .. }
             | Op::AlnShift { .. }
@@ -844,9 +845,27 @@ fn execute_alignment(a: &mut OpenedAlignment, op: &Op) -> Result<Vec<AlnUndo>> {
             let residues = normalise(residues)?;
             doc.replace(*row as usize, *start, *end, residues.as_bytes())
         }
-        Op::AlnInsert { row, col, residues } => {
+        Op::AlnInsert {
+            rows,
+            col,
+            residues,
+        } => {
             let residues = normalise(residues)?;
-            doc.insert(*row as usize, *col, residues.as_bytes())
+            doc.insert(rows, *col, residues.as_bytes())
+        }
+        Op::AlnFill {
+            rows,
+            start,
+            end,
+            residue,
+        } => {
+            let residue = normalise(residue)?;
+            let &[b] = residue.as_bytes() else {
+                return Err(invalid(format!(
+                    "aln.fill takes one residue, not {residue:?}"
+                )));
+            };
+            doc.fill(rows, *start, *end, b)
         }
         Op::AlnInsertGaps { rows, col, count } => doc.insert_gaps(rows, *col, *count),
         Op::AlnDelete { rows, start, end } => doc.delete(rows, *start, *end),
@@ -915,14 +934,18 @@ fn merge_alignment(prev: &Op, next: &Op) -> Option<Op> {
             })
         }
         (
-            Op::AlnInsert { row, col, residues },
             Op::AlnInsert {
-                row: row2,
+                rows,
+                col,
+                residues,
+            },
+            Op::AlnInsert {
+                rows: rows2,
                 col: col2,
                 residues: residues2,
             },
-        ) if row == row2 && *col2 == col + residues.len() as u64 => Some(Op::AlnInsert {
-            row: *row,
+        ) if rows == rows2 && *col2 == col + residues.len() as u64 => Some(Op::AlnInsert {
+            rows: rows.clone(),
             col: *col,
             residues: format!("{residues}{residues2}"),
         }),
@@ -976,7 +999,7 @@ fn normalise(residues: &str) -> Result<String> {
         .chars()
         .find(|c| !(c.is_ascii_alphabetic() || *c == '-' || *c == '*'))
     {
-        return Err(invalid(format!("{c:?} is not a base or residue code")));
+        return Err(invalid(format!("{c:?} is not a base or amino acid")));
     }
     Ok(residues.to_ascii_uppercase())
 }

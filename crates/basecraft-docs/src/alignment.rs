@@ -335,22 +335,46 @@ impl AlignmentDoc {
         Ok(undo)
     }
 
-    /// Insert `residues` before column `col` of one row, using up the row's
-    /// trailing gaps first: typing in insert mode.
+    /// Insert `residues` before column `col` in `rows`: typing in insert
+    /// mode. Like gaps, they use up each row's trailing gaps first unless
+    /// every row gets them.
     pub fn insert(
         &mut self,
-        row: usize,
+        rows: &RowRanges,
         col: u64,
         residues: &[u8],
     ) -> Result<Vec<Undo>, EditError> {
-        if row >= self.rows.len() {
-            return err(format!("no row {row}"));
-        }
+        let rows = self.expand(rows)?;
         if col > self.width {
             return err(format!("column {col} outside 0..={}", self.width));
         }
+        let every_row = rows.len() == self.rows.len();
         let mut undo = Vec::new();
-        self.insert_cells(row, col, residues, true, &mut undo);
+        for r in rows {
+            self.insert_cells(r, col, residues, !every_row, &mut undo);
+        }
+        self.square(&mut undo);
+        self.edited();
+        Ok(undo)
+    }
+
+    /// Type `residue` over every cell of the block `rows` × `start..end`.
+    pub fn fill(
+        &mut self,
+        rows: &RowRanges,
+        start: u64,
+        end: u64,
+        residue: u8,
+    ) -> Result<Vec<Undo>, EditError> {
+        let rows = self.expand(rows)?;
+        if start >= end || end > self.width {
+            return err(format!("columns {start}..{end} outside 0..{}", self.width));
+        }
+        let cells = vec![residue; usize::try_from(end - start).expect("columns fit in memory")];
+        let mut undo = Vec::new();
+        for r in rows {
+            self.splice(r, start, end, &cells, &mut undo);
+        }
         self.square(&mut undo);
         self.edited();
         Ok(undo)
@@ -835,7 +859,8 @@ mod tests {
             let e = (s + 1 + rnd(6)).min(w);
             let r = match rnd(8) {
                 0 if rnd(2) == 0 => d.replace(a as usize, s, e, b"ACG"),
-                0 => d.insert(a as usize, s, b"TT"),
+                0 if rnd(2) == 0 => d.insert(&[(a, b)], s, b"TT"),
+                0 => d.fill(&[(a, b)], s, e, b'-'),
                 1 => d.insert_gaps(&[(a, b)], s, 1 + rnd(3)),
                 2 => d.delete(&[(a, b)], s, e),
                 3 => d.shift(&[(a, b)], s, e, rnd(5) as i64 - 2),
@@ -914,20 +939,27 @@ mod tests {
                 })
                 .collect();
             let refs: Vec<&str> = rows.iter().map(String::as_str).collect();
-            let row = rnd(3) as usize;
+            let row = rnd(3) as u32;
             let mut one = aln(&refs);
             let col = rnd(one.width() + 1);
             let typed = &b"GTGA"[..=(rnd(4) as usize)];
             let mut steps = aln(&refs);
             for (i, b) in typed.iter().enumerate() {
-                steps.insert(row, col + i as u64, &[*b]).unwrap();
+                steps
+                    .insert(&[(row, row + 1)], col + i as u64, &[*b])
+                    .unwrap();
             }
-            one.insert(row, col, typed).unwrap();
+            one.insert(&[(row, row + 1)], col, typed).unwrap();
             assert_eq!(text(&one), text(&steps), "{refs:?} {row} {col}");
         }
         let mut d = aln(&["AC--", "ACGT"]);
-        d.insert(0, 1, b"G").unwrap();
+        d.insert(&[(0, 1)], 1, b"G").unwrap();
         assert_eq!(text(&d), ["AGC-", "ACGT"]);
+        // Into every row it's a new column.
+        d.insert(&[(0, 2)], 0, b"T").unwrap();
+        assert_eq!(text(&d), ["TAGC-", "TACGT"]);
+        d.fill(&[(0, 2)], 1, 3, b'-').unwrap();
+        assert_eq!(text(&d), ["T--C-", "T--GT"]);
     }
 
     /// Likewise for a block slid in steps.

@@ -311,7 +311,7 @@
       ]
     },
     {
-      "description": "Insert `residues` before column `col` of one row, using up the row's\ntrailing gaps first.",
+      "description": "Insert `residues` before column `col` in `rows`. Like gaps, they use\nup each row's trailing gaps first, unless every row gets them.",
       "type": "object",
       "properties": {
         "op": {
@@ -329,16 +329,89 @@
             "residues": {
               "type": "string"
             },
-            "row": {
+            "rows": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0
+                  }
+                ]
+              }
+            }
+          },
+          "required": [
+            "rows",
+            "col",
+            "residues"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ]
+    },
+    {
+      "description": "Type one residue, or a gap, over the block `rows` × `start..end`.",
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "aln.fill"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "end": {
               "type": "integer",
-              "format": "uint32",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "residue": {
+              "type": "string"
+            },
+            "rows": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0
+                  }
+                ]
+              }
+            },
+            "start": {
+              "type": "integer",
+              "format": "uint64",
               "minimum": 0
             }
           },
           "required": [
-            "row",
-            "col",
-            "residues"
+            "rows",
+            "start",
+            "end",
+            "residue"
           ]
         }
       },
