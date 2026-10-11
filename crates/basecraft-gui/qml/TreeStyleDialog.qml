@@ -12,7 +12,6 @@ Dialog {
     title: "Tree style"
     modal: true
     anchors.centerIn: Overlay.overlay
-    width: Math.min(520, parent ? parent.width - 40 : 520)
     padding: 16
 
     ListModel { id: sets }
@@ -64,8 +63,8 @@ Dialog {
         else close()
     }
 
+    // The dialog takes its size from its contents.
     ColumnLayout {
-        anchors.fill: parent
         spacing: 8
 
         Label { text: "Support values, shown in this order and joined with /"; font.bold: true }

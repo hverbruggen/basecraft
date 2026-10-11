@@ -13,7 +13,6 @@ Dialog {
     title: annotation.exists ? "Edit clade annotation" : "Annotate clade"
     modal: true
     anchors.centerIn: Overlay.overlay
-    width: Math.min(460, parent ? parent.width - 40 : 460)
     padding: 16
 
     // Colours offered as swatches; any other can be typed or picked.
@@ -59,8 +58,8 @@ Dialog {
         onAccepted: colour.text = selectedColor.toString()
     }
 
+    // The dialog takes its size from its contents.
     ColumnLayout {
-        anchors.fill: parent
         spacing: 10
 
         Label { text: (annotation.tips || 0) + " tips"; opacity: 0.7 }
@@ -70,6 +69,7 @@ Dialog {
             TextField {
                 id: label
                 Layout.fillWidth: true
+                Layout.minimumWidth: 300
                 placeholderText: "e.g. Ventalia"
                 Keys.onReturnPressed: dialog.save()
                 Keys.onEnterPressed: dialog.save()
