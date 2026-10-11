@@ -49,10 +49,21 @@ impl LogWriter {
 /// Every entry under a project's log directory, from all hosts. Within a
 /// host's stream, file order is kept: it is the order of events.
 pub fn read_all(root: &Path) -> Result<Vec<LogEntry>> {
+    Ok(read_entries(root, false)?.0)
+}
+
+/// Like `read_all`, but lines that can't be read are skipped and counted
+/// instead of failing the whole read.
+pub fn read_readable(root: &Path) -> Result<(Vec<LogEntry>, usize)> {
+    read_entries(root, true)
+}
+
+fn read_entries(root: &Path, lenient: bool) -> Result<(Vec<LogEntry>, usize)> {
     let mut entries = Vec::new();
+    let mut skipped = 0;
     let dir = log_dir(root);
     if !dir.exists() {
-        return Ok(entries);
+        return Ok((entries, skipped));
     }
     let mut hosts: Vec<PathBuf> = fs::read_dir(&dir)?
         .filter_map(|e| e.ok().map(|e| e.path()))
@@ -68,14 +79,33 @@ pub fn read_all(root: &Path) -> Result<Vec<LogEntry>> {
             if file.extension().is_some_and(|e| e == "jsonl") {
                 for line in BufReader::new(File::open(&file)?).lines() {
                     let line = line?;
-                    if !line.trim().is_empty() {
-                        entries.push(serde_json::from_str(&line)?);
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    match parse_entry(&line) {
+                        Ok(e) => entries.push(e),
+                        Err(_) if lenient => skipped += 1,
+                        Err(e) => return Err(e.into()),
                     }
                 }
             }
         }
     }
-    Ok(entries)
+    Ok((entries, skipped))
+}
+
+/// One log line, with entries written by earlier versions brought up to
+/// date.
+pub fn parse_entry(line: &str) -> serde_json::Result<LogEntry> {
+    let mut v: serde_json::Value = serde_json::from_str(line)?;
+    // aln.insert named one row before it took row ranges.
+    if v["op"] == "aln.insert"
+        && let Some(params) = v["params"].as_object_mut()
+        && let Some(row) = params.remove("row").and_then(|r| r.as_u64())
+    {
+        params.insert("rows".into(), serde_json::json!([[row, row + 1]]));
+    }
+    serde_json::from_value(v)
 }
 
 /// A readable account of what happened in the projects under `roots` since
@@ -83,12 +113,11 @@ pub fn read_all(root: &Path) -> Result<Vec<LogEntry>> {
 /// shifted by `utc_offset_min` minutes, to the viewer's local time.
 pub fn activity_text(roots: &[PathBuf], since: &str, utc_offset_min: i32) -> Result<String> {
     let mut entries = Vec::new();
+    let mut skipped = 0;
     for root in roots {
-        entries.extend(
-            read_all(root)?
-                .into_iter()
-                .filter(|e| e.t.as_str() >= since),
-        );
+        let (all, n) = read_readable(root)?;
+        skipped += n;
+        entries.extend(all.into_iter().filter(|e| e.t.as_str() >= since));
     }
     entries.sort_by(|a, b| a.t.cmp(&b.t));
     let mut out = format!(
@@ -97,6 +126,12 @@ pub fn activity_text(roots: &[PathBuf], since: &str, utc_offset_min: i32) -> Res
     );
     for root in roots {
         let _ = writeln!(out, "Full log: {}", log_dir(root).display());
+    }
+    if skipped > 0 {
+        let _ = writeln!(
+            out,
+            "{skipped} log lines couldn't be read and are left out."
+        );
     }
     out.push('\n');
     if entries.is_empty() {
@@ -285,5 +320,19 @@ mod activity_tests {
         assert_eq!(describe(&op), "Slid columns 10–12 of rows 3–5 left by 2");
         let op = Op::AlnRemoveRows { rows: vec![(0, 1)] };
         assert_eq!(describe(&op), "Deleted row 1");
+    }
+
+    #[test]
+    fn old_insert_entries_still_read() {
+        let line = r#"{"v":1,"id":"01","t":"2026-10-11T07:37:59.475Z","host":"h","session":"s","actor":{"kind":"human","user":"u"},"doc":"a.fas","op":"aln.insert","params":{"row":3,"col":6,"residues":"A"},"state":{"len":10,"features":0,"rows":5}}"#;
+        let e = parse_entry(line).unwrap();
+        assert_eq!(
+            e.op,
+            Op::AlnInsert {
+                rows: vec![(3, 4)],
+                col: 6,
+                residues: "A".into()
+            }
+        );
     }
 }

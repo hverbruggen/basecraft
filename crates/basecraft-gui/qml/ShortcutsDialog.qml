@@ -20,6 +20,7 @@ Dialog {
     readonly property var groups: [
         { name: "File", keys: [
             ["Ctrl+S", "Save"],
+            ["Ctrl+Shift+S", "Save as a new file"],
             ["Ctrl+Z", "Undo"],
             ["Ctrl+Shift+Z, Ctrl+Y", "Redo"],
         ] },

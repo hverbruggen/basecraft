@@ -45,7 +45,7 @@ ApplicationWindow {
     property int orfMinCodons: 100
     // Typing in the alignment editor inserts bases (true) or types over
     // them (false). Shared by all alignment tabs.
-    property bool alignmentInsert: false
+    property bool alignmentInsert: true
     readonly property bool alignmentOpen: currentKind === "alignment"
     readonly property var ribbonTabs: ["File", "View", alignmentOpen ? "Alignment" : "Annotations", "Settings", "Help"]
     // Only the wrapped layout is offered for now; files always open in it.
@@ -250,6 +250,7 @@ ApplicationWindow {
                         title: "File"
                         RibbonButton { text: "Open…"; tip: "Open a sequence or alignment file"; enabled: true; onClicked: openDialog.open() }
                         RibbonButton { text: "Save"; tip: "Save the current file"; keys: "Ctrl+S"; onClicked: window.current.save() }
+                        RibbonButton { text: "Save as…"; tip: "Save as a new file and carry on in that one"; keys: "Ctrl+Shift+S"; onClicked: window.saveAs() }
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
@@ -517,6 +518,30 @@ ApplicationWindow {
         currentFolder: shell.project_dir.length ? "file://" + shell.project_dir : ""
         nameFilters: ["Sequences and alignments (*.gb *.gbk *.genbank *.gbff *.fasta *.fa *.fna *.fas *.ffn *.faa *.afa)", "All files (*)"]
         onAccepted: window.openPath(window.localPath(selectedFile))
+    }
+
+    // Save the active tab under a new name; the tab then shows the new file.
+    function saveAs() {
+        if (!window.current) return
+        saveDialog.index = tabs.currentIndex
+        saveDialog.selectedFile = "file://" + window.currentPath
+        saveDialog.open()
+    }
+    Shortcut { sequence: "Ctrl+Shift+S"; onActivated: window.saveAs() }
+    FileDialog {
+        id: saveDialog
+        property int index: -1
+        title: "Save as"
+        fileMode: FileDialog.SaveFile
+        currentFolder: shell.project_dir.length ? "file://" + shell.project_dir : ""
+        onAccepted: {
+            const d = docs.itemAt(index)
+            const path = window.localPath(selectedFile)
+            if (d && d.controller.save_as(path)) {
+                openFiles.setProperty(index, "path", path)
+                Qt.callLater(window.refreshCurrent)
+            }
+        }
     }
 
     FolderDialog {

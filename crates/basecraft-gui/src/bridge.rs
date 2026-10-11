@@ -80,6 +80,9 @@ pub mod qobject {
         fn redo(self: Pin<&mut GenomeController>);
         #[qinvokable]
         fn save(self: Pin<&mut GenomeController>);
+        /// Save to a new file and carry on editing that one.
+        #[qinvokable]
+        fn save_as(self: Pin<&mut GenomeController>, path: &QString) -> bool;
         /// Reload the Omarchy theme if it changed.
         #[qinvokable]
         fn check_theme(self: Pin<&mut GenomeController>);
@@ -206,7 +209,7 @@ pub mod qobject {
 
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 
 use basecraft_docs::FeatureId;
 use basecraft_io::genbank::{format_location, parse_location};
@@ -218,6 +221,31 @@ use cxx_qt_lib::{QByteArray, QString};
 use serde_json::{Value, json};
 
 // Qt key codes and modifiers used below.
+/// One zoom step from the keyboard or the ribbon.
+pub(crate) const ZOOM_STEP: f64 = 1.25;
+/// Zoom per wheel unit (120 to a notch): about 13 % a notch.
+pub(crate) const WHEEL_ZOOM: f64 = 1.001;
+
+/// How long something took, for the end of a status message: " in 40 ms",
+/// " in 2.3 s", " in 4 min 5 s".
+pub(crate) fn took(started: Instant) -> String {
+    let d = started.elapsed();
+    let ms = d.as_millis();
+    if ms < 1000 {
+        format!(" in {ms} ms")
+    } else if ms < 60_000 {
+        format!(" in {:.1} s", d.as_secs_f64())
+    } else {
+        let s = d.as_secs();
+        format!(" in {} min {} s", s / 60, s % 60)
+    }
+}
+
+pub(crate) fn file_name(path: &Path) -> String {
+    path.file_name()
+        .map_or_else(String::new, |f| f.to_string_lossy().into_owned())
+}
+
 pub(crate) const KEY_ESCAPE: i32 = 0x0100_0000;
 pub(crate) const KEY_BACKSPACE: i32 = 0x0100_0003;
 pub(crate) const KEY_DELETE: i32 = 0x0100_0007;
@@ -520,7 +548,7 @@ impl qobject::GenomeController {
                 // The wheel scrolls lines; Ctrl+wheel zooms.
                 if modifiers & CTRL != 0 {
                     r.view
-                        .zoom_at_point(x as f32, y as f32, 1.0015f64.powf(dy), len);
+                        .zoom_at_point(x as f32, y as f32, WHEEL_ZOOM.powf(dy), len);
                 } else {
                     r.view.scroll_by((-dy * 0.5) as f32);
                 }
@@ -528,7 +556,7 @@ impl qobject::GenomeController {
                 let d = if dx.abs() > dy.abs() { dx } else { dy };
                 r.view.pan((d / 2.0) as f32, len);
             } else {
-                r.view.zoom_at(x as f32, 1.0015f64.powf(dy), len);
+                r.view.zoom_at(x as f32, WHEEL_ZOOM.powf(dy), len);
             }
         }
         self.refresh();
@@ -708,7 +736,7 @@ impl qobject::GenomeController {
                 self.as_mut().redo();
                 true
             }
-            KEY_S if ctrl => {
+            KEY_S if ctrl && !shift => {
                 self.as_mut().save();
                 true
             }
@@ -742,7 +770,11 @@ impl qobject::GenomeController {
                 true
             }
             KEY_PLUS | KEY_EQUAL | KEY_MINUS if ctrl => {
-                let factor = if key == KEY_MINUS { 1.0 / 1.6 } else { 1.6 };
+                let factor = if key == KEY_MINUS {
+                    1.0 / ZOOM_STEP
+                } else {
+                    ZOOM_STEP
+                };
                 let _ = cursor;
                 self.as_mut().rust_mut().view.zoom_step(factor, len);
                 true
@@ -893,23 +925,45 @@ impl qobject::GenomeController {
     }
 
     pub fn save(mut self: Pin<&mut Self>) {
+        let started = Instant::now();
         let result = {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
             let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
                 return;
             };
-            session
-                .save(doc, None)
-                .map(|()| session.doc_key(doc).to_string())
+            session.save(doc, None)
         };
         match result {
-            Ok(_key) => {
+            Ok(()) => {
                 self.as_mut().set_dirty(false);
-                self.done("Saved");
+                self.done(&format!("Saved{}", took(started)));
             }
             Err(e) => self.fail(&format!("Save failed: {e}")),
         }
+    }
+
+    pub fn save_as(mut self: Pin<&mut Self>, path: &QString) -> bool {
+        let started = Instant::now();
+        let target = PathBuf::from(path.to_string());
+        let result = {
+            let mut r = self.as_mut().rust_mut();
+            let r = &mut *r;
+            let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
+                return false;
+            };
+            session.save(doc, Some(&target))
+        };
+        if let Err(e) = result {
+            self.fail(&format!("Save failed: {e}"));
+            return false;
+        }
+        // Carry on in the new file; its log starts with opening it.
+        if !self.as_mut().open_file(path) {
+            return false;
+        }
+        self.done(&format!("Saved as {}{}", file_name(&target), took(started)));
+        true
     }
 
     pub fn check_theme(mut self: Pin<&mut Self>) {
@@ -1078,11 +1132,11 @@ impl qobject::GenomeController {
     }
 
     pub fn zoom_in(self: Pin<&mut Self>) {
-        self.zoom_centre(2.0);
+        self.zoom_centre(ZOOM_STEP);
     }
 
     pub fn zoom_out(self: Pin<&mut Self>) {
-        self.zoom_centre(0.5);
+        self.zoom_centre(1.0 / ZOOM_STEP);
     }
 
     pub fn zoom_to_selection(mut self: Pin<&mut Self>) {
@@ -1221,13 +1275,15 @@ impl qobject::GenomeController {
             self.as_mut().notify("Select bases to search for ORFs");
             return QString::default();
         }
+        let started = Instant::now();
         let msg = match self.as_mut().run_orf_finder(min_codons.max(1), range) {
-            Ok((m, true)) => {
-                self.as_mut().done(&m);
-                m
-            }
-            Ok((m, false)) => {
-                self.as_mut().notify(&m);
+            Ok((m, added)) => {
+                let m = format!("{m}{}", took(started));
+                if added {
+                    self.as_mut().done(&m);
+                } else {
+                    self.as_mut().notify(&m);
+                }
                 m
             }
             Err(e) => {
@@ -1353,6 +1409,7 @@ impl qobject::GenomeController {
             target = dir.join(format!("{base}_{n}.gb"));
             n += 1;
         }
+        let started = Instant::now();
         let result = {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
@@ -1363,13 +1420,10 @@ impl qobject::GenomeController {
         };
         match result {
             Ok(()) => {
-                let name = target
-                    .file_name()
-                    .map_or_else(String::new, |f| f.to_string_lossy().into_owned());
-                let _ = name;
                 self.as_mut().done(&format!(
-                    "Extracted {} bp",
-                    basecraft_viewmodel::genome::format_thousands(end - start)
+                    "Extracted {} bp{}",
+                    basecraft_viewmodel::genome::format_thousands(end - start),
+                    took(started)
                 ));
                 QString::from(&target.to_string_lossy().into_owned())
             }

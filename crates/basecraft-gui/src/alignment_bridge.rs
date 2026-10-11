@@ -111,6 +111,9 @@ pub mod qobject {
         fn redo(self: Pin<&mut AlignmentController>);
         #[qinvokable]
         fn save(self: Pin<&mut AlignmentController>);
+        /// Save to a new file and carry on editing that one.
+        #[qinvokable]
+        fn save_as(self: Pin<&mut AlignmentController>, path: &QString) -> bool;
         /// Reload the Omarchy theme if it changed.
         #[qinvokable]
         fn check_theme(self: Pin<&mut AlignmentController>);
@@ -171,7 +174,7 @@ pub mod qobject {
 
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 
 use basecraft_docs::AlignmentDoc;
 use basecraft_ops::{DocId, Session};
@@ -187,8 +190,8 @@ use serde_json::json;
 use crate::bridge::{
     ALT, CTRL, KEY_0, KEY_BACKSPACE, KEY_DELETE, KEY_DOWN, KEY_END, KEY_EQUAL, KEY_ESCAPE,
     KEY_HOME, KEY_LEFT, KEY_MINUS, KEY_PAGE_DOWN, KEY_PAGE_UP, KEY_PLUS, KEY_RIGHT, KEY_S, KEY_UP,
-    KEY_Y, KEY_Z, SHIFT, css, load_theme, memory_text, monospace_font, omarchy_theme_path,
-    plugin_dir, project_root,
+    KEY_Y, KEY_Z, SHIFT, WHEEL_ZOOM, ZOOM_STEP, css, file_name, load_theme, memory_text,
+    monospace_font, omarchy_theme_path, plugin_dir, project_root, took,
 };
 
 const KEY_A: i32 = 0x41;
@@ -394,7 +397,7 @@ impl qobject::AlignmentController {
         {
             let mut r = self.as_mut().rust_mut();
             if modifiers & CTRL != 0 {
-                r.view.zoom_at(f(x), f(y), 1.0015f64.powf(dy));
+                r.view.zoom_at(f(x), f(y), WHEEL_ZOOM.powf(dy));
             } else if modifiers & SHIFT != 0 || dx.abs() > dy.abs() {
                 let d = if dx.abs() > dy.abs() { dx } else { dy };
                 r.view.pan(f(-d / 2.0));
@@ -469,7 +472,7 @@ impl qobject::AlignmentController {
                 self.as_mut().history(true);
                 true
             }
-            KEY_S if ctrl => {
+            KEY_S if ctrl && !shift => {
                 self.as_mut().save();
                 true
             }
@@ -482,7 +485,11 @@ impl qobject::AlignmentController {
                 true
             }
             KEY_PLUS | KEY_EQUAL | KEY_MINUS if ctrl => {
-                let factor = if key == KEY_MINUS { 1.0 / 1.6 } else { 1.6 };
+                let factor = if key == KEY_MINUS {
+                    1.0 / ZOOM_STEP
+                } else {
+                    ZOOM_STEP
+                };
                 self.as_mut().rust_mut().view.zoom_step(factor);
                 true
             }
@@ -598,23 +605,45 @@ impl qobject::AlignmentController {
     }
 
     pub fn save(mut self: Pin<&mut Self>) {
+        let started = Instant::now();
         let result = {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
             let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
                 return;
             };
-            session
-                .save(doc, None)
-                .map(|()| session.doc_key(doc).to_string())
+            session.save(doc, None)
         };
         match result {
-            Ok(_) => {
+            Ok(()) => {
                 self.as_mut().set_dirty(false);
-                self.done("Saved");
+                self.done(&format!("Saved{}", took(started)));
             }
             Err(e) => self.fail(&format!("Save failed: {e}")),
         }
+    }
+
+    pub fn save_as(mut self: Pin<&mut Self>, path: &QString) -> bool {
+        let started = Instant::now();
+        let target = PathBuf::from(path.to_string());
+        let result = {
+            let mut r = self.as_mut().rust_mut();
+            let r = &mut *r;
+            let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
+                return false;
+            };
+            session.save(doc, Some(&target))
+        };
+        if let Err(e) = result {
+            self.fail(&format!("Save failed: {e}"));
+            return false;
+        }
+        // Carry on in the new file; its log starts with opening it.
+        if !self.as_mut().open_file(path) {
+            return false;
+        }
+        self.done(&format!("Saved as {}{}", file_name(&target), took(started)));
+        true
     }
 
     pub fn check_theme(mut self: Pin<&mut Self>) {
@@ -672,12 +701,12 @@ impl qobject::AlignmentController {
     }
 
     pub fn zoom_in(mut self: Pin<&mut Self>) {
-        self.as_mut().rust_mut().view.zoom_step(2.0);
+        self.as_mut().rust_mut().view.zoom_step(ZOOM_STEP);
         self.refresh();
     }
 
     pub fn zoom_out(mut self: Pin<&mut Self>) {
-        self.as_mut().rust_mut().view.zoom_step(0.5);
+        self.as_mut().rust_mut().view.zoom_step(1.0 / ZOOM_STEP);
         self.refresh();
     }
 
@@ -767,6 +796,7 @@ impl qobject::AlignmentController {
         };
         self.as_mut().set_busy(true);
         self.as_mut().notify("Aligning with MAFFT…");
+        let started = Instant::now();
         let qt_thread = self.qt_thread();
         std::thread::spawn(move || {
             let result = job.run();
@@ -783,7 +813,8 @@ impl qobject::AlignmentController {
                 match result {
                     Ok(res) => {
                         let msg = res.message.unwrap_or_else(|| "Aligned".into());
-                        this.as_mut().done(&format!("{msg} with MAFFT"));
+                        this.as_mut()
+                            .done(&format!("{msg} with MAFFT{}", took(started)));
                         let path = job.output.to_string_lossy().into_owned();
                         this.as_mut().file_created(QString::from(&path));
                     }
@@ -859,14 +890,18 @@ impl qobject::AlignmentController {
     }
 
     pub fn remove_gap_columns(mut self: Pin<&mut Self>) {
+        let started = Instant::now();
         let before = self.with_doc(AlignmentDoc::width).unwrap_or(0);
         if self.as_mut().edit(Op::AlnRemoveGapColumns {}) {
             let after = self.with_doc(AlignmentDoc::width).unwrap_or(0);
             if before == after {
                 self.as_mut().notify("No gap-only columns");
             } else {
-                self.as_mut()
-                    .done(&format!("Removed {} gap-only columns", before - after));
+                self.as_mut().done(&format!(
+                    "Removed {} gap-only columns{}",
+                    before - after,
+                    took(started)
+                ));
             }
         }
         self.refresh();
