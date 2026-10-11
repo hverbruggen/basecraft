@@ -753,7 +753,9 @@ ApplicationWindow {
                         }
                         DelegateChoice {
                             roleValue: "tree"
-                            TreeView {
+                            // Not "TreeView": that's Qt's, used by the
+                            // files sidebar.
+                            PhyloView {
                                 onDirtyChanged: openFiles.setProperty(index, "dirty", dirty)
                                 onContextMenu: (info) => { treeMenu.info = info; treeMenu.popup() }
                                 onToggleSidebar: window.sidebarOpen = !window.sidebarOpen

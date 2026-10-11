@@ -74,7 +74,7 @@ fn main() {
         "qml/FeatureEditor.qml",
         "qml/DocumentView.qml",
         "qml/AlignmentView.qml",
-        "qml/TreeView.qml",
+        "qml/PhyloView.qml",
         "qml/CladeEditor.qml",
         "qml/TreeStyleDialog.qml",
         "qml/ShortcutsDialog.qml",
