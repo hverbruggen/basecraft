@@ -6,7 +6,7 @@ use std::path::Path;
 
 use basecraft_ops::Session;
 use basecraft_plugin_host::FileJob;
-use basecraft_plugin_host::file_tool::output_beside;
+use basecraft_plugin_host::file_tool::{AlignmentInput, output_beside};
 use basecraft_plugin_host::process::python_interpreter;
 use basecraft_protocol::{Actor, Op};
 
@@ -48,8 +48,15 @@ fn realigns_with_mafft_and_logs_the_run() {
     let doc = session.open(&file).unwrap();
     assert!(session.is_alignment(doc));
     let plugin = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/mafft");
-    let output = output_beside(&file, "mafft");
-    let job = FileJob::from_alignment(&session, doc, (&plugin, "align"), output.clone()).unwrap();
+    let output = output_beside(&file, "mafft", "fasta");
+    let job = FileJob::from_alignment(
+        &session,
+        doc,
+        (&plugin, "align"),
+        AlignmentInput::Ungapped,
+        output.clone(),
+    )
+    .unwrap();
     let result = job.run().unwrap();
     job.record(&mut session, doc, &result).unwrap();
     assert_eq!(result.tool.as_ref().map(|t| t.name.as_str()), Some("mafft"));

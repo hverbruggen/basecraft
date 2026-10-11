@@ -54,6 +54,12 @@ pub mod qobject {
         #[qinvokable]
         fn align_mafft(self: Pin<&mut AlignmentController>);
 
+        /// Infer a maximum-likelihood tree with FastTree's standard settings
+        /// (GTR for DNA, LG for protein), in the background, into a new
+        /// Newick file beside this one.
+        #[qinvokable]
+        fn build_fasttree(self: Pin<&mut AlignmentController>);
+
         #[qinvokable]
         fn open_file(self: Pin<&mut AlignmentController>, path: &QString) -> bool;
         #[qinvokable]
@@ -179,7 +185,7 @@ use std::time::{Instant, SystemTime};
 use basecraft_docs::AlignmentDoc;
 use basecraft_ops::{DocId, Session};
 use basecraft_plugin_host::FileJob;
-use basecraft_plugin_host::file_tool::output_beside;
+use basecraft_plugin_host::file_tool::{AlignmentInput, output_beside};
 use basecraft_protocol::Op;
 use basecraft_viewmodel::alignment::Region;
 use basecraft_viewmodel::{AlignmentView, Frame, Theme};
@@ -195,6 +201,18 @@ use crate::bridge::{
 };
 
 const KEY_A: i32 = 0x41;
+
+/// A plugin that reads this alignment and writes a new file beside it.
+struct Tool {
+    name: &'static str,
+    plugin: &'static str,
+    operation: &'static str,
+    input: AlignmentInput,
+    /// The new file's suffix and extension: `NAME.<suffix>.<ext>`.
+    output: (&'static str, &'static str),
+    min_rows: usize,
+    working: &'static str,
+}
 const KEY_SPACE: i32 = 0x20;
 
 pub struct AlignmentRust {
@@ -771,12 +789,42 @@ impl qobject::AlignmentController {
         self.refresh();
     }
 
-    pub fn align_mafft(mut self: Pin<&mut Self>) {
+    pub fn align_mafft(self: Pin<&mut Self>) {
+        self.run_tool(&Tool {
+            name: "MAFFT",
+            plugin: "mafft",
+            operation: "align",
+            input: AlignmentInput::Ungapped,
+            output: ("mafft", "fasta"),
+            min_rows: 2,
+            working: "Aligning with MAFFT…",
+        });
+    }
+
+    pub fn build_fasttree(self: Pin<&mut Self>) {
+        self.run_tool(&Tool {
+            name: "FastTree",
+            plugin: "fasttree",
+            operation: "tree",
+            input: AlignmentInput::Aligned,
+            output: ("fasttree", "nwk"),
+            min_rows: 3,
+            working: "Building a tree with FastTree…",
+        });
+    }
+
+    /// Run a plugin on this alignment in the background, writing a new file
+    /// beside it, then log the run and ask for the file to be opened.
+    fn run_tool(mut self: Pin<&mut Self>, tool: &Tool) {
         if self.rust().busy {
             return;
         }
-        if self.with_doc(AlignmentDoc::row_count).unwrap_or(0) < 2 {
-            self.fail("MAFFT needs at least two sequences");
+        let name = tool.name;
+        if self.with_doc(AlignmentDoc::row_count).unwrap_or(0) < tool.min_rows {
+            self.fail(&format!(
+                "{name} needs at least {} sequences",
+                tool.min_rows
+            ));
             return;
         }
         let job = {
@@ -784,18 +832,25 @@ impl qobject::AlignmentController {
             let (Some(session), Some(doc)) = (&r.session, r.doc) else {
                 return;
             };
-            let output = output_beside(&PathBuf::from(r.file_path.to_string()), "mafft");
-            FileJob::from_alignment(session, doc, (&plugin_dir("mafft"), "align"), output)
+            let (suffix, ext) = tool.output;
+            let output = output_beside(&PathBuf::from(r.file_path.to_string()), suffix, ext);
+            FileJob::from_alignment(
+                session,
+                doc,
+                (&plugin_dir(tool.plugin), tool.operation),
+                tool.input,
+                output,
+            )
         };
         let job = match job {
             Ok(job) => job,
             Err(e) => {
-                self.fail(&format!("MAFFT: {e}"));
+                self.fail(&format!("{name}: {e}"));
                 return;
             }
         };
         self.as_mut().set_busy(true);
-        self.as_mut().notify("Aligning with MAFFT…");
+        self.as_mut().notify(tool.working);
         let started = Instant::now();
         let qt_thread = self.qt_thread();
         std::thread::spawn(move || {
@@ -812,13 +867,13 @@ impl qobject::AlignmentController {
                 });
                 match result {
                     Ok(res) => {
-                        let msg = res.message.unwrap_or_else(|| "Aligned".into());
+                        let msg = res.message.unwrap_or_else(|| "Done".into());
                         this.as_mut()
-                            .done(&format!("{msg} with MAFFT{}", took(started)));
+                            .done(&format!("{msg} with {name}{}", took(started)));
                         let path = job.output.to_string_lossy().into_owned();
                         this.as_mut().file_created(QString::from(&path));
                     }
-                    Err(e) => this.as_mut().fail(&format!("MAFFT: {}", short_error(&e))),
+                    Err(e) => this.as_mut().fail(&format!("{name}: {}", short_error(&e))),
                 }
             });
         });

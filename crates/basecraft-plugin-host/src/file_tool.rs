@@ -8,13 +8,22 @@
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-use basecraft_ops::files::{HashingWriter, write_ungapped};
+use basecraft_ops::files::{HashingWriter, write_alignment, write_ungapped};
 use basecraft_ops::{DocId, Session};
 use basecraft_protocol::Actor;
 use basecraft_protocol::plugin::InvokeResult;
 use serde_json::json;
 
 use crate::{Error, Manifest, PluginProcess, Result};
+
+/// What a tool gets from an alignment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AlignmentInput {
+    /// The rows without gaps, for an aligner.
+    Ungapped,
+    /// The alignment as it is, for tree building.
+    Aligned,
+}
 
 pub struct FileJob {
     /// The plugin's directory and the operation to call.
@@ -28,27 +37,37 @@ pub struct FileJob {
 }
 
 impl FileJob {
-    /// A job whose input is the alignment's rows without gaps, as FASTA.
+    /// A job whose input is the alignment as FASTA, with or without gaps.
     pub fn from_alignment(
         session: &Session,
         doc: DocId,
         (plugin, operation): (&Path, &str),
+        kind: AlignmentInput,
         output: PathBuf,
     ) -> Result<Self> {
         let dir = tempfile::Builder::new()
             .prefix("basecraft-tool")
             .tempdir()?;
-        let input = dir.path().join("input.fasta");
-        let mut file = std::io::BufWriter::new(std::fs::File::create(&input)?);
+        let path = dir.path().join("input.fasta");
+        let mut file = std::io::BufWriter::new(std::fs::File::create(&path)?);
         let mut hw = HashingWriter::new(&mut file);
-        write_ungapped(session.alignment(doc), &mut hw)?;
+        let key = match kind {
+            AlignmentInput::Ungapped => {
+                write_ungapped(session.alignment(doc), &mut hw)?;
+                format!("{} (ungapped)", session.doc_key(doc))
+            }
+            AlignmentInput::Aligned => {
+                write_alignment(session.alignment(doc), &mut hw)?;
+                session.doc_key(doc).to_string()
+            }
+        };
         let hash = hw.hash();
         file.flush()?;
         Ok(Self {
             plugin: plugin.to_path_buf(),
             operation: operation.to_string(),
-            input,
-            input_key: (format!("{} (ungapped)", session.doc_key(doc)), hash),
+            input: path,
+            input_key: (key, hash),
             output,
             _dir: dir,
         })
@@ -98,9 +117,9 @@ impl FileJob {
     }
 }
 
-/// `<stem>.<suffix>.fasta` beside `file`, numbered if that name is taken:
+/// `<stem>.<suffix>.<ext>` beside `file`, numbered if that name is taken:
 /// `rbcL.fasta` gives `rbcL.mafft.fasta`, then `rbcL.mafft-2.fasta`.
-pub fn output_beside(file: &Path, suffix: &str) -> PathBuf {
+pub fn output_beside(file: &Path, suffix: &str, ext: &str) -> PathBuf {
     let dir = file.parent().unwrap_or(Path::new("."));
     let name = file
         .file_name()
@@ -113,9 +132,9 @@ pub fn output_beside(file: &Path, suffix: &str) -> PathBuf {
     let mut n = 1;
     loop {
         let candidate = if n == 1 {
-            dir.join(format!("{stem}.{suffix}.fasta"))
+            dir.join(format!("{stem}.{suffix}.{ext}"))
         } else {
-            dir.join(format!("{stem}.{suffix}-{n}.fasta"))
+            dir.join(format!("{stem}.{suffix}-{n}.{ext}"))
         };
         if !candidate.exists() {
             return candidate;
@@ -132,11 +151,11 @@ mod tests {
     fn output_names_number_up() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("rbcL.aln.fasta");
-        let first = output_beside(&file, "mafft");
+        let first = output_beside(&file, "mafft", "fasta");
         assert_eq!(first, dir.path().join("rbcL.mafft.fasta"));
         std::fs::write(&first, "").unwrap();
         assert_eq!(
-            output_beside(&file, "mafft"),
+            output_beside(&file, "mafft", "fasta"),
             dir.path().join("rbcL.mafft-2.fasta")
         );
     }

@@ -123,6 +123,8 @@ struct Layout {
     width: f32,
     height: f32,
     tips_bottom: f32,
+    /// The root's x.
+    left: f32,
 }
 
 pub struct TreeView {
@@ -377,8 +379,14 @@ impl TreeView {
         })
     }
 
+    /// Flip the selected subtree; for a tip, its parent's.
     pub fn rotate_op(&self, doc: &TreeDoc) -> Option<Op> {
-        let s = self.selected.filter(|&s| !doc.node(s).is_tip())?;
+        let s = self.selected?;
+        let s = if doc.node(s).is_tip() {
+            doc.node(s).parent?
+        } else {
+            s
+        };
         Some(Op::TreeRotate {
             clade: doc.clade_ref(s),
         })
@@ -571,7 +579,19 @@ fn layout(doc: &TreeDoc, width: f32, height: f32, row_zoom: f32, width_zoom: f32
         col_w[column[k]] = col_w[column[k]].max(BAR_GAP + a.bar_width as f32 + 4.0 + label);
     }
     let bars_w: f32 = col_w.iter().sum();
-    let avail_w = (width - 2.0 * MARGIN - label_w - bars_w).max(60.0);
+    // Room at the left for support values beside branches near the root.
+    let support_chars = (0..n)
+        .filter(|&i| i != doc.root())
+        .map(|i| {
+            doc.supports()
+                .iter()
+                .map(|s| s.values[i].as_ref().map_or(1, String::len) + 1)
+                .sum::<usize>()
+        })
+        .max()
+        .unwrap_or(0);
+    let left = MARGIN + support_chars as f32 * style.support_font as f32 * GLYPH_ADVANCE;
+    let avail_w = (width - MARGIN - left - label_w - bars_w).max(60.0);
     let unit = if max_depth > 0.0 {
         (f64::from(avail_w * width_zoom) / max_depth) as f32
     } else {
@@ -579,7 +599,7 @@ fn layout(doc: &TreeDoc, width: f32, height: f32, row_zoom: f32, width_zoom: f32
     };
     let mut x = vec![0.0f32; n];
     for i in 0..n {
-        x[i] = MARGIN + (depth[i] as f32) * unit;
+        x[i] = left + (depth[i] as f32) * unit;
     }
     let mut y = vec![0.0f32; n];
     for (k, &t) in tips.iter().enumerate() {
@@ -591,7 +611,7 @@ fn layout(doc: &TreeDoc, width: f32, height: f32, row_zoom: f32, width_zoom: f32
             y[i] = f32::midpoint(y[a], y[b]);
         }
     }
-    let tree_right = MARGIN + max_depth as f32 * unit;
+    let tree_right = left + max_depth as f32 * unit;
     let label_end = tree_right + label_w;
     let mut starts = vec![label_end];
     for w in &col_w {
@@ -615,6 +635,7 @@ fn layout(doc: &TreeDoc, width: f32, height: f32, row_zoom: f32, width_zoom: f32
         width: label_end + bars_w + MARGIN,
         height: tips_bottom + scale + MARGIN,
         tips_bottom,
+        left,
     }
 }
 
@@ -912,14 +933,14 @@ fn shapes(
         let y = l.tips_bottom + 14.0;
         if visible(y - 4.0, y + 20.0) {
             out.push(Shape::Rect {
-                x: MARGIN,
+                x: l.left,
                 y,
                 w,
                 h: bw.max(1.0),
                 color: pal.foreground,
             });
             out.push(Shape::Text {
-                x: MARGIN + w / 2.0,
+                x: l.left + w / 2.0,
                 y: y + 4.0,
                 size: small,
                 text: format_length(nice),
@@ -1141,7 +1162,9 @@ mod tests {
         assert_eq!(l.y[ab], f32::midpoint(l.y[tips[0]], l.y[tips[1]]));
         // B is deepest: 3 units, at the right of the tree area.
         assert!(l.x[tips[1]] > l.x[tips[0]]);
-        assert!((l.x[tips[1]] - MARGIN - 3.0 * l.unit).abs() < 0.01);
+        assert!((l.x[tips[1]] - l.left - 3.0 * l.unit).abs() < 0.01);
+        // Room left of the root for the support value beside it.
+        assert!(l.left > MARGIN);
         assert!(l.width <= 600.0 + 0.5);
     }
 

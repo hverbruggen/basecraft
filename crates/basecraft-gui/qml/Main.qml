@@ -40,7 +40,8 @@ ApplicationWindow {
     property string currentKind: ""
     property bool sidebarOpen: true
     property bool showGc: true
-    property int ribbonTab: 0
+    // The chosen ribbon tab, by name.
+    property string ribbonTabName: "File"
     property string defaultLayout: "wrapped"
     property int orfMinCodons: 100
     // Typing in the alignment editor inserts bases (true) or types over
@@ -48,7 +49,16 @@ ApplicationWindow {
     property bool alignmentInsert: true
     readonly property bool alignmentOpen: currentKind === "alignment"
     readonly property bool treeOpen: currentKind === "tree"
-    readonly property var ribbonTabs: ["File", "View", alignmentOpen ? "Alignment" : treeOpen ? "Tree" : "Annotations", "Settings", "Help"]
+    // The third tab is Annotations for a sequence, Alignment for an
+    // alignment, Tree for a tree; an alignment also gets Build phylogeny.
+    readonly property var ribbonTabs: ["File", "View", alignmentOpen ? "Alignment" : treeOpen ? "Tree" : "Annotations"]
+        .concat(alignmentOpen ? ["Build phylogeny"] : [], ["Settings", "Help"])
+    // The chosen tab if this document has it, else its third tab (a tab
+    // for another kind of document), else File.
+    readonly property string ribbonTab: ribbonTabs.includes(ribbonTabName) ? ribbonTabName
+        : ["Annotations", "Alignment", "Tree", "Build phylogeny"].includes(ribbonTabName) ? ribbonTabs[2] : "File"
+    // Each tab's panel in the ribbon's stack.
+    readonly property var ribbonPanels: ({ "File": 0, "View": 1, "Annotations": 2, "Settings": 3, "Help": 4, "Alignment": 5, "Tree": 6, "Build phylogeny": 7 })
     // Only the wrapped layout is offered for now; files always open in it.
 
     // Preferences, kept between sessions (~/.config/Basecraft).
@@ -179,16 +189,17 @@ ApplicationWindow {
             glyph: "\uea65"
             tip: "Keyboard shortcuts for this tab"
             enabled: true
-            onClicked: shortcuts.show(window.ribbonTabs[window.ribbonTab])
+            onClicked: shortcuts.show(window.ribbonTab)
         }
     }
     component RibbonTabButton: ToolButton {
         id: tabButton
-        required property int tabIndex
+        required property string modelData
         focusPolicy: Qt.NoFocus
         checkable: true
-        checked: window.ribbonTab === tabIndex
-        onClicked: window.ribbonTab = tabIndex
+        text: modelData
+        checked: window.ribbonTab === modelData
+        onClicked: window.ribbonTabName = modelData
         topPadding: 3
         bottomPadding: 3
         leftPadding: 12
@@ -216,11 +227,10 @@ ApplicationWindow {
                 anchors.fill: parent
                 anchors.leftMargin: 6
                 spacing: 0
-                RibbonTabButton { tabIndex: 0; text: "File" }
-                RibbonTabButton { tabIndex: 1; text: "View" }
-                RibbonTabButton { tabIndex: 2; text: window.ribbonTabs[2] }
-                RibbonTabButton { tabIndex: 3; text: "Settings" }
-                RibbonTabButton { tabIndex: 4; text: "Help" }
+                Repeater {
+                    model: window.ribbonTabs
+                    RibbonTabButton {}
+                }
                 Label {
                     Layout.fillWidth: true
                     horizontalAlignment: Text.AlignRight
@@ -264,11 +274,7 @@ ApplicationWindow {
             color: Qt.alpha(shell.foreground, 0.025)
             StackLayout {
                 anchors { fill: parent; leftMargin: 8; topMargin: 4; bottomMargin: 2 }
-                // The third tab is Annotations for a sequence, Alignment
-                // for an alignment, Tree for a tree; those two panels sit
-                // last.
-                currentIndex: window.ribbonTab !== 2 ? window.ribbonTab
-                    : window.alignmentOpen ? 5 : window.treeOpen ? 6 : 2
+                currentIndex: window.ribbonPanels[window.ribbonTab]
 
                 RowLayout {
                     spacing: 6
@@ -307,14 +313,15 @@ ApplicationWindow {
                             opacity: 0.7
                         }
                     }
-                    ToolSeparator { Layout.fillHeight: true }
+                    ToolSeparator { Layout.fillHeight: true; visible: window.currentKind === "sequence" }
                     // Linear and circular layouts exist in the code but are
                     // not offered for now; the wrapped layout is the view.
                     RibbonGroup {
                         title: "Show"
+                        // Only sequences have a GC plot.
+                        visible: window.currentKind === "sequence"
                         CheckBox {
                             text: "GC content"
-                            enabled: window.currentKind === "sequence"
                             ToolTip.text: "Show the GC content plot"
                             ToolTip.visible: hovered
                             ToolTip.delay: 400
@@ -497,7 +504,7 @@ ApplicationWindow {
                         RibbonButton { text: "Annotate…"; tip: "Name the selected clade, with a bar or a coloured field"; keys: "Enter"; enabled: window.current !== null && window.current.has_selection; onClicked: cladeEditor.openSelected() }
                         RibbonButton { text: "Reroot"; tip: "Root the tree on the branch above the selection"; enabled: window.current !== null && window.current.has_selection; onClicked: window.current.reroot() }
                         RibbonButton { text: "Root position…"; tip: "Move the root along its branch"; onClicked: rootDialog.ask() }
-                        RibbonButton { text: "Rotate"; tip: "Swap the order of the selected clade's branches"; enabled: window.current !== null && window.current.has_selection; onClicked: window.current.rotate() }
+                        RibbonButton { text: "Flip"; tip: "Reverse the order of the branches in the selected subtree (for a tip, its parent's)"; enabled: window.current !== null && window.current.has_selection; onClicked: window.current.rotate() }
                         RibbonButton { text: "Rename…"; tip: "Rename the selected tip"; keys: "F2"; enabled: window.current !== null && window.current.tip_selected; onClicked: tipDialog.ask() }
                     }
                     ToolSeparator { Layout.fillHeight: true }
@@ -519,6 +526,22 @@ ApplicationWindow {
                     RibbonGroup {
                         title: "Figure"
                         RibbonButton { text: "Export SVG…"; tip: "Save the tree as an SVG figure, black on white"; onClicked: window.exportSvg() }
+                    }
+                    Item { Layout.fillWidth: true }
+                    ShortcutsGroup {}
+                }
+
+                // Build phylogeny: tree inference from the open alignment.
+                RowLayout {
+                    spacing: 6
+                    RibbonGroup {
+                        title: "Maximum likelihood"
+                        RibbonButton {
+                            text: window.current && window.current.busy ? "Running…" : "FastTree"
+                            enabled: window.current !== null && !window.current.busy
+                            tip: "Infer a tree with FastTree, standard settings (GTR for DNA, LG for protein), into a new file"
+                            onClicked: window.current.build_fasttree()
+                        }
                     }
                     Item { Layout.fillWidth: true }
                     ShortcutsGroup {}
@@ -925,7 +948,7 @@ ApplicationWindow {
         TreeItem { text: "Remove annotation"; visible: treeMenu.info.annotated; onTriggered: window.current.remove_annotation(treeMenu.info.annotation) }
         TreeItem { text: "Reroot here"; visible: treeMenu.info.node && !treeMenu.info.root; onTriggered: window.current.reroot() }
         TreeItem { text: "Root position…"; visible: treeMenu.info.rootBranch === true; onTriggered: rootDialog.ask() }
-        TreeItem { text: "Rotate"; visible: treeMenu.info.node && !treeMenu.info.tip; onTriggered: window.current.rotate() }
+        TreeItem { text: "Flip subtree"; visible: treeMenu.info.node; onTriggered: window.current.rotate() }
         TreeItem { text: "Rename tip…"; visible: treeMenu.info.tip; onTriggered: tipDialog.ask() }
         TreeItem { text: "Add support from tree…"; visible: !treeMenu.info.node; onTriggered: supportFile.open() }
         TreeItem { text: "Tree style…"; visible: !treeMenu.info.node; onTriggered: treeStyle.openStyle() }
@@ -1130,7 +1153,7 @@ ApplicationWindow {
             if (arg("--fit")) c.fit()
             // Alignment edits, ';'-separated: sel:R0,C0,R1,C1  gap  rmgap
             // slide:N  type:TEXT  del  undo  redo  up  down  strip  zoomsel
-            // insert  overwrite  mafft
+            // insert  overwrite  mafft  fasttree
             if (arg("--aln")) {
                 for (const step of arg("--aln").split(";")) {
                     const [cmd, a] = step.split(":")
@@ -1149,6 +1172,7 @@ ApplicationWindow {
                     else if (cmd === "insert") window.alignmentInsert = true
                     else if (cmd === "overwrite") window.alignmentInsert = false
                     else if (cmd === "mafft") c.align_mafft()
+                    else if (cmd === "fasttree") c.build_fasttree()
                     console.log("aln", step, "|", c.message)
                 }
             }
@@ -1199,14 +1223,14 @@ ApplicationWindow {
                 menu.itemAt(5).triggered()
                 menu.close()
             }
-            if (arg("--ribbon")) window.ribbonTab = Number(arg("--ribbon"))
+            if (arg("--ribbon")) window.ribbonTabName = window.ribbonTabs[Number(arg("--ribbon"))]
             if (arg("--orfs")) console.log(window.current.find_orfs(Number(arg("--orfs")), arg("--select") !== undefined))
             if (arg("--activity")) {
                 const files = []
                 for (let i = 0; i < openFiles.count; i++) files.push(openFiles.get(i).path)
                 console.log("activity:", shell.activity_log(files.join("\n"), -new Date().getTimezoneOffset()))
             }
-            if (arg("--shortcuts")) shortcuts.show(window.ribbonTabs[window.ribbonTab])
+            if (arg("--shortcuts")) shortcuts.show(window.ribbonTab)
             if (arg("--edit")) {
                 if (arg("--edit") === "new") editor.openNew(); else editor.openFeature(Number(arg("--edit")))
             }
