@@ -254,8 +254,41 @@ fn describe(op: &Op) -> String {
         Op::AlnMoveRows { rows: r, to } => format!("Moved {} to row {}", rows(r), to + 1),
         Op::AlnRenameRow { row, name } => format!("Renamed row {} to {name}", row + 1),
         Op::AlnRemoveRows { rows: r } => format!("Deleted {}", rows(r)),
+        Op::Export { path, format } => format!("Exported {format} to {path}"),
+        Op::TreeReroot { clade } => format!("Rerooted on {}", clade_name(clade)),
+        Op::TreeRotate { clade } => format!("Rotated {}", clade_name(clade)),
+        Op::TreeLadderize { small_first } => format!(
+            "Ladderized, {} clades on top",
+            if *small_first { "small" } else { "large" }
+        ),
+        Op::TreeRenameTip { from, to } => format!("Renamed {from} to {to}"),
+        Op::TreeAnnotate {
+            annotation: Some(a),
+            ..
+        } => format!("Annotated {} as {:?}", clade_name(&a.clade), a.label),
+        Op::TreeAnnotate {
+            id,
+            annotation: None,
+        } => format!("Removed clade annotation {id}"),
+        Op::TreeAddSupport { name, source, .. } if source.is_empty() => {
+            format!("Added support values {name:?}")
+        }
+        Op::TreeAddSupport { name, source, .. } => {
+            format!("Added support values {name:?} from {source}")
+        }
+        Op::TreeRemoveSupport { name } => format!("Removed support values {name:?}"),
+        Op::TreeStyle { .. } => "Changed the tree's style".into(),
         Op::Undo { .. } => "Undo".into(),
         Op::Redo { .. } => "Redo".into(),
+    }
+}
+
+/// A clade as people read it: "Codium fragile" or "the clade of A and B".
+fn clade_name(clade: &[String]) -> String {
+    match clade {
+        [a] => a.clone(),
+        [a, b] => format!("the clade of {a} and {b}"),
+        _ => "a clade".into(),
     }
 }
 

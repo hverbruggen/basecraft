@@ -13,12 +13,12 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use basecraft_docs::alignment::Undo as AlnUndo;
-use basecraft_docs::{AlignmentDoc, EditResult, FeatureId, SequenceDoc};
+use basecraft_docs::{AlignmentDoc, EditResult, FeatureId, SequenceDoc, TreeDoc};
 use basecraft_protocol::ops::LOG_VERSION;
 use basecraft_protocol::{Actor, DocState, Feature, LogEntry, Op, OpResult};
 
 use crate::error::invalid;
-use crate::files::{self, HashingWriter, Loaded, Opened, OpenedAlignment};
+use crate::files::{self, HashingWriter, Loaded, Opened, OpenedAlignment, OpenedTree};
 use crate::log::LogWriter;
 use crate::{Error, Result};
 
@@ -43,6 +43,8 @@ enum Inverse {
         before: Option<Feature>,
     },
     Alignment(Vec<AlnUndo>),
+    /// The whole tree as it was: trees are small.
+    Tree(Box<TreeDoc>),
 }
 
 struct Applied {
@@ -143,7 +145,7 @@ impl Session {
     pub fn doc(&self, id: DocId) -> &SequenceDoc {
         match &self.docs[id.0].content {
             Loaded::Sequence(o) => &o.doc,
-            Loaded::Alignment(_) => panic!("document {} is an alignment", id.0),
+            _ => panic!("document {} isn't a sequence", id.0),
         }
     }
 
@@ -151,8 +153,20 @@ impl Session {
     pub fn alignment(&self, id: DocId) -> &AlignmentDoc {
         match &self.docs[id.0].content {
             Loaded::Alignment(o) => &o.doc,
-            Loaded::Sequence(_) => panic!("document {} is a sequence", id.0),
+            _ => panic!("document {} isn't an alignment", id.0),
         }
+    }
+
+    /// A tree document. Panics if `id` isn't a tree.
+    pub fn tree(&self, id: DocId) -> &TreeDoc {
+        match &self.docs[id.0].content {
+            Loaded::Tree(o) => &o.doc,
+            _ => panic!("document {} isn't a tree", id.0),
+        }
+    }
+
+    pub fn is_tree(&self, id: DocId) -> bool {
+        matches!(self.docs[id.0].content, Loaded::Tree(_))
     }
 
     pub fn is_alignment(&self, id: DocId) -> bool {
@@ -163,6 +177,7 @@ impl Session {
         match &self.docs[id.0].content {
             Loaded::Sequence(o) => Ok(o),
             Loaded::Alignment(_) => Err(invalid("this needs a sequence, not an alignment")),
+            Loaded::Tree(_) => Err(invalid("this needs a sequence, not a tree")),
         }
     }
 
@@ -209,6 +224,11 @@ impl Session {
                 len: o.doc.width(),
                 features: 0,
                 rows: Some(o.doc.row_count() as u64),
+            },
+            Loaded::Tree(o) => DocState {
+                len: o.doc.tip_count() as u64,
+                features: o.doc.annotations().len() as u64,
+                rows: None,
             },
         }
     }
@@ -260,8 +280,13 @@ impl Session {
         let content = files::load(path)?;
         let key = self.relative(path);
         let mut hashes = vec![(key.clone(), basecraft_io::cache::content_hash(path)?)];
-        let sidecar = files::gff_sidecar(path);
-        if matches!(&content, Loaded::Sequence(o) if o.format == files::Format::Fasta)
+        let sidecar = if matches!(content, Loaded::Tree(_)) {
+            files::tree_sidecar(path)
+        } else {
+            files::gff_sidecar(path)
+        };
+        if (matches!(&content, Loaded::Sequence(o) if o.format == files::Format::Fasta)
+            || matches!(content, Loaded::Tree(_)))
             && sidecar.exists()
         {
             hashes.push((
@@ -329,6 +354,13 @@ impl Session {
                 hashes.push((self.relative(&target), main_hash));
                 return self.log_save(id, &target, hashes);
             }
+            Loaded::Tree(t) => {
+                if format != files::Format::Tree {
+                    return Err(invalid("a tree can only be saved as a tree file"));
+                }
+                let hashes = self.save_tree(t, &target)?;
+                return self.log_save(id, &target, hashes);
+            }
             Loaded::Sequence(o) => o,
         };
         if format != opened.format {
@@ -357,6 +389,27 @@ impl Session {
             hashes.push((self.relative(&sidecar), h));
         }
         self.log_save(id, &target, hashes)
+    }
+
+    /// Write a tree and its sidecar; returns their hashes.
+    fn save_tree(&self, tree: &OpenedTree, target: &Path) -> Result<Vec<(String, String)>> {
+        let mut hashes = Vec::new();
+        let sidecar = files::tree_sidecar(target);
+        for (path, sidecar_file) in [(target, false), (sidecar.as_path(), true)] {
+            let mut hash = String::new();
+            basecraft_io::write_atomic(path, |w| {
+                let mut hw = HashingWriter::new(w);
+                if sidecar_file {
+                    files::write_tree_sidecar(&tree.doc, &mut hw)?;
+                } else {
+                    files::write_tree(tree, &mut hw)?;
+                }
+                hash = hw.hash();
+                Ok(())
+            })?;
+            hashes.push((self.relative(path), hash));
+        }
+        Ok(hashes)
     }
 
     fn log_save(&mut self, id: DocId, target: &Path, hashes: Vec<(String, String)>) -> Result<()> {
@@ -456,6 +509,38 @@ impl Session {
         self.write(&entry)
     }
 
+    /// Write a derived file, such as a figure, and log it.
+    pub fn export(
+        &mut self,
+        id: DocId,
+        path: &Path,
+        format: &str,
+        f: impl FnOnce(&mut dyn std::io::Write) -> std::io::Result<()>,
+    ) -> Result<()> {
+        self.flush()?;
+        let mut hash = String::new();
+        basecraft_io::write_atomic(path, |w| {
+            let mut hw = HashingWriter::new(w);
+            f(&mut hw)?;
+            hash = hw.hash();
+            Ok(())
+        })?;
+        let key = self.relative(path);
+        let entry = self.entry(
+            id,
+            self.actor.clone(),
+            Op::Export {
+                path: key.clone(),
+                format: format.to_string(),
+            },
+            OpResult {
+                hashes: vec![(key, hash)],
+                feature: None,
+            },
+        );
+        self.write(&entry)
+    }
+
     /// The hash of the file an extract would write, without writing it.
     pub fn extract_hash(
         &self,
@@ -478,6 +563,13 @@ impl Session {
                 let mut hw = HashingWriter::new(std::io::sink());
                 files::write_alignment(&a.doc, &mut hw)?;
                 return Ok(vec![hw.hash()]);
+            }
+            Loaded::Tree(t) => {
+                let mut hw = HashingWriter::new(std::io::sink());
+                files::write_tree(t, &mut hw)?;
+                let mut side = HashingWriter::new(std::io::sink());
+                files::write_tree_sidecar(&t.doc, &mut side)?;
+                return Ok(vec![hw.hash(), side.hash()]);
             }
         };
         let mut hw = HashingWriter::new(std::io::sink());
@@ -644,6 +736,9 @@ impl Session {
             Loaded::Alignment(a) => {
                 return execute_alignment(a, op).map(|u| (Inverse::Alignment(u), None));
             }
+            Loaded::Tree(t) => {
+                return execute_tree(&mut t.doc, op).map(|before| (Inverse::Tree(before), None));
+            }
         };
         match op {
             Op::SeqReplace {
@@ -710,9 +805,18 @@ impl Session {
             | Op::AlnMoveRows { .. }
             | Op::AlnRenameRow { .. }
             | Op::AlnRemoveRows { .. } => Err(invalid(format!("{} needs an alignment", op.name()))),
+            Op::TreeReroot { .. }
+            | Op::TreeRotate { .. }
+            | Op::TreeLadderize { .. }
+            | Op::TreeRenameTip { .. }
+            | Op::TreeAnnotate { .. }
+            | Op::TreeAddSupport { .. }
+            | Op::TreeRemoveSupport { .. }
+            | Op::TreeStyle { .. } => Err(invalid(format!("{} needs a tree", op.name()))),
             Op::Open { .. }
             | Op::Save { .. }
             | Op::Extract { .. }
+            | Op::Export { .. }
             | Op::ToolRun { .. }
             | Op::Undo { .. }
             | Op::Redo { .. } => Err(invalid(format!("{} is not an edit", op.name()))),
@@ -768,8 +872,11 @@ impl Session {
         let applied = self.docs[id.0].undo.pop().ok_or(Error::NothingTo("undo"))?;
         match (&mut self.docs[id.0].content, &applied.inverse) {
             (Loaded::Alignment(a), Inverse::Alignment(steps)) => a.doc.undo(steps),
+            (Loaded::Tree(t), Inverse::Tree(before)) => t.doc = (**before).clone(),
             (Loaded::Sequence(o), inverse) => undo_sequence(&mut o.doc, inverse),
-            (Loaded::Alignment(_), _) => return Err(invalid("sequence undo on an alignment")),
+            (Loaded::Alignment(_) | Loaded::Tree(_), _) => {
+                return Err(invalid("undo of the wrong kind of edit"));
+            }
         }
         let of = applied.entry_id.clone();
         let entry = self.entry(
@@ -819,6 +926,39 @@ impl Drop for Session {
     }
 }
 
+/// Carry out a tree edit; returns the tree as it was.
+fn execute_tree(doc: &mut TreeDoc, op: &Op) -> Result<Box<TreeDoc>> {
+    let before = Box::new(doc.clone());
+    let edit = match op {
+        Op::TreeReroot { clade } => doc.reroot(clade),
+        Op::TreeRotate { clade } => doc.rotate(clade),
+        Op::TreeLadderize { small_first } => {
+            doc.ladderize(*small_first);
+            Ok(())
+        }
+        Op::TreeRenameTip { from, to } => doc.rename_tip(from, to),
+        Op::TreeAnnotate { id, annotation } => doc.annotate(*id, annotation.clone()),
+        Op::TreeAddSupport {
+            name,
+            source,
+            values,
+        } => doc.add_support(name, source, values),
+        Op::TreeRemoveSupport { name } => doc.remove_support(name),
+        Op::TreeStyle { style } => {
+            doc.set_style(style.clone());
+            Ok(())
+        }
+        _ => {
+            return Err(invalid(format!(
+                "{} needs a sequence or an alignment",
+                op.name()
+            )));
+        }
+    };
+    edit.map_err(|e| invalid(e.0))?;
+    Ok(before)
+}
+
 fn undo_sequence(doc: &mut SequenceDoc, inverse: &Inverse) {
     match inverse {
         Inverse::Residues { inserted, result } => {
@@ -829,7 +969,7 @@ fn undo_sequence(doc: &mut SequenceDoc, inverse: &Inverse) {
             }
         }
         Inverse::Feature { id: fid, before } => doc.restore_feature(*fid, before.clone()),
-        Inverse::Alignment(_) => {}
+        Inverse::Alignment(_) | Inverse::Tree(_) => {}
     }
 }
 

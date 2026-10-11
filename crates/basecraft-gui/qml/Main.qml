@@ -47,7 +47,8 @@ ApplicationWindow {
     // them (false). Shared by all alignment tabs.
     property bool alignmentInsert: true
     readonly property bool alignmentOpen: currentKind === "alignment"
-    readonly property var ribbonTabs: ["File", "View", alignmentOpen ? "Alignment" : "Annotations", "Settings", "Help"]
+    readonly property bool treeOpen: currentKind === "tree"
+    readonly property var ribbonTabs: ["File", "View", alignmentOpen ? "Alignment" : treeOpen ? "Tree" : "Annotations", "Settings", "Help"]
     // Only the wrapped layout is offered for now; files always open in it.
 
     // Preferences, kept between sessions (~/.config/Basecraft).
@@ -241,8 +242,10 @@ ApplicationWindow {
             StackLayout {
                 anchors { fill: parent; leftMargin: 8; topMargin: 4; bottomMargin: 2 }
                 // The third tab is Annotations for a sequence, Alignment
-                // for an alignment; the Alignment panel sits last.
-                currentIndex: window.ribbonTab === 2 && window.alignmentOpen ? 5 : window.ribbonTab
+                // for an alignment, Tree for a tree; those two panels sit
+                // last.
+                currentIndex: window.ribbonTab !== 2 ? window.ribbonTab
+                    : window.alignmentOpen ? 5 : window.treeOpen ? 6 : 2
 
                 RowLayout {
                     spacing: 6
@@ -267,8 +270,13 @@ ApplicationWindow {
                         title: "Zoom"
                         RibbonButton { text: "−"; tip: "Zoom out"; keys: "Ctrl+−"; onClicked: window.current.zoom_out() }
                         RibbonButton { text: "+"; tip: "Zoom in"; keys: "Ctrl++"; onClicked: window.current.zoom_in() }
-                        RibbonButton { text: "Fit"; tip: window.alignmentOpen ? "Show the whole width of the alignment" : "Show the whole sequence"; keys: "Ctrl+0"; onClicked: window.current.fit() }
-                        RibbonButton { text: "Selection"; tip: "Zoom to the selection"; onClicked: window.current.zoom_to_selection() }
+                        RibbonButton {
+                            text: "Fit"
+                            tip: window.alignmentOpen ? "Show the whole width of the alignment" : window.treeOpen ? "Show the whole tree" : "Show the whole sequence"
+                            keys: "Ctrl+0"
+                            onClicked: window.current.fit()
+                        }
+                        RibbonButton { text: "Selection"; visible: !window.treeOpen; tip: "Zoom to the selection"; onClicked: window.current.zoom_to_selection() }
                         Label {
                             text: window.current ? window.current.zoom_text : ""
                             leftPadding: 6
@@ -282,7 +290,7 @@ ApplicationWindow {
                         title: "Show"
                         CheckBox {
                             text: "GC content"
-                            enabled: !window.alignmentOpen
+                            enabled: window.currentKind === "sequence"
                             ToolTip.text: "Show the GC content plot"
                             ToolTip.visible: hovered
                             ToolTip.delay: 400
@@ -455,6 +463,41 @@ ApplicationWindow {
                     Item { Layout.fillWidth: true }
                     ShortcutsGroup {}
                 }
+
+                // Tree: the selected clade, the order of clades, support
+                // values and figures.
+                RowLayout {
+                    spacing: 6
+                    RibbonGroup {
+                        title: "Clade"
+                        RibbonButton { text: "Annotate…"; tip: "Name the selected clade, with a bar or a coloured field"; keys: "Enter"; enabled: window.current !== null && window.current.has_selection; onClicked: cladeEditor.openSelected() }
+                        RibbonButton { text: "Reroot"; tip: "Root the tree on the branch above the selection"; enabled: window.current !== null && window.current.has_selection; onClicked: window.current.reroot() }
+                        RibbonButton { text: "Rotate"; tip: "Swap the order of the selected clade's branches"; enabled: window.current !== null && window.current.has_selection; onClicked: window.current.rotate() }
+                        RibbonButton { text: "Rename…"; tip: "Rename the selected tip"; keys: "F2"; enabled: window.current !== null && window.current.tip_selected; onClicked: tipDialog.ask() }
+                    }
+                    ToolSeparator { Layout.fillHeight: true }
+                    RibbonGroup {
+                        title: "Order"
+                        RibbonButton { text: "Small on top"; tip: "Order every clade's branches by size, smallest first"; onClicked: window.current.ladderize(true) }
+                        RibbonButton { text: "Large on top"; tip: "Order every clade's branches by size, largest first"; onClicked: window.current.ladderize(false) }
+                    }
+                    ToolSeparator { Layout.fillHeight: true }
+                    RibbonGroup {
+                        title: "Support"
+                        RibbonButton { text: "Add from tree…"; tip: "Add support values from another analysis of the same taxa, matched branch by branch"; onClicked: supportFile.open() }
+                        ModeButton { text: "Natural"; tip: "Above branches going up, below branches going down"; active: window.current !== null && window.current.support_placement === "natural"; onClicked: window.current.place_support("natural") }
+                        ModeButton { text: "Above"; tip: "All support values above their branch"; active: window.current !== null && window.current.support_placement === "above"; onClicked: window.current.place_support("above") }
+                        ModeButton { text: "Below"; tip: "All support values below their branch"; active: window.current !== null && window.current.support_placement === "below"; onClicked: window.current.place_support("below") }
+                        RibbonButton { text: "Style…"; tip: "Which support values show, circles at nodes, sizes"; onClicked: treeStyle.openStyle() }
+                    }
+                    ToolSeparator { Layout.fillHeight: true }
+                    RibbonGroup {
+                        title: "Figure"
+                        RibbonButton { text: "Export SVG…"; tip: "Save the tree as an SVG figure, black on white"; onClicked: window.exportSvg() }
+                    }
+                    Item { Layout.fillWidth: true }
+                    ShortcutsGroup {}
+                }
             }
         }
     }
@@ -514,9 +557,9 @@ ApplicationWindow {
 
     FileDialog {
         id: openDialog
-        title: "Open a sequence or alignment"
+        title: "Open a sequence, alignment or tree"
         currentFolder: shell.project_dir.length ? "file://" + shell.project_dir : ""
-        nameFilters: ["Sequences and alignments (*.gb *.gbk *.genbank *.gbff *.fasta *.fa *.fna *.fas *.ffn *.faa *.afa)", "All files (*)"]
+        nameFilters: ["Sequences, alignments and trees (*.gb *.gbk *.genbank *.gbff *.fasta *.fa *.fna *.fas *.ffn *.faa *.afa *.nwk *.newick *.tre *.tree *.trees *.treefile *.contree *.nex *.nexus *.nxs)", "All files (*)"]
         onAccepted: window.openPath(window.localPath(selectedFile))
     }
 
@@ -709,6 +752,16 @@ ApplicationWindow {
                             }
                         }
                         DelegateChoice {
+                            roleValue: "tree"
+                            TreeView {
+                                onDirtyChanged: openFiles.setProperty(index, "dirty", dirty)
+                                onContextMenu: (info) => { treeMenu.info = info; treeMenu.popup() }
+                                onToggleSidebar: window.sidebarOpen = !window.sidebarOpen
+                                onRenameTip: tipDialog.ask()
+                                onAnnotate: cladeEditor.openSelected()
+                            }
+                        }
+                        DelegateChoice {
                             DocumentView {
                                 showGc: window.showGc
                                 defaultLayout: window.defaultLayout
@@ -833,6 +886,106 @@ ApplicationWindow {
         }
     }
 
+    // Tree context menu: what applies to the clade or tip under the pointer.
+    Menu {
+        id: treeMenu
+        property var info: ({ node: false, tip: false, root: false, annotated: false, annotation: 0 })
+        component TreeItem: MenuItem { height: visible ? implicitHeight : 0 }
+
+        TreeItem { text: treeMenu.info.annotated ? "Edit annotation…" : "Annotate clade…"; visible: treeMenu.info.node; onTriggered: cladeEditor.openSelected() }
+        TreeItem { text: "Remove annotation"; visible: treeMenu.info.annotated; onTriggered: window.current.remove_annotation(treeMenu.info.annotation) }
+        TreeItem { text: "Reroot here"; visible: treeMenu.info.node && !treeMenu.info.root; onTriggered: window.current.reroot() }
+        TreeItem { text: "Rotate"; visible: treeMenu.info.node && !treeMenu.info.tip; onTriggered: window.current.rotate() }
+        TreeItem { text: "Rename tip…"; visible: treeMenu.info.tip; onTriggered: tipDialog.ask() }
+        TreeItem { text: "Add support from tree…"; visible: !treeMenu.info.node; onTriggered: supportFile.open() }
+        TreeItem { text: "Tree style…"; visible: !treeMenu.info.node; onTriggered: treeStyle.openStyle() }
+    }
+
+    Dialog {
+        id: tipDialog
+        title: "Rename tip"
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        function ask() {
+            if (!window.treeOpen || !window.current.tip_selected) return
+            tipName.text = window.current.tip_name()
+            tipError.text = ""
+            open()
+        }
+        onOpened: { tipName.forceActiveFocus(); tipName.selectAll() }
+        onAccepted: {
+            const err = window.current.rename_tip(tipName.text)
+            if (err.length > 0) { tipError.text = err; open() }
+        }
+        onClosed: if (window.currentView) window.currentView.forceActiveFocus()
+        ColumnLayout {
+            spacing: 6
+            TextField {
+                id: tipName
+                Layout.preferredWidth: 320
+                Keys.onReturnPressed: tipDialog.accept()
+                Keys.onEnterPressed: tipDialog.accept()
+            }
+            Label { id: tipError; visible: text.length > 0; color: shell.accent }
+        }
+    }
+
+    // Support from another tree: pick the file, then name the values.
+    FileDialog {
+        id: supportFile
+        title: "Add support values from another tree"
+        currentFolder: shell.project_dir.length ? "file://" + shell.project_dir : ""
+        nameFilters: ["Trees (*.nwk *.newick *.tre *.tree *.trees *.treefile *.contree *.nex *.nexus *.nxs)", "All files (*)"]
+        onAccepted: { supportName.path = window.localPath(selectedFile); supportName.open() }
+    }
+    Dialog {
+        id: supportName
+        property string path
+        title: "Name the support values"
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        onOpened: { supportNameField.text = ""; supportNameField.forceActiveFocus() }
+        onAccepted: window.current.add_support_from(path, supportNameField.text)
+        onClosed: if (window.currentView) window.currentView.forceActiveFocus()
+        ColumnLayout {
+            spacing: 6
+            Label { text: window.fileName(supportName.path) }
+            TextField {
+                id: supportNameField
+                Layout.preferredWidth: 320
+                placeholderText: "e.g. Bootstrap, PP, UFBoot; empty keeps the file's names"
+                Keys.onReturnPressed: supportName.accept()
+                Keys.onEnterPressed: supportName.accept()
+            }
+        }
+    }
+
+    CladeEditor {
+        id: cladeEditor
+        controller: window.treeOpen ? window.current : null
+        onClosed: if (window.currentView) window.currentView.forceActiveFocus()
+    }
+    TreeStyleDialog {
+        id: treeStyle
+        controller: window.treeOpen ? window.current : null
+        onClosed: if (window.currentView) window.currentView.forceActiveFocus()
+    }
+
+    function exportSvg() {
+        if (!window.treeOpen) return
+        svgDialog.selectedFile = "file://" + window.currentPath.replace(/\.[^./]*$/, "") + ".svg"
+        svgDialog.open()
+    }
+    FileDialog {
+        id: svgDialog
+        title: "Export the tree as SVG"
+        fileMode: FileDialog.SaveFile
+        nameFilters: ["SVG figures (*.svg)"]
+        onAccepted: window.current.export_svg(window.localPath(selectedFile))
+    }
+
     Dialog {
         id: confirmClose
         property int index: -1
@@ -856,7 +1009,7 @@ ApplicationWindow {
     FeatureEditor {
         id: editor
         // Annotations belong to sequences; alignments have none yet.
-        controller: window.alignmentOpen ? null : window.current
+        controller: window.currentKind === "sequence" ? window.current : null
         onClosed: if (window.currentView) window.currentView.forceActiveFocus()
     }
 

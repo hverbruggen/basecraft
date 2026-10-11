@@ -6,7 +6,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::Feature;
+use crate::{CladeAnnotation, CladeRef, Feature, TreeStyle};
 
 /// Log format version, written into every entry.
 pub const LOG_VERSION: u32 = 1;
@@ -115,6 +115,44 @@ pub enum Op {
     AlnRenameRow { row: u32, name: String },
     #[serde(rename = "aln.remove_rows")]
     AlnRemoveRows { rows: Vec<(u32, u32)> },
+    // Tree edits. Clades are named by one or two tips: see `CladeRef`.
+    /// Root the tree halfway along the branch above `clade`.
+    #[serde(rename = "tree.reroot")]
+    TreeReroot { clade: CladeRef },
+    /// Reverse the order of the clade's children.
+    #[serde(rename = "tree.rotate")]
+    TreeRotate { clade: CladeRef },
+    /// Order every node's children by size: smallest first (on top), or
+    /// largest first.
+    #[serde(rename = "tree.ladderize")]
+    TreeLadderize { small_first: bool },
+    #[serde(rename = "tree.rename_tip")]
+    TreeRenameTip { from: String, to: String },
+    /// Add, change (same `id`) or, with no annotation, remove a clade
+    /// annotation.
+    #[serde(rename = "tree.annotate")]
+    TreeAnnotate {
+        id: u32,
+        annotation: Option<CladeAnnotation>,
+    },
+    /// A set of support values, such as bootstraps from another analysis:
+    /// one per internal node in preorder, as text.
+    #[serde(rename = "tree.add_support")]
+    TreeAddSupport {
+        name: String,
+        /// Where the values came from, for the record.
+        #[serde(default)]
+        source: String,
+        values: Vec<Option<String>>,
+    },
+    #[serde(rename = "tree.remove_support")]
+    TreeRemoveSupport { name: String },
+    #[serde(rename = "tree.style")]
+    TreeStyle { style: TreeStyle },
+    /// A figure or other derived file written from a document, such as a
+    /// tree as SVG. The result holds its hash; replay doesn't rewrite it.
+    #[serde(rename = "doc.export")]
+    Export { path: String, format: String },
     /// A plugin operation that reads and writes files, such as an aligner.
     /// `inputs` and `outputs` are project-relative paths; the result holds
     /// their content hashes. The actor names the tool and its version.
@@ -141,6 +179,7 @@ impl Op {
             Op::Open { .. } => "doc.open",
             Op::Save { .. } => "doc.save",
             Op::Extract { .. } => "doc.extract",
+            Op::Export { .. } => "doc.export",
             Op::SeqReplace { .. } => "seq.replace",
             Op::FeatureAdd { .. } => "feature.add",
             Op::FeatureRemove { .. } => "feature.remove",
@@ -156,6 +195,14 @@ impl Op {
             Op::AlnMoveRows { .. } => "aln.move_rows",
             Op::AlnRenameRow { .. } => "aln.rename_row",
             Op::AlnRemoveRows { .. } => "aln.remove_rows",
+            Op::TreeReroot { .. } => "tree.reroot",
+            Op::TreeRotate { .. } => "tree.rotate",
+            Op::TreeLadderize { .. } => "tree.ladderize",
+            Op::TreeRenameTip { .. } => "tree.rename_tip",
+            Op::TreeAnnotate { .. } => "tree.annotate",
+            Op::TreeAddSupport { .. } => "tree.add_support",
+            Op::TreeRemoveSupport { .. } => "tree.remove_support",
+            Op::TreeStyle { .. } => "tree.style",
             Op::Undo { .. } => "history.undo",
             Op::Redo { .. } => "history.redo",
         }
@@ -188,8 +235,9 @@ pub enum Actor {
 /// it at every step; full content hashes are compared at open and save.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct DocState {
-    /// Residues of a sequence, columns of an alignment.
+    /// Residues of a sequence, columns of an alignment, tips of a tree.
     pub len: u64,
+    /// Annotations: features of a sequence, clade annotations of a tree.
     pub features: u64,
     /// Rows of an alignment.
     #[serde(default, skip_serializing_if = "Option::is_none")]

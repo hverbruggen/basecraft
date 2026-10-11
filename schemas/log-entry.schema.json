@@ -724,6 +724,269 @@
       ]
     },
     {
+      "description": "Root the tree halfway along the branch above `clade`.",
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "tree.reroot"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "clade": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "clade"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ]
+    },
+    {
+      "description": "Reverse the order of the clade's children.",
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "tree.rotate"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "clade": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "clade"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ]
+    },
+    {
+      "description": "Order every node's children by size: smallest first (on top), or\nlargest first.",
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "tree.ladderize"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "small_first": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "small_first"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "tree.rename_tip"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "from": {
+              "type": "string"
+            },
+            "to": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "from",
+            "to"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ]
+    },
+    {
+      "description": "Add, change (same `id`) or, with no annotation, remove a clade\nannotation.",
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "tree.annotate"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "annotation": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CladeAnnotation"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "id": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "id"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ]
+    },
+    {
+      "description": "A set of support values, such as bootstraps from another analysis:\none per internal node in preorder, as text.",
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "tree.add_support"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "source": {
+              "description": "Where the values came from, for the record.",
+              "type": "string",
+              "default": ""
+            },
+            "values": {
+              "type": "array",
+              "items": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          "required": [
+            "name",
+            "values"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "tree.remove_support"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "tree.style"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "style": {
+              "$ref": "#/$defs/TreeStyle"
+            }
+          },
+          "required": [
+            "style"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ]
+    },
+    {
+      "description": "A figure or other derived file written from a document, such as a\ntree as SVG. The result holds its hash; replay doesn't rewrite it.",
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "doc.export"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "format": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "format"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ]
+    },
+    {
       "description": "A plugin operation that reads and writes files, such as an aligner.\n`inputs` and `outputs` are project-relative paths; the result holds\ntheir content hashes. The actor names the tool and its version.",
       "type": "object",
       "properties": {
@@ -921,17 +1184,79 @@
         }
       ]
     },
+    "CladeAnnotation": {
+      "description": "A highlighted clade: a name on its stem branch, a bar along its tips, a\nfield of colour behind it, or any mix of these.",
+      "type": "object",
+      "properties": {
+        "bar": {
+          "description": "Draw a bar along the clade's tips, labelled beside it.",
+          "type": "boolean",
+          "default": false
+        },
+        "bar_width": {
+          "description": "Bar thickness in pixels.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 3,
+          "minimum": 0
+        },
+        "clade": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "colour": {
+          "description": "`#rrggbb`, for the bar and the field.",
+          "type": "string",
+          "default": "#808080"
+        },
+        "field": {
+          "description": "Fill the area the clade covers.",
+          "type": "boolean",
+          "default": false
+        },
+        "label": {
+          "type": "string",
+          "default": ""
+        },
+        "on_branch": {
+          "description": "Write the label on the clade's stem branch.",
+          "type": "boolean",
+          "default": false
+        },
+        "opacity_left": {
+          "description": "The field's opacity at its left and right edges, in percent. Two\ndifferent values make a gradient.",
+          "type": "integer",
+          "format": "uint8",
+          "default": 30,
+          "maximum": 255,
+          "minimum": 0
+        },
+        "opacity_right": {
+          "type": "integer",
+          "format": "uint8",
+          "default": 30,
+          "maximum": 255,
+          "minimum": 0
+        }
+      },
+      "required": [
+        "clade"
+      ]
+    },
     "DocState": {
       "description": "A cheap fingerprint of a document after an operation. Replay compares\nit at every step; full content hashes are compared at open and save.",
       "type": "object",
       "properties": {
         "features": {
+          "description": "Annotations: features of a sequence, clade annotations of a tree.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0
         },
         "len": {
-          "description": "Residues of a sequence, columns of an alignment.",
+          "description": "Residues of a sequence, columns of an alignment, tips of a tree.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0
@@ -1081,6 +1406,111 @@
         "reverse",
         "unstranded"
       ]
+    },
+    "SupportPlacement": {
+      "description": "Where support values sit relative to their branch.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "above",
+            "below"
+          ]
+        },
+        {
+          "description": "Above branches that go up from their parent, below those that go\ndown.",
+          "type": "string",
+          "const": "natural"
+        }
+      ]
+    },
+    "SupportSymbols": {
+      "description": "Support shown as filled circles at nodes: dark at or above `high`\npercent, grey at or above `low`, white below, as in many published\ntrees. Proportions count as percentages, as for `support_min`.",
+      "type": "object",
+      "properties": {
+        "high": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "low": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "set": {
+          "description": "The support set the circles show.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "set",
+        "high",
+        "low"
+      ]
+    },
+    "TreeStyle": {
+      "description": "How a tree is drawn. Sizes are pixels at 100 % zoom.",
+      "type": "object",
+      "properties": {
+        "branch_width": {
+          "type": "integer",
+          "format": "uint32",
+          "default": 1,
+          "minimum": 0
+        },
+        "scale_bar": {
+          "type": "boolean",
+          "default": true
+        },
+        "support_font": {
+          "type": "integer",
+          "format": "uint32",
+          "default": 10,
+          "minimum": 0
+        },
+        "support_min": {
+          "description": "Hide support values below this percentage. Sets whose values are\nall at most 1, such as posterior probabilities, count as\nproportions. 0 shows them all.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 0,
+          "minimum": 0
+        },
+        "support_placement": {
+          "$ref": "#/$defs/SupportPlacement",
+          "default": "natural"
+        },
+        "support_shown": {
+          "description": "Support sets shown at nodes, in order, joined with \"/\". Empty shows\nevery set.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "symbols": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SupportSymbols"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "tip_font": {
+          "type": "integer",
+          "format": "uint32",
+          "default": 13,
+          "minimum": 0
+        },
+        "vertical_bar_labels": {
+          "description": "Write clade labels beside bars top to bottom, rather than across.",
+          "type": "boolean",
+          "default": true
+        }
+      }
     }
   }
 }

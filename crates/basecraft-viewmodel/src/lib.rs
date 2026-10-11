@@ -7,8 +7,10 @@ pub mod alignment;
 pub mod frame;
 pub mod genome;
 pub mod theme;
+pub mod tree;
 
 pub use alignment::AlignmentView;
 pub use frame::{Frame, Rgba};
 pub use genome::{GenomeView, Mode};
 pub use theme::Theme;
+pub use tree::TreeView;

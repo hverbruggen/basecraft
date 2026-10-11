@@ -4,6 +4,7 @@ pub mod cache;
 pub mod fasta;
 pub mod genbank;
 pub mod gff3;
+pub mod newick;
 pub mod source;
 
 mod error;

@@ -101,7 +101,8 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut Report) -> Re
             },
             // External tools aren't re-run: their outputs are new files,
             // and opening one later checks it against its stored copy.
-            Op::ToolRun { .. } => {}
+            // Exports are figures; drawing isn't part of replay.
+            Op::ToolRun { .. } | Op::Export { .. } => {}
             Op::Undo { of } | Op::Redo { of } => {
                 let r = if matches!(e.op, Op::Undo { .. }) {
                     session.undo_single(doc)

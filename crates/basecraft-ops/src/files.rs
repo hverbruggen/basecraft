@@ -4,9 +4,12 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use basecraft_docs::{AlignmentDoc, SequenceDoc};
-use basecraft_io::{cache, fasta, genbank, gff3};
-use basecraft_protocol::{Feature, Location, Qualifier, Segment};
+use std::collections::BTreeMap;
+
+use basecraft_docs::{AlignmentDoc, SequenceDoc, TreeDoc};
+use basecraft_io::{cache, fasta, genbank, gff3, newick};
+use basecraft_protocol::{CladeAnnotation, Feature, Location, Qualifier, Segment, TreeStyle};
+use serde::{Deserialize, Serialize};
 
 use crate::{Error, Result};
 
@@ -15,6 +18,9 @@ pub enum Format {
     GenBank,
     /// FASTA, with annotations in a GFF3 sidecar of the same stem.
     Fasta,
+    /// Newick or NEXUS (told apart by content), with annotations and style
+    /// in a JSON sidecar: see [`tree_sidecar`].
+    Tree,
 }
 
 impl Format {
@@ -27,6 +33,8 @@ impl Format {
         match ext.as_str() {
             "gb" | "gbk" | "genbank" | "gbff" => Ok(Format::GenBank),
             "fa" | "fasta" | "fna" | "fas" | "ffn" | "faa" | "afa" => Ok(Format::Fasta),
+            "nwk" | "newick" | "tre" | "tree" | "trees" | "treefile" | "contree" | "nex"
+            | "nexus" | "nxs" => Ok(Format::Tree),
             _ => Err(Error::UnknownFormat(path.to_path_buf())),
         }
     }
@@ -37,6 +45,7 @@ impl Format {
 pub enum Kind {
     Sequence,
     Alignment,
+    Tree,
 }
 
 /// Whether a file opens as a sequence or an alignment. A FASTA file is an
@@ -46,8 +55,10 @@ pub enum Kind {
 /// genomes reads best as rows. A GFF3 sidecar makes it a sequence: its
 /// annotations belong to sequences. Only the index is read.
 pub fn kind(path: &Path) -> Result<Kind> {
-    if Format::from_path(path)? != Format::Fasta {
-        return Ok(Kind::Sequence);
+    match Format::from_path(path)? {
+        Format::Tree => return Ok(Kind::Tree),
+        Format::GenBank => return Ok(Kind::Sequence),
+        Format::Fasta => {}
     }
     let file = cache::open_fasta(path)?;
     Ok(fasta_kind(path, &file))
@@ -82,13 +93,23 @@ pub struct OpenedAlignment {
     pub format: Format,
 }
 
+/// An open tree plus what's needed to write its file back.
+pub struct OpenedTree {
+    pub doc: TreeDoc,
+    pub nexus: bool,
+}
+
 pub enum Loaded {
     Sequence(Opened),
     Alignment(OpenedAlignment),
+    Tree(OpenedTree),
 }
 
 /// Open a file as whatever it holds: see [`kind`].
 pub fn load(path: &Path) -> Result<Loaded> {
+    if Format::from_path(path)? == Format::Tree {
+        return load_tree(path).map(Loaded::Tree);
+    }
     if Format::from_path(path)? == Format::Fasta {
         let file = Arc::new(cache::open_fasta(path)?);
         if file.index.records.is_empty() {
@@ -150,6 +171,88 @@ pub fn gff_sidecar(path: &Path) -> PathBuf {
     path.with_extension("gff3")
 }
 
+/// A tree file's sidecar: `NAME.nwk.basecraft.json` beside `NAME.nwk`.
+pub fn tree_sidecar(path: &Path) -> PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(".basecraft.json");
+    path.with_file_name(name)
+}
+
+/// What a tree's Newick can't hold.
+#[derive(Default, Serialize, Deserialize)]
+struct TreeSidecar {
+    /// Support set names and sources, in the order their values are joined
+    /// in the Newick labels.
+    #[serde(default)]
+    supports: Vec<SupportName>,
+    #[serde(default)]
+    annotations: BTreeMap<u32, CladeAnnotation>,
+    #[serde(default)]
+    style: TreeStyle,
+}
+
+#[derive(Serialize, Deserialize)]
+struct SupportName {
+    name: String,
+    #[serde(default)]
+    source: String,
+}
+
+/// Read the first tree of a Newick or NEXUS file, with its sidecar.
+pub fn load_tree(path: &Path) -> Result<OpenedTree> {
+    let text = std::fs::read_to_string(path)?;
+    let nexus = newick::is_nexus(&text);
+    let parsed = newick::parse_trees(&text)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| Error::Empty(path.to_path_buf()))?;
+    let name = path
+        .file_name()
+        .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+    let mut doc = TreeDoc::from_parsed(name, &parsed);
+    let sidecar = tree_sidecar(path);
+    if sidecar.exists() {
+        let side: TreeSidecar = serde_json::from_slice(&std::fs::read(&sidecar)?)?;
+        let names: Vec<(String, String)> = side
+            .supports
+            .into_iter()
+            .map(|s| (s.name, s.source))
+            .collect();
+        doc.restore(&names, side.annotations, side.style);
+    }
+    Ok(OpenedTree { doc, nexus })
+}
+
+/// Write a tree as Newick, or as NEXUS if it was read from NEXUS.
+pub fn write_tree(tree: &OpenedTree, w: &mut dyn Write) -> io::Result<()> {
+    let newick = tree.doc.to_newick();
+    if tree.nexus {
+        writeln!(
+            w,
+            "#NEXUS\nbegin trees;\n\ttree tree1 = [&R] {newick}\nend;"
+        )
+    } else {
+        writeln!(w, "{newick}")
+    }
+}
+
+pub fn write_tree_sidecar(doc: &TreeDoc, w: &mut dyn Write) -> io::Result<()> {
+    let side = TreeSidecar {
+        supports: doc
+            .supports()
+            .iter()
+            .map(|s| SupportName {
+                name: s.name.clone(),
+                source: s.source.clone(),
+            })
+            .collect(),
+        annotations: doc.annotations().clone(),
+        style: doc.style().clone(),
+    };
+    serde_json::to_writer_pretty(&mut *w, &side)?;
+    writeln!(w)
+}
+
 /// An open document plus what's needed to write its file back.
 pub struct Opened {
     pub doc: SequenceDoc,
@@ -163,6 +266,10 @@ pub struct Opened {
 pub fn open(path: &Path) -> Result<Opened> {
     let format = Format::from_path(path)?;
     match format {
+        Format::Tree => Err(crate::error::invalid(format!(
+            "{} is a tree, not a sequence",
+            path.display()
+        ))),
         Format::GenBank => {
             let bytes = std::fs::read(path)?;
             let rec = genbank::parse(&bytes)?
@@ -203,6 +310,7 @@ pub fn write_main(opened: &Opened, w: &mut dyn Write) -> io::Result<()> {
     let doc = &opened.doc;
     match opened.format {
         Format::GenBank => genbank::write(w, &doc.to_genbank()),
+        Format::Tree => Err(io::Error::other("a sequence can't be written as a tree")),
         Format::Fasta => {
             let Some(file) = &opened.fasta else {
                 return write_fasta_record(doc, None, w);

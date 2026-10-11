@@ -41,10 +41,18 @@ QImage buildAtlas(const QString &family)
     font.setPixelSize(int(AtlasCell * 0.8));
     p.setFont(font);
     p.setPen(Qt::white);
-    for (int i = 0; i < AtlasCols * AtlasRows; ++i) {
+    for (int i = 0; i < AtlasCols * AtlasRows - 1; ++i) {
         const QRect cell((i % AtlasCols) * AtlasCell, (i / AtlasCols) * AtlasCell, AtlasCell, AtlasCell);
         p.drawText(cell, Qt::AlignCenter, QString(QChar(32 + i)));
     }
+    // The last cell (127) is a filled circle, for node symbols.
+    const int last = AtlasCols * AtlasRows - 1;
+    const QRectF disc((last % AtlasCols) * AtlasCell + 1.5, (last / AtlasCols) * AtlasCell + 1.5,
+                      AtlasCell - 3.0, AtlasCell - 3.0);
+    p.setRenderHint(QPainter::Antialiasing);
+    p.setPen(Qt::NoPen);
+    p.setBrush(Qt::white);
+    p.drawEllipse(disc);
     return image;
 }
 

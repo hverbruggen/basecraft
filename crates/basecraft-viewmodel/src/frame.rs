@@ -5,8 +5,9 @@
 //! texture rectangle `(u, v, du, dv)` into the glyph atlas. `du == 0` means
 //! a solid quad. The C++ item uploads the buffer as-is.
 //!
-//! The atlas holds printable ASCII (32..=127) in a 16 × 6 grid of square
-//! cells, so glyph texture coordinates are computed here.
+//! The atlas holds printable ASCII (32..=126) in a 16 × 6 grid of square
+//! cells, so glyph texture coordinates are computed here. The last cell
+//! (127) holds a filled circle, for [`Frame::disc`].
 
 pub const FLOATS_PER_INSTANCE: usize = 16;
 pub const ATLAS_COLS: u32 = 16;
@@ -17,6 +18,9 @@ pub const ATLAS_ROWS: u32 = 6;
 pub const GLYPH_ADVANCE: f32 = 0.5;
 
 pub type Rgba = [f32; 4];
+
+/// The atlas cell holding a filled circle.
+const DISC: u8 = 127;
 
 #[derive(Clone, Debug, Default)]
 pub struct Frame {
@@ -85,6 +89,53 @@ impl Frame {
             color,
             uv,
         );
+    }
+
+    /// A filled circle.
+    pub fn disc(&mut self, cx: f32, cy: f32, r: f32, color: Rgba) {
+        let Some(uv) = glyph_uv(DISC) else { return };
+        if r <= 0.0 {
+            return;
+        }
+        // The atlas circle fills its cell less a small margin.
+        let r = r * 1.06;
+        self.quad(
+            [
+                [cx - r, cy - r],
+                [cx + r, cy - r],
+                [cx - r, cy + r],
+                [cx + r, cy + r],
+            ],
+            color,
+            uv,
+        );
+    }
+
+    /// Text running top to bottom (turned a quarter clockwise), its line
+    /// starting at `(x, y)` with `x` the left edge; returns its length.
+    pub fn text_down(&mut self, x: f32, y: f32, size: f32, text: &str, color: Rgba) -> f32 {
+        let advance = size * GLYPH_ADVANCE;
+        let mut cy = y;
+        for b in text.bytes() {
+            if b != b' '
+                && let Some(uv) = glyph_uv(b)
+            {
+                let y0 = cy - size * (1.0 - GLYPH_ADVANCE) / 2.0;
+                // The glyph's top edge faces right.
+                self.quad(
+                    [
+                        [x + size, y0],
+                        [x + size, y0 + size],
+                        [x, y0],
+                        [x, y0 + size],
+                    ],
+                    color,
+                    uv,
+                );
+            }
+            cy += advance;
+        }
+        cy - y
     }
 
     /// A line of text starting at `(x, y)`; returns its width.

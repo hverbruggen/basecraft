@@ -6,6 +6,8 @@
 pub mod annotation;
 pub mod ops;
 pub mod plugin;
+pub mod tree;
 
 pub use annotation::{Feature, Location, Qualifier, Segment, Strand};
 pub use ops::{Actor, DocState, LogEntry, Op, OpResult};
+pub use tree::{CladeAnnotation, CladeRef, SupportPlacement, SupportSymbols, TreeStyle};

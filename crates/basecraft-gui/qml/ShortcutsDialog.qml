@@ -53,6 +53,16 @@ Dialog {
             ["Ctrl+C", "Copy the selected block as FASTA"],
             ["Escape", "Select just the cursor's cell"],
         ] },
+        { name: "Tree", keys: [
+            ["Click a branch", "Select the clade below it"],
+            ["← →", "Select the parent / first child"],
+            ["↑ ↓", "Select the sibling above / below"],
+            ["Enter, double-click", "Annotate the selected clade"],
+            ["F2", "Rename the selected tip"],
+            ["Ctrl+wheel", "Rows closer or further apart"],
+            ["Ctrl+Shift+wheel", "Tree wider or narrower"],
+            ["Escape", "Clear the selection"],
+        ] },
         { name: "Settings", keys: [
             ["Ctrl+B", "Show or hide the files sidebar"],
         ] },

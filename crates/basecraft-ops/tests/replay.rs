@@ -500,3 +500,121 @@ fn multi_record_fasta_opens_as_alignment() {
     let d = s.open(&root.join("ragged.afa")).unwrap();
     assert_eq!(rows_text(&s, d), ["a AC--", "b ACGT"]);
 }
+
+fn clade(tips: &[&str]) -> Vec<String> {
+    tips.iter().map(|s| (*s).to_string()).collect()
+}
+
+#[test]
+fn tree_session_replays_exactly() {
+    use basecraft_protocol::{CladeAnnotation, SupportPlacement, TreeStyle};
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::write(root.join("t.nwk"), "(A:1,B:2,(C:3,(D:4,E:5)90:6)80:7);\n").unwrap();
+    std::fs::write(
+        root.join("other.tre"),
+        "#NEXUS\nbegin trees;\ntree con = [&U] ((A,B)[&prob=0.9],C,(D,E)[&prob=1.0]);\nend;\n",
+    )
+    .unwrap();
+    {
+        let mut s = Session::new(root);
+        let d = s.open(&root.join("t.nwk")).unwrap();
+        assert!(s.is_tree(d));
+        assert_eq!(s.tree(d).tip_count(), 5);
+        s.apply(
+            d,
+            Op::TreeReroot {
+                clade: clade(&["D", "E"]),
+            },
+        )
+        .unwrap();
+        s.apply(
+            d,
+            Op::TreeRotate {
+                clade: clade(&["A", "C"]),
+            },
+        )
+        .unwrap();
+        s.apply(d, Op::TreeLadderize { small_first: true }).unwrap();
+        let mut a = CladeAnnotation::new(clade(&["D", "E"]), "Delta group");
+        a.field = true;
+        a.opacity_left = 0;
+        s.apply(
+            d,
+            Op::TreeAnnotate {
+                id: 1,
+                annotation: Some(a),
+            },
+        )
+        .unwrap();
+        // Support from a MrBayes-style tree, matched by branch.
+        let other = basecraft_ops::files::load_tree(&root.join("other.tre")).unwrap();
+        let sets = s.tree(d).support_from(&other.doc).unwrap();
+        assert_eq!(sets.len(), 1);
+        s.apply(
+            d,
+            Op::TreeAddSupport {
+                name: "PP".into(),
+                source: "other.tre".into(),
+                values: sets[0].1.clone(),
+            },
+        )
+        .unwrap();
+        s.apply(
+            d,
+            Op::TreeRenameTip {
+                from: "A".into(),
+                to: "Alpha".into(),
+            },
+        )
+        .unwrap();
+        let style = TreeStyle {
+            support_placement: SupportPlacement::Below,
+            ..TreeStyle::default()
+        };
+        s.apply(d, Op::TreeStyle { style }).unwrap();
+        // An edit undone, and a bad one refused.
+        s.apply(
+            d,
+            Op::TreeRotate {
+                clade: clade(&["D", "E"]),
+            },
+        )
+        .unwrap();
+        s.undo(d).unwrap();
+        assert!(
+            s.apply(
+                d,
+                Op::TreeRotate {
+                    clade: clade(&["Nope"])
+                }
+            )
+            .is_err()
+        );
+        // A figure: logged with its hash, not redrawn on replay.
+        s.export(d, &root.join("t.svg"), "svg", |w| w.write_all(b"<svg/>"))
+            .unwrap();
+        s.save(d, None).unwrap();
+    }
+    let saved = std::fs::read_to_string(root.join("t.nwk")).unwrap();
+    assert!(saved.contains("Alpha"), "{saved}");
+    assert!(saved.contains("90/1"), "{saved}");
+    // Reopening restores the set names, annotation and style.
+    let reopened = basecraft_ops::files::load_tree(&root.join("t.nwk")).unwrap();
+    let names: Vec<&str> = reopened
+        .doc
+        .supports()
+        .iter()
+        .map(|s| s.name.as_str())
+        .collect();
+    assert_eq!(names, ["Support", "PP"]);
+    assert_eq!(reopened.doc.annotations()[&1].label, "Delta group");
+    assert_eq!(
+        reopened.doc.style().support_placement,
+        SupportPlacement::Below
+    );
+    let entries = basecraft_ops::log::read_all(root).unwrap();
+    assert!(entries.iter().any(|e| e.op.name() == "doc.export"));
+    let report = replay::replay(root).unwrap();
+    assert!(report.ok(), "{:#?}", report.problems);
+}

@@ -1046,6 +1046,7 @@ impl qobject::GenomeController {
         let kind = basecraft_ops::files::kind(Path::new(&path.to_string()));
         QString::from(match kind {
             Ok(basecraft_ops::files::Kind::Alignment) => "alignment",
+            Ok(basecraft_ops::files::Kind::Tree) => "tree",
             _ => "sequence",
         })
     }
