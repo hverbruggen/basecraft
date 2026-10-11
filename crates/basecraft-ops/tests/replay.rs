@@ -535,6 +535,14 @@ fn tree_session_replays_exactly() {
             },
         )
         .unwrap();
+        s.apply(
+            d,
+            Op::TreeRootPosition {
+                clade: clade(&["D", "E"]),
+                fraction: 0.3,
+            },
+        )
+        .unwrap();
         s.apply(d, Op::TreeLadderize { small_first: true }).unwrap();
         let mut a = CladeAnnotation::new(clade(&["D", "E"]), "Delta group");
         a.field = true;

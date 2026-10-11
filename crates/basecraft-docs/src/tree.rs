@@ -327,6 +327,39 @@ impl TreeDoc {
         Ok(())
     }
 
+    /// The root's branch, if the root has two children: the two children
+    /// and the branch's whole length.
+    pub fn root_branch(&self) -> Option<(usize, usize, f64)> {
+        let [a, b] = self.nodes[self.root].children[..] else {
+            return None;
+        };
+        let length = self.nodes[a].length? + self.nodes[b].length?;
+        Some((a, b, length))
+    }
+
+    /// Move the root along its branch: `clade`, one of its two children,
+    /// gets `fraction` of the branch's length.
+    pub fn set_root_position(&mut self, clade: &[String], fraction: f64) -> Result<(), EditError> {
+        if !(0.0..=1.0).contains(&fraction) {
+            return err(format!("{fraction} isn't between 0 and 1"));
+        }
+        let node = self.resolve(clade)?;
+        let Some((a, b, length)) = self.root_branch() else {
+            return err("the root needs two branches with lengths");
+        };
+        let other = if node == a {
+            b
+        } else if node == b {
+            a
+        } else {
+            return err("that clade isn't beside the root");
+        };
+        self.nodes[node].length = Some(length * fraction);
+        self.nodes[other].length = Some(length * (1.0 - fraction));
+        self.edited();
+        Ok(())
+    }
+
     /// Order every node's children by size.
     pub fn ladderize(&mut self, small_first: bool) {
         let counts = self.tip_counts();
@@ -874,6 +907,20 @@ mod tests {
         let cd = r.resolve(&names(&["C", "D"])).unwrap();
         assert_eq!(r.node(cd).length, Some(5.0));
         assert_eq!(r.supports()[0].values[cd].as_deref(), Some("70"));
+    }
+
+    #[test]
+    fn root_position_splits_the_root_branch() {
+        let mut t = tree("((A:1,B:1):2,(C:1,D:1):6);");
+        let (_, _, l) = t.root_branch().unwrap();
+        assert!((l - 8.0).abs() < 1e-12);
+        t.set_root_position(&names(&["C", "D"]), 0.25).unwrap();
+        let cd = t.resolve(&names(&["C", "D"])).unwrap();
+        let ab = t.resolve(&names(&["A", "B"])).unwrap();
+        assert_eq!(t.node(cd).length, Some(2.0));
+        assert_eq!(t.node(ab).length, Some(6.0));
+        assert!(t.set_root_position(&names(&["A"]), 0.5).is_err());
+        assert!(t.set_root_position(&names(&["A", "B"]), 1.5).is_err());
     }
 
     #[test]

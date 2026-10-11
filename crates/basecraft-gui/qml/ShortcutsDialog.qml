@@ -59,6 +59,8 @@ Dialog {
             ["↑ ↓", "Select the sibling above / below"],
             ["Enter, double-click", "Annotate the selected clade"],
             ["F2", "Rename the selected tip"],
+            ["Ctrl++  /  Ctrl+−", "Zoom in / out, both ways"],
+            ["Alt++  /  Alt+−", "Rows further apart / closer"],
             ["Ctrl+wheel", "Rows closer or further apart"],
             ["Ctrl+Shift+wheel", "Tree wider or narrower"],
             ["Escape", "Clear the selection"],

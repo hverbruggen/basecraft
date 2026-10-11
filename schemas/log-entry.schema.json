@@ -752,6 +752,39 @@
       ]
     },
     {
+      "description": "Move the root along its branch: `clade`, one of the root's two\nchildren, gets `fraction` of the branch's length, the other the\nrest.",
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "tree.root_position"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "clade": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "fraction": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "required": [
+            "clade",
+            "fraction"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ]
+    },
+    {
       "description": "Reverse the order of the clade's children.",
       "type": "object",
       "properties": {

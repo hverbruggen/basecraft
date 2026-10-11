@@ -472,6 +472,7 @@ ApplicationWindow {
                         title: "Clade"
                         RibbonButton { text: "Annotate…"; tip: "Name the selected clade, with a bar or a coloured field"; keys: "Enter"; enabled: window.current !== null && window.current.has_selection; onClicked: cladeEditor.openSelected() }
                         RibbonButton { text: "Reroot"; tip: "Root the tree on the branch above the selection"; enabled: window.current !== null && window.current.has_selection; onClicked: window.current.reroot() }
+                        RibbonButton { text: "Root position…"; tip: "Move the root along its branch"; onClicked: rootDialog.ask() }
                         RibbonButton { text: "Rotate"; tip: "Swap the order of the selected clade's branches"; enabled: window.current !== null && window.current.has_selection; onClicked: window.current.rotate() }
                         RibbonButton { text: "Rename…"; tip: "Rename the selected tip"; keys: "F2"; enabled: window.current !== null && window.current.tip_selected; onClicked: tipDialog.ask() }
                     }
@@ -897,10 +898,55 @@ ApplicationWindow {
         TreeItem { text: treeMenu.info.annotated ? "Edit annotation…" : "Annotate clade…"; visible: treeMenu.info.node; onTriggered: cladeEditor.openSelected() }
         TreeItem { text: "Remove annotation"; visible: treeMenu.info.annotated; onTriggered: window.current.remove_annotation(treeMenu.info.annotation) }
         TreeItem { text: "Reroot here"; visible: treeMenu.info.node && !treeMenu.info.root; onTriggered: window.current.reroot() }
+        TreeItem { text: "Root position…"; visible: treeMenu.info.rootBranch === true; onTriggered: rootDialog.ask() }
         TreeItem { text: "Rotate"; visible: treeMenu.info.node && !treeMenu.info.tip; onTriggered: window.current.rotate() }
         TreeItem { text: "Rename tip…"; visible: treeMenu.info.tip; onTriggered: tipDialog.ask() }
         TreeItem { text: "Add support from tree…"; visible: !treeMenu.info.node; onTriggered: supportFile.open() }
         TreeItem { text: "Tree style…"; visible: !treeMenu.info.node; onTriggered: treeStyle.openStyle() }
+    }
+
+    // Where the root sits along its branch: a share of the branch on each
+    // side. Halfway after rerooting.
+    Dialog {
+        id: rootDialog
+        property var info: ({ side: "", other: "", length: 0, share: 0.5 })
+        title: "Root position"
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        function ask() {
+            if (!window.treeOpen) return
+            const i = JSON.parse(window.current.root_json())
+            if (!i) {
+                window.current.message_kind = "error"
+                window.current.message = "The root needs two branches with lengths"
+                return
+            }
+            info = i
+            rootShare.value = i.share * 100
+            open()
+        }
+        function length(share) { return (info.length * share).toPrecision(3) }
+        onAccepted: window.current.move_root(rootShare.value / 100)
+        onClosed: if (window.currentView) window.currentView.forceActiveFocus()
+        ColumnLayout {
+            spacing: 8
+            Label { text: "Share of the root branch on each side"; opacity: 0.7 }
+            RowLayout {
+                Label { text: rootDialog.info.side; elide: Text.ElideMiddle; Layout.preferredWidth: 200; horizontalAlignment: Text.AlignRight }
+                Slider { id: rootShare; from: 0; to: 100; stepSize: 0.5; Layout.preferredWidth: 220 }
+                Label { text: rootDialog.info.other; elide: Text.ElideMiddle; Layout.preferredWidth: 200 }
+            }
+            RowLayout {
+                Label {
+                    text: rootShare.value.toFixed(1) + " % · " + rootDialog.length(rootShare.value / 100)
+                    Layout.preferredWidth: 200
+                    horizontalAlignment: Text.AlignRight
+                }
+                Button { text: "Halfway"; flat: true; Layout.preferredWidth: 220; onClicked: rootShare.value = 50 }
+                Label { text: (100 - rootShare.value).toFixed(1) + " % · " + rootDialog.length(1 - rootShare.value / 100); Layout.preferredWidth: 200 }
+            }
+        }
     }
 
     Dialog {

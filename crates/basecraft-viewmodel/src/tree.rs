@@ -222,6 +222,27 @@ impl TreeView {
         self.clamp_scroll();
     }
 
+    /// Zoom rows and width together about the middle of the view.
+    pub fn zoom_both(&mut self, doc: &TreeDoc, factor: f32) {
+        let (x, y) = (self.width / 2.0, self.height / 2.0);
+        self.zoom_at(doc, x, y, factor, true);
+        self.zoom_at(doc, x, y, factor, false);
+    }
+
+    /// The side of the root branch to measure the root's position from:
+    /// the selection if it's one of the root's two children, else the
+    /// first. With the branch's length and that side's share of it.
+    pub fn root_side(&self, doc: &TreeDoc) -> Option<(usize, usize, f64, f64)> {
+        let (a, b, length) = doc.root_branch()?;
+        let (side, other) = if self.selected == Some(b) {
+            (b, a)
+        } else {
+            (a, b)
+        };
+        let share = doc.node(side).length? / length.max(f64::MIN_POSITIVE);
+        Some((side, other, length, share))
+    }
+
     pub fn scroll_by(&mut self, dx: f32, dy: f32) {
         self.scroll_x += dx;
         self.scroll_y += dy;

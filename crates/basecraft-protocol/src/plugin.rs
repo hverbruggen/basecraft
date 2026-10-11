@@ -98,7 +98,7 @@ pub struct Invoke {
 
 /// `invoke` result: proposed operations against the snapshot's version,
 /// and for operations that write files, what they wrote and with which tool.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct InvokeResult {
     #[serde(default)]
     pub ops: Vec<Op>,

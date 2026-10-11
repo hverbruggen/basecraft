@@ -256,6 +256,11 @@ fn describe(op: &Op) -> String {
         Op::AlnRemoveRows { rows: r } => format!("Deleted {}", rows(r)),
         Op::Export { path, format } => format!("Exported {format} to {path}"),
         Op::TreeReroot { clade } => format!("Rerooted on {}", clade_name(clade)),
+        Op::TreeRootPosition { clade, fraction } => format!(
+            "Moved the root to {:.0} % of its branch from {}",
+            fraction * 100.0,
+            clade_name(clade)
+        ),
         Op::TreeRotate { clade } => format!("Rotated {}", clade_name(clade)),
         Op::TreeLadderize { small_first } => format!(
             "Ladderized, {} clades on top",

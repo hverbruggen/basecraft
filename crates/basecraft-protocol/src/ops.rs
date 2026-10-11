@@ -12,7 +12,7 @@ use crate::{CladeAnnotation, CladeRef, Feature, TreeStyle};
 pub const LOG_VERSION: u32 = 1;
 
 /// A change to a document. Coordinates are 0-based, half-open.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "op", content = "params")]
 pub enum Op {
     /// Open a file. Records its content hash, so replay can check it starts
@@ -119,6 +119,11 @@ pub enum Op {
     /// Root the tree halfway along the branch above `clade`.
     #[serde(rename = "tree.reroot")]
     TreeReroot { clade: CladeRef },
+    /// Move the root along its branch: `clade`, one of the root's two
+    /// children, gets `fraction` of the branch's length, the other the
+    /// rest.
+    #[serde(rename = "tree.root_position")]
+    TreeRootPosition { clade: CladeRef, fraction: f64 },
     /// Reverse the order of the clade's children.
     #[serde(rename = "tree.rotate")]
     TreeRotate { clade: CladeRef },
@@ -196,6 +201,7 @@ impl Op {
             Op::AlnRenameRow { .. } => "aln.rename_row",
             Op::AlnRemoveRows { .. } => "aln.remove_rows",
             Op::TreeReroot { .. } => "tree.reroot",
+            Op::TreeRootPosition { .. } => "tree.root_position",
             Op::TreeRotate { .. } => "tree.rotate",
             Op::TreeLadderize { .. } => "tree.ladderize",
             Op::TreeRenameTip { .. } => "tree.rename_tip",
@@ -255,7 +261,7 @@ pub struct OpResult {
 }
 
 /// One line of the operation log.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct LogEntry {
     pub v: u32,
     /// ULID: unique, and sorts by time.

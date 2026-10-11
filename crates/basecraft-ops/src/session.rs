@@ -806,6 +806,7 @@ impl Session {
             | Op::AlnRenameRow { .. }
             | Op::AlnRemoveRows { .. } => Err(invalid(format!("{} needs an alignment", op.name()))),
             Op::TreeReroot { .. }
+            | Op::TreeRootPosition { .. }
             | Op::TreeRotate { .. }
             | Op::TreeLadderize { .. }
             | Op::TreeRenameTip { .. }
@@ -931,6 +932,7 @@ fn execute_tree(doc: &mut TreeDoc, op: &Op) -> Result<Box<TreeDoc>> {
     let before = Box::new(doc.clone());
     let edit = match op {
         Op::TreeReroot { clade } => doc.reroot(clade),
+        Op::TreeRootPosition { clade, fraction } => doc.set_root_position(clade, *fraction),
         Op::TreeRotate { clade } => doc.rotate(clade),
         Op::TreeLadderize { small_first } => {
             doc.ladderize(*small_first);

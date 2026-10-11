@@ -96,6 +96,14 @@ pub mod qobject {
         fn rotate(self: Pin<&mut TreeController>);
         #[qinvokable]
         fn ladderize(self: Pin<&mut TreeController>, small_first: bool);
+        /// The root branch for the root position dialog, as JSON: its two
+        /// sides, its length and the first side's share, or null.
+        #[qinvokable]
+        fn root_json(self: &TreeController) -> QString;
+        /// Put the root at `fraction` of its branch, measured from the side
+        /// `root_json` named first.
+        #[qinvokable]
+        fn move_root(self: Pin<&mut TreeController>, fraction: f64);
         /// The selected tip's name, or empty.
         #[qinvokable]
         fn tip_name(self: &TreeController) -> QString;
@@ -146,9 +154,9 @@ use cxx_qt_lib::{QByteArray, QString};
 use serde_json::{Value, json};
 
 use crate::bridge::{
-    CTRL, KEY_0, KEY_DOWN, KEY_EQUAL, KEY_ESCAPE, KEY_LEFT, KEY_MINUS, KEY_PLUS, KEY_RIGHT, KEY_S,
-    KEY_UP, KEY_Y, KEY_Z, SHIFT, WHEEL_ZOOM, ZOOM_STEP, css, file_name, load_theme, memory_text,
-    monospace_font, omarchy_theme_path, project_root, took,
+    ALT, CTRL, KEY_0, KEY_DOWN, KEY_EQUAL, KEY_ESCAPE, KEY_LEFT, KEY_MINUS, KEY_PLUS, KEY_RIGHT,
+    KEY_S, KEY_UP, KEY_Y, KEY_Z, SHIFT, WHEEL_ZOOM, ZOOM_STEP, css, file_name, load_theme,
+    memory_text, monospace_font, omarchy_theme_path, project_root, took,
 };
 
 pub struct TreeRust {
@@ -411,6 +419,9 @@ impl qobject::TreeController {
                     "node": sel.is_some(),
                     "tip": sel.is_some_and(|s| d.node(s).is_tip()),
                     "root": sel == Some(d.root()),
+                    // On one of the two branches either side of the root.
+                    "rootBranch": d.root_branch().is_some()
+                        && sel.is_some_and(|s| d.node(s).parent == Some(d.root())),
                     "annotated": v.selected_annotation(d).is_some(),
                     "annotation": v.selected_annotation(d).map_or(0, |(id, _)| id),
                 })
@@ -451,13 +462,18 @@ impl qobject::TreeController {
                 self.as_mut().rust_mut().view.fit();
                 true
             }
-            KEY_PLUS | KEY_EQUAL | KEY_MINUS if ctrl => {
+            // Ctrl zooms both ways; Alt only spreads the rows.
+            KEY_PLUS | KEY_EQUAL | KEY_MINUS if ctrl || modifiers & ALT != 0 => {
                 let factor = if key == KEY_MINUS {
                     1.0 / ZOOM_STEP
                 } else {
                     ZOOM_STEP
                 };
-                self.as_mut().zoom_centre(f(factor));
+                if ctrl {
+                    self.as_mut().zoom_both(f(factor));
+                } else {
+                    self.as_mut().zoom_centre(f(factor));
+                }
                 true
             }
             KEY_ESCAPE => {
@@ -496,13 +512,21 @@ impl qobject::TreeController {
         }
     }
 
+    fn zoom_both(mut self: Pin<&mut Self>, factor: f32) {
+        let mut r = self.as_mut().rust_mut();
+        let r = &mut *r;
+        if let (Some(session), Some(doc)) = (&r.session, r.doc) {
+            r.view.zoom_both(session.tree(doc), factor);
+        }
+    }
+
     pub fn zoom_in(mut self: Pin<&mut Self>) {
-        self.as_mut().zoom_centre(f(ZOOM_STEP));
+        self.as_mut().zoom_both(f(ZOOM_STEP));
         self.refresh();
     }
 
     pub fn zoom_out(mut self: Pin<&mut Self>) {
-        self.as_mut().zoom_centre(f(1.0 / ZOOM_STEP));
+        self.as_mut().zoom_both(f(1.0 / ZOOM_STEP));
         self.refresh();
     }
 
@@ -663,6 +687,54 @@ impl qobject::TreeController {
 
     pub fn ladderize(mut self: Pin<&mut Self>, small_first: bool) {
         let _ = self.as_mut().edit(Op::TreeLadderize { small_first });
+    }
+
+    pub fn root_json(&self) -> QString {
+        let v = self
+            .with_doc(|d| {
+                let (side, other, length, share) = self.rust().view.root_side(d)?;
+                let name = |n: usize| {
+                    if d.node(n).is_tip() {
+                        basecraft_viewmodel::tree::display_name(&d.node(n).name)
+                    } else {
+                        let (a, b) = d.tip_range(n);
+                        format!(
+                            "{} … {}",
+                            basecraft_viewmodel::tree::display_name(&d.node(a).name),
+                            basecraft_viewmodel::tree::display_name(&d.node(b).name)
+                        )
+                    }
+                };
+                Some(json!({
+                    "side": name(side),
+                    "other": name(other),
+                    "length": length,
+                    "share": share,
+                }))
+            })
+            .flatten()
+            .unwrap_or(Value::Null);
+        QString::from(&v.to_string())
+    }
+
+    pub fn move_root(mut self: Pin<&mut Self>, fraction: f64) {
+        let op = self
+            .with_doc(|d| {
+                let (side, ..) = self.rust().view.root_side(d)?;
+                Some(Op::TreeRootPosition {
+                    clade: d.clade_ref(side),
+                    fraction: fraction.clamp(0.0, 1.0),
+                })
+            })
+            .flatten();
+        match op {
+            Some(op) => {
+                if self.as_mut().edit(op).is_ok() {
+                    self.done("Moved the root");
+                }
+            }
+            None => self.fail("The root needs two branches with lengths"),
+        }
     }
 
     pub fn tip_name(&self) -> QString {
