@@ -443,6 +443,12 @@ ApplicationWindow {
                     spacing: 6
                     RibbonGroup {
                         title: "Window"
+                        RibbonButton {
+                            text: "Move to window"
+                            enabled: window.current !== null && !window.current.dirty && !window.current.busy
+                            tip: "Move this saved document to its own window; save edits first"
+                            onClicked: if (shell.open_window(window.currentPath)) window.closeTab(tabs.currentIndex)
+                        }
                         RibbonButton { text: "Export SVG…"; tip: "Export an editable SVG of this view"; enabled: window.current !== null; onClicked: window.exportSvg() }
                         CheckBox {
                             text: "Files sidebar open"

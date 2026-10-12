@@ -41,6 +41,8 @@ pub mod qobject {
         #[qinvokable]
         fn open_file(self: Pin<&mut GenomeController>, path: &QString) -> bool;
         #[qinvokable]
+        fn open_window(self: Pin<&mut GenomeController>, path: &QString) -> bool;
+        #[qinvokable]
         fn export_svg(self: Pin<&mut GenomeController>, path: &QString);
         #[qinvokable]
         fn export_figure(
@@ -562,6 +564,29 @@ impl qobject::GenomeController {
         match result {
             Ok(()) => self.done(&format!("Exported {}", file_name(&target))),
             Err(e) => self.fail(&format!("Export failed: {e}")),
+        }
+    }
+
+    pub fn open_window(self: Pin<&mut Self>, path: &QString) -> bool {
+        let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+            let path = PathBuf::from(path.to_string()).canonicalize()?;
+            let kind = match basecraft_ops::files::kind(&path)? {
+                basecraft_ops::files::Kind::Sequence => "Sequence",
+                basecraft_ops::files::Kind::Alignment => "Alignment",
+                basecraft_ops::files::Kind::Tree => "Tree",
+            };
+            std::process::Command::new(std::env::current_exe()?)
+                .arg(path)
+                .args(["--editor-kind", kind])
+                .spawn()?;
+            Ok(())
+        })();
+        match result {
+            Ok(()) => true,
+            Err(e) => {
+                self.fail(&format!("Cannot open window: {e}"));
+                false
+            }
         }
     }
 

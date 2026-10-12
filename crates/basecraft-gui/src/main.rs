@@ -19,7 +19,18 @@ fn main() {
     let mut app = QGuiApplication::new();
     // A stable Wayland app-id (X11 class): desktop entries and window rules
     // match on it.
-    QGuiApplication::set_desktop_file_name(&QString::from("org.basecraft.Basecraft"));
+    let args: Vec<_> = std::env::args().collect();
+    let kind = args
+        .windows(2)
+        .find(|a| a[0] == "--editor-kind")
+        .map(|a| a[1].as_str());
+    let app_id = match kind {
+        Some("Sequence") => "org.basecraft.Sequence",
+        Some("Alignment") => "org.basecraft.Alignment",
+        Some("Tree") => "org.basecraft.Tree",
+        _ => "org.basecraft.Basecraft",
+    };
+    QGuiApplication::set_desktop_file_name(&QString::from(app_id));
     // Settings are stored under these names (~/.config/Basecraft/).
     if let Some(mut app) = app.as_mut() {
         app.as_mut()
