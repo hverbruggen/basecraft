@@ -42,9 +42,12 @@ pub fn run(
                 | "gmyc_single"
                 | "gmyc_multiple"
                 | "gmyc_exhaustive"
+                | "gmyc_alignment_single"
+                | "gmyc_alignment_multiple"
                 | "ptp"
                 | "mptp"
-                | "asap" => {}
+                | "asap"
+                | "group_statistics" => {}
                 _ => return Err("Unknown delimitation operation".into()),
             }
             let source = session.root().join(session.doc_key(doc));
@@ -91,7 +94,61 @@ fn run_delimitation(
         || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins"),
         PathBuf::from,
     );
-    let mut job = if session.is_tree(doc) {
+    if matches!(method, "gmyc_alignment_single" | "gmyc_alignment_multiple") {
+        let preparation_output = PathBuf::from(format!("{}.preparation.json", output.display()));
+        let mut preparation = if session.is_delimitation(doc) {
+            let input = params
+                .remove("analysis_input")
+                .and_then(|value| value.as_str().map(PathBuf::from))
+                .ok_or("Workspace analysis requires analysis_input")?;
+            FileJob::from_file(
+                session,
+                doc,
+                &input,
+                (&plugins.join("delimitation"), "haplotypes"),
+                preparation_output,
+            )?
+        } else if session.is_alignment(doc) {
+            FileJob::from_alignment(
+                session,
+                doc,
+                (&plugins.join("delimitation"), "haplotypes"),
+                AlignmentInput::Aligned,
+                preparation_output,
+            )?
+        } else {
+            return Err(
+                "This workflow requires an aligned DNA document or workspace with analysis_input"
+                    .into(),
+            );
+        };
+        params.insert("generation".into(), session.generation(doc).into());
+        let unique_haplotypes = params
+            .get("unique_haplotypes")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        preparation.params.extend(params);
+        let job = basecraft_plugin_host::delimitation_pipeline::AlignmentJob {
+            preparation,
+            unique_haplotypes,
+            fit_method: method.replace("_alignment", ""),
+            output,
+        };
+        return Ok(serde_json::to_value(job.run().record(session, doc)?)?);
+    }
+    let mut job = if session.is_delimitation(doc) {
+        let input = params
+            .remove("analysis_input")
+            .and_then(|v| v.as_str().map(PathBuf::from))
+            .ok_or("Workspace analysis requires analysis_input")?;
+        FileJob::from_file(
+            session,
+            doc,
+            &input,
+            (&plugins.join("delimitation"), method),
+            output,
+        )?
+    } else if session.is_tree(doc) {
         FileJob::from_tree(
             session,
             doc,

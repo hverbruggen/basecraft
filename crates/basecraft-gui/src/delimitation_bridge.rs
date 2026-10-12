@@ -12,6 +12,7 @@ pub mod qobject {
         #[qproperty(QString, workspace_json)]
         #[qproperty(QString, selection_json)]
         #[qproperty(QString, preview_json)]
+        #[qproperty(QString, sampling_summary)]
         #[qproperty(QString, statistics_json)]
         #[qproperty(QString, display_path)]
         #[qproperty(QString, active_hypothesis)]
@@ -33,6 +34,8 @@ pub mod qobject {
         fn attach_tree(self: Pin<&mut DelimitationController>, path: &QString, rooted: bool);
         #[qinvokable]
         fn activate(self: Pin<&mut DelimitationController>, id: &QString);
+        #[qinvokable]
+        fn analysis_json(self: &DelimitationController) -> QString;
         #[qinvokable]
         fn action(self: Pin<&mut DelimitationController>, name: &QString, args: &QString);
         #[qinvokable]
@@ -80,6 +83,10 @@ pub mod qobject {
         #[qinvokable]
         fn export_svg(self: Pin<&mut DelimitationController>, path: &QString);
         #[qinvokable]
+        fn export_statistics(self: Pin<&mut DelimitationController>, path: &QString);
+        #[qinvokable]
+        fn export_analysis(self: Pin<&mut DelimitationController>, path: &QString);
+        #[qinvokable]
         fn run_analysis(
             self: Pin<&mut DelimitationController>,
             method: &QString,
@@ -120,6 +127,7 @@ pub struct DelimitationRust {
     selection_json: QString,
     preview_json: QString,
     statistics_json: QString,
+    sampling_summary: QString,
     display_path: QString,
     active_hypothesis: QString,
     linked_alignment: QString,
@@ -148,6 +156,7 @@ impl Default for DelimitationRust {
             selection_json: QString::from("[]"),
             preview_json: QString::from("[]"),
             statistics_json: QString::from("{}"),
+            sampling_summary: QString::default(),
             display_path: QString::default(),
             active_hypothesis: QString::default(),
             linked_alignment: QString::default(),
@@ -389,6 +398,37 @@ impl qobject::DelimitationController {
         self.as_mut().set_active_hypothesis(id.clone());
         self.refresh();
     }
+    pub fn analysis_json(&self) -> QString {
+        let value = (|| -> Option<Value> {
+            let state = self.rust();
+            let (session, doc) = state.session.as_ref().zip(state.doc)?;
+            let hypothesis = session
+                .delimitation(doc)
+                .hypotheses
+                .iter()
+                .find(|h| h.id == state.active_hypothesis.to_string())?;
+            if hypothesis.origin != HypothesisOrigin::Inferred {
+                return None;
+            }
+            let report = hypothesis.provenance.parameters.get("analysis_report")?;
+            let hash = report["hash"].as_str()?;
+            let digest = hash.strip_prefix("b3:")?;
+            if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return None;
+            }
+            let retained = basecraft_ops::session::objects_dir(session.root()).join(digest);
+            let bytes = std::fs::read(retained)
+                .or_else(|_| std::fs::read(report["path"].as_str().unwrap_or("")))
+                .ok()?;
+            if basecraft_io::hash_bytes(&bytes) != hash {
+                return None;
+            }
+            let result: Value = serde_json::from_slice(&bytes).ok()?;
+            Some(result["metrics"]["gmyc"].clone())
+        })()
+        .unwrap_or_else(|| json!({}));
+        QString::from(value.to_string())
+    }
     pub fn action(self: Pin<&mut Self>, name: &QString, args: &QString) {
         let result = (|| -> Result<DelimitationEdit, String> {
             let r = self.rust();
@@ -459,6 +499,21 @@ impl qobject::DelimitationController {
                     specimens: members,
                     group: None,
                 },
+                "move_visible" => {
+                    let mut view = w.view.clone();
+                    let index = view
+                        .visible
+                        .iter()
+                        .position(|h| h == &text("id"))
+                        .ok_or("Hypothesis is not visible")?;
+                    let next = if args["direction"].as_i64().unwrap_or(1) < 0 {
+                        index.saturating_sub(1)
+                    } else {
+                        (index + 1).min(view.visible.len() - 1)
+                    };
+                    view.visible.swap(index, next);
+                    DelimitationEdit::SetView { view }
+                }
                 "visible" => {
                     let mut view = w.view.clone();
                     view.visible =
@@ -841,6 +896,94 @@ impl qobject::DelimitationController {
             Err(e) => self.fail(&e.to_string()),
         }
     }
+    pub fn export_analysis(mut self: Pin<&mut Self>, path: &QString) {
+        let bytes = self.analysis_json().to_string().into_bytes();
+        let result = (|| -> basecraft_ops::Result<()> {
+            if bytes == b"{}" {
+                return Err(basecraft_ops::Error::Invalid(
+                    "Choose a fitted GMYC hypothesis".into(),
+                ));
+            }
+            let mut state = self.as_mut().rust_mut();
+            let state = &mut *state;
+            let (session, doc) = state
+                .session
+                .as_mut()
+                .zip(state.doc)
+                .ok_or_else(|| basecraft_ops::Error::Invalid("No workspace open".into()))?;
+            session.export(doc, Path::new(&path.to_string()), "gmyc_report", |writer| {
+                writer.write_all(&bytes)
+            })?;
+            Ok(())
+        })();
+        match result {
+            Ok(()) => self
+                .as_mut()
+                .set_message(QString::from("Exported GMYC report")),
+            Err(error) => self.fail(&error.to_string()),
+        }
+    }
+
+    pub fn export_statistics(mut self: Pin<&mut Self>, path: &QString) {
+        let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+            let value: Value = serde_json::from_str(&self.rust().statistics_json.to_string())?;
+            let groups = value["groups"]
+                .as_array()
+                .ok_or("Run distance summaries first")?;
+            let fields = [
+                "group",
+                "specimens",
+                "mean_within",
+                "max_within",
+                "min_between",
+                "nearest_groups",
+                "barcode_gap",
+                "observed_within",
+                "missing_within",
+                "observed_between",
+                "missing_between",
+            ];
+            let mut csv = fields.join(",") + "\n";
+            for group in groups {
+                let row: Vec<_> = fields
+                    .iter()
+                    .map(|field| {
+                        let value = &group[field];
+                        let text = if value.is_null() {
+                            String::new()
+                        } else if let Some(values) = value.as_array() {
+                            values
+                                .iter()
+                                .filter_map(Value::as_str)
+                                .collect::<Vec<_>>()
+                                .join("; ")
+                        } else if let Some(text) = value.as_str() {
+                            text.to_string()
+                        } else {
+                            value.to_string()
+                        };
+                        format!("\"{}\"", text.replace('"', "\"\""))
+                    })
+                    .collect();
+                csv.push_str(&row.join(","));
+                csv.push('\n');
+            }
+            let mut state = self.as_mut().rust_mut();
+            let doc = state.doc.ok_or("No workspace open")?;
+            let session = state.session.as_mut().ok_or("No workspace open")?;
+            session.export(doc, Path::new(&path.to_string()), "csv", |writer| {
+                writer.write_all(csv.as_bytes())
+            })?;
+            Ok(())
+        })();
+        match result {
+            Ok(()) => {
+                self.as_mut().set_message_kind(QString::from("ok"));
+                self.set_message(QString::from("Exported distance summaries"));
+            }
+            Err(error) => self.fail(&error.to_string()),
+        }
+    }
     pub fn run_analysis(
         mut self: Pin<&mut Self>,
         method: &QString,
@@ -858,6 +1001,8 @@ impl qobject::DelimitationController {
             if ![
                 "gmyc_single",
                 "gmyc_multiple",
+                "gmyc_alignment_single",
+                "gmyc_alignment_multiple",
                 "ptp",
                 "mptp",
                 "asap",
@@ -872,12 +1017,24 @@ impl qobject::DelimitationController {
             let output = session
                 .root()
                 .join(format!("analysis-{}.json", ulid::Ulid::generate()));
+            let alignment_pipeline = method.starts_with("gmyc_alignment_");
             let mut job = basecraft_plugin_host::FileJob::from_file(
                 session,
                 doc,
                 Path::new(&input.to_string()),
-                (&crate::bridge::plugin_dir("delimitation"), &method),
-                output.clone(),
+                (
+                    &crate::bridge::plugin_dir("delimitation"),
+                    if alignment_pipeline {
+                        "haplotypes"
+                    } else {
+                        &method
+                    },
+                ),
+                if alignment_pipeline {
+                    PathBuf::from(format!("{}.preparation.json", output.display()))
+                } else {
+                    output.clone()
+                },
             )
             .map_err(|e| e.to_string())?;
             let progress = output.with_extension("progress.json");
@@ -893,8 +1050,21 @@ impl qobject::DelimitationController {
             let settings: serde_json::Map<String, Value> =
                 serde_json::from_str(&settings.to_string()).map_err(|e| e.to_string())?;
             for (key, value) in settings {
-                if ["cache", "mapping", "workers", "seed", "replicates", "model"]
-                    .contains(&key.as_str())
+                if [
+                    "cache",
+                    "mapping",
+                    "workers",
+                    "seed",
+                    "replicates",
+                    "model",
+                    "reference_version",
+                    "reference_age_clamp",
+                    "unique_haplotypes",
+                    "tree_index",
+                    "min_overlap",
+                    "candidate_budget",
+                ]
+                .contains(&key.as_str())
                     && !value.as_str().is_some_and(str::is_empty)
                 {
                     job.params.insert(key, value);
@@ -920,46 +1090,78 @@ impl qobject::DelimitationController {
                     ),
                 );
             }
-            Ok((job, session.generation(doc), progress, cancel))
+            let id = job.params["job_id"].as_str().unwrap().to_string();
+            let (workflow, progress_id) = if alignment_pipeline {
+                let unique_haplotypes = job
+                    .params
+                    .get("unique_haplotypes")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true);
+                (
+                    basecraft_plugin_host::delimitation_pipeline::FileWorkflow::Alignment(
+                        basecraft_plugin_host::delimitation_pipeline::AlignmentJob {
+                            preparation: job,
+                            unique_haplotypes,
+                            fit_method: method.replace("_alignment", ""),
+                            output,
+                        },
+                    ),
+                    format!("{id}-fit"),
+                )
+            } else {
+                (
+                    basecraft_plugin_host::delimitation_pipeline::FileWorkflow::Single(job),
+                    id,
+                )
+            };
+            Ok((
+                workflow,
+                session.generation(doc),
+                progress,
+                cancel,
+                progress_id,
+            ))
         })();
-        let (job, generation, progress, cancel) = match result {
+        let (workflow, generation, progress, cancel, id) = match result {
             Ok(job) => job,
             Err(e) => {
                 self.fail(&e);
                 return;
             }
         };
-        let id = job.params["job_id"].as_str().unwrap().to_string();
         self.as_mut().rust_mut().job_paths = Some((progress, cancel, id));
         self.as_mut().set_busy(true);
         self.as_mut()
             .set_message(QString::from("Running analysis…"));
         let thread = self.qt_thread();
         std::thread::spawn(move || {
-            let started = std::time::Instant::now();
-            let result = job.run();
-            let elapsed = started.elapsed().as_secs_f64();
+            let finished = workflow.run();
             let _ = thread.queue(move |mut ctl| {
                 let applied = (|| -> Result<Value, String> {
                     let mut state = ctl.as_mut().rust_mut();
                     let state = &mut *state;
                     let (session, doc) = state.session.as_mut().zip(state.doc).ok_or("Workspace closed")?;
-                    job.record_terminal(session, doc, &result, elapsed).map_err(|e| e.to_string())?;
-                    let result = result.map_err(|e| e.to_string())?;
-                    job.record(session, doc, &result).map_err(|e| e.to_string())?;
+                    let output = finished.output().to_owned();
+                    finished.record(session,doc).map_err(|e|e.to_string())?;
                     if session.generation(doc) != generation {
                         return Err("Analysis completed for its saved input; workspace changed, so result remains an artifact".into());
                     }
-                    let value: Value = serde_json::from_slice(&std::fs::read(&job.output).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
+                    let value: Value = serde_json::from_slice(&std::fs::read(&output).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
                     if value.get("workspace").is_some_and(|v|!v.is_null()) {
                         let work: basecraft_protocol::delimitation::DelimitationWorkspace = serde_json::from_value(value["workspace"].clone()).map_err(|e|e.to_string())?;
                         let roster: BTreeSet<_> = session.delimitation(doc).specimens.iter().map(|s|s.id.clone()).collect();
                         if roster != work.specimens.iter().map(|s|s.id.clone()).collect() {
                             return Err("Analysis specimen mapping differs; result saved separately".into());
                         }
-                        for hypothesis in work.hypotheses {
+                        let report_hash = session.snapshot_file(&output).map_err(|e|e.to_string())?;
+                        let added:Vec<_>=work.hypotheses.iter().map(|h|h.id.clone()).collect();
+                        for mut hypothesis in work.hypotheses {
+                            hypothesis.provenance.parameters.insert("analysis_report".into(),json!({"path":output,"hash":report_hash}));
                             session.apply(doc, Op::DelimitationEdit { edit: Box::new(DelimitationEdit::Add {hypothesis}) }).map_err(|e|e.to_string())?;
                         }
+                        let mut view=session.delimitation(doc).view.clone();
+                        view.visible.extend(added);
+                        session.apply(doc,Op::DelimitationEdit {edit:Box::new(DelimitationEdit::SetView {view})}).map_err(|e|e.to_string())?;
                     }
                     Ok(value)
                 })();
@@ -967,8 +1169,24 @@ impl qobject::DelimitationController {
                 ctl.as_mut().rust_mut().job_paths = None;
                 match applied {
                     Ok(value) => {
+                        if let Some(hypotheses)=value["workspace"]["hypotheses"].as_array() {
+                            if let Some(first)=hypotheses.first().and_then(|h|h["id"].as_str()) {ctl.as_mut().activate(&QString::from(first));}
+                            let inferred_alignment=hypotheses.first().is_some_and(|h|h["provenance"]["parameters"].get("tree_inference").is_some());
+                            if ctl.rust().display_path.to_string().is_empty() || inferred_alignment {
+                                if let Some(path)=value["workspace"]["view"]["display_tree"].as_str() {ctl.as_mut().attach_tree(&QString::from(path),value["metrics"].get("gmyc").is_some());}
+                            }
+                        }
+                        if let Some(path)=value["job"]["outputs"].as_object().and_then(|outputs|outputs.keys().find(|path|path.ends_with(".relative.nwk"))) {ctl.as_mut().attach_tree(&QString::from(path),true);}
                         if value.get("groups").is_some() {ctl.as_mut().set_statistics_json(QString::from(value.to_string()));}
                         else {ctl.as_mut().set_dirty(true);}
+                        if let Some(counts) = value["metrics"]["haplotypes"].as_object() {
+                            let original = counts.get("original_count").and_then(Value::as_u64).unwrap_or(0);
+                            let unique = counts.get("unique").and_then(Value::as_array).map_or(0,Vec::len);
+                            ctl.as_mut().set_sampling_summary(QString::from(format!("{original} specimens · {unique} exact haplotypes")));
+                        } else if let Some(hypothesis) = value["workspace"]["hypotheses"].as_array().and_then(|h|h.first()) {
+                            let counts=&hypothesis["provenance"]["parameters"];
+                            if let Some(original)=counts["original_count"].as_u64() {ctl.as_mut().set_sampling_summary(QString::from(format!("{original} specimens · {} retained tree tips",counts["retained_count"])));}
+                        }
                         ctl.as_mut().set_message_kind(QString::from("ok"));
                         ctl.as_mut().set_message(QString::from("Analysis completed"));
                         ctl.refresh();

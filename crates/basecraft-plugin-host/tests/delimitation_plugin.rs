@@ -82,3 +82,126 @@ fn snapshots_and_terminal_outcomes_survive_success_failure_and_cancel() {
     let report = replay::replay(root.path()).unwrap();
     assert!(report.ok(), "{:?}", report.problems);
 }
+
+#[test]
+fn exact_identity_precedes_public_tree_inference_and_restores_specimens() {
+    use basecraft_plugin_host::{delimitation_pipeline::AlignmentJob, file_tool::AlignmentInput};
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("aligned.fasta");
+    std::fs::write(
+        &source,
+        format!(
+            ">a\n{}\n>b\n{}\n>c\n{}{}\n>d\n{}{}\n>e\n{}{}\n",
+            "A".repeat(100),
+            "A".repeat(100),
+            "A".repeat(90),
+            "C".repeat(10),
+            "A".repeat(80),
+            "G".repeat(20),
+            "A".repeat(70),
+            "T".repeat(30)
+        ),
+    )
+    .unwrap();
+    let plugin = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/delimitation");
+    let native = std::env::var("BASECRAFT_DELIMITATION").unwrap();
+    let mut session = Session::new(root.path());
+    let doc = session.open(&source).unwrap();
+    for (unique, name) in [(true, "unique"), (false, "all")] {
+        let output = root.path().join(format!("{name}.json"));
+        let mut preparation = FileJob::from_alignment(
+            &session,
+            doc,
+            (&plugin, "haplotypes"),
+            AlignmentInput::Aligned,
+            root.path().join(format!("{name}.prepare.json")),
+        )
+        .unwrap();
+        preparation.params.extend([
+            ("executable".into(), json!(native)),
+            ("model".into(), json!("p")),
+        ]);
+        let outcome = AlignmentJob {
+            preparation,
+            unique_haplotypes: unique,
+            fit_method: "gmyc_single".into(),
+            output: output.clone(),
+        }
+        .run()
+        .record(&mut session, doc);
+        if unique {
+            outcome.unwrap();
+            let result: Value = serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
+            assert_eq!(
+                result["workspace"]["specimens"].as_array().unwrap().len(),
+                5
+            );
+            assert_eq!(
+                result["workspace"]["hypotheses"][0]["provenance"]["haplotypes"]["a"],
+                json!(["a", "b"])
+            );
+            assert_eq!(
+                result["workspace"]["hypotheses"][0]["provenance"]["parameters"]["retained_count"],
+                4
+            );
+            let memberships: Vec<_> = result["workspace"]["hypotheses"][0]["groups"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|g| g["members"].as_array().unwrap())
+                .collect();
+            assert!(
+                memberships
+                    .iter()
+                    .any(|members| members.contains(&json!("a")) && members.contains(&json!("b")))
+            );
+        } else {
+            assert!(outcome.is_err());
+            assert!(!output.exists());
+            let report: Value = serde_json::from_slice(
+                &std::fs::read(format!("{}.run.json", output.display())).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(report["job"]["status"], "failed");
+            assert!(
+                report["job"]["diagnostics"]
+                    .to_string()
+                    .contains("zero-time")
+            );
+        }
+    }
+    let single = root.path().join("single.fasta");
+    std::fs::write(&single, ">a\nACGT\n>b\nACGT\n").unwrap();
+    let single_doc = session.open(&single).unwrap();
+    let mut preparation = FileJob::from_alignment(
+        &session,
+        single_doc,
+        (&plugin, "haplotypes"),
+        AlignmentInput::Aligned,
+        root.path().join("single.prepare.json"),
+    )
+    .unwrap();
+    preparation
+        .params
+        .insert("executable".into(), json!(native));
+    let output = root.path().join("single.json");
+    assert!(
+        AlignmentJob {
+            preparation,
+            unique_haplotypes: true,
+            fit_method: "gmyc_single".into(),
+            output: output.clone()
+        }
+        .run()
+        .record(&mut session, single_doc)
+        .is_err()
+    );
+    let report: Value =
+        serde_json::from_slice(&std::fs::read(format!("{}.run.json", output.display())).unwrap())
+            .unwrap();
+    assert_eq!(report["job"]["status"], "unavailable");
+    assert!(!output.exists());
+    drop(session);
+    let result = replay::replay(root.path()).unwrap();
+    assert!(result.ok(), "{:?}", result.problems);
+}

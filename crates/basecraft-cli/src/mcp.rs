@@ -153,7 +153,7 @@ impl Server {
             "run_tool" => {
                 let doc = self.doc(args)?;
                 let output = self.path(text(args, "output")?)?;
-                let params = args
+                let mut params = args
                     .get("params")
                     .map(|v| v.as_object().cloned().ok_or("params must be an object"))
                     .transpose()?
@@ -171,11 +171,25 @@ impl Server {
                         "workers",
                         "tree_index",
                         "candidate_budget",
+                        "reference_version",
+                        "reference_age_clamp",
+                        "unique_haplotypes",
+                        "analysis_input",
+                        "mapping",
+                        "groups_data",
+                        "replicates",
+                        "progress",
+                        "cancel_file",
                         "threshold",
                     ]
                     .contains(&k.as_str())
                 }) {
                     return Err("Unsupported tool parameter".into());
+                }
+                for name in ["analysis_input", "mapping", "progress", "cancel_file"] {
+                    if let Some(path) = params.get(name).and_then(Value::as_str) {
+                        params.insert(name.into(), json!(self.path(path)?));
+                    }
                 }
                 crate::tools::run(&mut self.session, doc, text(args, "tool")?, output, params)
             }

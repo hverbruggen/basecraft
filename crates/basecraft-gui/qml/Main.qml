@@ -1440,6 +1440,29 @@ ApplicationWindow {
         }
     }
 
+    property var delimPending: []
+    function runDelimSteps(c) {
+        while (window.delimPending.length && !c.busy) {
+            const step=window.delimPending.shift()
+            if (step.action === "attach") c.attach_tree(step.path,step.rooted)
+            else if (step.action === "select") c.highlight_taxa(JSON.stringify(step.ids))
+            else if (step.action === "activate_last") { const work = JSON.parse(c.workspace_json); c.activate(work.hypotheses[work.hypotheses.length-1].id) }
+            else if (step.action === "cut") c.preview_cut(step.threshold)
+            else if (step.action === "cancel_cut") c.cancel_cut()
+            else if (step.action === "save_cut") c.save_cut(step.name)
+            else if (step.action === "undo") c.undo()
+            else if (step.action === "redo") c.redo()
+            else if (step.action === "save") c.save()
+            else if (step.action === "run") c.run_analysis(step.method,step.input,step.rooted || false,JSON.stringify(step.settings || {}))
+            else if (step.action === "statistics_csv") c.export_statistics(step.path)
+            else if (step.action === "inspect") c.export_analysis(step.path)
+            else if (step.action === "svg") c.export_svg(step.path)
+            else if (step.action === "visible_all") c.action("visible",JSON.stringify({ids:JSON.parse(c.workspace_json).hypotheses.map(h=>h.id)}))
+            else c.action(step.action,JSON.stringify(step))
+            console.log("delim",step.action,"|",c.message,"|",c.workspace_json,"| preview",c.preview_json)
+        }
+    }
+
     // Scripted runs, on the active tab: --goto START,END  --mode wrapped|linear|circular
     // --type TEXT  --select X0,X1[,Y]  --menu X,Y  --menu-add X  --edit new|ID
     // --label TEXT [--no-click 1]  --add LOCATION  --extract 1  --hover X,Y
@@ -1454,22 +1477,8 @@ ApplicationWindow {
             if (!c) { console.log("no document open"); shot.start(); return }
             if (arg("--fit")) c.fit()
             if (arg("--delim")) {
-                const steps = JSON.parse(arg("--delim"))
-                for (const step of steps) {
-                    if (step.action === "attach") c.attach_tree(step.path,step.rooted)
-                    else if (step.action === "select") c.highlight_taxa(JSON.stringify(step.ids))
-                    else if (step.action === "activate_last") { const work = JSON.parse(c.workspace_json); c.activate(work.hypotheses[work.hypotheses.length-1].id) }
-                    else if (step.action === "cut") c.preview_cut(step.threshold)
-                    else if (step.action === "cancel_cut") c.cancel_cut()
-                    else if (step.action === "save_cut") c.save_cut(step.name)
-                    else if (step.action === "undo") c.undo()
-                    else if (step.action === "redo") c.redo()
-                    else if (step.action === "save") c.save()
-                    else if (step.action === "svg") c.export_svg(step.path)
-                    else if (step.action === "visible_all") c.action("visible",JSON.stringify({ids:JSON.parse(c.workspace_json).hypotheses.map(h=>h.id)}))
-                    else c.action(step.action,JSON.stringify(step))
-                    console.log("delim",step.action,"|",c.message,"|",c.workspace_json,"| preview",c.preview_json)
-                }
+                window.delimPending=JSON.parse(arg("--delim"))
+                window.runDelimSteps(c)
             }
             // Alignment edits, ';'-separated: sel:R0,C0,R1,C1  gap  rmgap
             // slide:N  type:TEXT  del  undo  redo  up  down  strip  zoomsel
@@ -1592,6 +1601,11 @@ ApplicationWindow {
         interval: arg("--shot-delay") ? Number(arg("--shot-delay")) : 400
         onTriggered: {
             const c = window.current
+            if (c && (c.busy || window.delimPending.length)) {
+                if (!c.busy) window.runDelimSteps(c)
+                shot.start()
+                return
+            }
             if (c) console.log(c.memory_report(), "|", c.status, "|", c.hscroll_size, c.vscroll_size)
             const v = window.currentView
             console.log("saved", v ? v.saveWindow(arg("--screenshot")) : false)

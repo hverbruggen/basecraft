@@ -15,6 +15,14 @@ Item {
     readonly property var selection: JSON.parse(ctl.selection_json)
     property string tool: "select"
     property var mergeGroups: []
+    property bool settingsOpen: false
+    property bool detailsOpen: false
+    component WorkspaceButton: Button {
+        font.pixelSize: 13
+        padding: 6
+        implicitHeight: 32
+        implicitWidth: Math.max(50, contentItem.implicitWidth + 16)
+    }
     Timer { interval: 250; running: ctl.busy; repeat: true; onTriggered: ctl.poll_job() }
     signal openFile(string path)
     DelimitationController { id: ctl }
@@ -30,23 +38,40 @@ Item {
     ColumnLayout {
         anchors.fill: parent
         spacing: 4
-        RowLayout {
-            Label { text: "Hypotheses"; font.bold: true }
-            TextField { id: name; placeholderText: "Hypothesis or group name"; Layout.preferredWidth: 210 }
-            Button { text: "New"; onClicked: ctl.action("create", JSON.stringify({name:name.text})) }
-            Button { text: "Derive"; enabled: ctl.active_hypothesis.length > 0; onClicked: ctl.action("derive", JSON.stringify({name:name.text})) }
-            Button { text: "Rename"; onClicked: ctl.action("rename",JSON.stringify({name:name.text})) }
-            Button { text: "Group selection"; enabled: doc.selection.length > 0; onClicked: ctl.action("group",JSON.stringify({label:name.text})) }
-            Button { text: "Merge checked groups"; enabled: doc.mergeGroups.length > 1; onClicked: { ctl.action("merge",JSON.stringify({groups:doc.mergeGroups,label:name.text})); doc.mergeGroups = [] } }
-            Button { text: "Unassign"; enabled: doc.selection.length > 0; onClicked: ctl.action("unassign","{}") }
+        Flow {
+            Layout.fillWidth: true
+            Layout.preferredHeight: childrenRect.height
+            spacing: 4
+            TextField { id: name; width: 170; height: 32; font.pixelSize: 13; placeholderText: "Hypothesis / group name" }
+            WorkspaceButton { text: "New"; onClicked: ctl.action("create", JSON.stringify({name:name.text})) }
+            WorkspaceButton { text: "Derive"; enabled: ctl.active_hypothesis.length > 0; onClicked: ctl.action("derive", JSON.stringify({name:name.text})) }
+            WorkspaceButton { text: "Rename"; onClicked: ctl.action("rename",JSON.stringify({name:name.text})) }
+            WorkspaceButton { text: "Group selection"; enabled: doc.selection.length > 0; onClicked: ctl.action("group",JSON.stringify({label:name.text})) }
+            WorkspaceButton { text: "Merge checked"; enabled: doc.mergeGroups.length > 1; onClicked: { ctl.action("merge",JSON.stringify({groups:doc.mergeGroups,label:name.text})); doc.mergeGroups = [] } }
+            WorkspaceButton { text: "Unassign"; enabled: doc.selection.length > 0; onClicked: ctl.action("unassign","{}") }
+            WorkspaceButton { text: "Select"; checkable: true; checked: doc.tool === "select"; onClicked: { doc.tool = "select"; ctl.cancel_cut() } }
+            WorkspaceButton { text: "Cut"; checkable: true; checked: doc.tool === "cut"; enabled: ctl.can_cut; onClicked: doc.tool = "cut" }
+            WorkspaceButton { text: "SVG"; onClicked: ctl.export_svg(doc.path + ".svg") }
+            WorkspaceButton { text: "Details"; checkable: true; checked: doc.detailsOpen; onClicked: doc.detailsOpen = !doc.detailsOpen }
+            WorkspaceButton { text: doc.settingsOpen ? "Hide analysis settings" : "Analysis settings"; onClicked: doc.settingsOpen = !doc.settingsOpen }
         }
+        ScrollView {
+            visible: doc.settingsOpen
+            Layout.fillWidth: true
+            Layout.minimumWidth: 0
+            Layout.preferredHeight: 310
+            contentWidth: Math.max(doc.width, 1200)
+            ColumnLayout {
+                width: Math.max(doc.width, 1200)
         RowLayout {
+            Layout.minimumWidth: 0
+            visible: doc.settingsOpen
             TextField { id: treePath; placeholderText: "Display tree path"; Layout.fillWidth: true; text: ctl.display_path }
-            CheckBox { id: rooted; text: "Explicitly rooted time tree" }
-            Button { text: "Attach tree"; onClicked: ctl.attach_tree(treePath.text,rooted.checked) }
-            Button { text: "Select"; checkable: true; checked: doc.tool === "select"; onClicked: { doc.tool = "select"; ctl.cancel_cut() } }
-            Button { text: "Cut"; checkable: true; checked: doc.tool === "cut"; enabled: ctl.can_cut; onClicked: doc.tool = "cut" }
-            Button { text: "SVG"; onClicked: ctl.export_svg(doc.path + ".svg") }
+            CheckBox { id: rooted; text: "Explicitly rooted" }
+            WorkspaceButton { text: "Attach tree"; onClicked: ctl.attach_tree(treePath.text,rooted.checked) }
+            WorkspaceButton { text: "Select"; checkable: true; checked: doc.tool === "select"; onClicked: { doc.tool = "select"; ctl.cancel_cut() } }
+            WorkspaceButton { text: "Cut"; checkable: true; checked: doc.tool === "cut"; enabled: ctl.can_cut; onClicked: doc.tool = "cut" }
+            WorkspaceButton { text: "SVG"; onClicked: ctl.export_svg(doc.path + ".svg") }
         }
         RowLayout {
             visible: doc.tool === "cut"
@@ -54,25 +79,64 @@ Item {
             Slider { id: cutSlider; Layout.fillWidth: true; from: 0; to: ctl.root_height; value: ctl.threshold; onMoved: ctl.preview_cut(value) }
             TextField { id: cutValue; text: ctl.threshold.toPrecision(6); Layout.preferredWidth: 110; validator: DoubleValidator { bottom: 0; top: ctl.root_height } onEditingFinished: ctl.preview_cut(Number(text)) }
             Label { text: JSON.parse(ctl.preview_json).length + " preview groups" }
-            Button { text: "Save cut"; enabled: JSON.parse(ctl.preview_json).length > 0; onClicked: ctl.save_cut(name.text.length ? name.text : "Manual time cut") }
-            Button { text: "Cancel"; onClicked: { ctl.cancel_cut(); doc.tool = "select" } }
+            WorkspaceButton { text: "Save cut"; enabled: JSON.parse(ctl.preview_json).length > 0; onClicked: ctl.save_cut(name.text.length ? name.text : "Manual time cut") }
+            WorkspaceButton { text: "Cancel"; onClicked: { ctl.cancel_cut(); doc.tool = "select" } }
         }
         RowLayout {
-            TextField { id: analysisInput; placeholderText: "Immutable analysis input (tree or aligned FASTA)"; Layout.fillWidth: true; text: ctl.display_path }
-            ComboBox { id: method; model: ["gmyc_single", "gmyc_multiple", "ptp", "mptp", "asap", "relative_time", "haplotypes", "group_statistics"] }
-            Button { text: "Run"; enabled: !ctl.busy; onClicked: ctl.run_analysis(method.currentText,analysisInput.text,rooted.checked,JSON.stringify({cache:cachePath.text,mapping:mappingPath.text})) }
-            Button { text: "Cancel job"; enabled: ctl.busy; onClicked: ctl.cancel_job() }
+            Layout.minimumWidth: 0
+            visible: doc.settingsOpen
+            TextField { id: analysisInput; placeholderText: "Immutable analysis input (tree or aligned FASTA)"; Layout.fillWidth: true; text: ["asap","haplotypes","group_statistics","gmyc_alignment_single","gmyc_alignment_multiple"].includes(method.currentText) ? ctl.linked_alignment : ctl.display_path }
+            ComboBox { id: method; model: ["gmyc_single", "gmyc_multiple", "gmyc_alignment_single", "gmyc_alignment_multiple", "ptp", "mptp", "asap", "relative_time", "haplotypes", "group_statistics"] }
+            WorkspaceButton { text: "Run"; enabled: !ctl.busy; onClicked: ctl.run_analysis(method.currentText,analysisInput.text,rooted.checked,JSON.stringify({cache:cachePath.text,mapping:mappingPath.text,unique_haplotypes:sampling.currentIndex === 0,model:distanceModel.currentText,seed:seed.value,workers:workers.value,replicates:replicates.value,tree_index:treeIndex.value})) }
+            WorkspaceButton { text: "Cancel job"; enabled: ctl.busy; onClicked: ctl.cancel_job() }
         }
         RowLayout {
+            Layout.minimumWidth: 0
+            visible: doc.settingsOpen
+            ComboBox { id: sampling; model: ["Unique haplotypes", "All specimens"] }
+            Label { text: "Alignment GMYC: UPGMA equal-rate tree" }
+            WorkspaceButton { text: "Count haplotypes"; enabled: !ctl.busy; onClicked: ctl.run_analysis("haplotypes",analysisInput.text,false,"{}") }
+            Label { text: ctl.sampling_summary }
+        }
+        RowLayout {
+            Layout.minimumWidth: 0
+            visible: doc.settingsOpen
+            Label { text: "Distance model" }
+            ComboBox { id: distanceModel; model: ["p", "jc69", "k2p"] }
+            Label { text: "Seed" }
+            SpinBox { id: seed; from: 1; to: 2147483647; value: 1; editable: true }
+            Label { text: "Workers" }
+            SpinBox { id: workers; from: 1; to: 256; value: 1; editable: true }
+            Label { text: "ASAP simulations" }
+            SpinBox { id: replicates; from: 100; to: 10000000; value: 10000; editable: true }
+            Label { text: "Tree index (0 first)" }
+            SpinBox { id: treeIndex; from: 0; to: 100000; value: 0; editable: true }
+        }
+        RowLayout {
+            Layout.minimumWidth: 0
+            visible: doc.settingsOpen
             TextField { id: cachePath; placeholderText: "Observed distance cache (optional)"; Layout.fillWidth: true }
             TextField { id: mappingPath; placeholderText: "Exact haplotype mapping (optional)"; Layout.fillWidth: true }
         }
+            }
+        }
+        RowLayout {
+            visible: doc.tool === "cut" && !doc.settingsOpen
+            Layout.fillWidth: true
+            Slider { Layout.fillWidth: true; from: 0; to: ctl.root_height; value: ctl.threshold; onMoved: ctl.preview_cut(value) }
+            Label { text: ctl.threshold.toPrecision(5) + " · " + JSON.parse(ctl.preview_json).length + " groups" }
+            WorkspaceButton { text: "Save cut"; enabled: JSON.parse(ctl.preview_json).length > 0; onClicked: ctl.save_cut(name.text.length ? name.text : "Manual time cut") }
+            WorkspaceButton { text: "Cancel"; onClicked: { ctl.cancel_cut(); doc.tool = "select" } }
+        }
         Label { text: { ctl.workspace_json; const coverage = JSON.parse(ctl.coverage_json(tree.canvas_geometry)); return "Unmatched tree tips: " + (coverage.unmatched_tips || []).join(", ") + " · Specimens absent from display: " + (coverage.absent_specimens || []).join(", ") } elide: Text.ElideRight; Layout.fillWidth: true }
         SplitView {
+            Layout.minimumWidth: 0
             Layout.fillWidth: true
             Layout.fillHeight: true
             ScrollView {
-                SplitView.preferredWidth: 235
+                SplitView.minimumWidth: 120
+                SplitView.preferredWidth: 170
+                SplitView.maximumWidth: 235
                 ColumnLayout {
                     width: parent.width
                     Repeater {
@@ -83,7 +147,11 @@ Item {
                             RowLayout {
                                 CheckBox { checked: (doc.workspace.view.visible || []).includes(modelData.id)
                                     onClicked: ctl.action("visible",JSON.stringify({ids:checked ? (doc.workspace.view.visible || []).concat([modelData.id]) : (doc.workspace.view.visible || []).filter(id => id !== modelData.id)})) }
-                                Button { text: modelData.name; highlighted: ctl.active_hypothesis === modelData.id; onClicked: ctl.activate(modelData.id); Layout.fillWidth: true }
+                                WorkspaceButton { text: modelData.name; highlighted: ctl.active_hypothesis === modelData.id; onClicked: ctl.activate(modelData.id); Layout.fillWidth: true }
+                            }
+                            RowLayout {
+                                WorkspaceButton { text: "←"; enabled: (doc.workspace.view.visible || []).includes(modelData.id); onClicked: ctl.action("move_visible",JSON.stringify({id:modelData.id,direction:-1})) }
+                                WorkspaceButton { text: "→"; enabled: (doc.workspace.view.visible || []).includes(modelData.id); onClicked: ctl.action("move_visible",JSON.stringify({id:modelData.id,direction:1})) }
                             }
                             Label { text: modelData.origin + (modelData.provenance.method.length ? " · " + modelData.provenance.method : ""); elide: Text.ElideRight; Layout.maximumWidth: 220 }
                             Label { text: modelData.groups.length + " groups · " + modelData.unassigned.length + " unassigned" }
@@ -119,7 +187,8 @@ Item {
                 Item {
                     id: barArea
                     anchors { right: parent.right; top: parent.top; bottom: parent.bottom }
-                    width: (doc.workspace.view ? doc.workspace.view.visible.length : 0) * 36 + 36
+                    readonly property real naturalWidth: (doc.workspace.view ? doc.workspace.view.visible.length : 0) * 36 + 36
+                    width: Math.min(naturalWidth, parent.width * 0.45)
                     clip: true
                     readonly property var segments: {
                         ctl.workspace_json; ctl.preview_json
@@ -128,7 +197,7 @@ Item {
                     Repeater { model: barArea.segments
                         delegate: Rectangle {
                             required property var modelData
-                            x: modelData.x; y: modelData.y; width: modelData.width; height: modelData.height
+                            x: modelData.x * barArea.width / barArea.naturalWidth; y: modelData.y; width: modelData.width * barArea.width / barArea.naturalWidth; height: modelData.height
                             color: modelData.color.length ? modelData.color : "#377eb8"
                             border.color: "#ffffff"; border.width: 0.5
                             ToolTip.visible: segmentMouse.containsMouse; ToolTip.text: modelData.label
@@ -138,6 +207,7 @@ Item {
                 }
             }
             ScrollView {
+                visible: doc.width > 1000 || doc.detailsOpen
                 SplitView.preferredWidth: 290
                 ColumnLayout {
                     width: parent.width
@@ -153,21 +223,43 @@ Item {
                                     required property var modelData
                                     Layout.fillWidth: true
                                     CheckBox { text: "Include in merge"; checked: doc.mergeGroups.includes(modelData.id); onClicked: doc.mergeGroups = checked ? doc.mergeGroups.concat([modelData.id]) : doc.mergeGroups.filter(id => id !== modelData.id) }
-                                    Button { text: modelData.label + " (" + modelData.members.length + ")"; onClicked: ctl.select_group(ctl.active_hypothesis,modelData.id,false) }
+                                    WorkspaceButton { text: modelData.label + " (" + modelData.members.length + ")"; onClicked: ctl.select_group(ctl.active_hypothesis,modelData.id,false) }
                                     Label { text: modelData.members.join(", "); wrapMode: Text.Wrap; Layout.maximumWidth: 260 }
                                     RowLayout {
-                                        Button { text: "Reassign here"; enabled: doc.selection.length > 0; onClicked: ctl.action("reassign",JSON.stringify({group:modelData.id})) }
-                                        Button { text: "Rename"; onClicked: ctl.action("rename_group",JSON.stringify({group:modelData.id,label:name.text})) }
+                                        WorkspaceButton { text: "Reassign here"; enabled: doc.selection.length > 0; onClicked: ctl.action("reassign",JSON.stringify({group:modelData.id})) }
+                                        WorkspaceButton { text: "Rename"; onClicked: ctl.action("rename_group",JSON.stringify({group:modelData.id,label:name.text})) }
                                     }
                                 }
                             }
                         }
                     }
+                    ColumnLayout {
+                        id: fitInspector
+                        property var fit: { ctl.workspace_json; ctl.active_hypothesis; return JSON.parse(ctl.analysis_json()) }
+                        property var best: fit.profile ? fit.profile[fit.best] : ({})
+                        visible: fit.profile !== undefined
+                        Label { text: "Fitted GMYC " + (fitInspector.fit.method || ""); font.bold: true }
+                        WorkspaceButton { text: "Export fit report"; onClicked: ctl.export_analysis(doc.path + ".gmyc.json") }
+                        Label { text: "Threshold ages: " + (fitInspector.best.thresholds || []).join(", "); wrapMode: Text.Wrap; Layout.maximumWidth: 260 }
+                        Label { text: "Log likelihood: " + fitInspector.best.log_likelihood + " · LR: " + fitInspector.fit.likelihood_ratio + " · p: " + fitInspector.fit.lr_p_value; wrapMode: Text.Wrap; Layout.maximumWidth: 260 }
+                        Label { text: "log λ diversification: " + fitInspector.best.log_lambda_div + " · coalescent: " + fitInspector.best.log_lambda_coal + " · exponents: " + fitInspector.best.p_div + ", " + fitInspector.best.p_coal; wrapMode: Text.Wrap; Layout.maximumWidth: 260 }
+                        Label { text: (fitInspector.best.diagnostics || []).join("\n"); wrapMode: Text.Wrap; Layout.maximumWidth: 260 }
+                        Label { text: fitInspector.fit.support_convention || ""; wrapMode: Text.Wrap; Layout.maximumWidth: 260 }
+                        Label { text: "Likelihood profile (age: log likelihood)"; font.bold: true }
+                        Repeater { model: fitInspector.fit.profile || []
+                            delegate: Label {
+                                required property var modelData
+                                text: (modelData.thresholds || []).join(", ") + ": " + modelData.log_likelihood.toFixed(6)
+                                wrapMode: Text.Wrap; Layout.maximumWidth: 260
+                            }
+                        }
+                    }
                     Label { text: "Observed distances"; font.bold: true }
+                    WorkspaceButton { text: "Export summaries CSV"; enabled: (JSON.parse(ctl.statistics_json).groups || []).length > 0; onClicked: ctl.export_statistics(doc.path + ".statistics.csv") }
                     Repeater { model: JSON.parse(ctl.statistics_json).groups || []
                         delegate: Label {
                             required property var modelData
-                            text: modelData.group + ": n=" + modelData.specimens + " · mean=" + (modelData.mean_within === null ? "unavailable" : modelData.mean_within) + " · max=" + modelData.max_within + " · nearest=" + (modelData.nearest_groups || []).join(", ") + " · missing=" + modelData.missing_within + "/" + modelData.missing_between
+                            text: modelData.group + ": n=" + modelData.specimens + " · mean=" + (modelData.mean_within === null ? "unavailable" : modelData.mean_within) + " · max=" + modelData.max_within + " · min between=" + modelData.min_between + " · nearest=" + (modelData.nearest_groups || []).join(", ") + " · gap=" + (modelData.barcode_gap === null ? "unavailable" : modelData.barcode_gap) + " · observed=" + modelData.observed_within + "/" + modelData.observed_between + " · missing=" + modelData.missing_within + "/" + modelData.missing_between
                             wrapMode: Text.Wrap; Layout.maximumWidth: 260
                         }
                     }

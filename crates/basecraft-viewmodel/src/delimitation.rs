@@ -129,33 +129,38 @@ pub fn bars(
                 unmatched.insert(name.clone());
                 continue;
             };
-            let Some((group, index)) = ids.first().and_then(|id| membership.get(id)).copied()
-            else {
-                continue;
-            };
-            if ids.iter().any(|id| !group.members.contains(id)) {
-                continue;
-            }
-            let y = y - height / 2.0;
-            let mut top = y;
-            let mut bottom = y + height;
-            if let Some((start, end)) = viewport {
-                if bottom <= start || top >= end {
-                    continue;
+            let mut row_groups = BTreeMap::<usize, (&Group, usize)>::new();
+            for id in ids {
+                if let Some(&(group, index)) = membership.get(id) {
+                    row_groups.entry(index).or_insert((group, 0)).1 += 1;
                 }
-                top = top.max(start);
-                bottom = bottom.min(end);
             }
-            segments.push(BarSegment {
-                hypothesis: h.id.clone(),
-                group: group.id.clone(),
-                x: left + column as f32 * column_width,
-                y: top,
-                width: column_width - 6.0,
-                height: bottom - top,
-                color: color(group, index).into(),
-                label: group.label.clone(),
-            });
+            let mut cursor = y - height / 2.0;
+            for (index, (group, count)) in row_groups {
+                // If manually separated specimens share a unique tip, show
+                // distinct proportional stripes instead of hiding their groups.
+                let stripe_height = height * count as f32 / ids.len() as f32;
+                let mut top = cursor;
+                let mut bottom = cursor + stripe_height;
+                cursor = bottom;
+                if let Some((start, end)) = viewport {
+                    if bottom <= start || top >= end {
+                        continue;
+                    }
+                    top = top.max(start);
+                    bottom = bottom.min(end);
+                }
+                segments.push(BarSegment {
+                    hypothesis: h.id.clone(),
+                    group: group.id.clone(),
+                    x: left + column as f32 * column_width,
+                    y: top,
+                    width: column_width - 6.0,
+                    height: bottom - top,
+                    color: color(group, index).into(),
+                    label: group.label.clone(),
+                });
+            }
         }
     }
     (segments, unmatched)
@@ -238,6 +243,21 @@ mod tests {
             &["a".into(), "b".into(), "c".into(), "d".into()].into(),
         );
         assert_eq!(full["a"], ["a".into()].into());
+        work.view.visible = vec!["partition-1".into()];
+        let (segments, _) = bars(
+            &work,
+            &[("a".into(), 20.0, 20.0), ("c".into(), 40.0, 20.0)],
+            0.0,
+            36.0,
+            None,
+        );
+        let row: Vec<_> = segments.iter().filter(|s| s.y < 30.0).collect();
+        assert_eq!(row.len(), 2);
+        assert!(
+            row.iter()
+                .all(|segment| (segment.height - 10.0).abs() < f32::EPSILON)
+        );
+        assert_ne!(row[0].group, row[1].group);
     }
     #[test]
     fn noncontiguous_groups_share_identity_and_select_all_segments() {

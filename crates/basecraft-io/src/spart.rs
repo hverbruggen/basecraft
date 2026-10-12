@@ -214,7 +214,11 @@ pub fn parse_text(text: &str) -> Result<DelimitationWorkspace> {
             sources: BTreeMap::new(),
             attributes: BTreeMap::new(),
         });
-        let assignments: Vec<_> = assignments.split('/').map(str::trim).collect();
+        let assignments: Vec<_> = if assignments.trim().is_empty() && count == 0 {
+            vec![]
+        } else {
+            assignments.split('/').map(str::trim).collect()
+        };
         if assignments.len() != count {
             return Err(error("assignment column count mismatch"));
         }
@@ -242,7 +246,11 @@ pub fn parse_text(text: &str) -> Result<DelimitationWorkspace> {
             if !ids.contains(&id) {
                 return Err(error("unknown individual score reference"));
             }
-            let values: Vec<_> = values.split('/').collect();
+            let values: Vec<_> = if values.trim().is_empty() && count == 0 {
+                vec![]
+            } else {
+                values.split('/').collect()
+            };
             if values.len() != count {
                 return Err(error("individual score count mismatch"));
             }
@@ -679,6 +687,20 @@ mod tests {
             ["b".into(), "d".into()].into()
         );
     }
+    #[test]
+    fn roster_without_hypotheses_roundtrips() {
+        let mut work = parse_text(FIXTURE).unwrap();
+        work.hypotheses.clear();
+        work.view.visible.clear();
+        for round in [
+            parse_text(&write_text(&work).0).unwrap(),
+            parse_xml(&write_xml(&work)).unwrap(),
+        ] {
+            assert_eq!(round.specimens, work.specimens);
+            assert_eq!(round.hypotheses, []);
+        }
+    }
+
     #[test]
     fn names_roundtrip_and_dtd_is_rejected() {
         let mut work = parse_text(FIXTURE).unwrap();

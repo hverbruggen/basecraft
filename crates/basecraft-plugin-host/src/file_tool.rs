@@ -171,6 +171,45 @@ impl FileJob {
         })
     }
 
+    /// Compose a dependent public file operation without accessing a document on
+    /// the worker thread. The next input is copied before the stage starts.
+    pub fn following(
+        &self,
+        input: &Path,
+        (plugin, operation): (&Path, &str),
+        output: PathBuf,
+    ) -> Result<Self> {
+        if output.exists() && output.canonicalize()? == input.canonicalize()? {
+            return Err(Error::Protocol(
+                "output must differ from analysis input".into(),
+            ));
+        }
+        let dir = tempfile::Builder::new()
+            .prefix("basecraft-following-job-")
+            .tempdir()?;
+        let snapshot = dir.path().join(
+            input
+                .file_name()
+                .unwrap_or_else(|| std::ffi::OsStr::new("input")),
+        );
+        std::fs::copy(input, &snapshot)?;
+        let hash = basecraft_io::hash_file(&snapshot).map_err(basecraft_ops::Error::from)?;
+        Ok(Self {
+            plugin: plugin.into(),
+            operation: operation.into(),
+            input: snapshot,
+            input_key: (input.display().to_string(), hash),
+            output,
+            params: [("job_id".into(), json!(ulid::Ulid::generate().to_string()))]
+                .into_iter()
+                .collect(),
+            source_path: self.source_path.clone(),
+            source_version: self.source_version,
+            source_hash: self.source_hash.clone(),
+            _dir: dir,
+        })
+    }
+
     /// Record a terminal outcome even if the plugin reports an RPC error.
     /// Input snapshots outlive the temporary worker directory through the store.
     pub fn record_terminal(

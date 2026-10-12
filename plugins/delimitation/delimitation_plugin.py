@@ -26,6 +26,8 @@ def invoke(method, params):
     target = Path(params["output"]).resolve()
     report = Path(str(target) + ".run.json")
     job_id = params.get("job_id") or str(uuid.uuid4())
+    if not isinstance(job_id, str) or len(job_id) > 100 or not all(c.isascii() and (c.isalnum() or c in "-_") for c in job_id):
+        raise ValueError("job_id must contain only 1-100 ASCII letters, digits, '-' or '_'")
     snapshot = Path(str(target) + ".input." + job_id + source.suffix)
     spart = Path(str(target) + ".spart")
     sidecar = Path(str(spart) + ".basecraft.json")
@@ -58,7 +60,7 @@ def invoke(method, params):
                    "method": method, "input": str(snapshot), "input_hash": input_hash, "output": str(target.parent / (".delimitation-job-" + job_id) / "result.json"),
                    "rooted": params.get("rooted", False), "tree_index": params.get("tree_index", 0),
                    "seed": params.get("seed", 1), "workers": workers,
-                   "parameters": {k: v for k, v in params.items() if k in ("threshold", "candidate_budget", "groups", "log_likelihood", "fitted_log_likelihood", "null_log_likelihood", "lrt_passed", "mptp_version", "command", "min_branch", "units", "diagnostics", "asap_model", "replicates", "upstream_version", "haplotypes", "haplotype_policy", "mapping_hash", "upstream")},
+                   "parameters": {k: v for k, v in params.items() if k in ("threshold", "candidate_budget", "reference_version", "reference_age_clamp", "groups", "log_likelihood", "fitted_log_likelihood", "null_log_likelihood", "lrt_passed", "mptp_version", "command", "min_branch", "units", "diagnostics", "asap_model", "replicates", "upstream_version", "haplotypes", "haplotype_policy", "mapping_hash", "upstream", "tree_inference", "sequence_sampling", "alignment_input_hash", "original_count", "retained_count")},
                    "progress": params.get("progress"), "cancel_file": params.get("cancel_file")}
     mapping_snapshot = None
     if params.get("mapping"):
