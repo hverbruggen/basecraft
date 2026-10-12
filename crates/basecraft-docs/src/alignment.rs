@@ -467,10 +467,24 @@ impl AlignmentDoc {
         Ok(undo)
     }
 
-    /// Delete every column that is a gap in every row. Returns how many went.
+    /// Independent edit snapshot sharing the immutable residue sources.
+    #[must_use]
+    pub fn snapshot(&self) -> Self {
+        Self {
+            name: self.name.clone(),
+            rows: self.rows.clone(),
+            width: self.width,
+            version: self.version,
+            protein: self.protein,
+            consensus: Mutex::new(ConsensusCache::default()),
+        }
+    }
+
+    /// Half-open runs containing only gaps across every row.
+    /// Ambiguity and missing-data symbols are not gaps.
     // Column indexes fit in usize: `all_gap` holds one flag per column.
     #[allow(clippy::cast_possible_truncation)]
-    pub fn remove_gap_columns(&mut self) -> (Vec<Undo>, u64) {
+    pub fn gap_column_runs(&self) -> Vec<(u64, u64)> {
         let width = self.width;
         let mut all_gap = vec![true; usize::try_from(width).unwrap_or(0)];
         let mut buf = Vec::new();
@@ -503,6 +517,12 @@ impl AlignmentDoc {
                 i += 1;
             }
         }
+        runs
+    }
+
+    /// Delete every gap-only column in one undoable operation.
+    pub fn remove_gap_columns(&mut self) -> (Vec<Undo>, u64) {
+        let runs = self.gap_column_runs();
         let removed = runs.iter().map(|(a, b)| b - a).sum();
         let mut undo = Vec::new();
         if removed == 0 {
@@ -794,6 +814,25 @@ mod tests {
         d.undo(&u);
         assert_eq!(names(&d), ["r2", "r3", "r0", "r1"]);
         assert!(d.remove_rows(&[(0, 4)]).is_err());
+    }
+
+    #[test]
+    fn gap_snapshot_is_independent_and_ambiguities_are_not_gaps() {
+        let mut d = AlignmentDoc::new(
+            "test",
+            vec![
+                AlnRow::new("a", Arc::new(b"A-.N?-".to_vec())),
+                AlnRow::new("b", Arc::new(b"T.-?N-".to_vec())),
+            ],
+        );
+        let snapshot = d.snapshot();
+        assert_eq!(snapshot.gap_column_runs(), vec![(1, 3), (5, 6)]);
+        let (undo, count) = d.remove_gap_columns();
+        assert_eq!(count, 3);
+        assert_eq!(d.read(0, 0, d.width()), b"AN?");
+        assert_eq!(snapshot.read(0, 0, snapshot.width()), b"A-.N?-");
+        d.undo(&undo);
+        assert_eq!(d.gap_column_runs(), snapshot.gap_column_runs());
     }
 
     #[test]

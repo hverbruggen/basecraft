@@ -289,11 +289,23 @@ ApplicationWindow {
         // The ribbon panel for the chosen tab.
         Rectangle {
             Layout.fillWidth: true
-            implicitHeight: 54
+            implicitHeight: ribbonScroll.contentWidth > ribbonScroll.width ? 64 : 54
             color: Qt.alpha(shell.foreground, 0.025)
-            StackLayout {
+            Flickable {
+                id: ribbonScroll
                 anchors { fill: parent; leftMargin: 8; topMargin: 4; bottomMargin: 2 }
+                clip: true
+                contentWidth: Math.max(width, ribbonStack.children[ribbonStack.currentIndex].implicitWidth)
+                contentHeight: 48
+                flickableDirection: Flickable.HorizontalFlick
+                boundsBehavior: Flickable.StopAtBounds
+                ScrollBar.horizontal: ScrollBar { policy: ScrollBar.AsNeeded; active: true }
+            StackLayout {
+                id: ribbonStack
+                width: ribbonScroll.contentWidth
+                height: ribbonScroll.contentHeight
                 currentIndex: window.ribbonPanels[window.ribbonTab]
+                onCurrentIndexChanged: ribbonScroll.contentX = 0
 
                 RowLayout {
                     spacing: 6
@@ -483,7 +495,13 @@ ApplicationWindow {
                         title: "Columns"
                         RibbonButton { text: "Insert"; tip: "Insert a gap column before the selection"; onClicked: window.current.insert_column() }
                         RibbonButton { text: "Delete"; tip: "Delete the selected columns from every row"; onClicked: window.current.delete_columns() }
-                        RibbonButton { text: "Strip gaps"; tip: "Delete every column that is a gap in all rows"; onClicked: window.current.remove_gap_columns() }
+                        RibbonButton {
+                            text: window.current && window.current.gap_column_count >= 0
+                                  ? "Delete gap-only columns (" + window.current.gap_column_count + ")" : "Counting gap-only columns…"
+                            enabled: window.current !== null && window.current.gap_column_count > 0
+                            tip: "Delete columns containing only gaps across all rows, including hidden rows"
+                            onClicked: window.current.remove_gap_columns()
+                        }
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
@@ -570,6 +588,7 @@ ApplicationWindow {
                     Item { Layout.fillWidth: true }
                     ShortcutsGroup {}
                 }
+            }
             }
         }
     }

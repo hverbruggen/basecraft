@@ -160,6 +160,23 @@ impl AlignmentView {
         self.clamp();
     }
 
+    /// Keep cursor, selection and viewport attached to surviving columns.
+    pub fn map_deleted_columns(&mut self, runs: &[(u64, u64)]) {
+        let map = |position: u64| {
+            position
+                - runs
+                    .iter()
+                    .map(|&(a, b)| position.min(b).saturating_sub(a))
+                    .sum::<u64>()
+        };
+        self.cursor.1 = map(self.cursor.1);
+        self.anchor.1 = map(self.anchor.1);
+        self.start = map(self.start.max(0.0) as u64) as f64;
+        if let Some(block) = &mut self.selection {
+            block.cols = (map(block.cols.0), map(block.cols.1));
+        }
+    }
+
     // Geometry.
 
     pub fn row_height(&self) -> f32 {
@@ -1427,6 +1444,15 @@ mod tests {
         v.press(v.x_of(21.5), y, false);
         v.release();
         assert_eq!(v.selection.unwrap().cols, (21, 22));
+    }
+
+    #[test]
+    fn deleted_columns_map_selection() {
+        let d = doc(10, 100);
+        let mut v = view(&d);
+        v.select_block((2, 5), (20, 40));
+        v.map_deleted_columns(&[(1, 3), (25, 30)]);
+        assert_eq!(v.block().cols, (18, 33));
     }
 
     #[test]

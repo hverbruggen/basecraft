@@ -42,6 +42,7 @@ pub mod qobject {
         #[qproperty(bool, insert_mode)]
         /// A tool is running on this alignment.
         #[qproperty(bool, busy)]
+        #[qproperty(f64, gap_column_count)]
         type AlignmentController = super::AlignmentRust;
 
         /// A tool wrote a new file, to open in a tab.
@@ -215,6 +216,8 @@ struct Tool {
 }
 const KEY_SPACE: i32 = 0x20;
 
+// Independent Qt properties plus the background scan state.
+#[allow(clippy::struct_excessive_bools)]
 pub struct AlignmentRust {
     frame: QByteArray,
     status: QString,
@@ -236,6 +239,10 @@ pub struct AlignmentRust {
     names_width: f64,
     insert_mode: bool,
     busy: bool,
+    gap_column_count: f64,
+    gap_scan_running: bool,
+    gap_runs: Vec<(u64, u64)>,
+    gap_scan_key: Option<(String, u64)>,
 
     session: Option<Session>,
     doc: Option<DocId>,
@@ -268,6 +275,10 @@ impl Default for AlignmentRust {
             names_width: 0.0,
             insert_mode: false,
             busy: false,
+            gap_column_count: -1.0,
+            gap_scan_running: false,
+            gap_runs: Vec::new(),
+            gap_scan_key: None,
             session: None,
             doc: None,
             view: AlignmentView::new(800.0, 600.0),
@@ -329,6 +340,55 @@ impl qobject::AlignmentController {
         self.as_mut().set_hscroll_pos(h.0);
         self.as_mut().set_vscroll_size(v.1);
         self.as_mut().set_vscroll_pos(v.0);
+        self.as_mut().update_gap_count();
+    }
+
+    // Only one scan at a time; discard old versions and scan the newest snapshot.
+    fn update_gap_count(mut self: Pin<&mut Self>) {
+        let work = {
+            let mut r = self.as_mut().rust_mut();
+            let (Some(session), Some(doc)) = (&r.session, r.doc) else {
+                return;
+            };
+            let d = session.alignment(doc);
+            let key = (session.id().to_owned(), d.version());
+            if r.gap_scan_key.as_ref() == Some(&key) {
+                return;
+            }
+            if r.gap_scan_running {
+                self.as_mut().set_gap_column_count(-1.0);
+                return;
+            }
+            let snapshot = d.snapshot();
+            r.gap_scan_running = true;
+            (key, snapshot)
+        };
+        self.as_mut().set_gap_column_count(-1.0);
+        let qt_thread = self.qt_thread();
+        std::thread::spawn(move || {
+            let runs = work.1.gap_column_runs();
+            let count: u64 = runs.iter().map(|(a, b)| b - a).sum();
+            let _ = qt_thread.queue(move |mut this| {
+                let current = {
+                    let mut r = this.as_mut().rust_mut();
+                    r.gap_scan_running = false;
+                    let current = r.session.as_ref().zip(r.doc).is_some_and(|(s, d)| {
+                        s.id() == work.0.0 && s.alignment(d).version() == work.0.1
+                    });
+                    if current {
+                        r.gap_scan_key = Some(work.0);
+                        r.gap_runs = runs;
+                    }
+                    current
+                };
+                if current {
+                    #[allow(clippy::cast_precision_loss)]
+                    this.as_mut().set_gap_column_count(count as f64);
+                } else {
+                    this.update_gap_count();
+                }
+            });
+        });
     }
 
     /// A neutral hint. Messages stay brief: say what happened.
@@ -947,7 +1007,22 @@ impl qobject::AlignmentController {
     pub fn remove_gap_columns(mut self: Pin<&mut Self>) {
         let started = Instant::now();
         let before = self.with_doc(AlignmentDoc::width).unwrap_or(0);
+        let runs = if self.rust().gap_column_count >= 0.0 {
+            self.rust().gap_runs.clone()
+        } else {
+            self.with_doc(AlignmentDoc::gap_column_runs)
+                .unwrap_or_default()
+        };
+        let mut view = self.rust().view.clone();
+        view.map_deleted_columns(&runs);
         if self.as_mut().edit(Op::AlnRemoveGapColumns {}) {
+            {
+                let mut r = self.as_mut().rust_mut();
+                if let (Some(session), Some(doc)) = (&r.session, r.doc) {
+                    view.sync(session.alignment(doc));
+                }
+                r.view = view;
+            }
             let after = self.with_doc(AlignmentDoc::width).unwrap_or(0);
             if before == after {
                 self.as_mut().notify("No gap-only columns");
