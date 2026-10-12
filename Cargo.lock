@@ -197,6 +197,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "basecraft-delimitation"
+version = "0.0.0"
+dependencies = [
+ "basecraft-docs",
+ "basecraft-io",
+ "basecraft-protocol",
+ "blake3",
+ "clap",
+ "rayon",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "basecraft-distance"
 version = "0.0.0"
 dependencies = [

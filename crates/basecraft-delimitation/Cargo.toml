@@ -1,0 +1,23 @@
+[package]
+name = "basecraft-delimitation"
+description = "Species delimitation preparation and reference likelihood engines"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+license.workspace = true
+[dependencies]
+basecraft-protocol.workspace = true
+basecraft-io.workspace = true
+basecraft-docs.workspace = true
+blake3.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+rayon.workspace = true
+thiserror.workspace = true
+[lints]
+workspace = true
+[dev-dependencies]
+tempfile.workspace = true

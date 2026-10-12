@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DelimitationRequest",
+  "type": "object",
+  "properties": {
+    "cancel_file": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "generation": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "input": {
+      "type": "string"
+    },
+    "input_hash": {
+      "type": "string"
+    },
+    "job_id": {
+      "type": "string"
+    },
+    "method": {
+      "type": "string"
+    },
+    "output": {
+      "type": "string"
+    },
+    "parameters": {
+      "type": "object",
+      "additionalProperties": true,
+      "default": {}
+    },
+    "progress": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "rooted": {
+      "type": "boolean"
+    },
+    "seed": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "tree_index": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "workers": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "version",
+    "job_id",
+    "generation",
+    "method",
+    "input",
+    "input_hash",
+    "output",
+    "rooted",
+    "tree_index",
+    "seed",
+    "workers"
+  ]
+}

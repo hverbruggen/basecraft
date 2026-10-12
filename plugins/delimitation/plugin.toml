@@ -1,0 +1,28 @@
+schema = 1
+id = "basecraft.delimitation"
+name = "Species hypotheses and time-tree preparation"
+version = "0.1.0"
+kinds = ["operation"]
+[entry]
+operation = "python:delimitation_plugin.py"
+[[operations]]
+name = "haplotypes"
+label = "Prepare exact aligned DNA haplotypes"
+[[operations]]
+name = "validate_time_tree"
+label = "Validate an explicitly rooted imported time tree"
+[[operations]]
+name = "relative_time"
+label = "Convert a fixed-root tree to constrained relative times"
+[[operations]]
+name = "manual_cut"
+label = "Partition a time tree at a manual threshold"
+[[operations]]
+name = "gmyc_single"
+label = "Native single-threshold GMYC (reference validation pending)"
+[[operations]]
+name = "gmyc_multiple"
+label = "Native bounded multiple-threshold GMYC (reference validation pending)"
+[[operations]]
+name = "gmyc_exhaustive"
+label = "Exhaustive GMYC oracle for tiny trees"

@@ -167,3 +167,30 @@ pub struct JobRecord {
     pub diagnostics: Vec<String>,
     pub elapsed_seconds: f64,
 }
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct DelimitationRequest {
+    pub version: u32,
+    pub job_id: String,
+    pub generation: u64,
+    pub method: String,
+    pub input: String,
+    pub input_hash: String,
+    pub output: String,
+    pub rooted: bool,
+    pub tree_index: usize,
+    pub seed: u64,
+    pub workers: usize,
+    #[serde(default)]
+    pub parameters: BTreeMap<String, serde_json::Value>,
+    pub progress: Option<String>,
+    pub cancel_file: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct DelimitationResult {
+    pub version: u32,
+    pub job: JobRecord,
+    pub workspace: Option<DelimitationWorkspace>,
+    pub metrics: BTreeMap<String, serde_json::Value>,
+}

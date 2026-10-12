@@ -279,6 +279,14 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             std::fs::create_dir_all(&dir)?;
             let schemas = [
                 (
+                    "delimitation-request",
+                    schemars::schema_for!(basecraft_protocol::delimitation::DelimitationRequest),
+                ),
+                (
+                    "delimitation-result",
+                    schemars::schema_for!(basecraft_protocol::delimitation::DelimitationResult),
+                ),
+                (
                     "delimitation-workspace",
                     schemars::schema_for!(basecraft_protocol::delimitation::DelimitationWorkspace),
                 ),
