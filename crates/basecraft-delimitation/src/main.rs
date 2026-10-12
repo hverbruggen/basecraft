@@ -59,6 +59,48 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         result.job.diagnostics.push(error.to_string());
     }
+    if let Some(workspace) = &mut result.workspace {
+        for hypothesis in &mut workspace.hypotheses {
+            hypothesis
+                .provenance
+                .diagnostics
+                .extend(result.job.diagnostics.clone());
+        }
+        if let Some(mapping) = request.parameters.get("haplotypes") {
+            let mapping: BTreeMap<String, std::collections::BTreeSet<String>> =
+                serde_json::from_value(mapping.clone())?;
+            let tips: std::collections::BTreeSet<_> =
+                workspace.specimens.iter().map(|s| s.id.clone()).collect();
+            if tips != mapping.keys().cloned().collect() {
+                return Err(
+                    "Haplotype mapping representatives differ from fitted tree tips".into(),
+                );
+            }
+            for h in &mut workspace.hypotheses {
+                let groups = basecraft_delimitation::haplotypes::expand(
+                    &h.groups
+                        .iter()
+                        .map(|g| g.members.clone())
+                        .collect::<Vec<_>>(),
+                    &mapping,
+                )?;
+                for (group, members) in h.groups.iter_mut().zip(groups) {
+                    group.members = members;
+                }
+                h.provenance.haplotypes = mapping.clone();
+            }
+            workspace.specimens = mapping
+                .values()
+                .flatten()
+                .map(|id| basecraft_protocol::delimitation::Specimen {
+                    id: id.clone(),
+                    label: id.clone(),
+                    sources: BTreeMap::new(),
+                    attributes: BTreeMap::new(),
+                })
+                .collect();
+        }
+    }
     if let Some(workspace) = &result.workspace {
         basecraft_docs::delimitation::validate(workspace)?;
         let spart = PathBuf::from(format!("{}.spart", request.output));
@@ -115,7 +157,7 @@ fn run(
     if hash != request.input_hash {
         return Err("immutable input hash differs from request".into());
     }
-    if request.method == "haplotypes" {
+    if request.method == "haplotypes" || request.method == "workspace_alignment" {
         let index = basecraft_io::fasta::FastaIndex::build(&input_bytes)?;
         let rows: Result<Vec<_>, Box<dyn std::error::Error>> = index
             .records
@@ -127,10 +169,65 @@ fn run(
                 ))
             })
             .collect();
-        result.metrics.insert(
-            "haplotypes".into(),
-            serde_json::to_value(basecraft_delimitation::haplotypes::deduplicate(&rows?)?)?,
-        );
+        if request.method == "workspace_alignment" {
+            result.workspace = Some(empty_workspace(
+                request,
+                rows?.iter().map(|(name, _)| name.clone()).collect(),
+                false,
+            )?);
+            return Ok(());
+        }
+        let haplotypes = basecraft_delimitation::haplotypes::deduplicate(&rows?)?;
+        let mut fasta = String::new();
+        for (name, sequence) in &haplotypes.unique {
+            fasta.push('>');
+            fasta.push_str(name);
+            fasta.push('\n');
+            fasta.push_str(sequence);
+            fasta.push('\n');
+        }
+        artifact(request, result, ".unique.fasta", fasta.as_bytes())?;
+        artifact(
+            request,
+            result,
+            ".haplotypes.json",
+            &serde_json::to_vec_pretty(&haplotypes)?,
+        )?;
+        result
+            .metrics
+            .insert("haplotypes".into(), serde_json::to_value(haplotypes)?);
+        return Ok(());
+    }
+    if request.method == "asap_import" {
+        use basecraft_protocol::delimitation::{HypothesisOrigin, Provenance};
+        let mut work = basecraft_io::spart::parse_xml(std::str::from_utf8(&input_bytes)?)?;
+        for (i, h) in work.hypotheses.iter_mut().enumerate() {
+            h.id = format!("{}-{i}", request.job_id);
+            h.origin = HypothesisOrigin::Inferred;
+            h.provenance = Provenance {
+                method: "ASAP".into(),
+                version: request
+                    .parameters
+                    .get("upstream_version")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("unknown")
+                    .into(),
+                inputs: [(request.input.clone(), request.input_hash.clone())].into(),
+                parameters: request.parameters.clone(),
+                seed: Some(request.seed),
+                workers: Some(1),
+                status: Some(JobStatus::Completed),
+                ..Provenance::default()
+            };
+            for score in &mut h.scores {
+                score.method = "ASAP".into();
+                score.scale = "ASAP rank score".into();
+                score.interpretation =
+                    "Weighted probability and barcode-gap rank; smaller ranks first".into();
+            }
+        }
+        work.view.visible = work.hypotheses.iter().map(|h| h.id.clone()).collect();
+        result.workspace = Some(work);
         return Ok(());
     }
     let trees = basecraft_io::newick::parse_trees(std::str::from_utf8(&input_bytes)?)?;
@@ -145,6 +242,47 @@ fn run(
         .metrics
         .insert("selected_tree_index".into(), request.tree_index.into());
     match request.method.as_str() {
+        "workspace_tree" => {
+            result.workspace = Some(empty_workspace(
+                request,
+                tree.tips_in_order()
+                    .iter()
+                    .map(|&i| tree.node(i).name.clone())
+                    .collect(),
+                true,
+            )?);
+        }
+        "inspect_tree" => {
+            result.metrics.insert(
+                "tips".into(),
+                serde_json::to_value(basecraft_delimitation::time_tree::substitution_tips(
+                    &tree,
+                    request.rooted,
+                )?)?,
+            );
+        }
+        "ptp" | "mptp" => {
+            basecraft_delimitation::time_tree::substitution_tips(&tree, request.rooted)?;
+            let groups = serde_json::from_value(
+                request
+                    .parameters
+                    .get("groups")
+                    .ok_or("import requires groups")?
+                    .clone(),
+            )?;
+            let likelihood = request
+                .parameters
+                .get("log_likelihood")
+                .and_then(serde_json::Value::as_f64)
+                .ok_or("import requires finite log likelihood")?;
+            result.workspace = Some(workspace(request, &tree, groups, likelihood));
+            if let Some(diagnostics) = request.parameters.get("diagnostics") {
+                result
+                    .job
+                    .diagnostics
+                    .extend(serde_json::from_value::<Vec<String>>(diagnostics.clone())?);
+            }
+        }
         "validate_time_tree" | "manual_cut" => {
             let time =
                 basecraft_delimitation::time_tree::validate(&tree, request.rooted, 1e-8, true)?;
@@ -172,6 +310,17 @@ fn run(
             if !converted.converged {
                 return Err("relative-time optimization did not converge".into());
             }
+            let mut derived = parsed.clone();
+            for (node, length) in derived.nodes.iter_mut().zip(&converted.derived_lengths) {
+                node.length = *length;
+            }
+            let derived = basecraft_docs::TreeDoc::from_parsed(&parsed.name, &derived);
+            artifact(
+                request,
+                result,
+                ".relative.nwk",
+                derived.to_newick().as_bytes(),
+            )?;
             result
                 .metrics
                 .insert("conversion".into(), serde_json::to_value(converted)?);
@@ -248,5 +397,60 @@ fn progress(
             Ok(())
         })?;
     }
+    Ok(())
+}
+
+fn empty_workspace(
+    request: &DelimitationRequest,
+    names: Vec<String>,
+    tree: bool,
+) -> Result<basecraft_protocol::delimitation::DelimitationWorkspace, Box<dyn std::error::Error>> {
+    use basecraft_protocol::delimitation::{DelimitationView, DelimitationWorkspace, Specimen};
+    let unique: std::collections::BTreeSet<_> = names.iter().collect();
+    if unique.len() != names.len() || names.iter().any(String::is_empty) {
+        return Err("Source has empty or duplicate specimen identifiers".into());
+    }
+    Ok(DelimitationWorkspace {
+        version: 1,
+        name: "Species hypotheses".into(),
+        specimens: names
+            .into_iter()
+            .map(|id| Specimen {
+                label: id.clone(),
+                sources: [(
+                    request
+                        .parameters
+                        .get("original_source")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or(&request.input)
+                        .into(),
+                    id.clone(),
+                )]
+                .into(),
+                id,
+                attributes: BTreeMap::new(),
+            })
+            .collect(),
+        hypotheses: vec![],
+        view: DelimitationView {
+            display_tree: tree.then(|| request.input.clone()),
+            ..DelimitationView::default()
+        },
+        exchange_fields: BTreeMap::new(),
+    })
+}
+
+fn artifact(
+    request: &DelimitationRequest,
+    result: &mut DelimitationResult,
+    suffix: &str,
+    bytes: &[u8],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let path = PathBuf::from(format!("{}{suffix}", request.output));
+    basecraft_io::write_atomic(&path, |w| w.write_all(bytes))?;
+    result
+        .job
+        .outputs
+        .insert(path.display().to_string(), basecraft_io::hash_bytes(bytes));
     Ok(())
 }

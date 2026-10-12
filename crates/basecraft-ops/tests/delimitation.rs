@@ -81,7 +81,7 @@ fn edits_undo_save_reopen_and_replay_preserve_lineage() {
         &mut session,
         Edit::Merge {
             hypothesis: "edited".into(),
-            groups: ["group-1".into(), "group-2".into()].into(),
+            groups: ["group-1".into(), "new".into()].into(),
             id: "merged".into(),
             label: "Together".into(),
         },

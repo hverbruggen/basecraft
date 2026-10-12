@@ -555,6 +555,8 @@ impl DistanceMatrix {
             let mean =
                 (!values.is_empty()).then(|| values.iter().sum::<f64>() / values.len() as f64);
             let mut nearest: Option<(f64, String)> = None;
+            let mut nearest_groups = std::collections::BTreeSet::new();
+            let mut observed_between = 0;
             let mut missing_between = 0;
             for (&other, other_ids) in &groups {
                 if other == group {
@@ -563,8 +565,16 @@ impl DistanceMatrix {
                 for &i in ids {
                     for &j in other_ids {
                         if let Some(d) = self.get(i, j) {
+                            observed_between += 1;
                             if nearest.as_ref().is_none_or(|(v, _)| d < *v) {
+                                nearest_groups.clear();
+                                nearest_groups.insert(other.to_string());
                                 nearest = Some((d, other.to_string()));
+                            } else if nearest
+                                .as_ref()
+                                .is_some_and(|(v, _)| d.total_cmp(v).is_eq())
+                            {
+                                nearest_groups.insert(other.to_string());
                             }
                         } else {
                             missing_between += 1;
@@ -584,6 +594,8 @@ impl DistanceMatrix {
                 max_within: max,
                 min_between: nearest.as_ref().map(|x| x.0),
                 nearest_group: nearest.map(|x| x.1),
+                nearest_groups: nearest_groups.into_iter().collect(),
+                observed_between,
                 barcode_gap: gap,
                 observed_within: values.len(),
                 missing_within: missing,
@@ -611,6 +623,8 @@ pub struct GroupSummary {
     pub max_within: Option<f64>,
     pub min_between: Option<f64>,
     pub nearest_group: Option<String>,
+    pub nearest_groups: Vec<String>,
+    pub observed_between: usize,
     pub barcode_gap: Option<bool>,
     pub observed_within: usize,
     pub missing_within: usize,

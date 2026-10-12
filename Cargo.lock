@@ -239,6 +239,7 @@ dependencies = [
 name = "basecraft-gui"
 version = "0.0.0"
 dependencies = [
+ "basecraft-delimitation",
  "basecraft-docs",
  "basecraft-io",
  "basecraft-ops",
@@ -252,6 +253,7 @@ dependencies = [
  "cxx-qt-lib",
  "serde_json",
  "tempfile",
+ "ulid",
 ]
 
 [[package]]
@@ -307,6 +309,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "toml",
+ "ulid",
 ]
 
 [[package]]
@@ -338,6 +341,7 @@ name = "basecraft-viewmodel"
 version = "0.0.0"
 dependencies = [
  "basecraft-docs",
+ "basecraft-io",
  "basecraft-protocol",
 ]
 

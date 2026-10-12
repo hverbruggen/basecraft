@@ -29,7 +29,7 @@ enum Command {
     },
     /// Run a bundled alignment tool through the same public plugin as the GUI.
     Tool {
-        #[arg(value_parser = ["mafft", "trimal", "iqtree", "fasttree", "distance"])]
+        #[arg(value_parser = ["mafft", "trimal", "iqtree", "fasttree", "distance", "delimitation"])]
         tool: String,
         file: PathBuf,
         #[arg(long)]
@@ -222,7 +222,10 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     serde_json::from_reader(std::fs::File::open(v)?)?,
                 );
             }
-            let result = job.run()?;
+            let started = Instant::now();
+            let outcome = job.run();
+            job.record_terminal(&mut session, doc, &outcome, started.elapsed().as_secs_f64())?;
+            let result = outcome?;
             job.record(&mut session, doc, &result)?;
             println!(
                 "{}",

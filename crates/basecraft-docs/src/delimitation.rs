@@ -172,6 +172,7 @@ pub fn apply(work: &mut DelimitationWorkspace, edit: &DelimitationEdit) -> Resul
                 return fail("split requires a new group ID and nonempty selection");
             }
             remove_members(h, &group.members);
+            h.groups.retain(|g| !g.members.is_empty());
             h.groups.push(group.clone());
         }
         DelimitationEdit::Merge {
@@ -228,6 +229,7 @@ pub fn apply(work: &mut DelimitationWorkspace, edit: &DelimitationEdit) -> Resul
             } else {
                 h.unassigned.extend(specimens.clone());
             }
+            h.groups.retain(|g| !g.members.is_empty());
         }
         DelimitationEdit::SetView { view } => next.view.clone_from(view),
     }

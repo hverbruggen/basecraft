@@ -26,3 +26,31 @@ label = "Native bounded multiple-threshold GMYC (reference validation pending)"
 [[operations]]
 name = "gmyc_exhaustive"
 label = "Exhaustive GMYC oracle for tiny trees"
+
+[[operations]]
+name = "inspect_tree"
+label = "Validate a rooted substitution tree"
+[[operations]]
+name = "ptp"
+label = "Single-rate PTP maximum likelihood through mPTP"
+[[operations]]
+name = "mptp"
+label = "Multi-rate mPTP maximum likelihood"
+
+[[operations]]
+name = "workspace_tree"
+label = "Open a species workspace from a tree"
+[[operations]]
+name = "workspace_alignment"
+label = "Open a species workspace from an alignment"
+
+[[operations]]
+name = "asap"
+label = "ASAP complete upstream scoring and coalescent simulations"
+[[operations]]
+name = "asap_import"
+label = "Import validated upstream ASAP partitions"
+
+[[operations]]
+name = "group_statistics"
+label = "Summarize specimen groups with the shared cached-distance engine"

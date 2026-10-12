@@ -57,6 +57,8 @@ impl Server {
             ("alignment", self.session.alignment(doc).version())
         } else if self.session.is_tree(doc) {
             ("tree", self.session.tree(doc).version())
+        } else if self.session.is_delimitation(doc) {
+            ("delimitation", self.session.generation(doc))
         } else {
             ("sequence", self.session.doc(doc).version())
         };
@@ -91,6 +93,9 @@ impl Server {
                     return Ok(
                         json!({"tips":self.session.tree(doc).nodes().iter().filter(|n|n.is_tip()).map(|n|&n.name).collect::<Vec<_>>()}),
                     );
+                }
+                if self.session.is_delimitation(doc) {
+                    return Ok(serde_json::to_value(self.session.delimitation(doc))?);
                 }
                 let start = args["start"].as_u64().unwrap_or(0);
                 let end = args["end"]
@@ -162,6 +167,11 @@ impl Server {
                         "tree_threads",
                         "seed",
                         "min_overlap",
+                        "rooted",
+                        "workers",
+                        "tree_index",
+                        "candidate_budget",
+                        "threshold",
                     ]
                     .contains(&k.as_str())
                 }) {
@@ -203,7 +213,7 @@ fn tools() -> Value {
         tool("undo","Undo one edit group.",json!({"document":doc}), &["document"]),
         tool("redo","Redo one edit group.",json!({"document":doc}), &["document"]),
         tool("save","Save a document, optionally to a new project path.",json!({"document":doc,"path":string}), &["document"]),
-        tool("run_tool","Run a bundled alignment tool, retaining output provenance.",json!({"document":doc,"tool":{"enum":["mafft","trimal","iqtree","fasttree","distance"]},"output":string,"params":{"type":"object"}}), &["document","tool","output"])
+        tool("run_tool","Run a bundled alignment tool, retaining output provenance.",json!({"document":doc,"tool":{"enum":["mafft","trimal","iqtree","fasttree","distance","delimitation"]},"output":string,"params":{"type":"object"}}), &["document","tool","output"])
     ]})
 }
 

@@ -60,6 +60,7 @@ struct Applied {
 struct Slot {
     key: String,
     content: Loaded,
+    generation: u64,
     undo: Vec<Applied>,
     redo: Vec<Applied>,
 }
@@ -201,6 +202,10 @@ impl Session {
         &self.docs[id.0].key
     }
 
+    pub fn generation(&self, id: DocId) -> u64 {
+        self.docs[id.0].generation
+    }
+
     pub fn can_undo(&self, id: DocId) -> bool {
         !self.docs[id.0].undo.is_empty()
     }
@@ -323,6 +328,7 @@ impl Session {
         self.docs.push(Slot {
             key: key.clone(),
             content,
+            generation: 0,
             undo: Vec::new(),
             redo: Vec::new(),
         });
@@ -340,6 +346,23 @@ impl Session {
         Ok(id)
     }
 
+    pub fn snapshot_file(&self, path: &Path) -> Result<String> {
+        self.snapshot_bytes(&std::fs::read(path)?)
+    }
+
+    /// Hash and retain the exact immutable buffer consumed by an analysis.
+    pub fn snapshot_bytes(&self, bytes: &[u8]) -> Result<String> {
+        let hash = basecraft_io::hash_bytes(bytes);
+        if self.store_objects && bytes.len() as u64 <= OBJECT_STORE_LIMIT {
+            let dest = objects_dir(&self.root).join(hash.trim_start_matches("b3:"));
+            if !dest.exists() {
+                std::fs::create_dir_all(objects_dir(&self.root))?;
+                basecraft_io::write_atomic(&dest, |w| w.write_all(bytes))?;
+            }
+        }
+        Ok(hash)
+    }
+
     fn store_object(&self, path: &Path, hash: &str) -> Result<()> {
         let size = std::fs::metadata(path)?.len();
         if size > OBJECT_STORE_LIMIT {
@@ -349,6 +372,9 @@ impl Session {
         if !dest.exists() {
             std::fs::create_dir_all(objects_dir(&self.root))?;
             let bytes = std::fs::read(path)?;
+            if basecraft_io::hash_bytes(&bytes) != hash {
+                return Err(invalid("source changed while retaining its snapshot"));
+            }
             basecraft_io::write_atomic(&dest, |w| w.write_all(&bytes))?;
         }
         Ok(())
@@ -684,6 +710,7 @@ impl Session {
 
     pub fn apply_as(&mut self, doc: DocId, op: Op, actor: Actor) -> Result<Outcome> {
         if self.merge && self.try_merge(doc, &op, &actor)? {
+            self.docs[doc.0].generation += 1;
             let id = self
                 .pending
                 .as_ref()
@@ -696,6 +723,7 @@ impl Session {
         }
         self.flush()?;
         let (inverse, feature) = self.execute(doc, &op)?;
+        self.docs[doc.0].generation += 1;
         let result = OpResult {
             hashes: Vec::new(),
             feature: feature.map(|f| f.0),
@@ -983,6 +1011,7 @@ impl Session {
                 return Err(invalid("undo of the wrong kind of edit"));
             }
         }
+        self.docs[id.0].generation += 1;
         let of = applied.entry_id.clone();
         let entry = self.entry(
             id,
@@ -1012,6 +1041,7 @@ impl Session {
             }
             (op, _) => self.execute(id, &op.clone())?.0,
         };
+        self.docs[id.0].generation += 1;
         let of = applied.entry_id.clone();
         self.docs[id.0].undo.push(Applied { inverse, ..applied });
         let entry = self.entry(

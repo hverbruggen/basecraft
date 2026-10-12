@@ -80,7 +80,9 @@ impl FileJob {
             input: path,
             input_key: (key, hash),
             output,
-            params: serde_json::Map::new(),
+            params: [("job_id".into(), json!(ulid::Ulid::generate().to_string()))]
+                .into_iter()
+                .collect(),
             source_path: session.root().join(session.doc_key(doc)),
             source_version: session.alignment(doc).version(),
             source_hash: basecraft_io::hash_file(&session.root().join(session.doc_key(doc)))
@@ -90,10 +92,163 @@ impl FileJob {
     }
 
     /// Run the plugin. Touches no session, so it can run on any thread.
+    pub fn from_tree(
+        session: &Session,
+        doc: DocId,
+        (plugin, operation): (&Path, &str),
+        output: PathBuf,
+    ) -> Result<Self> {
+        if !session.is_tree(doc) {
+            return Err(Error::Protocol("a tree input is required".into()));
+        }
+        let source_path = session.root().join(session.doc_key(doc));
+        if output.exists() && output.canonicalize()? == source_path.canonicalize()? {
+            return Err(Error::Protocol(
+                "output must differ from source tree".into(),
+            ));
+        }
+        let dir = tempfile::Builder::new()
+            .prefix("basecraft-tree-job-")
+            .tempdir()?;
+        let input = dir.path().join("input.nwk");
+        std::fs::write(&input, session.tree(doc).to_newick())?;
+        let hash = basecraft_io::hash_file(&input).map_err(basecraft_ops::Error::from)?;
+        Ok(Self {
+            plugin: plugin.to_path_buf(),
+            operation: operation.into(),
+            input,
+            input_key: (session.doc_key(doc).into(), hash),
+            output,
+            params: [("job_id".into(), json!(ulid::Ulid::generate().to_string()))]
+                .into_iter()
+                .collect(),
+            source_path: source_path.clone(),
+            source_version: session.tree(doc).version(),
+            source_hash: basecraft_io::hash_file(&source_path)
+                .map_err(basecraft_ops::Error::from)?,
+            _dir: dir,
+        })
+    }
+
+    /// Public immutable file input for analyses coordinated by another document.
+    pub fn from_file(
+        session: &Session,
+        doc: DocId,
+        input: &Path,
+        (plugin, operation): (&Path, &str),
+        output: PathBuf,
+    ) -> Result<Self> {
+        let source_path = session.root().join(session.doc_key(doc));
+        if output.exists() && output.canonicalize()? == input.canonicalize()? {
+            return Err(Error::Protocol(
+                "output must differ from analysis input".into(),
+            ));
+        }
+        let dir = tempfile::Builder::new()
+            .prefix("basecraft-file-job-")
+            .tempdir()?;
+        let snapshot = dir.path().join(
+            input
+                .file_name()
+                .unwrap_or_else(|| std::ffi::OsStr::new("input")),
+        );
+        std::fs::copy(input, &snapshot)?;
+        let hash = basecraft_io::hash_file(&snapshot).map_err(basecraft_ops::Error::from)?;
+        Ok(Self {
+            plugin: plugin.into(),
+            operation: operation.into(),
+            input: snapshot,
+            input_key: (input.display().to_string(), hash),
+            output,
+            params: [("job_id".into(), json!(ulid::Ulid::generate().to_string()))]
+                .into_iter()
+                .collect(),
+            source_version: session.generation(doc),
+            source_hash: basecraft_io::hash_file(&source_path)
+                .map_err(basecraft_ops::Error::from)?,
+            source_path,
+            _dir: dir,
+        })
+    }
+
+    /// Record a terminal outcome even if the plugin reports an RPC error.
+    /// Input snapshots outlive the temporary worker directory through the store.
+    pub fn record_terminal(
+        &self,
+        session: &mut Session,
+        doc: DocId,
+        outcome: &Result<InvokeResult>,
+        elapsed_seconds: f64,
+    ) -> Result<()> {
+        use basecraft_protocol::delimitation::{JobRecord, JobStatus};
+        session.snapshot_file(&self.input)?;
+        let cancelled = self
+            .params
+            .get("cancel_file")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|p| Path::new(p).exists());
+        let diagnostics = outcome
+            .as_ref()
+            .err()
+            .map_or_else(Vec::new, |e| vec![e.to_string()]);
+        let mut report = JobRecord {
+            id: ulid::Ulid::generate().to_string(),
+            generation: self.source_version,
+            status: if outcome.is_ok() {
+                JobStatus::Completed
+            } else if cancelled {
+                JobStatus::Cancelled
+            } else {
+                JobStatus::Failed
+            },
+            method: self.operation.clone(),
+            inputs: std::iter::once(self.input_key.clone()).collect(),
+            outputs: std::collections::BTreeMap::new(),
+            diagnostics,
+            elapsed_seconds,
+        };
+        let path = PathBuf::from(format!("{}.run.json", self.output.display()));
+        if path.exists() {
+            report
+                .outputs
+                .insert(path.display().to_string(), session.snapshot_file(&path)?);
+            if let Ok(value) = std::fs::read(&path).and_then(|bytes| {
+                serde_json::from_slice::<serde_json::Value>(&bytes).map_err(std::io::Error::other)
+            }) {
+                if let Ok(native) = serde_json::from_value::<JobRecord>(value["job"].clone()) {
+                    if self
+                        .params
+                        .get("job_id")
+                        .and_then(serde_json::Value::as_str)
+                        == Some(&native.id)
+                        && native.method == self.operation
+                    {
+                        report.status = native.status;
+                        report.diagnostics.extend(native.diagnostics);
+                        for path in native.outputs.keys() {
+                            let path = Path::new(path);
+                            if path.is_file() {
+                                report.outputs.insert(
+                                    path.display().to_string(),
+                                    session.snapshot_file(path)?,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        session.log_job_finished(doc, report)?;
+        Ok(())
+    }
+
     pub fn run(&self) -> Result<InvokeResult> {
         let manifest = Manifest::load(&self.plugin)?;
         let mut process = PluginProcess::spawn(&manifest)?;
         let mut params = self.params.clone();
+        params
+            .entry("original_source")
+            .or_insert(json!(self.source_path));
         params.insert("input".into(), json!(self.input));
         params.insert("output".into(), json!(self.output));
         let mut result =

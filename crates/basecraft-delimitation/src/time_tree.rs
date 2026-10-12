@@ -64,6 +64,13 @@ pub fn validate(tree: &TreeDoc, rooted: bool, tolerance: f64, binary: bool) -> R
     })
 }
 
+pub fn substitution_tips(tree: &TreeDoc, rooted: bool) -> Result<BTreeMap<String, usize>> {
+    if !rooted {
+        return Err(Error("explicit root or outgroup required".into()));
+    }
+    Ok(depths(tree, true)?.1)
+}
+
 fn depths(tree: &TreeDoc, binary: bool) -> Result<(Vec<f64>, BTreeMap<String, usize>)> {
     let mut depths = vec![0.0; tree.nodes().len()];
     let mut tips = BTreeMap::new();

@@ -41,7 +41,7 @@ fn group(id: String, label: String) -> Group {
     Group {
         id,
         label,
-        color: "#377eb8".into(),
+        color: String::new(),
         members: BTreeSet::new(),
         scores: vec![],
         individual_scores: BTreeMap::new(),
