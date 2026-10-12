@@ -1,6 +1,6 @@
 [package]
 name = "basecraft-testgen"
-description = "Deterministic synthetic test data for benchmarks and spikes"
+description = "Deterministic synthetic test data for benchmarks and tests"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

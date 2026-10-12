@@ -16,7 +16,7 @@ use genome::GenomeSpec;
 use rng::Rng;
 
 #[derive(Parser)]
-#[command(about = "Generate synthetic test data for Basecraft benchmarks and spikes")]
+#[command(about = "Generate synthetic test data for Basecraft benchmarks and tests")]
 struct Args {
     /// Output directory.
     #[arg(long)]
