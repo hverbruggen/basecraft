@@ -1,0 +1,109 @@
+use serde_json::{Value, json};
+use std::{
+    io::Write,
+    process::{Command, Stdio},
+};
+
+fn request(id: u32, name: &str, args: Value) -> Value {
+    let mut message = json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":{"name":name}});
+    message["params"]["arguments"] = args;
+    message
+}
+
+#[test]
+fn stdio_edits_are_version_checked_logged_and_project_scoped() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("input.afa"), ">a\nACGT\n>b\nACGT\n").unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_basecraft"))
+        .args([
+            "mcp",
+            d.path().to_str().unwrap(),
+            "--allow-writes",
+            "--model-id",
+            "test-agent",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let messages = vec![
+        json!({"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}),
+        json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+        request(1, "open", json!({"path":"input.afa"})),
+        request(
+            2,
+            "apply",
+            json!({"document":0,"version":0,"operation":{"op":"aln.replace","params":{"row":0,"start":0,"end":1,"residues":"T"}}}),
+        ),
+        request(
+            3,
+            "apply",
+            json!({"document":0,"version":0,"operation":{"op":"aln.remove_gap_columns","params":{}}}),
+        ),
+        request(4, "read", json!({"document":0,"row":0,"start":0,"end":4})),
+        request(5, "save", json!({"document":0})),
+        request(6, "open", json!({"path":"/etc/passwd"})),
+        request(7, "state", json!({"document":999})),
+    ];
+    let mut input = child.stdin.take().unwrap();
+    for message in messages {
+        writeln!(input, "{message}").unwrap();
+    }
+    drop(input);
+    let out = child.wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let replies: Vec<Value> = String::from_utf8(out.stdout)
+        .unwrap()
+        .lines()
+        .map(|s| serde_json::from_str(s).unwrap())
+        .collect();
+    assert_eq!(replies.len(), 8);
+    assert_eq!(replies[0]["result"]["protocolVersion"], "2025-11-25");
+    assert_eq!(replies[2]["result"]["isError"], false);
+    assert_eq!(replies[3]["result"]["isError"], true);
+    assert!(
+        replies[4]["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("TCGT")
+    );
+    assert_eq!(replies[6]["result"]["isError"], true);
+    assert_eq!(replies[7]["result"]["isError"], true);
+    assert!(
+        std::fs::read_to_string(d.path().join("input.afa"))
+            .unwrap()
+            .contains("TCGT")
+    );
+    let log = basecraft_ops::log::read_all(d.path()).unwrap();
+    assert!(log.iter().any(
+        |e| matches!(&e.actor,basecraft_protocol::Actor::Agent{model} if model=="test-agent")
+    ));
+    assert!(basecraft_ops::replay::replay(d.path()).unwrap().ok());
+}
+
+#[test]
+fn mcp_defaults_to_read_only() {
+    let d = tempfile::tempdir().unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_basecraft"))
+        .args(["mcp", d.path().to_str().unwrap()])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+    writeln!(
+        input,
+        "{}",
+        json!({"jsonrpc":"2.0","id":0,"method":"initialize"})
+    )
+    .unwrap();
+    writeln!(input, "{}", request(1, "apply", json!({}))).unwrap();
+    drop(input);
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success());
+    assert!(String::from_utf8(out.stdout).unwrap().contains("read-only"));
+}

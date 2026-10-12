@@ -193,6 +193,7 @@ dependencies = [
  "clap",
  "schemars",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

@@ -1,5 +1,8 @@
 //! The `basecraft` command-line tool.
 
+mod mcp;
+mod tools;
+
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Instant;
@@ -15,6 +18,61 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Serve a headless project session over MCP stdio (2025-11-25).
+    Mcp {
+        #[arg(default_value = ".")]
+        project: PathBuf,
+        #[arg(long)]
+        allow_writes: bool,
+        #[arg(long, default_value = "mcp-client")]
+        model_id: String,
+    },
+    /// Run a bundled alignment tool through the same public plugin as the GUI.
+    Tool {
+        #[arg(value_parser = ["mafft", "trimal", "iqtree", "fasttree", "distance"])]
+        tool: String,
+        file: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        /// Tool parameters as a JSON object.
+        #[arg(long, default_value = "{}")]
+        params: String,
+    },
+    /// Apply a typed JSON operation to a document and save it.
+    Edit { file: PathBuf, operation: String },
+    /// Calculate DNA distances or infer a tree through the bundled distance plugin.
+    Distance {
+        file: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long, default_value = "k2p", value_parser = ["p", "jc69", "k2p"])]
+        model: String,
+        #[arg(long, value_parser = ["sorted", "fourpoint", "njstar", "mvrstar", "upgma"])]
+        method: Option<String>,
+        #[arg(long, default_value_t = 1)]
+        min_overlap: u64,
+        #[arg(long)]
+        threads: Option<usize>,
+        #[arg(long)]
+        tree_threads: Option<usize>,
+        /// Exact ordinary site bootstrap for sorted NJ/UPGMA (off by default).
+        #[arg(long, default_value_t = 0)]
+        bootstrap: usize,
+        #[arg(long, default_value_t = 1)]
+        seed: u64,
+        #[arg(long)]
+        progress: Option<PathBuf>,
+        #[arg(long)]
+        cancel_file: Option<PathBuf>,
+        #[arg(long)]
+        cache: Option<PathBuf>,
+        /// Produce an observed-distance TSV instead of a tree.
+        #[arg(long, conflicts_with = "groups")]
+        matrix: bool,
+        /// JSON specimen-to-group assignments; produce a summary table.
+        #[arg(long)]
+        groups: Option<PathBuf>,
+    },
     /// Index a FASTA file (or load its cached index) and print a summary.
     Index { file: PathBuf },
     /// Replay a project's operation log and check every step.
@@ -57,6 +115,122 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
+        Command::Mcp {
+            project,
+            allow_writes,
+            model_id,
+        } => mcp::serve(&project, allow_writes, &model_id)?,
+        Command::Tool {
+            tool,
+            file,
+            output,
+            params,
+        } => {
+            let file = file.canonicalize()?;
+            let root = file.parent().unwrap_or(std::path::Path::new("."));
+            let mut session = basecraft_ops::Session::new(root);
+            let doc = session.open(&file)?;
+            let params = serde_json::from_str(&params)?;
+            let result = tools::run(&mut session, doc, &tool, output, params)?;
+            println!("{result}");
+        }
+        Command::Edit { file, operation } => {
+            let file = file.canonicalize()?;
+            let root = file.parent().unwrap_or(std::path::Path::new("."));
+            let mut session = basecraft_ops::Session::new(root);
+            let doc = session.open(&file)?;
+            session.apply(doc, serde_json::from_str(&operation)?)?;
+            session.save(doc, None)?;
+        }
+        Command::Distance {
+            file,
+            output,
+            model,
+            method,
+            min_overlap,
+            threads,
+            tree_threads,
+            bootstrap,
+            seed,
+            progress,
+            cancel_file,
+            cache,
+            matrix,
+            groups,
+        } => {
+            let root = file
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or(std::path::Path::new("."));
+            let mut session = basecraft_ops::Session::new(root);
+            let doc = session.open(&file)?;
+            if !session.is_alignment(doc) {
+                return Err("distance inference requires an alignment".into());
+            }
+            let plugin_root = std::env::var_os("BASECRAFT_PLUGINS").map_or_else(
+                || PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins"),
+                PathBuf::from,
+            );
+            let operation = if groups.is_some() {
+                "groups"
+            } else if matrix {
+                "matrix"
+            } else {
+                "tree"
+            };
+            let mut job = basecraft_plugin_host::FileJob::from_alignment(
+                &session,
+                doc,
+                (&plugin_root.join("distance"), operation),
+                basecraft_plugin_host::file_tool::AlignmentInput::Aligned,
+                output,
+            )?;
+            if bootstrap > 0 && operation != "tree" {
+                return Err("bootstrap is available for tree inference only".into());
+            }
+            job.params
+                .insert("bootstrap".into(), serde_json::json!(bootstrap));
+            job.params.insert("seed".into(), serde_json::json!(seed));
+            if let Some(path) = progress {
+                job.params
+                    .insert("progress".into(), serde_json::json!(path));
+            }
+            if let Some(path) = cancel_file {
+                job.params
+                    .insert("cancel_file".into(), serde_json::json!(path));
+            }
+            job.params.insert("model".into(), serde_json::json!(model));
+            let method =
+                method.unwrap_or_else(|| if bootstrap > 0 { "sorted" } else { "njstar" }.into());
+            job.params
+                .insert("method".into(), serde_json::json!(method));
+            job.params
+                .insert("min_overlap".into(), serde_json::json!(min_overlap));
+            if let Some(v) = threads {
+                job.params.insert("threads".into(), serde_json::json!(v));
+            }
+            if let Some(v) = tree_threads {
+                job.params
+                    .insert("tree_threads".into(), serde_json::json!(v));
+            }
+            if let Some(v) = cache {
+                job.params.insert("cache".into(), serde_json::json!(v));
+            }
+            if let Some(v) = groups {
+                job.params.insert(
+                    "groups_data".into(),
+                    serde_json::from_reader(std::fs::File::open(v)?)?,
+                );
+            }
+            let result = job.run()?;
+            job.record(&mut session, doc, &result)?;
+            println!(
+                "{}",
+                result
+                    .message
+                    .unwrap_or_else(|| "Calculated distances".into())
+            );
+        }
         Command::Index { file } => {
             let t = Instant::now();
             let f = basecraft_io::cache::open_fasta(&file)?;
