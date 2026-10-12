@@ -72,3 +72,9 @@ compile_commands.json
 
 # Brainstorming notes, kept local until a proper design doc replaces them
 /PLAN.md
+
+# Development docs stay local: on disk and in pCloud, not on GitHub.
+/docs/
+/CLAUDE.md
+/README.md
+/methods_research/
