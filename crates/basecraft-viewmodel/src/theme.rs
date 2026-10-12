@@ -50,6 +50,16 @@ impl Default for Theme {
 }
 
 impl Theme {
+    /// Explicit publication palette; screen exports retain the current theme by default.
+    #[must_use]
+    pub fn publication() -> Self {
+        Self {
+            background: [1.; 4],
+            foreground: [0., 0., 0., 1.],
+            ..Self::default()
+        }
+    }
+
     /// The theme colour whose hue is nearest `hue` (degrees: 0 red, 120
     /// green), among its saturated palette colours. Status messages use it
     /// so that success and failure read as green and red in any theme.

@@ -712,6 +712,50 @@ impl TreeDoc {
             .collect()
     }
 
+    /// Copy a clade for figure export, retaining styles, support sets and local annotations.
+    pub fn subtree(&self, root: usize) -> Result<Self, EditError> {
+        if root >= self.nodes.len() {
+            return err("invalid clade");
+        }
+        let mut order = Vec::new();
+        let mut stack = vec![root];
+        while let Some(n) = stack.pop() {
+            order.push(n);
+            stack.extend(self.nodes[n].children.iter().rev());
+        }
+        let mut mapping = vec![0; self.nodes.len()];
+        for (new, &old) in order.iter().enumerate() {
+            mapping[old] = new;
+        }
+        let mut tree = self.clone();
+        tree.nodes = order
+            .iter()
+            .map(|&i| {
+                let mut node = self.nodes[i].clone();
+                node.parent = if i == root {
+                    None
+                } else {
+                    node.parent.map(|p| mapping[p])
+                };
+                if i == root {
+                    node.length = None;
+                }
+                node.children = node.children.iter().map(|&c| mapping[c]).collect();
+                node
+            })
+            .collect();
+        tree.root = 0;
+        for support in &mut tree.supports {
+            support.values = order.iter().map(|&i| support.values[i].clone()).collect();
+        }
+        let annotations = std::mem::take(&mut tree.annotations);
+        tree.annotations = annotations
+            .into_iter()
+            .filter(|(_, a)| tree.resolve(&a.clade).is_ok())
+            .collect();
+        Ok(tree)
+    }
+
     // Writing.
 
     /// The tree as Newick. Internal nodes carry their support values joined
@@ -856,6 +900,22 @@ mod tests {
             t.to_newick(),
             "((A:1,B:1)95/1/-:1,(C:1,D:1)80/0.9/0.99:1)root;"
         );
+    }
+
+    #[test]
+    fn subtree_retains_support_and_only_its_annotations() {
+        let mut t = tree("(((A:1,B:1)95:1,C:1)80:1,D:1);");
+        t.annotate(1, Some(CladeAnnotation::new(names(&["A", "B"]), "kept")))
+            .unwrap();
+        t.annotate(2, Some(CladeAnnotation::new(names(&["A", "D"]), "outside")))
+            .unwrap();
+        let n = t.resolve(&names(&["A", "C"])).unwrap();
+        let subtree = t.subtree(n).unwrap();
+        assert_eq!(tip_names(&subtree), ["A", "B", "C"]);
+        assert!(subtree.to_newick().contains("95"));
+        assert!(subtree.annotations().contains_key(&1));
+        assert!(!subtree.annotations().contains_key(&2));
+        assert_eq!(t.tip_count(), 4);
     }
 
     #[test]

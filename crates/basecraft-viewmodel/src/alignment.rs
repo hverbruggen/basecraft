@@ -107,6 +107,7 @@ impl Block {
 pub struct AlignmentView {
     /// Exact counterpart rows highlighted by a linked tree selection.
     pub linked_taxa: std::collections::HashSet<String>,
+    figure: bool,
     /// Column at the left edge of the grid.
     pub start: f64,
     pub px_per_col: f64,
@@ -132,6 +133,7 @@ impl AlignmentView {
     pub fn new(width: f32, height: f32) -> Self {
         Self {
             linked_taxa: std::collections::HashSet::new(),
+            figure: false,
             start: 0.0,
             px_per_col: PX_PER_COL_AT_100,
             scroll_y: 0.0,
@@ -178,6 +180,29 @@ impl AlignmentView {
         if let Some(block) = &mut self.selection {
             block.cols = (map(block.cols.0), map(block.cols.1));
         }
+    }
+
+    /// A figure viewport at the current cell size, covering the complete alignment or selection.
+    #[must_use]
+    pub fn figure_view(&self, doc: &AlignmentDoc, selection: bool) -> Self {
+        let mut view = self.clone();
+        let block = if selection {
+            self.block()
+        } else {
+            Block {
+                rows: (0, doc.row_count()),
+                cols: (0, doc.width()),
+            }
+        };
+        view.auto_fit = false;
+        view.start = block.cols.0 as f64;
+        view.scroll_y = block.rows.0 as f32 * view.row_height();
+        view.width = view.name_width + (block.col_count() as f64 * view.px_per_col) as f32;
+        view.height = view.header_height() + block.row_count() as f32 * view.row_height();
+        view.selection = None;
+        view.linked_taxa.clear();
+        view.figure = true;
+        view
     }
 
     // Geometry.
@@ -885,7 +910,9 @@ impl AlignmentView {
             }
         };
         self.draw_grid(doc, theme, &colour, frame);
-        self.draw_selection(theme, frame);
+        if !self.figure {
+            self.draw_selection(theme, frame);
+        }
         self.draw_names(doc, theme, frame);
         self.draw_header(doc, theme, &colour, frame);
     }
@@ -1452,12 +1479,16 @@ mod tests {
     }
 
     #[test]
-    fn deleted_columns_map_selection() {
+    fn deleted_columns_map_selection_and_figure_bounds() {
         let d = doc(10, 100);
         let mut v = view(&d);
         v.select_block((2, 5), (20, 40));
         v.map_deleted_columns(&[(1, 3), (25, 30)]);
         assert_eq!(v.block().cols, (18, 33));
+        let figure = v.figure_view(&d, true);
+        assert_eq!(figure.start, 18.0);
+        assert!((figure.height - figure.header_height() - 3.0 * figure.row_height()).abs() < 0.01);
+        assert!(!figure.linked_taxa.contains("missing"));
     }
 
     #[test]

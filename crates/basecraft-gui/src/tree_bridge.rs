@@ -159,6 +159,13 @@ pub mod qobject {
         /// Write the tree as an SVG figure.
         #[qinvokable]
         fn export_svg(self: Pin<&mut TreeController>, path: &QString);
+        #[qinvokable]
+        fn export_figure(
+            self: Pin<&mut TreeController>,
+            path: &QString,
+            scope: i32,
+            publication: bool,
+        );
     }
 }
 
@@ -169,7 +176,7 @@ use std::time::{Instant, SystemTime};
 use basecraft_docs::TreeDoc;
 use basecraft_ops::{DocId, Session};
 use basecraft_protocol::{CladeAnnotation, Op, SupportPlacement, TreeStyle};
-use basecraft_viewmodel::tree::to_svg;
+use basecraft_viewmodel::tree::to_svg_with_style;
 use basecraft_viewmodel::{Frame, Theme, TreeView};
 use cxx_qt::{CxxQtType, Threading};
 use cxx_qt_lib::{QByteArray, QString};
@@ -860,6 +867,11 @@ impl qobject::TreeController {
     }
 
     pub fn check_theme(mut self: Pin<&mut Self>) {
+        let font = QString::from(&monospace_font());
+        if font != self.rust().mono_font {
+            self.as_mut().set_mono_font(font);
+        }
+
         let Some(path) = omarchy_theme_path() else {
             return;
         };
@@ -1196,20 +1208,65 @@ impl qobject::TreeController {
         }
     }
 
-    pub fn export_svg(mut self: Pin<&mut Self>, path: &QString) {
-        let started = Instant::now();
+    pub fn export_svg(self: Pin<&mut Self>, path: &QString) {
+        self.export_figure(path, 2, false);
+    }
+
+    pub fn export_figure(mut self: Pin<&mut Self>, path: &QString, scope: i32, publication: bool) {
+        if !(0..=2).contains(&scope) {
+            self.fail("Unknown figure scope");
+            return;
+        }
+        if scope == 1 && self.rust().view.selected.is_none() {
+            self.fail("Select a region or clade first");
+            return;
+        }
         let target = PathBuf::from(path.to_string());
-        let result = {
+        let result = (|| -> basecraft_ops::Result<()> {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
             let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
-                return;
+                return Ok(());
             };
-            let svg = to_svg(session.tree(doc), 900.0, 20.0);
+            let theme = if publication {
+                Theme::publication()
+            } else {
+                r.theme.clone()
+            };
+            let tree = session.tree(doc);
+            let svg = if scope == 0 {
+                let mut frame = Frame::new();
+                r.view.build(tree, &theme, &mut frame);
+                let (width, height) = r.view.size();
+                basecraft_viewmodel::svg::frame_svg(
+                    &frame,
+                    width,
+                    height,
+                    &r.mono_font.to_string(),
+                    theme.background,
+                )
+            } else if scope == 1 {
+                let trees = r
+                    .view
+                    .selected_roots(tree)
+                    .into_iter()
+                    .map(|node| tree.subtree(node))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| basecraft_ops::Error::Invalid(e.to_string()))?;
+                basecraft_viewmodel::tree::forest_svg(
+                    &trees,
+                    900.0,
+                    20.0,
+                    &theme,
+                    &r.mono_font.to_string(),
+                )
+            } else {
+                to_svg_with_style(tree, 900.0, 20.0, &theme, &r.mono_font.to_string())
+            };
             session.export(doc, &target, "svg", |w| w.write_all(svg.as_bytes()))
-        };
+        })();
         match result {
-            Ok(()) => self.done(&format!("Exported {}{}", file_name(&target), took(started))),
+            Ok(()) => self.done(&format!("Exported {}", file_name(&target))),
             Err(e) => self.fail(&format!("Export failed: {e}")),
         }
     }

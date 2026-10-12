@@ -443,6 +443,7 @@ ApplicationWindow {
                     spacing: 6
                     RibbonGroup {
                         title: "Window"
+                        RibbonButton { text: "Export SVG…"; tip: "Export an editable SVG of this view"; enabled: window.current !== null; onClicked: window.exportSvg() }
                         CheckBox {
                             text: "Files sidebar open"
                             ToolTip.text: "Show the files sidebar   Ctrl+B"
@@ -596,7 +597,7 @@ ApplicationWindow {
                     }
                     RibbonGroup {
                         title: "Figure"
-                        RibbonButton { text: "Export SVG…"; tip: "Save the tree as an SVG figure, black on white"; onClicked: window.exportSvg() }
+                        RibbonButton { text: "Export SVG…"; tip: "Save the complete tree as an editable SVG with the current colours and font"; onClicked: window.exportSvg() }
                     }
                     Item { Layout.fillWidth: true }
                     ShortcutsGroup {}
@@ -1283,16 +1284,35 @@ ApplicationWindow {
     }
 
     function exportSvg() {
-        if (!window.treeOpen) return
-        svgDialog.selectedFile = "file://" + window.currentPath.replace(/\.[^./]*$/, "") + ".svg"
-        svgDialog.open()
+        if (!window.current) return
+        svgDialog.controller = window.current
+        svgScope.currentIndex = window.treeOpen ? 2 : 0
+        svgPublication.checked = false
+        svgOptions.open()
+    }
+    Dialog {
+        id: svgOptions
+        title: "Export editable SVG"
+        anchors.centerIn: parent
+        modal: true
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        ColumnLayout {
+            Label { text: "Region" }
+            ComboBox { id: svgScope; model: ["Visible view", "Selection", "Complete figure"] }
+            CheckBox { id: svgPublication; text: "Publication colours (white background)" }
+        }
+        onAccepted: {
+            svgDialog.selectedFile = "file://" + window.currentPath.replace(/\.[^./]*$/, "") + ".svg"
+            svgDialog.open()
+        }
     }
     FileDialog {
         id: svgDialog
-        title: "Export the tree as SVG"
+        property var controller: null
+        title: "Export SVG"
         fileMode: FileDialog.SaveFile
         nameFilters: ["SVG figures (*.svg)"]
-        onAccepted: window.current.export_svg(window.localPath(selectedFile))
+        onAccepted: if (controller) controller.export_figure(window.localPath(selectedFile), svgScope.currentIndex, svgPublication.checked)
     }
 
     // Quitting with unsaved changes: save them all, throw them away, or
@@ -1501,6 +1521,7 @@ ApplicationWindow {
             if (arg("--distance-settings")) distanceSettings.open()
             if (arg("--link-alignment")) c.link_alignment(arg("--link-alignment"))
             if (arg("--clade")) c.select_clade(JSON.stringify(arg("--clade").split(",")))
+            if (arg("--export-svg")) c.export_figure(arg("--export-svg"), Number(arg("--export-scope") || 0), arg("--publication") === "1")
             if (arg("--extract-clade")) c.extract_clade_alignment()
             if (arg("--shortcuts")) shortcuts.show(window.ribbonTab)
             if (arg("--edit")) {

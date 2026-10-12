@@ -40,6 +40,15 @@ pub mod qobject {
 
         #[qinvokable]
         fn open_file(self: Pin<&mut GenomeController>, path: &QString) -> bool;
+        #[qinvokable]
+        fn export_svg(self: Pin<&mut GenomeController>, path: &QString);
+        #[qinvokable]
+        fn export_figure(
+            self: Pin<&mut GenomeController>,
+            path: &QString,
+            scope: i32,
+            publication: bool,
+        );
         /// Set `project_dir` to the project a file belongs to, without
         /// opening it.
         #[qinvokable]
@@ -358,6 +367,20 @@ impl Default for ControllerRust {
 /// The desktop's monospace font: Omarchy's current font when available,
 /// else whatever fontconfig calls monospace.
 pub(crate) fn monospace_font() -> String {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<(std::time::Instant, String)>> =
+        std::sync::OnceLock::new();
+    let cache = CACHE
+        .get_or_init(|| std::sync::Mutex::new((std::time::Instant::now(), read_monospace_font())));
+    let mut current = cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if current.0.elapsed() >= std::time::Duration::from_secs(2) {
+        *current = (std::time::Instant::now(), read_monospace_font());
+    }
+    current.1.clone()
+}
+
+fn read_monospace_font() -> String {
     std::process::Command::new("omarchy")
         .args(["font", "current"])
         .output()
@@ -477,6 +500,69 @@ impl qobject::GenomeController {
     fn fail(mut self: Pin<&mut Self>, msg: &str) {
         self.as_mut().set_message_kind(QString::from("error"));
         self.as_mut().set_message(QString::from(msg));
+    }
+
+    pub fn export_svg(self: Pin<&mut Self>, path: &QString) {
+        self.export_figure(path, 0, false);
+    }
+
+    pub fn export_figure(mut self: Pin<&mut Self>, path: &QString, scope: i32, publication: bool) {
+        if !(0..=2).contains(&scope) {
+            self.fail("Unknown figure scope");
+            return;
+        }
+        if scope == 1 && self.rust().view.selection.is_none() {
+            self.fail("Select a region or clade first");
+            return;
+        }
+        let target = PathBuf::from(path.to_string());
+        let result = (|| -> basecraft_ops::Result<()> {
+            let mut r = self.as_mut().rust_mut();
+            let r = &mut *r;
+            let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
+                return Ok(());
+            };
+            let theme = if publication {
+                Theme::publication()
+            } else {
+                r.theme.clone()
+            };
+            let mut view = r.view.clone();
+            let sequence = session.doc(doc);
+            if scope == 2 {
+                view.fit_doc(sequence);
+            }
+            if scope == 1 {
+                let (start, end) = view.selection.unwrap_or((0, sequence.len()));
+                view.mode = basecraft_viewmodel::genome::Mode::Linear;
+                #[allow(clippy::cast_precision_loss)]
+                {
+                    view.start = start as f64;
+                    view.bp_per_px = (end - start).max(1) as f64 / f64::from(view.width);
+                }
+                view.auto_fit = false;
+            }
+            if scope != 0 {
+                view.selection = None;
+                view.selection_parts = None;
+                view.selected = None;
+                view.cursor = None;
+            }
+            let mut frame = Frame::new();
+            view.build(sequence, &theme, &mut frame);
+            let svg = basecraft_viewmodel::svg::frame_svg(
+                &frame,
+                view.width,
+                view.height,
+                &r.mono_font.to_string(),
+                theme.background,
+            );
+            session.export(doc, &target, "svg", |w| w.write_all(svg.as_bytes()))
+        })();
+        match result {
+            Ok(()) => self.done(&format!("Exported {}", file_name(&target))),
+            Err(e) => self.fail(&format!("Export failed: {e}")),
+        }
     }
 
     pub fn open_file(mut self: Pin<&mut Self>, path: &QString) -> bool {
@@ -980,6 +1066,11 @@ impl qobject::GenomeController {
     }
 
     pub fn check_theme(mut self: Pin<&mut Self>) {
+        let font = QString::from(&monospace_font());
+        if font != self.rust().mono_font {
+            self.as_mut().set_mono_font(font);
+        }
+
         let Some(path) = omarchy_theme_path() else {
             return;
         };

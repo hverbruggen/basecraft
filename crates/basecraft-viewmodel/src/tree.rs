@@ -1094,6 +1094,48 @@ fn draw(frame: &mut Frame, s: &Shape, dx: f32, dy: f32, ratio: f32) {
 /// The whole tree as an SVG figure, black on white, `width` pixels wide
 /// and rows `row` pixels apart.
 pub fn to_svg(doc: &TreeDoc, width: f32, row: f32) -> String {
+    svg_with_palette(
+        doc,
+        width,
+        row,
+        Palette::print(),
+        "Helvetica, Arial, sans-serif",
+    )
+}
+
+/// Full-tree figure preserving screen colours and typography.
+pub fn to_svg_with_style(doc: &TreeDoc, width: f32, row: f32, theme: &Theme, font: &str) -> String {
+    svg_with_palette(doc, width, row, Palette::from_theme(theme), font)
+}
+
+/// Independent selected clades arranged vertically without inventing connecting edges.
+pub fn forest_svg(trees: &[TreeDoc], width: f32, row: f32, theme: &Theme, font: &str) -> String {
+    let mut figures = Vec::new();
+    let mut total = 0.0;
+    let mut widest = width;
+    for (i, tree) in trees.iter().enumerate() {
+        let scale = if tree.has_lengths() && tree.style().scale_bar {
+            SCALE_SPACE
+        } else {
+            0.0
+        };
+        let height = tree.tip_count().max(1) as f32 * row + 2.0 * MARGIN + scale;
+        let geometry = layout(tree, width, height, 1.0, 1.0);
+        widest = widest.max(geometry.width);
+        let figure = to_svg_with_style(tree, width, row, theme, font)
+            .replacen("<svg ", &format!("<svg y=\"{total}\" "), 1)
+            .replace("id=\"g", &format!("id=\"clade{i}-g"))
+            .replace("url(#g", &format!("url(#clade{i}-g"));
+        figures.push(format!("<g id=\"clade-{i}\">{figure}</g>"));
+        total += geometry.height;
+    }
+    format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{widest}\" height=\"{total}\" viewBox=\"0 0 {widest} {total}\">\n{}\n</svg>\n",
+        figures.join("\n")
+    )
+}
+
+fn svg_with_palette(doc: &TreeDoc, width: f32, row: f32, pal: Palette, font: &str) -> String {
     let tips = doc.tip_count().max(1) as f32;
     let scale = if doc.has_lengths() && doc.style().scale_bar {
         SCALE_SPACE
@@ -1102,13 +1144,14 @@ pub fn to_svg(doc: &TreeDoc, width: f32, row: f32) -> String {
     };
     let height = tips * row + 2.0 * MARGIN + scale;
     let l = layout(doc, width, height, 1.0, 1.0);
-    let pal = Palette::print();
     let shapes = shapes(doc, &l, &pal, None, None);
     let (w, h) = (l.width.max(width), l.height);
     let mut svg = format!(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{w:.0}\" height=\"{h:.0}\" \
-         viewBox=\"0 0 {w:.1} {h:.1}\" font-family=\"Helvetica, Arial, sans-serif\">\n\
-         <rect width=\"100%\" height=\"100%\" fill=\"#ffffff\"/>\n"
+         viewBox=\"0 0 {w:.1} {h:.1}\" font-family=\"{}\">\n\
+         <rect width=\"100%\" height=\"100%\" fill=\"{}\"/>\n",
+        xml_escape(font),
+        css(pal.background)
     );
     let mut gradients = 0;
     for s in &shapes {
@@ -1169,12 +1212,14 @@ pub fn to_svg(doc: &TreeDoc, width: f32, row: f32) -> String {
                 } else {
                     ""
                 };
+                let font_size = size * 0.8;
+                let text_length = crate::frame::text_width(text, *size);
                 let text = xml_escape(text);
                 if *down {
                     // Rotated a quarter turn clockwise about its start.
                     let _ = writeln!(
                         svg,
-                        "<text transform=\"translate({:.2},{y:.2}) rotate(90)\" font-size=\"{size}\" \
+                        "<text transform=\"translate({:.2},{y:.2}) rotate(90)\" font-size=\"{font_size}\" textLength=\"{text_length}\" lengthAdjust=\"spacingAndGlyphs\" \
                          text-anchor=\"{anchor}\"{style} {}>{text}</text>",
                         x + size * 0.2,
                         fill(*color)
@@ -1182,7 +1227,7 @@ pub fn to_svg(doc: &TreeDoc, width: f32, row: f32) -> String {
                 } else {
                     let _ = writeln!(
                         svg,
-                        "<text x=\"{x:.2}\" y=\"{:.2}\" font-size=\"{size}\" text-anchor=\"{anchor}\"{style} {}>{text}</text>",
+                        "<text x=\"{x:.2}\" y=\"{:.2}\" font-size=\"{font_size}\" textLength=\"{text_length}\" lengthAdjust=\"spacingAndGlyphs\" text-anchor=\"{anchor}\"{style} {}>{text}</text>",
                         y + size * 0.8,
                         fill(*color)
                     );
@@ -1239,7 +1284,7 @@ mod tests {
     }
 
     #[test]
-    fn multiple_clades_keep_exact_taxa() {
+    fn multiple_clades_keep_exact_taxa_and_export_separate_figures() {
         let t = tree("((A:1,B:1)90:1,(C:1,D:1)80:1);");
         let mut v = TreeView::new(800., 600.);
         v.selected = t.find_tip("A");
@@ -1247,6 +1292,12 @@ mod tests {
         assert_eq!(v.selected_names(&t), names(&["A", "C"]));
         let roots = v.selected_roots(&t);
         assert_eq!(roots.len(), 2);
+        let figures: Vec<_> = roots.into_iter().map(|n| t.subtree(n).unwrap()).collect();
+        let svg = forest_svg(&figures, 500., 20., &Theme::default(), "monospace");
+        assert_eq!(svg.matches("<g id=\"clade-").count(), 2);
+        assert!(svg.contains(">A</text>"));
+        assert!(svg.contains(">C</text>"));
+        assert!(!svg.contains(">B</text>"));
         v.toggle_clade(&t, t.find_tip("C").unwrap());
         assert_eq!(v.selected_names(&t), names(&["A"]));
     }

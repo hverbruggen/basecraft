@@ -85,6 +85,15 @@ pub mod qobject {
         #[cxx_name = "taxaSelected"]
         fn taxa_selected(self: Pin<&mut AlignmentController>, names: QString);
         #[qinvokable]
+        fn export_svg(self: Pin<&mut AlignmentController>, path: &QString);
+        #[qinvokable]
+        fn export_figure(
+            self: Pin<&mut AlignmentController>,
+            path: &QString,
+            scope: i32,
+            publication: bool,
+        );
+        #[qinvokable]
         fn resize(self: Pin<&mut AlignmentController>, width: f64, height: f64);
         #[qinvokable]
         fn wheel(
@@ -488,6 +497,53 @@ impl qobject::AlignmentController {
         }
     }
 
+    pub fn export_svg(self: Pin<&mut Self>, path: &QString) {
+        self.export_figure(path, 0, false);
+    }
+
+    pub fn export_figure(mut self: Pin<&mut Self>, path: &QString, scope: i32, publication: bool) {
+        if !(0..=2).contains(&scope) {
+            self.fail("Unknown figure scope");
+            return;
+        }
+        if scope == 1 && self.rust().view.selection.is_none() {
+            self.fail("Select a region or clade first");
+            return;
+        }
+        let target = PathBuf::from(path.to_string());
+        let result = (|| -> basecraft_ops::Result<()> {
+            let mut r = self.as_mut().rust_mut();
+            let r = &mut *r;
+            let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
+                return Ok(());
+            };
+            let theme = if publication {
+                Theme::publication()
+            } else {
+                r.theme.clone()
+            };
+            let mut view = if scope == 0 {
+                r.view.clone()
+            } else {
+                r.view.figure_view(session.alignment(doc), scope == 1)
+            };
+            let mut frame = Frame::new();
+            view.build(session.alignment(doc), &theme, &mut frame);
+            let svg = basecraft_viewmodel::svg::frame_svg(
+                &frame,
+                view.width,
+                view.height,
+                &r.mono_font.to_string(),
+                theme.background,
+            );
+            session.export(doc, &target, "svg", |w| w.write_all(svg.as_bytes()))
+        })();
+        match result {
+            Ok(()) => self.done(&format!("Exported {}", file_name(&target))),
+            Err(e) => self.fail(&format!("Export failed: {e}")),
+        }
+    }
+
     pub fn highlight_taxa(mut self: Pin<&mut Self>, names: &QString) {
         if let Ok(taxa) =
             serde_json::from_str::<std::collections::HashSet<String>>(&names.to_string())
@@ -812,6 +868,11 @@ impl qobject::AlignmentController {
     }
 
     pub fn check_theme(mut self: Pin<&mut Self>) {
+        let font = QString::from(&monospace_font());
+        if font != self.rust().mono_font {
+            self.as_mut().set_mono_font(font);
+        }
+
         let Some(path) = omarchy_theme_path() else {
             return;
         };

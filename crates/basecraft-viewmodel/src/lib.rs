@@ -14,3 +14,5 @@ pub use frame::{Frame, Rgba};
 pub use genome::{GenomeView, Mode};
 pub use theme::Theme;
 pub use tree::TreeView;
+
+pub mod svg;
