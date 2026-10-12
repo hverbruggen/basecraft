@@ -583,6 +583,27 @@ ApplicationWindow {
                 RowLayout {
                     spacing: 6
                     RibbonGroup {
+                        title: "basecraft-distance"
+                        Repeater {
+                            model: [{label: "Matrix", value: "matrix"}, {label: "NJ", value: "nj"}, {label: "UPGMA", value: "upgma"}]
+                            delegate: RibbonButton {
+                                required property var modelData
+                                text: modelData.label
+                                enabled: window.current !== null && !window.current.busy
+                                tip: modelData.value === "matrix" ? "Save observed distances as TSV and a reusable cache" : modelData.value === "upgma" ? "Build a rooted, equal-rate UPGMA tree" : "Build a neighbor-joining tree"
+                                onClicked: window.current.distance_action(modelData.value, JSON.stringify(distanceSettings.parameters()))
+                            }
+                        }
+                        RibbonButton { text: "Settings…"; tip: "Distance model, overlap and workers"; onClicked: distanceSettings.open() }
+                        ColumnLayout {
+                            visible: window.currentKind === "alignment" && window.current !== null && window.current.bootstrap_running
+                            Label { text: parent.visible ? window.current.bootstrap_status : ""; font.pixelSize: 11 }
+                            ProgressBar { from: 0; to: 1; value: parent.visible ? window.current.bootstrap_progress : 0; Layout.fillWidth: true }
+                            Button { text: "Cancel bootstrap"; enabled: parent.visible && !window.current.bootstrap_cancelling; onClicked: window.current.cancel_bootstrap() }
+                        }
+                    }
+                    ToolSeparator { Layout.fillHeight: true }
+                    RibbonGroup {
                         title: "Maximum likelihood"
                         RibbonButton {
                             text: window.current && window.current.busy ? "Running…" : "FastTree"
@@ -602,6 +623,43 @@ ApplicationWindow {
                 }
             }
             }
+        }
+    }
+
+    Dialog {
+        id: distanceSettings
+        title: "Distance settings"
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        standardButtons: Dialog.Close
+        function parameters() {
+            const p = {model: distanceModel.currentText, method: distanceMethod.currentText, min_overlap: distanceOverlap.value}
+            if (distanceWorkers.value > 0) p.threads = distanceWorkers.value
+            if (treeWorkers.value > 0) p.tree_threads = treeWorkers.value
+            if (distanceBootstrap.checked) {
+                p.bootstrap = bootstrapReplicates.value
+                p.seed = bootstrapSeed.value
+            }
+            return p
+        }
+        GridLayout {
+            columns: 2
+            Label { text: "DNA model" }
+            ComboBox { id: distanceModel; model: ["p", "jc69", "k2p"]; currentIndex: 2 }
+            Label { text: "Minimum shared sites" }
+            SpinBox { id: distanceOverlap; from: 1; to: 100000000; value: 1; editable: true }
+            Label { text: "Distance workers (0 = auto)" }
+            SpinBox { id: distanceWorkers; from: 0; to: 1024; value: 0; editable: true }
+            Label { text: "NJ workers (0 = auto)" }
+            SpinBox { id: treeWorkers; from: 0; to: 1024; value: 0; editable: true }
+            Label { text: "NJ missing-distance method" }
+            ComboBox { id: distanceMethod; model: ["njstar", "sorted", "fourpoint", "mvrstar"]; enabled: !distanceBootstrap.checked }
+            CheckBox { id: distanceBootstrap; text: "Bootstrap support"; onCheckedChanged: if (checked) distanceMethod.currentIndex = 1 }
+            SpinBox { id: bootstrapReplicates; from: 1; to: 1000000; value: 1000; editable: true; enabled: distanceBootstrap.checked }
+            Label { text: "Bootstrap seed" }
+            SpinBox { id: bootstrapSeed; from: 0; to: 2147483647; value: 1; editable: true; enabled: distanceBootstrap.checked }
+            Label { Layout.columnSpan: 2; text: "Bootstrap uses complete sorted NJ or UPGMA; any failed replicate withholds support.\nMatrix export ignores bootstrap settings." }
+            Label { Layout.columnSpan: 2; text: "UPGMA requires complete distances within each connected group.\nGaps and ambiguous residues are excluded pairwise." }
         }
     }
 
@@ -1346,6 +1404,7 @@ ApplicationWindow {
                     else if (cmd === "fasttree") c.build_fasttree()
                     else if (cmd === "trimal") c.trim_alignment()
                     else if (cmd === "iqtree") c.build_iqtree()
+                    else if (cmd === "distance") c.build_distance_tree(a || "k2p")
                     console.log("aln", step, "|", c.message)
                 }
             }
@@ -1407,6 +1466,8 @@ ApplicationWindow {
                 for (let i = 0; i < openFiles.count; i++) files.push(openFiles.get(i).path)
                 console.log("activity:", shell.activity_log(files.join("\n"), -new Date().getTimezoneOffset()))
             }
+            if (arg("--distance-action")) c.distance_action(arg("--distance-action"), arg("--distance-options") || "{}")
+            if (arg("--distance-settings")) distanceSettings.open()
             if (arg("--shortcuts")) shortcuts.show(window.ribbonTab)
             if (arg("--edit")) {
                 if (arg("--edit") === "new") editor.openNew(); else editor.openFeature(Number(arg("--edit")))

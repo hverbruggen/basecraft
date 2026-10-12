@@ -1,0 +1,153 @@
+//! Public plugin boundary, output provenance, and operation-log replay.
+use basecraft_ops::Session;
+use basecraft_plugin_host::{FileJob, file_tool::AlignmentInput};
+use basecraft_protocol::Op;
+#[test]
+fn distance_outputs_are_logged_and_replay() {
+    let Some(binary) = std::env::var_os("BASECRAFT_DISTANCE_TEST_BINARY") else {
+        eprintln!("set BASECRAFT_DISTANCE_TEST_BINARY to exercise the distance CLI plugin");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let input = root.join("input.aln.fasta");
+    std::fs::write(
+        &input,
+        ">a\nAAAAAAAC\n>b\nAAAAAACC\n>c\nCCAAAAAC\n>d\nCCAAAACC\n",
+    )
+    .unwrap();
+    let mut session = Session::new(root);
+    let doc = session.open(&input).unwrap();
+    let plugin = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/distance");
+    std::fs::create_dir(root.join("nested")).unwrap();
+    let output = root.join("nested/../tree.nwk");
+    let mut job = FileJob::from_alignment(
+        &session,
+        doc,
+        (&plugin, "tree"),
+        AlignmentInput::Aligned,
+        output.clone(),
+    )
+    .unwrap();
+    job.params.insert(
+        "executable".into(),
+        serde_json::json!(std::path::PathBuf::from(binary)),
+    );
+    job.params.insert("model".into(), serde_json::json!("jc69"));
+    job.params.insert("threads".into(), serde_json::json!(2));
+    let result = job.run().unwrap();
+    assert_eq!(result.outputs.len(), 3);
+    job.record(&mut session, doc, &result).unwrap();
+    let tree = session.open(&output).unwrap();
+    assert_eq!(session.tree(tree).tip_count(), 4);
+    let log = basecraft_ops::log::read_all(root).unwrap();
+    let entry = log
+        .iter()
+        .find(|e| matches!(e.op, Op::ToolRun { .. }))
+        .unwrap();
+    assert_eq!(entry.result.hashes.len(), 4);
+    if let Op::ToolRun {
+        params, outputs, ..
+    } = &entry.op
+    {
+        assert_eq!(params["model"], "jc69");
+        assert_eq!(outputs.len(), 3);
+    }
+    let mut upgma = FileJob::from_alignment(
+        &session,
+        doc,
+        (&plugin, "tree"),
+        AlignmentInput::Aligned,
+        root.join("upgma.nwk"),
+    )
+    .unwrap();
+    upgma.params.clone_from(&job.params);
+    upgma
+        .params
+        .insert("method".into(), serde_json::json!("upgma"));
+    let result = upgma.run().unwrap();
+    upgma.record(&mut session, doc, &result).unwrap();
+    let metadata: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(root.join("upgma.nwk.run.json")).unwrap()).unwrap();
+    assert_eq!(metadata["method"], "upgma");
+    let tree = session.open(&root.join("upgma.nwk")).unwrap();
+    assert_eq!(session.tree(tree).tip_count(), 4);
+    let replay = basecraft_ops::replay::replay(root).unwrap();
+    assert!(replay.ok(), "{:?}", replay.problems);
+}
+
+#[test]
+fn bootstrap_provenance_success_and_withheld_support_replay() {
+    let Some(binary) = std::env::var_os("BASECRAFT_DISTANCE_TEST_BINARY") else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let plugin = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/distance");
+    for (case, input_text) in [
+        (
+            "complete",
+            ">a\nAAAAAAAAAACCAAAACCAA\n>b\nAAAAAAAAAACCAAAACCAA\n>c\nAAAAGGAAAACCAAAACCAA\n>d\nAAAAGGAAAACCAAAACCAA\n",
+        ),
+        ("gaps", ">a\nA---\n>b\nAAAA\n"),
+    ] {
+        let input = root.join(format!("{case}.afa"));
+        std::fs::write(&input, input_text).unwrap();
+        let mut session = Session::new(root);
+        let doc = session.open(&input).unwrap();
+        for method in ["sorted", "upgma"] {
+            let output = root.join(format!("{case}-{method}.nwk"));
+            let mut job = FileJob::from_alignment(
+                &session,
+                doc,
+                (&plugin, "tree"),
+                AlignmentInput::Aligned,
+                output.clone(),
+            )
+            .unwrap();
+            job.params.insert(
+                "executable".into(),
+                serde_json::json!(std::path::PathBuf::from(&binary)),
+            );
+            job.params.insert("model".into(), serde_json::json!("p"));
+            job.params
+                .insert("method".into(), serde_json::json!(method));
+            job.params.insert("bootstrap".into(), serde_json::json!(64));
+            job.params.insert("seed".into(), serde_json::json!(71));
+            job.params.insert("threads".into(), serde_json::json!(2));
+            let result = job.run().unwrap();
+            job.record(&mut session, doc, &result).unwrap();
+            let report: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(format!("{}.run.json", output.display())).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(report["bootstrap"]["requested"], 64);
+            assert_eq!(report["bootstrap"]["seed"], 71);
+            assert_eq!(report["bootstrap"]["method"], method);
+            assert_eq!(report["bootstrap"]["support_withheld"], case == "gaps");
+            if case == "gaps" {
+                assert!(result.message.unwrap().contains("support withheld"));
+            } else {
+                assert_eq!(report["bootstrap"]["completed"], 64);
+                let tree = session.open(&output).unwrap();
+                assert_ne!(session.tree(tree).supports(), []);
+            }
+        }
+        session.flush().unwrap();
+    }
+    let log = basecraft_ops::log::read_all(root).unwrap();
+    assert_eq!(
+        log.iter()
+            .filter(|e| matches!(e.op, Op::ToolRun { .. }))
+            .count(),
+        4
+    );
+    for entry in log.iter().filter(|e| matches!(e.op, Op::ToolRun { .. })) {
+        if let Op::ToolRun { params, .. } = &entry.op {
+            assert_eq!(params["bootstrap"], 64);
+            assert_eq!(params["seed"], 71);
+        }
+    }
+    let replay = basecraft_ops::replay::replay(root).unwrap();
+    assert!(replay.ok(), "{:?}", replay.problems);
+}

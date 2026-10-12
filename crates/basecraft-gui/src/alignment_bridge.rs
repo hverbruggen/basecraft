@@ -42,6 +42,10 @@ pub mod qobject {
         #[qproperty(bool, insert_mode)]
         /// A tool is running on this alignment.
         #[qproperty(bool, busy)]
+        #[qproperty(bool, bootstrap_running)]
+        #[qproperty(bool, bootstrap_cancelling)]
+        #[qproperty(f64, bootstrap_progress)]
+        #[qproperty(QString, bootstrap_status)]
         #[qproperty(f64, gap_column_count)]
         type AlignmentController = super::AlignmentRust;
 
@@ -64,6 +68,14 @@ pub mod qobject {
         fn trim_alignment(self: Pin<&mut AlignmentController>);
         #[qinvokable]
         fn build_iqtree(self: Pin<&mut AlignmentController>);
+
+        /// Infer a DNA distance tree through the bundled public plugin.
+        #[qinvokable]
+        fn build_distance_tree(self: Pin<&mut AlignmentController>, model: QString);
+        #[qinvokable]
+        fn distance_action(self: Pin<&mut AlignmentController>, kind: QString, options: QString);
+        #[qinvokable]
+        fn cancel_bootstrap(self: Pin<&mut AlignmentController>);
 
         #[qinvokable]
         fn open_file(self: Pin<&mut AlignmentController>, path: &QString) -> bool;
@@ -185,6 +197,10 @@ pub mod qobject {
 
 use std::path::PathBuf;
 use std::pin::Pin;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::{Instant, SystemTime};
 
 use basecraft_docs::AlignmentDoc;
@@ -244,6 +260,11 @@ pub struct AlignmentRust {
     names_width: f64,
     insert_mode: bool,
     busy: bool,
+    bootstrap_running: bool,
+    bootstrap_cancelling: bool,
+    bootstrap_progress: f64,
+    bootstrap_status: QString,
+    bootstrap_control: Option<Arc<BootstrapControl>>,
     gap_column_count: f64,
     gap_scan_running: bool,
     gap_runs: Vec<(u64, u64)>,
@@ -255,6 +276,21 @@ pub struct AlignmentRust {
     theme: Theme,
     theme_stamp: Option<SystemTime>,
     scratch: Frame,
+}
+
+// The worker and monitor retain this directory until the engine has finished.
+struct BootstrapControl {
+    directory: tempfile::TempDir,
+    finished: AtomicBool,
+}
+impl Drop for AlignmentRust {
+    fn drop(&mut self) {
+        if let Some(control) = self.bootstrap_control.take() {
+            std::thread::spawn(move || {
+                let _ = std::fs::write(control.directory.path().join("cancel"), b"");
+            });
+        }
+    }
 }
 
 impl Default for AlignmentRust {
@@ -280,6 +316,11 @@ impl Default for AlignmentRust {
             names_width: 0.0,
             insert_mode: false,
             busy: false,
+            bootstrap_running: false,
+            bootstrap_cancelling: false,
+            bootstrap_progress: 0.,
+            bootstrap_status: QString::default(),
+            bootstrap_control: None,
             gap_column_count: -1.0,
             gap_scan_running: false,
             gap_runs: Vec::new(),
@@ -440,6 +481,10 @@ impl qobject::AlignmentController {
     }
 
     pub fn open_file(mut self: Pin<&mut Self>, path: &QString) -> bool {
+        if self.rust().busy {
+            self.fail("Wait for the running tool before replacing this document");
+            return false;
+        }
         let path = PathBuf::from(path.to_string());
         let mut session = Session::new(project_root(&path));
         match session.open(&path) {
@@ -912,6 +957,80 @@ impl qobject::AlignmentController {
         });
     }
 
+    // QString is passed by value across the QML invokable boundary.
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn build_distance_tree(self: Pin<&mut Self>, model: QString) {
+        self.distance_action(
+            QString::from("nj"),
+            QString::from(serde_json::json!({"model":model.to_string()}).to_string()),
+        );
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn distance_action(self: Pin<&mut Self>, kind: QString, options: QString) {
+        let Ok(mut params) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(
+            &options.to_string(),
+        ) else {
+            self.fail("Invalid distance settings");
+            return;
+        };
+        params.entry("model").or_insert(serde_json::json!("k2p"));
+        params
+            .entry("method")
+            .or_insert(serde_json::json!("njstar"));
+        params.entry("min_overlap").or_insert(serde_json::json!(1));
+        let (name, operation, suffix, extension) = match kind.to_string().as_str() {
+            "matrix" => {
+                params.remove("bootstrap");
+                params.remove("seed");
+                ("Distance matrix", "matrix", "distances", "tsv")
+            }
+            "nj" => ("Neighbor joining", "tree", "nj", "nwk"),
+            "upgma" => {
+                params.insert("method".into(), serde_json::json!("upgma"));
+                ("UPGMA", "tree", "upgma", "nwk")
+            }
+            _ => {
+                self.fail("Unknown distance action");
+                return;
+            }
+        };
+        self.run_tool(&Tool {
+            name,
+            plugin: "distance",
+            operation,
+            input: AlignmentInput::Aligned,
+            output: (suffix, extension),
+            min_rows: 2,
+            working: "Calculating distances…",
+            params,
+        });
+    }
+
+    pub fn cancel_bootstrap(mut self: Pin<&mut Self>) {
+        if let Some(control) = self.rust().bootstrap_control.clone() {
+            self.as_mut().set_bootstrap_cancelling(true);
+            self.as_mut()
+                .set_bootstrap_status(QString::from("Cancelling after the current replicate…"));
+            let qt_thread = self.qt_thread();
+            std::thread::spawn(move || {
+                if let Err(error) = std::fs::write(control.directory.path().join("cancel"), b"") {
+                    let _ = qt_thread.queue(move |mut this| {
+                        if this
+                            .rust()
+                            .bootstrap_control
+                            .as_ref()
+                            .is_some_and(|current| Arc::ptr_eq(current, &control))
+                        {
+                            this.as_mut().set_bootstrap_cancelling(false);
+                            this.fail(&format!("Could not request cancellation: {error}"));
+                        }
+                    });
+                }
+            });
+        }
+    }
+
     /// Run a plugin on this alignment in the background, writing a new file
     /// beside it, then log the run and ask for the file to be opened.
     fn run_tool(mut self: Pin<&mut Self>, tool: &Tool) {
@@ -949,13 +1068,108 @@ impl qobject::AlignmentController {
             }
         };
         job.params.clone_from(&tool.params);
+        let bootstrap_control = if tool.plugin == "distance"
+            && tool.operation == "tree"
+            && tool
+                .params
+                .get("bootstrap")
+                .and_then(serde_json::Value::as_u64)
+                .is_some_and(|n| n > 0)
+        {
+            let directory = match tempfile::Builder::new()
+                .prefix("basecraft-bootstrap-")
+                .tempdir()
+            {
+                Ok(directory) => directory,
+                Err(error) => {
+                    self.fail(&format!("Bootstrap progress: {error}"));
+                    return;
+                }
+            };
+            let control = Arc::new(BootstrapControl {
+                directory,
+                finished: AtomicBool::new(false),
+            });
+            job.params.insert(
+                "progress".into(),
+                json!(control.directory.path().join("progress.json")),
+            );
+            job.params.insert(
+                "cancel_file".into(),
+                json!(control.directory.path().join("cancel")),
+            );
+            self.as_mut().rust_mut().bootstrap_control = Some(Arc::clone(&control));
+            self.as_mut().set_bootstrap_running(true);
+            self.as_mut().set_bootstrap_cancelling(false);
+            self.as_mut().set_bootstrap_progress(0.);
+            self.as_mut()
+                .set_bootstrap_status(QString::from("Preparing bootstrap…"));
+            let qt_thread = self.qt_thread();
+            let monitor = Arc::clone(&control);
+            std::thread::spawn(move || {
+                let mut previous = String::new();
+                while !monitor.finished.load(Ordering::Acquire) {
+                    if let Ok(text) =
+                        std::fs::read_to_string(monitor.directory.path().join("progress.json"))
+                    {
+                        if text != previous {
+                            if let Ok(progress) = serde_json::from_str::<serde_json::Value>(&text) {
+                                let attempted = progress["attempted"].as_f64().unwrap_or(0.);
+                                let requested =
+                                    progress["requested"].as_f64().unwrap_or(1.).max(1.);
+                                let completed = progress["completed"].as_u64().unwrap_or(0);
+                                let failures = progress["failed_replicates"].as_u64().unwrap_or(0);
+                                let label = format!(
+                                    "Bootstrap {attempted:.0}/{requested:.0}; {completed} complete, {failures} failed"
+                                );
+                                let generation = Arc::clone(&monitor);
+                                let _ =
+                                    qt_thread.queue(move |mut this| {
+                                        if this.rust().bootstrap_control.as_ref().is_some_and(
+                                            |current| Arc::ptr_eq(current, &generation),
+                                        ) {
+                                            this.as_mut()
+                                                .set_bootstrap_progress(attempted / requested);
+                                            if !this.rust().bootstrap_cancelling {
+                                                this.as_mut()
+                                                    .set_bootstrap_status(QString::from(&label));
+                                            }
+                                        }
+                                    });
+                            }
+                            previous = text;
+                        }
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                }
+            });
+            Some(control)
+        } else {
+            None
+        };
         self.as_mut().set_busy(true);
         self.as_mut().notify(tool.working);
         let started = Instant::now();
         let qt_thread = self.qt_thread();
         std::thread::spawn(move || {
             let result = job.run();
+            if let Some(control) = &bootstrap_control {
+                control.finished.store(true, Ordering::Release);
+            }
             let _ = qt_thread.queue(move |mut this| {
+                if let Some(control) = &bootstrap_control {
+                    if !this
+                        .rust()
+                        .bootstrap_control
+                        .as_ref()
+                        .is_some_and(|current| Arc::ptr_eq(current, control))
+                    {
+                        return;
+                    }
+                    this.as_mut().rust_mut().bootstrap_control = None;
+                    this.as_mut().set_bootstrap_running(false);
+                    this.as_mut().set_bootstrap_cancelling(false);
+                }
                 this.as_mut().set_busy(false);
                 let result = result.and_then(|res| {
                     let mut r = this.as_mut().rust_mut();
@@ -970,8 +1184,29 @@ impl qobject::AlignmentController {
                         let msg = res.message.unwrap_or_else(|| "Done".into());
                         this.as_mut()
                             .done(&format!("{msg} with {name}{}", took(started)));
-                        let path = job.output.to_string_lossy().into_owned();
-                        this.as_mut().file_created(QString::from(&path));
+                        if job.operation == "matrix" {
+                            this.as_mut()
+                                .done(&format!("{msg}; saved {}", job.output.display()));
+                            return;
+                        }
+                        let components: Vec<_> = res
+                            .outputs
+                            .iter()
+                            .filter(|p| {
+                                std::path::Path::new(p)
+                                    .extension()
+                                    .is_some_and(|e| e.eq_ignore_ascii_case("nwk"))
+                                    && p.contains(".component-")
+                            })
+                            .collect();
+                        if job.operation == "tree" && !components.is_empty() {
+                            for path in components {
+                                this.as_mut().file_created(QString::from(path));
+                            }
+                        } else {
+                            let path = job.output.to_string_lossy().into_owned();
+                            this.as_mut().file_created(QString::from(&path));
+                        }
                     }
                     Err(e) => this.as_mut().fail(&format!("{name}: {}", short_error(&e))),
                 }
