@@ -45,6 +45,7 @@ enum Inverse {
     Alignment(Vec<AlnUndo>),
     /// The whole tree as it was: trees are small.
     Tree(Box<TreeDoc>),
+    Delimitation(Box<basecraft_protocol::delimitation::DelimitationWorkspace>),
 }
 
 struct Applied {
@@ -165,6 +166,20 @@ impl Session {
         }
     }
 
+    pub fn delimitation(
+        &self,
+        id: DocId,
+    ) -> &basecraft_protocol::delimitation::DelimitationWorkspace {
+        match &self.docs[id.0].content {
+            Loaded::Delimitation(work) => work,
+            _ => panic!("not a delimitation workspace"),
+        }
+    }
+
+    pub fn is_delimitation(&self, id: DocId) -> bool {
+        matches!(self.docs[id.0].content, Loaded::Delimitation(_))
+    }
+
     pub fn is_tree(&self, id: DocId) -> bool {
         matches!(self.docs[id.0].content, Loaded::Tree(_))
     }
@@ -176,6 +191,7 @@ impl Session {
     fn sequence_of(&self, id: DocId) -> Result<&Opened> {
         match &self.docs[id.0].content {
             Loaded::Sequence(o) => Ok(o),
+            Loaded::Delimitation(_) => Err(invalid("this needs a sequence")),
             Loaded::Alignment(_) => Err(invalid("this needs a sequence, not an alignment")),
             Loaded::Tree(_) => Err(invalid("this needs a sequence, not a tree")),
         }
@@ -224,6 +240,11 @@ impl Session {
                 len: o.doc.width(),
                 features: 0,
                 rows: Some(o.doc.row_count() as u64),
+            },
+            Loaded::Delimitation(work) => DocState {
+                len: work.specimens.len() as u64,
+                features: work.hypotheses.len() as u64,
+                rows: None,
             },
             Loaded::Tree(o) => DocState {
                 len: o.doc.tip_count() as u64,
@@ -280,13 +301,13 @@ impl Session {
         let content = files::load(path)?;
         let key = self.relative(path);
         let mut hashes = vec![(key.clone(), basecraft_io::cache::content_hash(path)?)];
-        let sidecar = if matches!(content, Loaded::Tree(_)) {
+        let sidecar = if matches!(content, Loaded::Tree(_) | Loaded::Delimitation(_)) {
             files::tree_sidecar(path)
         } else {
             files::gff_sidecar(path)
         };
         if (matches!(&content, Loaded::Sequence(o) if o.format == files::Format::Fasta)
-            || matches!(content, Loaded::Tree(_)))
+            || matches!(content, Loaded::Tree(_) | Loaded::Delimitation(_)))
             && sidecar.exists()
         {
             hashes.push((
@@ -341,6 +362,31 @@ impl Session {
         let mut hashes = Vec::new();
         let mut main_hash = String::new();
         let opened = match &self.docs[id.0].content {
+            Loaded::Delimitation(work) => {
+                if format != files::Format::Delimitation {
+                    return Err(invalid(
+                        "a delimitation workspace requires SPART or SPART-XML",
+                    ));
+                }
+                let xml = files::delimitation_xml(&target);
+                basecraft_io::write_atomic(&target, |w| {
+                    let mut hw = HashingWriter::new(w);
+                    files::write_delimitation(work, xml, &mut hw)?;
+                    main_hash = hw.hash();
+                    Ok(())
+                })?;
+                let sidecar = files::tree_sidecar(&target);
+                let mut side_hash = String::new();
+                basecraft_io::write_atomic(&sidecar, |w| {
+                    let mut hw = HashingWriter::new(w);
+                    files::write_delimitation_sidecar(work, &main_hash, &mut hw)?;
+                    side_hash = hw.hash();
+                    Ok(())
+                })?;
+                hashes.push((self.relative(&target), main_hash));
+                hashes.push((self.relative(&sidecar), side_hash));
+                return self.log_save(id, &target, hashes);
+            }
             Loaded::Alignment(a) => {
                 if format != a.format {
                     return Err(invalid("saving to a different format isn't supported yet"));
@@ -575,6 +621,18 @@ impl Session {
     /// Hashes the files a save would write, without writing them.
     pub fn save_hashes(&self, id: DocId) -> Result<Vec<String>> {
         let opened = match &self.docs[id.0].content {
+            Loaded::Delimitation(work) => {
+                let mut main = HashingWriter::new(std::io::sink());
+                files::write_delimitation(
+                    work,
+                    files::delimitation_xml(Path::new(&self.docs[id.0].key)),
+                    &mut main,
+                )?;
+                let hash = main.hash();
+                let mut side = HashingWriter::new(std::io::sink());
+                files::write_delimitation_sidecar(work, &hash, &mut side)?;
+                return Ok(vec![hash, side.hash()]);
+            }
             Loaded::Sequence(o) => o,
             Loaded::Alignment(a) => {
                 let mut hw = HashingWriter::new(std::io::sink());
@@ -598,6 +656,22 @@ impl Session {
             out.push(hw.hash());
         }
         Ok(out)
+    }
+
+    /// Retain failure and cancellation diagnostics without creating a hypothesis.
+    pub fn log_job_finished(
+        &mut self,
+        id: DocId,
+        report: basecraft_protocol::delimitation::JobRecord,
+    ) -> Result<()> {
+        self.flush()?;
+        let entry = self.entry(
+            id,
+            self.actor.clone(),
+            Op::JobFinished { report },
+            OpResult::default(),
+        );
+        self.write(&entry)
     }
 
     // Operations.
@@ -750,6 +824,14 @@ impl Session {
     fn execute(&mut self, id: DocId, op: &Op) -> Result<(Inverse, Option<FeatureId>)> {
         let doc = match &mut self.docs[id.0].content {
             Loaded::Sequence(o) => &mut o.doc,
+            Loaded::Delimitation(work) => {
+                let Op::DelimitationEdit { edit } = op else {
+                    return Err(invalid("this needs a delimitation edit"));
+                };
+                let before = Box::new(work.clone());
+                basecraft_docs::delimitation::apply(work, edit).map_err(|e| invalid(e.0))?;
+                return Ok((Inverse::Delimitation(before), None));
+            }
             Loaded::Alignment(a) => {
                 return execute_alignment(a, op).map(|u| (Inverse::Alignment(u), None));
             }
@@ -831,6 +913,8 @@ impl Session {
             | Op::TreeAddSupport { .. }
             | Op::TreeRemoveSupport { .. }
             | Op::TreeStyle { .. } => Err(invalid(format!("{} needs a tree", op.name()))),
+            Op::DelimitationEdit { .. } => Err(invalid("this needs a delimitation workspace")),
+            Op::JobFinished { .. } => Err(invalid("use log_job_finished")),
             Op::Open { .. }
             | Op::Save { .. }
             | Op::Extract { .. }
@@ -891,8 +975,11 @@ impl Session {
         match (&mut self.docs[id.0].content, &applied.inverse) {
             (Loaded::Alignment(a), Inverse::Alignment(steps)) => a.doc.undo(steps),
             (Loaded::Tree(t), Inverse::Tree(before)) => t.doc = (**before).clone(),
+            (Loaded::Delimitation(work), Inverse::Delimitation(before)) => {
+                *work = (**before).clone();
+            }
             (Loaded::Sequence(o), inverse) => undo_sequence(&mut o.doc, inverse),
-            (Loaded::Alignment(_) | Loaded::Tree(_), _) => {
+            (Loaded::Alignment(_) | Loaded::Tree(_) | Loaded::Delimitation(_), _) => {
                 return Err(invalid("undo of the wrong kind of edit"));
             }
         }
@@ -988,7 +1075,7 @@ fn undo_sequence(doc: &mut SequenceDoc, inverse: &Inverse) {
             }
         }
         Inverse::Feature { id: fid, before } => doc.restore_feature(*fid, before.clone()),
-        Inverse::Alignment(_) | Inverse::Tree(_) => {}
+        Inverse::Alignment(_) | Inverse::Tree(_) | Inverse::Delimitation(_) => {}
     }
 }
 

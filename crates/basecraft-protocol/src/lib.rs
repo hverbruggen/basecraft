@@ -4,6 +4,7 @@
 //! This crate must never depend on a GPL crate.
 
 pub mod annotation;
+pub mod delimitation;
 pub mod ops;
 pub mod plugin;
 pub mod tree;

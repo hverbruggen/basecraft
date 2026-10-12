@@ -1066,6 +1066,56 @@
       ]
     },
     {
+      "description": "An atomic species-hypothesis edit against a workspace.",
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "delimitation.edit"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "edit": {
+              "$ref": "#/$defs/DelimitationEdit"
+            }
+          },
+          "required": [
+            "edit"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ]
+    },
+    {
+      "description": "A terminal job record, including failures and cancellation.",
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "job.finished"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "report": {
+              "$ref": "#/$defs/JobRecord"
+            }
+          },
+          "required": [
+            "report"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ]
+    },
+    {
       "description": "Undo the operation with log id `of`.",
       "type": "object",
       "properties": {
@@ -1278,6 +1328,246 @@
         "clade"
       ]
     },
+    "DelimitationEdit": {
+      "description": "One atomic edit. Inferred and imported results must first be derived.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "add"
+            },
+            "hypothesis": {
+              "$ref": "#/$defs/Hypothesis"
+            }
+          },
+          "required": [
+            "action",
+            "hypothesis"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "derive"
+            },
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "source": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "action",
+            "source",
+            "id",
+            "name"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "rename"
+            },
+            "hypothesis": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "action",
+            "hypothesis",
+            "name"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "rename_group"
+            },
+            "group": {
+              "type": "string"
+            },
+            "hypothesis": {
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "action",
+            "hypothesis",
+            "group",
+            "label"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "split"
+            },
+            "group": {
+              "$ref": "#/$defs/Group"
+            },
+            "hypothesis": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "action",
+            "hypothesis",
+            "group"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "merge"
+            },
+            "groups": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "uniqueItems": true
+            },
+            "hypothesis": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "action",
+            "hypothesis",
+            "groups",
+            "id",
+            "label"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "reassign"
+            },
+            "group": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "hypothesis": {
+              "type": "string"
+            },
+            "specimens": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "uniqueItems": true
+            }
+          },
+          "required": [
+            "action",
+            "hypothesis",
+            "specimens"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "save_cut"
+            },
+            "boundary": {
+              "type": "string"
+            },
+            "hypothesis": {
+              "$ref": "#/$defs/Hypothesis"
+            },
+            "threshold": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "required": [
+            "action",
+            "hypothesis",
+            "threshold",
+            "boundary"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "set_view"
+            },
+            "view": {
+              "$ref": "#/$defs/DelimitationView"
+            }
+          },
+          "required": [
+            "action",
+            "view"
+          ]
+        }
+      ]
+    },
+    "DelimitationView": {
+      "type": "object",
+      "properties": {
+        "display_tree": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "selected": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "visible": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "visible",
+        "selected"
+      ]
+    },
     "DocState": {
       "description": "A cheap fingerprint of a document after an operation. Replay compares\nit at every step; full content hashes are compared at open and save.",
       "type": "object",
@@ -1332,6 +1622,185 @@
         "qualifiers"
       ]
     },
+    "Group": {
+      "type": "object",
+      "properties": {
+        "attributes": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "color": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "individual_scores": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Score"
+            }
+          },
+          "default": {}
+        },
+        "label": {
+          "type": "string"
+        },
+        "members": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "scores": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Score"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "color",
+        "members"
+      ]
+    },
+    "Hypothesis": {
+      "type": "object",
+      "properties": {
+        "attributes": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "groups": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Group"
+          }
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "origin": {
+          "$ref": "#/$defs/HypothesisOrigin"
+        },
+        "parent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provenance": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "scores": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Score"
+          }
+        },
+        "unassigned": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "origin",
+        "groups",
+        "unassigned",
+        "provenance"
+      ]
+    },
+    "HypothesisOrigin": {
+      "type": "string",
+      "enum": [
+        "manual",
+        "imported",
+        "inferred",
+        "derived",
+        "manual_cut"
+      ]
+    },
+    "JobRecord": {
+      "type": "object",
+      "properties": {
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "elapsed_seconds": {
+          "type": "number",
+          "format": "double"
+        },
+        "generation": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "id": {
+          "type": "string"
+        },
+        "inputs": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "method": {
+          "type": "string"
+        },
+        "outputs": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "status": {
+          "$ref": "#/$defs/JobStatus"
+        }
+      },
+      "required": [
+        "id",
+        "generation",
+        "status",
+        "method",
+        "inputs",
+        "outputs",
+        "diagnostics",
+        "elapsed_seconds"
+      ]
+    },
+    "JobStatus": {
+      "type": "string",
+      "enum": [
+        "completed",
+        "failed",
+        "cancelled",
+        "unavailable"
+      ]
+    },
     "Location": {
       "description": "A feature location: segments in biological order, 5' to 3' of the\nfeature. A reverse-strand two-exon gene lists its downstream exon first.\nLocations crossing the origin of a circular sequence are split into two\nsegments at the origin.",
       "type": "object",
@@ -1382,6 +1851,84 @@
         }
       }
     },
+    "Provenance": {
+      "type": "object",
+      "properties": {
+        "analysis_tree": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "diagnostics": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "haplotypes": {
+          "description": "Representative ID to original specimen IDs; never likelihood weights.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          },
+          "default": {}
+        },
+        "inputs": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "method": {
+          "type": "string"
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": true,
+          "default": {}
+        },
+        "seed": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JobStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "version": {
+          "type": "string"
+        },
+        "workers": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "method",
+        "version"
+      ]
+    },
     "Qualifier": {
       "type": "object",
       "properties": {
@@ -1398,6 +1945,30 @@
       },
       "required": [
         "key"
+      ]
+    },
+    "Score": {
+      "type": "object",
+      "properties": {
+        "interpretation": {
+          "type": "string"
+        },
+        "method": {
+          "type": "string"
+        },
+        "scale": {
+          "type": "string"
+        },
+        "value": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "value",
+        "method",
+        "scale",
+        "interpretation"
       ]
     },
     "Segment": {

@@ -1,0 +1,15 @@
+begin spart;
+project_name = fixture;
+date = 2026-10-12T00:00:00;
+n_spartitions = 3 : first, -12.5 / second, ? / partial, ?;
+n_individuals = 4 / 4 / 2;
+n_subsets = 2: 0.9, 0.8 / 2: ?, ? / 1: ?;
+spartition_score_type = logLikelihood / ? / ?;
+subset_score_type = posterior / ? / ?;
+individual_assignment =
+a : 1 / 1 / 1
+b : 2 / 1 / ?
+c : 1 / 2 / 1
+d : 2 / 2 / ?
+;
+end;

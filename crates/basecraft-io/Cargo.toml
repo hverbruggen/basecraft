@@ -9,6 +9,7 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
+roxmltree = { path = "../../vendor/roxmltree" }
 basecraft-protocol.workspace = true
 blake3.workspace = true
 memchr.workspace = true

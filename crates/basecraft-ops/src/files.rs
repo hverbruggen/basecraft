@@ -16,6 +16,7 @@ use crate::{Error, Result};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Format {
     GenBank,
+    Delimitation,
     /// FASTA, with annotations in a GFF3 sidecar of the same stem.
     Fasta,
     /// Newick or NEXUS (told apart by content), with annotations and style
@@ -31,6 +32,7 @@ impl Format {
             .map(str::to_ascii_lowercase)
             .unwrap_or_default();
         match ext.as_str() {
+            "spart" | "spartxml" | "spart-xml" | "xml" => Ok(Format::Delimitation),
             "gb" | "gbk" | "genbank" | "gbff" => Ok(Format::GenBank),
             "fa" | "fasta" | "fna" | "fas" | "ffn" | "faa" | "afa" => Ok(Format::Fasta),
             "nwk" | "newick" | "tre" | "tree" | "trees" | "treefile" | "contree" | "nex"
@@ -44,6 +46,7 @@ impl Format {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     Sequence,
+    Delimitation,
     Alignment,
     Tree,
 }
@@ -56,6 +59,7 @@ pub enum Kind {
 /// annotations belong to sequences. Only the index is read.
 pub fn kind(path: &Path) -> Result<Kind> {
     match Format::from_path(path)? {
+        Format::Delimitation => return Ok(Kind::Delimitation),
         Format::Tree => return Ok(Kind::Tree),
         Format::GenBank => return Ok(Kind::Sequence),
         Format::Fasta => {}
@@ -101,12 +105,16 @@ pub struct OpenedTree {
 
 pub enum Loaded {
     Sequence(Opened),
+    Delimitation(basecraft_protocol::delimitation::DelimitationWorkspace),
     Alignment(OpenedAlignment),
     Tree(OpenedTree),
 }
 
 /// Open a file as whatever it holds: see [`kind`].
 pub fn load(path: &Path) -> Result<Loaded> {
+    if Format::from_path(path)? == Format::Delimitation {
+        return load_delimitation(path).map(Loaded::Delimitation);
+    }
     if Format::from_path(path)? == Format::Tree {
         return load_tree(path).map(Loaded::Tree);
     }
@@ -266,6 +274,7 @@ pub struct Opened {
 pub fn open(path: &Path) -> Result<Opened> {
     let format = Format::from_path(path)?;
     match format {
+        Format::Delimitation => Err(crate::error::invalid("this is a delimitation workspace")),
         Format::Tree => Err(crate::error::invalid(format!(
             "{} is a tree, not a sequence",
             path.display()
@@ -310,6 +319,7 @@ pub fn write_main(opened: &Opened, w: &mut dyn Write) -> io::Result<()> {
     let doc = &opened.doc;
     match opened.format {
         Format::GenBank => genbank::write(w, &doc.to_genbank()),
+        Format::Delimitation => Err(io::Error::other("this is a delimitation workspace")),
         Format::Tree => Err(io::Error::other("a sequence can't be written as a tree")),
         Format::Fasta => {
             let Some(file) = &opened.fasta else {
@@ -666,4 +676,70 @@ fn extract_range(doc: &SequenceDoc, start: u64, end: u64) -> genbank::Record {
         features,
         sequence: doc.read(start, end),
     }
+}
+
+/// A portable SPART file plus its versioned Basecraft workspace sidecar.
+#[derive(Serialize, Deserialize)]
+struct DelimitationSidecar {
+    version: u32,
+    exchange_hash: String,
+    workspace: basecraft_protocol::delimitation::DelimitationWorkspace,
+}
+
+pub fn load_delimitation(
+    path: &Path,
+) -> Result<basecraft_protocol::delimitation::DelimitationWorkspace> {
+    let text = std::fs::read_to_string(path)?;
+    let mut work = if text.trim_start().starts_with('<') {
+        basecraft_io::spart::parse_xml(&text)?
+    } else {
+        basecraft_io::spart::parse_text(&text)?
+    };
+    let sidecar = tree_sidecar(path);
+    if sidecar.exists() {
+        let side: DelimitationSidecar = serde_json::from_slice(&std::fs::read(sidecar)?)?;
+        if side.version != 1 || side.exchange_hash != cache::content_hash(path)? {
+            return Err(crate::error::invalid(
+                "SPART sidecar version or exchange hash differs",
+            ));
+        }
+        work = side.workspace;
+    }
+    basecraft_docs::delimitation::validate(&work).map_err(|e| crate::error::invalid(e.0))?;
+    Ok(work)
+}
+
+pub fn write_delimitation(
+    work: &basecraft_protocol::delimitation::DelimitationWorkspace,
+    xml: bool,
+    w: &mut dyn Write,
+) -> io::Result<()> {
+    let text = if xml {
+        basecraft_io::spart::write_xml(work)
+    } else {
+        basecraft_io::spart::write_text(work).0
+    };
+    w.write_all(text.as_bytes())
+}
+
+pub fn write_delimitation_sidecar(
+    work: &basecraft_protocol::delimitation::DelimitationWorkspace,
+    hash: &str,
+    w: &mut dyn Write,
+) -> io::Result<()> {
+    let side = DelimitationSidecar {
+        version: 1,
+        exchange_hash: hash.into(),
+        workspace: work.clone(),
+    };
+    serde_json::to_writer_pretty(&mut *w, &side)?;
+    writeln!(w)
+}
+
+pub fn delimitation_xml(path: &Path) -> bool {
+    path.extension().is_some_and(|e| {
+        e.eq_ignore_ascii_case("xml")
+            || e.eq_ignore_ascii_case("spartxml")
+            || e.eq_ignore_ascii_case("spart-xml")
+    })
 }

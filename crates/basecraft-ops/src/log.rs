@@ -285,6 +285,8 @@ fn describe(op: &Op) -> String {
         Op::TreeStyle { .. } => "Changed the tree's style".into(),
         Op::Undo { .. } => "Undo".into(),
         Op::Redo { .. } => "Redo".into(),
+        Op::DelimitationEdit { .. } => "Edited species hypothesis".into(),
+        Op::JobFinished { report } => format!("{} {:?}", report.method, report.status),
     }
 }
 

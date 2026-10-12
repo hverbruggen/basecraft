@@ -1,0 +1,12 @@
+[package]
+name = "roxmltree"
+version = "0.21.1"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+[features]
+default = ["std", "positions"]
+std = []
+positions = []
+
+[dependencies]
+memchr = "2.8"

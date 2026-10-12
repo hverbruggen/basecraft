@@ -1,0 +1,37 @@
+<?xml version="1.0" ?>
+<root>
+	<project_name>fixture</project_name>
+	<date>2026-10-12T00:00:00</date>
+	<individuals>
+		<individual id="a"/>
+		<individual id="b"/>
+		<individual id="c"/>
+		<individual id="d"/>
+	</individuals>
+	<spartitions>
+		<spartition label="first" subsetScoreType="posterior" spartitionScoreType="logLikelihood" spartitionScore="-12.5">
+			<subsets>
+				<subset label="1" score="0.9">
+					<individual ref="a"/>
+					<individual ref="c"/>
+				</subset>
+				<subset label="2" score="0.8">
+					<individual ref="b"/>
+					<individual ref="d"/>
+				</subset>
+			</subsets>
+		</spartition>
+		<spartition label="second">
+			<subsets>
+				<subset label="1">
+					<individual ref="a"/>
+					<individual ref="b"/>
+				</subset>
+				<subset label="2">
+					<individual ref="c"/>
+					<individual ref="d"/>
+				</subset>
+			</subsets>
+		</spartition>
+	</spartitions>
+</root>

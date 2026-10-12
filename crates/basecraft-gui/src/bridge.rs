@@ -574,6 +574,7 @@ impl qobject::GenomeController {
                 basecraft_ops::files::Kind::Sequence => "Sequence",
                 basecraft_ops::files::Kind::Alignment => "Alignment",
                 basecraft_ops::files::Kind::Tree => "Tree",
+                basecraft_ops::files::Kind::Delimitation => "Delimitation",
             };
             std::process::Command::new(std::env::current_exe()?)
                 .arg(path)

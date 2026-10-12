@@ -170,6 +170,16 @@ pub enum Op {
         inputs: Vec<String>,
         outputs: Vec<String>,
     },
+    /// An atomic species-hypothesis edit against a workspace.
+    #[serde(rename = "delimitation.edit")]
+    DelimitationEdit {
+        edit: Box<crate::delimitation::DelimitationEdit>,
+    },
+    /// A terminal job record, including failures and cancellation.
+    #[serde(rename = "job.finished")]
+    JobFinished {
+        report: crate::delimitation::JobRecord,
+    },
     /// Undo the operation with log id `of`.
     #[serde(rename = "history.undo")]
     Undo { of: String },
@@ -209,6 +219,8 @@ impl Op {
             Op::TreeAddSupport { .. } => "tree.add_support",
             Op::TreeRemoveSupport { .. } => "tree.remove_support",
             Op::TreeStyle { .. } => "tree.style",
+            Op::DelimitationEdit { .. } => "delimitation.edit",
+            Op::JobFinished { .. } => "job.finished",
             Op::Undo { .. } => "history.undo",
             Op::Redo { .. } => "history.redo",
         }

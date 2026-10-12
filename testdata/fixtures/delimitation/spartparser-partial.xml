@@ -1,0 +1,43 @@
+<?xml version="1.0" ?>
+<root>
+	<individuals>
+		<individual id="a"/>
+		<individual id="b"/>
+		<individual id="c"/>
+		<individual id="d"/>
+	</individuals>
+	<spartitions>
+		<spartition label="first" spartitionScore="-12.5" spartitionScoreType="logLikelihood" subsetScoreType="posterior">
+			<subsets>
+				<subset label="1" score="0.9">
+					<individual ref="a"/>
+					<individual ref="c"/>
+				</subset>
+				<subset label="2" score="0.8">
+					<individual ref="b"/>
+					<individual ref="d"/>
+				</subset>
+			</subsets>
+		</spartition>
+		<spartition label="second">
+			<subsets>
+				<subset label="1">
+					<individual ref="a"/>
+					<individual ref="b"/>
+				</subset>
+				<subset label="2">
+					<individual ref="c"/>
+					<individual ref="d"/>
+				</subset>
+			</subsets>
+		</spartition>
+		<spartition label="partial">
+			<subsets>
+				<subset label="1">
+					<individual ref="a"/>
+					<individual ref="c"/>
+				</subset>
+			</subsets>
+		</spartition>
+	</spartitions>
+</root>

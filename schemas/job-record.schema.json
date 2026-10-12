@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "JobRecord",
+  "type": "object",
+  "properties": {
+    "diagnostics": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "elapsed_seconds": {
+      "type": "number",
+      "format": "double"
+    },
+    "generation": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "id": {
+      "type": "string"
+    },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "method": {
+      "type": "string"
+    },
+    "outputs": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "status": {
+      "$ref": "#/$defs/JobStatus"
+    }
+  },
+  "required": [
+    "id",
+    "generation",
+    "status",
+    "method",
+    "inputs",
+    "outputs",
+    "diagnostics",
+    "elapsed_seconds"
+  ],
+  "$defs": {
+    "JobStatus": {
+      "type": "string",
+      "enum": [
+        "completed",
+        "failed",
+        "cancelled",
+        "unavailable"
+      ]
+    }
+  }
+}

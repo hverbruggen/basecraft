@@ -6,6 +6,7 @@ pub mod genbank;
 pub mod gff3;
 pub mod newick;
 pub mod source;
+pub mod spart;
 
 mod error;
 
