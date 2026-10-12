@@ -44,12 +44,50 @@ fn executable_preserves_success_failure_cancellation_and_hash_contract() {
     assert_eq!(result.job.generation, 4);
     assert_eq!(result.job.outputs.len(), 2);
     basecraft_docs::delimitation::validate(result.workspace.as_ref().unwrap()).unwrap();
+    request
+        .parameters
+        .insert("haplotypes".into(), serde_json::json!({"wrong":["a","b"]}));
+    let (process, result) = execute(&request);
+    assert!(!process.status.success());
+    assert_eq!(result.job.status, JobStatus::Failed);
+    assert!(result.workspace.is_none());
+    assert!(
+        result
+            .job
+            .diagnostics
+            .last()
+            .unwrap()
+            .contains("representatives differ")
+    );
+    request.parameters.clear();
     request.input_hash = "changed".into();
     let (process, result) = execute(&request);
     assert!(!process.status.success());
     assert_eq!(result.job.status, JobStatus::Failed);
     assert!(result.workspace.is_none());
     assert!(result.job.diagnostics[0].contains("hash differs"));
+    std::fs::write(
+        &input,
+        include_str!("../../../testdata/fixtures/delimitation/gmyc-coal8.nwk"),
+    )
+    .unwrap();
+    request.input_hash = basecraft_io::hash_file(&input).unwrap();
+    request.method = "gmyc_multiple".into();
+    request
+        .parameters
+        .insert("candidate_budget".into(), 1.into());
+    let (_, result) = execute(&request);
+    assert_eq!(result.job.status, JobStatus::Failed);
+    assert!(result.workspace.is_none());
+    assert!(
+        result
+            .job
+            .diagnostics
+            .last()
+            .unwrap()
+            .contains("budget reached")
+    );
+    request.parameters.clear();
     let cancel = directory.path().join("cancel");
     std::fs::write(&cancel, "").unwrap();
     request.cancel_file = Some(cancel.display().to_string());

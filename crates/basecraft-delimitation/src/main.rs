@@ -27,8 +27,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?)?;
     let started = Instant::now();
     let output = Path::new(&request.output);
-    if output == Path::new(&request.input) {
-        return Err("output must differ from immutable input".into());
+    for suffix in [
+        "",
+        ".spart",
+        ".spart.basecraft.json",
+        ".unique.fasta",
+        ".haplotypes.json",
+        ".relative.nwk",
+    ] {
+        if same_file(
+            Path::new(&format!("{}{suffix}", request.output)),
+            Path::new(&request.input),
+        ) {
+            return Err(
+                "output artifacts must differ from immutable input, including aliases".into(),
+            );
+        }
+    }
+    if request
+        .progress
+        .as_deref()
+        .is_some_and(|path| same_file(Path::new(path), Path::new(&request.input)))
+    {
+        return Err("progress must differ from immutable input".into());
     }
     let mut result = DelimitationResult {
         version: 1,
@@ -46,7 +67,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     };
     progress(&request, "preparation", 0, 1)?;
-    let run = run(&request, &mut result);
+    let run = run(&request, &mut result).and_then(|()| prepare_workspace(&request, &mut result));
     if let Err(error) = run {
         result.job.status = if request
             .cancel_file
@@ -57,8 +78,69 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             JobStatus::Failed
         };
+        result.workspace = None;
         result.job.diagnostics.push(error.to_string());
     }
+    if let Some(workspace) = &result.workspace {
+        basecraft_docs::delimitation::validate(workspace)?;
+        let spart = PathBuf::from(format!("{}.spart", request.output));
+        let sidecar = PathBuf::from(format!("{}.basecraft.json", spart.display()));
+        basecraft_io::write_atomic(&spart, |w| {
+            w.write_all(basecraft_io::spart::write_text(workspace).0.as_bytes())
+        })?;
+        let spart_hash = basecraft_io::hash_file(&spart)?;
+        basecraft_io::write_atomic(&sidecar, |w| {
+            serde_json::to_writer_pretty(
+                w,
+                &serde_json::json!({"version":1,"exchange_hash":spart_hash,"workspace":workspace}),
+            )?;
+            Ok(())
+        })?;
+        result
+            .job
+            .outputs
+            .insert(spart.display().to_string(), spart_hash);
+        result.job.outputs.insert(
+            sidecar.display().to_string(),
+            basecraft_io::hash_file(&sidecar)?,
+        );
+    }
+    progress(&request, "finished", 1, 1)?;
+    result.job.elapsed_seconds = started.elapsed().as_secs_f64();
+    basecraft_io::write_atomic(output, |w| {
+        serde_json::to_writer_pretty(w, &result)?;
+        Ok(())
+    })?;
+    println!("{}", serde_json::to_string(&result)?);
+    if result.job.status != JobStatus::Completed {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+fn same_file(first: &Path, second: &Path) -> bool {
+    if first == second {
+        return true;
+    }
+    if let (Ok(left), Ok(right)) = (first.canonicalize(), second.canonicalize()) {
+        if left == right {
+            return true;
+        }
+    }
+    #[cfg(unix)]
+    if let (Ok(left), Ok(right)) = (std::fs::metadata(first), std::fs::metadata(second)) {
+        use std::os::unix::fs::MetadataExt;
+        if left.dev() == right.dev() && left.ino() == right.ino() {
+            return true;
+        }
+    }
+    false
+}
+
+fn prepare_workspace(
+    request: &DelimitationRequest,
+    result: &mut DelimitationResult,
+) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(workspace) = &mut result.workspace {
         for hypothesis in &mut workspace.hypotheses {
             hypothesis
@@ -95,7 +177,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map(|id| basecraft_protocol::delimitation::Specimen {
                     id: id.clone(),
                     label: id.clone(),
-                    sources: BTreeMap::new(),
+                    sources: request
+                        .parameters
+                        .get("original_source")
+                        .and_then(serde_json::Value::as_str)
+                        .map_or_else(BTreeMap::new, |path| {
+                            [(path.to_string(), id.clone())].into()
+                        }),
                     attributes: BTreeMap::new(),
                 })
                 .collect();
@@ -103,37 +191,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if let Some(workspace) = &result.workspace {
         basecraft_docs::delimitation::validate(workspace)?;
-        let spart = PathBuf::from(format!("{}.spart", request.output));
-        let sidecar = PathBuf::from(format!("{}.basecraft.json", spart.display()));
-        basecraft_io::write_atomic(&spart, |w| {
-            w.write_all(basecraft_io::spart::write_text(workspace).0.as_bytes())
-        })?;
-        let spart_hash = basecraft_io::hash_file(&spart)?;
-        basecraft_io::write_atomic(&sidecar, |w| {
-            serde_json::to_writer_pretty(
-                w,
-                &serde_json::json!({"version":1,"exchange_hash":spart_hash,"workspace":workspace}),
-            )?;
-            Ok(())
-        })?;
-        result
-            .job
-            .outputs
-            .insert(spart.display().to_string(), spart_hash);
-        result.job.outputs.insert(
-            sidecar.display().to_string(),
-            basecraft_io::hash_file(&sidecar)?,
-        );
-    }
-    progress(&request, "finished", 1, 1)?;
-    result.job.elapsed_seconds = started.elapsed().as_secs_f64();
-    basecraft_io::write_atomic(output, |w| {
-        serde_json::to_writer_pretty(w, &result)?;
-        Ok(())
-    })?;
-    println!("{}", serde_json::to_string(&result)?);
-    if result.job.status != JobStatus::Completed {
-        std::process::exit(1);
     }
     Ok(())
 }
@@ -326,8 +383,28 @@ fn run(
                 .insert("conversion".into(), serde_json::to_value(converted)?);
         }
         "gmyc_single" | "gmyc_multiple" | "gmyc_exhaustive" => {
-            let time =
+            let mut time =
                 basecraft_delimitation::time_tree::validate(&tree, request.rooted, 1e-8, true)?;
+            if request
+                .parameters
+                .get("reference_age_clamp")
+                .and_then(serde_json::Value::as_bool)
+                == Some(true)
+            {
+                let mut changed = 0;
+                for &node in &time.events {
+                    if time.ages[node] < 1e-6 {
+                        time.ages[node] = 1e-6;
+                        changed += 1;
+                    }
+                }
+                time.root_height = time.ages[tree.root()];
+                time.diagnostics.push(format!("Explicit splits compatibility preprocessing: clamped {changed} internal node ages to 1e-6 input time units; original tree retained"));
+                result.metrics.insert(
+                    "reference_age_clamp".into(),
+                    serde_json::json!({"minimum_input_age":1e-6,"changed_nodes":changed}),
+                );
+            }
             let cancel = request.cancel_file.as_deref().map(Path::new);
             let pool = rayon::ThreadPoolBuilder::new()
                 .num_threads(request.workers)
@@ -338,17 +415,65 @@ fn run(
                 .and_then(serde_json::Value::as_u64)
                 .and_then(|n| usize::try_from(n).ok())
                 .unwrap_or(10_000);
-            let fit = pool.install(|| match request.method.as_str() {
-                "gmyc_single" => basecraft_delimitation::gmyc::single(&tree, &time, cancel),
-                "gmyc_multiple" => {
-                    basecraft_delimitation::gmyc::multiple(&tree, &time, budget, cancel)
+            let progress_state = std::sync::Mutex::new((0usize, Vec::new()));
+            let report_progress = |completed: usize, total: usize| {
+                let mut state = progress_state.lock().unwrap();
+                if completed >= state.0 {
+                    state.0 = completed;
+                    let phase = if request.method == "gmyc_single" {
+                        "GMYC threshold candidates"
+                    } else {
+                        "GMYC candidates / budget"
+                    };
+                    if let Err(error) = progress(request, phase, completed, total) {
+                        state.1.push(error.to_string());
+                    }
                 }
+            };
+            let mut fit = pool.install(|| match request.method.as_str() {
+                "gmyc_single" => basecraft_delimitation::gmyc::single_with_progress(
+                    &tree,
+                    &time,
+                    cancel,
+                    &report_progress,
+                ),
+                "gmyc_multiple" => basecraft_delimitation::gmyc::multiple_with_progress(
+                    &tree,
+                    &time,
+                    budget,
+                    cancel,
+                    &report_progress,
+                ),
                 _ => basecraft_delimitation::gmyc::exhaustive(&tree, &time, budget, cancel),
             })?;
+            match request
+                .parameters
+                .get("reference_version")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("1.0-20")
+            {
+                "1.0-20" => {}
+                "1.1-dc187fd" => basecraft_delimitation::gmyc::use_newer_summary(&mut fit),
+                _ => return Err("unsupported GMYC reference version".into()),
+            }
+            if request
+                .parameters
+                .get("reference_age_clamp")
+                .and_then(serde_json::Value::as_bool)
+                == Some(true)
+            {
+                fit.reference
+                    .push_str("; explicit recent-age compatibility clamp enabled");
+                fit.warnings.retain(|w| !w.starts_with("Recent-age clamp"));
+            }
             result
                 .metrics
                 .insert("gmyc".into(), serde_json::to_value(&fit)?);
             result.job.diagnostics.extend(time.diagnostics.clone());
+            result
+                .job
+                .diagnostics
+                .extend(progress_state.into_inner().unwrap().1);
             result.job.diagnostics.extend(fit.warnings.clone());
             if fit
                 .stopping_condition
@@ -362,6 +487,29 @@ fn run(
             let best = &fit.profile[fit.best];
             let groups = basecraft_delimitation::gmyc::groups(&tree, &time, best);
             result.workspace = Some(workspace(request, &tree, groups, best.log_likelihood));
+            result.job.diagnostics.extend(best.diagnostics.clone());
+            if let Some(work) = &mut result.workspace {
+                for hypothesis in &mut work.hypotheses {
+                    hypothesis
+                        .provenance
+                        .parameters
+                        .entry("reference_version".into())
+                        .or_insert_with(|| "1.0-20".into());
+                    hypothesis
+                        .provenance
+                        .parameters
+                        .entry("reference_age_clamp".into())
+                        .or_insert_with(|| false.into());
+                    hypothesis
+                        .provenance
+                        .parameters
+                        .insert("root_height".into(), time.root_height.into());
+                    hypothesis.provenance.parameters.insert(
+                        "sampling_policy".into(),
+                        "each retained tree tip once; multiplicity restored after fitting".into(),
+                    );
+                }
+            }
         }
         other => return Err(format!("unknown native method {other}").into()),
     }

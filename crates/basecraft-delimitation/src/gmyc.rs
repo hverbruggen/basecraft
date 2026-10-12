@@ -39,6 +39,9 @@ pub struct GmycResult {
     pub best: usize,
     pub likelihood_ratio: f64,
     pub lr_degrees_of_freedom: usize,
+    pub lr_p_value: f64,
+    pub support_candidates: Vec<usize>,
+    pub support_convention: String,
     pub reference: String,
     pub evaluated_candidates: usize,
     pub global_optimum: bool,
@@ -343,6 +346,9 @@ pub fn evaluate(
         .likelihood(q)
         .ok_or_else(|| Error("unidentified GMYC rate or nonfinite likelihood".into()))?;
     let mut diagnostics = Vec::new();
+    if prepared.bases.iter().filter(|&&base| base > 0.0).count() == 1 {
+        diagnostics.push("coalescent exponent and rate are not separately identified: all positive lineage-count bases are equal".into());
+    }
     if !converged {
         diagnostics.push("reference-start optimizer reached its evaluation budget".into());
     }
@@ -453,7 +459,7 @@ fn cancelled(cancel: Option<&Path>) -> bool {
     cancel.is_some_and(Path::exists)
 }
 
-pub fn single(tree: &TreeDoc, time: &TimeTree, cancel: Option<&Path>) -> Result<GmycResult> {
+fn validate_events(time: &TimeTree) -> Result<()> {
     if time.ages.iter().any(|age| !age.is_finite())
         || time.events.iter().any(|&i| time.ages[i] <= 0.0)
     {
@@ -461,6 +467,19 @@ pub fn single(tree: &TreeDoc, time: &TimeTree, cancel: Option<&Path>) -> Result<
             "GMYC requires positive event ages; zero-time events are not jittered".into(),
         ));
     }
+    Ok(())
+}
+
+pub fn single(tree: &TreeDoc, time: &TimeTree, cancel: Option<&Path>) -> Result<GmycResult> {
+    single_with_progress(tree, time, cancel, &|_, _| {})
+}
+pub fn single_with_progress(
+    tree: &TreeDoc,
+    time: &TimeTree,
+    cancel: Option<&Path>,
+    progress: &(dyn Fn(usize, usize) + Sync),
+) -> Result<GmycResult> {
+    validate_events(time)?;
     let mut profile = vec![null(time)];
     let mut seen = BTreeSet::new();
     let candidates: Vec<_> = time
@@ -472,13 +491,18 @@ pub fn single(tree: &TreeDoc, time: &TimeTree, cancel: Option<&Path>) -> Result<
             seen.insert(roots.clone()).then_some((roots, time.ages[i]))
         })
         .collect();
+    let completed = std::sync::atomic::AtomicUsize::new(0);
+    progress(0, candidates.len());
     let fits: Vec<_> = candidates
         .par_iter()
         .map(|(roots, threshold)| {
             if cancelled(cancel) {
                 return Err(Error("cancelled between GMYC candidates".into()));
             }
-            evaluate(tree, time, roots, Some(*threshold))
+            let fit = evaluate(tree, time, roots, Some(*threshold));
+            let done = completed.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            progress(done, candidates.len());
+            fit
         })
         .collect();
     for fit in fits {
@@ -510,42 +534,104 @@ fn result(
                 .then(b.cmp(&a))
         })
         .unwrap_or(0);
+    let near_tied = profile.iter().enumerate().any(|(i, fit)| {
+        i != best && (fit.log_likelihood - profile[best].log_likelihood).abs() < 1e-6
+    });
+    let mut warnings = vec!["Convergence does not establish statistical support or biological correctness".into(),"Recent-age clamp in splits is not applied; compatibility comparisons must record it explicitly".into(),"Native rates are evaluated at the returned exponents; splits reports its last objective-call rate cache, which can differ from its returned optimum".into()];
+    if near_tied {
+        warnings.push("Alternative partitions differ by less than 1e-6 log-likelihood units; numerical optimizer tolerance can change the selected partition. Inspect the full support profile".into());
+    }
     let likelihood_ratio = 2.0 * (profile[best].log_likelihood - profile[0].log_likelihood);
     let evaluated_candidates = profile.len();
-    GmycResult { method:method.into(),profile,best,likelihood_ratio,lr_degrees_of_freedom:2,reference:"splits plug-in pooled-rate waiting-time convention; reference numerical acceptance pending".into(),evaluated_candidates,global_optimum,stopping_condition,starts,warnings:vec!["Convergence does not establish statistical support or biological correctness".into(),"Recent-age clamp in splits is not applied; compatibility comparisons must record it explicitly".into()] }
+    // splits 1.0-20 uses the revised df=2 convention for both methods.
+    let degrees = 2;
+    let support_candidates = (0..profile.len())
+        .filter(|&i| profile[i].log_likelihood > profile[best].log_likelihood - 2.0)
+        .collect();
+    GmycResult { method:method.into(),profile,best,likelihood_ratio,lr_degrees_of_freedom:degrees,lr_p_value:chi_square_tail(likelihood_ratio,degrees),support_candidates,support_convention:"splits 1.0-20 summary convention: log likelihood strictly greater than maximum minus 2; asymptotic chi-square LR test".into(),reference:"splits 1.0-20 plug-in pooled-rate waiting-time convention; native unmodified node ages".into(),evaluated_candidates,global_optimum,stopping_condition,starts,warnings }
 }
 
-/// The reference split/fuse neighborhood excludes the root and all-singleton
-/// proposals. Tip siblings permit fusion; split keeps nonsingleton descendants.
-fn neighbors(tree: &TreeDoc, roots: &[usize]) -> BTreeSet<Vec<usize>> {
-    let mut out = BTreeSet::new();
+/// The newer reference changes its LR summary only; fitted likelihoods are unchanged.
+pub fn use_newer_summary(result: &mut GmycResult) {
+    result.lr_degrees_of_freedom = if result.method == "single" {
+        3
+    } else {
+        2 + result.profile[result.best].thresholds.len()
+    };
+    result.lr_p_value = chi_square_tail(result.likelihood_ratio, result.lr_degrees_of_freedom);
+    result.support_convention = "splits 1.1 dc187fd summary convention: log likelihood strictly greater than maximum minus 2; chi-square df=3 single or 2+threshold count multiple".into();
+    result.reference = "splits 1.1 dc187fd71ec583b514e4068189316fb50568b1f4; plug-in pooled-rate waiting-time convention; native unmodified node ages".into();
+}
+
+/// Upper-tail chi-square probability. Integer and half-integer gamma shapes
+/// admit a stable recurrence; the initial erfc is evaluated by convergent
+/// incomplete-gamma series/continued fraction, rather than a normal shortcut.
+fn chi_square_tail(statistic: f64, degrees: usize) -> f64 {
+    if statistic <= 0.0 || degrees == 0 {
+        return 1.0;
+    }
+    let shape = degrees as f64 / 2.0;
+    let x = statistic / 2.0;
+    let mut log_gamma = if degrees % 2 == 0 {
+        0.0
+    } else {
+        std::f64::consts::PI.ln() / 2.0
+    };
+    let mut term = if degrees % 2 == 0 { 1.0 } else { 0.5 };
+    while term < shape {
+        log_gamma += term.ln();
+        term += 1.0;
+    }
+    let scale = (-x + shape * x.ln() - log_gamma).exp();
+    if x < shape + 1.0 {
+        let mut sum = 1.0 / shape;
+        let mut add = sum;
+        let mut denominator = shape;
+        for _ in 0..10_000 {
+            denominator += 1.0;
+            add *= x / denominator;
+            sum += add;
+            if add.abs() < sum.abs() * 1e-15 {
+                break;
+            }
+        }
+        (1.0 - sum * scale).clamp(0.0, 1.0)
+    } else {
+        let mut b = x + 1.0 - shape;
+        let mut c = 1e300;
+        let mut d = 1.0 / b;
+        let mut h = d;
+        for i in 1..10_000 {
+            let index = f64::from(i);
+            let a = -index * (index - shape);
+            b += 2.0;
+            d = a * d + b;
+            if d.abs() < 1e-300 {
+                d = 1e-300;
+            }
+            c = b + a / c;
+            if c.abs() < 1e-300 {
+                c = 1e-300;
+            }
+            d = 1.0 / d;
+            let delta = d * c;
+            h *= delta;
+            if (delta - 1.0).abs() < 1e-15 {
+                break;
+            }
+        }
+        (scale * h).clamp(0.0, 1.0)
+    }
+}
+
+/// Preserve reference proposal order: fusions first, then divisions. Cache keys
+/// are canonical sets, but traversal retains the order in each proposal.
+fn neighbors(tree: &TreeDoc, roots: &[usize]) -> Vec<Vec<usize>> {
+    let mut out = Vec::new();
     if roots.len() <= 1 {
         return out;
     }
     for &root in roots {
-        let mut split: Vec<_> = roots
-            .iter()
-            .copied()
-            .filter(|&i| i != root)
-            .chain(
-                tree.node(root)
-                    .children
-                    .iter()
-                    .copied()
-                    .filter(|&i| !tree.node(i).is_tip()),
-            )
-            .collect();
-        split.sort_unstable();
-        if tree
-            .node(root)
-            .children
-            .iter()
-            .any(|&i| !tree.node(i).is_tip())
-            && !split.is_empty()
-            && split != roots
-        {
-            out.insert(split);
-        }
         if let Some(parent) = tree.node(root).parent {
             if parent != tree.root()
                 && tree
@@ -554,28 +640,70 @@ fn neighbors(tree: &TreeDoc, roots: &[usize]) -> BTreeSet<Vec<usize>> {
                     .iter()
                     .all(|&c| tree.node(c).is_tip() || roots.contains(&c))
             {
-                let mut fused: Vec<_> = roots
+                let fused: Vec<_> = roots
                     .iter()
                     .copied()
                     .filter(|i| !tree.node(parent).children.contains(i))
                     .chain(std::iter::once(parent))
                     .collect();
-                fused.sort_unstable();
-                out.insert(fused);
+                if !out.contains(&fused) {
+                    out.push(fused);
+                }
             }
+        }
+    }
+    for &root in roots {
+        if tree
+            .node(root)
+            .children
+            .iter()
+            .any(|&i| !tree.node(i).is_tip())
+        {
+            out.push(
+                roots
+                    .iter()
+                    .copied()
+                    .filter(|&i| i != root)
+                    .chain(
+                        tree.node(root)
+                            .children
+                            .iter()
+                            .copied()
+                            .filter(|&i| !tree.node(i).is_tip()),
+                    )
+                    .collect(),
+            );
         }
     }
     out
 }
+fn canonical(roots: &[usize]) -> Vec<usize> {
+    let mut key = roots.to_vec();
+    key.sort_unstable();
+    key
+}
+fn mean(values: &[f64]) -> f64 {
+    values.iter().sum::<f64>() / values.len() as f64
+}
 
-/// Named bounded reference-neighborhood search. Uses the splits recursive
-/// median/left/right starts and follows ties deterministically without cycles.
+/// Reference recursive mean/left/right starts and ordered split/fuse traversal.
+/// Duplicate numerical evaluations are cached; an explicit budget bounds work.
 pub fn multiple(
     tree: &TreeDoc,
     time: &TimeTree,
     budget: usize,
     cancel: Option<&Path>,
 ) -> Result<GmycResult> {
+    multiple_with_progress(tree, time, budget, cancel, &|_, _| {})
+}
+pub fn multiple_with_progress(
+    tree: &TreeDoc,
+    time: &TimeTree,
+    budget: usize,
+    cancel: Option<&Path>,
+    progress: &(dyn Fn(usize, usize) + Sync),
+) -> Result<GmycResult> {
+    validate_events(time)?;
     if budget == 0 {
         return Err(Error(
             "multi-threshold search requires a positive candidate budget".into(),
@@ -584,58 +712,60 @@ pub fn multiple(
     let mut cache = BTreeMap::<Vec<usize>, Fit>::new();
     let mut profile = vec![null(time)];
     let mut starts = Vec::new();
-    let mut best_value = profile[0].log_likelihood;
-    let mut parts = vec![
-        time.events
-            .iter()
-            .map(|&i| time.ages[i])
-            .collect::<Vec<_>>(),
-    ];
+    let mut baseline = profile[0].log_likelihood;
+    let mut ages = time
+        .events
+        .iter()
+        .map(|&i| time.ages[i])
+        .collect::<Vec<_>>();
     let mut exhausted = false;
-    while let Some(mut ages) = parts.pop() {
+    let mut cycles = false;
+    progress(0, budget);
+    loop {
         if cancelled(cancel) {
             return Err(Error("cancelled between multi-threshold searches".into()));
         }
-        ages.sort_by(f64::total_cmp);
         if ages.is_empty() {
-            continue;
+            break;
         }
-        let median = if ages.len() % 2 == 0 {
-            (ages[ages.len() / 2 - 1] + ages[ages.len() / 2]) / 2.0
-        } else {
-            ages[ages.len() / 2]
-        };
-        let left: Vec<_> = ages.iter().copied().filter(|a| *a < median).collect();
-        let right: Vec<_> = ages.iter().copied().filter(|a| *a >= median).collect();
-        if left.is_empty() || right.is_empty() {
-            continue;
+        let middle = mean(&ages);
+        // R works in negative ages; its left subset is the older positive ages.
+        let older: Vec<_> = ages.iter().copied().filter(|a| *a > middle).collect();
+        let younger: Vec<_> = ages.iter().copied().filter(|a| *a <= middle).collect();
+        if older.is_empty() || younger.is_empty() {
+            break;
         }
+        let old_mean = mean(&older);
+        let young_mean = mean(&younger);
         let mid: Vec<_> = ages
             .iter()
             .copied()
-            .filter(|a| *a >= *left.last().unwrap() && *a < right[0])
+            .filter(|a| *a <= old_mean && *a > young_mean)
             .collect();
-        let thresholds = [left[left.len() / 2], median, right[right.len() / 2]];
+        let thresholds = [old_mean, middle, young_mean];
         let mut improvements = [0usize; 3];
-        let mut local_best = best_value;
         for (part, threshold) in thresholds.into_iter().enumerate() {
             starts.push(threshold);
             let mut current = roots_at(tree, time, threshold);
-            current.sort_unstable();
             let mut visited = BTreeSet::new();
+            let mut maximum: Option<f64> = None;
             loop {
-                if !visited.insert(current.clone()) {
+                if !visited.insert(canonical(&current)) {
+                    cycles = true;
                     break;
                 }
-                let proposals: Vec<_> = neighbors(tree, &current)
-                    .into_iter()
-                    .filter(|r| !cache.contains_key(r))
+                let proposals = neighbors(tree, &current);
+                let missing: BTreeSet<_> = proposals
+                    .iter()
+                    .map(|r| canonical(r))
+                    .filter(|key| !cache.contains_key(key))
                     .collect();
-                if cache.len() + proposals.len() > budget {
+                if cache.len() + missing.len() > budget {
                     exhausted = true;
                     break;
                 }
-                let fits: Vec<_> = proposals
+                let missing: Vec<_> = missing.into_iter().collect();
+                let fits: Vec<_> = missing
                     .par_iter()
                     .map(|roots| {
                         if cancelled(cancel) {
@@ -646,52 +776,53 @@ pub fn multiple(
                         evaluate(tree, time, roots, None)
                     })
                     .collect();
-                for (roots, fit) in proposals.into_iter().zip(fits) {
-                    cache.insert(roots, fit?);
+                for (key, fit) in missing.into_iter().zip(fits) {
+                    cache.insert(key, fit?);
                 }
-                let next = neighbors(tree, &current)
-                    .into_iter()
-                    .filter_map(|r| cache.get(&r))
-                    .max_by(|a, b| {
-                        a.log_likelihood
-                            .total_cmp(&b.log_likelihood)
-                            .then(a.roots.cmp(&b.roots))
-                    });
+                progress(cache.len(), budget);
+                let mut next = None;
+                // Every running improvement is counted by the R recursion,
+                // including an intermediate proposal superseded in this sweep.
+                for proposal in proposals {
+                    let fit = &cache[&canonical(&proposal)];
+                    if maximum.is_none_or(|old| fit.log_likelihood >= old) {
+                        maximum = Some(fit.log_likelihood);
+                        if fit.log_likelihood > baseline {
+                            profile.push(fit.clone());
+                            improvements[part] += 1;
+                        }
+                        next = Some(proposal);
+                    }
+                }
                 let Some(next) = next else {
                     break;
                 };
-                // The reference accepts >= and keeps the last tied proposal; visited prevents cycles.
-                if current != roots_at(tree, time, threshold)
-                    && cache
-                        .get(&current)
-                        .is_some_and(|old| old.log_likelihood > next.log_likelihood)
-                {
-                    break;
-                }
-                if next.log_likelihood > best_value {
-                    improvements[part] += 1;
-                    local_best = local_best.max(next.log_likelihood);
-                }
-                current.clone_from(&next.roots);
+                current = next;
             }
             if exhausted {
                 break;
             }
         }
-        best_value = local_best;
         if exhausted {
             break;
         }
-        if let Some(part) = (0..3).max_by_key(|&i| improvements[i]) {
-            if improvements[part] > 0 {
-                let chosen = [&left, &mid, &right][part];
-                if chosen.len() < ages.len() {
-                    parts.push(chosen.clone());
-                }
-            }
+        // which.max in R takes the first tied maximum.
+        let part = (0..3)
+            .max_by_key(|&i| (improvements[i], std::cmp::Reverse(i)))
+            .unwrap();
+        if improvements[part] == 0 {
+            break;
         }
+        baseline = profile
+            .iter()
+            .map(|fit| fit.log_likelihood)
+            .fold(baseline, f64::max);
+        let chosen = [&older, &mid, &younger][part];
+        if chosen.len() >= ages.len() {
+            break;
+        }
+        ages.clone_from(chosen);
     }
-    profile.extend(cache.into_values());
     let mut result = result(
         "multiple",
         profile,
@@ -703,10 +834,14 @@ pub fn multiple(
         },
         starts,
     );
+    result.evaluated_candidates = cache.len() + 1;
     if exhausted {
         result.warnings.push(
             "Search incomplete: result must be recorded as unavailable, not completed".into(),
         );
+    }
+    if cycles {
+        result.warnings.push("Exact tied split/fuse cycle stopped after revisiting a partition; reference traversal can cycle".into());
     }
     Ok(result)
 }
@@ -718,6 +853,7 @@ pub fn exhaustive(
     budget: usize,
     cancel: Option<&Path>,
 ) -> Result<GmycResult> {
+    validate_events(time)?;
     let mut todo = vec![vec![tree.root()]];
     let mut seen = BTreeSet::new();
     let mut profile = vec![null(time)];
@@ -812,6 +948,53 @@ fn reduce_thresholds(tree: &TreeDoc, time: &TimeTree, roots: &[usize]) -> Vec<f6
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn reference_summary_chi_square_convention_has_known_tails() {
+        assert!((chi_square_tail(2.0, 2) - (-1.0f64).exp()).abs() < 1e-14);
+        assert!((chi_square_tail(3.841_458_820_694_124, 1) - 0.05).abs() < 1e-12);
+        assert!((chi_square_tail(7.814_727_903_251_179, 3) - 0.05).abs() < 1e-12);
+        assert!((chi_square_tail(9.487_729_036_781_154, 4) - 0.05).abs() < 1e-12);
+    }
+
+    #[test]
+    fn reference_versions_report_distinct_summary_conventions() {
+        let tree =
+            TreeDoc::from_newick("fixture", "((a:0.1,b:0.1):0.9,(c:0.2,d:0.2):0.8);").unwrap();
+        let time = crate::time_tree::validate(&tree, true, 1e-8, true).unwrap();
+        let mut fit = single(&tree, &time, None).unwrap();
+        assert_eq!(fit.lr_degrees_of_freedom, 2);
+        let old = fit.lr_p_value;
+        let best = fit.best;
+        use_newer_summary(&mut fit);
+        assert_eq!(fit.best, best);
+        assert_eq!(fit.lr_degrees_of_freedom, 3);
+        assert!(fit.lr_p_value > old);
+        assert!(
+            fit.profile[fit.best]
+                .diagnostics
+                .iter()
+                .any(|text| text.contains("not separately identified"))
+        );
+    }
+
+    #[test]
+    fn numerically_tied_partitions_are_reported_without_forced_reassignment() {
+        let tree = TreeDoc::from_newick(
+            "ladder",
+            include_str!("../../../testdata/fixtures/delimitation/gmyc-ladder.nwk"),
+        )
+        .unwrap();
+        let time = crate::time_tree::validate(&tree, true, 1e-8, true).unwrap();
+        let fit = single(&tree, &time, None).unwrap();
+        assert!(
+            fit.warnings
+                .iter()
+                .any(|warning| warning.contains("Alternative partitions"))
+        );
+        assert!(fit.support_candidates.len() > 1);
+        assert!(fit.likelihood_ratio < 1e-6);
+    }
+
     #[test]
     fn analytic_plugin_rates_and_waiting_likelihood() {
         let tree =
