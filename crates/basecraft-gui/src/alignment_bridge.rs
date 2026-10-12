@@ -60,6 +60,10 @@ pub mod qobject {
         /// Newick file beside this one.
         #[qinvokable]
         fn build_fasttree(self: Pin<&mut AlignmentController>);
+        #[qinvokable]
+        fn trim_alignment(self: Pin<&mut AlignmentController>);
+        #[qinvokable]
+        fn build_iqtree(self: Pin<&mut AlignmentController>);
 
         #[qinvokable]
         fn open_file(self: Pin<&mut AlignmentController>, path: &QString) -> bool;
@@ -213,6 +217,7 @@ struct Tool {
     output: (&'static str, &'static str),
     min_rows: usize,
     working: &'static str,
+    params: serde_json::Map<String, serde_json::Value>,
 }
 const KEY_SPACE: i32 = 0x20;
 
@@ -858,6 +863,39 @@ impl qobject::AlignmentController {
             output: ("mafft", "fasta"),
             min_rows: 2,
             working: "Aligning with MAFFT…",
+            params: serde_json::Map::new(),
+        });
+    }
+
+    pub fn trim_alignment(self: Pin<&mut Self>) {
+        let mut params = serde_json::Map::new();
+        params.insert("method".into(), serde_json::json!("automated1"));
+        self.run_tool(&Tool {
+            name: "trimAl",
+            plugin: "trimal",
+            operation: "trim",
+            input: AlignmentInput::Aligned,
+            output: ("trimmed", "fasta"),
+            min_rows: 2,
+            working: "Trimming with trimAl…",
+            params,
+        });
+    }
+
+    pub fn build_iqtree(self: Pin<&mut Self>) {
+        let mut params = serde_json::Map::new();
+        params.insert("model".into(), serde_json::json!("MFP"));
+        params.insert("threads".into(), serde_json::json!(4));
+        params.insert("seed".into(), serde_json::json!(1));
+        self.run_tool(&Tool {
+            name: "IQ-TREE",
+            plugin: "iqtree",
+            operation: "tree",
+            input: AlignmentInput::Aligned,
+            output: ("iqtree", "nwk"),
+            min_rows: 4,
+            working: "Selecting a model and building a tree with IQ-TREE…",
+            params,
         });
     }
 
@@ -870,6 +908,7 @@ impl qobject::AlignmentController {
             output: ("fasttree", "nwk"),
             min_rows: 3,
             working: "Building a tree with FastTree…",
+            params: serde_json::Map::new(),
         });
     }
 
@@ -902,13 +941,14 @@ impl qobject::AlignmentController {
                 output,
             )
         };
-        let job = match job {
+        let mut job = match job {
             Ok(job) => job,
             Err(e) => {
                 self.fail(&format!("{name}: {e}"));
                 return;
             }
         };
+        job.params.clone_from(&tool.params);
         self.as_mut().set_busy(true);
         self.as_mut().notify(tool.working);
         let started = Instant::now();

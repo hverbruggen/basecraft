@@ -521,6 +521,12 @@ ApplicationWindow {
                             tip: "Realign the sequences with MAFFT, default settings, into a new file"
                             onClicked: window.current.align_mafft()
                         }
+                        RibbonButton {
+                            text: "trimAl"
+                            enabled: window.current !== null && !window.current.busy
+                            tip: "Trim unreliable columns with trimAl automated1 into a new alignment"
+                            onClicked: window.current.trim_alignment()
+                        }
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
@@ -583,6 +589,12 @@ ApplicationWindow {
                             enabled: window.current !== null && !window.current.busy
                             tip: "Infer a tree with FastTree, standard settings (GTR for DNA, LG for protein), into a new file"
                             onClicked: window.current.build_fasttree()
+                        }
+                        RibbonButton {
+                            text: "IQ-TREE"
+                            enabled: window.current !== null && !window.current.busy
+                            tip: "Select a model and infer a maximum-likelihood tree; four workers, seed 1, no support resampling"
+                            onClicked: window.current.build_iqtree()
                         }
                     }
                     Item { Layout.fillWidth: true }
@@ -1332,6 +1344,8 @@ ApplicationWindow {
                     else if (cmd === "overwrite") window.alignmentInsert = false
                     else if (cmd === "mafft") c.align_mafft()
                     else if (cmd === "fasttree") c.build_fasttree()
+                    else if (cmd === "trimal") c.trim_alignment()
+                    else if (cmd === "iqtree") c.build_iqtree()
                     console.log("aln", step, "|", c.message)
                 }
             }

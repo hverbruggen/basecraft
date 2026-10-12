@@ -1,0 +1,10 @@
+schema = 1
+id = "basecraft.iqtree"
+name = "IQ-TREE maximum-likelihood inference"
+version = "0.1.0"
+kinds = ["operation"]
+[entry]
+operation = "python:iqtree_plugin.py"
+[[operations]]
+name = "tree"
+label = "Infer a tree with IQ-TREE and retain the analysis report"

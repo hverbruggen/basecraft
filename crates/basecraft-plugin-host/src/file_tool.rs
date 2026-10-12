@@ -33,6 +33,8 @@ pub struct FileJob {
     /// What the input was made from, with the hash of the input itself.
     pub input_key: (String, String),
     pub output: PathBuf,
+    /// Public operation parameters, retained in the tool-run log.
+    pub params: serde_json::Map<String, serde_json::Value>,
     _dir: tempfile::TempDir,
 }
 
@@ -45,6 +47,12 @@ impl FileJob {
         kind: AlignmentInput,
         output: PathBuf,
     ) -> Result<Self> {
+        let source_path = session.root().join(session.doc_key(doc));
+        if output.exists() && output.canonicalize()? == source_path.canonicalize()? {
+            return Err(Error::Protocol(
+                "tool output must differ from the source alignment".into(),
+            ));
+        }
         let dir = tempfile::Builder::new()
             .prefix("basecraft-tool")
             .tempdir()?;
@@ -69,6 +77,7 @@ impl FileJob {
             input: path,
             input_key: (key, hash),
             output,
+            params: serde_json::Map::new(),
             _dir: dir,
         })
     }
@@ -77,11 +86,10 @@ impl FileJob {
     pub fn run(&self) -> Result<InvokeResult> {
         let manifest = Manifest::load(&self.plugin)?;
         let mut process = PluginProcess::spawn(&manifest)?;
-        let result = process.invoke(
-            &self.operation,
-            json!({ "input": self.input, "output": self.output }),
-            None,
-        )?;
+        let mut params = self.params.clone();
+        params.insert("input".into(), json!(self.input));
+        params.insert("output".into(), json!(self.output));
+        let result = process.invoke(&self.operation, serde_json::Value::Object(params), None)?;
         if !self.output.exists() {
             return Err(Error::Protocol(format!(
                 "{} wrote no {}",
@@ -105,13 +113,20 @@ impl FileJob {
                 version: t.version.clone(),
             },
         );
+        let mut outputs = vec![self.output.canonicalize()?];
+        for path in &result.outputs {
+            let path = PathBuf::from(path).canonicalize()?;
+            if !outputs.contains(&path) {
+                outputs.push(path);
+            }
+        }
         session.log_tool_run(
             doc,
             actor,
             (&manifest.id, &self.operation),
-            json!({}),
+            serde_json::Value::Object(self.params.clone()),
             std::slice::from_ref(&self.input_key),
-            std::slice::from_ref(&self.output),
+            &outputs,
         )?;
         Ok(())
     }
