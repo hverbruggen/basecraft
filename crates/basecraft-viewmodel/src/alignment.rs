@@ -105,6 +105,8 @@ impl Block {
 
 #[derive(Clone, Debug)]
 pub struct AlignmentView {
+    /// Exact counterpart rows highlighted by a linked tree selection.
+    pub linked_taxa: std::collections::HashSet<String>,
     /// Column at the left edge of the grid.
     pub start: f64,
     pub px_per_col: f64,
@@ -129,6 +131,7 @@ pub struct AlignmentView {
 impl AlignmentView {
     pub fn new(width: f32, height: f32) -> Self {
         Self {
+            linked_taxa: std::collections::HashSet::new(),
             start: 0.0,
             px_per_col: PX_PER_COL_AT_100,
             scroll_y: 0.0,
@@ -1043,7 +1046,9 @@ impl AlignmentView {
         let selected = self.selection.map(|b| b.rows);
         for r in self.visible_rows() {
             let y = self.y_of(r);
-            if selected.is_some_and(|(a, b)| (a..b).contains(&r)) {
+            if selected.is_some_and(|(a, b)| (a..b).contains(&r))
+                || self.linked_taxa.contains(&doc.row(r).name)
+            {
                 frame.rect(
                     0.0,
                     y.max(top),

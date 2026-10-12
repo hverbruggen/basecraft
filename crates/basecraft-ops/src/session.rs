@@ -359,7 +359,24 @@ impl Session {
                     return Err(invalid("a tree can only be saved as a tree file"));
                 }
                 let hashes = self.save_tree(t, &target)?;
-                return self.log_save(id, &target, hashes);
+                self.log_save(id, &target, hashes)?;
+                let original = self.resolve(&self.docs[id.0].key);
+                if original.canonicalize().unwrap_or_else(|_| original.clone())
+                    != target.canonicalize()?
+                    && crate::links::sidecar(&original).exists()
+                {
+                    let link = crate::links::AlignmentLink::read(&original)?;
+                    let outputs = link.copy_to(&original, &target)?;
+                    self.log_tool_run(
+                        id,
+                        self.actor.clone(),
+                        ("basecraft.links", "copy"),
+                        serde_json::json!({"from": original,"to":target}),
+                        &[],
+                        &outputs,
+                    )?;
+                }
+                return Ok(());
             }
             Loaded::Sequence(o) => o,
         };

@@ -63,7 +63,21 @@ fn trimal_and_iqtree_preserve_identifiers_and_provenance() {
     job.record(&mut session, doc, &result).unwrap();
     let tree_doc = session.open(&tree).unwrap();
     assert!(session.tree(tree_doc).find_tip("a:one").is_some());
+    let link = basecraft_ops::links::AlignmentLink::read(&tree).unwrap();
+    assert!(link.inferred);
+    assert_eq!(link.alignment_version, session.alignment(doc).version());
+    let snapshot = link
+        .checked_snapshot(&tree, session.tree(tree_doc))
+        .unwrap();
+    let snapshot_doc = session.open(&snapshot).unwrap();
+    assert_eq!(session.alignment(snapshot_doc).read(0, 0, 1), b"T");
     assert!(result.outputs.iter().any(|p| p.ends_with(".iqtree")));
+    assert!(
+        result
+            .outputs
+            .iter()
+            .any(|p| p.ends_with(".alignment.json"))
+    );
     session.flush().unwrap();
     assert!(basecraft_ops::replay::replay(root).unwrap().ok());
 }

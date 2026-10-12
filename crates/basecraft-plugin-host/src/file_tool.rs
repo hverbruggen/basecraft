@@ -35,6 +35,9 @@ pub struct FileJob {
     pub output: PathBuf,
     /// Public operation parameters, retained in the tool-run log.
     pub params: serde_json::Map<String, serde_json::Value>,
+    source_path: PathBuf,
+    source_version: u64,
+    source_hash: String,
     _dir: tempfile::TempDir,
 }
 
@@ -78,6 +81,10 @@ impl FileJob {
             input_key: (key, hash),
             output,
             params: serde_json::Map::new(),
+            source_path: session.root().join(session.doc_key(doc)),
+            source_version: session.alignment(doc).version(),
+            source_hash: basecraft_io::hash_file(&session.root().join(session.doc_key(doc)))
+                .map_err(basecraft_ops::Error::from)?,
             _dir: dir,
         })
     }
@@ -89,13 +96,45 @@ impl FileJob {
         let mut params = self.params.clone();
         params.insert("input".into(), json!(self.input));
         params.insert("output".into(), json!(self.output));
-        let result = process.invoke(&self.operation, serde_json::Value::Object(params), None)?;
+        let mut result =
+            process.invoke(&self.operation, serde_json::Value::Object(params), None)?;
         if !self.output.exists() {
             return Err(Error::Protocol(format!(
                 "{} wrote no {}",
                 manifest.id,
                 self.output.display()
             )));
+        }
+        if self.operation == "tree" {
+            let mut trees = vec![self.output.canonicalize()?];
+            for path in &result.outputs {
+                let path = PathBuf::from(path);
+                if path
+                    .extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("nwk"))
+                {
+                    let path = path.canonicalize()?;
+                    if !trees.contains(&path) {
+                        trees.push(path);
+                    }
+                }
+            }
+            let artifacts = basecraft_ops::links::AlignmentLink::create(
+                &self.output,
+                &self.source_path,
+                &self.input,
+                self.source_version,
+                true,
+                Some(&self.source_hash),
+            )?;
+            result
+                .outputs
+                .extend(artifacts.iter().map(|p| p.to_string_lossy().into_owned()));
+            let link = basecraft_ops::links::AlignmentLink::read(&self.output)?;
+            for tree in trees.into_iter().skip(1) {
+                let metadata = link.share_to(&self.output, &tree)?;
+                result.outputs.push(metadata.to_string_lossy().into_owned());
+            }
         }
         Ok(result)
     }

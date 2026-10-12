@@ -13,6 +13,7 @@ arrow-array.workspace = true
 arrow-ipc.workspace = true
 arrow-schema.workspace = true
 basecraft-docs.workspace = true
+basecraft-io.workspace = true
 basecraft-ops.workspace = true
 basecraft-platform.workspace = true
 basecraft-protocol.workspace = true
@@ -23,7 +24,6 @@ thiserror.workspace = true
 toml.workspace = true
 
 [dev-dependencies]
-basecraft-io.workspace = true
 
 
 [lints]

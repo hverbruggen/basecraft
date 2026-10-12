@@ -128,6 +128,9 @@ struct Layout {
 }
 
 pub struct TreeView {
+    /// Exact counterpart tips highlighted by a linked alignment selection.
+    pub linked_taxa: std::collections::HashSet<String>,
+    pub multi_taxa: Option<std::collections::HashSet<String>>,
     width: f32,
     height: f32,
     /// Row spacing and tree width relative to fitting the window.
@@ -146,6 +149,8 @@ pub struct TreeView {
 impl TreeView {
     pub fn new(width: f32, height: f32) -> Self {
         Self {
+            linked_taxa: std::collections::HashSet::new(),
+            multi_taxa: None,
             width,
             height,
             row_zoom: 1.0,
@@ -334,12 +339,75 @@ impl TreeView {
     }
 
     pub fn select_at(&mut self, doc: &TreeDoc, x: f32, y: f32) -> Option<usize> {
+        self.multi_taxa = None;
         self.selected = self.node_at(doc, x, y);
         self.selected
     }
 
+    pub fn selected_names(&self, doc: &TreeDoc) -> Vec<String> {
+        if let Some(names) = &self.multi_taxa {
+            return doc
+                .nodes()
+                .iter()
+                .filter(|n| n.is_tip() && names.contains(&n.name))
+                .map(|n| n.name.clone())
+                .collect();
+        }
+        let mut stack: Vec<_> = self.selected.into_iter().collect();
+        let mut names = Vec::new();
+        while let Some(n) = stack.pop() {
+            if doc.node(n).is_tip() {
+                names.push(doc.node(n).name.clone());
+            } else {
+                stack.extend(&doc.node(n).children);
+            }
+        }
+        names
+    }
+
+    /// Maximal clades entirely contained in the selected taxon set.
+    pub fn selected_roots(&self, doc: &TreeDoc) -> Vec<usize> {
+        let Some(names) = &self.multi_taxa else {
+            return self.selected.into_iter().collect();
+        };
+        let mut included = vec![false; doc.nodes().len()];
+        let order = doc.preorder();
+        for &n in order.iter().rev() {
+            included[n] = if doc.node(n).is_tip() {
+                names.contains(&doc.node(n).name)
+            } else {
+                doc.node(n).children.iter().all(|&c| included[c])
+            };
+        }
+        order
+            .into_iter()
+            .filter(|&n| included[n] && doc.node(n).parent.is_none_or(|p| !included[p]))
+            .collect()
+    }
+
+    /// Ctrl-click adds/removes a clade's exact tip set, without filling in its MRCA.
+    pub fn toggle_clade(&mut self, doc: &TreeDoc, node: usize) {
+        let previous: std::collections::HashSet<_> = self.selected_names(doc).into_iter().collect();
+        self.multi_taxa = None;
+        self.selected = Some(node);
+        let clicked = self.selected_names(doc);
+        let mut union = previous;
+        if clicked.iter().all(|n| union.contains(n)) {
+            for name in clicked {
+                union.remove(&name);
+            }
+        } else {
+            union.extend(clicked);
+        }
+        if union.is_empty() {
+            self.selected = None;
+        }
+        self.multi_taxa = Some(union);
+    }
+
     /// Move the selection: to the parent, the first child, or a sibling.
     pub fn select_parent(&mut self, doc: &TreeDoc) {
+        self.multi_taxa = None;
         if let Some(p) = self.selected.and_then(|s| doc.node(s).parent) {
             self.selected = Some(p);
             self.reveal(p);
@@ -347,6 +415,7 @@ impl TreeView {
     }
 
     pub fn select_child(&mut self, doc: &TreeDoc) {
+        self.multi_taxa = None;
         let s = self.selected.unwrap_or(doc.root());
         if let Some(&c) = doc.node(s).children.first() {
             self.selected = Some(c);
@@ -357,6 +426,7 @@ impl TreeView {
     }
 
     pub fn select_sibling(&mut self, doc: &TreeDoc, by: i32) {
+        self.multi_taxa = None;
         let Some(s) = self.selected else {
             self.selected = Some(doc.root());
             return;
@@ -433,6 +503,22 @@ impl TreeView {
         let (dx, dy) = (-self.scroll_x, -self.scroll_y);
         for s in &shapes {
             draw(frame, s, dx, dy, self.pixel_ratio);
+        }
+        for (i, node) in doc.nodes().iter().enumerate() {
+            if node.is_tip()
+                && (self.linked_taxa.contains(&node.name)
+                    || self
+                        .multi_taxa
+                        .as_ref()
+                        .is_some_and(|names| names.contains(&node.name)))
+            {
+                frame.disc(
+                    self.layout.x[i] + dx,
+                    self.layout.y[i] + dy,
+                    4.0,
+                    theme.accent,
+                );
+            }
         }
     }
 }
@@ -1150,6 +1236,19 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn multiple_clades_keep_exact_taxa() {
+        let t = tree("((A:1,B:1)90:1,(C:1,D:1)80:1);");
+        let mut v = TreeView::new(800., 600.);
+        v.selected = t.find_tip("A");
+        v.toggle_clade(&t, t.find_tip("C").unwrap());
+        assert_eq!(v.selected_names(&t), names(&["A", "C"]));
+        let roots = v.selected_roots(&t);
+        assert_eq!(roots.len(), 2);
+        v.toggle_clade(&t, t.find_tip("C").unwrap());
+        assert_eq!(v.selected_names(&t), names(&["A"]));
     }
 
     #[test]

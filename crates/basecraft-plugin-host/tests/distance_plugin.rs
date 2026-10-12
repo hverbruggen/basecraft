@@ -36,7 +36,7 @@ fn distance_outputs_are_logged_and_replay() {
     job.params.insert("model".into(), serde_json::json!("jc69"));
     job.params.insert("threads".into(), serde_json::json!(2));
     let result = job.run().unwrap();
-    assert_eq!(result.outputs.len(), 3);
+    assert_eq!(result.outputs.len(), 5);
     job.record(&mut session, doc, &result).unwrap();
     let tree = session.open(&output).unwrap();
     assert_eq!(session.tree(tree).tip_count(), 4);
@@ -45,13 +45,13 @@ fn distance_outputs_are_logged_and_replay() {
         .iter()
         .find(|e| matches!(e.op, Op::ToolRun { .. }))
         .unwrap();
-    assert_eq!(entry.result.hashes.len(), 4);
+    assert_eq!(entry.result.hashes.len(), 6);
     if let Op::ToolRun {
         params, outputs, ..
     } = &entry.op
     {
         assert_eq!(params["model"], "jc69");
-        assert_eq!(outputs.len(), 3);
+        assert_eq!(outputs.len(), 5);
     }
     let mut upgma = FileJob::from_alignment(
         &session,
@@ -74,6 +74,72 @@ fn distance_outputs_are_logged_and_replay() {
     assert_eq!(session.tree(tree).tip_count(), 4);
     let replay = basecraft_ops::replay::replay(root).unwrap();
     assert!(replay.ok(), "{:?}", replay.problems);
+}
+
+#[test]
+fn forest_members_share_one_alignment_snapshot() {
+    let Some(binary) = std::env::var_os("BASECRAFT_DISTANCE_TEST_BINARY") else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("forest.afa");
+    std::fs::write(&input, ">a\nAAA---\n>b\nAAT---\n>c\n---CCC\n>d\n---CCT\n").unwrap();
+    let mut session = Session::new(dir.path());
+    let doc = session.open(&input).unwrap();
+    let plugin = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/distance");
+    assert!(
+        FileJob::from_alignment(
+            &session,
+            doc,
+            (&plugin, "tree"),
+            AlignmentInput::Aligned,
+            input.clone()
+        )
+        .is_err()
+    );
+    let output = dir.path().join("forest.nwk");
+    let mut job = FileJob::from_alignment(
+        &session,
+        doc,
+        (&plugin, "tree"),
+        AlignmentInput::Aligned,
+        output.clone(),
+    )
+    .unwrap();
+    job.params.insert(
+        "executable".into(),
+        serde_json::json!(std::path::PathBuf::from(binary)),
+    );
+    job.params.insert("model".into(), serde_json::json!("p"));
+    let result = job.run().unwrap();
+    job.record(&mut session, doc, &result).unwrap();
+    let main = basecraft_ops::links::AlignmentLink::read(&output).unwrap();
+    let mut components = 0;
+    for path in &result.outputs {
+        if path.contains(".component-")
+            && std::path::Path::new(path)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("nwk"))
+        {
+            components += 1;
+            let path = std::path::Path::new(path);
+            let tree = session.open(path).unwrap();
+            let link = basecraft_ops::links::AlignmentLink::read(path).unwrap();
+            assert_eq!(link.snapshot, main.snapshot);
+            assert!(link.checked_snapshot(path, session.tree(tree)).is_ok());
+        }
+    }
+    assert_eq!(components, 2);
+    assert_eq!(
+        result
+            .outputs
+            .iter()
+            .filter(|p| p.ends_with(".alignment.afa"))
+            .count(),
+        1
+    );
+    session.flush().unwrap();
+    assert!(basecraft_ops::replay::replay(dir.path()).unwrap().ok());
 }
 
 #[test]

@@ -18,8 +18,13 @@ Item {
     signal toggleSidebar
     signal renameTip
     signal annotate
+    signal openFile(string path)
 
     TreeController { id: ctl }
+    Connections {
+        target: ctl
+        function onFileCreated(path) { doc.openFile(path) }
+    }
 
     // Lines snap to whole screen pixels.
     readonly property real pixelRatio: view.Window.window ? view.Window.window.devicePixelRatio : 1
@@ -56,7 +61,7 @@ Item {
                 if (mouse.button === Qt.RightButton)
                     doc.contextMenu(JSON.parse(ctl.context_press(mouse.x, mouse.y)))
                 else
-                    ctl.press(mouse.x, mouse.y)
+                    ctl.press_modified(mouse.x, mouse.y, mouse.modifiers)
             }
             onPositionChanged: (mouse) => {
                 lastX = mouse.x; lastY = mouse.y

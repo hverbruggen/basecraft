@@ -6,6 +6,7 @@
 
 #[cxx_qt::bridge]
 pub mod qobject {
+    impl cxx_qt::Threading for TreeController {}
     unsafe extern "C++" {
         include!("cxx-qt-lib/qbytearray.h");
         type QByteArray = cxx_qt_lib::QByteArray;
@@ -28,6 +29,7 @@ pub mod qobject {
         #[qproperty(QString, accent)]
         #[qproperty(QString, mono_font)]
         #[qproperty(QString, file_path)]
+        #[qproperty(bool, busy)]
         #[qproperty(bool, dirty)]
         #[qproperty(QString, zoom_text)]
         #[qproperty(f64, hscroll_pos)]
@@ -36,6 +38,7 @@ pub mod qobject {
         #[qproperty(f64, vscroll_size)]
         /// A node is selected; `tip_selected` if it's a tip.
         #[qproperty(bool, has_selection)]
+        #[qproperty(QString, linked_alignment)]
         #[qproperty(bool, tip_selected)]
         /// Where support values sit: "natural", "above" or "below".
         #[qproperty(QString, support_placement)]
@@ -43,6 +46,20 @@ pub mod qobject {
 
         #[qinvokable]
         fn open_file(self: Pin<&mut TreeController>, path: &QString) -> bool;
+        #[qinvokable]
+        fn highlight_taxa(self: Pin<&mut TreeController>, names: &QString);
+        #[qsignal]
+        #[cxx_name = "taxaSelected"]
+        fn taxa_selected(self: Pin<&mut TreeController>, names: QString);
+        #[qinvokable]
+        fn link_alignment(self: Pin<&mut TreeController>, path: &QString);
+        #[qinvokable]
+        fn extract_clade_alignment(self: Pin<&mut TreeController>);
+        #[qinvokable]
+        fn select_clade(self: Pin<&mut TreeController>, names: &QString);
+        #[qsignal]
+        #[cxx_name = "fileCreated"]
+        fn file_created(self: Pin<&mut TreeController>, path: QString);
         #[qinvokable]
         fn resize(self: Pin<&mut TreeController>, width: f64, height: f64);
         /// Screen pixels per QML pixel, so lines draw on whole pixels.
@@ -53,6 +70,8 @@ pub mod qobject {
         /// Select what's under the pointer.
         #[qinvokable]
         fn press(self: Pin<&mut TreeController>, x: f64, y: f64);
+        #[qinvokable]
+        fn press_modified(self: Pin<&mut TreeController>, x: f64, y: f64, modifiers: i32);
         /// Select what's under the pointer and describe it for the context
         /// menu, as JSON.
         #[qinvokable]
@@ -152,7 +171,7 @@ use basecraft_ops::{DocId, Session};
 use basecraft_protocol::{CladeAnnotation, Op, SupportPlacement, TreeStyle};
 use basecraft_viewmodel::tree::to_svg;
 use basecraft_viewmodel::{Frame, Theme, TreeView};
-use cxx_qt::CxxQtType;
+use cxx_qt::{CxxQtType, Threading};
 use cxx_qt_lib::{QByteArray, QString};
 use serde_json::{Value, json};
 
@@ -162,8 +181,17 @@ use crate::bridge::{
     memory_text, monospace_font, omarchy_theme_path, project_root, took,
 };
 
+struct CladeExtraction {
+    output: PathBuf,
+    source_changed: bool,
+    params: Value,
+    input: (String, String),
+}
+
+#[allow(clippy::struct_excessive_bools)]
 pub struct TreeRust {
     frame: QByteArray,
+    last_taxa: String,
     status: QString,
     message: QString,
     message_kind: QString,
@@ -175,6 +203,7 @@ pub struct TreeRust {
     mono_font: QString,
     file_path: QString,
     dirty: bool,
+    busy: bool,
     zoom_text: QString,
     hscroll_pos: f64,
     hscroll_size: f64,
@@ -182,6 +211,7 @@ pub struct TreeRust {
     vscroll_size: f64,
     has_selection: bool,
     tip_selected: bool,
+    linked_alignment: QString,
     support_placement: QString,
 
     session: Option<Session>,
@@ -196,6 +226,7 @@ impl Default for TreeRust {
     fn default() -> Self {
         let mut c = Self {
             frame: QByteArray::default(),
+            last_taxa: String::new(),
             status: QString::default(),
             message: QString::default(),
             message_kind: QString::default(),
@@ -207,6 +238,7 @@ impl Default for TreeRust {
             mono_font: QString::from(&monospace_font()),
             file_path: QString::default(),
             dirty: false,
+            busy: false,
             zoom_text: QString::default(),
             hscroll_pos: 0.0,
             hscroll_size: 1.0,
@@ -214,6 +246,7 @@ impl Default for TreeRust {
             vscroll_size: 1.0,
             has_selection: false,
             tip_selected: false,
+            linked_alignment: QString::default(),
             support_placement: QString::from("natural"),
             session: None,
             doc: None,
@@ -289,6 +322,7 @@ impl qobject::TreeController {
         self.as_mut().set_tip_selected(tip);
         self.as_mut()
             .set_support_placement(QString::from(placement));
+        self.emit_taxa();
     }
 
     /// A neutral hint. Messages stay brief: say what happened.
@@ -339,6 +373,171 @@ impl qobject::TreeController {
         }
     }
 
+    fn refresh_link(mut self: Pin<&mut Self>) {
+        let path = PathBuf::from(self.rust().file_path.to_string());
+        let source = basecraft_ops::links::AlignmentLink::read(&path)
+            .ok()
+            .map(|link| link.source.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        self.as_mut().set_linked_alignment(QString::from(&source));
+    }
+
+    pub fn link_alignment(mut self: Pin<&mut Self>, path: &QString) {
+        let result = (|| -> basecraft_ops::Result<()> {
+            let mut r = self.as_mut().rust_mut();
+            let r = &mut *r;
+            let tree_path = PathBuf::from(r.file_path.to_string());
+            let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
+                return Ok(());
+            };
+            let source = PathBuf::from(path.to_string());
+            let outputs = basecraft_ops::links::AlignmentLink::associate(
+                &tree_path,
+                session.tree(doc),
+                &source,
+            )?;
+            session.log_tool_run(
+                doc,
+                basecraft_protocol::Actor::Human {
+                    user: basecraft_platform::username(),
+                },
+                ("basecraft.links", "associate"),
+                json!({"alignment":source,"inferred":false}),
+                &[(
+                    source.to_string_lossy().into_owned(),
+                    basecraft_io::hash_file(&source)?,
+                )],
+                &outputs,
+            )?;
+            Ok(())
+        })();
+        match result {
+            Ok(()) => {
+                self.as_mut().refresh_link();
+                self.done("Linked alignment; matching names do not establish inference provenance");
+            }
+            Err(e) => self.fail(&format!("Cannot link alignment: {e}")),
+        }
+    }
+
+    pub fn select_clade(mut self: Pin<&mut Self>, names: &QString) {
+        let result = (|| -> Result<usize, Box<dyn std::error::Error>> {
+            let names: Vec<String> = serde_json::from_str(&names.to_string())?;
+            self.with_doc(|tree| tree.resolve(&names))
+                .ok_or("No tree open")?
+                .map_err(Into::into)
+        })();
+        match result {
+            Ok(node) => {
+                self.as_mut().rust_mut().view.multi_taxa = None;
+                self.as_mut().rust_mut().view.selected = Some(node);
+                self.refresh();
+            }
+            Err(e) => self.fail(&e.to_string()),
+        }
+    }
+
+    pub fn extract_clade_alignment(mut self: Pin<&mut Self>) {
+        if self.rust().busy {
+            return;
+        }
+        let work = {
+            let r = self.rust();
+            let (Some(session), Some(doc)) = (&r.session, r.doc) else {
+                return;
+            };
+            let tree = session.tree(doc);
+            let taxa = r.view.selected_names(tree);
+            if taxa.is_empty() {
+                self.fail("Select one or more clades first");
+                return;
+            }
+            (
+                PathBuf::from(r.file_path.to_string()),
+                tree.clone(),
+                taxa,
+                session.id().to_owned(),
+                doc,
+            )
+        };
+        self.as_mut().set_busy(true);
+        self.as_mut().notify("Extracting the selected clades…");
+        let qt_thread = self.qt_thread();
+        std::thread::spawn(move || {
+            let result =
+                (|| -> Result<CladeExtraction, Box<dyn std::error::Error + Send + Sync>> {
+                    let (tree_path, tree, taxa, _, _) = &work;
+                    let link = basecraft_ops::links::AlignmentLink::read(tree_path)
+                        .map_err(|e| format!("Link an alignment first: {e}"))?;
+                    let input = link.checked_snapshot(tree_path, tree)?;
+                    let output =
+                        basecraft_plugin_host::file_tool::output_beside(tree_path, "clade", "afa");
+                    let manifest = basecraft_plugin_host::Manifest::load(
+                        &crate::bridge::plugin_dir("clade-alignment"),
+                    )?;
+                    let mut process = basecraft_plugin_host::PluginProcess::spawn(&manifest)?;
+                    let params = json!({"input":input,"output":output,"taxa":taxa,"tree_version":tree.version()});
+                    let result = process.invoke("extract", params.clone(), None)?;
+                    if !output.exists() || result.outputs.is_empty() {
+                        return Err("Plugin wrote no alignment".into());
+                    }
+                    Ok(CladeExtraction {
+                        output,
+                        source_changed: link.source_changed(),
+                        params,
+                        input: (input.to_string_lossy().into_owned(), link.snapshot_hash),
+                    })
+                })();
+            let _ = qt_thread.queue(move |mut this| {
+                this.as_mut().set_busy(false);
+                let result = result.and_then(|done| {
+                    let mut r = this.as_mut().rust_mut();
+                    let Some(session) = &mut r.session else { return Err("Tree was closed".into()) };
+                    if session.id() != work.3 { return Err("The open tree changed during extraction".into()); }
+                    session.log_tool_run(work.4,basecraft_protocol::Actor::Plugin {
+                        id:"basecraft.clade-alignment".into(),version:"0.1.0".into()
+                    },("basecraft.clade-alignment","extract"),done.params.clone(),
+                        std::slice::from_ref(&done.input),std::slice::from_ref(&done.output))?;
+                    Ok(done)
+                });
+                match result {
+                    Ok(done) => {
+                        this.as_mut().done(if done.source_changed {
+                            "Opened clades from the retained alignment snapshot; the source file has changed"
+                        } else { "Opened alignment for the selected clades" });
+                        this.file_created(QString::from(&done.output.to_string_lossy().into_owned()));
+                    }
+                    Err(e) => this.fail(&format!("Cannot extract clades: {e}")),
+                }
+            });
+        });
+    }
+
+    pub fn highlight_taxa(mut self: Pin<&mut Self>, names: &QString) {
+        if let Ok(taxa) =
+            serde_json::from_str::<std::collections::HashSet<String>>(&names.to_string())
+        {
+            self.as_mut().rust_mut().view.linked_taxa = taxa;
+            self.refresh();
+        }
+    }
+
+    fn emit_taxa(mut self: Pin<&mut Self>) {
+        let taxa = {
+            let r = self.rust();
+            let (Some(session), Some(doc)) = (&r.session, r.doc) else {
+                return;
+            };
+            let tree = session.tree(doc);
+            let names = r.view.selected_names(tree);
+            serde_json::to_string(&names).unwrap_or_default()
+        };
+        if taxa != self.rust().last_taxa {
+            self.as_mut().rust_mut().last_taxa.clone_from(&taxa);
+            self.taxa_selected(QString::from(&taxa));
+        }
+    }
+
     pub fn open_file(mut self: Pin<&mut Self>, path: &QString) -> bool {
         let path = PathBuf::from(path.to_string());
         let mut session = Session::new(project_root(&path));
@@ -348,6 +547,7 @@ impl qobject::TreeController {
                     let mut r = self.as_mut().rust_mut();
                     let r = &mut *r;
                     r.view.selected = None;
+                    r.view.multi_taxa = None;
                     r.view.fit();
                     r.view.sync(session.tree(doc));
                     r.session = Some(session);
@@ -356,6 +556,7 @@ impl qobject::TreeController {
                 let abs = std::fs::canonicalize(&path).unwrap_or(path);
                 self.as_mut()
                     .set_file_path(QString::from(&abs.to_string_lossy().into_owned()));
+                self.as_mut().refresh_link();
                 self.as_mut().set_dirty(false);
                 self.as_mut().notify("");
                 self.refresh();
@@ -410,6 +611,24 @@ impl qobject::TreeController {
                 r.view.scroll_by(f(-d / 2.0), 0.0);
             } else {
                 r.view.scroll_by(0.0, f(-dy / 2.0));
+            }
+        }
+        self.refresh();
+    }
+
+    pub fn press_modified(mut self: Pin<&mut Self>, x: f64, y: f64, modifiers: i32) {
+        if modifiers & CTRL == 0 {
+            self.press(x, y);
+            return;
+        }
+        {
+            let mut r = self.as_mut().rust_mut();
+            let r = &mut *r;
+            if let (Some(session), Some(doc)) = (&r.session, r.doc) {
+                let tree = session.tree(doc);
+                if let Some(node) = r.view.node_at(tree, f(x), f(y)) {
+                    r.view.toggle_clade(tree, node);
+                }
             }
         }
         self.refresh();
@@ -615,6 +834,10 @@ impl qobject::TreeController {
     }
 
     pub fn save_as(mut self: Pin<&mut Self>, path: &QString) -> bool {
+        if self.rust().busy {
+            self.fail("Wait for clade extraction before saving under a new name");
+            return false;
+        }
         let started = Instant::now();
         let target = PathBuf::from(path.to_string());
         let result = {

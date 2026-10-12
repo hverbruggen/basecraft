@@ -1,6 +1,7 @@
 //! Operation registry, undo and redo, the operation log and replay.
 
 pub mod files;
+pub mod links;
 pub mod log;
 pub mod replay;
 pub mod session;

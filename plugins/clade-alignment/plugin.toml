@@ -1,0 +1,10 @@
+schema = 1
+id = "basecraft.clade-alignment"
+name = "Alignment for selected clade"
+version = "0.1.0"
+kinds = ["operation"]
+[entry]
+operation = "python:clade_alignment.py"
+[[operations]]
+name = "extract"
+label = "Extract selected taxa without realigning"

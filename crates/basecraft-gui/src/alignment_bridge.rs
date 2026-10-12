@@ -80,6 +80,11 @@ pub mod qobject {
         #[qinvokable]
         fn open_file(self: Pin<&mut AlignmentController>, path: &QString) -> bool;
         #[qinvokable]
+        fn highlight_taxa(self: Pin<&mut AlignmentController>, names: &QString);
+        #[qsignal]
+        #[cxx_name = "taxaSelected"]
+        fn taxa_selected(self: Pin<&mut AlignmentController>, names: QString);
+        #[qinvokable]
         fn resize(self: Pin<&mut AlignmentController>, width: f64, height: f64);
         #[qinvokable]
         fn wheel(
@@ -241,6 +246,7 @@ const KEY_SPACE: i32 = 0x20;
 #[allow(clippy::struct_excessive_bools)]
 pub struct AlignmentRust {
     frame: QByteArray,
+    last_taxa: String,
     status: QString,
     message: QString,
     message_kind: QString,
@@ -297,6 +303,7 @@ impl Default for AlignmentRust {
     fn default() -> Self {
         let mut c = Self {
             frame: QByteArray::default(),
+            last_taxa: String::new(),
             status: QString::default(),
             message: QString::default(),
             message_kind: QString::default(),
@@ -387,6 +394,7 @@ impl qobject::AlignmentController {
         self.as_mut().set_vscroll_size(v.1);
         self.as_mut().set_vscroll_pos(v.0);
         self.as_mut().update_gap_count();
+        self.emit_taxa();
     }
 
     // Only one scan at a time; discard old versions and scan the newest snapshot.
@@ -477,6 +485,35 @@ impl qobject::AlignmentController {
                 self.fail(&e.to_string());
                 false
             }
+        }
+    }
+
+    pub fn highlight_taxa(mut self: Pin<&mut Self>, names: &QString) {
+        if let Ok(taxa) =
+            serde_json::from_str::<std::collections::HashSet<String>>(&names.to_string())
+        {
+            self.as_mut().rust_mut().view.linked_taxa = taxa;
+            self.refresh();
+        }
+    }
+
+    fn emit_taxa(mut self: Pin<&mut Self>) {
+        let taxa = {
+            let r = self.rust();
+            let (Some(session), Some(doc)) = (&r.session, r.doc) else {
+                return;
+            };
+            let alignment = session.alignment(doc);
+            let names: Vec<_> = r.view.selection.map_or_else(Vec::new, |block| {
+                (block.rows.0..block.rows.1)
+                    .map(|i| alignment.row(i).name.clone())
+                    .collect()
+            });
+            serde_json::to_string(&names).unwrap_or_default()
+        };
+        if taxa != self.rust().last_taxa {
+            self.as_mut().rust_mut().last_taxa.clone_from(&taxa);
+            self.taxa_selected(QString::from(&taxa));
         }
     }
 

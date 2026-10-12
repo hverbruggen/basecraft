@@ -119,6 +119,24 @@ ApplicationWindow {
         tabs.currentIndex = openFiles.count - 1
     }
 
+    Connections {
+        target: window.current
+        ignoreUnknownSignals: true
+        function onTaxaSelected(names) {
+            if (!window.current) return
+            const source = window.treeOpen ? window.current.linked_alignment : window.current.file_path
+            if (!source) return
+            for (let i = 0; i < docs.count; i++) {
+                const d = docs.itemAt(i)
+                if (!d || d.controller === window.current) continue
+                if (window.treeOpen && d.kind === "alignment" && d.controller.file_path === source)
+                    d.controller.highlight_taxa(names)
+                else if (window.alignmentOpen && d.kind === "tree" && d.controller.linked_alignment === source)
+                    d.controller.highlight_taxa(names)
+            }
+        }
+    }
+
     function closeTab(i) {
         const d = docs.itemAt(i)
         if (d && d.controller.dirty) { confirmClose.index = i; confirmClose.open(); return }
@@ -572,6 +590,11 @@ ApplicationWindow {
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
+                        title: "Linked alignment"
+                        RibbonButton { text: "Link alignment…"; tip: "Associate an imported tree with an alignment after validating its identifiers"; onClicked: linkAlignmentFile.open() }
+                        RibbonButton { text: "Open selected clade(s)"; enabled: window.current !== null && !window.current.busy; tip: "Extract aligned rows without realigning; Ctrl-click to select multiple clades"; onClicked: window.current.extract_clade_alignment() }
+                    }
+                    RibbonGroup {
                         title: "Figure"
                         RibbonButton { text: "Export SVG…"; tip: "Save the tree as an SVG figure, black on white"; onClicked: window.exportSvg() }
                     }
@@ -986,6 +1009,7 @@ ApplicationWindow {
                             // Not "TreeView": that's Qt's, used by the
                             // files sidebar.
                             PhyloView {
+                                onOpenFile: (path) => window.openPath(path)
                                 onDirtyChanged: openFiles.setProperty(index, "dirty", dirty)
                                 onContextMenu: (info) => { treeMenu.info = info; treeMenu.popup() }
                                 onToggleSidebar: window.sidebarOpen = !window.sidebarOpen
@@ -1251,6 +1275,13 @@ ApplicationWindow {
         onClosed: if (window.currentView) window.currentView.forceActiveFocus()
     }
 
+    FileDialog {
+        id: linkAlignmentFile
+        title: "Link an alignment to this tree"
+        nameFilters: ["FASTA alignments (*.fasta *.fa *.fas *.afa)"]
+        onAccepted: if (window.treeOpen) window.current.link_alignment(window.localPath(selectedFile))
+    }
+
     function exportSvg() {
         if (!window.treeOpen) return
         svgDialog.selectedFile = "file://" + window.currentPath.replace(/\.[^./]*$/, "") + ".svg"
@@ -1468,6 +1499,9 @@ ApplicationWindow {
             }
             if (arg("--distance-action")) c.distance_action(arg("--distance-action"), arg("--distance-options") || "{}")
             if (arg("--distance-settings")) distanceSettings.open()
+            if (arg("--link-alignment")) c.link_alignment(arg("--link-alignment"))
+            if (arg("--clade")) c.select_clade(JSON.stringify(arg("--clade").split(",")))
+            if (arg("--extract-clade")) c.extract_clade_alignment()
             if (arg("--shortcuts")) shortcuts.show(window.ribbonTab)
             if (arg("--edit")) {
                 if (arg("--edit") === "new") editor.openNew(); else editor.openFeature(Number(arg("--edit")))
