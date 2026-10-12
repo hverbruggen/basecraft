@@ -1,0 +1,22 @@
+[package]
+name = "basecraft-distance"
+description = "Parallel evolutionary distances and neighbor joining, as a library and CLI"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+basecraft-io = { path = "../basecraft-io" }
+rayon.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+blake3.workspace = true
+
+tempfile.workspace = true
+
+[lints]
+workspace = true

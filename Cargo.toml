@@ -26,6 +26,7 @@ basecraft-plugin-host = { path = "crates/basecraft-plugin-host" }
 arrow-array = { version = "60", default-features = false }
 arrow-ipc = { version = "60", default-features = false }
 arrow-schema = { version = "60", default-features = false }
+rayon = "1.12"
 blake3 = "1.8"
 memchr = "2.8"
 memmap2 = "0.9"

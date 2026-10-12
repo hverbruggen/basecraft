@@ -5,6 +5,15 @@ testdata_dir := env("BASECRAFT_TESTDATA", home_directory() / ".cache/basecraft-t
 default:
     @just --list
 
+# Install the desktop app and CLI alongside the shared distance engine.
+install: install-distance
+    cargo install --path crates/basecraft-cli --locked --root {{home_directory()}}/.local
+    cargo install --path crates/basecraft-gui --locked --root {{home_directory()}}/.local
+
+# Install the engine used by the neighbor-joining GUI buttons and distance plugin.
+install-distance:
+    cargo install --path crates/basecraft-distance --locked --root {{home_directory()}}/.local
+
 # Point git at the repo's hooks. Run once after cloning.
 hooks:
     git config core.hooksPath .githooks
