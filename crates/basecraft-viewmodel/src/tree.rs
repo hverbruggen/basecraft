@@ -168,6 +168,27 @@ impl TreeView {
         self.pixel_ratio = if ratio > 0.0 { ratio } else { 1.0 };
     }
 
+    /// Visible-row geometry for aligned, independent overlays using this canvas.
+    pub fn tip_rows(&self, doc: &TreeDoc) -> Vec<(String, f32, f32)> {
+        doc.tips_in_order()
+            .iter()
+            .map(|&i| {
+                (
+                    doc.node(i).name.clone(),
+                    self.layout.y[i] - self.scroll_y,
+                    self.layout.row,
+                )
+            })
+            .collect()
+    }
+
+    pub fn node_position(&self, node: usize) -> Option<(f32, f32)> {
+        Some((
+            *self.layout.x.get(node)? - self.scroll_x,
+            *self.layout.y.get(node)? - self.scroll_y,
+        ))
+    }
+
     pub fn size(&self) -> (f32, f32) {
         (self.width, self.height)
     }
@@ -1106,6 +1127,25 @@ pub fn to_svg(doc: &TreeDoc, width: f32, row: f32) -> String {
 /// Full-tree figure preserving screen colours and typography.
 pub fn to_svg_with_style(doc: &TreeDoc, width: f32, row: f32, theme: &Theme, font: &str) -> String {
     svg_with_palette(doc, width, row, Palette::from_theme(theme), font)
+}
+
+/// Geometry for overlays on the full SVG, from the identical layout invocation.
+pub fn figure_rows(doc: &TreeDoc, width: f32, row: f32) -> (Vec<(String, f32, f32)>, f32, f32) {
+    let scale = if doc.has_lengths() && doc.style().scale_bar {
+        SCALE_SPACE
+    } else {
+        0.0
+    };
+    let height = doc.tip_count().max(1) as f32 * row + 2.0 * MARGIN + scale;
+    let geometry = layout(doc, width, height, 1.0, 1.0);
+    (
+        doc.tips_in_order()
+            .iter()
+            .map(|&i| (doc.node(i).name.clone(), geometry.y[i], geometry.row))
+            .collect(),
+        geometry.width.max(width),
+        geometry.height,
+    )
 }
 
 /// Independent selected clades arranged vertically without inventing connecting edges.

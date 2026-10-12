@@ -78,6 +78,8 @@ pub mod qobject {
         fn cancel_bootstrap(self: Pin<&mut AlignmentController>);
 
         #[qinvokable]
+        fn create_delimitation(self: Pin<&mut AlignmentController>) -> QString;
+        #[qinvokable]
         fn open_file(self: Pin<&mut AlignmentController>, path: &QString) -> bool;
         #[qinvokable]
         fn highlight_taxa(self: Pin<&mut AlignmentController>, names: &QString);
@@ -573,6 +575,24 @@ impl qobject::AlignmentController {
         }
     }
 
+    pub fn create_delimitation(mut self: Pin<&mut Self>) -> QString {
+        let result = {
+            let mut r = self.as_mut().rust_mut();
+            let r = &mut *r;
+            r.session
+                .as_mut()
+                .zip(r.doc)
+                .ok_or_else(|| "No source open".to_string())
+                .and_then(|(s, d)| crate::delimitation_bridge::create_workspace(s, d))
+        };
+        match result {
+            Ok(path) => QString::from(path),
+            Err(error) => {
+                self.fail(&error);
+                QString::default()
+            }
+        }
+    }
     pub fn open_file(mut self: Pin<&mut Self>, path: &QString) -> bool {
         if self.rust().busy {
             self.fail("Wait for the running tool before replacing this document");
@@ -1269,7 +1289,16 @@ impl qobject::AlignmentController {
                     this.as_mut().set_bootstrap_cancelling(false);
                 }
                 this.as_mut().set_busy(false);
-                let result = result.and_then(|res| {
+                let terminal = {
+                    let mut r = this.as_mut().rust_mut();
+                    let r = &mut *r;
+                    if let (Some(session), Some(doc)) = (&mut r.session, r.doc) {
+                        job.record_terminal(session, doc, &result, started.elapsed().as_secs_f64())
+                    } else {
+                        Ok(())
+                    }
+                };
+                let result = terminal.and(result).and_then(|res| {
                     let mut r = this.as_mut().rust_mut();
                     let r = &mut *r;
                     if let (Some(session), Some(doc)) = (&mut r.session, r.doc) {

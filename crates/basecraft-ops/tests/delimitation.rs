@@ -202,3 +202,20 @@ fn changed_exchange_file_is_not_silently_replaced_by_sidecar() {
     std::fs::write(&path, SPART).unwrap();
     assert!(session.open(&path).is_err());
 }
+
+#[test]
+fn save_as_xml_replays_the_selected_exchange_format() {
+    let dir = tempfile::tempdir().unwrap();
+    let text = dir.path().join("input.spart");
+    std::fs::write(&text, SPART).unwrap();
+    let xml = dir.path().join("export.spartxml");
+    let mut session = Session::new(dir.path());
+    let doc = session.open(&text).unwrap();
+    session.save(doc, Some(&xml)).unwrap();
+    let mut reopened = Session::unlogged(dir.path());
+    let copy = reopened.open(&xml).unwrap();
+    assert_eq!(reopened.delimitation(copy), session.delimitation(doc));
+    drop(session);
+    let report = replay::replay(dir.path()).unwrap();
+    assert!(report.ok(), "{:?}", report.problems);
+}

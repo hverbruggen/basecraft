@@ -75,7 +75,7 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut Report) -> Re
             continue;
         };
         match &e.op {
-            Op::Save { .. } => match session.save_hashes(doc) {
+            Op::Save { path } => match session.save_hashes_at(doc, Path::new(path)) {
                 Ok(got) => {
                     let want: Vec<&String> = e.result.hashes.iter().map(|(_, h)| h).collect();
                     if got.iter().collect::<Vec<_>>() != want {

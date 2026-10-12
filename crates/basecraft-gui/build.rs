@@ -75,6 +75,8 @@ fn main() {
         "qml/DocumentView.qml",
         "qml/AlignmentView.qml",
         "qml/PhyloView.qml",
+        "qml/TreeCanvas.qml",
+        "qml/DelimitationView.qml",
         "qml/CladeEditor.qml",
         "qml/TreeStyleDialog.qml",
         "qml/ShortcutsDialog.qml",
@@ -84,6 +86,7 @@ fn main() {
         "src/bridge.rs",
         "src/alignment_bridge.rs",
         "src/tree_bridge.rs",
+        "src/delimitation_bridge.rs",
     ])
     .cpp_file("cpp/instanceview.h")
     .cpp_file("cpp/instanceview.cpp")

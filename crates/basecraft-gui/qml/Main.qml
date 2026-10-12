@@ -67,16 +67,17 @@ ApplicationWindow {
     property bool alignmentInsert: true
     readonly property bool alignmentOpen: currentKind === "alignment"
     readonly property bool treeOpen: currentKind === "tree"
+    readonly property bool delimitationOpen: currentKind === "delimitation"
     // The third tab is Annotations for a sequence, Alignment for an
     // alignment, Tree for a tree; an alignment also gets Build phylogeny.
-    readonly property var ribbonTabs: ["File", "View", alignmentOpen ? "Alignment" : treeOpen ? "Tree" : "Annotations"]
+    readonly property var ribbonTabs: ["File", "View", alignmentOpen ? "Alignment" : treeOpen ? "Tree" : delimitationOpen ? "Delimitation" : "Annotations"]
         .concat(alignmentOpen ? ["Build phylogeny"] : [], ["Settings", "Help"])
     // The chosen tab if this document has it, else its third tab (a tab
     // for another kind of document), else File.
     readonly property string ribbonTab: ribbonTabs.includes(ribbonTabName) ? ribbonTabName
-        : ["Annotations", "Alignment", "Tree", "Build phylogeny"].includes(ribbonTabName) ? ribbonTabs[2] : "File"
+        : ["Annotations", "Alignment", "Tree", "Build phylogeny", "Delimitation"].includes(ribbonTabName) ? ribbonTabs[2] : "File"
     // Each tab's panel in the ribbon's stack.
-    readonly property var ribbonPanels: ({ "File": 0, "View": 1, "Annotations": 2, "Settings": 3, "Help": 4, "Alignment": 5, "Tree": 6, "Build phylogeny": 7 })
+    readonly property var ribbonPanels: ({ "File": 0, "View": 1, "Annotations": 2, "Settings": 3, "Help": 4, "Alignment": 5, "Tree": 6, "Build phylogeny": 7, "Delimitation": 8 })
     // Only the wrapped layout is offered for now; files always open in it.
 
     // Preferences, kept between sessions (~/.config/Basecraft).
@@ -124,14 +125,14 @@ ApplicationWindow {
         ignoreUnknownSignals: true
         function onTaxaSelected(names) {
             if (!window.current) return
-            const source = window.treeOpen ? window.current.linked_alignment : window.current.file_path
+            const source = (window.treeOpen || window.delimitationOpen) ? window.current.linked_alignment : window.current.file_path
             if (!source) return
             for (let i = 0; i < docs.count; i++) {
                 const d = docs.itemAt(i)
                 if (!d || d.controller === window.current) continue
-                if (window.treeOpen && d.kind === "alignment" && d.controller.file_path === source)
+                if ((window.treeOpen || window.delimitationOpen) && d.kind === "alignment" && d.controller.file_path === source)
                     d.controller.highlight_taxa(names)
-                else if (window.alignmentOpen && d.kind === "tree" && d.controller.linked_alignment === source)
+                else if (window.alignmentOpen && (d.kind === "tree" || d.kind === "delimitation") && d.controller.linked_alignment === source)
                     d.controller.highlight_taxa(names)
             }
         }
@@ -346,16 +347,16 @@ ApplicationWindow {
                     spacing: 6
                     RibbonGroup {
                         title: "Zoom"
-                        RibbonButton { glyph: "\ueb82"; tip: "Zoom out"; keys: "Ctrl+−"; onClicked: window.current.zoom_out() }
-                        RibbonButton { glyph: "\ueb81"; tip: "Zoom in"; keys: "Ctrl++"; onClicked: window.current.zoom_in() }
+                        RibbonButton { glyph: "\ueb82"; tip: "Zoom out"; keys: "Ctrl+−"; onClicked: (window.delimitationOpen ? window.currentView.controller : window.current).zoom_out() }
+                        RibbonButton { glyph: "\ueb81"; tip: "Zoom in"; keys: "Ctrl++"; onClicked: (window.delimitationOpen ? window.currentView.controller : window.current).zoom_in() }
                         RibbonButton {
                             text: "Fit"
                             glyph: "\ueb4c"
                             tip: window.alignmentOpen ? "Show the whole width of the alignment" : window.treeOpen ? "Show the whole tree" : "Show the whole sequence"
                             keys: "Ctrl+0"
-                            onClicked: window.current.fit()
+                            onClicked: (window.delimitationOpen ? window.currentView.controller : window.current).fit()
                         }
-                        RibbonButton { text: "Selection"; glyph: "\uebf8"; visible: !window.treeOpen; tip: "Zoom to the selection"; onClicked: window.current.zoom_to_selection() }
+                        RibbonButton { text: "Selection"; glyph: "\uebf8"; visible: !window.treeOpen && !window.delimitationOpen; tip: "Zoom to the selection"; onClicked: window.current.zoom_to_selection() }
                         Label {
                             text: window.current ? window.current.zoom_text : ""
                             leftPadding: 6
@@ -574,6 +575,7 @@ ApplicationWindow {
                     spacing: 6
                     RibbonGroup {
                         title: "Clade"
+                        RibbonButton { text: "Delimitation…"; onClicked: { const path = window.current.create_delimitation(); if (path.length) window.openPath(path) } }
                         RibbonButton { text: "Annotate…"; tip: "Name the selected clade, with a bar or a coloured field"; keys: "Enter"; enabled: window.current !== null && window.current.has_selection === true; onClicked: cladeEditor.openSelected() }
                         RibbonButton { text: "Reroot"; tip: "Root the tree on the branch above the selection"; enabled: window.current !== null && window.current.has_selection === true; onClicked: window.current.reroot() }
                         RibbonButton { text: "Root position…"; tip: "Move the root along its branch"; onClicked: rootDialog.ask() }
@@ -632,6 +634,7 @@ ApplicationWindow {
                             Button { text: "Cancel bootstrap"; enabled: parent.visible && !window.current.bootstrap_cancelling; onClicked: window.current.cancel_bootstrap() }
                         }
                     }
+                    RibbonButton { text: "Delimitation…"; onClicked: { const path = window.current.create_delimitation(); if (path.length) window.openPath(path) } }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
                         title: "Maximum likelihood"
@@ -651,6 +654,12 @@ ApplicationWindow {
                     Item { Layout.fillWidth: true }
                     ShortcutsGroup {}
                 }
+                RowLayout {
+                    Label { text: "Create, derive and edit hypotheses in the workspace below" }
+                    Item { Layout.fillWidth: true }
+                    ShortcutsGroup {}
+                }
+
             }
             }
         }
@@ -1022,6 +1031,13 @@ ApplicationWindow {
                                 onToggleSidebar: window.sidebarOpen = !window.sidebarOpen
                                 onRenameTip: tipDialog.ask()
                                 onAnnotate: cladeEditor.openSelected()
+                            }
+                        }
+                        DelegateChoice {
+                            roleValue: "delimitation"
+                            DelimitationView {
+                                onOpenFile: (path) => window.openPath(path)
+                                onDirtyChanged: openFiles.setProperty(index, "dirty", dirty)
                             }
                         }
                         DelegateChoice {
@@ -1437,6 +1453,24 @@ ApplicationWindow {
             const v = window.currentView
             if (!c) { console.log("no document open"); shot.start(); return }
             if (arg("--fit")) c.fit()
+            if (arg("--delim")) {
+                const steps = JSON.parse(arg("--delim"))
+                for (const step of steps) {
+                    if (step.action === "attach") c.attach_tree(step.path,step.rooted)
+                    else if (step.action === "select") c.highlight_taxa(JSON.stringify(step.ids))
+                    else if (step.action === "activate_last") { const work = JSON.parse(c.workspace_json); c.activate(work.hypotheses[work.hypotheses.length-1].id) }
+                    else if (step.action === "cut") c.preview_cut(step.threshold)
+                    else if (step.action === "cancel_cut") c.cancel_cut()
+                    else if (step.action === "save_cut") c.save_cut(step.name)
+                    else if (step.action === "undo") c.undo()
+                    else if (step.action === "redo") c.redo()
+                    else if (step.action === "save") c.save()
+                    else if (step.action === "svg") c.export_svg(step.path)
+                    else if (step.action === "visible_all") c.action("visible",JSON.stringify({ids:JSON.parse(c.workspace_json).hypotheses.map(h=>h.id)}))
+                    else c.action(step.action,JSON.stringify(step))
+                    console.log("delim",step.action,"|",c.message,"|",c.workspace_json,"| preview",c.preview_json)
+                }
+            }
             // Alignment edits, ';'-separated: sel:R0,C0,R1,C1  gap  rmgap
             // slide:N  type:TEXT  del  undo  redo  up  down  strip  zoomsel
             // insert  overwrite  mafft  fasttree

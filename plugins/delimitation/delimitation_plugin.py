@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 import uuid
 from pathlib import Path
+
 from basecraft.plugin import Plugin
 
 plugin = Plugin("basecraft.delimitation", "0.1.0")
@@ -53,12 +54,12 @@ def invoke(method, params):
         finally:
             staged_path.unlink(missing_ok=True)
     input_hash = subprocess.check_output([engine, "--hash", str(snapshot)], text=True).strip()
-    request = dict(version=1, job_id=job_id, generation=params.get("generation", 0),
-                   method=method, input=str(snapshot), input_hash=input_hash, output=str(target.parent / (".delimitation-job-" + job_id) / "result.json"),
-                   rooted=params.get("rooted", False), tree_index=params.get("tree_index", 0),
-                   seed=params.get("seed", 1), workers=workers,
-                   parameters={k: v for k, v in params.items() if k in ("threshold", "candidate_budget", "groups", "log_likelihood", "fitted_log_likelihood", "null_log_likelihood", "lrt_passed", "mptp_version", "command", "min_branch", "units", "diagnostics", "asap_model", "replicates", "upstream_version", "haplotypes", "haplotype_policy", "mapping_hash")},
-                   progress=params.get("progress"), cancel_file=params.get("cancel_file"))
+    request = {"version": 1, "job_id": job_id, "generation": params.get("generation", 0),
+                   "method": method, "input": str(snapshot), "input_hash": input_hash, "output": str(target.parent / (".delimitation-job-" + job_id) / "result.json"),
+                   "rooted": params.get("rooted", False), "tree_index": params.get("tree_index", 0),
+                   "seed": params.get("seed", 1), "workers": workers,
+                   "parameters": {k: v for k, v in params.items() if k in ("threshold", "candidate_budget", "groups", "log_likelihood", "fitted_log_likelihood", "null_log_likelihood", "lrt_passed", "mptp_version", "command", "min_branch", "units", "diagnostics", "asap_model", "replicates", "upstream_version", "haplotypes", "haplotype_policy", "mapping_hash", "upstream")},
+                   "progress": params.get("progress"), "cancel_file": params.get("cancel_file")}
     mapping_snapshot = None
     if params.get("mapping"):
         mapping_source=Path(params["mapping"]).resolve()
@@ -124,22 +125,23 @@ def failure_report(method, params, error, artifacts=()):
     target = Path(params["output"]).resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
     engine = None
+    hashing_errors = []
     try:
         engine = executable(params)
-    except Exception:
-        pass
+    except FileNotFoundError as engine_error:
+        hashing_errors.append(str(engine_error))
     hashes = {}
     for artifact in artifacts:
         if Path(artifact).is_file() and engine:
             try:
                 hashes[str(artifact)] = subprocess.check_output([engine, "--hash", str(artifact)], text=True).strip()
-            except Exception:
-                pass
-    job = dict(id=params.get("job_id", str(uuid.uuid4())), generation=params.get("generation", 0),
-               method=method, status="cancelled" if params.get("cancel_file") and Path(params["cancel_file"]).exists() else "failed",
-               inputs={}, outputs=hashes, diagnostics=[str(error)], elapsed_seconds=0.0)
+            except (OSError, subprocess.CalledProcessError) as hash_error:
+                hashing_errors.append(str(hash_error))
+    job = {"id": params.get("job_id", str(uuid.uuid4())), "generation": params.get("generation", 0),
+               "method": method, "status": "cancelled" if params.get("cancel_file") and Path(params["cancel_file"]).exists() else "failed",
+               "inputs": {}, "outputs": hashes, "diagnostics": [str(error), *hashing_errors], "elapsed_seconds": 0.0}
     with tempfile.NamedTemporaryFile(mode="w", dir=target.parent, prefix=".delimitation-failed-", delete=False) as stream:
-        json.dump(dict(version=1, job=job, workspace=None), stream, indent=2)
+        json.dump({"version": 1, "job": job, "workspace": None}, stream, indent=2)
         stream.write("\n")
         temporary = stream.name
     os.replace(temporary, str(target) + ".run.json")

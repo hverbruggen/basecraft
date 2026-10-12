@@ -646,14 +646,15 @@ impl Session {
 
     /// Hashes the files a save would write, without writing them.
     pub fn save_hashes(&self, id: DocId) -> Result<Vec<String>> {
+        self.save_hashes_at(id, Path::new(&self.docs[id.0].key))
+    }
+
+    /// Replay a save using its actual exchange format, including Save As.
+    pub fn save_hashes_at(&self, id: DocId, target: &Path) -> Result<Vec<String>> {
         let opened = match &self.docs[id.0].content {
             Loaded::Delimitation(work) => {
                 let mut main = HashingWriter::new(std::io::sink());
-                files::write_delimitation(
-                    work,
-                    files::delimitation_xml(Path::new(&self.docs[id.0].key)),
-                    &mut main,
-                )?;
+                files::write_delimitation(work, files::delimitation_xml(target), &mut main)?;
                 let hash = main.hash();
                 let mut side = HashingWriter::new(std::io::sink());
                 files::write_delimitation_sidecar(work, &hash, &mut side)?;

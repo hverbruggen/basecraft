@@ -672,6 +672,29 @@ mod tests {
         assert!(estimate(Model::P, 0, 0, 0).is_none());
     }
     #[test]
+    fn nearest_group_ties_and_singleton_unknowns_remain_explicit() {
+        let a = Alignment {
+            names: vec!["a".into(), "b".into(), "c".into()],
+            sequences: vec![b"AAAA".to_vec(), b"AAAC".to_vec(), b"AAAG".to_vec()],
+        };
+        let matrix = DistanceMatrix::calculate(&a, Model::P, 1, 1).unwrap();
+        let summary = matrix
+            .groups(
+                &[
+                    ("a".into(), "A".into()),
+                    ("b".into(), "B".into()),
+                    ("c".into(), "C".into()),
+                ]
+                .into(),
+            )
+            .unwrap();
+        assert_eq!(summary[0].nearest_groups, vec!["B", "C"]);
+        assert_eq!(summary[0].observed_between, 2);
+        assert!(summary[0].mean_within.is_none());
+        assert!(summary[0].max_within.is_none());
+        assert!(summary[0].barcode_gap.is_none());
+    }
+    #[test]
     fn cached_observations_survive_tree_and_group_changes() {
         let a = alignment();
         let m = DistanceMatrix::calculate(&a, Model::Jc69, 1, 4).unwrap();

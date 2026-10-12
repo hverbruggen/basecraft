@@ -18,6 +18,7 @@ pub mod qobject {
         #[qobject]
         #[qml_element]
         #[qproperty(QByteArray, frame)]
+        #[qproperty(QString, canvas_geometry)]
         #[qproperty(QString, status)]
         #[qproperty(QString, message)]
         /// "ok", "error", or "" for a neutral hint.
@@ -44,6 +45,8 @@ pub mod qobject {
         #[qproperty(QString, support_placement)]
         type TreeController = super::TreeRust;
 
+        #[qinvokable]
+        fn create_delimitation(self: Pin<&mut TreeController>) -> QString;
         #[qinvokable]
         fn open_file(self: Pin<&mut TreeController>, path: &QString) -> bool;
         #[qinvokable]
@@ -198,6 +201,7 @@ struct CladeExtraction {
 #[allow(clippy::struct_excessive_bools)]
 pub struct TreeRust {
     frame: QByteArray,
+    canvas_geometry: QString,
     last_taxa: String,
     status: QString,
     message: QString,
@@ -233,6 +237,7 @@ impl Default for TreeRust {
     fn default() -> Self {
         let mut c = Self {
             frame: QByteArray::default(),
+            canvas_geometry: QString::from("{}"),
             last_taxa: String::new(),
             status: QString::default(),
             message: QString::default(),
@@ -318,6 +323,13 @@ impl qobject::TreeController {
                 placement_name(d.style().support_placement),
             )
         };
+        let geometry = {
+            let r = self.rust();
+            let d = r.session.as_ref().unwrap().tree(r.doc.unwrap());
+            serde_json::json!({"rows": r.view.tip_rows(d).iter().map(|(name,y,height)| serde_json::json!({"name":name,"y":y,"height":height})).collect::<Vec<_>>(),"root":r.view.node_position(d.root()),"tips_x":d.tips_in_order().iter().filter_map(|&i| r.view.node_position(i).map(|(x,_)|x)).fold(f32::NEG_INFINITY,f32::max)})
+        };
+        self.as_mut()
+            .set_canvas_geometry(QString::from(&geometry.to_string()));
         self.as_mut().set_frame(QByteArray::from(bytes.as_slice()));
         self.as_mut().set_status(QString::from(&status));
         self.as_mut().set_zoom_text(QString::from(&zoom));
@@ -545,6 +557,24 @@ impl qobject::TreeController {
         }
     }
 
+    pub fn create_delimitation(mut self: Pin<&mut Self>) -> QString {
+        let result = {
+            let mut r = self.as_mut().rust_mut();
+            let r = &mut *r;
+            r.session
+                .as_mut()
+                .zip(r.doc)
+                .ok_or_else(|| "No source open".to_string())
+                .and_then(|(s, d)| crate::delimitation_bridge::create_workspace(s, d))
+        };
+        match result {
+            Ok(path) => QString::from(path),
+            Err(error) => {
+                self.fail(&error);
+                QString::default()
+            }
+        }
+    }
     pub fn open_file(mut self: Pin<&mut Self>, path: &QString) -> bool {
         let path = PathBuf::from(path.to_string());
         let mut session = Session::new(project_root(&path));

@@ -4,6 +4,7 @@
 //! events into operations. No Qt or GPU code lives here.
 
 pub mod alignment;
+pub mod delimitation;
 pub mod frame;
 pub mod genome;
 pub mod theme;

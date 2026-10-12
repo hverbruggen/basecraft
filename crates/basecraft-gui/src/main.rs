@@ -11,6 +11,7 @@
 
 mod alignment_bridge;
 mod bridge;
+mod delimitation_bridge;
 mod tree_bridge;
 
 use cxx_qt_lib::{QGuiApplication, QQmlApplicationEngine, QString, QUrl};

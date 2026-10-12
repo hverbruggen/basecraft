@@ -1177,6 +1177,7 @@ impl qobject::GenomeController {
         QString::from(match kind {
             Ok(basecraft_ops::files::Kind::Alignment) => "alignment",
             Ok(basecraft_ops::files::Kind::Tree) => "tree",
+            Ok(basecraft_ops::files::Kind::Delimitation) => "delimitation",
             _ => "sequence",
         })
     }

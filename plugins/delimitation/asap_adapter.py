@@ -2,12 +2,12 @@
 import json
 import math
 import os
-import shutil
 import subprocess
 import sys
 import time
 import uuid
 import xml.etree.ElementTree as ET
+from datetime import UTC, datetime
 from pathlib import Path
 
 
@@ -48,10 +48,11 @@ def invoke(params, native, run_native):
         raise ValueError("Invalid ASAP simulation count or seed")
     results = directory / "results"
     results.mkdir()
-    request = dict(input=str(input_file), out=str(results) + os.sep,
-                   time="1970-01-01T00:00:00", number=params.get("partitions", 10),
-                   method=models[model], seed=seed, sequence_length=len(sequences[0]),
-                   replicates=replicates, seuil_pvalue=0.001, pond_pente=0.5, rate=2.0, all=True)
+    request = {"input": str(input_file), "out": str(results) + os.sep,
+                   "time": datetime.now(UTC).isoformat(timespec="seconds"), "number": params.get("partitions", 10),
+                   "method": models[model], "seed": seed, "sequence_length": len(sequences[0]),
+                   "replicates": replicates, "seuil_pvalue": 0.001, "pond_pente": 0.5, "rate": 2.0, "all": True}
+    request["worker_metadata"] = str(directory / "upstream.json")
     request_path = directory / "request.json"
     request_path.write_text(json.dumps(request))
     command = [os.environ.get("BASECRAFT_ASAP_PYTHON", sys.executable), str(Path(__file__).with_name("asap_worker.py")), str(request_path)]
@@ -89,8 +90,9 @@ def invoke(params, native, run_native):
             raise ValueError("ASAP emitted nonfinite score")
     restored = directory / "restored.spartxml"
     xml.write(restored, encoding="utf-8", xml_declaration=True)
+    upstream = json.loads((directory / "upstream.json").read_text())
     result = run_native("asap_import", dict(params, input=str(restored), original_source=str(source),
-                                           asap_model=model, replicates=replicates, public_method="asap", upstream_version="ASAPy 0.1.2", command=command))
-    result["tool"] = dict(name="ASAP upstream", version="ASAPy 0.1.2")
+                                           asap_model=model, replicates=replicates, public_method="asap", upstream_version=upstream["version"], upstream=upstream, command=command))
+    result["tool"] = {"name": "ASAP upstream", "version": upstream["version"]}
     result["outputs"] += [str(path) for path in directory.rglob("*") if path.is_file()]
     return result

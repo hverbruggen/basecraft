@@ -14,3 +14,6 @@ basecraft-protocol.workspace = true
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+basecraft-io.workspace = true

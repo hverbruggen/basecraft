@@ -35,8 +35,8 @@ def parse_result(text, expected):
     warnings = []
     if count and int(count[1]) != len(groups):
         warnings.append("mPTP fitted-count header differs from printed assignments after null-model selection; using the printed partition")
-    return dict(groups=groups, log_likelihood=score, fitted_log_likelihood=float(best[2]),
-                null_log_likelihood=float(null[1]), lrt_passed=lrt_passed, diagnostics=warnings)
+    return {"groups": groups, "log_likelihood": score, "fitted_log_likelihood": float(best[2]),
+                "null_log_likelihood": float(null[1]), "lrt_passed": lrt_passed, "diagnostics": warnings}
 
 
 def invoke(method, params, native, run_native):
