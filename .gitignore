@@ -37,6 +37,7 @@ compile_commands.json
 /testdata/*
 !/testdata/fixtures/
 !/testdata/generate/
+!/testdata/compact/
 
 # Large data formats. Generated test data goes to ~/.cache/basecraft-testdata.
 # Small files under testdata/fixtures/ are allowed. The pre-commit hook

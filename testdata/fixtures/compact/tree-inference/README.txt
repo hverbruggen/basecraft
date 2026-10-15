@@ -1,0 +1,1 @@
+Open informative.afa. Try distances/NJ/UPGMA/bootstrap (seed 1001), FastTree or IQ-TREE if installed. Check all eight taxa and finite nonnegative branches; no universal topology or species truth is promised. known-distances.afa has exact p distances 1/12, 1/12, 2/12. quoted.nex tests support and labels.
