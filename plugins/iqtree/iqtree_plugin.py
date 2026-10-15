@@ -11,10 +11,9 @@ from basecraft.plugin import Plugin
 from basecraft.tools import (
     allocated_cpus,
     executable,
-    quote_newick,
     read_alignment,
-    write_atomic,
 )
+from output_contract import publish_artifacts, restore_tree
 
 plugin = Plugin("basecraft.iqtree", "0.1.0")
 
@@ -82,17 +81,7 @@ def tree(snapshot, params):
                 diagnostic or "IQ-TREE failed"
             )
         names = {f"t{i}": h.split()[0] for i, (h, _) in enumerate(records)}
-        newick = treefile.read_text().strip()
-        if not newick.endswith(";"):
-            raise RuntimeError("IQ-TREE produced an incomplete tree")
-        observed = re.findall(r"(?<=[(,])(t\d+)(?=[:,);])", newick)
-        if len(observed) != len(names) or set(observed) != set(names):
-            raise RuntimeError("IQ-TREE output has missing, duplicate or unknown specimen labels")
-        newick = re.sub(
-            r"(?<=[(,])(t\d+)(?=[:,);])",
-            lambda m: quote_newick(names[m.group(1)]),
-            newick,
-        )
+        newick = restore_tree(treefile.read_text().strip(), names)
         artifacts = [(target, newick + "\n")]
         for suffix in (".iqtree", ".log"):
             report = prefix.with_suffix(suffix)
@@ -103,6 +92,8 @@ def tree(snapshot, params):
                     if chosen:
                         selected_model = chosen.group(1)
                 artifacts.append((Path(str(target) + suffix), report_text))
+            else:
+                artifacts.append((Path(str(target) + suffix), None))
         artifacts.append(
             (
                 Path(str(target) + ".run.json"),
@@ -125,12 +116,13 @@ def tree(snapshot, params):
         )
         if any(path.resolve() == source for path, _ in artifacts):
             raise ValueError("An output would overwrite the input")
-        for path, text in artifacts:
-            write_atomic(path, text)
-            outputs.append(str(path))
-    version = subprocess.run(
-        [exe, "--version"], capture_output=True, text=True, check=False
-    )
+        version = subprocess.run(
+            [exe, "--version"], capture_output=True, text=True, check=False
+        )
+        if cancelled():
+            raise RuntimeError("IQ-TREE cancelled before publication")
+        publish_artifacts(artifacts)
+        outputs = [str(path) for path, payload in artifacts if payload is not None]
     return {
         "ops": [],
         "outputs": outputs,

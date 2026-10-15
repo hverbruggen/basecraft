@@ -44,12 +44,21 @@ class InputOptions(unittest.TestCase):
         self.assertEqual(set(report["identifiers"].values()), {"a", "b", "c", "d"})
 
     def test_missing_or_duplicate_labels_preserve_previous_output(self):
-        for tree in ("(t0:1,t1:1,t2:1);", "(t0:1,t1:1,t2:1,t2:1);"):
+        for tree in ("(t0:1,t1:1,t2:1);", "(t0:1,t1:1,t2:1,t2:1);", "(t0:1,t1:1,t2:1,t3:1,rogue:1);"):
             self.output.write_text("previous tree")
             with self.executable("prefix = pathlib.Path(sys.argv[sys.argv.index('-pre')+1])\n"
                                  f"prefix.with_suffix('.treefile').write_text({tree!r})\n"), self.assertRaisesRegex(RuntimeError, "specimen labels"):
                 iqtree_plugin.tree(None, self.params)
             self.assertEqual(self.output.read_text(), "previous tree")
+
+    def test_sidecar_directory_preserves_previous_tree(self):
+        self.output.write_text("previous tree\n")
+        Path(str(self.output) + ".run.json").mkdir()
+        with self.executable("prefix = pathlib.Path(sys.argv[sys.argv.index('-pre')+1])\n"
+                             "prefix.with_suffix('.treefile').write_text('(t0:1,t1:1,t2:1,t3:1);')\n"), self.assertRaisesRegex(OSError, "previous result preserved"):
+            iqtree_plugin.tree(None, self.params)
+        self.assertEqual(self.output.read_text(), "previous tree\n")
+        self.assertTrue(Path(str(self.output) + ".run.json").is_dir())
 
     def test_cancellation_stops_process_without_output(self):
         cancel = self.root / "cancel"

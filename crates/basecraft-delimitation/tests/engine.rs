@@ -155,3 +155,114 @@ fn executable_preserves_success_failure_cancellation_and_hash_contract() {
     assert_eq!(result.job.status, JobStatus::Cancelled);
     assert!(result.workspace.is_none());
 }
+
+#[test]
+fn import_expands_unassigned_specimens_and_individual_scores() {
+    use serde_json::json;
+    use std::collections::BTreeSet;
+    let directory = tempfile::tempdir().unwrap();
+    let alignment = directory.path().join("original.fa");
+    std::fs::write(
+        &alignment,
+        ">a\nACGT\n>a2\nacgu\n>b\nACGA\n>b2\nacga\n>c\nTCGA\n",
+    )
+    .unwrap();
+    let input = directory.path().join("representatives.spartxml");
+    // b is deliberately absent from the subset: it and b2 must stay unassigned.
+    std::fs::write(&input, r#"<root><individuals><individual id="a"/><individual id="b"/><individual id="c"/></individuals>
+<spartitions><spartition label="contract fixture" individualScoreType="probability"><subsets><subset label="group 1">
+<individual ref="a" score="0.75"/><individual ref="c" score="0.25"/>
+</subset></subsets></spartition></spartitions></root>"#).unwrap();
+    let mapping = json!({"a":["a","a2"],"b":["b","b2"],"c":["c"]});
+    let request = DelimitationRequest {
+        version: 1,
+        job_id: "expansion".into(),
+        generation: 0,
+        method: "asap_import".into(),
+        input: input.display().to_string(),
+        input_hash: basecraft_io::hash_file(&input).unwrap(),
+        output: directory.path().join("result.json").display().to_string(),
+        rooted: false,
+        tree_index: 0,
+        seed: 1,
+        workers: 1,
+        progress: None,
+        cancel_file: None,
+        parameters: [
+            ("deduplicate".into(), json!(true)),
+            ("alignment_snapshot".into(), json!(alignment)),
+            (
+                "alignment_input_hash".into(),
+                json!(basecraft_io::hash_file(&alignment).unwrap()),
+            ),
+            ("original_source".into(), json!(alignment)),
+            ("haplotypes".into(), mapping.clone()),
+        ]
+        .into(),
+    };
+    let request_path = directory.path().join("request.json");
+    std::fs::write(&request_path, serde_json::to_vec(&request).unwrap()).unwrap();
+    let process = Command::new(env!("CARGO_BIN_EXE_basecraft-delimitation"))
+        .arg("--request")
+        .arg(&request_path)
+        .output()
+        .unwrap();
+    assert!(
+        process.status.success(),
+        "{}",
+        String::from_utf8_lossy(&process.stderr)
+    );
+    let result: DelimitationResult =
+        serde_json::from_slice(&std::fs::read(&request.output).unwrap()).unwrap();
+    assert_eq!(result.job.status, JobStatus::Completed);
+    let workspace = result.workspace.unwrap();
+    basecraft_docs::delimitation::validate(&workspace).unwrap();
+    let hypothesis = &workspace.hypotheses[0];
+    assert_eq!(hypothesis.unassigned, ["b".into(), "b2".into()].into());
+    let group = &hypothesis.groups[0];
+    assert_eq!(group.members, ["a".into(), "a2".into(), "c".into()].into());
+    assert_eq!(group.individual_scores.len(), 3);
+    assert_eq!(group.individual_scores["a"], group.individual_scores["a2"]);
+    assert_eq!(group.individual_scores["a"].len(), 1);
+    assert_eq!(group.individual_scores["a"][0].value, 0.75);
+    assert_eq!(group.individual_scores["c"][0].value, 0.25);
+    assert!(!group.individual_scores.contains_key("b"));
+    let expected: BTreeSet<String> = ["a", "a2", "b", "b2", "c"].map(str::to_string).into();
+    assert_eq!(
+        group
+            .members
+            .union(&hypothesis.unassigned)
+            .cloned()
+            .collect::<BTreeSet<_>>(),
+        expected
+    );
+    assert!(group.members.is_disjoint(&hypothesis.unassigned));
+    assert_eq!(workspace.specimens.len(), 5);
+    assert_eq!(
+        workspace
+            .specimens
+            .iter()
+            .map(|specimen| specimen.id.clone())
+            .collect::<BTreeSet<_>>(),
+        expected
+    );
+    for specimen in &workspace.specimens {
+        assert_eq!(specimen.label, specimen.id);
+        assert_eq!(
+            specimen.sources[&alignment.display().to_string()],
+            specimen.id
+        );
+    }
+    assert_eq!(
+        serde_json::to_value(&hypothesis.provenance.haplotypes).unwrap(),
+        mapping
+    );
+    let sidecar: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(format!("{}.spart.basecraft.json", request.output)).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        sidecar["workspace"],
+        serde_json::to_value(workspace).unwrap()
+    );
+}
