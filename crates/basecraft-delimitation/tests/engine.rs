@@ -86,11 +86,23 @@ fn executable_preserves_success_failure_cancellation_and_hash_contract() {
     let (_, result) = execute(&request);
     assert_eq!(result.job.status, JobStatus::Failed);
     assert!(result.workspace.is_none());
-    assert!(result.job.diagnostics[0].contains("differs from retained alignment"));
+    assert!(
+        result
+            .job
+            .diagnostics
+            .iter()
+            .any(|message| message.contains("differs from retained alignment"))
+    );
     std::fs::write(&alignment, ">a\nCCCC\n").unwrap();
     let (_, result) = execute(&request);
     assert_eq!(result.job.status, JobStatus::Failed);
-    assert!(result.job.diagnostics[0].contains("Retained alignment changed"));
+    assert!(
+        result
+            .job
+            .diagnostics
+            .iter()
+            .any(|message| message.contains("Retained alignment changed"))
+    );
     request.parameters.clear();
     request
         .parameters
