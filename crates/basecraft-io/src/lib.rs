@@ -1,5 +1,6 @@
 //! Format readers and writers, indexes and memory mapping.
 
+pub mod abif;
 pub mod cache;
 pub mod fasta;
 pub mod genbank;
@@ -13,7 +14,7 @@ mod error;
 pub use error::{Error, Result};
 pub use source::Source;
 
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::Path;
 
 /// Write a file atomically: stream into a temporary file next to it, then
@@ -42,6 +43,28 @@ pub fn hash_file(path: &Path) -> Result<String> {
 
 pub fn hash_bytes(bytes: &[u8]) -> String {
     format!("b3:{}", blake3::hash(bytes).to_hex())
+}
+
+/// SHA-256 of in-memory evidence bytes, as lowercase hexadecimal.
+pub fn sha256_bytes(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+/// SHA-256 used to verify Tracy draft provenance against its source AB1 files.
+pub fn sha256_file(path: &Path) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    let mut file = std::fs::File::open(path)?;
+    let mut digest = Sha256::new();
+    let mut buffer = vec![0u8; 64 * 1024];
+    loop {
+        let count = file.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        digest.update(&buffer[..count]);
+    }
+    Ok(format!("{:x}", digest.finalize()))
 }
 
 /// Incremental BLAKE3, giving the same `b3:<hex>` form as [`hash_bytes`].

@@ -12,6 +12,7 @@ license.workspace = true
 roxmltree = { path = "../../vendor/roxmltree" }
 basecraft-protocol.workspace = true
 blake3.workspace = true
+sha2.workspace = true
 memchr.workspace = true
 memmap2.workspace = true
 tempfile.workspace = true

@@ -1,0 +1,18 @@
+schema = 1
+id = "basecraft.tracy-sanger"
+name = "Tracy Sanger consensus draft"
+version = "0.2.0"
+kinds = ["operation"]
+[entry]
+operation = "python:tracy_plugin.py"
+[[operations]]
+name = "consensus"
+label = "Draft calls or consensus from one to three AB1 reads"
+
+[[operations]]
+name = "calls"
+label = "Read Tracy calls and signal coordinates"
+
+[[operations]]
+name = "primers"
+label = "Find partial terminal primer candidates for masking"

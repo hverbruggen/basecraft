@@ -6,6 +6,7 @@ pub mod links;
 pub mod log;
 pub mod provenance;
 pub mod replay;
+pub mod sanger_review;
 pub mod session;
 
 mod error;

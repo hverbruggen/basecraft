@@ -10,10 +10,11 @@ license.workspace = true
 
 [dependencies]
 basecraft-docs.workspace = true
+basecraft-io.workspace = true
 basecraft-protocol.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
 
 [lints]
 workspace = true
-
-[dev-dependencies]
-basecraft-io.workspace = true

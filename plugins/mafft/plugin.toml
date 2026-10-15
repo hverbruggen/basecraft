@@ -1,7 +1,7 @@
 schema = 1
 id = "basecraft.mafft"
 name = "MAFFT"
-version = "0.1.0"
+version = "0.2.0"
 kinds = ["operation"]
 
 [entry]
@@ -16,3 +16,11 @@ conda = ["bioconda::mafft"]
 [[operations]]
 name = "align"
 label = "Align sequences with MAFFT (default settings)"
+
+[[operations]]
+name = "place_sanger"
+label = "Place a Sanger draft against a frozen alignment"
+
+[[operations]]
+name = "add_sequences"
+label = "Add sequences to an existing alignment without losing bases"

@@ -5,6 +5,7 @@ pub mod alignment;
 pub mod coord;
 pub mod delimitation;
 pub mod piece;
+pub mod sanger;
 pub mod sequence;
 pub mod tree;
 

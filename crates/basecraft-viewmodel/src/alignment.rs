@@ -370,6 +370,10 @@ impl AlignmentView {
         self.zoom_at(x, y, factor);
     }
 
+    pub fn zoom_percent(&self) -> f64 {
+        self.px_per_col / PX_PER_COL_AT_100 * 100.0
+    }
+
     pub fn zoom_text(&self) -> String {
         format!("{:.0} %", self.px_per_col / PX_PER_COL_AT_100 * 100.0)
     }

@@ -7,6 +7,10 @@ pub mod alignment;
 pub mod delimitation;
 pub mod frame;
 pub mod genome;
+pub mod sanger;
+pub mod sanger_alignment;
+pub mod sanger_map;
+pub mod sanger_review;
 pub mod theme;
 pub mod tree;
 
@@ -17,3 +21,7 @@ pub use theme::Theme;
 pub use tree::TreeView;
 
 pub mod svg;
+
+pub mod sanger_triage;
+
+pub mod accessible;

@@ -49,6 +49,19 @@ impl Frame {
         &self.data
     }
 
+    /// Append another frame with its geometry translated by `dx, dy`.
+    pub fn append_translated(&mut self, other: &Frame, dx: f32, dy: f32) {
+        for instance in other.data.chunks_exact(FLOATS_PER_INSTANCE) {
+            let mut translated = [0.0; FLOATS_PER_INSTANCE];
+            translated.copy_from_slice(instance);
+            for corner in 0..4 {
+                translated[corner * 2] += dx;
+                translated[corner * 2 + 1] += dy;
+            }
+            self.data.extend_from_slice(&translated);
+        }
+    }
+
     /// The instance data as bytes in native endianness, for upload.
     pub fn to_bytes(&self) -> Vec<u8> {
         self.data.iter().flat_map(|f| f.to_ne_bytes()).collect()

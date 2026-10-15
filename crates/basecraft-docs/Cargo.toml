@@ -13,6 +13,7 @@ basecraft-io.workspace = true
 basecraft-protocol.workspace = true
 basecraft-query.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

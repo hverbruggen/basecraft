@@ -483,8 +483,12 @@ impl GenomeView {
         self.selected = None;
     }
 
-    /// Zoom level for display: pixels per base when bases are wider than a
-    /// pixel, else bases per pixel, plus how much sequence is shown.
+    /// Exact percentage relative to the standard base width.
+    pub fn zoom_percent(&self) -> f64 {
+        self.px_per_bp() / PX_PER_BP_AT_100 * 100.0
+    }
+
+    /// Zoom percentage plus how much sequence is shown.
     pub fn zoom_text(&self, len: u64) -> String {
         let percent = self.px_per_bp() / PX_PER_BP_AT_100 * 100.0;
         let level = if percent >= 10.0 {

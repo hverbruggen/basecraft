@@ -303,6 +303,10 @@ impl TreeView {
         self.clamp_scroll();
     }
 
+    pub fn zoom_percent(&self) -> f64 {
+        f64::from(self.row_zoom) * 100.0
+    }
+
     pub fn zoom_text(&self) -> String {
         format!("{:.0} %", self.row_zoom * 100.0)
     }

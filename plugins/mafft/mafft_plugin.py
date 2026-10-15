@@ -11,8 +11,9 @@ import sys
 from pathlib import Path
 
 from basecraft.plugin import Plugin
+from basecraft.tools import allocated_cpus
 
-plugin = Plugin("basecraft.mafft", "0.1.0")
+plugin = Plugin("basecraft.mafft", "0.2.0")
 
 
 def mafft_executable() -> str:
@@ -44,8 +45,10 @@ def align(snapshot, params):
         raise ValueError("MAFFT needs at least two sequences")
     exe = mafft_executable()
     partial = target.with_name(target.name + ".part")
+    threads = allocated_cpus(params.get("threads"))
+    argv = [exe, "--preservecase", "--thread", str(threads), str(source)]
     with partial.open("wb") as out:
-        run = subprocess.run([exe, "--preservecase", str(source)], stdout=out, stderr=subprocess.PIPE, check=False)
+        run = subprocess.run(argv, stdout=out, stderr=subprocess.PIPE, check=False)
     if run.returncode != 0 or partial.stat().st_size == 0:
         partial.unlink(missing_ok=True)
         detail = run.stderr.decode(errors="replace").strip().splitlines()
@@ -56,7 +59,34 @@ def align(snapshot, params):
         "message": f"Aligned {count} sequences",
         "outputs": [str(target)],
         "tool": {"name": "mafft", "version": mafft_version(exe)},
+        "execution": {"argv": argv, "resolved_parameters": {"threads": threads, "preserve_case": True}, "preprocessing": [], "environment": {}, "methods_template": "mafft.align.v1", "methods": {"description": "Sequences were aligned", "citations": ["Katoh and Standley (2013), MAFFT version 7. https://doi.org/10.1093/molbev/mst010"]}},
     }
+
+
+@plugin.operation("place_sanger")
+def place_sanger(snapshot, params):
+    """Map a draft Sanger fragment to columns in a frozen source MSA."""
+    from sanger_place import place
+
+    source = Path(params["input"])
+    target = Path(params["output"])
+    result = place(source, str(params["fragment"]), target, mafft_executable(), threads=params.get("threads"))
+    return {"ops": [], "outputs": [str(target)],
+            "message": f"Placed {len(result['fragment'])} bases; "
+                       f"{result['insertions']} insertion anchors",
+            "tool": {"name": "mafft", "version": result["version"]}}
+
+
+@plugin.operation("add_sequences")
+def add_sequences(snapshot, params):
+    from add_sequences import run_add
+
+    result = run_add(Path(params["input"]), params["rows"], Path(params["output"]),
+                     mafft_executable(), orientation=bool(params.get("orientation", False)),
+                     keep=bool(params.get("keep", True)), threads=params.get("threads"))
+    return {"ops": [], "outputs": [params["output"]],
+            "message": f"Placed {len(result['rows'])} new sequences",
+            "tool": {"name": "mafft", "version": mafft_version(mafft_executable())}}
 
 
 if __name__ == "__main__":
