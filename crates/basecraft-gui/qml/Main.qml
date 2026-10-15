@@ -1110,7 +1110,7 @@ ApplicationWindow {
                             model: [{label: "Matrix", value: "matrix"}, {label: "NJ", value: "nj"}, {label: "UPGMA", value: "upgma"}]
                             delegate: RibbonButton { commandId: "analysis.distance." + modelData.value;
                                 required property var modelData
-                                iconName: modelData.value === "matrix" ? "matrix" : "tree"
+                                iconName: modelData.value === "matrix" ? "matrix" : modelData.value === "nj" ? "phylogram" : "tree"
                                 text: modelData.label
                                 enabled: window.current !== null && !window.current.busy
                                 tip: modelData.value === "matrix" ? "Save observed distances as TSV and a reusable cache" : modelData.value === "upgma" ? "Build a rooted, equal-rate UPGMA tree" : "Build a neighbor-joining tree"
@@ -1134,12 +1134,14 @@ ApplicationWindow {
                     RibbonGroup {
                         title: "Maximum likelihood"
                         RibbonButton { commandId: "ribbon.infer-a-tree-with-fasttree-standard-settings-gtr-for";
+                            iconName: "phylogram"
                             text: window.current && window.current.busy ? "Running…" : "FastTree"
                             enabled: window.current !== null && !window.current.busy
                             tip: "Infer a tree with FastTree, standard settings (GTR for DNA, LG for protein), into a new file"
                             onInvoked: window.current.build_fasttree()
                         }
                         RibbonButton { commandId: "ribbon.select-a-model-and-infer-a-maximum-likelihood-tree";
+                            iconName: "phylogram"
                             text: "IQ-TREE"
                             enabled: window.current !== null && !window.current.busy
                             tip: "Select a model and infer a maximum-likelihood tree; allocated CPU threads, seed 1, no support resampling"
