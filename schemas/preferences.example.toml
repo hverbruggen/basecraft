@@ -1,0 +1,28 @@
+schema_version = 1
+revision = 1
+
+[ui]
+# Optional override in points (6–32); absent uses platform size minus 3, minimum 6.
+# font_size_points = 9
+show_gc = true
+sidebar_open = true
+orf_min_codons = 100
+alignment_insert = true
+
+[files]
+provenance = "portable"
+recovery = true
+remember_workspace = false
+persistent_browsing_indexes = false
+
+[compute]
+local_cpu_threads = 4
+
+[customization]
+ribbon_hidden = []
+
+[customization.shortcuts]
+"file.save" = "Ctrl+S"
+
+[migration]
+qsettings_imported = false

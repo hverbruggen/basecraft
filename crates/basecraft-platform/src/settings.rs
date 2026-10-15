@@ -1,0 +1,788 @@
+//! Versioned, readable preferences. Reads never create files; explicit updates
+//! lock and reload the latest file before merging just the requested fields.
+use fs4::fs_std::FileExt;
+use serde::{Deserialize, Serialize};
+use std::{
+    collections::BTreeMap,
+    fs::{File, OpenOptions},
+    io::Read,
+    path::PathBuf,
+};
+
+pub const SCHEMA_VERSION: u32 = 1;
+const MAX_BYTES: u64 = 1024 * 1024;
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("preferences are being changed by another process; retry shortly")]
+    Busy,
+    #[error("preferences I/O: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("invalid preferences: {0}")]
+    Invalid(String),
+    #[error("preferences save: {0}")]
+    Save(#[from] basecraft_io::Error),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Preferences {
+    pub schema_version: u32,
+    pub revision: u64,
+    pub ui: Ui,
+    pub files: Files,
+    pub compute: Compute,
+    pub customization: Customization,
+    pub migration: Migration,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Ui {
+    pub show_gc: bool,
+    pub sidebar_open: bool,
+    pub orf_min_codons: u32,
+    pub alignment_insert: bool,
+    /// None uses the compact platform-relative default; explicit values are points.
+    pub font_size_points: Option<u32>,
+}
+impl Default for Ui {
+    fn default() -> Self {
+        Self {
+            show_gc: true,
+            sidebar_open: true,
+            orf_min_codons: 100,
+            alignment_insert: true,
+            font_size_points: None,
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProvenancePolicy {
+    #[default]
+    Portable,
+    LocalOnly,
+    None,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Files {
+    pub provenance: ProvenancePolicy,
+    pub recovery: bool,
+    pub remember_workspace: bool,
+    pub persistent_browsing_indexes: bool,
+}
+impl Default for Files {
+    fn default() -> Self {
+        Self {
+            provenance: ProvenancePolicy::Portable,
+            recovery: true,
+            remember_workspace: false,
+            persistent_browsing_indexes: false,
+        }
+    }
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Compute {
+    pub local_cpu_threads: u32,
+}
+impl Default for Compute {
+    fn default() -> Self {
+        Self {
+            local_cpu_threads: 4,
+        }
+    }
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct Customization {
+    /// Stable command IDs; unknown IDs remain available after plugin removal.
+    pub shortcuts: BTreeMap<String, String>,
+    pub ribbon_hidden: Vec<String>,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct Migration {
+    pub qsettings_imported: bool,
+}
+impl Default for Preferences {
+    fn default() -> Self {
+        Self {
+            schema_version: SCHEMA_VERSION,
+            revision: 0,
+            ui: Ui::default(),
+            files: Files::default(),
+            compute: Compute::default(),
+            customization: Customization::default(),
+            migration: Migration::default(),
+        }
+    }
+}
+impl Preferences {
+    /// Resolve explicit session/command overrides above user preferences without
+    /// changing the stored profile. Project analysis defaults belong to project
+    /// metadata and cannot override machine/UI preferences through this API.
+    pub fn resolve_session(&self, overrides: &[Change]) -> Result<Self, Error> {
+        let mut effective = self.clone();
+        for change in overrides {
+            change.validate()?;
+            change.clone().apply(&mut effective);
+        }
+        effective.validate()?;
+        Ok(effective)
+    }
+    pub fn validate(&self) -> Result<(), Error> {
+        if self.schema_version != SCHEMA_VERSION {
+            return Err(Error::Invalid(format!(
+                "unsupported schema version {}; original file retained",
+                self.schema_version
+            )));
+        }
+        if !(1..=1_000_000).contains(&self.ui.orf_min_codons) {
+            return Err(Error::Invalid(
+                "ORF minimum must be between 1 and 1000000 codons".into(),
+            ));
+        }
+        if self
+            .ui
+            .font_size_points
+            .is_some_and(|size| !(6..=32).contains(&size))
+        {
+            return Err(Error::Invalid(
+                "Interface font size must be between 6 and 32 points".into(),
+            ));
+        }
+        if !(1..=65536).contains(&self.compute.local_cpu_threads) {
+            return Err(Error::Invalid(
+                "CPU threads must be between 1 and 65536".into(),
+            ));
+        }
+        if self.customization.shortcuts.len() > 4096
+            || self.customization.ribbon_hidden.len() > 4096
+        {
+            return Err(Error::Invalid("too many customization entries".into()));
+        }
+        for id in self
+            .customization
+            .shortcuts
+            .keys()
+            .chain(self.customization.ribbon_hidden.iter())
+        {
+            if id.is_empty() || id.len() > 256 || id.chars().any(char::is_control) {
+                return Err(Error::Invalid("invalid command ID".into()));
+            }
+        }
+        let mut shortcuts = BTreeMap::new();
+        let defaults = [
+            ("file.open", "Ctrl+O"),
+            ("file.save", "Ctrl+S"),
+            ("file.save-as", "Ctrl+Shift+S"),
+            ("view.text", "Ctrl+Alt+T"),
+        ];
+        for (id, value) in defaults {
+            if !self.customization.shortcuts.contains_key(id) {
+                shortcuts.insert(canonical_shortcut(value)?, id);
+            }
+        }
+        for (id, value) in &self.customization.shortcuts {
+            let canonical = canonical_shortcut(value)?;
+            if canonical.is_empty() {
+                continue;
+            }
+            // Canvas navigation/editing remains local to its focused document.
+            // These keys cannot be stolen by an application-wide override.
+            let reserved = [
+                "F2",
+                "Ctrl+A",
+                "Ctrl+V",
+                "Ctrl+X",
+                "Ctrl+Shift+V",
+                "Ctrl+Home",
+                "Ctrl+End",
+                "Ctrl+Delete",
+                "Ctrl+Shift+Home",
+                "Ctrl+Shift+End",
+                "Ctrl+Left",
+                "Ctrl+Right",
+                "Ctrl+Up",
+                "Ctrl+Down",
+                "Ctrl+Shift+Left",
+                "Ctrl+Shift+Right",
+                "F6",
+                "Shift+F6",
+                "Ctrl+Q",
+                "Ctrl+W",
+                "Ctrl+B",
+                "Ctrl+Z",
+                "Ctrl+Shift+Z",
+                "Ctrl+Y",
+                "Ctrl+C",
+                "Ctrl+E",
+                "Ctrl+N",
+                "Ctrl+Shift+N",
+                "Ctrl+0",
+                "Ctrl+=",
+                "Ctrl+-",
+                "Ctrl+Alt+O",
+                "Ctrl+Shift+D",
+                "Ctrl+Shift+E",
+                "Ctrl+Shift+C",
+                "Ctrl+Shift+A",
+                "Ctrl+Alt+A",
+                "Ctrl+Alt+D",
+                "Ctrl+Alt+M",
+                "Ctrl+Alt+P",
+                "Ctrl+Alt+Home",
+                "Ctrl+Alt+End",
+                "Alt+Left",
+                "Alt+Right",
+                "Alt+Return",
+                "Alt+Up",
+                "Alt+Down",
+            ];
+            if reserved
+                .iter()
+                .any(|key| canonical_shortcut(key).is_ok_and(|key| key == canonical))
+            {
+                return Err(Error::Invalid(format!(
+                    "{value} is reserved for document editing or navigation"
+                )));
+            }
+            if let Some(other) = shortcuts.insert(canonical, id.as_str()) {
+                return Err(Error::Invalid(format!(
+                    "shortcut {value} is already assigned to {other}"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Portable single-chord syntax, independent of Qt and platform locale.
+/// Plain text keys are excluded to preserve typing in scientific documents.
+pub fn canonical_shortcut(value: &str) -> Result<String, Error> {
+    if value.is_empty() {
+        return Ok(String::new());
+    }
+    if value.len() > 128 || value.chars().any(char::is_control) {
+        return Err(Error::Invalid("invalid shortcut; maximum 128 bytes".into()));
+    }
+    let parts: Vec<_> = value.split('+').map(str::trim).collect();
+    let (key, modifiers) = parts
+        .split_last()
+        .ok_or_else(|| Error::Invalid("empty shortcut".into()))?;
+    let mut key = key.to_ascii_uppercase();
+    let mut mask = 0u8;
+    for modifier in modifiers {
+        let bit = match modifier.to_ascii_lowercase().as_str() {
+            "ctrl" => 1,
+            "alt" => 2,
+            "shift" => 4,
+            "meta" => 8,
+            _ => {
+                return Err(Error::Invalid(
+                    "use Ctrl, Alt, Shift or Meta modifiers".into(),
+                ));
+            }
+        };
+        if mask & bit != 0 {
+            return Err(Error::Invalid("duplicate shortcut modifier".into()));
+        }
+        mask |= bit;
+    }
+    let function = key
+        .strip_prefix('F')
+        .and_then(|n| n.parse::<u8>().ok())
+        .is_some_and(|n| (1..=35).contains(&n));
+    if function
+        && let Some(number) = key
+            .strip_prefix('F')
+            .and_then(|number| number.parse::<u8>().ok())
+    {
+        key = format!("F{number}");
+    }
+    let named = [
+        "HOME", "END", "LEFT", "RIGHT", "UP", "DOWN", "RETURN", "ENTER", "SPACE", "TAB", "ESC",
+        "DELETE", "INSERT", "PGUP", "PGDOWN",
+    ]
+    .contains(&key.as_str());
+    let character = key.len() == 1 && key.as_bytes()[0].is_ascii_graphic();
+    if (!function && !named && !character) || (!function && mask & (1 | 2 | 8) == 0) {
+        return Err(Error::Invalid(
+            "use a function key or a key with Ctrl, Alt or Meta".into(),
+        ));
+    }
+    let mut normalized = String::new();
+    for (bit, name) in [(1, "CTRL+"), (2, "ALT+"), (4, "SHIFT+"), (8, "META+")] {
+        if mask & bit != 0 {
+            normalized.push_str(name);
+        }
+    }
+    normalized.push_str(if key == "ENTER" { "RETURN" } else { &key });
+    Ok(normalized)
+}
+
+/// Each variant changes one field, preventing stale whole-file replacement.
+#[derive(Debug, Clone)]
+pub enum Change {
+    ShowGc(bool),
+    SidebarOpen(bool),
+    OrfMinCodons(u32),
+    AlignmentInsert(bool),
+    FontSizePoints(Option<u32>),
+    CpuThreads(u32),
+    Provenance(ProvenancePolicy),
+    Recovery(bool),
+    RememberWorkspace(bool),
+    PersistentBrowsingIndexes(bool),
+    Shortcut { id: String, value: Option<String> },
+    RibbonHidden(Vec<String>),
+    RibbonCommandHidden { id: String, hidden: bool },
+    ResetCustomization,
+}
+impl Change {
+    fn validate(&self) -> Result<(), Error> {
+        if let Self::Shortcut { id, .. } | Self::RibbonCommandHidden { id, .. } = self
+            && (id.is_empty() || id.len() > 256 || id.chars().any(char::is_control))
+        {
+            return Err(Error::Invalid("invalid command ID".into()));
+        }
+        Ok(())
+    }
+    fn apply(self, prefs: &mut Preferences) {
+        match self {
+            Self::ShowGc(v) => prefs.ui.show_gc = v,
+            Self::SidebarOpen(v) => prefs.ui.sidebar_open = v,
+            Self::OrfMinCodons(v) => prefs.ui.orf_min_codons = v,
+            Self::AlignmentInsert(v) => prefs.ui.alignment_insert = v,
+            Self::FontSizePoints(v) => prefs.ui.font_size_points = v,
+            Self::CpuThreads(v) => prefs.compute.local_cpu_threads = v,
+            Self::Provenance(v) => prefs.files.provenance = v,
+            Self::Recovery(v) => prefs.files.recovery = v,
+            Self::RememberWorkspace(v) => prefs.files.remember_workspace = v,
+            Self::PersistentBrowsingIndexes(v) => prefs.files.persistent_browsing_indexes = v,
+            Self::Shortcut { id, value } => {
+                if let Some(v) = value {
+                    prefs.customization.shortcuts.insert(id, v);
+                } else {
+                    prefs.customization.shortcuts.remove(&id);
+                }
+            }
+            Self::RibbonHidden(v) => prefs.customization.ribbon_hidden = v,
+            Self::RibbonCommandHidden { id, hidden } => {
+                prefs
+                    .customization
+                    .ribbon_hidden
+                    .retain(|existing| existing != &id);
+                if hidden {
+                    prefs.customization.ribbon_hidden.push(id);
+                }
+            }
+            Self::ResetCustomization => prefs.customization = Customization::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SettingsStore {
+    path: PathBuf,
+}
+impl SettingsStore {
+    pub fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+    pub fn load(&self) -> Result<Preferences, Error> {
+        Ok(self.read()?.0)
+    }
+    fn read(&self) -> Result<(Preferences, toml::Value), Error> {
+        let file = match File::open(&self.path) {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok((
+                    Preferences::default(),
+                    toml::Value::Table(toml::map::Map::default()),
+                ));
+            }
+            Err(e) => return Err(e.into()),
+        };
+        let mut text = String::new();
+        file.take(MAX_BYTES + 1).read_to_string(&mut text)?;
+        if text.len() as u64 > MAX_BYTES {
+            return Err(Error::Invalid("file exceeds 1 MiB".into()));
+        }
+        let mut raw: toml::Value =
+            toml::from_str(&text).map_err(|e| Error::Invalid(e.to_string()))?;
+        // Version 0 used the same fields without a schema declaration. Migration
+        // occurs in memory; the original is untouched until an explicit update.
+        if raw.get("schema_version").is_none()
+            || raw.get("schema_version").and_then(toml::Value::as_integer) == Some(0)
+        {
+            raw.as_table_mut()
+                .ok_or_else(|| Error::Invalid("expected a TOML table".into()))?
+                .insert(
+                    "schema_version".into(),
+                    toml::Value::Integer(i64::from(SCHEMA_VERSION)),
+                );
+        }
+        let prefs: Preferences = raw
+            .clone()
+            .try_into()
+            .map_err(|e: toml::de::Error| Error::Invalid(e.to_string()))?;
+        prefs.validate()?;
+        Ok((prefs, raw))
+    }
+    pub fn update(&self, change: Change) -> Result<Preferences, Error> {
+        change.validate()?;
+        self.modify(|prefs| change.apply(prefs))
+    }
+    fn modify(&self, modify: impl FnOnce(&mut Preferences)) -> Result<Preferences, Error> {
+        let parent = self
+            .path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .ok_or_else(|| Error::Invalid("preferences path must have a parent".into()))?;
+        std::fs::create_dir_all(parent)?;
+        let lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(self.path.with_extension("toml.lock"))?;
+        if !lock.try_lock_exclusive()? {
+            return Err(Error::Busy);
+        }
+        let (mut prefs, mut raw) = self.read()?;
+        let before = prefs.clone();
+        modify(&mut prefs);
+        prefs.validate()?;
+        if prefs == before && self.path.exists() {
+            return Ok(prefs);
+        }
+        prefs.revision = prefs
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| Error::Invalid("revision overflow".into()))?;
+        let typed = toml::Value::try_from(&prefs).map_err(|e| Error::Invalid(e.to_string()))?;
+        merge(&mut raw, typed);
+        if prefs.ui.font_size_points.is_none()
+            && let Some(ui) = raw.get_mut("ui").and_then(toml::Value::as_table_mut)
+        {
+            ui.remove("font_size_points");
+        }
+        // Map removals must be reflected, while unknown surrounding fields survive.
+        if let Some(customization) = raw
+            .get_mut("customization")
+            .and_then(toml::Value::as_table_mut)
+        {
+            customization.insert(
+                "shortcuts".into(),
+                toml::Value::try_from(&prefs.customization.shortcuts)
+                    .map_err(|e| Error::Invalid(e.to_string()))?,
+            );
+        }
+        let text = toml::to_string_pretty(&raw).map_err(|e| Error::Invalid(e.to_string()))?;
+        if text.len() as u64 > MAX_BYTES {
+            return Err(Error::Invalid("serialized file exceeds 1 MiB".into()));
+        }
+        basecraft_io::write_atomic(&self.path, |writer| writer.write_all(text.as_bytes()))?;
+        Ok(prefs)
+    }
+    /// Import only known legacy UI preferences once; never alter the old store.
+    /// The caller reads platform-specific `QSettings` and passes validated values.
+    pub fn import_qsettings(&self, changes: Vec<Change>) -> Result<Preferences, Error> {
+        self.modify(|prefs| {
+            if !prefs.migration.qsettings_imported {
+                // This check runs under the same lock as reload and write. A
+                // hand-authored file may legitimately have no revision field.
+                if !self.path.exists() {
+                    for change in changes {
+                        change.apply(prefs);
+                    }
+                }
+                prefs.migration.qsettings_imported = true;
+            }
+        })
+    }
+}
+fn merge(destination: &mut toml::Value, source: toml::Value) {
+    if let (toml::Value::Table(dest), toml::Value::Table(src)) = (&mut *destination, &source) {
+        for (key, value) in src {
+            if let Some(existing) = dest.get_mut(key) {
+                merge(existing, value.clone());
+            } else {
+                dest.insert(key.clone(), value.clone());
+            }
+        }
+    } else {
+        *destination = source;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn font_size_defaults_persist_validate_and_reset_without_losing_unknown_fields() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = store(&temp);
+        assert_eq!(store.load().unwrap().ui.font_size_points, None);
+        assert!(!store.path.exists());
+        store.update(Change::FontSizePoints(Some(10))).unwrap();
+        assert_eq!(store.load().unwrap().ui.font_size_points, Some(10));
+        let original = std::fs::read_to_string(&store.path).unwrap();
+        assert!(store.update(Change::FontSizePoints(Some(0))).is_err());
+        assert!(store.update(Change::FontSizePoints(Some(33))).is_err());
+        assert_eq!(std::fs::read_to_string(&store.path).unwrap(), original);
+        std::fs::write(&store.path, format!("{original}\n[future]\nkeep = true\n")).unwrap();
+        store.update(Change::FontSizePoints(None)).unwrap();
+        assert_eq!(store.load().unwrap().ui.font_size_points, None);
+        assert!(
+            std::fs::read_to_string(&store.path)
+                .unwrap()
+                .contains("keep = true")
+        );
+    }
+    fn store(temp: &tempfile::TempDir) -> SettingsStore {
+        SettingsStore::new(temp.path().join("config/preferences.toml"))
+    }
+    #[test]
+    fn shortcut_conflicts_limits_missing_ids_and_reset() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = store(&temp);
+        let shortcut = |id: &str, value: &str| Change::Shortcut {
+            id: id.into(),
+            value: Some(value.into()),
+        };
+        assert!(store.update(shortcut("missing.plugin", "Ctrl+S")).is_err());
+        assert!(
+            store
+                .update(shortcut("missing.plugin", "Ctrl+Alt+T"))
+                .is_err()
+        );
+        assert!(store.update(shortcut("missing.plugin", "F6")).is_err());
+        assert!(store.update(shortcut("missing.plugin", "A")).is_err());
+        assert!(
+            store
+                .update(Change::Shortcut {
+                    id: String::new(),
+                    value: None
+                })
+                .is_err()
+        );
+        store.update(shortcut("view.text", "Ctrl+Alt+T")).unwrap();
+        assert!(
+            store
+                .update(shortcut("missing.plugin", &"x".repeat(129)))
+                .is_err()
+        );
+        store
+            .update(shortcut("missing.plugin", "Alt+Ctrl+J"))
+            .unwrap();
+        assert!(
+            store
+                .update(shortcut("other.plugin", "ctrl+alt+j"))
+                .is_err()
+        );
+        let prefs = store
+            .update(Change::RibbonHidden(vec!["missing.plugin".into()]))
+            .unwrap();
+        assert!(prefs.customization.shortcuts.contains_key("missing.plugin"));
+        assert_eq!(prefs.customization.ribbon_hidden, ["missing.plugin"]);
+        store.update(shortcut("file.save", "")).unwrap();
+        store.update(shortcut("other.plugin", "Ctrl+S")).unwrap();
+        let prefs = store.update(Change::ResetCustomization).unwrap();
+        assert_eq!(prefs.customization, Customization::default());
+        assert_eq!(
+            canonical_shortcut("Shift+Ctrl+Enter").unwrap(),
+            "CTRL+SHIFT+RETURN"
+        );
+    }
+    #[test]
+    fn session_overrides_are_validated_and_not_persisted() {
+        let prefs = Preferences::default();
+        let effective = prefs.resolve_session(&[Change::CpuThreads(2)]).unwrap();
+        assert_eq!(effective.compute.local_cpu_threads, 2);
+        assert_eq!(prefs.compute.local_cpu_threads, 4);
+        assert!(prefs.resolve_session(&[Change::CpuThreads(0)]).is_err());
+    }
+    #[test]
+    fn import_never_replaces_explicit_new_preferences() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = store(&temp);
+        store.update(Change::OrfMinCodons(123)).unwrap();
+        let prefs = store
+            .import_qsettings(vec![Change::OrfMinCodons(456)])
+            .unwrap();
+        assert_eq!(prefs.ui.orf_min_codons, 123);
+        assert!(prefs.migration.qsettings_imported);
+    }
+    #[test]
+    fn hand_authored_toml_without_revision_takes_precedence_over_legacy() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = store(&temp);
+        std::fs::create_dir_all(store.path.parent().unwrap()).unwrap();
+        for revision in ["", "revision = 0\n"] {
+            std::fs::write(
+                &store.path,
+                format!(
+                    "schema_version = 1\n{revision}[ui]\norf_min_codons = 123\nshow_gc = false\n"
+                ),
+            )
+            .unwrap();
+            let prefs = store
+                .import_qsettings(vec![Change::OrfMinCodons(456), Change::ShowGc(true)])
+                .unwrap();
+            assert_eq!(prefs.ui.orf_min_codons, 123);
+            assert!(!prefs.ui.show_gc);
+            assert!(prefs.migration.qsettings_imported);
+        }
+    }
+    #[test]
+    fn public_example_is_valid() {
+        let prefs: Preferences =
+            toml::from_str(include_str!("../../../schemas/preferences.example.toml")).unwrap();
+        prefs.validate().unwrap();
+    }
+    #[test]
+    fn passive_load_creates_nothing() {
+        let temp = tempfile::tempdir().unwrap();
+        assert_eq!(store(&temp).load().unwrap(), Preferences::default());
+        assert!(!temp.path().join("config").exists());
+    }
+    #[test]
+    fn targeted_updates_reload_and_preserve_unknown_fields() {
+        let temp = tempfile::tempdir().unwrap();
+        let a = store(&temp);
+        let b = store(&temp);
+        a.update(Change::ShowGc(false)).unwrap();
+        let mut text = std::fs::read_to_string(&a.path).unwrap();
+        text.push_str("\n[future_plugin]\nunknown = 'retained'\n");
+        std::fs::write(&a.path, text).unwrap();
+        b.update(Change::CpuThreads(8)).unwrap();
+        let prefs = a.load().unwrap();
+        assert!(!prefs.ui.show_gc);
+        assert_eq!(prefs.compute.local_cpu_threads, 8);
+        assert_eq!(prefs.revision, 2);
+        assert!(
+            std::fs::read_to_string(&a.path)
+                .unwrap()
+                .contains("retained")
+        );
+        a.update(Change::Shortcut {
+            id: "file.save".into(),
+            value: Some("Ctrl+S".into()),
+        })
+        .unwrap();
+        a.update(Change::Shortcut {
+            id: "file.save".into(),
+            value: None,
+        })
+        .unwrap();
+        assert!(a.load().unwrap().customization.shortcuts.is_empty());
+    }
+    #[test]
+    fn invalid_or_future_files_are_never_overwritten() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = store(&temp);
+        store.update(Change::ShowGc(false)).unwrap();
+        let original = std::fs::read(&store.path).unwrap();
+        assert!(store.update(Change::CpuThreads(0)).is_err());
+        assert_eq!(std::fs::read(&store.path).unwrap(), original);
+        for text in [
+            "schema_version = 99\n",
+            "not valid TOML = [",
+            "[compute]\nlocal_cpu_threads = 0\n",
+        ] {
+            std::fs::write(&store.path, text).unwrap();
+            assert!(store.load().is_err());
+            assert!(store.update(Change::ShowGc(true)).is_err());
+            assert_eq!(std::fs::read_to_string(&store.path).unwrap(), text);
+        }
+    }
+    #[test]
+    fn migration_is_once_and_original_legacy_values_remain_independent() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = store(&temp);
+        let imported = store
+            .import_qsettings(vec![Change::OrfMinCodons(321)])
+            .unwrap();
+        assert!(imported.migration.qsettings_imported);
+        store.update(Change::OrfMinCodons(222)).unwrap();
+        assert_eq!(
+            store
+                .import_qsettings(vec![Change::OrfMinCodons(321)])
+                .unwrap()
+                .ui
+                .orf_min_codons,
+            222
+        );
+        std::fs::write(&store.path, "schema_version = 0\n[ui]\nshow_gc = false\n").unwrap();
+        assert!(!store.load().unwrap().ui.show_gc);
+        assert!(
+            std::fs::read_to_string(&store.path)
+                .unwrap()
+                .contains("schema_version = 0")
+        );
+        store.update(Change::SidebarOpen(false)).unwrap();
+        assert!(
+            std::fs::read_to_string(&store.path)
+                .unwrap()
+                .contains("schema_version = 1")
+        );
+    }
+    fn retry_update(store: &SettingsStore, change: &Change) {
+        for _ in 0..1000 {
+            match store.update(change.clone()) {
+                Ok(_) => return,
+                Err(Error::Busy) => std::thread::sleep(std::time::Duration::from_millis(1)),
+                Err(e) => panic!("unexpected settings failure: {e}"),
+            }
+        }
+        panic!("settings lock remained busy");
+    }
+    #[test]
+    fn held_lock_returns_busy_without_replacing_preferences() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = store(&temp);
+        store.update(Change::ShowGc(false)).unwrap();
+        let lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(store.path.with_extension("toml.lock"))
+            .unwrap();
+        lock.lock_exclusive().unwrap();
+        assert!(matches!(
+            store.update(Change::ShowGc(true)),
+            Err(Error::Busy)
+        ));
+        assert!(!store.load().unwrap().ui.show_gc);
+    }
+    #[test]
+    fn concurrent_updates_do_not_lose_other_fields() {
+        let temp = tempfile::tempdir().unwrap();
+        let a = store(&temp);
+        let b = a.clone();
+        let one = std::thread::spawn(move || {
+            for _ in 0..20 {
+                retry_update(&a, &Change::ShowGc(false));
+            }
+        });
+        let two = std::thread::spawn(move || {
+            for _ in 0..20 {
+                retry_update(&b, &Change::CpuThreads(7));
+            }
+        });
+        one.join().unwrap();
+        two.join().unwrap();
+        let prefs = store(&temp).load().unwrap();
+        assert!(!prefs.ui.show_gc);
+        assert_eq!(prefs.compute.local_cpu_threads, 7);
+    }
+    #[test]
+    fn unavailable_destination_reports_failure() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("config"), "occupied").unwrap();
+        assert!(store(&temp).update(Change::ShowGc(false)).is_err());
+    }
+}

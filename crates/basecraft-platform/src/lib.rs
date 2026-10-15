@@ -4,6 +4,8 @@
 
 #[cfg(unix)]
 pub mod fdpass;
+pub mod paths;
+pub mod settings;
 pub mod shm;
 
 /// This machine's host name, used to keep one log stream per machine.
@@ -62,6 +64,12 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let d = u32::try_from(doy - (153 * mp + 2) / 5 + 1).unwrap_or(1);
     let m = u32::try_from(if mp < 10 { mp + 3 } else { mp - 9 }).unwrap_or(1);
     (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+/// Identity for this process lifetime, shared by retained jobs and their readers.
+pub fn process_instance() -> &'static str {
+    static INSTANCE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    INSTANCE.get_or_init(|| format!("{}:{}", std::process::id(), now_rfc3339()))
 }
 
 #[cfg(test)]
