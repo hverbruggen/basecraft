@@ -6,3 +6,8 @@ target-dir = "/private/local-path"
 # cxx-qt finds Qt through qmake. Arch ships Qt 6's as qmake6.
 [env]
 QMAKE = "/usr/bin/qmake6"
+
+# Select Rust's bundled LLD explicitly. This also prevents Qt's build helper
+# from falling back to the deprecated Gold linker on this Linux target.
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]

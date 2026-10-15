@@ -5,6 +5,10 @@ testdata_dir := env("BASECRAFT_TESTDATA", home_directory() / ".cache/basecraft-t
 default:
     @just --list
 
+# Build on build-host, test locally, and publish the executable used by the launcher.
+test-build jobs="24":
+    python3 tools/test_build.py --jobs {{jobs}}
+
 # Install the desktop app and CLI alongside the shared distance engine.
 install: install-distance
     cargo install --path crates/basecraft-cli --locked --root {{home_directory()}}/.local
@@ -54,7 +58,12 @@ protocol-license:
 
 # QML component tests, headless.
 qml-test:
-    QT_QPA_PLATFORM=offscreen "$(qmake6 -query QT_HOST_BINS)/qmltestrunner" -input crates/basecraft-gui/tests/qml
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for scale in 1 1.25 1.5 2; do
+        QT_QPA_PLATFORM=offscreen QT_QPA_PLATFORMTHEME= QT_QUICK_CONTROLS_STYLE=Basic QT_SCALE_FACTOR="$scale" \
+            "$(qmake6 -query QT_HOST_BINS)/qmltestrunner" -input crates/basecraft-gui/tests/qml
+    done
 
 # Replay tests for every operation type.
 replay:
