@@ -68,9 +68,11 @@ pub fn expand(
 ) -> Result<Vec<BTreeSet<String>>> {
     let mut used = BTreeSet::new();
     let mut originals = BTreeSet::new();
-    for members in mapping.values() {
-        if members.is_empty() {
-            return Err(Error("empty representative mapping".into()));
+    for (representative, members) in mapping {
+        if !members.contains(representative) {
+            return Err(Error(
+                "representative mapping must contain its own specimen ID".into(),
+            ));
         }
         for id in members {
             if !originals.insert(id) {
@@ -78,7 +80,7 @@ pub fn expand(
             }
         }
     }
-    groups
+    let expanded = groups
         .iter()
         .map(|group| {
             let mut result = BTreeSet::new();
@@ -93,7 +95,13 @@ pub fn expand(
             }
             Ok(result)
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+    if used.len() != mapping.len() {
+        return Err(Error(
+            "partition does not cover every representative".into(),
+        ));
+    }
+    Ok(expanded)
 }
 
 #[cfg(test)]
@@ -118,6 +126,30 @@ mod tests {
         )
         .unwrap();
         assert_eq!(expanded.iter().map(BTreeSet::len).sum::<usize>(), 4);
+    }
+    #[test]
+    fn expansion_rejects_incomplete_overlapping_and_nonreversible_mappings() {
+        let mapping = [
+            ("a".into(), ["a".into(), "b".into()].into()),
+            ("c".into(), ["c".into()].into()),
+        ]
+        .into();
+        assert!(expand(&[["a".into()].into()], &mapping).is_err());
+        assert!(
+            expand(
+                &[["a".into(), "c".into()].into(), ["a".into()].into()],
+                &mapping
+            )
+            .is_err()
+        );
+        let invalid = [("a".into(), ["b".into()].into())].into();
+        assert!(expand(&[["a".into()].into()], &invalid).is_err());
+        let overlapping = [
+            ("a".into(), ["a".into(), "b".into()].into()),
+            ("c".into(), ["b".into(), "c".into()].into()),
+        ]
+        .into();
+        assert!(expand(&[["a".into(), "c".into()].into()], &overlapping).is_err());
     }
     #[test]
     fn pairwise_deletion_zero_does_not_define_identity() {

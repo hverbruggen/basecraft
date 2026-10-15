@@ -4,6 +4,7 @@ import json
 import re
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 from basecraft.plugin import Plugin
@@ -23,6 +24,11 @@ def tree(snapshot, params):
     source, target = Path(params["input"]).resolve(), Path(params["output"]).resolve()
     if source == target:
         raise ValueError("Output must differ from input")
+    def cancelled():
+        return params.get("cancel_file") and Path(params["cancel_file"]).exists()
+
+    if cancelled():
+        raise RuntimeError("IQ-TREE cancelled before inference")
     records = read_alignment(source, minimum=4)
     model = params.get("model", "MFP")
     if not isinstance(model, str) or not re.fullmatch(r"[A-Za-z0-9+{},._/-]+", model):
@@ -50,16 +56,38 @@ def tree(snapshot, params):
             str(seed),
             "-quiet",
         ]
-        run = subprocess.run(args, capture_output=True, text=True, check=False)
+        if params.get("keep_identical", False):
+            args.append("-keep-ident")
+        # Files avoid a pipe-buffer deadlock during long external runs.
+        with (Path(work) / "stdout").open("w+") as stdout, (Path(work) / "stderr").open("w+") as stderr:
+            run = subprocess.Popen(args, stdout=stdout, stderr=stderr)
+            while run.poll() is None:
+                if cancelled():
+                    run.terminate()
+                    try:
+                        run.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        run.kill()
+                        run.wait()
+                    raise RuntimeError("IQ-TREE cancelled; no completed display tree")
+                time.sleep(0.1)
+            stdout.seek(0)
+            stderr.seek(0)
+            diagnostic = stderr.read().strip() or stdout.read().strip()
+        if cancelled():
+            raise RuntimeError("IQ-TREE cancelled; no completed display tree")
         treefile = prefix.with_suffix(".treefile")
         if run.returncode or not treefile.exists():
             raise RuntimeError(
-                run.stderr.strip() or run.stdout.strip() or "IQ-TREE failed"
+                diagnostic or "IQ-TREE failed"
             )
         names = {f"t{i}": h.split()[0] for i, (h, _) in enumerate(records)}
         newick = treefile.read_text().strip()
         if not newick.endswith(";"):
             raise RuntimeError("IQ-TREE produced an incomplete tree")
+        observed = re.findall(r"(?<=[(,])(t\d+)(?=[:,);])", newick)
+        if len(observed) != len(names) or set(observed) != set(names):
+            raise RuntimeError("IQ-TREE output has missing, duplicate or unknown specimen labels")
         newick = re.sub(
             r"(?<=[(,])(t\d+)(?=[:,);])",
             lambda m: quote_newick(names[m.group(1)]),
@@ -85,6 +113,9 @@ def tree(snapshot, params):
                         "seed": seed,
                         "identifiers": names,
                         "support": "not requested",
+                        "keep_identical": params.get("keep_identical", False),
+                        "tree_role": params.get("tree_role", "phylogenetic inference"),
+                        "units": "substitutions per site",
                         "command": args,
                     },
                     indent=2,
@@ -104,7 +135,7 @@ def tree(snapshot, params):
         "ops": [],
         "outputs": outputs,
         "message": f"Built an IQ-TREE tree of {len(records)} sequences ({model})",
-        "execution": {"argv": args, "resolved_parameters": {"requested_model": model, "selected_model": selected_model, "threads": threads, "seed": seed, "support": "not requested"}, "preprocessing": ["Sequence identifiers mapped to neutral t0..tN identifiers and restored in Newick"], "environment": {}, "methods_template": "iqtree.tree.v1", "methods": {"description": "A phylogenetic tree was inferred", "citations": ["IQ-TREE citations by software version and method: https://www.iqtree.org/doc/Home"]}},
+        "execution": {"argv": args, "resolved_parameters": {"requested_model": model, "selected_model": selected_model, "threads": threads, "seed": seed, "support": "not requested", "keep_identical": params.get("keep_identical", False), "tree_role": params.get("tree_role", "phylogenetic inference"), "units": "substitutions per site"}, "preprocessing": ["Sequence identifiers mapped to neutral t0..tN identifiers and restored in Newick"], "environment": {}, "methods_template": "iqtree.tree.v1", "methods": {"description": "A phylogenetic tree was inferred", "citations": ["IQ-TREE citations by software version and method: https://www.iqtree.org/doc/Home"]}},
         "tool": {
             "name": "IQ-TREE",
             "version": (version.stdout or version.stderr).strip(),

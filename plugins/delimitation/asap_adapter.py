@@ -91,7 +91,7 @@ def invoke(params, native, run_native):
     restored = directory / "restored.spartxml"
     xml.write(restored, encoding="utf-8", xml_declaration=True)
     upstream = json.loads((directory / "upstream.json").read_text())
-    result = run_native("asap_import", dict(params, input=str(restored), original_source=str(source),
+    result = run_native("asap_import", dict(params, input=str(restored), original_source=params.get("original_source", str(source)),
                                            asap_model=model, replicates=replicates, public_method="asap", upstream_version=upstream["version"], upstream=upstream, command=command))
     result["tool"] = {"name": "ASAP upstream", "version": upstream["version"]}
     result["outputs"] += [str(path) for path in directory.rglob("*") if path.is_file()]
