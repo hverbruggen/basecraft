@@ -12,7 +12,8 @@ Control {
     default property alias controls: row.data
     readonly property real captionY: caption.y
     readonly property real bodyCenterY: body.height / 2
-    implicitWidth: Math.max(row.implicitWidth, caption.implicitWidth)
+    // Layouts assign whole pixels; round up so fractional font metrics fit.
+    implicitWidth: Math.ceil(Math.max(row.implicitWidth, caption.implicitWidth))
     implicitHeight: row.implicitHeight + caption.implicitHeight + Kirigami.Units.smallSpacing
     Layout.fillHeight: true
     Layout.minimumWidth: implicitWidth
