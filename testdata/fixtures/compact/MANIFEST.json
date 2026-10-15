@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "seed": 1001,
   "origin": "Original designed ancestor with inherited synonymous substitutions and a codon deletion; synthetic traces and analytical/invalid cases labeled separately",
   "license": "GPL-3.0-or-later",
@@ -39,7 +39,7 @@
     "README.txt": {
       "kind": "documentation",
       "expected": "Start here",
-      "sha256": "b66f01bd8f506b1b08ae606105e023a3fe6ef6e3220c152739afd79f7481f0df",
+      "sha256": "d3d4ca66bf47367fdabd7e847f8b7d2ceaac1dbc29f448e76f078ab9a137083b",
       "bytes": 294
     },
     "alignment-editing/README.txt": {
@@ -129,7 +129,7 @@
     "recovery-errors/invalid/peak-outside.ab1": {
       "kind": "invalid",
       "expected": "Reject PLOC sample index equal to channel length",
-      "sha256": "22b99479eaaa12ddf28792964695a02c506eea645ec9c60c9bf615a6c13e8956",
+      "sha256": "f054bd77789f320e01415649ed0190845946f38e0d72214deb560e6485f33048",
       "bytes": 4048
     },
     "recovery-errors/invalid/ragged.afa": {
@@ -147,7 +147,7 @@
     "recovery-errors/invalid/truncated.ab1": {
       "kind": "invalid",
       "expected": "Reject payload outside file",
-      "sha256": "587c514535ebfe059deea24f019995cc445122d3ee57b22aebc12d682e3ca860",
+      "sha256": "805d995c58d52917b117d099882291f9479ee3d8a5f8cff38e625f7d3cab282b",
       "bytes": 3968
     },
     "recovery-errors/invalid/truncated.gb": {
@@ -165,13 +165,13 @@
     "sanger-review/forward.ab1": {
       "kind": "synthetic-valid",
       "expected": "36 calls, 444 samples, disagreement at index 12, quality 8 at ends/35 inside; synthetic format test",
-      "sha256": "bf2dd2c870a38de1deb112f53f1eb53f59cdfb95ac3060c15786e7070e2a5f58",
+      "sha256": "245fb10f874da417017b6d7d0434ed887f7021ce0641d6ef5f533a8ff0c6bf3a",
       "bytes": 4048
     },
     "sanger-review/no-quality.ab1": {
       "kind": "synthetic-edge",
       "expected": "PCON absent: quality unknown, never fabricated",
-      "sha256": "1132c8604f0070d646744b3f056e86a3ca769dc385c33f96c9e929fa3247dedf",
+      "sha256": "7e703ae980be0ef8cbf89dcff1176bb6a61d98f81516397e361a4b17e7b18900",
       "bytes": 3984
     },
     "sanger-review/reference.fasta": {
@@ -183,7 +183,7 @@
     "sanger-review/reverse.ab1": {
       "kind": "synthetic-valid",
       "expected": "Reverse read orientation; N at call index 15; synthetic format test",
-      "sha256": "5bf60d56ffaf5ef7e33027959262818a8c100e56bc62eed22609c0bdf4c5c7cc",
+      "sha256": "295612f01bb77745f212d7da4d04e60bf68f91dbbd6d255c87672560b0b31b88",
       "bytes": 4048
     },
     "sequences-annotations/README.txt": {
@@ -231,8 +231,8 @@
     "species-delimitation/README.txt": {
       "kind": "documentation",
       "expected": "Manual procedure",
-      "sha256": "cd2ec459a68e15dfcfb0a7c89f5b240e32555ae0e336706dbc381d7925c3abf1",
-      "bytes": 444
+      "sha256": "cf57cbccd67f0632114ca1997713402ac985a964cee7d85388492cd9c3c80a3b",
+      "bytes": 463
     },
     "species-delimitation/hypotheses.spart": {
       "kind": "synthetic-valid",
@@ -248,9 +248,9 @@
     },
     "species-delimitation/substitutions.nwk": {
       "kind": "synthetic-valid",
-      "expected": "Rooted stipulated substitutions/site; intentionally non-ultrametric; not GMYC input",
-      "sha256": "4d190eaba9c47e3bd1acd4e6cc258eea8c49f40d89a648a70733b25f1b8b98c6",
-      "bytes": 155
+      "expected": "Rooted bifurcating tree, stipulated substitutions/site; intentionally non-ultrametric; passes rooted substitution-tree validation, not GMYC input",
+      "sha256": "bebb343b899b6a5d1c59ceda35cfa184c22b466f4fa3f0b8b629b32ad9d57ae8",
+      "bytes": 180
     },
     "species-delimitation/time-binary.nwk": {
       "kind": "synthetic-valid",

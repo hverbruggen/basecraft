@@ -56,10 +56,10 @@ def abif(calls, quality=True, bad_peak=False):
                     channel[positions[i] + delta] = amplitude * (5 - abs(delta)) // 5
         entries.append((b'DATA', number, 4, 2, struct.pack(f'>{samples}h', *channel)))
     entries += [(b'PBAS', 2, 2, 1, calls.encode()),
-                (b'PLOC', 2, 3, 2, struct.pack(f'>{len(calls)}H',
+                (b'PLOC', 2, 4, 2, struct.pack(f'>{len(calls)}h',
                  *(positions[:-1] + [samples] if bad_peak else positions)))]
     if quality:
-        entries.append((b'PCON', 2, 1, 1, bytes(
+        entries.append((b'PCON', 2, 2, 1, bytes(
             8 if i in (0, len(calls) - 1) or c == 'N' else 35
             for i, c in enumerate(calls))))
     offset = 128 + 28 * len(entries)
@@ -132,13 +132,13 @@ def suite():
     add('tree-inference/known-distances.afa', '>a\nACGTACGTACGT\n>b\nACGTACGTACGA\n>c\nTCGTACGTACGA\n', 'Analytical toy: p distances ab=1/12, bc=1/12, ac=2/12; not realism', 'analytical')
     add('tree-inference/informative.afa', fasta(rows), 'Same eight specimen IDs; infer topology/branch lengths without treating groups as species truth')
     time_tree = '((specimen_01:0.1,specimen_02:0.1):0.9,((specimen_03:0.1,specimen_04:0.1,specimen_05:0.1):0.4,(specimen_06:0.1,specimen_07:0.1,specimen_08:0.1):0.4):0.5);\n'
-    subst_tree = time_tree.replace('specimen_03:0.1', 'specimen_03:0.2')
     add('species-delimitation/specimens.afa', fasta(rows), 'Eight matching specimens; exact haplotype multiplicities 2,1,1,1,1,2')
     add('species-delimitation/time.nwk', time_tree, 'Rooted stipulated time units; all root-to-tip distances 1 (tolerance 1e-12), polytomies; GMYC may reject ties')
-    add('species-delimitation/substitutions.nwk', subst_tree, 'Rooted stipulated substitutions/site; intentionally non-ultrametric; not GMYC input')
     # Strict binary, distinct branching times for the normal GMYC workflow.
     binary = '((specimen_01:0.03,specimen_02:0.03):0.97,((specimen_03:0.08,(specimen_04:0.02,specimen_05:0.02):0.06):0.42,(specimen_06:0.09,(specimen_07:0.01,specimen_08:0.01):0.08):0.41):0.5);\n'
     add('species-delimitation/time-binary.nwk', binary, 'Rooted ultrametric, height 1; seven distinct positive branching times; no promised species count')
+    subst_tree = binary.replace('specimen_03:0.08', 'specimen_03:0.18')
+    add('species-delimitation/substitutions.nwk', subst_tree, 'Rooted bifurcating tree, stipulated substitutions/site; intentionally non-ultrametric; passes rooted substitution-tree validation, not GMYC input')
     spart = ('begin spart;\nproject_name = synthetic_demo;\ndate = 2026-10-15T00:00:00;\n'
              'n_spartitions = 2 : construction / partial_review;\nn_individuals = 8 / 7;\n'
              'n_subsets = 3 / 3;\nindividual_assignment =\n' + ''.join(
@@ -174,16 +174,16 @@ def suite():
         'sequences-annotations': 'Open locus.gb, then locus.fasta (with locus.gff3 alongside). Inspect joined forward and reverse CDS, extract/translate, save a copy and reopen. Both CDS encode coding.fasta. Protein and noncoding FASTA are separate molecules.',
         'alignment-editing': 'Open homologues.afa. Select/copy a block, edit a residue, undo/redo, save a copy and reopen. Eight distinct specimen IDs must survive. Try MAFFT on unaligned.fasta. ambiguous-gappy.afa has a deliberately all-gap block and N; identifiers.fasta is an ID robustness case.',
         'tree-inference': 'Open informative.afa. Try distances/NJ/UPGMA/bootstrap (seed 1001), FastTree or IQ-TREE if installed. Check all eight taxa and finite nonnegative branches; no universal topology or species truth is promised. known-distances.afa has exact p distances 1/12, 1/12, 2/12. quoted.nex tests support and labels.',
-        'species-delimitation': 'Open specimens.afa and hypotheses.spart. Try Manual/Combine and deduplication; all eight IDs must map back, including duplicates. time-binary.nwk is a normal GMYC time tree; time.nwk tests ties/polytomies. substitutions.nwk is a PTP input with stipulated substitutions/site, unsuitable for GMYC. Branch units are supplied here, not encoded by Newick. Small data can yield uninformative estimates; construction groups are not validated species.',
+        'species-delimitation': 'Open specimens.afa and hypotheses.spart. Try Manual/Combine and deduplication; all eight IDs must map back, including duplicates. time-binary.nwk is a normal GMYC time tree; time.nwk tests ties/polytomies. substitutions.nwk is a rooted bifurcating PTP input with stipulated substitutions/site, unsuitable for GMYC. Branch units are supplied here, not encoded by Newick. Small data can yield uninformative estimates; construction groups are not validated species.',
         'sanger-review': 'Open forward.ab1 and reverse.ab1 against reference.fasta. Review a disagreement and ambiguous call, inspect low-quality ends, and try no-quality.ab1 (quality must remain unknown). These minimal synthetic triangular traces test parsing and display only; they do not validate Tracy, basecalling accuracy, chemistry or empirical Sanger performance.',
         'recovery-errors': 'Files in invalid/ are deliberate robustness probes, not biological examples. See MANIFEST.json for per-file outcomes and known permissive readers. Work on copies in a disposable folder. Save an edited valid example, reopen and inspect History/Methods. Changed hashes, damaged journals, unwritable paths and partial writes belong in isolated automated tests, never in existing user data.',
     }
     for directory, instructions in readmes.items():
         add(directory + '/README.txt', instructions + '\n', 'Manual procedure', 'documentation')
-    add('README.txt', 'Basecraft compact synthetic suite v1, seed 1001. GPL-3.0-or-later.\n'
+    add('README.txt', 'Basecraft compact synthetic suite v2, seed 1001. GPL-3.0-or-later.\n'
         'Open the named folders and read their README.txt. MANIFEST.json records origin, hashes and expectations.\n'
         'No natural accession, external sequences or user data are included. No empirical species or Sanger validation is claimed.\n', 'Start here', 'documentation')
-    manifest = {'version': 1, 'seed': SEED, 'origin': 'Original designed ancestor with inherited synonymous substitutions and a codon deletion; synthetic traces and analytical/invalid cases labeled separately',
+    manifest = {'version': 2, 'seed': SEED, 'origin': 'Original designed ancestor with inherited synonymous substitutions and a codon deletion; synthetic traces and analytical/invalid cases labeled separately',
                 'license': 'GPL-3.0-or-later', 'specimens': IDS,
                 'haplotypes': [[IDS[0], IDS[1]], [IDS[2]], [IDS[3]], [IDS[4]], [IDS[5]], [IDS[6], IDS[7]]],
                 'files': {name: {**descriptions[name], 'sha256': hashlib.sha256(data).hexdigest(), 'bytes': len(data)} for name, data in sorted(files.items())}}

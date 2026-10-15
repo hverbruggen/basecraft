@@ -2,6 +2,7 @@
 import hashlib
 import json
 from pathlib import Path
+import struct
 import subprocess
 import sys
 import tempfile
@@ -62,6 +63,45 @@ class CompactSuite(unittest.TestCase):
         self.assertEqual(genome[241:421].translate(str.maketrans('ACGT', 'TGCA'))[::-1], ancestor)
         self.assertEqual(genome[61:63], 'GT')
         self.assertEqual(genome[88:90], 'AG')
+
+    def test_abif_manufacturer_directory_schema(self):
+        # Decode committed bytes independently of generate.abif and Basecraft IO.
+        # Applied Biosystems July 2006, pp. 14 and 52-53: PLOC short, PCON char.
+        for name in ('forward.ab1', 'reverse.ab1', 'no-quality.ab1'):
+            with self.subTest(trace=name):
+                data = (FIXTURES / 'sanger-review' / name).read_bytes()
+                self.assertEqual(data[:4], b'ABIF')
+                root = struct.unpack_from('>4sIHHIIII', data, 6)
+                self.assertEqual(root[:4], (b'tdir', 1, 1023, 28))
+                count, size, offset = root[4:7]
+                self.assertEqual(size, 28 * count)
+                self.assertGreaterEqual(offset, 128)
+                self.assertLessEqual(offset + size, len(data))
+                entries = {}
+                for i in range(count):
+                    at = offset + i * 28
+                    tag, number, kind, width, n, size, address, _ = struct.unpack_from(
+                        '>4sIHHIIII', data, at)
+                    self.assertNotIn((tag, number), entries)
+                    self.assertEqual(size, width * n)
+                    start = at + 20 if size <= 4 else address
+                    self.assertLessEqual(start + size, len(data))
+                    entries[tag, number] = ((kind, width, n), data[start:start + size])
+                self.assertEqual(entries[b'FWO_', 1], ((2, 1, 4), b'GATC'))
+                for number in range(9, 13):
+                    self.assertEqual(entries[b'DATA', number][0], (4, 2, 444))
+                self.assertEqual(entries[b'PBAS', 2][0], (2, 1, 36))
+                self.assertEqual(entries[b'PLOC', 2][0], (4, 2, 36))
+                self.assertEqual(struct.unpack('>36h', entries[b'PLOC', 2][1]),
+                                 tuple(range(12, 433, 12)))
+                if name == 'no-quality.ab1':
+                    self.assertNotIn((b'PCON', 2), entries)
+                else:
+                    self.assertEqual(entries[b'PCON', 2][0], (2, 1, 36))
+                    calls = entries[b'PBAS', 2][1]
+                    expected = tuple(8 if i in (0, 35) or c == ord('N') else 35
+                                     for i, c in enumerate(calls))
+                    self.assertEqual(struct.unpack('>36b', entries[b'PCON', 2][1]), expected)
 
     def test_export_refuses_to_overwrite_edits(self):
         with tempfile.TemporaryDirectory() as tmp:

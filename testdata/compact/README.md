@@ -27,7 +27,7 @@ redistributed third-party datasets are included. Seed **1001** ranks internal
 codon positions by SHA-256 of `1001:<position>`; this is fixed and independent of
 Python PRNG versions. `MANIFEST.json` records every payload's origin category,
 expectation, size and SHA-256. The manifest does not hash itself. The generator
-version is 1; a change to construction requires reviewing and regenerating the
+version is 2; a change to construction requires reviewing and regenerating the
 committed bytes and expectations together.
 
 The 180 nt ancestor is a designed 60-codon template including ATG and TAA. It
@@ -50,8 +50,8 @@ checked independently of application parsing code.
 
 The time trees have stipulated arbitrary time units and root-to-tip length 1
 (tolerance 1e-12). `time-binary.nwk` has distinct positive internal event times;
-`time.nwk` deliberately has ties/polytomies. The substitution tree deliberately
-violates ultrametricity and has stipulated substitutions/site. These hand-built
+`time.nwk` deliberately has ties/polytomies. The substitution tree perturbs specimen_03 on the binary topology (0.08 to
+0.18), retains eight matching IDs and deliberately violates ultrametricity and has stipulated substitutions/site. These hand-built
 trees are workflow inputs, not calibrated estimates of the codon simulation.
 Newick itself does not identify branch units. `hypotheses.spart` includes a
 partial assignment. Deduplication is literal aligned identity after uppercase
@@ -62,10 +62,13 @@ For stochastic tools use seed 1001 where supported and verify taxon sets and
 finite branches, not an asserted universal topology or species count.
 
 The AB1 examples implement a minimal processed ABIF schema: 36 calls, 444 samples,
-GATC channel order, triangular peaks, quality 8 at ends/ambiguous calls and 35
+GATC channel order, PLOC type 4 (signed short), PCON type 2 (char),
+triangular peaks, quality 8 at ends/ambiguous calls and 35
 elsewhere. Reverse calls are reverse-complemented; a disagreement and N are
 intentional. These are **format and display fixtures**, not an instrument noise
 model, empirical Sanger validation, or a guarantee of Tracy compatibility.
+Independent directory decoding asserts canonical tag types, widths, counts and
+signed peak/quality values without using the generator or application parser.
 Absent qualities remain unknown. Invalid peak offsets and truncated payloads
 are kept separately under `recovery-errors/invalid`.
 
@@ -78,7 +81,11 @@ References consulted 2026-10-15; no sequence data copied from them:
 - [Sequence Ontology GFF3 specification](https://github.com/The-Sequence-Ontology/Specifications/blob/master/gff3.md):
   one-based inclusive coordinates and CDS phase.
 - [Applied Biosystems ABIF specification, July 2006 (archived manufacturer PDF)](https://archive.gfjc.fiu.edu/workshops/resources/literature/ABIF_File_Format.pdf):
-  big-endian directory entries, inline payloads and processed signal tags.
+  big-endian directory entries, inline payloads and processed signal tags;
+  printed pages 14 and 52–53 define PLOC short and PCON char.
+- [mPTP input specification](https://github.com/Pas-Kapli/mptp/wiki/Input-data):
+  rooted binary tree input. The compact substitution tree is checked through
+  `substitution_tips(..., true)`; method validation does not claim an empirical fit.
 
 See [COVERAGE.md](COVERAGE.md) for consumers, known permissive readers and gaps.
 The six demo folders contain README.txt procedures. Failure injection belongs
