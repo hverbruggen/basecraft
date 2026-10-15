@@ -11,12 +11,69 @@ Dialog {
     modal: true
     focus: true
     anchors.centerIn: Overlay.overlay
-    implicitWidth: 680
+    implicitWidth: Math.max(implicitContentWidth + leftPadding + rightPadding,
+        implicitHeaderWidth, implicitFooterWidth)
     width: Math.max(0, Math.min(implicitWidth,
         Overlay.overlay ? Overlay.overlay.width - 32 : implicitWidth))
     height: Math.max(0, Math.min(implicitHeight,
         Overlay.overlay ? Overlay.overlay.height - 32 : implicitHeight))
     closePolicy: Popup.CloseOnEscape
+
+    // Basic's header/footer backgrounds can cover the outline, and its default
+    // button box distributes two buttons across the entire dialog.
+    header: Label {
+        text: dialog.title
+        visible: text.length > 0
+        font.family: dialog.font.family
+        font.pixelSize: dialog.font.pixelSize
+        font.bold: true
+        wrapMode: Text.Wrap
+        padding: dialog.padding
+        leftPadding: dialog.leftPadding
+        rightPadding: dialog.rightPadding
+    }
+    footer: DialogButtonBox {
+        id: buttons
+        readonly property real naturalButtonsWidth: {
+            let total = Math.max(0, count - 1) * spacing
+            for (let i = 0; i < count; ++i) total += itemAt(i).implicitWidth
+            return total
+        }
+        readonly property real widestButton: {
+            let widest = 0
+            for (let i = 0; i < count; ++i) widest = Math.max(widest, itemAt(i).implicitWidth)
+            return widest
+        }
+        readonly property bool stacked: availableWidth < naturalButtonsWidth
+        visible: count > 0
+        alignment: Qt.AlignRight
+        spacing: 8
+        padding: dialog.padding
+        leftPadding: dialog.leftPadding
+        rightPadding: dialog.rightPadding
+        implicitWidth: naturalButtonsWidth + leftPadding + rightPadding
+        implicitHeight: contentItem.implicitHeight + topPadding + bottomPadding
+        contentWidth: stacked ? widestButton : naturalButtonsWidth
+        contentHeight: contentItem.implicitHeight
+        delegate: AppButton { width: Math.min(implicitWidth, buttons.availableWidth) }
+        contentItem: ListView {
+            implicitWidth: buttons.contentWidth
+            implicitHeight: {
+                let total = 0
+                for (let i = 0; i < buttons.count; ++i) {
+                    const height = buttons.itemAt(i).implicitHeight
+                    total = buttons.stacked ? total + height : Math.max(total, height)
+                }
+                return total + (buttons.stacked ? Math.max(0, buttons.count - 1) * spacing : 0)
+            }
+            model: buttons.contentModel
+            spacing: buttons.spacing
+            orientation: buttons.stacked ? ListView.Vertical : ListView.Horizontal
+            boundsBehavior: Flickable.StopAtBounds
+            interactive: false
+        }
+        background: Item {}
+    }
 
     function usable(item) {
         return item && item.visible && item.enabled

@@ -38,6 +38,7 @@ Item {
             dialog.font.pixelSize = data.size
             dialog.open()
             tryCompare(dialog, "opened", true)
+            tryVerify(() => dialog.lastField.Accessible.labelledBy.font.pixelSize === data.size)
             verify(dialog.width <= parent.width)
             verify(dialog.height <= parent.height)
             tryVerify(() => dialog.contentItem.contentHeight > dialog.contentItem.height, 1000, "long forms scroll: " + dialog.contentItem.contentHeight + "/" + dialog.contentItem.height)
