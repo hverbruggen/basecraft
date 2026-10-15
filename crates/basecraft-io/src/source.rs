@@ -19,21 +19,19 @@ pub enum Source {
 
 impl Source {
     pub fn open(path: &Path) -> Result<Self> {
-        let file = File::open(path)?;
-        let len = file.metadata()?.len();
-        if len < MAP_THRESHOLD {
-            return Ok(Source::Owned(std::fs::read(path)?));
-        }
-        // SAFETY: the mapping is read-only. If another program truncates the
-        // file while it's mapped, reads past the new end raise SIGBUS.
-        // basecraft-platform will install a handler that turns that into an
-        // error; until then this is the documented risk in the design notes.
-        let map = unsafe { Mmap::map(&file)? };
-        #[cfg(unix)]
-        {
-            let _ = map.advise(memmap2::Advice::Random);
-        }
-        Ok(Source::Mapped(map))
+        // User-owned files may be truncated by another process. Never map them:
+        // a read-only mmap can still raise SIGBUS and cannot yield a Rust error.
+        // Fallible reservation also reports oversized inputs instead of aborting.
+        use std::io::Read;
+        let mut file = File::open(path)?;
+        let len = usize::try_from(file.metadata()?.len())
+            .map_err(|_| std::io::Error::other("input is too large for this platform"))?;
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(len)
+            .map_err(|e| std::io::Error::other(format!("cannot allocate input buffer: {e}")))?;
+        file.read_to_end(&mut bytes)?;
+        Ok(Source::Owned(bytes))
     }
 
     pub fn from_vec(bytes: Vec<u8>) -> Self {
@@ -49,5 +47,22 @@ impl Source {
 
     pub fn is_mapped(&self) -> bool {
         matches!(self, Source::Mapped(_))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn externally_truncated_large_input_keeps_safe_owned_contents() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("large");
+        let threshold = usize::try_from(MAP_THRESHOLD).unwrap();
+        std::fs::write(&path, vec![b'A'; threshold + 1]).unwrap();
+        let source = Source::open(&path).unwrap();
+        assert!(!source.is_mapped());
+        std::fs::write(path, b"").unwrap();
+        assert_eq!(source.bytes().len(), threshold + 1);
+        assert_eq!(source.bytes()[threshold], b'A');
     }
 }
