@@ -1,0 +1,298 @@
+{
+  "version": 1,
+  "seed": 1001,
+  "origin": "Original designed ancestor with inherited synonymous substitutions and a codon deletion; synthetic traces and analytical/invalid cases labeled separately",
+  "license": "GPL-3.0-or-later",
+  "specimens": [
+    "specimen_01",
+    "specimen_02",
+    "specimen_03",
+    "specimen_04",
+    "specimen_05",
+    "specimen_06",
+    "specimen_07",
+    "specimen_08"
+  ],
+  "haplotypes": [
+    [
+      "specimen_01",
+      "specimen_02"
+    ],
+    [
+      "specimen_03"
+    ],
+    [
+      "specimen_04"
+    ],
+    [
+      "specimen_05"
+    ],
+    [
+      "specimen_06"
+    ],
+    [
+      "specimen_07",
+      "specimen_08"
+    ]
+  ],
+  "files": {
+    "README.txt": {
+      "kind": "documentation",
+      "expected": "Start here",
+      "sha256": "b66f01bd8f506b1b08ae606105e023a3fe6ef6e3220c152739afd79f7481f0df",
+      "bytes": 294
+    },
+    "alignment-editing/README.txt": {
+      "kind": "documentation",
+      "expected": "Manual procedure",
+      "sha256": "8701ae534abdf4394d38de9e7f7882a15e9b4a881eadbe430c5210afd613c81c",
+      "bytes": 269
+    },
+    "alignment-editing/ambiguous-gappy.afa": {
+      "kind": "synthetic-edge",
+      "expected": "183 columns; all-gap columns 30..33; specimen_01 N at column 33; edge data",
+      "sha256": "2b33beca6ce359e592678be548073b5657e6063b365bba37f61e6817f3deacad",
+      "bytes": 1600
+    },
+    "alignment-editing/homologues.afa": {
+      "kind": "synthetic-valid",
+      "expected": "8 rows x 180 columns, shared branch changes, codon deletion, 6 haplotypes",
+      "sha256": "7e0489c74869a034240756a51aa91d5c4c961b12977d7ef9d3d97b6adec10a4c",
+      "bytes": 1568
+    },
+    "alignment-editing/identifiers.fasta": {
+      "kind": "synthetic-edge",
+      "expected": "Duplicate Unicode IDs preserved by IO; analysis must reject duplicates",
+      "sha256": "f03c33f5e3faf66314f9db8b01e57c65e6eae4d728b22262ca349a174e86a2c7",
+      "bytes": 428
+    },
+    "alignment-editing/unaligned.fasta": {
+      "kind": "synthetic-valid",
+      "expected": "MAFFT input; first five 180 nt, last three 177 nt",
+      "sha256": "2f34de5b7bde3b3094c1a8f1d7fbec1cac7bea9954962f3fbe899e486a104426",
+      "bytes": 1559
+    },
+    "recovery-errors/README.txt": {
+      "kind": "documentation",
+      "expected": "Manual procedure",
+      "sha256": "2744b7bdc6b74a7136c8246ee636a3839461d6f922783030dc8d82d5c72a1324",
+      "bytes": 387
+    },
+    "recovery-errors/invalid/empty.fasta": {
+      "kind": "invalid",
+      "expected": "IO permits zero records; analyses reject empty inputs",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "recovery-errors/invalid/malformed.gb": {
+      "kind": "invalid",
+      "expected": "Reject missing LOCUS",
+      "sha256": "979ebf0255601bf2014a0747459d9f102ef31943cf0876d7aa066d892d0e5338",
+      "bytes": 20
+    },
+    "recovery-errors/invalid/malformed.gff3": {
+      "kind": "invalid",
+      "expected": "Reject start zero",
+      "sha256": "676f95b9023825f2efdaa3f2e27d53d2df5edd2976faabb0a2c6defd97e6e79c",
+      "bytes": 32
+    },
+    "recovery-errors/invalid/malformed.nwk": {
+      "kind": "invalid",
+      "expected": "Reject unmatched parenthesis",
+      "sha256": "f0c86a7b0d779d72c4abf3472cd872ae0c811215ad1beaf23edb329bdfff62bb",
+      "bytes": 15
+    },
+    "recovery-errors/invalid/malformed.spart": {
+      "kind": "invalid",
+      "expected": "Reject malformed SPART",
+      "sha256": "529d54ed2b3cf23bd3d3cbae30269fb73742852ebe46db39dd6ea209faa88cc0",
+      "bytes": 40
+    },
+    "recovery-errors/invalid/missing-header.fasta": {
+      "kind": "invalid",
+      "expected": "Reject sequence before header",
+      "sha256": "a4b0723993d3751f3d530e3c20da4c24ccdd32e65820fba897cc5f119e85ca55",
+      "bytes": 5
+    },
+    "recovery-errors/invalid/missing-tip.nwk": {
+      "kind": "invalid",
+      "expected": "Tree is parseable; reject matching against eight-specimen alignment",
+      "sha256": "5610bcded1df5853d62679bc9ed826af9706c2f191b44abcda7d58a32b437d57",
+      "bytes": 31
+    },
+    "recovery-errors/invalid/negative.nwk": {
+      "kind": "invalid",
+      "expected": "IO may retain lengths; scientific tree validation must reject negatives",
+      "sha256": "f42004574d1377a1982f26285103f94dcba419bda92e471e01fb39c6f97fa72a",
+      "bytes": 12
+    },
+    "recovery-errors/invalid/peak-outside.ab1": {
+      "kind": "invalid",
+      "expected": "Reject PLOC sample index equal to channel length",
+      "sha256": "22b99479eaaa12ddf28792964695a02c506eea645ec9c60c9bf615a6c13e8956",
+      "bytes": 4048
+    },
+    "recovery-errors/invalid/ragged.afa": {
+      "kind": "invalid",
+      "expected": "Reject as distance alignment; sequence IO may read it",
+      "sha256": "d2cb903cbee5c7a449f8bf029d772d3619d17fdb121549c530e33880e746840e",
+      "bytes": 15
+    },
+    "recovery-errors/invalid/symbols.fasta": {
+      "kind": "invalid",
+      "expected": "Robustness probe: IO is permissive; biological validation is a separate concern",
+      "sha256": "6915b709c9dec470da9c08c3a9cac752e1f67e9846ec3e2087083006fd5d737f",
+      "bytes": 12
+    },
+    "recovery-errors/invalid/truncated.ab1": {
+      "kind": "invalid",
+      "expected": "Reject payload outside file",
+      "sha256": "587c514535ebfe059deea24f019995cc445122d3ee57b22aebc12d682e3ca860",
+      "bytes": 3968
+    },
+    "recovery-errors/invalid/truncated.gb": {
+      "kind": "invalid",
+      "expected": "Robustness probe: current GenBank reader accepts missing terminator; validation gap",
+      "sha256": "61fa24f3c1e7378b5d3a9063aad4096bd58a6f0d4df1b17b288de091ba6d7340",
+      "bytes": 920
+    },
+    "sanger-review/README.txt": {
+      "kind": "documentation",
+      "expected": "Manual procedure",
+      "sha256": "ab177865d567e9ce11d29ad1a105826ca352e7ecd8face1421a29f71236599d4",
+      "bytes": 346
+    },
+    "sanger-review/forward.ab1": {
+      "kind": "synthetic-valid",
+      "expected": "36 calls, 444 samples, disagreement at index 12, quality 8 at ends/35 inside; synthetic format test",
+      "sha256": "bf2dd2c870a38de1deb112f53f1eb53f59cdfb95ac3060c15786e7070e2a5f58",
+      "bytes": 4048
+    },
+    "sanger-review/no-quality.ab1": {
+      "kind": "synthetic-edge",
+      "expected": "PCON absent: quality unknown, never fabricated",
+      "sha256": "1132c8604f0070d646744b3f056e86a3ca769dc385c33f96c9e929fa3247dedf",
+      "bytes": 3984
+    },
+    "sanger-review/reference.fasta": {
+      "kind": "synthetic-valid",
+      "expected": "36 nt; forward calls differ at index 12, reverse at reference index 20 (N)",
+      "sha256": "6c5325be18e91c83c259cd393af416d1c8d3323eac3fb481be54bf885715405b",
+      "bytes": 48
+    },
+    "sanger-review/reverse.ab1": {
+      "kind": "synthetic-valid",
+      "expected": "Reverse read orientation; N at call index 15; synthetic format test",
+      "sha256": "5bf60d56ffaf5ef7e33027959262818a8c100e56bc62eed22609c0bdf4c5c7cc",
+      "bytes": 4048
+    },
+    "sequences-annotations/README.txt": {
+      "kind": "documentation",
+      "expected": "Manual procedure",
+      "sha256": "a2df824a52f197aa91230b8a9d10781b30fd34a5ba9f152f4eef89553ec4b031",
+      "bytes": 226
+    },
+    "sequences-annotations/coding.fasta": {
+      "kind": "synthetic-valid",
+      "expected": "180 nt, start ATG, stop TAA, 59 amino acids",
+      "sha256": "db9e5b8c587bfe36409151743efd3dde3c54b2f23b0607b0d4198ef7f5ab0c5d",
+      "bytes": 193
+    },
+    "sequences-annotations/locus.fasta": {
+      "kind": "synthetic-valid",
+      "expected": "421 nt, same residues as locus.gb",
+      "sha256": "5b26c049fcdc3d168c8dd23a8f8c6c4e4f7525b7458889d2419f20d1617719cd",
+      "bytes": 436
+    },
+    "sequences-annotations/locus.gb": {
+      "kind": "synthetic-valid",
+      "expected": "Two CDS encode the ancestor; GenBank and GFF3 locations agree",
+      "sha256": "5d9f9f7834b5aa0ea49d1537f77465aa57acaca8961e4ed6d377e26cc1b1c104",
+      "bytes": 940
+    },
+    "sequences-annotations/locus.gff3": {
+      "kind": "synthetic-valid",
+      "expected": "Joined forward CDS, phase 0/2; reverse CDS reaches last base",
+      "sha256": "e1494443e4044ff6c7f7071986fde7bb8daecce1b0ae1f5f3c302b00f7c39fd0",
+      "bytes": 208
+    },
+    "sequences-annotations/noncoding.fasta": {
+      "kind": "synthetic-valid",
+      "expected": "32 nt designed intergenic sequence; no functional claim",
+      "sha256": "70dda21951d440875e0d9cd2003abd1ab43b151c412b914a7bc3a9484d17593c",
+      "bytes": 50
+    },
+    "sequences-annotations/protein.fasta": {
+      "kind": "synthetic-valid",
+      "expected": "59 aa; translation of coding.fasta excluding stop",
+      "sha256": "b63fd8204a59e8b51203ee60ff38a295e9ad82838825e8145a193448112d1b2d",
+      "bytes": 73
+    },
+    "species-delimitation/README.txt": {
+      "kind": "documentation",
+      "expected": "Manual procedure",
+      "sha256": "cd2ec459a68e15dfcfb0a7c89f5b240e32555ae0e336706dbc381d7925c3abf1",
+      "bytes": 444
+    },
+    "species-delimitation/hypotheses.spart": {
+      "kind": "synthetic-valid",
+      "expected": "Two constructed hypotheses, second unassigns specimen_08; not validated species",
+      "sha256": "62cade22031351b37af9841062cad3c2f246ef40abf2c488994518858f186146",
+      "bytes": 356
+    },
+    "species-delimitation/specimens.afa": {
+      "kind": "synthetic-valid",
+      "expected": "Eight matching specimens; exact haplotype multiplicities 2,1,1,1,1,2",
+      "sha256": "7e0489c74869a034240756a51aa91d5c4c961b12977d7ef9d3d97b6adec10a4c",
+      "bytes": 1568
+    },
+    "species-delimitation/substitutions.nwk": {
+      "kind": "synthetic-valid",
+      "expected": "Rooted stipulated substitutions/site; intentionally non-ultrametric; not GMYC input",
+      "sha256": "4d190eaba9c47e3bd1acd4e6cc258eea8c49f40d89a648a70733b25f1b8b98c6",
+      "bytes": 155
+    },
+    "species-delimitation/time-binary.nwk": {
+      "kind": "synthetic-valid",
+      "expected": "Rooted ultrametric, height 1; seven distinct positive branching times; no promised species count",
+      "sha256": "02f6e9409af417ba7d37b753483163c61ffd9876acf7b1d145db58ec89d45a59",
+      "bytes": 180
+    },
+    "species-delimitation/time.nwk": {
+      "kind": "synthetic-valid",
+      "expected": "Rooted stipulated time units; all root-to-tip distances 1 (tolerance 1e-12), polytomies; GMYC may reject ties",
+      "sha256": "2eb4ac97ad326908cfd3d29902223d325670033a49f9ac166e43d3ca50ae5898",
+      "bytes": 155
+    },
+    "tree-inference/README.txt": {
+      "kind": "documentation",
+      "expected": "Manual procedure",
+      "sha256": "0fd7d527f544b8d5a6edab65e420a5b6c2e1a0c940834b7e71c952ea39788a4e",
+      "bytes": 305
+    },
+    "tree-inference/informative.afa": {
+      "kind": "synthetic-valid",
+      "expected": "Same eight specimen IDs; infer topology/branch lengths without treating groups as species truth",
+      "sha256": "7e0489c74869a034240756a51aa91d5c4c961b12977d7ef9d3d97b6adec10a4c",
+      "bytes": 1568
+    },
+    "tree-inference/known-distances.afa": {
+      "kind": "analytical",
+      "expected": "Analytical toy: p distances ab=1/12, bc=1/12, ac=2/12; not realism",
+      "sha256": "0239018b7a818fc3c2d7ef3bbc1844623fc5e7ed3f605d7d8c5ff6fbc81ce182",
+      "bytes": 48
+    },
+    "tree-inference/quoted.nex": {
+      "kind": "synthetic-edge",
+      "expected": "Three tips, quoted Unicode/space labels, support 95 and zero length",
+      "sha256": "98f52e725ed0a3d56424a42cbad0c64d6965d60b0901bcf15a37cc533d2d5930",
+      "bytes": 120
+    },
+    "tree-inference/unrooted.nwk": {
+      "kind": "analytical",
+      "expected": "Unrooted interpretation; trifurcation",
+      "sha256": "909b217cbf3ab38150aacf942c09e0249cf6af6c474abebbcabc2645750b4757",
+      "bytes": 21
+    }
+  }
+}

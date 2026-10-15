@@ -1,0 +1,1 @@
+Open locus.gb, then locus.fasta (with locus.gff3 alongside). Inspect joined forward and reverse CDS, extract/translate, save a copy and reopen. Both CDS encode coding.fasta. Protein and noncoding FASTA are separate molecules.

@@ -1,0 +1,17 @@
+LOCUS       locus                    421 bp    DNA     linear SYN 15-OCT-2026
+DEFINITION  Synthetic joined and reverse coding example; no natural accession.
+FEATURES             Location/Qualifiers
+     CDS             join(1..61,91..209)
+                     /gene="toyA"
+                     /codon_start=1
+     CDS             complement(242..421)
+                     /gene="toyB"
+                     /codon_start=1
+ORIGIN
+        1 atggctgaactgaaaggtattgttgacaccttccagaaccgttctgctggtctggaagtt
+       61 agtaagtatcttaacctatcttaacctcagaaaccgacattttcaaccagtctcgtgctg
+      121 aactgggtgacaaagttaccattcagttcaacgcttctcgtggtctggaaaaagacgtta
+      181 ttaccttccagaactctgctcgtggttaatataaagcgctatatcggctaacctaggtta
+      241 cttaaccacgagcagagttctggaaggtaataacgtctttttccagaccacgagaagcgt
+      301 tgaactgaatggtaactttgtcacccagttcagcacgagactggttgaaaatgtcggttt
+      361 taacttccagaccagcagaacggttctggaaggtgtcaacaatacctttcagttca

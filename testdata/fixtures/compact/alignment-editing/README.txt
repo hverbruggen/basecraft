@@ -1,0 +1,1 @@
+Open homologues.afa. Select/copy a block, edit a residue, undo/redo, save a copy and reopen. Eight distinct specimen IDs must survive. Try MAFFT on unaligned.fasta. ambiguous-gappy.afa has a deliberately all-gap block and N; identifiers.fasta is an ID robustness case.

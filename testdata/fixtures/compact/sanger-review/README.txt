@@ -1,0 +1,1 @@
+Open forward.ab1 and reverse.ab1 against reference.fasta. Review a disagreement and ambiguous call, inspect low-quality ends, and try no-quality.ab1 (quality must remain unknown). These minimal synthetic triangular traces test parsing and display only; they do not validate Tracy, basecalling accuracy, chemistry or empirical Sanger performance.

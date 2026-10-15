@@ -1,0 +1,5 @@
+#NEXUS
+begin trees;
+translate 1 'sample α', 2 'sample beta', 3 gamma;
+tree demo = [&R] ((1:0,2:0.2)95:0.1,3:0.3);
+end;

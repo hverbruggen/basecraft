@@ -24,6 +24,7 @@ hooks:
 
 # Format, lint, test. The pre-commit hook runs the first two.
 check:
+    python3 -m unittest discover -s testdata/compact
     cargo fmt --all --check
     cargo clippy --workspace --all-targets -- -D warnings
     cargo test --workspace
@@ -73,9 +74,16 @@ replay:
 bench:
     @echo "wall-clock benchmarks: not set up yet"
 
-# Generate synthetic test data outside the synced folder. scale: small or full.
-testdata scale="small":
-    cargo run --release -q -p basecraft-testgen -- --out {{testdata_dir}} --scale {{scale}}
+# Compact defaults need no compilation. Legacy small/full stress tiers remain opt-in.
+# Run compiler-backed tiers on the configured remote build machine.
+testdata scale="compact":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case '{{scale}}' in
+        compact) python3 testdata/compact/generate.py --out '{{testdata_dir}}/compact' ;;
+        small|full) cargo run --release -q -p basecraft-testgen -- --out '{{testdata_dir}}' --scale '{{scale}}' ;;
+        *) echo 'scale must be compact, small or full' >&2; exit 2 ;;
+    esac
 
 # Build the basecraft-core Python module into the pixi environment.
 py:

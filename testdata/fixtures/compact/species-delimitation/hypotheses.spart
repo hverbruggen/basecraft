@@ -1,0 +1,17 @@
+begin spart;
+project_name = synthetic_demo;
+date = 2026-10-15T00:00:00;
+n_spartitions = 2 : construction / partial_review;
+n_individuals = 8 / 7;
+n_subsets = 3 / 3;
+individual_assignment =
+specimen_01 : 1 / 1
+specimen_02 : 1 / 1
+specimen_03 : 2 / 2
+specimen_04 : 2 / 2
+specimen_05 : 2 / 2
+specimen_06 : 3 / 3
+specimen_07 : 3 / 3
+specimen_08 : 3 / ?
+;
+end;
