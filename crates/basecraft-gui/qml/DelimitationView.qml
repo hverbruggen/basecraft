@@ -1,10 +1,19 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import Basecraft
 
-Item {
+FocusScope {
     id: doc
+    property var notificationSink: null
+    Connections {
+        target: ctl
+        function onMessageChanged() {
+            if (notificationSink && ctl.message.length)
+                notificationSink.notification(ctl.file_path, ctl.message, ctl.message_kind)
+        }
+    }
+
     required property string path
     required property int index
     property alias controller: ctl
@@ -17,10 +26,9 @@ Item {
     property var mergeGroups: []
     property bool settingsOpen: false
     property bool detailsOpen: false
-    component WorkspaceButton: Button {
-        font.pixelSize: 13
+    component WorkspaceButton: AppButton {
         padding: 6
-        implicitHeight: 32
+        implicitHeight: Math.max(32, implicitContentHeight + topPadding + bottomPadding)
         implicitWidth: Math.max(50, contentItem.implicitWidth + 16)
     }
     Timer { interval: 250; running: ctl.busy; repeat: true; onTriggered: ctl.poll_job() }
@@ -42,7 +50,7 @@ Item {
             Layout.fillWidth: true
             Layout.preferredHeight: childrenRect.height
             spacing: 4
-            TextField { id: name; width: 170; height: 32; font.pixelSize: 13; placeholderText: "Hypothesis / group name" }
+            TextField { id: name; width: Math.max(170, implicitWidth); Accessible.name: "Hypothesis / group name"; placeholderText: "Hypothesis / group name" }
             WorkspaceButton { text: "New"; onClicked: ctl.action("create", JSON.stringify({name:name.text})) }
             WorkspaceButton { text: "Derive"; enabled: ctl.active_hypothesis.length > 0; onClicked: ctl.action("derive", JSON.stringify({name:name.text})) }
             WorkspaceButton { text: "Rename"; onClicked: ctl.action("rename",JSON.stringify({name:name.text})) }
@@ -86,14 +94,14 @@ Item {
             Layout.minimumWidth: 0
             visible: doc.settingsOpen
             TextField { id: analysisInput; placeholderText: "Immutable analysis input (tree or aligned FASTA)"; Layout.fillWidth: true; text: ["asap","haplotypes","group_statistics","gmyc_alignment_single","gmyc_alignment_multiple"].includes(method.currentText) ? ctl.linked_alignment : ctl.display_path }
-            ComboBox { id: method; model: ["gmyc_single", "gmyc_multiple", "gmyc_alignment_single", "gmyc_alignment_multiple", "ptp", "mptp", "asap", "relative_time", "haplotypes", "group_statistics"] }
+            AppComboBox { id: method; model: ["gmyc_single", "gmyc_multiple", "gmyc_alignment_single", "gmyc_alignment_multiple", "ptp", "mptp", "asap", "relative_time", "haplotypes", "group_statistics"] }
             WorkspaceButton { text: "Run"; enabled: !ctl.busy; onClicked: ctl.run_analysis(method.currentText,analysisInput.text,rooted.checked,JSON.stringify({cache:cachePath.text,mapping:mappingPath.text,unique_haplotypes:sampling.currentIndex === 0,model:distanceModel.currentText,seed:seed.value,workers:workers.value,replicates:replicates.value,tree_index:treeIndex.value})) }
             WorkspaceButton { text: "Cancel job"; enabled: ctl.busy; onClicked: ctl.cancel_job() }
         }
         RowLayout {
             Layout.minimumWidth: 0
             visible: doc.settingsOpen
-            ComboBox { id: sampling; model: ["Unique haplotypes", "All specimens"] }
+            AppComboBox { id: sampling; model: ["Unique haplotypes", "All specimens"] }
             Label { text: "Alignment GMYC: UPGMA equal-rate tree" }
             WorkspaceButton { text: "Count haplotypes"; enabled: !ctl.busy; onClicked: ctl.run_analysis("haplotypes",analysisInput.text,false,"{}") }
             Label { text: ctl.sampling_summary }
@@ -102,7 +110,7 @@ Item {
             Layout.minimumWidth: 0
             visible: doc.settingsOpen
             Label { text: "Distance model" }
-            ComboBox { id: distanceModel; model: ["p", "jc69", "k2p"] }
+            AppComboBox { id: distanceModel; model: ["p", "jc69", "k2p"] }
             Label { text: "Seed" }
             SpinBox { id: seed; from: 1; to: 2147483647; value: 1; editable: true }
             Label { text: "Workers" }
@@ -150,8 +158,8 @@ Item {
                                 WorkspaceButton { text: modelData.name; highlighted: ctl.active_hypothesis === modelData.id; onClicked: ctl.activate(modelData.id); Layout.fillWidth: true }
                             }
                             RowLayout {
-                                WorkspaceButton { text: "←"; enabled: (doc.workspace.view.visible || []).includes(modelData.id); onClicked: ctl.action("move_visible",JSON.stringify({id:modelData.id,direction:-1})) }
-                                WorkspaceButton { text: "→"; enabled: (doc.workspace.view.visible || []).includes(modelData.id); onClicked: ctl.action("move_visible",JSON.stringify({id:modelData.id,direction:1})) }
+                                AppIconButton { iconName: "arrow-left"; description: "Move hypothesis left"; enabled: (doc.workspace.view.visible || []).includes(modelData.id); onClicked: ctl.action("move_visible",JSON.stringify({id:modelData.id,direction:-1})) }
+                                AppIconButton { iconName: "arrow-right"; description: "Move hypothesis right"; enabled: (doc.workspace.view.visible || []).includes(modelData.id); onClicked: ctl.action("move_visible",JSON.stringify({id:modelData.id,direction:1})) }
                             }
                             Label { text: modelData.origin + (modelData.provenance.method.length ? " · " + modelData.provenance.method : ""); elide: Text.ElideRight; Layout.maximumWidth: 220 }
                             Label { text: modelData.groups.length + " groups · " + modelData.unassigned.length + " unassigned" }

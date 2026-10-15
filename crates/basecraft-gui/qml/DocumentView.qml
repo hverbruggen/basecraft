@@ -1,12 +1,21 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import Basecraft
 
 // One open file: its controller, the GPU view, and pointer and key
 // handling. Window-level actions (menus, dialogs, the sidebar) are asked
 // for through signals.
-Item {
+FocusScope {
     id: doc
+    property var notificationSink: null
+    Connections {
+        target: ctl
+        function onMessageChanged() {
+            if (notificationSink && ctl.message.length)
+                notificationSink.notification(ctl.file_path, ctl.message, ctl.message_kind)
+        }
+    }
+
     required property string path
     required property int index
     property alias controller: ctl
@@ -38,8 +47,10 @@ Item {
         }
     })
 
-    InstanceView {
+    AppCanvas {
         id: view
+        accessibleTitle: "Sequence editor"
+        accessibleSummary: ctl.status
         anchors.fill: parent
         clearColor: ctl.background
         fontFamily: ctl.mono_font
@@ -159,6 +170,7 @@ Item {
         }
 
         Keys.onPressed: (event) => {
+            if (!view.renderingAvailable) { event.accepted = false; return }
             const ctrl = event.modifiers & Qt.ControlModifier
             if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && ctl.selected_feature() >= 0) {
                 doc.editSelected(); event.accepted = true; return

@@ -54,6 +54,35 @@ pub mod qobject {
         #[cxx_name = "fileCreated"]
         fn file_created(self: Pin<&mut AlignmentController>, path: QString);
 
+        #[qinvokable]
+        fn document_record(self: &AlignmentController) -> QString;
+        #[qinvokable]
+        fn record_revision(self: &AlignmentController) -> QString;
+        #[qinvokable]
+        fn accessible_page(self: &AlignmentController, page: i32) -> QString;
+        #[qinvokable]
+        fn add_sequences(
+            self: Pin<&mut AlignmentController>,
+            text: &QString,
+            name: &QString,
+            mafft: bool,
+            orientation: bool,
+            keep: bool,
+        );
+        #[qinvokable]
+        fn read_sequence_file(self: Pin<&mut AlignmentController>, path: &QString) -> QString;
+        #[qinvokable]
+        fn review_snapshot(self: Pin<&mut AlignmentController>) -> QString;
+        #[qsignal]
+        #[cxx_name = "additionNeedsGaps"]
+        fn addition_needs_gaps(self: Pin<&mut AlignmentController>, count: i32);
+        #[qsignal]
+        #[cxx_name = "sequencesAdded"]
+        fn sequences_added(self: Pin<&mut AlignmentController>);
+        #[qsignal]
+        #[cxx_name = "additionFailed"]
+        fn addition_failed(self: Pin<&mut AlignmentController>, message: QString);
+
         /// Realign the rows with MAFFT's default settings, in the
         /// background, into a new file beside this one.
         #[qinvokable]
@@ -134,6 +163,8 @@ pub mod qobject {
         fn zoom_by(self: Pin<&mut AlignmentController>, x: f64, y: f64, factor: f64);
         #[qinvokable]
         fn zoom_in(self: Pin<&mut AlignmentController>);
+        #[qinvokable]
+        fn set_zoom_percent(self: Pin<&mut AlignmentController>, percent: f64);
         #[qinvokable]
         fn zoom_out(self: Pin<&mut AlignmentController>);
         #[qinvokable]
@@ -232,9 +263,9 @@ use serde_json::json;
 
 use crate::bridge::{
     ALT, CTRL, KEY_0, KEY_BACKSPACE, KEY_DELETE, KEY_DOWN, KEY_END, KEY_EQUAL, KEY_ESCAPE,
-    KEY_HOME, KEY_LEFT, KEY_MINUS, KEY_PAGE_DOWN, KEY_PAGE_UP, KEY_PLUS, KEY_RIGHT, KEY_S, KEY_UP,
-    KEY_Y, KEY_Z, SHIFT, WHEEL_ZOOM, ZOOM_STEP, css, file_name, load_theme, memory_text,
-    monospace_font, omarchy_theme_path, plugin_dir, project_root, took,
+    KEY_HOME, KEY_LEFT, KEY_MINUS, KEY_PAGE_DOWN, KEY_PAGE_UP, KEY_PLUS, KEY_RIGHT, KEY_UP, KEY_Y,
+    KEY_Z, SHIFT, WHEEL_ZOOM, ZOOM_STEP, css, file_name, load_theme, memory_text, monospace_font,
+    omarchy_theme_path, plugin_dir, project_root, took,
 };
 
 const KEY_A: i32 = 0x41;
@@ -287,6 +318,7 @@ pub struct AlignmentRust {
     gap_runs: Vec<(u64, u64)>,
     gap_scan_key: Option<(String, u64)>,
 
+    review_snapshot_dir: Option<tempfile::TempDir>,
     session: Option<Session>,
     doc: Option<DocId>,
     view: AlignmentView,
@@ -343,6 +375,7 @@ impl Default for AlignmentRust {
             gap_scan_running: false,
             gap_runs: Vec::new(),
             gap_scan_key: None,
+            review_snapshot_dir: None,
             session: None,
             doc: None,
             view: AlignmentView::new(800.0, 600.0),
@@ -369,6 +402,22 @@ fn f(v: f64) -> f32 {
 }
 
 impl qobject::AlignmentController {
+    pub fn document_record(&self) -> QString {
+        crate::provenance_bridge::session_report(self.rust().session.as_ref(), self.rust().doc)
+    }
+    pub fn record_revision(&self) -> QString {
+        crate::provenance_bridge::session_revision(self.rust().session.as_ref(), self.rust().doc)
+    }
+
+    pub fn accessible_page(&self, page: i32) -> QString {
+        let result = self.with_doc(|d| basecraft_viewmodel::accessible::alignment(d, page));
+        let value = result.map_or_else(
+            || serde_json::json!({"page": 0, "pages": 1, "text": "No document loaded"}),
+            |p| serde_json::json!({"page": p.page, "pages": p.pages, "text": p.text}),
+        );
+        QString::from(&value.to_string())
+    }
+
     fn with_doc<T>(&self, f: impl FnOnce(&AlignmentDoc) -> T) -> Option<T> {
         let r = self.rust();
         match (&r.session, r.doc) {
@@ -472,6 +521,11 @@ impl qobject::AlignmentController {
     fn fail(mut self: Pin<&mut Self>, msg: &str) {
         self.as_mut().set_message_kind(QString::from("error"));
         self.as_mut().set_message(QString::from(msg));
+    }
+
+    fn fail_addition(mut self: Pin<&mut Self>, msg: &str) {
+        self.as_mut().fail("Cannot add sequences");
+        self.as_mut().addition_failed(QString::from(msg));
     }
 
     /// Apply an edit through the session; on failure, say why.
@@ -599,7 +653,13 @@ impl qobject::AlignmentController {
             return false;
         }
         let path = PathBuf::from(path.to_string());
-        let mut session = Session::new(project_root(&path));
+        let mut session = match Session::recoverable(project_root(&path)) {
+            Ok(session) => session,
+            Err(error) => {
+                self.fail(&error.to_string());
+                return false;
+            }
+        };
         match session.open(&path) {
             Ok(doc) if session.is_alignment(doc) => {
                 {
@@ -711,10 +771,6 @@ impl qobject::AlignmentController {
             }
             KEY_Y if ctrl => {
                 self.as_mut().history(true);
-                true
-            }
-            KEY_S if ctrl && !shift => {
-                self.as_mut().save();
                 true
             }
             KEY_0 if ctrl => {
@@ -946,6 +1002,15 @@ impl qobject::AlignmentController {
         self.refresh();
     }
 
+    pub fn set_zoom_percent(mut self: Pin<&mut Self>, percent: f64) {
+        if !percent.is_finite() || !(0.000_001..=20_000.0).contains(&percent) {
+            return;
+        }
+        let factor = percent / self.rust().view.zoom_percent();
+        self.as_mut().rust_mut().view.zoom_step(factor);
+        self.refresh();
+    }
+
     pub fn zoom_in(mut self: Pin<&mut Self>) {
         self.as_mut().rust_mut().view.zoom_step(ZOOM_STEP);
         self.refresh();
@@ -1017,6 +1082,203 @@ impl qobject::AlignmentController {
         self.refresh();
     }
 
+    pub fn read_sequence_file(mut self: Pin<&mut Self>, path: &QString) -> QString {
+        match std::fs::read_to_string(path.to_string()) {
+            Ok(text) if text.trim_start().starts_with('>') => QString::from(text),
+            Ok(_) => {
+                self.as_mut().fail_addition("Choose a FASTA file");
+                QString::default()
+            }
+            Err(e) => {
+                self.as_mut().fail_addition(&e.to_string());
+                QString::default()
+            }
+        }
+    }
+
+    pub fn review_snapshot(mut self: Pin<&mut Self>) -> QString {
+        let result = (|| -> Result<(tempfile::TempDir, PathBuf), String> {
+            let dir = tempfile::Builder::new()
+                .prefix("basecraft-review-reference-")
+                .tempdir()
+                .map_err(|e| e.to_string())?;
+            let path = dir.path().join("reference.afa");
+            let mut file = std::fs::File::create(&path).map_err(|e| e.to_string())?;
+            self.with_doc(|doc| basecraft_ops::files::write_alignment(doc, &mut file))
+                .ok_or("No alignment open")?
+                .map_err(|e| e.to_string())?;
+            Ok((dir, path))
+        })();
+        match result {
+            Ok((dir, path)) => {
+                self.as_mut().rust_mut().review_snapshot_dir = Some(dir);
+                QString::from(path.to_string_lossy().as_ref())
+            }
+            Err(e) => {
+                self.as_mut().fail(&e);
+                QString::default()
+            }
+        }
+    }
+
+    pub fn add_sequences(
+        mut self: Pin<&mut Self>,
+        text: &QString,
+        name: &QString,
+        mafft: bool,
+        orientation: bool,
+        keep: bool,
+    ) {
+        if self.rust().busy {
+            return;
+        }
+        let rows = match basecraft_ops::alignment_add::parse_sequences(
+            &text.to_string(),
+            &name.to_string(),
+        ) {
+            Ok(rows) => rows,
+            Err(e) => {
+                self.fail_addition(&e);
+                return;
+            }
+        };
+        match self.with_doc(|doc| doc.validate_additions(&rows)) {
+            Some(Ok(())) => {}
+            Some(Err(error)) => {
+                self.fail_addition(&error.to_string());
+                return;
+            }
+            None => {
+                self.fail_addition("No alignment open");
+                return;
+            }
+        }
+        let duplicates = self
+            .with_doc(|doc| doc.duplicate_sequence_names(&rows))
+            .unwrap_or_default();
+        if !duplicates.is_empty() {
+            self.fail_addition(&format!(
+                "These sequence IDs are already in the alignment:\n\n{}",
+                duplicates
+                    .iter()
+                    .map(|n| format!("• {n}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ));
+            return;
+        }
+        if !mafft {
+            if self.as_mut().edit(Op::AlnAddSequences {
+                rows,
+                reference: None,
+            }) {
+                self.as_mut().done("Added sequences");
+                self.as_mut().sequences_added();
+            } else {
+                let message = self.rust().message.to_string();
+                self.as_mut().fail_addition(&message);
+            }
+            self.refresh();
+            return;
+        }
+        let result = (|| -> Result<(FileJob, tempfile::TempDir), String> {
+            let dir = tempfile::Builder::new()
+                .prefix("basecraft-add-sequences-")
+                .tempdir()
+                .map_err(|e| e.to_string())?;
+            let r = self.rust();
+            let (Some(session), Some(doc)) = (&r.session, r.doc) else {
+                return Err("No alignment open".into());
+            };
+            let mut job = FileJob::from_alignment(
+                session,
+                doc,
+                (&plugin_dir("mafft"), "add_sequences"),
+                AlignmentInput::Aligned,
+                dir.path().join("addition.json"),
+            )
+            .map_err(|e| e.to_string())?;
+            job.params.insert("rows".into(), json!(rows));
+            job.params.insert("orientation".into(), json!(orientation));
+            job.params.insert("keep".into(), json!(keep));
+            Ok((job, dir))
+        })();
+        let (job, dir) = match result {
+            Ok(value) => value,
+            Err(e) => {
+                self.fail_addition(&e);
+                return;
+            }
+        };
+        let generation = self
+            .rust()
+            .session
+            .as_ref()
+            .zip(self.rust().doc)
+            .map(|(session, doc)| session.generation(doc));
+        self.as_mut().set_busy(true);
+        self.as_mut().notify("Adding sequences with MAFFT…");
+        let qt_thread = self.qt_thread();
+        std::thread::spawn(move || {
+            let result = job.run();
+            let _ = qt_thread.queue(move |mut this| {
+                this.as_mut().set_busy(false);
+                let result = (|| -> Result<serde_json::Value, String> {
+                    let res = result.map_err(|e| e.to_string())?;
+                    {
+                        let mut r = this.as_mut().rust_mut();
+                        let r = &mut *r;
+                        let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
+                            return Err("Alignment was closed".into());
+                        };
+                        if Some(session.generation(doc)) != generation {
+                            return Err("Alignment changed during addition; try again".into());
+                        }
+                        job.record(session, doc, &res).map_err(|e| e.to_string())?;
+                    }
+                    let bytes = std::fs::read(&job.output).map_err(|e| e.to_string())?;
+                    serde_json::from_slice(&bytes).map_err(|e| e.to_string())
+                })();
+                match result {
+                    Ok(value) => {
+                        let count = value["insertions"].as_i64().unwrap_or(0);
+                        if count > 0 {
+                            this.as_mut().notify("New bases need reference gaps");
+                            this.as_mut()
+                                .addition_needs_gaps(i32::try_from(count).unwrap_or(i32::MAX));
+                        } else {
+                            let parsed = serde_json::from_value::<Vec<(String, String)>>(
+                                value["rows"].clone(),
+                            )
+                            .and_then(|rows| {
+                                serde_json::from_value::<Vec<String>>(value["reference"].clone())
+                                    .map(|reference| (rows, reference))
+                            });
+                            match parsed {
+                                Ok((rows, reference)) => {
+                                    if this.as_mut().edit(Op::AlnAddSequences {
+                                        rows,
+                                        reference: Some(reference),
+                                    }) {
+                                        this.as_mut().done("Added sequences");
+                                        this.as_mut().sequences_added();
+                                    } else {
+                                        let message = this.rust().message.to_string();
+                                        this.as_mut().fail_addition(&message);
+                                    }
+                                    this.as_mut().refresh();
+                                }
+                                Err(e) => this.as_mut().fail_addition(&e.to_string()),
+                            }
+                        }
+                    }
+                    Err(e) => this.as_mut().fail_addition(&e),
+                }
+                drop(dir);
+            });
+        });
+    }
+
     pub fn align_mafft(self: Pin<&mut Self>) {
         self.run_tool(&Tool {
             name: "MAFFT",
@@ -1048,7 +1310,10 @@ impl qobject::AlignmentController {
     pub fn build_iqtree(self: Pin<&mut Self>) {
         let mut params = serde_json::Map::new();
         params.insert("model".into(), serde_json::json!("MFP"));
-        params.insert("threads".into(), serde_json::json!(4));
+        params.insert(
+            "threads".into(),
+            serde_json::json!(basecraft_plugin_host::compute::allocation()),
+        );
         params.insert("seed".into(), serde_json::json!(1));
         self.run_tool(&Tool {
             name: "IQ-TREE",
@@ -1092,7 +1357,13 @@ impl qobject::AlignmentController {
             self.fail("Invalid distance settings");
             return;
         };
-        params.entry("model").or_insert(serde_json::json!("k2p"));
+        params.entry("model").or_insert_with(|| {
+            serde_json::json!(if kind.to_string() == "matrix" {
+                "p"
+            } else {
+                "k2p"
+            })
+        });
         params
             .entry("method")
             .or_insert(serde_json::json!("njstar"));

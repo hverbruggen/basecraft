@@ -1,19 +1,17 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
 // Add or edit one annotation (a GenBank/GFF feature): type, location in GenBank syntax (1-based, with
 // complement() and join()), and qualifiers. Saving is one operation.
-Dialog {
+AppContentDialog {
     id: dialog
+    initialFocusItem: location
     property var controller
     property int featureId: -1
 
     title: featureId < 0 ? "Add annotation" : "Edit annotation"
     modal: true
-    anchors.centerIn: Overlay.overlay
-    width: Math.min(640, parent ? parent.width - 40 : 640)
-    height: Math.min(560, parent ? parent.height - 40 : 560)
     padding: 16
 
     function load(json) {
@@ -83,34 +81,34 @@ Dialog {
         return row ? row.children[1] : null
     }
 
-    contentItem: ColumnLayout {
+    body: ColumnLayout {
         spacing: 10
         GridLayout {
-            columns: 2
+            columns: width < 460 ? 1 : 2
             columnSpacing: 12
             rowSpacing: 8
             Layout.fillWidth: true
-            Label { text: "Type" }
-            ComboBox {
-                id: kind
+            Label { id: kindLabel; text: "Type" }
+            AppComboBox {
+                id: kind; objectName: "kind"; Accessible.labelledBy: kindLabel; Accessible.name: kindLabel.text
                 editable: true
                 Layout.fillWidth: true
                 model: JSON.parse(dialog.controller ? dialog.controller.feature_kinds() : "[]")
             }
-            Label { text: "Location" }
+            Label { id: locationLabel; text: "Location" }
             TextField {
-                id: location
+                id: location; objectName: "location"; Accessible.labelledBy: locationLabel; Accessible.name: locationLabel.text
                 Layout.fillWidth: true
                 font.family: "monospace"
                 placeholderText: "e.g. 120..560, complement(join(10..80,200..300))"
                 onAccepted: dialog.save()
                 onTextEdited: dialog.refreshFromLocation()
             }
-            Label { text: "Direction" }
+            Label { id: directionLabel; text: "Direction" }
             RowLayout {
                 spacing: 12
-                ComboBox {
-                    id: direction
+                AppComboBox {
+                    id: direction; objectName: "direction"; Accessible.labelledBy: directionLabel; Accessible.name: directionLabel.text
                     model: ["Forward  →", "Reverse  ←", "None"]
                     displayText: currentIndex < 0 ? "Mixed" : currentText
                     onActivated: dialog.applyControls()
@@ -140,7 +138,7 @@ Dialog {
         ListView {
             id: list
             Layout.fillWidth: true
-            Layout.fillHeight: true
+            Layout.preferredHeight: Math.max(100, contentHeight)
             clip: true
             model: quals
             spacing: 4
@@ -151,7 +149,9 @@ Dialog {
                 required property string key
                 required property string value
                 TextField {
+                    id: qualifierKey
                     objectName: "qualifierKey" + index
+                    Accessible.name: "Qualifier key"
                     Layout.preferredWidth: 150
                     text: key
                     placeholderText: "key"
@@ -159,28 +159,31 @@ Dialog {
                 }
                 TextField {
                     objectName: "qualifierValue" + index
+                    Accessible.labelledBy: qualifierKey
+                    Accessible.name: qualifierKey.text.length ? qualifierKey.text : "Qualifier value"
                     Layout.fillWidth: true
                     text: value
                     placeholderText: "value"
                     onTextEdited: quals.setProperty(index, "value", text)
                     onAccepted: dialog.save()
                 }
-                ToolButton { text: "×"; onClicked: quals.remove(index) }
+                AppIconButton { iconName: "close"; description: "Remove qualifier"; onClicked: quals.remove(index) }
             }
         }
         RowLayout {
-            Button { text: "Add qualifier"; onClicked: quals.append({ key: "", value: "", flag: false }) }
+            AppButton { text: "Add qualifier"; onClicked: quals.append({ key: "", value: "", flag: false }) }
             Item { Layout.fillWidth: true }
-            Button {
+            AppButton {
                 text: "Delete annotation"
                 visible: dialog.featureId >= 0
                 onClicked: { dialog.controller.delete_feature(dialog.featureId); dialog.close() }
             }
-            Button { text: "Cancel"; onClicked: dialog.close() }
-            Button { text: "Save"; highlighted: true; onClicked: dialog.save() }
+            AppButton { text: "Cancel"; onClicked: dialog.close() }
+            AppButton { text: "Save"; highlighted: true; onClicked: dialog.save() }
         }
-        Label {
+        AppErrorLabel {
             id: error
+            objectName: "featureError"
             Layout.fillWidth: true
             wrapMode: Text.Wrap
             color: dialog.controller ? dialog.controller.accent : "red"

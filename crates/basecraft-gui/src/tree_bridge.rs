@@ -46,6 +46,12 @@ pub mod qobject {
         type TreeController = super::TreeRust;
 
         #[qinvokable]
+        fn document_record(self: &TreeController) -> QString;
+        #[qinvokable]
+        fn record_revision(self: &TreeController) -> QString;
+        #[qinvokable]
+        fn accessible_page(self: &TreeController, page: i32) -> QString;
+        #[qinvokable]
         fn create_delimitation(self: Pin<&mut TreeController>) -> QString;
         #[qinvokable]
         fn open_file(self: Pin<&mut TreeController>, path: &QString) -> bool;
@@ -87,6 +93,8 @@ pub mod qobject {
         fn key(self: Pin<&mut TreeController>, key: i32, modifiers: i32) -> bool;
         #[qinvokable]
         fn zoom_in(self: Pin<&mut TreeController>);
+        #[qinvokable]
+        fn set_zoom_percent(self: Pin<&mut TreeController>, percent: f64);
         #[qinvokable]
         fn zoom_out(self: Pin<&mut TreeController>);
         #[qinvokable]
@@ -187,8 +195,8 @@ use serde_json::{Value, json};
 
 use crate::bridge::{
     ALT, CTRL, KEY_0, KEY_DOWN, KEY_EQUAL, KEY_ESCAPE, KEY_LEFT, KEY_MINUS, KEY_PLUS, KEY_RIGHT,
-    KEY_S, KEY_UP, KEY_Y, KEY_Z, SHIFT, WHEEL_ZOOM, ZOOM_STEP, css, file_name, load_theme,
-    memory_text, monospace_font, omarchy_theme_path, project_root, took,
+    KEY_UP, KEY_Y, KEY_Z, SHIFT, WHEEL_ZOOM, ZOOM_STEP, css, file_name, load_theme, memory_text,
+    monospace_font, omarchy_theme_path, project_root, took,
 };
 
 struct CladeExtraction {
@@ -294,6 +302,22 @@ fn placement_name(p: SupportPlacement) -> &'static str {
 }
 
 impl qobject::TreeController {
+    pub fn document_record(&self) -> QString {
+        crate::provenance_bridge::session_report(self.rust().session.as_ref(), self.rust().doc)
+    }
+    pub fn record_revision(&self) -> QString {
+        crate::provenance_bridge::session_revision(self.rust().session.as_ref(), self.rust().doc)
+    }
+
+    pub fn accessible_page(&self, page: i32) -> QString {
+        let result = self.with_doc(|d| basecraft_viewmodel::accessible::tree(d, page));
+        let value = result.map_or_else(
+            || serde_json::json!({"page": 0, "pages": 1, "text": "No document loaded"}),
+            |p| serde_json::json!({"page": p.page, "pages": p.pages, "text": p.text}),
+        );
+        QString::from(&value.to_string())
+    }
+
     fn with_doc<T>(&self, f: impl FnOnce(&TreeDoc) -> T) -> Option<T> {
         let r = self.rust();
         match (&r.session, r.doc) {
@@ -577,7 +601,13 @@ impl qobject::TreeController {
     }
     pub fn open_file(mut self: Pin<&mut Self>, path: &QString) -> bool {
         let path = PathBuf::from(path.to_string());
-        let mut session = Session::new(project_root(&path));
+        let mut session = match Session::recoverable(project_root(&path)) {
+            Ok(session) => session,
+            Err(error) => {
+                self.fail(&error.to_string());
+                return false;
+            }
+        };
         match session.open(&path) {
             Ok(doc) if session.is_tree(doc) => {
                 {
@@ -727,10 +757,6 @@ impl qobject::TreeController {
                 self.as_mut().history(true);
                 true
             }
-            KEY_S if ctrl && !shift => {
-                self.as_mut().save();
-                true
-            }
             KEY_0 if ctrl => {
                 self.as_mut().rust_mut().view.fit();
                 true
@@ -791,6 +817,15 @@ impl qobject::TreeController {
         if let (Some(session), Some(doc)) = (&r.session, r.doc) {
             r.view.zoom_both(session.tree(doc), factor);
         }
+    }
+
+    pub fn set_zoom_percent(mut self: Pin<&mut Self>, percent: f64) {
+        if !percent.is_finite() || !(0.000_001..=20_000.0).contains(&percent) {
+            return;
+        }
+        let factor = percent / self.rust().view.zoom_percent();
+        self.as_mut().zoom_both(f(factor));
+        self.refresh();
     }
 
     pub fn zoom_in(mut self: Pin<&mut Self>) {

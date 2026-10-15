@@ -1,17 +1,17 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
 // How a tree is drawn: which support values show and in what order,
 // circles at nodes, sizes. Saving is one operation.
-Dialog {
+AppContentDialog {
     id: dialog
+    initialFocusItem: minimum
     property var controller
     property var style: ({})
 
     title: "Tree style"
     modal: true
-    anchors.centerIn: Overlay.overlay
     padding: 16
 
     ListModel { id: sets }
@@ -64,7 +64,7 @@ Dialog {
     }
 
     // The dialog takes its size from its contents.
-    ColumnLayout {
+    body: ColumnLayout {
         spacing: 8
 
         Label { text: "Support values, shown in this order and joined with /"; font.bold: true }
@@ -82,8 +82,8 @@ Dialog {
                     onToggled: sets.setProperty(index, "shown", checked)
                     Layout.fillWidth: true
                 }
-                ToolButton { text: "▲"; enabled: index > 0; onClicked: sets.move(index, index - 1, 1) }
-                ToolButton { text: "▼"; enabled: index < sets.count - 1; onClicked: sets.move(index, index + 1, 1) }
+                AppIconButton { iconName: "up"; description: "Move colour set up"; enabled: index > 0; onClicked: sets.move(index, index - 1, 1) }
+                AppIconButton { iconName: "down"; description: "Move colour set down"; enabled: index < sets.count - 1; onClicked: sets.move(index, index + 1, 1) }
                 ToolButton {
                     text: "Remove"
                     onClicked: { controller.remove_support(name); dialog.openStyle() }
@@ -91,43 +91,43 @@ Dialog {
             }
         }
         RowLayout {
-            Label { text: "Hide values below" }
-            SpinBox { id: minimum; from: 0; to: 100; editable: true }
+            Label { id: minimumLabel; text: "Hide values below" }
+            SpinBox { id: minimum; objectName: "minimum"; Accessible.labelledBy: minimumLabel; Accessible.name: minimumLabel.text + " (%)"; from: 0; to: 100; editable: true }
             Label { text: "% (posteriors count as %)"; opacity: 0.7 }
         }
 
         RowLayout {
             CheckBox { id: symbols; text: "Circles at nodes for" }
-            ComboBox { id: symbolSet; enabled: symbols.checked; Layout.preferredWidth: 150 }
+            AppComboBox { id: symbolSet; objectName: "symbolSet"; Accessible.labelledBy: symbols; Accessible.name: symbols.text; enabled: symbols.checked; Layout.preferredWidth: 150 }
         }
         RowLayout {
             enabled: symbols.checked
-            Label { text: "Dark at"; leftPadding: 28 }
-            SpinBox { id: high; from: 0; to: 100; editable: true }
-            Label { text: "grey at" }
-            SpinBox { id: low; from: 0; to: 100; editable: true }
+            Label { id: highLabel; text: "Dark at"; leftPadding: 28 }
+            SpinBox { id: high; objectName: "high"; Accessible.labelledBy: highLabel; Accessible.name: highLabel.text; from: 0; to: 100; editable: true }
+            Label { id: lowLabel; text: "grey at" }
+            SpinBox { id: low; objectName: "low"; Accessible.labelledBy: lowLabel; Accessible.name: lowLabel.text; from: 0; to: 100; editable: true }
             Label { text: "white below" }
         }
 
         Label { text: "Sizes"; font.bold: true; topPadding: 6 }
         GridLayout {
             columns: 4
-            Label { text: "Tip names" }
-            SpinBox { id: tipFont; from: 6; to: 40; editable: true }
-            Label { text: "Support values" }
-            SpinBox { id: supportFont; from: 6; to: 30; editable: true }
-            Label { text: "Branches" }
-            SpinBox { id: branchWidth; from: 1; to: 10; editable: true }
+            Label { id: tipFontLabel; text: "Tip names" }
+            SpinBox { id: tipFont; objectName: "tipFont"; Accessible.labelledBy: tipFontLabel; Accessible.name: tipFontLabel.text; from: 6; to: 40; editable: true }
+            Label { id: supportFontLabel; text: "Support values" }
+            SpinBox { id: supportFont; objectName: "supportFont"; Accessible.labelledBy: supportFontLabel; Accessible.name: supportFontLabel.text; from: 6; to: 30; editable: true }
+            Label { id: branchWidthLabel; text: "Branches" }
+            SpinBox { id: branchWidth; objectName: "branchWidth"; Accessible.labelledBy: branchWidthLabel; Accessible.name: branchWidthLabel.text; from: 1; to: 10; editable: true }
         }
         CheckBox { id: verticalLabels; text: "Clade names beside bars run top to bottom" }
         CheckBox { id: scaleBar; text: "Scale bar" }
 
-        Label { id: error; visible: text.length > 0; color: palette.highlight; wrapMode: Text.Wrap; Layout.fillWidth: true }
+        AppErrorLabel { id: error; visible: text.length > 0; color: palette.highlight; wrapMode: Text.Wrap; Layout.fillWidth: true }
 
         RowLayout {
             Item { Layout.fillWidth: true }
-            Button { text: "Cancel"; onClicked: dialog.close() }
-            Button { text: "Save"; highlighted: true; onClicked: dialog.save() }
+            AppButton { text: "Cancel"; onClicked: dialog.close() }
+            AppButton { text: "Save"; highlighted: true; onClicked: dialog.save() }
         }
     }
 }

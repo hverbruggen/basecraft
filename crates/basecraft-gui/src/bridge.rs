@@ -7,10 +7,14 @@
 #[cxx_qt::bridge]
 pub mod qobject {
     unsafe extern "C++" {
+        include!("instanceview.h");
+        fn configure_canvas_graphics();
         include!("cxx-qt-lib/qbytearray.h");
         type QByteArray = cxx_qt_lib::QByteArray;
         include!("cxx-qt-lib/qstring.h");
         type QString = cxx_qt_lib::QString;
+        include!("cxx-qt-lib/qurl.h");
+        type QUrl = cxx_qt_lib::QUrl;
     }
 
     unsafe extern "RustQt" {
@@ -39,9 +43,19 @@ pub mod qobject {
         type GenomeController = super::ControllerRust;
 
         #[qinvokable]
+        fn document_record(self: &GenomeController) -> QString;
+        #[qinvokable]
+        fn record_revision(self: &GenomeController) -> QString;
+        #[qinvokable]
+        fn accessible_page(self: &GenomeController, page: i32) -> QString;
+        #[qinvokable]
         fn open_file(self: Pin<&mut GenomeController>, path: &QString) -> bool;
         #[qinvokable]
-        fn open_window(self: Pin<&mut GenomeController>, path: &QString) -> bool;
+        fn local_file_url(self: &GenomeController, path: &QString) -> QUrl;
+        #[qinvokable]
+        fn local_file_path(self: &GenomeController, url: &QUrl) -> QString;
+        #[qinvokable]
+        fn parent_folder_url(self: &GenomeController, path: &QString) -> QUrl;
         #[qinvokable]
         fn export_svg(self: Pin<&mut GenomeController>, path: &QString);
         #[qinvokable]
@@ -126,6 +140,8 @@ pub mod qobject {
         fn zoom_by(self: Pin<&mut GenomeController>, x: f64, y: f64, factor: f64);
         #[qinvokable]
         fn zoom_in(self: Pin<&mut GenomeController>);
+        #[qinvokable]
+        fn set_zoom_percent(self: Pin<&mut GenomeController>, percent: f64);
         #[qinvokable]
         fn zoom_out(self: Pin<&mut GenomeController>);
         #[qinvokable]
@@ -222,6 +238,10 @@ pub mod qobject {
         /// The Basecraft version.
         #[qinvokable]
         fn version(self: &GenomeController) -> QString;
+        #[qinvokable]
+        fn available_cpu_threads(self: &GenomeController) -> i32;
+        #[qinvokable]
+        fn configure_cpu_threads(self: &GenomeController, threads: i32);
         /// Id of the selected feature, or -1.
         #[qinvokable]
         fn selected_feature(self: &GenomeController) -> i32;
@@ -241,7 +261,7 @@ use basecraft_ops::{DocId, Session};
 use basecraft_protocol::{Feature, Location, Op, Qualifier, Strand};
 use basecraft_viewmodel::{Frame, GenomeView, Mode, Theme};
 use cxx_qt::CxxQtType;
-use cxx_qt_lib::{QByteArray, QString};
+use cxx_qt_lib::{QByteArray, QString, QUrl};
 use serde_json::{Value, json};
 
 // Qt key codes and modifiers used below.
@@ -287,7 +307,6 @@ pub(crate) const KEY_MINUS: i32 = 0x2d;
 pub(crate) const KEY_EQUAL: i32 = 0x3d;
 pub(crate) const KEY_0: i32 = 0x30;
 pub(crate) const KEY_N: i32 = 0x4e;
-pub(crate) const KEY_S: i32 = 0x53;
 pub(crate) const KEY_Y: i32 = 0x59;
 pub(crate) const KEY_Z: i32 = 0x5a;
 pub(crate) const SHIFT: i32 = 0x0200_0000;
@@ -444,6 +463,39 @@ pub(crate) fn project_root(file: &Path) -> PathBuf {
 }
 
 impl qobject::GenomeController {
+    pub fn document_record(&self) -> QString {
+        crate::provenance_bridge::session_report(self.rust().session.as_ref(), self.rust().doc)
+    }
+    pub fn record_revision(&self) -> QString {
+        crate::provenance_bridge::session_revision(self.rust().session.as_ref(), self.rust().doc)
+    }
+
+    pub fn accessible_page(&self, page: i32) -> QString {
+        let result =
+            self.with_doc(|s, d| basecraft_viewmodel::accessible::sequence(s.doc(d), page));
+        let value = result.map_or_else(
+            || serde_json::json!({"page": 0, "pages": 1, "text": "No document loaded"}),
+            |p| serde_json::json!({"page": p.page, "pages": p.pages, "text": p.text}),
+        );
+        QString::from(&value.to_string())
+    }
+
+    fn local_file_url(&self, path: &QString) -> QUrl {
+        QUrl::from_local_file(path)
+    }
+
+    fn local_file_path(&self, url: &QUrl) -> QString {
+        url.to_local_file().unwrap_or_default()
+    }
+
+    fn parent_folder_url(&self, path: &QString) -> QUrl {
+        let path = path.to_string();
+        let parent = std::path::Path::new(&path)
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new(""));
+        QUrl::from_local_file(&QString::from(parent.to_string_lossy().as_ref()))
+    }
+
     fn len(&self) -> u64 {
         let r = self.rust();
         match (&r.session, r.doc) {
@@ -467,11 +519,7 @@ impl qobject::GenomeController {
         let (zoom, (pos, size)) = {
             let len = self.len();
             let v = &self.rust().view;
-            let zoom = if v.mode == Mode::Linear {
-                v.zoom_text(len)
-            } else {
-                String::new()
-            };
+            let zoom = v.zoom_text(len);
             let scroll = if v.mode == Mode::Linear {
                 v.scroll_fraction(len)
             } else {
@@ -567,34 +615,16 @@ impl qobject::GenomeController {
         }
     }
 
-    pub fn open_window(self: Pin<&mut Self>, path: &QString) -> bool {
-        let result = (|| -> Result<(), Box<dyn std::error::Error>> {
-            let path = PathBuf::from(path.to_string()).canonicalize()?;
-            let kind = match basecraft_ops::files::kind(&path)? {
-                basecraft_ops::files::Kind::Sequence => "Sequence",
-                basecraft_ops::files::Kind::Alignment => "Alignment",
-                basecraft_ops::files::Kind::Tree => "Tree",
-                basecraft_ops::files::Kind::Delimitation => "Delimitation",
-            };
-            std::process::Command::new(std::env::current_exe()?)
-                .arg(path)
-                .args(["--editor-kind", kind])
-                .spawn()?;
-            Ok(())
-        })();
-        match result {
-            Ok(()) => true,
-            Err(e) => {
-                self.fail(&format!("Cannot open window: {e}"));
-                false
-            }
-        }
-    }
-
     pub fn open_file(mut self: Pin<&mut Self>, path: &QString) -> bool {
         let path = PathBuf::from(path.to_string());
         let root = project_root(&path);
-        let mut session = Session::new(&root);
+        let mut session = match Session::recoverable(&root) {
+            Ok(session) => session,
+            Err(error) => {
+                self.fail(&error.to_string());
+                return false;
+            }
+        };
         match session.open(&path) {
             Ok(doc) => {
                 let (name, len, circular) = {
@@ -859,10 +889,6 @@ impl qobject::GenomeController {
             }
             KEY_Y if ctrl => {
                 self.as_mut().redo();
-                true
-            }
-            KEY_S if ctrl && !shift => {
-                self.as_mut().save();
                 true
             }
             KEY_0 if ctrl => {
@@ -1173,6 +1199,13 @@ impl qobject::GenomeController {
     }
 
     pub fn file_kind(&self, path: &QString) -> QString {
+        if Path::new(&path.to_string())
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("ab1") || ext.eq_ignore_ascii_case("abi"))
+        {
+            return QString::from("trace");
+        }
         let kind = basecraft_ops::files::kind(Path::new(&path.to_string()));
         QString::from(match kind {
             Ok(basecraft_ops::files::Kind::Alignment) => "alignment",
@@ -1261,6 +1294,14 @@ impl qobject::GenomeController {
         }
         self.as_mut().sync_mode();
         self.refresh();
+    }
+
+    pub fn set_zoom_percent(self: Pin<&mut Self>, percent: f64) {
+        if !percent.is_finite() || !(0.000_001..=20_000.0).contains(&percent) {
+            return;
+        }
+        let factor = percent / self.rust().view.zoom_percent();
+        self.zoom_centre(factor);
     }
 
     pub fn zoom_in(self: Pin<&mut Self>) {
@@ -1764,6 +1805,12 @@ impl qobject::GenomeController {
         found
     }
 
+    pub fn available_cpu_threads(&self) -> i32 {
+        i32::try_from(basecraft_plugin_host::compute::available()).unwrap_or(i32::MAX)
+    }
+    pub fn configure_cpu_threads(&self, threads: i32) {
+        basecraft_plugin_host::compute::configure(usize::try_from(threads).unwrap_or(1));
+    }
     pub fn version(&self) -> QString {
         QString::from(env!("CARGO_PKG_VERSION"))
     }
@@ -1931,6 +1978,32 @@ fn feature_from_json(text: &str) -> Result<Feature, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_file_urls_round_trip_reserved_and_unicode_names() {
+        for path in [
+            "/tmp/a b.fasta",
+            "/tmp/100%real#fragment?.fasta",
+            "/tmp/échantillon/藻.fasta",
+        ] {
+            let url = QUrl::from_local_file(&QString::from(path));
+            let encoded = Vec::<u8>::from(&url.to_encoded());
+            let parsed = QUrl::from(std::str::from_utf8(&encoded).unwrap());
+            assert_eq!(parsed.to_local_file().unwrap().to_string(), path);
+        }
+        assert!(
+            QUrl::from("https://example.org/a.fasta")
+                .to_local_file()
+                .is_none()
+        );
+        assert_eq!(
+            QUrl::from("file:///tmp/100%25real.fasta")
+                .to_local_file()
+                .unwrap()
+                .to_string(),
+            "/tmp/100%real.fasta"
+        );
+    }
 
     #[test]
     fn feature_json_roundtrip() {

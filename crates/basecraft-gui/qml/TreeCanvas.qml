@@ -1,10 +1,12 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import Basecraft
 
 // Shared tree rendering and navigation; the embedding workspace owns actions.
-InstanceView {
+AppCanvas {
     id: view
+        accessibleTitle: "Tree editor"
+        accessibleSummary: treeController.status
     required property var controller
     readonly property var treeController: controller
     property bool annotationEnabled: true
@@ -110,6 +112,7 @@ InstanceView {
         }
 
         Keys.onPressed: (event) => {
+            if (!view.renderingAvailable) { event.accepted = false; return }
             const ctrl = event.modifiers & Qt.ControlModifier
             if (ctrl && event.key === Qt.Key_B) { view.toggleSidebar(); event.accepted = true; return }
             if (annotationEnabled && event.key === Qt.Key_F2) { view.renameTip(); event.accepted = true; return }

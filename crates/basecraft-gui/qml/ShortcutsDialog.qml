@@ -1,26 +1,25 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
 // Keyboard shortcuts, grouped like the ribbon. `show(name)` opens it with
 // only that ribbon tab's shortcuts; `show("")` lists them all.
-Dialog {
+AppDialog {
     id: dialog
     title: first.length && first !== "Help" ? first + " shortcuts" : "Keyboard shortcuts"
     modal: true
     anchors.centerIn: Overlay.overlay
-    width: Math.min(560, parent ? parent.width - 40 : 560)
-    height: Math.min(620, parent ? parent.height - 40 : 620)
+    implicitWidth: 560
+    implicitHeight: 620
     standardButtons: Dialog.Close
 
     property string first: ""
+    property var commands: []
 
     // Keyboard only, grouped by ribbon tab; "Editing" has no tab of its
     // own and shows in the full list.
     readonly property var groups: [
         { name: "File", keys: [
-            ["Ctrl+S", "Save"],
-            ["Ctrl+Shift+S", "Save as a new file"],
             ["Ctrl+W", "Close the tab"],
             ["Ctrl+Q", "Quit, asking about unsaved changes"],
             ["Ctrl+Z", "Undo"],
@@ -40,6 +39,7 @@ Dialog {
             ["Ctrl+E", "Extract the selection as a new sequence"],
         ] },
         { name: "Alignment", keys: [
+            ["Shift+wheel / Ctrl+wheel", "Scroll horizontally / zoom"],
             ["Insert", "Switch between inserting and typing over bases"],
             ["Letters, −", "Insert one per selected column, or type over the selection; − is a gap"],
             ["Space", "Insert a gap before the selection"],
@@ -71,6 +71,28 @@ Dialog {
         { name: "Settings", keys: [
             ["Ctrl+B", "Show or hide the files sidebar"],
         ] },
+        { name: "Trace", keys: [
+            ["DNA letters / Delete", "Edit the consensus base / mark a gap"],
+            ["← →", "Move one consensus base"],
+            ["Alt+← →, [ ]", "Previous / next unresolved issue"],
+            ["Alt+Enter", "Accept this base and go to the next issue"],
+            ["Ctrl+Z / Ctrl+Shift+Z", "Undo / redo consensus edits"],
+            ["Ctrl+S", "Save review decisions"],
+            ["F2", "Edit the consensus sequence ID"],
+            ["Ctrl+Alt+O / Ctrl+Shift+D", "Open saved review / draft evidence (File ribbon)"],
+            ["Ctrl+Shift+A", "Add consensus to the source alignment"],
+            ["Ctrl+Shift+E", "Export consensus to FASTA"],
+            ["Ctrl+Shift+C", "Copy consensus as FASTA"],
+            ["Ctrl+Alt+A", "Choose alignment context for a standalone review"],
+            ["Ctrl+Alt+D", "Draft a consensus from additional reads"],
+            ["Ctrl+wheel", "Zoom the shared base axis"],
+            ["Shift+wheel", "Scroll horizontally through consensus and traces"],
+            ["Wheel", "Scroll vertically through taller traces"],
+            ["Ctrl+Alt+M", "Mask consensus ends"],
+            ["Ctrl+Alt+Home / Ctrl+Alt+End", "Keep from / through the selected consensus column"],
+            ["Right-click a consensus position", "Set either end of the kept range here"],
+            ["Ctrl+Alt+P", "Set primers and find terminal candidates"],
+        ] },
         { name: "Editing", keys: [
             ["Letters", "Type bases at the cursor, replacing a selection"],
             ["Backspace / Delete", "Delete before / after the cursor, or the selection"],
@@ -86,7 +108,9 @@ Dialog {
     // A tab's name shows only its group; "" (Help) shows them all.
     function shown() {
         const g = groups.filter(x => x.name === first)
-        return g.length ? g : groups
+        const shared = commands.filter(command => command.shortcut.toString().length)
+            .map(command => [command.shortcut.toString(), command.text])
+        return [{ name: "Application commands", keys: shared }].concat(g.length ? g : groups)
     }
 
     function show(name) {

@@ -1,18 +1,18 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Dialogs
 import QtQuick.Layouts
 
 // Annotate the selected clade: a name on its stem branch, a bar along its
 // tips, a field of colour behind it. Saving is one operation.
-Dialog {
+AppContentDialog {
     id: dialog
+    initialFocusItem: label
     property var controller
     property var annotation: ({})
 
     title: annotation.exists ? "Edit clade annotation" : "Annotate clade"
     modal: true
-    anchors.centerIn: Overlay.overlay
     padding: 16
 
     // Colours offered as swatches; any other can be typed or picked.
@@ -59,15 +59,15 @@ Dialog {
     }
 
     // The dialog takes its size from its contents.
-    ColumnLayout {
+    body: ColumnLayout {
         spacing: 10
 
         Label { text: (annotation.tips || 0) + " tips"; opacity: 0.7 }
 
         RowLayout {
-            Label { text: "Name"; Layout.preferredWidth: 70 }
+            Label { id: cladeNameLabel; text: "Name"; Layout.preferredWidth: 70 }
             TextField {
-                id: label
+                id: label; objectName: "label"; Accessible.labelledBy: cladeNameLabel; Accessible.name: cladeNameLabel.text
                 Layout.fillWidth: true
                 Layout.minimumWidth: 300
                 placeholderText: "e.g. Ventalia"
@@ -80,13 +80,13 @@ Dialog {
         RowLayout {
             CheckBox { id: bar; text: "Bar along the tips, named beside it" }
             Item { Layout.fillWidth: true }
-            Label { text: "Thickness"; enabled: bar.checked }
-            SpinBox { id: barWidth; from: 1; to: 30; enabled: bar.checked; editable: true }
+            Label { id: barWidthLabel; text: "Thickness"; enabled: bar.checked }
+            SpinBox { id: barWidth; objectName: "barWidth"; Accessible.labelledBy: barWidthLabel; Accessible.name: barWidthLabel.text; from: 1; to: 30; enabled: bar.checked; editable: true }
         }
         CheckBox { id: field; text: "Coloured field behind the clade" }
 
         RowLayout {
-            Label { text: "Colour"; Layout.preferredWidth: 70 }
+            Label { id: colourLabel; text: "Colour"; Layout.preferredWidth: 70 }
             Repeater {
                 model: dialog.swatches
                 Rectangle {
@@ -98,18 +98,18 @@ Dialog {
                     MouseArea { anchors.fill: parent; onClicked: colour.text = parent.modelData }
                 }
             }
-            TextField { id: colour; Layout.preferredWidth: 90 }
-            Button { text: "Pick…"; onClicked: picker.open() }
+            TextField { id: colour; objectName: "colour"; Accessible.labelledBy: colourLabel; Accessible.name: colourLabel.text; Layout.preferredWidth: 90 }
+            AppButton { text: "Pick…"; onClicked: picker.open() }
         }
 
         GridLayout {
             columns: 3
             enabled: field.checked
-            Label { text: "Field opacity at left" }
-            Slider { id: left; from: 0; to: 100; stepSize: 1; Layout.fillWidth: true }
+            Label { id: leftOpacityLabel; text: "Field opacity at left" }
+            Slider { id: left; objectName: "left"; Accessible.labelledBy: leftOpacityLabel; Accessible.name: leftOpacityLabel.text + " (%)"; from: 0; to: 100; stepSize: 1; Layout.fillWidth: true }
             Label { text: Math.round(left.value) + " %"; Layout.preferredWidth: 44 }
-            Label { text: "Field opacity at right" }
-            Slider { id: right; from: 0; to: 100; stepSize: 1; Layout.fillWidth: true }
+            Label { id: rightOpacityLabel; text: "Field opacity at right" }
+            Slider { id: right; objectName: "right"; Accessible.labelledBy: rightOpacityLabel; Accessible.name: rightOpacityLabel.text + " (%)"; from: 0; to: 100; stepSize: 1; Layout.fillWidth: true }
             Label { text: Math.round(right.value) + " %"; Layout.preferredWidth: 44 }
         }
         // What the field will look like.
@@ -125,17 +125,17 @@ Dialog {
             }
         }
 
-        Label { id: error; visible: text.length > 0; color: palette.highlight; wrapMode: Text.Wrap; Layout.fillWidth: true }
+        AppErrorLabel { id: error; visible: text.length > 0; color: palette.highlight; wrapMode: Text.Wrap; Layout.fillWidth: true }
 
         RowLayout {
-            Button {
+            AppButton {
                 text: "Remove"
                 visible: annotation.exists === true
                 onClicked: { controller.remove_annotation(annotation.id); dialog.close() }
             }
             Item { Layout.fillWidth: true }
-            Button { text: "Cancel"; onClicked: dialog.close() }
-            Button { text: "Save"; highlighted: true; onClicked: dialog.save() }
+            AppButton { text: "Cancel"; onClicked: dialog.close() }
+            AppButton { text: "Save"; highlighted: true; onClicked: dialog.save() }
         }
     }
 }

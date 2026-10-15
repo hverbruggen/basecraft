@@ -71,9 +71,38 @@ fn main() {
     let shader_dir = out_dir.join("shaders");
     let builder = CxxQtBuilder::new_qml_module(QmlModule::new("Basecraft").qml_files([
         "qml/Main.qml",
+        "qml/FileTreeDelegate.qml",
+        "qml/DocumentRecordDialog.qml",
+        "qml/TasksDialog.qml",
+        "qml/AppRibbonButton.qml",
+        "qml/AppTabButton.qml",
+        "qml/RibbonGroup.qml",
+        "qml/RibbonPage.qml",
+        "qml/RibbonTabs.qml",
+        "qml/Ribbon.qml",
+        "qml/AppCommand.qml",
+        "qml/AppCommandButton.qml",
+        "qml/PreferencesDialog.qml",
+        "qml/AppCanvas.qml",
+        "qml/TextRepresentationDialog.qml",
+        "qml/FocusScrollView.qml",
+        "qml/AppErrorLabel.qml",
+        "qml/AppDialog.qml",
+        "qml/AppContentDialog.qml",
+        "qml/AppFormDialog.qml",
+        "qml/DistanceAnalysisDialog.qml",
+        "qml/AppIcon.qml",
+        "qml/AppIconButton.qml",
+        "qml/AppControlBackground.qml",
+        "qml/AppButton.qml",
+        "qml/AddSequenceDialog.qml",
+        "qml/AdditionErrorDialog.qml",
+        "qml/TraceReviewControls.qml",
+        "qml/AppComboBox.qml",
         "qml/FeatureEditor.qml",
         "qml/DocumentView.qml",
         "qml/AlignmentView.qml",
+        "qml/SangerView.qml",
         "qml/PhyloView.qml",
         "qml/TreeCanvas.qml",
         "qml/DelimitationView.qml",
@@ -81,10 +110,15 @@ fn main() {
         "qml/TreeStyleDialog.qml",
         "qml/ShortcutsDialog.qml",
     ]))
+    .qrc("icons.qrc")
+    .qrc("controls.qrc")
     .qt_module("Quick")
     .files([
         "src/bridge.rs",
+        "src/settings_bridge.rs",
+        "src/provenance_bridge.rs",
         "src/alignment_bridge.rs",
+        "src/sanger_bridge.rs",
         "src/tree_bridge.rs",
         "src/delimitation_bridge.rs",
     ])
@@ -97,6 +131,7 @@ fn main() {
     let builder = unsafe {
         builder.cc_builder(|cc| {
             cc.include(&shader_dir);
+            cc.include("cpp");
             cc.include(&gui_private);
             cc.include(gui_private.join("QtGui"));
             // GCC 16 warns about Qt's own headers.

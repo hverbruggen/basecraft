@@ -29,6 +29,10 @@ pub mod qobject {
         #[qproperty(f64, threshold)]
         type DelimitationController = super::DelimitationRust;
         #[qinvokable]
+        fn document_record(self: &DelimitationController) -> QString;
+        #[qinvokable]
+        fn record_revision(self: &DelimitationController) -> QString;
+        #[qinvokable]
         fn open_file(self: Pin<&mut DelimitationController>, path: &QString) -> bool;
         #[qinvokable]
         fn attach_tree(self: Pin<&mut DelimitationController>, path: &QString, rooted: bool);
@@ -211,6 +215,13 @@ fn group(members: BTreeSet<String>, label: String) -> Group {
     }
 }
 impl qobject::DelimitationController {
+    pub fn document_record(&self) -> QString {
+        crate::provenance_bridge::session_report(self.rust().session.as_ref(), self.rust().doc)
+    }
+    pub fn record_revision(&self) -> QString {
+        crate::provenance_bridge::session_revision(self.rust().session.as_ref(), self.rust().doc)
+    }
+
     fn fail(mut self: Pin<&mut Self>, text: &str) {
         self.as_mut().set_message_kind(QString::from("error"));
         self.set_message(QString::from(text));
@@ -265,7 +276,7 @@ impl qobject::DelimitationController {
     pub fn open_file(mut self: Pin<&mut Self>, path: &QString) -> bool {
         let p = PathBuf::from(path.to_string());
         let result = (|| -> basecraft_ops::Result<_> {
-            let mut s = Session::new(crate::bridge::project_root(&p));
+            let mut s = Session::recoverable(crate::bridge::project_root(&p))?;
             let d = s.open(&p)?;
             if !s.is_delimitation(d) {
                 return Err(basecraft_ops::Error::Invalid(
@@ -416,7 +427,8 @@ impl qobject::DelimitationController {
             if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
                 return None;
             }
-            let retained = basecraft_ops::session::objects_dir(session.root()).join(digest);
+            let retained =
+                basecraft_ops::session::objects_dir(session.recovery_root()).join(digest);
             let bytes = std::fs::read(retained)
                 .or_else(|_| std::fs::read(report["path"].as_str().unwrap_or("")))
                 .ok()?;

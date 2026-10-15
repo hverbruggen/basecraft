@@ -1,12 +1,21 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import Basecraft
 
 // One open tree: its controller, the GPU view, and pointer and key
 // handling. Window-level actions (menus, dialogs, the sidebar) are asked
 // for through signals, as in the other editors.
-Item {
+FocusScope {
     id: doc
+    property var notificationSink: null
+    Connections {
+        target: ctl
+        function onMessageChanged() {
+            if (notificationSink && ctl.message.length)
+                notificationSink.notification(ctl.file_path, ctl.message, ctl.message_kind)
+        }
+    }
+
     required property string path
     required property int index
     property alias controller: ctl

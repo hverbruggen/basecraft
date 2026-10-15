@@ -12,11 +12,15 @@
 mod alignment_bridge;
 mod bridge;
 mod delimitation_bridge;
+mod provenance_bridge;
+mod sanger_bridge;
+mod settings_bridge;
 mod tree_bridge;
 
 use cxx_qt_lib::{QGuiApplication, QQmlApplicationEngine, QString, QUrl};
 
 fn main() {
+    bridge::qobject::configure_canvas_graphics();
     let mut app = QGuiApplication::new();
     // A stable Wayland app-id (X11 class): desktop entries and window rules
     // match on it.
@@ -32,7 +36,7 @@ fn main() {
         _ => "org.basecraft.Basecraft",
     };
     QGuiApplication::set_desktop_file_name(&QString::from(app_id));
-    // Settings are stored under these names (~/.config/Basecraft/).
+    // Retain the legacy QSettings identity for one-time preferences migration.
     if let Some(mut app) = app.as_mut() {
         app.as_mut()
             .set_organization_name(&QString::from("Basecraft"));
@@ -42,7 +46,14 @@ fn main() {
             .set_application_name(&QString::from("Basecraft"));
     }
     let mut engine = QQmlApplicationEngine::new();
-    if let Some(engine) = engine.as_mut() {
+    if let Some(mut engine) = engine.as_mut() {
+        engine
+            .as_mut()
+            .on_object_creation_failed(|_, _| {
+                eprintln!("Basecraft could not load its interface; check the Qt Quick and Kirigami installation. See the QML errors above.");
+                std::process::exit(1);
+            })
+            .release();
         engine.load(&QUrl::from("qrc:/qt/qml/Basecraft/qml/Main.qml"));
     }
     if let Some(app) = app.as_mut() {

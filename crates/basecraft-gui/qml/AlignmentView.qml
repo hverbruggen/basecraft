@@ -1,21 +1,36 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Dialogs
+import QtQuick.Layouts
+import QtQuick.Controls.Basic
 import Basecraft
 
 // One open alignment: its controller, the GPU view, and pointer and key
 // handling. Window-level actions (menus, dialogs, the sidebar) are asked
 // for through signals, as in DocumentView.
-Item {
+FocusScope {
     id: doc
+    property var notificationSink: null
+    Connections {
+        target: ctl
+        function onMessageChanged() {
+            if (notificationSink && ctl.message.length)
+                notificationSink.notification(ctl.file_path, ctl.message, ctl.message_kind)
+        }
+    }
+
+    required property var fileUrls
     required property string path
     required property int index
     property alias controller: ctl
     property alias view: view
     readonly property bool dirty: ctl.dirty
     readonly property string kind: "alignment"
+    readonly property string hoverStatus: visible ? mouse.hoverText : ""
     // Typing inserts rather than overwrites; set by the window.
     property bool insertMode: false
 
+    property bool ribbonInitialized: false
+    function activeFolder() { const p = ctl.file_path.length ? ctl.file_path : doc.path; return fileUrls.parent_folder_url(p) }
     signal contextMenu(var info)
     signal copyText(string text)
     signal toggleSidebar
@@ -24,11 +39,94 @@ Item {
     // A tool wrote a new file, to open in a tab.
     signal openFile(string path)
 
+    signal activate
+    signal reviewTraces(var paths, string reference)
+    function localPath(url) { return fileUrls.local_file_path(url) }
+    function showAdditionChoices() { if (activeAdditionDialog) activeAdditionDialog.showChoices() }
+    property var activeAdditionDialog: null
+    function addText() { if (ctl.busy) return; activeAdditionDialog = textSequenceDialog; textSequenceDialog.prepare("") }
+    function addFasta() { if (!ctl.busy) fastaDialog.open() }
+    function addTraces() { traceDialog.open() }
+    function addReviewed(sequence, name, mafft = true) { if (ctl.busy) return; doc.activate(); activeAdditionDialog = reviewedSequenceDialog; reviewedSequenceDialog.prepare(sequence, name, mafft ? 1 : 0) }
+    function prepareFasta(text) { if (ctl.busy) return; activeAdditionDialog = fastaSequenceDialog; fastaSequenceDialog.prepare(text) }
+
     AlignmentController { id: ctl }
+    FileDialog {
+        id: fastaDialog
+        currentFolder: doc.activeFolder()
+        onVisibleChanged: if (visible) currentFolder = doc.activeFolder()
+        title: "Add all sequences from FASTA"
+        nameFilters: ["FASTA (*.fa *.fasta *.fas *.fna *.afa)", "All files (*)"]
+        onAccepted: {
+            const text = ctl.read_sequence_file(doc.localPath(selectedFile))
+            if (text.length) doc.prepareFasta(text)
+        }
+    }
+    FileDialog {
+        id: traceDialog
+        currentFolder: doc.activeFolder()
+        onVisibleChanged: if (visible) currentFolder = doc.activeFolder()
+        title: "Choose 1–3 reads from the same specimen and amplicon"
+        fileMode: FileDialog.OpenFiles
+        nameFilters: ["Chromatograms (*.ab1 *.abi)", "All files (*)"]
+        onAccepted: {
+            if (selectedFiles.length < 1 || selectedFiles.length > 3) { tooManyReads.open(); return }
+            const reference = ctl.review_snapshot()
+            if (reference.length) doc.reviewTraces(selectedFiles.map(url => doc.localPath(url)), reference)
+        }
+    }
+    AppFormDialog {
+        id: tooManyReads
+        title: "Select one to three reads"
+        implicitWidth: 480
+        modal: true
+        standardButtons: Dialog.Ok
+        Label { Layout.fillWidth: true; text: "Review one specimen and amplicon at a time, using up to three reads."; wrapMode: Text.Wrap }
+    }
+    AddSequenceDialog {
+        id: textSequenceDialog
+        controller: ctl
+        inputKind: "text"
+        onInputError: (message) => additionError.show(message)
+    }
+    AddSequenceDialog {
+        id: fastaSequenceDialog
+        controller: ctl
+        inputKind: "fasta"
+        onInputError: (message) => additionError.show(message)
+    }
+    AddSequenceDialog {
+        id: reviewedSequenceDialog
+        controller: ctl
+        inputKind: "reviewed"
+        onInputError: (message) => additionError.show(message)
+    }
+    AdditionErrorDialog {
+        id: additionError
+        onCopyMessage: (text) => doc.copyText(text)
+    }
+    AppContentDialog {
+        id: insertionDialog
+        initialFocusItem: abortAddition
+        property int count: 0
+        title: "New bases require reference gaps"
+        modal: true
+        body: ColumnLayout {
+            Label { text: insertionDialog.count + " bases in the new sequences cannot fit without adding gaps to the reference. Allow new gaps to retain every base, or abort the addition."; wrapMode: Text.Wrap; Layout.fillWidth: true }
+            RowLayout {
+                AppButton { id: abortAddition; text: "Abort addition"; onClicked: { insertionDialog.close(); if (doc.activeAdditionDialog) doc.activeAdditionDialog.close() } }
+                AppButton { text: "Allow new gaps"; onClicked: { insertionDialog.close(); if (doc.activeAdditionDialog) doc.activeAdditionDialog.submit(false) } }
+            }
+        }
+    }
+
     Binding { target: ctl; property: "insert_mode"; value: doc.insertMode }
     Connections {
         target: ctl
         function onFileCreated(path) { doc.openFile(path) }
+        function onSequencesAdded() { if (doc.activeAdditionDialog) doc.activeAdditionDialog.close() }
+        function onAdditionFailed(message) { additionError.show(message) }
+        function onAdditionNeedsGaps(count) { insertionDialog.count = count; insertionDialog.open() }
     }
 
     // Open once the view has its real size.
@@ -37,9 +135,12 @@ Item {
         ctl.open_file(doc.path)
     })
 
-    InstanceView {
+    AppCanvas {
         id: view
+        accessibleTitle: "Alignment editor"
+        accessibleSummary: ctl.status
         anchors.fill: parent
+        anchors.bottomMargin: hbar.visible ? hbar.height : 0
         clearColor: ctl.background
         fontFamily: ctl.mono_font
         instances: ctl.frame
@@ -87,29 +188,11 @@ Item {
             onWheel: (wheel) => ctl.wheel(wheel.x, wheel.y, wheel.angleDelta.y, wheel.angleDelta.x, wheel.modifiers)
         }
 
-        // What's under the pointer, following it.
-        Rectangle {
-            visible: mouse.hoverText.length > 0
-            x: Math.min(mouse.lastX + 14, view.width - width - 4)
-            y: mouse.lastY + 18
-            width: tipLabel.implicitWidth + 16
-            height: tipLabel.implicitHeight + 10
-            radius: 4
-            color: ctl.foreground
-            opacity: 0.92
-            Label {
-                id: tipLabel
-                anchors.centerIn: parent
-                text: mouse.hoverText
-                color: ctl.background
-            }
-        }
-
         ScrollBar {
             id: hbar
             orientation: Qt.Horizontal
             // Under the residues only, not the names.
-            anchors { left: parent.left; leftMargin: ctl.names_width; right: vbar.left; bottom: parent.bottom }
+            anchors { left: parent.left; leftMargin: ctl.names_width; right: parent.right; rightMargin: vbar.width; top: parent.bottom }
             policy: ScrollBar.AlwaysOn
             visible: ctl.hscroll_size < 0.999
             size: ctl.hscroll_size
@@ -154,6 +237,7 @@ Item {
         }
 
         Keys.onPressed: (event) => {
+            if (!view.renderingAvailable) { event.accepted = false; return }
             const ctrl = event.modifiers & Qt.ControlModifier
             if (ctrl && event.key === Qt.Key_B) { doc.toggleSidebar(); event.accepted = true; return }
             if (ctrl && event.key === Qt.Key_C) {
@@ -163,7 +247,7 @@ Item {
             }
             if (event.key === Qt.Key_F2) { doc.renameRow(); event.accepted = true; return }
             if (event.key === Qt.Key_Insert) { doc.toggleInsert(); event.accepted = true; return }
-            event.accepted = ctl.key(event.key, event.text, event.modifiers)
+            event.accepted = ctl.busy || ctl.key(event.key, event.text, event.modifiers)
         }
     }
 }

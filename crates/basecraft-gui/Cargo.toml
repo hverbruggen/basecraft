@@ -18,6 +18,7 @@ basecraft-platform.workspace = true
 basecraft-plugin-host.workspace = true
 basecraft-protocol.workspace = true
 basecraft-viewmodel.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 cxx = "1.0"

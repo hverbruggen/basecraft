@@ -1,6 +1,9 @@
 #include "instanceview.h"
 
 #include <memory>
+#include <limits>
+#include <cstring>
+#include <QtCore/QPointer>
 
 #include <QtGui/QFont>
 #include <QtGui/QGuiApplication>
@@ -9,11 +12,28 @@
 #include <QtGui/QImage>
 #include <QtGui/QMatrix4x4>
 #include <QtGui/QPainter>
+#include <QtGui/QSurfaceFormat>
 #include <QtQuick/QQuickWindow>
 #include <qpa/qwindowsysteminterface.h>
 #include <rhi/qrhi.h>
 
 #include "basecraft_shaders.h"
+
+void configure_canvas_graphics()
+{
+    // QRhi deliberately ignores instancing extensions on a GL 2 context, even
+    // when the driver supports newer GL. This must run before QGuiApplication.
+    auto format = QSurfaceFormat::defaultFormat();
+#if QT_CONFIG(opengles2)
+    format.setRenderableType(QSurfaceFormat::OpenGLES);
+    format.setVersion(3, 0);
+#else
+    format.setRenderableType(QSurfaceFormat::OpenGL);
+    format.setVersion(3, 3);
+    format.setProfile(QSurfaceFormat::CoreProfile);
+#endif
+    QSurfaceFormat::setDefaultFormat(format);
+}
 
 namespace {
 
@@ -67,7 +87,12 @@ public:
     void render(QRhiCommandBuffer *cb) override;
 
 private:
-    void rebindAtlas();
+    bool rebindAtlas();
+    void fail(const QString &message);
+    void publishError();
+    QPointer<InstanceView> m_item;
+    QString m_error;
+    bool m_ready = false;
 
     QRhi *m_rhi = nullptr;
     std::unique_ptr<QRhiBuffer> m_quad;
@@ -95,6 +120,7 @@ private:
 InstanceView::InstanceView(QQuickItem *parent)
     : QQuickRhiItem(parent)
 {
+    setActiveFocusOnTab(true);
 }
 
 QQuickRhiItemRenderer *InstanceView::createRenderer()
@@ -145,6 +171,31 @@ void InstanceView::clickAt(qreal x, qreal y)
     QGuiApplication::sendEvent(window(), &release);
 }
 
+void InstanceView::setRenderError(const QString &error)
+{
+    if (m_renderError == error) return;
+    m_renderError = error;
+    emit renderErrorChanged();
+}
+
+void InstanceRenderer::publishError()
+{
+    if (!m_item) return;
+    const auto item = m_item;
+    const auto error = m_error;
+    QMetaObject::invokeMethod(item, [item, error]() {
+        if (item) item->setRenderError(error);
+    }, Qt::QueuedConnection);
+}
+
+void InstanceRenderer::fail(const QString &message)
+{
+    m_ready = false;
+    m_error = message;
+    publishError();
+    qWarning() << "Basecraft canvas:" << message;
+}
+
 void InstanceView::setInstances(const QByteArray &data)
 {
     m_instances = data;
@@ -175,30 +226,40 @@ void InstanceRenderer::initialize(QRhiCommandBuffer *)
     if (m_rhi != rhi()) {
         m_pipeline.reset();
         m_rhi = rhi();
+        m_ready = false;
+        m_error.clear();
     }
-    if (m_pipeline)
+    if (m_ready)
         return;
+    if (!m_error.isEmpty()) return;
+    if (!m_rhi || !renderTarget()) { fail(QStringLiteral("No graphics device is available.")); return; }
 
+    if (qEnvironmentVariableIsSet("BASECRAFT_RENDER_DIAGNOSTICS"))
+        qInfo() << "BASECRAFT_RENDER instancing" << m_rhi->isFeatureSupported(QRhi::Instancing);
+    if (!m_rhi->isFeatureSupported(QRhi::Instancing)) {
+        fail(QStringLiteral("This graphics backend does not support instanced drawing. Select a supported graphics backend."));
+        return;
+    }
     m_quad.reset(m_rhi->newBuffer(QRhiBuffer::Immutable, QRhiBuffer::VertexBuffer, sizeof(QuadCorners)));
-    m_quad->create();
+    if (!m_quad->create()) { fail(QStringLiteral("Could not create the vertex buffer.")); return; }
     m_quadUploaded = false;
     m_instances.reset();
     m_capacity = 0;
     m_dataDirty = true;
 
     m_uniforms.reset(m_rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, 64));
-    m_uniforms->create();
+    if (!m_uniforms->create()) { fail(QStringLiteral("Could not create the uniform buffer.")); return; }
 
     m_sampler.reset(m_rhi->newSampler(QRhiSampler::Linear, QRhiSampler::Linear, QRhiSampler::None,
                                       QRhiSampler::ClampToEdge, QRhiSampler::ClampToEdge));
-    m_sampler->create();
+    if (!m_sampler->create()) { fail(QStringLiteral("Could not create the texture sampler.")); return; }
 
     m_atlas.reset(m_rhi->newTexture(QRhiTexture::RGBA8, QSize(AtlasCols * AtlasCell, AtlasRows * AtlasCell)));
-    m_atlas->create();
+    if (!m_atlas->create()) { fail(QStringLiteral("Could not create the glyph atlas.")); return; }
     m_atlasDirty = true;
 
     m_bindings.reset(m_rhi->newShaderResourceBindings());
-    rebindAtlas();
+    if (!rebindAtlas()) { fail(QStringLiteral("Could not bind the glyph atlas.")); return; }
 
     m_pipeline.reset(m_rhi->newGraphicsPipeline());
     QRhiGraphicsPipeline::TargetBlend blend;
@@ -229,22 +290,26 @@ void InstanceRenderer::initialize(QRhiCommandBuffer *)
     m_pipeline->setSampleCount(renderTarget()->sampleCount());
     m_pipeline->setShaderResourceBindings(m_bindings.get());
     m_pipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
-    m_pipeline->create();
+    if (!m_pipeline->create()) { fail(QStringLiteral("Could not create the graphics pipeline.")); return; }
+    m_ready = true;
+    publishError();
 }
 
-void InstanceRenderer::rebindAtlas()
+bool InstanceRenderer::rebindAtlas()
 {
     m_bindings->setBindings({
         QRhiShaderResourceBinding::uniformBuffer(0, QRhiShaderResourceBinding::VertexStage, m_uniforms.get()),
         QRhiShaderResourceBinding::sampledTexture(1, QRhiShaderResourceBinding::FragmentStage, m_atlas.get(),
                                                   m_sampler.get()),
     });
-    m_bindings->create();
+    return m_bindings->create();
 }
 
 void InstanceRenderer::synchronize(QQuickRhiItem *rhiItem)
 {
     auto *item = static_cast<InstanceView *>(rhiItem);
+    m_item = item;
+    if (item->renderError() != m_error) publishError();
     if (item->m_instances.constData() != m_data.constData() || item->m_instances.size() != m_data.size()) {
         m_data = item->m_instances;  // implicitly shared, no copy
         m_dataDirty = true;
@@ -259,7 +324,21 @@ void InstanceRenderer::synchronize(QQuickRhiItem *rhiItem)
 
 void InstanceRenderer::render(QRhiCommandBuffer *cb)
 {
+    if (!m_ready || !m_rhi || !renderTarget()) return;
+    constexpr qsizetype stride = FloatsPerInstance * sizeof(float);
+    if (m_data.size() % stride != 0 || m_data.size() > std::numeric_limits<int>::max()) {
+        fail(QStringLiteral("The canvas data exceeds the supported buffer size or has an invalid record length."));
+        return;
+    }
+    if (m_dataDirty && (quint32(m_data.size()) > m_capacity || !m_instances)) {
+        const auto bytes = quint32(m_data.size());
+        // QRhi buffer sizes are signed int. Never double past their range.
+        m_capacity = qMax<quint32>(bytes, 64 * 1024);
+        m_instances.reset(m_rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::VertexBuffer, int(m_capacity)));
+        if (!m_instances->create()) { fail(QStringLiteral("Could not allocate the canvas buffer.")); return; }
+    }
     QRhiResourceUpdateBatch *updates = m_rhi->nextResourceUpdateBatch();
+    if (!updates) { fail(QStringLiteral("Could not allocate graphics updates.")); return; }
     if (!m_quadUploaded) {
         updates->uploadStaticBuffer(m_quad.get(), QuadCorners);
         m_quadUploaded = true;
@@ -272,14 +351,23 @@ void InstanceRenderer::render(QRhiCommandBuffer *cb)
     if (m_dataDirty) {
         const quint32 bytes = quint32(m_data.size());
         m_count = int(bytes / (FloatsPerInstance * sizeof(float)));
-        if (bytes > m_capacity || !m_instances) {
-            m_capacity = qMax<quint32>(bytes * 2, 64 * 1024);
-            m_instances.reset(m_rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::VertexBuffer, m_capacity));
-            m_instances->create();
-        }
         if (bytes > 0)
             updates->updateDynamicBuffer(m_instances.get(), 0, bytes, m_data.constData());
         m_dataDirty = false;
+    }
+
+    if (qEnvironmentVariableIsSet("BASECRAFT_RENDER_DIAGNOSTICS")) {
+        float maxX = 0, maxY = 0;
+        for (qsizetype offset = 0; offset + stride <= m_data.size(); offset += stride) {
+            float corners[8];
+            std::memcpy(corners, m_data.constData() + offset, sizeof(corners));
+            for (int corner = 0; corner < 4; ++corner) {
+                maxX = qMax(maxX, corners[corner * 2]);
+                maxY = qMax(maxY, corners[corner * 2 + 1]);
+            }
+        }
+        qInfo() << "BASECRAFT_RENDER" << m_logicalSize << renderTarget()->pixelSize()
+                << "instances" << m_count << "extent" << maxX << maxY;
     }
 
     QMatrix4x4 mvp = m_rhi->clipSpaceCorrMatrix();

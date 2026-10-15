@@ -12,10 +12,14 @@
 #include <QtQml/qqmlregistration.h>
 #include <QtQuick/QQuickRhiItem>
 
+// Configure the minimum OpenGL context needed by the instanced RHI canvas.
+void configure_canvas_graphics();
+
 class InstanceView : public QQuickRhiItem
 {
     Q_OBJECT
     QML_ELEMENT
+    Q_PROPERTY(QString renderError READ renderError NOTIFY renderErrorChanged)
     Q_PROPERTY(QByteArray instances READ instances WRITE setInstances NOTIFY instancesChanged)
     Q_PROPERTY(QColor clearColor READ clearColor WRITE setClearColor NOTIFY clearColorChanged)
     Q_PROPERTY(QString fontFamily READ fontFamily WRITE setFontFamily NOTIFY fontFamilyChanged)
@@ -36,6 +40,9 @@ public:
     // Deliver a left click at window coordinates, likewise.
     Q_INVOKABLE void clickAt(qreal x, qreal y);
 
+    QString renderError() const { return m_renderError; }
+    void setRenderError(const QString &error);
+
     QByteArray instances() const { return m_instances; }
     void setInstances(const QByteArray &data);
     QColor clearColor() const { return m_clearColor; }
@@ -44,12 +51,14 @@ public:
     void setFontFamily(const QString &family);
 
 signals:
+    void renderErrorChanged();
     void instancesChanged();
     void clearColorChanged();
     void fontFamilyChanged();
 
 private:
     friend class InstanceRenderer;
+    QString m_renderError;
     QByteArray m_instances;
     QColor m_clearColor = Qt::white;
     QString m_fontFamily = QStringLiteral("monospace");
