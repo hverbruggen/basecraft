@@ -705,10 +705,10 @@ ApplicationWindow {
         id: speciesMethods
         required property string commandSuffix
         title: "Species delimitation"
-        RibbonButton { commandId: "species.gmyc-" + speciesMethods.commandSuffix; text: "GMYC"; iconName: "delimitation"; enabled: window.current !== null && !window.current.busy; onInvoked: window.beginDelimitation("gmyc") }
-        RibbonButton { commandId: "species.asap-" + speciesMethods.commandSuffix; text: "ASAP"; iconName: "delimitation"; enabled: window.current !== null && !window.current.busy; onInvoked: window.beginDelimitation("asap") }
-        RibbonButton { commandId: "species.ptp-" + speciesMethods.commandSuffix; text: "PTP"; iconName: "delimitation"; enabled: window.current !== null && !window.current.busy; onInvoked: window.beginDelimitation("ptp") }
-        RibbonButton { commandId: "species.manual-" + speciesMethods.commandSuffix; text: "Manual"; iconName: "tree"; enabled: window.current !== null && !window.current.busy; onInvoked: window.beginDelimitation("manual") }
+        RibbonButton { commandId: "species.gmyc-" + speciesMethods.commandSuffix; text: "GMYC"; iconName: "tree-gmyc"; enabled: window.current !== null && !window.current.busy; onInvoked: window.beginDelimitation("gmyc") }
+        RibbonButton { commandId: "species.asap-" + speciesMethods.commandSuffix; text: "ASAP"; iconName: "matrix-asap"; enabled: window.current !== null && !window.current.busy; onInvoked: window.beginDelimitation("asap") }
+        RibbonButton { commandId: "species.ptp-" + speciesMethods.commandSuffix; text: "PTP"; iconName: "phylogram-ptp"; enabled: window.current !== null && !window.current.busy; onInvoked: window.beginDelimitation("ptp") }
+        RibbonButton { commandId: "species.manual-" + speciesMethods.commandSuffix; text: "Manual"; iconName: "tree-gmyc"; enabled: window.current !== null && !window.current.busy; onInvoked: window.beginDelimitation("manual") }
         RibbonButton { commandId: "species.combine-" + speciesMethods.commandSuffix; text: "Combine"; iconName: "align"; onInvoked: combinePicker.open() }
     }
     component ShortcutsGroup: RibbonGroup {
