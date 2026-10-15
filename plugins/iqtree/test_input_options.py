@@ -1,0 +1,79 @@
+"""External process contract tests, without claiming mock trees as ML validation."""
+import json
+import tempfile
+import threading
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+import iqtree_plugin
+
+
+class InputOptions(unittest.TestCase):
+    def setUp(self):
+        allocation = patch.object(iqtree_plugin, "allocated_cpus", return_value=1)
+        allocation.start()
+        self.addCleanup(allocation.stop)
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+        self.source = self.root / "input.fa"
+        self.source.write_text(">a\nACGT\n>b\nACGT\n>c\nACGA\n>d\nTCGT\n")
+        self.output = self.root / "tree.nwk"
+        self.params = {"input": str(self.source), "output": str(self.output), "model": "JC",
+                       "seed": 7, "threads": 1, "keep_identical": True, "tree_role": "display only"}
+
+    def executable(self, body):
+        path = self.root / "iqtree"
+        path.write_text("#!/usr/bin/env python3\nimport sys, pathlib, time\n"
+                        "if '--version' in sys.argv: print('test double'); sys.exit(0)\n" + body)
+        path.chmod(0o755)
+        return patch.object(iqtree_plugin, "executable", return_value=str(path))
+
+    def test_identity_parameters_and_display_units(self):
+        with self.executable("prefix = pathlib.Path(sys.argv[sys.argv.index('-pre')+1])\n"
+                             "prefix.with_suffix('.treefile').write_text('((t0:1,t1:1):1,(t2:1,t3:1):1);')\n"):
+            result = iqtree_plugin.tree(None, self.params)
+        self.assertEqual(self.output.read_text(), "(('a':1,'b':1):1,('c':1,'d':1):1);\n")
+        effective = result["execution"]["resolved_parameters"]
+        self.assertEqual(effective["units"], "substitutions per site")
+        self.assertEqual(effective["tree_role"], "display only")
+        self.assertEqual(effective["seed"], 7)
+        self.assertIn("-keep-ident", result["execution"]["argv"])
+        report = json.loads(Path(str(self.output) + ".run.json").read_text())
+        self.assertEqual(set(report["identifiers"].values()), {"a", "b", "c", "d"})
+
+    def test_missing_or_duplicate_labels_preserve_previous_output(self):
+        for tree in ("(t0:1,t1:1,t2:1);", "(t0:1,t1:1,t2:1,t2:1);"):
+            self.output.write_text("previous tree")
+            with self.executable("prefix = pathlib.Path(sys.argv[sys.argv.index('-pre')+1])\n"
+                                 f"prefix.with_suffix('.treefile').write_text({tree!r})\n"), self.assertRaisesRegex(RuntimeError, "specimen labels"):
+                iqtree_plugin.tree(None, self.params)
+            self.assertEqual(self.output.read_text(), "previous tree")
+
+    def test_cancellation_stops_process_without_output(self):
+        cancel = self.root / "cancel"
+        self.params["cancel_file"] = str(cancel)
+        timer = threading.Timer(0.2, lambda: cancel.write_text("cancel"))
+        with self.executable("time.sleep(30)\n"):
+            timer.start()
+            try:
+                with self.assertRaisesRegex(RuntimeError, "cancelled"):
+                    iqtree_plugin.tree(None, self.params)
+            finally:
+                timer.join()
+        self.assertFalse(self.output.exists())
+
+    def test_missing_tool_and_pre_cancel_fail_usefully(self):
+        with patch.object(iqtree_plugin, "executable", side_effect=FileNotFoundError("Install IQ-TREE")), self.assertRaisesRegex(FileNotFoundError, "Install IQ-TREE"):
+            iqtree_plugin.tree(None, self.params)
+        cancel = self.root / "cancel"
+        cancel.touch()
+        self.params["cancel_file"] = str(cancel)
+        with self.assertRaisesRegex(RuntimeError, "cancelled before inference"):
+            iqtree_plugin.tree(None, self.params)
+        self.assertFalse(self.output.exists())
+
+
+if __name__ == "__main__":
+    unittest.main()

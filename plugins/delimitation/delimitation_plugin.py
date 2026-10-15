@@ -60,7 +60,7 @@ def invoke(method, params):
                    "method": method, "input": str(snapshot), "input_hash": input_hash, "output": str(target.parent / (".delimitation-job-" + job_id) / "result.json"),
                    "rooted": params.get("rooted", False), "tree_index": params.get("tree_index", 0),
                    "seed": params.get("seed", 1), "workers": workers,
-                   "parameters": {k: v for k, v in params.items() if k in ("threshold", "candidate_budget", "reference_version", "reference_age_clamp", "groups", "log_likelihood", "fitted_log_likelihood", "null_log_likelihood", "lrt_passed", "mptp_version", "command", "min_branch", "units", "diagnostics", "asap_model", "replicates", "upstream_version", "haplotypes", "haplotype_policy", "mapping_hash", "upstream", "tree_inference", "sequence_sampling", "alignment_input_hash", "original_count", "retained_count")},
+                   "parameters": {k: v for k, v in params.items() if k in ("threshold", "candidate_budget", "reference_version", "reference_age_clamp", "groups", "log_likelihood", "fitted_log_likelihood", "null_log_likelihood", "lrt_passed", "mptp_version", "command", "min_branch", "units", "diagnostics", "asap_model", "replicates", "upstream_version", "haplotypes", "haplotype_policy", "mapping_hash", "upstream", "tree_inference", "sequence_sampling", "alignment_input_hash", "alignment_snapshot", "deduplicate", "model", "min_overlap", "original_count", "retained_count")},
                    "progress": params.get("progress"), "cancel_file": params.get("cancel_file")}
     mapping_snapshot = None
     if params.get("mapping"):
@@ -72,7 +72,10 @@ def invoke(method, params):
         mapping=json.loads(mapping_snapshot.read_text())
         if mapping.get("policy") != "aligned-dna-case-u-to-t-literal-gap-ambiguity-v1":
             raise ValueError("Unsupported exact haplotype identity policy")
-        request["parameters"].update(haplotypes=mapping["members"],haplotype_policy=mapping["policy"],mapping_hash=subprocess.check_output([engine,"--hash",str(mapping_snapshot)],text=True).strip())
+        mapping_hash = subprocess.check_output([engine,"--hash",str(mapping_snapshot)],text=True).strip()
+        if params.get("mapping_hash") and mapping_hash != params["mapping_hash"]:
+            raise ValueError("Retained haplotype mapping changed; repeat preparation")
+        request["parameters"].update(haplotypes=mapping["members"],haplotype_policy=mapping["policy"],mapping_hash=mapping_hash)
     request["parameters"]["original_source"] = params.get("original_source", str(source))
     staged_output = Path(request["output"])
     staged_output.parent.mkdir()
@@ -155,6 +158,10 @@ for _method in METHODS:
         def operation(snapshot, params):
             params = dict(params, job_id=params.get("job_id") or str(uuid.uuid4()))
             try:
+                if method in ("gmyc_single", "gmyc_multiple", "gmyc_exhaustive", "ptp", "mptp") and params.get("deduplicate") and not params.get("alignment_snapshot"):
+                    raise ValueError("Tree-only deduplication requires verified alignment evidence and a representative tree; use alignment GMYC/ASAP or prepare a representative tree and mapping first. No tips were removed.")
+                if method == "asap" and params.get("deduplicate") and not params.get("mapping"):
+                    raise ValueError("Deduplicated ASAP requires exact haplotype preparation and a retained mapping")
                 if method == "group_statistics":
                     import sys
                     sys.path.insert(0,str(Path(__file__).resolve().parent.parent / "distance"))

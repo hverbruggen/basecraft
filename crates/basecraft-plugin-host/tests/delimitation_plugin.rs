@@ -227,3 +227,90 @@ fn exact_identity_precedes_public_tree_inference_and_restores_specimens() {
     let result = replay::replay(root.path()).unwrap();
     assert!(result.ok(), "{:?}", result.problems);
 }
+
+#[test]
+fn asap_sampling_restores_roster_and_replays() {
+    use basecraft_plugin_host::delimitation_pipeline::AlignmentJob;
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("input.fa");
+    std::fs::write(
+        &source,
+        ">a\nACGT\n>b\nACGT\n>c\nACGA\n>d\nTCGA\n>e\nTCGT\n",
+    )
+    .unwrap();
+    // Only the upstream numerical process is replaced. Exercise the real public
+    // socket, preparation, adapter, native importer, expansion and replay.
+    let plugin = root.path().join("delimitation");
+    std::fs::create_dir(&plugin).unwrap();
+    let original = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/delimitation");
+    for name in ["plugin.toml", "delimitation_plugin.py", "asap_adapter.py"] {
+        std::fs::copy(original.join(name), plugin.join(name)).unwrap();
+    }
+    std::fs::write(plugin.join("asap_worker.py"), r#"
+import json, sys
+from pathlib import Path
+r = json.loads(Path(sys.argv[1]).read_text())
+names = [line[1:] for line in Path(r['input']).read_text().splitlines() if line.startswith('>')]
+individuals = ''.join('<individual id="'+n+'"/>' for n in names)
+members = ''.join('<individual ref="'+n+'"/>' for n in names)
+Path(r['out'], 'fixture.spart.xml').write_text('<root><individuals>'+individuals+'</individuals><spartitions><spartition label="fixture" spartitionScore="1"><subsets><subset label="1">'+members+'</subset></subsets></spartition></spartitions></root>')
+Path(r['worker_metadata']).write_text(json.dumps({'version':'contract fixture, not ASAP inference'}))
+"#).unwrap();
+    let mut session = Session::new(root.path());
+    let doc = session.open(&source).unwrap();
+    for unique in [false, true] {
+        let output = root.path().join(format!("asap-{unique}.json"));
+        let mut preparation = FileJob::from_file(
+            &session,
+            doc,
+            &source,
+            (&plugin, "haplotypes"),
+            root.path().join(format!("prep-{unique}.json")),
+        )
+        .unwrap();
+        preparation.params.insert("model".into(), json!("p"));
+        AlignmentJob {
+            preparation,
+            unique_haplotypes: unique,
+            fit_method: "asap".into(),
+            output: output.clone(),
+        }
+        .run()
+        .record(&mut session, doc)
+        .unwrap();
+        let result: Value = serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
+        let workspace = &result["workspace"];
+        assert_eq!(workspace["specimens"].as_array().unwrap().len(), 5);
+        let hypothesis = &workspace["hypotheses"][0];
+        assert_eq!(
+            hypothesis["groups"][0]["members"],
+            json!(["a", "b", "c", "d", "e"])
+        );
+        assert!(hypothesis["provenance"]["analysis_tree"].is_null());
+        assert_eq!(
+            hypothesis["provenance"]["parameters"]["deduplicate"],
+            unique
+        );
+        assert_eq!(
+            hypothesis["provenance"]["parameters"]["retained_count"],
+            if unique { 4 } else { 5 }
+        );
+        let params = &hypothesis["provenance"]["parameters"];
+        let snapshot = params["alignment_snapshot"].as_str().unwrap();
+        assert_eq!(
+            basecraft_io::hash_file(Path::new(snapshot)).unwrap(),
+            params["alignment_input_hash"]
+        );
+        if unique {
+            assert_eq!(
+                hypothesis["provenance"]["haplotypes"]["a"],
+                json!(["a", "b"])
+            );
+        } else {
+            assert_eq!(hypothesis["provenance"]["haplotypes"], json!({}));
+        }
+    }
+    drop(session);
+    let report = replay::replay(root.path()).unwrap();
+    assert!(report.ok(), "{:?}", report.problems);
+}

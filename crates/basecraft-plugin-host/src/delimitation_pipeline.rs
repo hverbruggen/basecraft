@@ -1,4 +1,4 @@
-//! Exact identity preprocessing, public UPGMA inference, then reference GMYC.
+//! Exact identity preprocessing, followed by ASAP or public UPGMA and GMYC.
 //! Every stage is an ordinary public file-plugin job with retained outcomes.
 use crate::{Error, FileJob, Result};
 use basecraft_ops::{DocId, Session};
@@ -43,6 +43,9 @@ impl AlignmentJob {
         if result.stages[0].outcome.is_err() {
             return result;
         }
+        if self.fit_method == "asap" {
+            return run_asap(result, self.unique_haplotypes);
+        }
         let prepare = &result.stages[0].job;
         let setup = (|| -> Result<FileJob> {
             if !["gmyc_single", "gmyc_multiple"].contains(&self.fit_method.as_str()) {
@@ -63,18 +66,14 @@ impl AlignmentJob {
             if retained < 2 {
                 return Err(Error::Protocol("GMYC unavailable: fewer than two retained haplotypes; no tree or fit was invented".into()));
             }
-            let source = if self.unique_haplotypes {
-                PathBuf::from(format!("{}.unique.fasta", prepare.output.display()))
-            } else {
-                prepare.input.clone()
-            };
             let plugin = prepare
                 .plugin
                 .parent()
                 .ok_or_else(|| Error::Protocol("plugin directory has no parent".into()))?
                 .join("distance");
-            let mut tree = prepare.following(
-                &source,
+            let mut tree = following_alignment(
+                prepare,
+                self.unique_haplotypes,
                 (&plugin, "tree"),
                 PathBuf::from(format!("{}.upgma.nwk", self.output.display())),
             )?;
@@ -122,42 +121,16 @@ impl AlignmentJob {
                     prepare.params["job_id"].as_str().unwrap_or("alignment")
                 )),
             );
-            let metadata: Value = serde_json::from_slice(&std::fs::read(&prepare.output)?)?;
-            let counts = &metadata["metrics"]["haplotypes"];
-            fit.params.insert(
-                "alignment_input_hash".into(),
-                prepare.input_key.1.clone().into(),
-            );
-            fit.params
-                .insert("original_count".into(), counts["original_count"].clone());
-            fit.params.insert(
-                "retained_count".into(),
-                if self.unique_haplotypes {
-                    json!(counts["unique"].as_array().map_or(0, Vec::len))
-                } else {
-                    counts["original_count"].clone()
-                },
-            );
+            sampling_parameters(prepare, &mut fit, self.unique_haplotypes)?;
             fit.params.insert("rooted".into(), true.into());
+            fit.params.insert(
+                "units".into(),
+                json!("relative time from equal-rate UPGMA distances; uncalibrated"),
+            );
             fit.params.insert(
                 "tree_inference".into(),
                 "UPGMA equal-rate clustering from retained aligned sequences".into(),
             );
-            fit.params.insert(
-                "sequence_sampling".into(),
-                if self.unique_haplotypes {
-                    "unique aligned DNA haplotypes"
-                } else {
-                    "all specimens"
-                }
-                .into(),
-            );
-            if self.unique_haplotypes {
-                fit.params.insert(
-                    "mapping".into(),
-                    json!(format!("{}.haplotypes.json", prepare.output.display())),
-                );
-            }
             Ok(fit)
         })();
         let fit = match setup {
@@ -177,6 +150,110 @@ impl AlignmentJob {
         result
     }
 }
+fn following_alignment(
+    prepare: &FileJob,
+    unique: bool,
+    operation: (&std::path::Path, &str),
+    output: PathBuf,
+) -> Result<FileJob> {
+    let metadata: Value = serde_json::from_slice(&std::fs::read(&prepare.output)?)?;
+    let source = if unique {
+        PathBuf::from(format!("{}.unique.fasta", prepare.output.display()))
+    } else {
+        prepare.input.clone()
+    };
+    let expected = if unique {
+        metadata["job"]["outputs"]
+            .get(source.display().to_string())
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                Error::Protocol("Preparation has no representative alignment hash".into())
+            })?
+    } else {
+        &prepare.input_key.1
+    };
+    let job = prepare.following(&source, operation, output)?;
+    if job.input_key.1 != expected {
+        return Err(Error::Protocol(
+            "Prepared alignment changed; repeat preparation".into(),
+        ));
+    }
+    Ok(job)
+}
+
+/// Carry the exact retained source and reversible mapping into every fit.
+fn sampling_parameters(prepare: &FileJob, fit: &mut FileJob, unique: bool) -> Result<()> {
+    let metadata: Value = serde_json::from_slice(&std::fs::read(&prepare.output)?)?;
+    let counts = &metadata["metrics"]["haplotypes"];
+    let snapshot = metadata["job"]["inputs"]
+        .as_object()
+        .and_then(|inputs| inputs.keys().next())
+        .ok_or_else(|| Error::Protocol("Preparation has no retained alignment".into()))?;
+    fit.params.extend([
+        ("deduplicate".into(), json!(unique)),
+        ("alignment_input_hash".into(), json!(prepare.input_key.1)),
+        ("alignment_snapshot".into(), json!(snapshot)),
+        ("original_source".into(), json!(prepare.input_key.0)),
+        ("original_count".into(), counts["original_count"].clone()),
+        (
+            "retained_count".into(),
+            if unique {
+                json!(counts["unique"].as_array().map_or(0, Vec::len))
+            } else {
+                counts["original_count"].clone()
+            },
+        ),
+        (
+            "sequence_sampling".into(),
+            json!(if unique {
+                "unique aligned DNA haplotypes"
+            } else {
+                "all specimens"
+            }),
+        ),
+    ]);
+    if unique {
+        let mapping = format!("{}.haplotypes.json", prepare.output.display());
+        let hash = metadata["job"]["outputs"]
+            .get(&mapping)
+            .ok_or_else(|| Error::Protocol("Preparation has no mapping hash".into()))?;
+        fit.params.insert("mapping".into(), json!(mapping));
+        fit.params.insert("mapping_hash".into(), hash.clone());
+    }
+    Ok(())
+}
+
+fn run_asap(mut result: PipelineOutcome, unique: bool) -> PipelineOutcome {
+    let prepare = &result.stages[0].job;
+    let setup = (|| -> Result<FileJob> {
+        if cancelled(prepare) {
+            return Err(Error::Protocol("ASAP cancelled before fitting".into()));
+        }
+        let mut fit = following_alignment(
+            prepare,
+            unique,
+            (&prepare.plugin, "asap"),
+            result.output.clone(),
+        )?;
+        fit.params.extend(prepare.params.clone());
+        sampling_parameters(prepare, &mut fit, unique)?;
+        Ok(fit)
+    })();
+    match setup {
+        Ok(job) => {
+            let started = Instant::now();
+            let outcome = job.run();
+            result.stages.push(Stage {
+                job,
+                outcome,
+                elapsed: started.elapsed().as_secs_f64(),
+            });
+        }
+        Err(error) => result.unavailable = Some(error.to_string()),
+    }
+    result
+}
+
 fn cancelled(job: &FileJob) -> bool {
     job.params
         .get("cancel_file")
@@ -210,7 +287,7 @@ impl PipelineOutcome {
                 } else {
                     JobStatus::Unavailable
                 },
-                method: "gmyc_alignment".into(),
+                method: "delimitation_alignment".into(),
                 inputs,
                 outputs: BTreeMap::new(),
                 diagnostics: vec![reason.clone()],

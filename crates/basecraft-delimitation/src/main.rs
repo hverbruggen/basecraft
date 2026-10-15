@@ -148,6 +148,45 @@ fn prepare_workspace(
                 .diagnostics
                 .extend(result.job.diagnostics.clone());
         }
+        if let Some(path) = request
+            .parameters
+            .get("alignment_snapshot")
+            .and_then(serde_json::Value::as_str)
+        {
+            let bytes = std::fs::read(path)?;
+            let hash = basecraft_io::hash_bytes(&bytes);
+            if request
+                .parameters
+                .get("alignment_input_hash")
+                .and_then(serde_json::Value::as_str)
+                != Some(hash.as_str())
+            {
+                return Err("Retained alignment changed; repeat haplotype preparation".into());
+            }
+            if let Some(mapping) = request.parameters.get("haplotypes") {
+                let index = basecraft_io::fasta::FastaIndex::build(&bytes)?;
+                let rows: Result<Vec<_>, Box<dyn std::error::Error>> = index
+                    .records
+                    .iter()
+                    .map(|record| {
+                        Ok((
+                            record.name.clone(),
+                            String::from_utf8(record.read(&bytes, 0, record.len)?)?,
+                        ))
+                    })
+                    .collect();
+                let expected = basecraft_delimitation::haplotypes::deduplicate(&rows?)?;
+                if serde_json::to_value(expected.members)? != *mapping {
+                    return Err("Haplotype mapping differs from retained alignment identity".into());
+                }
+            }
+            for hypothesis in &mut workspace.hypotheses {
+                hypothesis
+                    .provenance
+                    .inputs
+                    .insert(path.into(), hash.clone());
+            }
+        }
         if let Some(mapping) = request.parameters.get("haplotypes") {
             let mapping: BTreeMap<String, std::collections::BTreeSet<String>> =
                 serde_json::from_value(mapping.clone())?;
@@ -163,11 +202,24 @@ fn prepare_workspace(
                     &h.groups
                         .iter()
                         .map(|g| g.members.clone())
+                        .chain(std::iter::once(h.unassigned.clone()))
                         .collect::<Vec<_>>(),
                     &mapping,
                 )?;
+                h.unassigned = groups.last().cloned().unwrap_or_default();
                 for (group, members) in h.groups.iter_mut().zip(groups) {
                     group.members = members;
+                    group.individual_scores = group
+                        .individual_scores
+                        .iter()
+                        .flat_map(|(id, scores)| {
+                            mapping
+                                .get(id)
+                                .into_iter()
+                                .flatten()
+                                .map(move |member| (member.clone(), scores.clone()))
+                        })
+                        .collect();
                 }
                 h.provenance.haplotypes = mapping.clone();
             }
@@ -208,6 +260,20 @@ fn run(
         .is_some_and(|p| Path::new(p).exists())
     {
         return Err("cancelled before preparation".into());
+    }
+    if request
+        .parameters
+        .get("deduplicate")
+        .and_then(serde_json::Value::as_bool)
+        == Some(true)
+        && request.method != "haplotypes"
+        && (!request.parameters.contains_key("alignment_snapshot")
+            || !request.parameters.contains_key("haplotypes"))
+    {
+        return Err(
+            "Deduplication requires verified alignment preparation and a representative mapping"
+                .into(),
+        );
     }
     let input_bytes = std::fs::read(&request.input)?;
     let hash = basecraft_io::hash_bytes(&input_bytes);

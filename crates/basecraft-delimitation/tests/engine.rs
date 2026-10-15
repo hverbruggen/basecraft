@@ -44,6 +44,66 @@ fn executable_preserves_success_failure_cancellation_and_hash_contract() {
     assert_eq!(result.job.generation, 4);
     assert_eq!(result.job.outputs.len(), 2);
     basecraft_docs::delimitation::validate(result.workspace.as_ref().unwrap()).unwrap();
+    let alignment = directory.path().join("retained.fa");
+    std::fs::write(
+        &alignment,
+        ">a\nACGT\n>a2\nacgu\n>b\nACGA\n>c\nTCGA\n>d\nTCGT\n",
+    )
+    .unwrap();
+    request.parameters.extend([
+        ("alignment_snapshot".into(), serde_json::json!(alignment)),
+        (
+            "alignment_input_hash".into(),
+            serde_json::json!(basecraft_io::hash_file(&alignment).unwrap()),
+        ),
+        (
+            "haplotypes".into(),
+            serde_json::json!({"a":["a","a2"],"b":["b"],"c":["c"],"d":["d"]}),
+        ),
+    ]);
+    let (process, result) = execute(&request);
+    assert!(process.status.success(), "{:?}", result.job.diagnostics);
+    let work = result.workspace.unwrap();
+    assert_eq!(work.specimens.len(), 5);
+    assert_eq!(
+        work.hypotheses[0]
+            .groups
+            .iter()
+            .map(|g| g.members.len())
+            .sum::<usize>(),
+        5
+    );
+    assert!(
+        work.hypotheses[0]
+            .provenance
+            .inputs
+            .contains_key(&alignment.display().to_string())
+    );
+    request.parameters.insert(
+        "haplotypes".into(),
+        serde_json::json!({"a":["a","wrong"],"b":["b"],"c":["c"],"d":["d"]}),
+    );
+    let (_, result) = execute(&request);
+    assert_eq!(result.job.status, JobStatus::Failed);
+    assert!(result.workspace.is_none());
+    assert!(
+        result
+            .job
+            .diagnostics
+            .iter()
+            .any(|message| message.contains("differs from retained alignment"))
+    );
+    std::fs::write(&alignment, ">a\nCCCC\n").unwrap();
+    let (_, result) = execute(&request);
+    assert_eq!(result.job.status, JobStatus::Failed);
+    assert!(
+        result
+            .job
+            .diagnostics
+            .iter()
+            .any(|message| message.contains("Retained alignment changed"))
+    );
+    request.parameters.clear();
     request
         .parameters
         .insert("haplotypes".into(), serde_json::json!({"wrong":["a","b"]}));

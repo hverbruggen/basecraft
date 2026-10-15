@@ -37,14 +37,14 @@ FocusScope {
             const hypotheses = JSON.parse(ctl.workspace_json).hypotheses || []
             if (hypotheses.length) ctl.activate(hypotheses[hypotheses.length - 1].id)
             }
-            if (displayMethod === "upgma" || displayMethod === "nj") {
+            if (["upgma", "nj", "iqtree"].includes(displayMethod)) {
                 showGroups = false
                 ctl.run_analysis("display_" + displayMethod, input, false, settings)
             } else if (displayMethod === "existing") { ctl.attach_tree(input, rooted); showGroups = false }
             else showGroups = true
             return
         }
-        if (method === "asap" && (displayMethod === "upgma" || displayMethod === "nj")) {
+        if (method === "asap" && (["upgma", "nj", "iqtree"].includes(displayMethod))) {
             pendingAnalysis = {method: method, input: input, rooted: rooted, settings: settings}
             ctl.run_analysis("display_" + displayMethod, input, false, settings)
         } else {
@@ -142,14 +142,14 @@ FocusScope {
             visible: doc.settingsOpen
             TextField { id: analysisInput; placeholderText: "Immutable analysis input (tree or aligned FASTA)"; Layout.fillWidth: true; text: ["asap","haplotypes","group_statistics","gmyc_alignment_single","gmyc_alignment_multiple"].includes(method.currentText) ? ctl.linked_alignment : ctl.display_path }
             AppComboBox { id: method; model: ["gmyc_single", "gmyc_multiple", "gmyc_alignment_single", "gmyc_alignment_multiple", "ptp", "mptp", "asap", "relative_time", "haplotypes", "group_statistics"] }
-            WorkspaceButton { text: "Run"; enabled: !ctl.busy; onClicked: ctl.run_analysis(method.currentText,analysisInput.text,rooted.checked,JSON.stringify({cache:cachePath.text,mapping:mappingPath.text,unique_haplotypes:sampling.currentIndex === 0,model:distanceModel.currentText,seed:seed.value,workers:workers.value,replicates:replicates.value,tree_index:treeIndex.value})) }
+            WorkspaceButton { text: "Run"; enabled: !ctl.busy; onClicked: ctl.run_analysis(method.currentText,analysisInput.text,rooted.checked,JSON.stringify({cache:cachePath.text,mapping:mappingPath.text,deduplicate:sampling.currentIndex === 0,model:distanceModel.currentText,seed:seed.value,workers:workers.value,replicates:replicates.value,tree_index:treeIndex.value})) }
             WorkspaceButton { text: "Cancel job"; enabled: ctl.busy; onClicked: ctl.cancel_job() }
         }
         RowLayout {
             Layout.minimumWidth: 0
             visible: doc.settingsOpen
-            AppComboBox { id: sampling; model: ["Unique haplotypes", "All specimens"] }
-            Label { text: "Alignment GMYC: UPGMA equal-rate tree" }
+            AppComboBox { id: sampling; model: ["Deduplicate exact aligned DNA", "All specimens"]; currentIndex: 1 }
+            Label { text: "GMYC/ASAP alignment only; tree deduplication needs verified alignment preparation" }
             WorkspaceButton { text: "Count haplotypes"; enabled: !ctl.busy; onClicked: ctl.run_analysis("haplotypes",analysisInput.text,false,"{}") }
             Label { text: ctl.sampling_summary }
         }
