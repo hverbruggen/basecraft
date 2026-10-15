@@ -22,6 +22,7 @@ fn stdio_edits_are_version_checked_logged_and_project_scoped() {
             "--model-id",
             "test-agent",
         ])
+        .env("BASECRAFT_PROFILE_DIR", d.path().join("profile"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
@@ -78,11 +79,16 @@ fn stdio_edits_are_version_checked_logged_and_project_scoped() {
             .unwrap()
             .contains("TCGT")
     );
-    let log = basecraft_ops::log::read_all(d.path()).unwrap();
+    let log = basecraft_ops::provenance::inspect(&d.path().join("input.afa"))
+        .unwrap()
+        .events;
     assert!(log.iter().any(
         |e| matches!(&e.actor,basecraft_protocol::Actor::Agent{model} if model=="test-agent")
     ));
-    assert!(basecraft_ops::replay::replay(d.path()).unwrap().ok());
+    assert_eq!(
+        basecraft_ops::provenance::verify(&d.path().join("input.afa")).unwrap(),
+        Vec::<String>::new()
+    );
 }
 
 #[test]
@@ -90,6 +96,7 @@ fn mcp_defaults_to_read_only() {
     let d = tempfile::tempdir().unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_basecraft"))
         .args(["mcp", d.path().to_str().unwrap()])
+        .env("BASECRAFT_PROFILE_DIR", d.path().join("profile"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
@@ -106,4 +113,49 @@ fn mcp_defaults_to_read_only() {
     let out = child.wait_with_output().unwrap();
     assert!(out.status.success());
     assert!(String::from_utf8(out.stdout).unwrap().contains("read-only"));
+}
+
+#[test]
+fn document_record_describes_unsaved_headless_edits_and_undo() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("gene.fasta"), ">gene\nACGT\n").unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_basecraft"))
+        .args(["mcp", dir.path().to_str().unwrap(), "--allow-writes"])
+        .env("BASECRAFT_PROFILE_DIR", dir.path().join("profile"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+    for message in [
+        json!({"jsonrpc":"2.0","id":0,"method":"initialize"}),
+        request(1, "open", json!({"path":"gene.fasta"})),
+        request(
+            2,
+            "apply",
+            json!({"document":0,"version":0,"operation":{"op":"seq.replace","params":{"start":0,"end":1,"residues":"T"}}}),
+        ),
+        request(3, "document_record", json!({"document":0})),
+        request(4, "undo", json!({"document":0})),
+        request(5, "document_record", json!({"document":0})),
+    ] {
+        writeln!(input, "{message}").unwrap();
+    }
+    drop(input);
+    let result = child.wait_with_output().unwrap();
+    assert!(result.status.success());
+    let replies: Vec<Value> = String::from_utf8(result.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let before: Value =
+        serde_json::from_str(replies[3]["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(before["unsaved"], true);
+    assert!(before["methods"].as_str().unwrap().contains("Replaced"));
+    let after: Value =
+        serde_json::from_str(replies[5]["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(after["unsaved"], false);
+    assert_eq!(after["paragraphs"], json!([]));
+    assert!(!basecraft_ops::provenance::companion(&dir.path().join("gene.fasta")).exists());
 }

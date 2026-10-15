@@ -1,10 +1,53 @@
 """Utilities for public plugins that invoke local or pixi-installed tools."""
 
+import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+
+def allocated_cpus(requested=None):
+    """Resolve a tool's worker count within the host's local CPU allocation."""
+    if requested is not None and (
+        isinstance(requested, bool) or not isinstance(requested, int) or requested < 1
+    ):
+        raise ValueError("CPU threads must be a positive integer")
+    available = os.cpu_count() or 1
+    if "BASECRAFT_CPU_THREADS" in os.environ:
+        budget = int(os.environ["BASECRAFT_CPU_THREADS"])
+    else:
+        # Use the Rust reader for paths, schema/migration and validation. Never
+        # silently reinterpret a malformed profile or use a divergent TOML parser.
+        try:
+            process = subprocess.run(
+                [executable(["basecraft"], "BASECRAFT"), "preferences"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                check=True,
+                timeout=15,
+            )
+        except subprocess.CalledProcessError as error:
+            raise ValueError(f"Cannot load Basecraft preferences: {(error.stderr or str(error)).strip()}") from error
+        except subprocess.TimeoutExpired as error:
+            raise ValueError("Timed out loading Basecraft preferences") from error
+        except FileNotFoundError as error:
+            raise ValueError("Install the Basecraft CLI or set BASECRAFT to load shared preferences") from error
+        try:
+            budget = json.loads(process.stdout)["compute"]["local_cpu_threads"]
+        except (ValueError, KeyError, TypeError) as error:
+            raise ValueError("Basecraft returned an invalid preferences snapshot") from error
+        if isinstance(budget, bool) or not isinstance(budget, int) or not 1 <= budget <= 65536:
+            raise ValueError("Basecraft returned an invalid CPU allocation")
+    if not 1 <= budget <= 65536:
+        raise ValueError("CPU allocation must be between 1 and 65536")
+    budget = min(budget, available)
+    if requested is None:
+        return budget
+    return min(requested, budget)
 
 
 def executable(names, environment):

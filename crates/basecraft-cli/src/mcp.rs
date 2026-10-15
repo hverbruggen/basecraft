@@ -87,6 +87,9 @@ impl Server {
                 ))
             }
             "state" => Ok(self.state(self.doc(args)?)),
+            "document_record" => Ok(serde_json::to_value(
+                self.session.document_record(self.doc(args)?)?.report()?,
+            )?),
             "read" => {
                 let doc = self.doc(args)?;
                 if self.session.is_tree(doc) {
@@ -221,6 +224,7 @@ fn tools() -> Value {
     json!({"tools":[
         tool("open","Open a document within the project.",json!({"path":string}), &["path"]),
         tool("documents","List this headless session's open documents.",json!({}), &[]),
+        tool("document_record","Read history and methods for this headless session current revision, including unsaved edits.",json!({"document":doc}), &["document"]),
         tool("state","Inspect document dimensions, version and undo state.",json!({"document":doc}), &["document"]),
         tool("read","Read a residue range or list tree tips.",json!({"document":doc,"start":{"type":"integer","minimum":0},"end":{"type":"integer","minimum":0},"row":{"type":"integer","minimum":0}}), &["document"]),
         apply,
@@ -232,7 +236,7 @@ fn tools() -> Value {
 }
 
 pub fn serve(root: &Path, writable: bool, model: &str) -> Result<()> {
-    let mut session = Session::new(root.canonicalize()?);
+    let mut session = Session::recoverable(root.canonicalize()?)?;
     session.set_actor(Actor::Agent {
         model: model.into(),
     });

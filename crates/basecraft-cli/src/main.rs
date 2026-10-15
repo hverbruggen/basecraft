@@ -18,6 +18,33 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Readable history for the file's exact current contents. Does not write records.
+    History {
+        file: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Preview methods immediately; optionally export the frozen report.
+    Methods {
+        file: PathBuf,
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the validated shared preferences as JSON without creating files.
+    Preferences,
+    /// Reconstruct an unsaved session into a new directory; never overwrites inputs.
+    Recover {
+        session: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    /// Inspect, verify, report, or package readable saved-result provenance.
+    Provenance {
+        #[command(subcommand)]
+        action: ProvenanceCommand,
+    },
     /// Serve a headless project session over MCP stdio (2025-11-25).
     Mcp {
         #[arg(default_value = ".")]
@@ -103,6 +130,27 @@ enum Command {
     },
 }
 
+#[derive(Subcommand)]
+enum ProvenanceCommand {
+    Inspect {
+        result: PathBuf,
+    },
+    Verify {
+        result: PathBuf,
+    },
+    Methods {
+        result: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    /// Copy a verified result with retained exact inputs; executes no tools.
+    Package {
+        result: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
+}
+
 fn main() -> ExitCode {
     match run(Cli::parse()) {
         Ok(()) => ExitCode::SUCCESS,
@@ -115,6 +163,72 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
+        Command::History { file, json } => {
+            let file = file.canonicalize()?;
+            let mut session =
+                basecraft_ops::Session::recoverable(file.parent().ok_or("File has no parent")?)?;
+            let doc = session.open(&file)?;
+            let report = session.document_record(doc)?.report()?;
+            println!(
+                "{}",
+                if json {
+                    serde_json::to_string_pretty(&report)?
+                } else {
+                    report.history_text
+                }
+            );
+        }
+        Command::Methods { file, json, output } => {
+            let file = file.canonicalize()?;
+            let mut session =
+                basecraft_ops::Session::recoverable(file.parent().ok_or("File has no parent")?)?;
+            let doc = session.open(&file)?;
+            let report = session.document_record(doc)?.report()?;
+            if let Some(output) = output {
+                report.export(&output)?;
+            }
+            println!(
+                "{}",
+                if json {
+                    serde_json::to_string_pretty(&report)?
+                } else {
+                    report.methods
+                }
+            );
+        }
+        Command::Preferences => {
+            let paths = basecraft_platform::paths::AppPaths::discover()?;
+            let preferences =
+                basecraft_platform::settings::SettingsStore::new(paths.preferences()).load()?;
+            println!("{}", serde_json::to_string_pretty(&preferences)?);
+        }
+        Command::Recover { session, output } => {
+            for restored in basecraft_ops::replay::recover(&session, &output)? {
+                println!("{}", restored.display());
+            }
+        }
+        Command::Provenance { action } => match action {
+            ProvenanceCommand::Inspect { result } => {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&basecraft_ops::provenance::inspect(&result)?)?
+                );
+            }
+            ProvenanceCommand::Verify { result } => {
+                let issues = basecraft_ops::provenance::verify(&result)?;
+                if !issues.is_empty() {
+                    return Err(issues.join("\n").into());
+                }
+                println!("done: recorded hashes verified; replay verification is a separate check");
+            }
+            ProvenanceCommand::Methods { result, output } => {
+                let publication = basecraft_ops::provenance::inspect(&result)?;
+                basecraft_ops::provenance::write_reports(&output, &publication)?;
+            }
+            ProvenanceCommand::Package { result, output } => {
+                basecraft_ops::provenance::package(&result, &output)?;
+            }
+        },
         Command::Mcp {
             project,
             allow_writes,
@@ -128,7 +242,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         } => {
             let file = file.canonicalize()?;
             let root = file.parent().unwrap_or(std::path::Path::new("."));
-            let mut session = basecraft_ops::Session::new(root);
+            let mut session = basecraft_ops::Session::recoverable(root)?;
             let doc = session.open(&file)?;
             let params = serde_json::from_str(&params)?;
             let result = tools::run(&mut session, doc, &tool, output, params)?;
@@ -137,7 +251,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Command::Edit { file, operation } => {
             let file = file.canonicalize()?;
             let root = file.parent().unwrap_or(std::path::Path::new("."));
-            let mut session = basecraft_ops::Session::new(root);
+            let mut session = basecraft_ops::Session::recoverable(root)?;
             let doc = session.open(&file)?;
             session.apply(doc, serde_json::from_str(&operation)?)?;
             session.save(doc, None)?;
@@ -162,7 +276,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 .parent()
                 .filter(|p| !p.as_os_str().is_empty())
                 .unwrap_or(std::path::Path::new("."));
-            let mut session = basecraft_ops::Session::new(root);
+            let mut session = basecraft_ops::Session::recoverable(root)?;
             let doc = session.open(&file)?;
             if !session.is_alignment(doc) {
                 return Err("distance inference requires an alignment".into());
@@ -364,7 +478,7 @@ fn run_plugin(
     );
 
     let root = file.parent().unwrap_or(std::path::Path::new("."));
-    let mut session = basecraft_ops::Session::new(root);
+    let mut session = basecraft_ops::Session::recoverable(root)?;
     let doc = session.open(file)?;
     let t_snap = Instant::now();
     let snap = basecraft_plugin_host::Snapshot::of(session.doc_key(doc), session.doc(doc))?;

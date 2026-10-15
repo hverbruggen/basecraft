@@ -10,6 +10,7 @@ license.workspace = true
 
 [dependencies]
 basecraft-io.workspace = true
+basecraft-platform.workspace = true
 basecraft-ops.workspace = true
 basecraft-plugin-host.workspace = true
 basecraft-protocol.workspace = true
