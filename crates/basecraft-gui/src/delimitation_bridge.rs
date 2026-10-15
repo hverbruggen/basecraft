@@ -1132,6 +1132,7 @@ impl qobject::DelimitationController {
             if ![
                 "display_upgma",
                 "display_nj",
+                "display_iqtree",
                 "gmyc_single",
                 "gmyc_multiple",
                 "gmyc_alignment_single",
@@ -1153,13 +1154,15 @@ impl qobject::DelimitationController {
                 ulid::Ulid::generate(),
                 if display_job { "nwk" } else { "json" }
             ));
-            let alignment_pipeline = method.starts_with("gmyc_alignment_");
+            let alignment_pipeline = method.starts_with("gmyc_alignment_") || method == "asap";
             let mut job = basecraft_plugin_host::FileJob::from_file(
                 session,
                 doc,
                 Path::new(&input.to_string()),
                 (
-                    &crate::bridge::plugin_dir(if display_job {
+                    &crate::bridge::plugin_dir(if method == "display_iqtree" {
+                        "iqtree"
+                    } else if display_job {
                         "distance"
                     } else {
                         "delimitation"
@@ -1207,6 +1210,8 @@ impl qobject::DelimitationController {
                     "reference_version",
                     "reference_age_clamp",
                     "unique_haplotypes",
+                    "deduplicate",
+                    "iqtree_model",
                     "tree_index",
                     "min_overlap",
                     "candidate_budget",
@@ -1217,7 +1222,39 @@ impl qobject::DelimitationController {
                     job.params.insert(key, value);
                 }
             }
+            if !alignment_pipeline
+                && !display_job
+                && job.params.get("deduplicate").and_then(Value::as_bool) == Some(true)
+            {
+                return Err("Exact sequence deduplication requires a verified alignment and representative tree. Tree-only preprocessing is unavailable; use alignment GMYC/ASAP, or prepare and root a representative tree with its mapping before fitting. No tips were removed.".into());
+            }
             if display_job {
+                // Analysis sampling is independent of the all-specimen display.
+                for key in [
+                    "deduplicate",
+                    "unique_haplotypes",
+                    "mapping",
+                    "replicates",
+                    "candidate_budget",
+                ] {
+                    job.params.remove(key);
+                }
+                job.params.insert(
+                    "tree_role".into(),
+                    json!("display only; does not change species assignments"),
+                );
+                job.params.insert(
+                    "sequence_sampling".into(),
+                    json!("all specimens; analysis deduplication does not remove display tips"),
+                );
+                job.params.insert(
+                    "units".into(),
+                    json!(if method == "display_upgma" {
+                        "equal-rate relative distance"
+                    } else {
+                        "substitutions per site"
+                    }),
+                );
                 job.params.insert(
                     "method".into(),
                     json!(if method == "display_upgma" {
@@ -1226,6 +1263,13 @@ impl qobject::DelimitationController {
                         "njstar"
                     }),
                 );
+            }
+            if method == "display_iqtree" {
+                let model = job.params.remove("iqtree_model").unwrap_or(json!("MFP"));
+                job.params.insert("model".into(), model);
+                job.params.insert("keep_identical".into(), json!(true));
+                job.params.remove("method");
+                job.params.remove("min_overlap");
             }
             if method == "group_statistics" {
                 let h = session
@@ -1251,9 +1295,10 @@ impl qobject::DelimitationController {
             let (workflow, progress_id) = if alignment_pipeline {
                 let unique_haplotypes = job
                     .params
-                    .get("unique_haplotypes")
+                    .get("deduplicate")
+                    .or_else(|| job.params.get("unique_haplotypes"))
                     .and_then(Value::as_bool)
-                    .unwrap_or(true);
+                    .unwrap_or(method.starts_with("gmyc_alignment_"));
                 (
                     basecraft_plugin_host::delimitation_pipeline::FileWorkflow::Alignment(
                         basecraft_plugin_host::delimitation_pipeline::AlignmentJob {

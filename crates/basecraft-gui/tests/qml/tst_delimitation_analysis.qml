@@ -28,6 +28,8 @@ Item {
                 compare(dialog.operation(), "gmyc_multiple")
                 verify(!dialog.validInput)
                 findChild(dialog, "rootedTree").checked = true
+                verify(!dialog.validInput) // a requested deduplication is never silently discarded
+                findChild(dialog, "deduplicateInput").checked = false
                 verify(dialog.validInput)
             } else if (data.tag === "ptp") {
                 compare(dialog.operation(), "ptp")
@@ -52,6 +54,50 @@ Item {
             tryCompare(dialog, "opened", true)
             dialog.reject()
             compare(requests.count, 1)
+        }
+        function test_sampling_and_iqtree_data() {
+            return [{tag:"asap"}, {tag:"manual"}, {tag:"view"}]
+        }
+        function test_sampling_and_iqtree(data) {
+            const dialog = createTemporaryObject(factory, parent)
+            requests.target = dialog
+            requests.clear()
+            dialog.show(data.tag, "/input.afa", "")
+            tryCompare(dialog, "opened", true)
+            const sampling = findChild(dialog, "deduplicateInput")
+            if (data.tag === "asap") {
+                compare(dialog.parameters().deduplicate, false)
+                sampling.checked = true
+                compare(dialog.parameters().deduplicate, true)
+                findChild(dialog, "asapView").currentIndex = 3
+            } else {
+                verify(!sampling.visible)
+                findChild(dialog, "manualTree").currentIndex = 4
+            }
+            verify(dialog.iqtreeDisplay)
+            compare(dialog.parameters().iqtree_model, "MFP")
+            findChild(dialog, "iqtreeModel").text = "GTR+G"
+            compare(dialog.parameters().iqtree_model, "GTR+G")
+            dialog.accept()
+            compare(requests.count, 1)
+            compare(requests.signalArguments[0][4], "iqtree")
+        }
+        function test_tree_deduplication_is_explicitly_unavailable_data() {
+            return [{tag:"gmyc"}, {tag:"ptp"}]
+        }
+        function test_tree_deduplication_is_explicitly_unavailable(data) {
+            const dialog = createTemporaryObject(factory, parent)
+            dialog.show(data.tag, "", "/input.nwk")
+            tryCompare(dialog, "opened", true)
+            findChild(dialog, "rootedTree").checked = true
+            verify(dialog.validInput)
+            findChild(dialog, "deduplicateInput").checked = true
+            verify(dialog.unsupportedDeduplication)
+            verify(!dialog.validInput)
+            compare(dialog.parameters().deduplicate, true)
+            findChild(dialog, "deduplicateInput").checked = false
+            verify(dialog.validInput)
+            dialog.reject()
         }
         function test_manual_without_tree() {
             const dialog = createTemporaryObject(factory, parent)
