@@ -6,6 +6,8 @@ FileTreeModel::FileTreeModel(QObject *parent)
     // Hidden entries (the .basecraft folder among them) stay out of view.
     setFilter(QDir::AllDirs | QDir::Files | QDir::NoDotAndDotDot);
     setReadOnly(true);
+    // QFileSystemModel's name comparator is case-insensitive and natural.
+    sort(0, Qt::AscendingOrder);
 }
 
 void FileTreeModel::setRootDir(const QString &dir)

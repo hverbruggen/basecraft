@@ -911,7 +911,7 @@ ApplicationWindow {
                 selectionModel: ItemSelectionModel {}
                 delegate: TreeViewDelegate {
                     implicitWidth: tree.width
-                    readonly property string path: files.pathAt(treeView.index(row, column))
+                    readonly property string path: model.filePath
                     highlighted: path === window.currentPath
                     font.pixelSize: 10
                     implicitHeight: 17
