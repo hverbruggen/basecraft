@@ -9,6 +9,10 @@ default:
 test-build jobs="24":
     python3 tools/test_build.py --jobs {{jobs}}
 
+# Include the full ribbon/dialog screenshot batch for release preparation or on request.
+test-build-release jobs="24":
+    python3 tools/test_build.py --jobs {{jobs}} --ribbon-screenshots
+
 # Install the desktop app and CLI alongside the shared distance engine.
 install: install-distance
     cargo install --path crates/basecraft-cli --locked --root {{home_directory()}}/.local

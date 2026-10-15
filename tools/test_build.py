@@ -114,6 +114,10 @@ def main():
     parser.add_argument("--host", default="build-host.example.invalid")
     parser.add_argument("--jobs", type=int, default=24)
     parser.add_argument(
+        "--ribbon-screenshots", action="store_true",
+        help="Run the ribbon/dialog screenshot batch (requested checks and release preparation)",
+    )
+    parser.add_argument(
         "--root", type=Path, default=Path.home() / ".cache/basecraft/builds"
     )
     args = parser.parse_args()
@@ -256,14 +260,17 @@ sha256sum {" ".join(BINARIES)} > SHA256SUMS
                 backend,
             ]
         )
-    run(
-        [
-            "python3",
-            source / "crates/basecraft-gui/tools/check_ribbon.py",
-            bundle / "bin/basecraft-gui",
-            checks / "ribbon",
-        ]
-    )
+    if args.ribbon_screenshots:
+        run(
+            [
+                "python3",
+                source / "crates/basecraft-gui/tools/check_ribbon.py",
+                bundle / "bin/basecraft-gui",
+                checks / "ribbon",
+            ]
+        )
+    else:
+        print("Ribbon/dialog screenshot batch skipped; use --ribbon-screenshots for release preparation or requested checks", flush=True)
     run(["just", "qml-test"], cwd=source)
     manifest = {
         "schema_version": 1,
@@ -280,7 +287,7 @@ sha256sum {" ".join(BINARIES)} > SHA256SUMS
             "remote core tests",
             "local software startup",
             "local OpenGL startup",
-            "local RHI canvas and ribbon checks",
+            *(["local RHI canvas and ribbon checks"] if args.ribbon_screenshots else []),
             "local QML tests",
         ],
         "logs": str(stage),
