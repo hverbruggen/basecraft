@@ -29,10 +29,13 @@ fn main() {
         .windows(2)
         .find(|a| a[0] == "--editor-kind")
         .map(|a| a[1].as_str());
-    let app_id = match kind {
-        Some("Sequence") => "org.basecraft.Sequence",
-        Some("Alignment") => "org.basecraft.Alignment",
-        Some("Tree") => "org.basecraft.Tree",
+    let gui_test = std::env::var_os("BASECRAFT_GUI_TEST").is_some_and(|value| value == "1")
+        || args.iter().any(|arg| arg == "--screenshot");
+    let app_id = match (gui_test, kind) {
+        (true, _) => "org.basecraft.Validation",
+        (false, Some("Sequence")) => "org.basecraft.Sequence",
+        (false, Some("Alignment")) => "org.basecraft.Alignment",
+        (false, Some("Tree")) => "org.basecraft.Tree",
         _ => "org.basecraft.Basecraft",
     };
     QGuiApplication::set_desktop_file_name(&QString::from(app_id));
