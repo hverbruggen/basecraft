@@ -115,6 +115,13 @@ pub enum Op {
     AlnRenameRow { row: u32, name: String },
     #[serde(rename = "aln.remove_rows")]
     AlnRemoveRows { rows: Vec<(u32, u32)> },
+    /// Append sequences, optionally replacing reference rows with their
+    /// gap-expanded forms from an alignment addition tool.
+    #[serde(rename = "aln.add_sequences")]
+    AlnAddSequences {
+        rows: Vec<(String, String)>,
+        reference: Option<Vec<String>>,
+    },
     // Tree edits. Clades are named by one or two tips: see `CladeRef`.
     /// Root the tree halfway along the branch above `clade`.
     #[serde(rename = "tree.reroot")]
@@ -210,6 +217,7 @@ impl Op {
             Op::AlnMoveRows { .. } => "aln.move_rows",
             Op::AlnRenameRow { .. } => "aln.rename_row",
             Op::AlnRemoveRows { .. } => "aln.remove_rows",
+            Op::AlnAddSequences { .. } => "aln.add_sequences",
             Op::TreeReroot { .. } => "tree.reroot",
             Op::TreeRootPosition { .. } => "tree.root_position",
             Op::TreeRotate { .. } => "tree.rotate",

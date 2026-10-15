@@ -7,6 +7,7 @@ pub mod annotation;
 pub mod delimitation;
 pub mod ops;
 pub mod plugin;
+pub mod provenance;
 pub mod tree;
 
 pub use annotation::{Feature, Location, Qualifier, Segment, Strand};

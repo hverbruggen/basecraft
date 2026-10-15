@@ -67,6 +67,9 @@ pub enum Undo {
         index: usize,
         row: Box<AlnRow>,
     },
+    RemoveRow {
+        index: usize,
+    },
     Rename {
         row: usize,
         name: String,
@@ -92,12 +95,116 @@ fn err<T>(msg: impl Into<String>) -> Result<T, EditError> {
     Err(EditError(msg.into()))
 }
 
-/// Consensus of one column: the most common residue and the fraction of
-/// rows that have it; `-` and 0 for a column of gaps.
+/// Consensus of one column and its fraction of supporting rows.
+/// DNA uses the smallest IUPAC set supported by at least half the nongap rows.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Consensus {
     pub residue: u8,
     pub agreement: f32,
+}
+
+/// Canonical bases represented by an IUPAC DNA symbol, in A/C/G/T bit order.
+pub fn dna_mask(base: u8) -> u8 {
+    match base.to_ascii_uppercase() {
+        b'A' => 1,
+        b'C' => 2,
+        b'G' => 4,
+        b'T' | b'U' => 8,
+        b'M' => 3,
+        b'R' => 5,
+        b'S' => 6,
+        b'V' => 7,
+        b'W' => 9,
+        b'Y' => 10,
+        b'H' => 11,
+        b'K' => 12,
+        b'D' => 13,
+        b'B' => 14,
+        b'N' => 15,
+        _ => 0,
+    }
+}
+
+#[allow(clippy::cast_precision_loss)] // Consensus agreement is stored as f32 throughout the editor.
+fn dna_consensus(counts: &[u32; 28], rows: u32) -> Consensus {
+    let rows = rows.saturating_sub(counts[26]);
+    if rows == 0 {
+        return Consensus {
+            residue: GAP,
+            agreement: 0.0,
+        };
+    }
+    let mut best = (u32::MAX, 0, 15u8);
+    for mask in 1u8..=15 {
+        let count: u32 = counts[..26]
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &count)| {
+                let observed = dna_mask(b'A' + u8::try_from(i).unwrap());
+                (observed != 0 && observed & mask == observed).then_some(count)
+            })
+            .sum();
+        if u64::from(count) * 2 >= u64::from(rows)
+            && (mask.count_ones(), std::cmp::Reverse(count), mask)
+                < (best.0, std::cmp::Reverse(best.1), best.2)
+        {
+            best = (mask.count_ones(), count, mask);
+        }
+    }
+    if best.0 != u32::MAX {
+        return Consensus {
+            residue: b"?ACMGRSVTWYHKDBN"[best.2 as usize],
+            agreement: best.1 as f32 / rows.max(1) as f32,
+        };
+    }
+    // Missing data cannot supply votes for an unobserved base. Gaps have
+    // already been removed from the denominator, including terminal padding.
+    let count: u32 = counts[..26]
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| dna_mask(b'A' + u8::try_from(*i).unwrap()) != 0)
+        .map(|(_, n)| n)
+        .sum();
+    Consensus {
+        residue: b'N',
+        agreement: count as f32 / rows.max(1) as f32,
+    }
+}
+
+/// Whole-alignment composition of one DNA column. Ambiguous symbols are kept
+/// separate rather than distributed across A/C/G/T by an arbitrary prior.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ColumnStats {
+    pub acgt: [u32; 4],
+    pub gap: u32,
+    pub missing: u32,
+    pub ambiguous: u32,
+    pub other: u32,
+}
+
+impl ColumnStats {
+    pub fn informative(&self) -> u32 {
+        self.acgt.iter().sum()
+    }
+
+    /// Shannon diversity among unambiguous observed bases, in bits.
+    pub fn entropy_bits(&self) -> Option<f64> {
+        let n = self.informative();
+        if n == 0 {
+            return None;
+        }
+        let n = f64::from(n);
+        Some(
+            self.acgt
+                .iter()
+                .filter(|&&count| count > 0)
+                .map(|&count| {
+                    let p = f64::from(count) / n;
+                    -p * p.log2()
+                })
+                .sum(),
+        )
+    }
 }
 
 /// Columns per consensus cache entry.
@@ -109,6 +216,12 @@ struct ConsensusCache {
     chunks: HashMap<u64, Arc<Vec<Consensus>>>,
 }
 
+#[derive(Default)]
+struct StatsCache {
+    version: u64,
+    chunks: HashMap<u64, Arc<Vec<ColumnStats>>>,
+}
+
 pub struct AlignmentDoc {
     pub name: String,
     rows: Vec<AlnRow>,
@@ -116,6 +229,7 @@ pub struct AlignmentDoc {
     version: u64,
     protein: bool,
     consensus: Mutex<ConsensusCache>,
+    stats: Mutex<StatsCache>,
 }
 
 impl AlignmentDoc {
@@ -129,6 +243,7 @@ impl AlignmentDoc {
             version: 0,
             protein: false,
             consensus: Mutex::new(ConsensusCache::default()),
+            stats: Mutex::new(StatsCache::default()),
         };
         doc.square(&mut Vec::new());
         doc.protein = doc.detect_protein();
@@ -209,13 +324,13 @@ impl AlignmentDoc {
             for &b in &buf {
                 if b.is_ascii_alphabetic() {
                     letters += 1;
-                    if b"ACGTUNacgtun".contains(&b) {
+                    if b"ACGTUNRYKMSWBDHVacgtunrykmswbdhv".contains(&b) {
                         nucleotide += 1;
                     }
                 }
             }
         }
-        letters > 0 && f64::from(nucleotide) < 0.9 * f64::from(letters)
+        letters > 0 && nucleotide < letters
     }
 
     /// Rows in `ranges`, ascending, without duplicates; checked against the
@@ -289,6 +404,130 @@ impl AlignmentDoc {
     }
 
     // Edits.
+
+    /// Conflicting identifiers in input order, reported once each.
+    pub fn duplicate_sequence_names(&self, rows: &[(String, String)]) -> Vec<String> {
+        let mut names: std::collections::HashSet<&str> =
+            self.rows.iter().map(|r| r.name.as_str()).collect();
+        let mut reported = std::collections::HashSet::new();
+        rows.iter()
+            .filter(|(name, _)| !names.insert(name.as_str()) && reported.insert(name.as_str()))
+            .map(|(name, _)| name.clone())
+            .collect()
+    }
+
+    /// Validate additions against this alignment's molecule alphabet.
+    pub fn validate_additions(&self, rows: &[(String, String)]) -> Result<(), EditError> {
+        let alphabet: &[u8] = if self.protein {
+            b"ACDEFGHIKLMNPQRSTVWYBXZJUO-*"
+        } else {
+            b"ACGTUNRYKMSWBDHV-"
+        };
+        for (name, sequence) in rows {
+            if !sequence
+                .bytes()
+                .all(|b| alphabet.contains(&b.to_ascii_uppercase()))
+            {
+                return err(format!(
+                    "Sequence {name} contains symbols outside this {} alignment's IUPAC alphabet",
+                    if self.protein {
+                        "protein"
+                    } else {
+                        "nucleotide"
+                    }
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Append rows as one reversible edit. A tool may expand reference gaps,
+    /// but must preserve every existing residue and row identity.
+    pub fn add_sequences(
+        &mut self,
+        rows: &[(String, String)],
+        reference: Option<&[String]>,
+    ) -> Result<Vec<Undo>, EditError> {
+        self.validate_additions(rows)?;
+        let duplicates = self.duplicate_sequence_names(rows);
+        if !duplicates.is_empty() {
+            return err(format!(
+                "Sequence IDs already used:\n{}",
+                duplicates.join("\n")
+            ));
+        }
+        let mut names: std::collections::HashSet<&str> =
+            self.rows.iter().map(|r| r.name.as_str()).collect();
+        if rows.is_empty()
+            || rows.iter().any(|(name, seq)| {
+                name.is_empty()
+                    || name.chars().any(char::is_whitespace)
+                    || seq.is_empty()
+                    || !names.insert(name)
+            })
+        {
+            return err("New sequences need nonempty sequences and unique names without spaces");
+        }
+        if let Some(reference) = reference {
+            let width = reference.first().map_or(0, String::len);
+            if reference.len() != self.rows.len()
+                || width == 0
+                || reference.iter().any(|s| s.len() != width)
+                || rows.iter().any(|(_, s)| s.len() != width)
+            {
+                return err("Added alignment is not rectangular");
+            }
+            for (i, seq) in reference.iter().enumerate() {
+                let before = self.read(i, 0, self.width);
+                if !before
+                    .iter()
+                    .copied()
+                    .filter(|b| !is_gap(*b))
+                    .eq(seq.bytes().filter(|b| !is_gap(*b)))
+                {
+                    return err("Addition changed reference residues");
+                }
+            }
+        }
+        if let Some(reference) = reference {
+            let original: Vec<_> = (0..self.row_count())
+                .map(|row| self.read(row, 0, self.width))
+                .collect();
+            let mut old = 0;
+            for col in 0..reference[0].len() {
+                let matches = old < original[0].len()
+                    && reference.iter().enumerate().all(|(row, seq)| {
+                        let before = original[row][old];
+                        let after = seq.as_bytes()[col];
+                        before == after || (is_gap(before) && is_gap(after))
+                    });
+                if matches {
+                    old += 1;
+                } else if reference.iter().any(|seq| !is_gap(seq.as_bytes()[col])) {
+                    return err("Addition changed reference column homology");
+                }
+            }
+            if old != original[0].len() {
+                return err("Addition removed reference columns");
+            }
+        }
+        let mut undo = Vec::new();
+        if let Some(reference) = reference {
+            let width = self.width;
+            for (i, seq) in reference.iter().enumerate() {
+                self.splice(i, 0, width, seq.as_bytes(), &mut undo);
+            }
+        }
+        for (name, seq) in rows {
+            let index = self.rows.len();
+            self.rows
+                .push(AlnRow::new(name, Arc::new(seq.as_bytes().to_vec())));
+            undo.push(Undo::RemoveRow { index });
+        }
+        self.square(&mut undo);
+        self.edited();
+        Ok(undo)
+    }
 
     /// Replace `start..end` of one row with `residues`. Typing over a residue
     /// is a replacement of the same length.
@@ -477,6 +716,7 @@ impl AlignmentDoc {
             version: self.version,
             protein: self.protein,
             consensus: Mutex::new(ConsensusCache::default()),
+            stats: Mutex::new(StatsCache::default()),
         }
     }
 
@@ -617,6 +857,9 @@ impl AlignmentDoc {
                     seq.insert(*pos, residues);
                 }
                 Undo::InsertRow { index, row } => self.rows.insert(*index, (**row).clone()),
+                Undo::RemoveRow { index } => {
+                    self.rows.remove(*index);
+                }
                 Undo::Rename { row, name } => self.rows[*row].name.clone_from(name),
                 Undo::Reorder { order } => {
                     let order: Vec<usize> = order.iter().map(|&i| i as usize).collect();
@@ -629,6 +872,86 @@ impl AlignmentDoc {
     }
 
     // Consensus.
+
+    /// Composition over all rows, independent of which rows are displayed.
+    pub fn column_stats(&self, col: u64) -> Option<ColumnStats> {
+        if col >= self.width || self.protein {
+            return None;
+        }
+        let chunk = self.stats_chunk(col / CONSENSUS_CHUNK);
+        Some(chunk[(col % CONSENSUS_CHUNK) as usize])
+    }
+
+    /// Bounded, versioned whole-alignment composition for a visible interval.
+    pub fn column_stats_range(&self, start: u64, end: u64) -> Vec<ColumnStats> {
+        let end = end.min(self.width);
+        if self.protein || start >= end {
+            return Vec::new();
+        }
+        let Ok(capacity) = usize::try_from(end - start) else {
+            return Vec::new();
+        };
+        let mut out = Vec::with_capacity(capacity);
+        for index in start / CONSENSUS_CHUNK..=(end - 1) / CONSENSUS_CHUNK {
+            let chunk = self.stats_chunk(index);
+            let base = index * CONSENSUS_CHUNK;
+            let bounds = usize::try_from(start.max(base) - base)
+                .ok()
+                .zip(usize::try_from(end.min(base + chunk.len() as u64) - base).ok());
+            let Some((first, last)) = bounds else {
+                return Vec::new();
+            };
+            out.extend_from_slice(&chunk[first..last]);
+        }
+        out
+    }
+
+    fn stats_chunk(&self, index: u64) -> Arc<Vec<ColumnStats>> {
+        {
+            let mut cache = self
+                .stats
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if cache.version != self.version {
+                cache.version = self.version;
+                cache.chunks.clear();
+            }
+            if let Some(chunk) = cache.chunks.get(&index) {
+                return Arc::clone(chunk);
+            }
+        }
+        let start = index * CONSENSUS_CHUNK;
+        let end = (start + CONSENSUS_CHUNK).min(self.width);
+        let mut columns: Vec<_> = (start..end).map(|_| ColumnStats::default()).collect();
+        let mut buf = Vec::with_capacity(columns.len());
+        for row in 0..self.rows.len() {
+            buf.clear();
+            self.read_into(row, start, end, &mut buf);
+            for (column, &base) in columns.iter_mut().zip(&buf) {
+                match base.to_ascii_uppercase() {
+                    b'A' => column.acgt[0] += 1,
+                    b'C' => column.acgt[1] += 1,
+                    b'G' => column.acgt[2] += 1,
+                    b'T' | b'U' => column.acgt[3] += 1,
+                    b'-' | b'.' => column.gap += 1,
+                    b'N' | b'?' => column.missing += 1,
+                    b'R' | b'Y' | b'S' | b'W' | b'K' | b'M' | b'B' | b'D' | b'H' | b'V' => {
+                        column.ambiguous += 1;
+                    }
+                    _ => column.other += 1,
+                }
+            }
+        }
+        let columns = Arc::new(columns);
+        let mut cache = self
+            .stats
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if cache.version == self.version {
+            cache.chunks.insert(index, Arc::clone(&columns));
+        }
+        columns
+    }
 
     /// Consensus of columns `start..end`, cached per version.
     pub fn consensus(&self, start: u64, end: u64) -> Vec<Consensus> {
@@ -696,6 +1019,9 @@ impl AlignmentDoc {
         let cols: Vec<Consensus> = counts
             .iter()
             .map(|c| {
+                if !self.is_protein() {
+                    return dna_consensus(c, u32::try_from(self.rows.len()).unwrap_or(u32::MAX));
+                }
                 let (best, &count) = c[..26]
                     .iter()
                     .enumerate()
@@ -758,6 +1084,54 @@ mod tests {
 
     fn names(d: &AlignmentDoc) -> Vec<String> {
         d.rows().map(|r| r.name.clone()).collect()
+    }
+
+    #[test]
+    fn addition_collisions_list_every_id_once_in_input_order() {
+        let mut doc = aln(&["AC", "GT"]);
+        let first = doc.row(0).name.clone();
+        let second = doc.row(1).name.clone();
+        let rows = vec![
+            (second.clone(), "AC".into()),
+            (first.clone(), "GT".into()),
+            (second.clone(), "AT".into()),
+        ];
+        assert_eq!(
+            doc.duplicate_sequence_names(&rows),
+            vec![second.clone(), first.clone()]
+        );
+        let error = doc.add_sequences(&rows, None).err().unwrap().to_string();
+        assert!(error.contains(&first) && error.contains(&second));
+        assert_eq!(doc.row_count(), 2);
+    }
+
+    #[test]
+    fn additions_must_match_the_alignment_alphabet() {
+        let mut dna = aln(&["ACGTN", "ACGTT"]);
+        assert!(
+            dna.add_sequences(&[("bad".into(), "ACGTE".into())], None)
+                .is_err()
+        );
+        assert!(
+            dna.add_sequences(&[("stop".into(), "ACGT*".into())], None)
+                .is_err()
+        );
+        assert!(
+            dna.add_sequences(&[("iupac".into(), "RYKMSWBDHVN".into())], None)
+                .is_ok()
+        );
+        assert!(!aln(&["NNRYKMSW", "NNBDHVRY"]).is_protein());
+        let protein = aln(&["MKLVE", "MKLIE"]);
+        assert!(
+            protein
+                .validate_additions(&[("valid".into(), "MKLBZX*".into())])
+                .is_ok()
+        );
+        assert!(
+            protein
+                .validate_additions(&[("bad".into(), "MKL?".into())])
+                .is_err()
+        );
     }
 
     #[test]
@@ -846,6 +1220,66 @@ mod tests {
     }
 
     #[test]
+    fn dna_consensus_uses_least_inclusive_majority_iupac() {
+        let d = aln(&["AAAAN", "AACAR", "GCGAC", "GC-CT", "TG-T-"]);
+        // A/G tie below 50% => R (80%); A/C/G below 50% => M (80%).
+        assert_eq!(d.consensus_at(0).unwrap().residue, b'R');
+        assert_eq!(d.consensus_at(1).unwrap().residue, b'M');
+        assert_eq!(d.consensus_at(2).unwrap().residue, b'M');
+        assert_eq!(d.consensus_at(3).unwrap().residue, b'A');
+        assert_eq!(
+            aln(&["R", "R", "A", "C", "T"])
+                .consensus_at(0)
+                .unwrap()
+                .residue,
+            b'R'
+        );
+        assert_eq!(aln(&["A", "G"]).consensus_at(0).unwrap().residue, b'A');
+        assert_eq!(aln(&["?", "?", "A"]).consensus_at(0).unwrap().residue, b'N');
+        assert_eq!(
+            aln(&["E", "E", "F", "L", "V"])
+                .consensus_at(0)
+                .unwrap()
+                .residue,
+            b'E'
+        );
+    }
+
+    #[test]
+    fn consensus_ignores_terminal_and_internal_gaps() {
+        let d = aln(&["AC-", "A--", "---", "---", "---"]);
+        let c = d.consensus(0, 3);
+        assert_eq!(
+            c[0],
+            Consensus {
+                residue: b'A',
+                agreement: 1.0
+            }
+        );
+        assert_eq!(
+            c[1],
+            Consensus {
+                residue: b'C',
+                agreement: 1.0
+            }
+        );
+        assert_eq!(
+            c[2],
+            Consensus {
+                residue: b'-',
+                agreement: 0.0
+            }
+        );
+        assert_eq!(
+            aln(&["A", "C", "G", "-", "-", "-"])
+                .consensus_at(0)
+                .unwrap()
+                .residue,
+            b'M'
+        );
+    }
+
+    #[test]
     fn consensus_counts_rows() {
         let d = aln(&["AC-", "AG-", "TG-", "AG-"]);
         let c = d.consensus(0, 3);
@@ -854,6 +1288,43 @@ mod tests {
         assert_eq!(c[1].residue, b'G');
         assert_eq!(c[2].residue, b'-');
         assert_eq!(d.consensus_at(1), Some(c[1]));
+    }
+
+    #[test]
+    fn composition_keeps_coverage_and_ambiguity_distinct() {
+        let d = aln(&[
+            "ACGTACGTAA",
+            "ACGTACGTAA",
+            "ACGTACGTAC",
+            "ACGTACGTA-",
+            "ACGTACGTAN",
+            "ACGTACGTAR",
+            "ACGTACGTA?",
+        ]);
+        let s = d.column_stats(9).unwrap();
+        assert_eq!(s.acgt, [2, 1, 0, 0]);
+        assert_eq!((s.gap, s.missing, s.ambiguous), (1, 2, 1));
+        assert_eq!(s.informative(), 3);
+        assert!((s.entropy_bits().unwrap() - 0.918_295_834).abs() < 1e-8);
+        assert!(
+            aln(&["N", "-"])
+                .column_stats(0)
+                .unwrap()
+                .entropy_bits()
+                .is_none()
+        );
+        assert_eq!(d.column_stats_range(9, 10), vec![s]);
+        assert_eq!(d.column_stats_range(10, 11), []);
+    }
+
+    #[test]
+    fn composition_cache_tracks_alignment_edits() {
+        let mut d = aln(&["AA", "CA"]);
+        assert_eq!(d.column_stats_range(0, 2)[0].acgt, [1, 1, 0, 0]);
+        let undo = d.replace(1, 0, 1, b"A").unwrap();
+        assert_eq!(d.column_stats_range(0, 2)[0].acgt, [2, 0, 0, 0]);
+        d.undo(&undo);
+        assert_eq!(d.column_stats_range(0, 2)[0].acgt, [1, 1, 0, 0]);
     }
 
     #[test]

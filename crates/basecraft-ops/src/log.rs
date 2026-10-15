@@ -17,6 +17,11 @@ pub fn log_dir(root: &Path) -> PathBuf {
 pub struct LogWriter {
     dir: PathBuf,
     open: Option<(String, File)>,
+    stream: String,
+    sequence: u64,
+    segment: u64,
+    poisoned: bool,
+    poison_marker: PathBuf,
 }
 
 impl LogWriter {
@@ -24,23 +29,71 @@ impl LogWriter {
         Self {
             dir: log_dir(root).join(host),
             open: None,
+            stream: ulid::Ulid::generate().to_string(),
+            sequence: 0,
+            segment: 0,
+            poisoned: false,
+            poison_marker: root.join("recovery-integrity-error.json"),
         }
     }
 
     pub fn append(&mut self, entry: &LogEntry) -> Result<()> {
+        if self.poisoned {
+            return Err(crate::error::invalid(
+                "journal durability is uncertain; close this session and inspect recovery",
+            ));
+        }
         let month = entry.t.get(..7).unwrap_or("unknown").to_string();
+        if self
+            .open
+            .as_ref()
+            .is_some_and(|(_, file)| file.metadata().is_ok_and(|m| m.len() >= 8 << 20))
+        {
+            self.open = None;
+            self.segment += 1;
+        }
         if self.open.as_ref().is_none_or(|(m, _)| *m != month) {
             fs::create_dir_all(&self.dir)?;
-            let path = self.dir.join(format!("{month}.jsonl"));
+            let path = self
+                .dir
+                .join(format!("{month}-{}-{:06}.jsonl", self.stream, self.segment));
             let file = OpenOptions::new().create(true).append(true).open(path)?;
             self.open = Some((month, file));
         }
-        let mut line = serde_json::to_vec(entry)?;
+        let mut value = serde_json::to_value(entry)?;
+        let checksum = basecraft_io::hash_bytes(&serde_json::to_vec(&value)?);
+        value["_checksum"] = serde_json::json!(checksum);
+        value["_sequence"] = serde_json::json!(self.sequence);
+        let mut line = serde_json::to_vec(&value)?;
         line.push(b'\n');
+        if line.len() > 8 << 20 {
+            return Err(crate::error::invalid(
+                "operation journal event exceeds 8 MiB limit",
+            ));
+        }
         if let Some((_, f)) = &mut self.open {
             // One write per line: with O_APPEND, a crash can't interleave
             // half lines.
-            f.write_all(&line)?;
+            let previous_length = f.metadata()?.len();
+            if let Err(error) = f.write_all(&line).and_then(|()| f.sync_data()) {
+                if f.set_len(previous_length)
+                    .and_then(|()| f.sync_data())
+                    .is_err()
+                {
+                    self.poisoned = true;
+                    let bytes = serde_json::to_vec_pretty(&serde_json::json!({
+                        "schema_version": 1, "verified_length": previous_length,
+                        "error": "append failed and rollback durability could not be confirmed"
+                    }))?;
+                    let _ =
+                        basecraft_io::write_atomic(&self.poison_marker, |w| w.write_all(&bytes));
+                    return Err(crate::error::invalid(format!(
+                        "journal write failed ({error}); rollback durability is uncertain; inspect recovery before continuing"
+                    )));
+                }
+                return Err(error.into());
+            }
+            self.sequence += 1;
         }
         Ok(())
     }
@@ -61,6 +114,7 @@ pub fn read_readable(root: &Path) -> Result<(Vec<LogEntry>, usize)> {
 fn read_entries(root: &Path, lenient: bool) -> Result<(Vec<LogEntry>, usize)> {
     let mut entries = Vec::new();
     let mut skipped = 0;
+    let mut total_bytes = 0u64;
     let dir = log_dir(root);
     if !dir.exists() {
         return Ok((entries, skipped));
@@ -69,6 +123,7 @@ fn read_entries(root: &Path, lenient: bool) -> Result<(Vec<LogEntry>, usize)> {
         .filter_map(|e| e.ok().map(|e| e.path()))
         .collect();
     hosts.sort();
+    let mut sequences = std::collections::HashMap::<String, u64>::new();
     for host in hosts.into_iter().filter(|h| h.is_dir()) {
         // Monthly files sort by name.
         let mut files: Vec<PathBuf> = fs::read_dir(&host)?
@@ -77,13 +132,32 @@ fn read_entries(root: &Path, lenient: bool) -> Result<(Vec<LogEntry>, usize)> {
         files.sort();
         for file in files {
             if file.extension().is_some_and(|e| e == "jsonl") {
+                let bytes = fs::metadata(&file)?.len();
+                total_bytes = total_bytes.saturating_add(bytes);
+                if bytes > 16 << 20 || total_bytes > 128 << 20 {
+                    return Err(crate::error::invalid(
+                        "journal exceeds 16 MiB segment or 128 MiB session reading limit",
+                    ));
+                }
                 for line in BufReader::new(File::open(&file)?).lines() {
                     let line = line?;
                     if line.trim().is_empty() {
                         continue;
                     }
                     match parse_entry(&line) {
-                        Ok(e) => entries.push(e),
+                        Ok(e) => {
+                            let value: serde_json::Value = serde_json::from_str(&line)?;
+                            if let Some(sequence) = value["_sequence"].as_u64() {
+                                let expected = sequences.entry(e.session.clone()).or_insert(0);
+                                if sequence != *expected {
+                                    return Err(crate::error::invalid(
+                                        "journal sequence gap or reordered segment",
+                                    ));
+                                }
+                                *expected += 1;
+                            }
+                            entries.push(e);
+                        }
                         Err(_) if lenient => skipped += 1,
                         Err(e) => return Err(e.into()),
                     }
@@ -94,16 +168,94 @@ fn read_entries(root: &Path, lenient: bool) -> Result<(Vec<LogEntry>, usize)> {
     Ok((entries, skipped))
 }
 
+/// Recovery exposes only the verified prefix and leaves an invalid tail intact.
+/// The caller may copy the tail for inspection; this never repairs or skips it.
+#[derive(Debug)]
+pub struct VerifiedPrefix {
+    pub entries: Vec<LogEntry>,
+    pub verified_bytes: u64,
+    pub problem: Option<String>,
+}
+
+pub fn verified_prefix(path: &Path) -> Result<VerifiedPrefix> {
+    let file = File::open(path)?;
+    if file.metadata()?.len() > 16 << 20 {
+        return Err(crate::error::invalid(
+            "journal segment exceeds 16 MiB reading limit",
+        ));
+    }
+    let mut reader = BufReader::new(file);
+    let mut prefix = VerifiedPrefix {
+        entries: Vec::new(),
+        verified_bytes: 0,
+        problem: None,
+    };
+    let mut previous = None;
+    loop {
+        let mut bytes = Vec::new();
+        let n = reader.read_until(b'\n', &mut bytes)?;
+        if n == 0 {
+            break;
+        }
+        let parsed = (|| -> Result<LogEntry> {
+            if bytes.last() != Some(&b'\n') {
+                return Err(crate::error::invalid("torn journal tail"));
+            }
+            let line = std::str::from_utf8(&bytes)
+                .map_err(|_| crate::error::invalid("invalid journal UTF-8"))?;
+            let event = parse_entry(line)?;
+            let value: serde_json::Value = serde_json::from_str(line)?;
+            if let Some(sequence) = value["_sequence"].as_u64() {
+                if previous.is_some_and(|p| sequence != p + 1) {
+                    return Err(crate::error::invalid("journal sequence gap"));
+                }
+                previous = Some(sequence);
+            }
+            Ok(event)
+        })();
+        match parsed {
+            Ok(event) => {
+                prefix.entries.push(event);
+                prefix.verified_bytes += n as u64;
+            }
+            Err(error) => {
+                prefix.problem = Some(error.to_string());
+                break;
+            }
+        }
+    }
+    Ok(prefix)
+}
+
 /// One log line, with entries written by earlier versions brought up to
 /// date.
 pub fn parse_entry(line: &str) -> serde_json::Result<LogEntry> {
     let mut v: serde_json::Value = serde_json::from_str(line)?;
+    if let Some(object) = v.as_object_mut() {
+        if let Some(checksum) = object.remove("_checksum") {
+            let sequence = object.remove("_sequence");
+            if sequence
+                .as_ref()
+                .and_then(serde_json::Value::as_u64)
+                .is_none()
+                || checksum.as_str()
+                    != Some(basecraft_io::hash_bytes(&serde_json::to_vec(&v)?).as_str())
+            {
+                return Err(<serde_json::Error as serde::de::Error>::custom(
+                    "journal checksum mismatch",
+                ));
+            }
+        }
+    }
     // aln.insert named one row before it took row ranges.
     if v["op"] == "aln.insert"
         && let Some(params) = v["params"].as_object_mut()
         && let Some(row) = params.remove("row").and_then(|r| r.as_u64())
     {
-        params.insert("rows".into(), serde_json::json!([[row, row + 1]]));
+        params.insert(
+            "rows".into(),
+            serde_json::json!([[row, row.saturating_add(1)]]),
+        );
     }
     serde_json::from_value(v)
 }
@@ -160,7 +312,7 @@ fn local_time(t: &str, offset_min: i32) -> String {
 }
 
 fn range(start: u64, end: u64) -> String {
-    format!("{}–{end}", start + 1)
+    format!("{}–{end}", start.saturating_add(1))
 }
 
 fn feature_name(f: &basecraft_protocol::Feature) -> String {
@@ -176,7 +328,7 @@ fn feature_name(f: &basecraft_protocol::Feature) -> String {
 }
 
 /// One line for an operation.
-fn describe(op: &Op) -> String {
+pub fn describe(op: &Op) -> String {
     match op {
         Op::Open { .. } => "Opened".into(),
         Op::Save { .. } => "Saved".into(),
@@ -187,8 +339,8 @@ fn describe(op: &Op) -> String {
             start,
             end,
             residues,
-        } => match (end - start, residues.len()) {
-            (0, n) => format!("Inserted {n} bp at {}", start + 1),
+        } => match (end.saturating_sub(*start), residues.len()) {
+            (0, n) => format!("Inserted {n} bp at {}", start.saturating_add(1)),
             (d, 0) => format!("Deleted {d} bp at {}", range(*start, *end)),
             (_, n) => format!("Replaced {} with {n} bp", range(*start, *end)),
         },
@@ -203,13 +355,17 @@ fn describe(op: &Op) -> String {
         } => format!(
             "Replaced columns {} of row {} with {residues}",
             range(*start, *end),
-            row + 1
+            row.saturating_add(1)
         ),
         Op::AlnInsert {
             rows: r,
             col,
             residues,
-        } => format!("Inserted {residues} at column {} in {}", col + 1, rows(r)),
+        } => format!(
+            "Inserted {residues} at column {} in {}",
+            col.saturating_add(1),
+            rows(r)
+        ),
         Op::AlnFill {
             rows: r,
             start,
@@ -231,7 +387,11 @@ fn describe(op: &Op) -> String {
             col,
             count,
         } => {
-            format!("Inserted {count} gaps at column {} in {}", col + 1, rows(r))
+            format!(
+                "Inserted {count} gaps at column {} in {}",
+                col.saturating_add(1),
+                rows(r)
+            )
         }
         Op::AlnDelete {
             rows: r,
@@ -251,9 +411,14 @@ fn describe(op: &Op) -> String {
             by.unsigned_abs()
         ),
         Op::AlnRemoveGapColumns {} => "Removed gap-only columns".into(),
-        Op::AlnMoveRows { rows: r, to } => format!("Moved {} to row {}", rows(r), to + 1),
-        Op::AlnRenameRow { row, name } => format!("Renamed row {} to {name}", row + 1),
+        Op::AlnMoveRows { rows: r, to } => {
+            format!("Moved {} to row {}", rows(r), to.saturating_add(1))
+        }
+        Op::AlnRenameRow { row, name } => {
+            format!("Renamed row {} to {name}", row.saturating_add(1))
+        }
         Op::AlnRemoveRows { rows: r } => format!("Deleted {}", rows(r)),
+        Op::AlnAddSequences { rows, .. } => format!("Added {} sequences", rows.len()),
         Op::Export { path, format } => format!("Exported {format} to {path}"),
         Op::TreeReroot { clade } => format!("Rerooted on {}", clade_name(clade)),
         Op::TreeRootPosition { clade, fraction } => format!(
@@ -304,10 +469,10 @@ fn rows(ranges: &[(u32, u32)]) -> String {
     let parts: Vec<String> = ranges
         .iter()
         .map(|&(a, b)| {
-            if b == a + 1 {
-                (a + 1).to_string()
+            if b == a.saturating_add(1) {
+                (a.saturating_add(1)).to_string()
             } else {
-                format!("{}–{b}", a + 1)
+                format!("{}–{b}", a.saturating_add(1))
             }
         })
         .collect();

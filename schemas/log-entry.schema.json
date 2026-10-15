@@ -724,6 +724,53 @@
       ]
     },
     {
+      "description": "Append sequences, optionally replacing reference rows with their\ngap-expanded forms from an alignment addition tool.",
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "aln.add_sequences"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "reference": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "type": "string"
+              }
+            },
+            "rows": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              }
+            }
+          },
+          "required": [
+            "rows"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ]
+    },
+    {
       "description": "Root the tree halfway along the branch above `clade`.",
       "type": "object",
       "properties": {

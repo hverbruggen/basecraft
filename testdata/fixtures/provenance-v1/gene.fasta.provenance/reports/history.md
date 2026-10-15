@@ -1,0 +1,7 @@
+# Recorded history
+
+History before import is not recorded.
+
+- 01M4XYQCYWR6JN7TW6XSM746T3: `doc.open` (`2026-10-14T19:37:45.180Z`)
+- 01M4XYQCYWR6JN7TW6XSM746T4: `seq.replace` (`2026-10-14T19:37:45.180Z`)
+- 01M4XYQCYWR6JN7TW6XSM746T5: `doc.save` (`2026-10-14T19:37:45.180Z`)

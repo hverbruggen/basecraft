@@ -1,0 +1,138 @@
+{
+  "schema_version": 1,
+  "id": "01M4XYQCYWR6JN7TW6XSM746T5",
+  "session": "01M4XYQCYVNWDDH8DMY23TJCYQ",
+  "parents": [],
+  "parent_hashes": {},
+  "created": "2026-10-14T19:37:45.180Z",
+  "origin": "external history before import is unknown",
+  "inputs": [
+    {
+      "id": "01M4XYQCYWR6JN7TW6XSM746T3:input:0",
+      "logical_name": "gene.fasta",
+      "hash": "b3:43ee15c062467a4fa87c8f31101457b505f43cb5e18f1458f4eed7722162834c",
+      "size": 11,
+      "retained": "artifacts/43ee15c062467a4fa87c8f31101457b505f43cb5e18f1458f4eed7722162834c"
+    }
+  ],
+  "outputs": [
+    {
+      "id": "01M4XYQCYWR6JN7TW6XSM746T5:output:0",
+      "logical_name": "gene.fasta",
+      "hash": "b3:8fe544b732f874558ea83bf7299d6c0ca00a548b93d10e49838ce798a1c6695e",
+      "size": 11,
+      "retained": "artifacts/8fe544b732f874558ea83bf7299d6c0ca00a548b93d10e49838ce798a1c6695e"
+    },
+    {
+      "id": "01M4XYQCYWR6JN7TW6XSM746T5:output:1",
+      "logical_name": "gene.gff3",
+      "hash": "b3:01dbd320bf53a1ba24b1a7650f3ac838a42269258c8fba1bd2a4bc7d427fefa2",
+      "size": 43,
+      "retained": "artifacts/01dbd320bf53a1ba24b1a7650f3ac838a42269258c8fba1bd2a4bc7d427fefa2"
+    }
+  ],
+  "events": [
+    {
+      "v": 1,
+      "id": "01M4XYQCYWR6JN7TW6XSM746T3",
+      "t": "2026-10-14T19:37:45.180Z",
+      "host": "",
+      "session": "01M4XYQCYVNWDDH8DMY23TJCYQ",
+      "actor": {
+        "kind": "human",
+        "user": "redacted"
+      },
+      "doc": "gene.fasta",
+      "op": "doc.open",
+      "params": {
+        "path": "gene.fasta"
+      },
+      "result": {
+        "hashes": [
+          [
+            "gene.fasta",
+            "b3:43ee15c062467a4fa87c8f31101457b505f43cb5e18f1458f4eed7722162834c"
+          ]
+        ]
+      },
+      "state": {
+        "len": 4,
+        "features": 0
+      }
+    },
+    {
+      "v": 1,
+      "id": "01M4XYQCYWR6JN7TW6XSM746T4",
+      "t": "2026-10-14T19:37:45.180Z",
+      "host": "",
+      "session": "01M4XYQCYVNWDDH8DMY23TJCYQ",
+      "actor": {
+        "kind": "human",
+        "user": "redacted"
+      },
+      "doc": "gene.fasta",
+      "op": "seq.replace",
+      "params": {
+        "start": 1,
+        "end": 2,
+        "residues": "T"
+      },
+      "state": {
+        "len": 4,
+        "features": 0
+      }
+    },
+    {
+      "v": 1,
+      "id": "01M4XYQCYWR6JN7TW6XSM746T5",
+      "t": "2026-10-14T19:37:45.180Z",
+      "host": "",
+      "session": "01M4XYQCYVNWDDH8DMY23TJCYQ",
+      "actor": {
+        "kind": "human",
+        "user": "redacted"
+      },
+      "doc": "gene.fasta",
+      "op": "doc.save",
+      "params": {
+        "path": "gene.fasta"
+      },
+      "result": {
+        "hashes": [
+          [
+            "gene.fasta",
+            "b3:8fe544b732f874558ea83bf7299d6c0ca00a548b93d10e49838ce798a1c6695e"
+          ],
+          [
+            "gene.gff3",
+            "b3:01dbd320bf53a1ba24b1a7650f3ac838a42269258c8fba1bd2a4bc7d427fefa2"
+          ]
+        ]
+      },
+      "state": {
+        "len": 4,
+        "features": 0
+      }
+    }
+  ],
+  "effective_edits": [
+    {
+      "id": "01M4XYQCYWR6JN7TW6XSM746T4",
+      "operation": {
+        "op": "seq.replace",
+        "params": {
+          "start": 1,
+          "end": 2,
+          "residues": "T"
+        }
+      }
+    }
+  ],
+  "completeness": {
+    "ancestry_known": false,
+    "input_bytes_available": true,
+    "execution_specification_available": false,
+    "replay_verified": false
+  },
+  "report_template_version": 1
+}

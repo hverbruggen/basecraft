@@ -9,6 +9,7 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
+fs4 = "0.13"
 basecraft-docs.workspace = true
 basecraft-io.workspace = true
 basecraft-platform.workspace = true

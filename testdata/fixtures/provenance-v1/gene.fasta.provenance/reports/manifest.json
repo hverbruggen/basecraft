@@ -1,0 +1,15 @@
+{
+  "citations": [],
+  "output_hashes": [
+    "b3:8fe544b732f874558ea83bf7299d6c0ca00a548b93d10e49838ce798a1c6695e",
+    "b3:01dbd320bf53a1ba24b1a7650f3ac838a42269258c8fba1bd2a4bc7d427fefa2"
+  ],
+  "publication": "01M4XYQCYWR6JN7TW6XSM746T5",
+  "redactions": [
+    "machine-local paths",
+    "host",
+    "user"
+  ],
+  "schema_version": 1,
+  "template_version": 1
+}

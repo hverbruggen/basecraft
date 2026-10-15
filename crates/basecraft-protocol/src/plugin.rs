@@ -110,6 +110,33 @@ pub struct InvokeResult {
     /// The external program that did the work.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool: Option<ToolInfo>,
+    /// Actual process evidence supplied by newer plugins; absence stays unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution: Option<ExecutionInfo>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ExecutionInfo {
+    pub argv: Vec<String>,
+    #[serde(default)]
+    pub resolved_parameters: serde_json::Map<String, serde_json::Value>,
+    #[serde(default)]
+    pub preprocessing: Vec<String>,
+    /// Only scientific environment settings, never the whole process environment.
+    #[serde(default)]
+    pub environment: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    pub methods_template: Option<String>,
+    /// Frozen scientific description and citations supplied by the plugin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub methods: Option<Box<MethodsInfo>>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct MethodsInfo {
+    pub description: String,
+    #[serde(default)]
+    pub citations: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

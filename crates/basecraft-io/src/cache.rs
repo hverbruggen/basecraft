@@ -46,7 +46,7 @@ fn key(path: &Path) -> Result<String> {
 /// BLAKE3 content hash of a file, cached under the same stat-based key as
 /// indexes, so a large unchanged file is hashed once.
 pub fn content_hash(path: &Path) -> Result<String> {
-    content_hash_in(path, &cache_dir())
+    crate::hash_file(path)
 }
 
 pub fn content_hash_in(path: &Path, cache: &Path) -> Result<String> {
@@ -80,7 +80,13 @@ impl IndexedFasta {
 /// Open a FASTA file, loading its index from the cache or building and
 /// caching it.
 pub fn open_fasta(path: &Path) -> Result<IndexedFasta> {
-    open_fasta_in(path, &cache_dir())
+    let source = Source::open(path)?;
+    let index = FastaIndex::build(source.bytes())?;
+    Ok(IndexedFasta {
+        source,
+        index,
+        cached: false,
+    })
 }
 
 pub fn open_fasta_in(path: &Path, cache: &Path) -> Result<IndexedFasta> {

@@ -1,0 +1,2 @@
+activity	operation	parameters_json
+01M4XYQCYWR6JN7TW6XSM746T4	seq.replace	{"op":"seq.replace","params":{"start":1,"end":2,"residues":"T"}}

@@ -59,6 +59,10 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut Report) -> Re
                 .push(format!("{} {} {}: {msg}", e.id, e.op.name(), e.doc));
         };
         if let Op::Open { path } = &e.op {
+            if !safe_key(path) || !safe_key(&e.doc) || path != &e.doc {
+                problem("unsafe or inconsistent document identity".into());
+                continue;
+            }
             match materialise(root, work.path(), &e.result.hashes) {
                 Ok(()) => match session.open(&work.path().join(path)) {
                     Ok(id) => {
@@ -150,6 +154,18 @@ fn materialise(
     inputs: &[(String, String)],
 ) -> std::result::Result<(), String> {
     for (rel, hash) in inputs {
+        if Path::new(rel)
+            .components()
+            .any(|c| !matches!(c, std::path::Component::Normal(_)))
+        {
+            return Err(format!("unsafe replay input path: {rel}"));
+        }
+        let Some(digest) = hash.strip_prefix("b3:") else {
+            return Err("unsupported input hash".into());
+        };
+        if digest.len() != 64 || !digest.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err("invalid input hash".into());
+        }
         let stored = objects_dir(root).join(hash.trim_start_matches("b3:"));
         let original = root.join(rel);
         let source = if stored.exists() {
@@ -159,6 +175,9 @@ fn materialise(
         } else {
             return Err(format!("input {rel} changed and no stored copy exists"));
         };
+        if basecraft_io::hash_file(&source).map_err(|e| e.to_string())? != *hash {
+            return Err(format!("retained input {rel} hash differs"));
+        }
         let dest = work.join(rel);
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -168,4 +187,89 @@ fn materialise(
         }
     }
     Ok(())
+}
+
+fn safe_key(key: &str) -> bool {
+    !key.is_empty()
+        && Path::new(key)
+            .components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)))
+}
+
+/// Reconstruct unsaved documents into a new directory without modifying sources
+/// or executing any tools. Strict reading rejects torn/corrupt journals; callers
+/// can inspect `verified_prefix` separately before explicitly salvaging a prefix.
+pub fn recover(root: &Path, destination: &Path) -> Result<Vec<std::path::PathBuf>> {
+    if root.join("recovery-integrity-error.json").exists() {
+        return Err(crate::error::invalid(
+            "journal durability was uncertain; inspect the preserved verified prefix before recovery",
+        ));
+    }
+    if destination.exists() {
+        return Err(crate::error::invalid("recovery destination already exists"));
+    }
+    let entries = log::read_all(root)?;
+    if entries.is_empty() {
+        return Err(crate::error::invalid(
+            "recovery contains no verified events",
+        ));
+    }
+    let parent = destination
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    std::fs::create_dir_all(parent)?;
+    let staging = tempfile::Builder::new()
+        .prefix(".basecraft-recover-")
+        .tempdir_in(parent)?;
+    let mut session = Session::unlogged(staging.path());
+    let mut documents = std::collections::BTreeMap::<String, DocId>::new();
+    for entry in entries {
+        if let Op::Open { path } = &entry.op {
+            if !safe_key(path) || !safe_key(&entry.doc) || path != &entry.doc {
+                return Err(crate::error::invalid(
+                    "unsafe or inconsistent recovery document identity",
+                ));
+            }
+            materialise(root, staging.path(), &entry.result.hashes)
+                .map_err(crate::error::invalid)?;
+            let doc = session.open(&staging.path().join(path))?;
+            documents.insert(entry.doc.clone(), doc);
+            continue;
+        }
+        let doc = *documents
+            .get(&entry.doc)
+            .ok_or_else(|| crate::error::invalid("recovery event precedes its baseline"))?;
+        match entry.op {
+            Op::Save { .. }
+            | Op::ToolRun { .. }
+            | Op::JobFinished { .. }
+            | Op::Export { .. }
+            | Op::Extract { .. } => {}
+            Op::Undo { .. } => {
+                session.undo_single(doc)?;
+            }
+            Op::Redo { .. } => {
+                session.redo_single(doc)?;
+            }
+            operation => {
+                session.apply_as(doc, operation, entry.actor)?;
+            }
+        }
+        if session.state(doc) != entry.state {
+            return Err(crate::error::invalid(format!(
+                "recovery state differs at {}",
+                entry.id
+            )));
+        }
+    }
+    let mut outputs = Vec::new();
+    for (relative, doc) in documents {
+        let target = staging.path().join(&relative);
+        session.save(doc, Some(&target))?;
+        outputs.push(destination.join(relative));
+    }
+    drop(session);
+    std::fs::rename(staging.path(), destination)?;
+    Ok(outputs)
 }

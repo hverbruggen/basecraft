@@ -282,6 +282,14 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             std::fs::create_dir_all(&dir)?;
             let schemas = [
                 (
+                    "plugin-invoke-result",
+                    schemars::schema_for!(basecraft_protocol::plugin::InvokeResult),
+                ),
+                (
+                    "provenance-publication",
+                    schemars::schema_for!(basecraft_protocol::provenance::Publication),
+                ),
+                (
                     "delimitation-request",
                     schemars::schema_for!(basecraft_protocol::delimitation::DelimitationRequest),
                 ),

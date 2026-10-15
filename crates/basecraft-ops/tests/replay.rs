@@ -263,7 +263,20 @@ fn replay_detects_divergence() {
         .unwrap()
         .path();
     let text = std::fs::read_to_string(&file).unwrap();
-    let tampered = text.replace(r#""start":25,"end":35"#, r#""start":25,"end":36"#);
+    // Exercise semantic divergence in a legacy unframed log. Framed-log
+    // corruption is rejected earlier by checksum tests.
+    let tampered = text
+        .lines()
+        .map(|line| {
+            let mut value: serde_json::Value = serde_json::from_str(line).unwrap();
+            value.as_object_mut().unwrap().remove("_checksum");
+            value.as_object_mut().unwrap().remove("_sequence");
+            if value["params"]["start"] == 25 && value["params"]["end"] == 35 {
+                value["params"]["end"] = serde_json::json!(36);
+            }
+            serde_json::to_string(&value).unwrap() + "\n"
+        })
+        .collect::<String>();
     assert_ne!(text, tampered);
     std::fs::write(&file, tampered).unwrap();
 
@@ -623,6 +636,60 @@ fn tree_session_replays_exactly() {
     );
     let entries = basecraft_ops::log::read_all(root).unwrap();
     assert!(entries.iter().any(|e| e.op.name() == "doc.export"));
+    let report = replay::replay(root).unwrap();
+    assert!(report.ok(), "{:#?}", report.problems);
+}
+
+#[test]
+fn sequence_addition_expands_reference_and_replays_with_undo() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let path = root.join("addition.afa");
+    std::fs::write(&path, ">a description\nAC-GT\n>b\nAC-GT\n").unwrap();
+    {
+        let mut session = Session::new(root);
+        let doc = session.open(&path).unwrap();
+        let before = rows_text(&session, doc);
+        assert!(
+            session
+                .apply(
+                    doc,
+                    Op::AlnAddSequences {
+                        rows: vec![("a".into(), "ACTGT".into())],
+                        reference: None,
+                    }
+                )
+                .is_err()
+        );
+        assert_eq!(rows_text(&session, doc), before);
+        session
+            .apply(
+                doc,
+                Op::AlnAddSequences {
+                    rows: vec![("new".into(), "AC-GGT".into())],
+                    reference: Some(vec!["AC-G-T".into(), "AC-G-T".into()]),
+                },
+            )
+            .unwrap();
+        assert_eq!(session.alignment(doc).width(), 6);
+        assert_eq!(session.alignment(doc).row_count(), 3);
+        let added = rows_text(&session, doc);
+        session.undo(doc).unwrap();
+        assert_eq!(rows_text(&session, doc), before);
+        session.redo(doc).unwrap();
+        assert_eq!(rows_text(&session, doc), added);
+        session
+            .apply(
+                doc,
+                Op::AlnAddSequences {
+                    rows: vec![("unaligned".into(), "AA".into())],
+                    reference: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(session.alignment(doc).read(3, 0, 6), b"AA----");
+        session.save(doc, None).unwrap();
+    }
     let report = replay::replay(root).unwrap();
     assert!(report.ok(), "{:#?}", report.problems);
 }
