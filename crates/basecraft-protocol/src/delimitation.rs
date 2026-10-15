@@ -114,6 +114,10 @@ pub struct DelimitationWorkspace {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum DelimitationEdit {
+    /// Import a validated batch without splitting lineage across separate edits.
+    Combine {
+        hypotheses: Vec<Hypothesis>,
+    },
     Add {
         hypothesis: Hypothesis,
     },

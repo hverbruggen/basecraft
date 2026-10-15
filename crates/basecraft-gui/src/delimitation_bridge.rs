@@ -29,13 +29,25 @@ pub mod qobject {
         #[qproperty(f64, threshold)]
         type DelimitationController = super::DelimitationRust;
         #[qinvokable]
+        fn accessible_page(self: &DelimitationController, page: i32) -> QString;
+        #[qinvokable]
         fn document_record(self: &DelimitationController) -> QString;
         #[qinvokable]
         fn record_revision(self: &DelimitationController) -> QString;
         #[qinvokable]
         fn open_file(self: Pin<&mut DelimitationController>, path: &QString) -> bool;
         #[qinvokable]
-        fn attach_tree(self: Pin<&mut DelimitationController>, path: &QString, rooted: bool);
+        fn combine_files(
+            self: Pin<&mut DelimitationController>,
+            paths: &QString,
+            output: &QString,
+        ) -> bool;
+        #[qinvokable]
+        fn attach_tree(
+            self: Pin<&mut DelimitationController>,
+            path: &QString,
+            rooted: bool,
+        ) -> bool;
         #[qinvokable]
         fn activate(self: Pin<&mut DelimitationController>, id: &QString);
         #[qinvokable]
@@ -98,6 +110,9 @@ pub mod qobject {
             rooted: bool,
             settings: &QString,
         );
+        #[qsignal]
+        #[cxx_name = "displayTreeReady"]
+        fn display_tree_ready(self: Pin<&mut DelimitationController>, success: bool);
         #[qinvokable]
         fn cancel_job(self: Pin<&mut DelimitationController>);
         #[qinvokable]
@@ -215,6 +230,22 @@ fn group(members: BTreeSet<String>, label: String) -> Group {
     }
 }
 impl qobject::DelimitationController {
+    pub fn accessible_page(&self, page: i32) -> QString {
+        let state = self.rust();
+        let result =
+            state.session.as_ref().zip(state.doc).map(|(s, d)| {
+                basecraft_viewmodel::accessible::delimitation(s.delimitation(d), page)
+            });
+        QString::from(
+            result
+                .map_or_else(
+                    || json!({"page":0,"pages":1,"text":"No workspace loaded"}),
+                    |p| json!({"page":p.page,"pages":p.pages,"text":p.text}),
+                )
+                .to_string(),
+        )
+    }
+
     pub fn document_record(&self) -> QString {
         crate::provenance_bridge::session_report(self.rust().session.as_ref(), self.rust().doc)
     }
@@ -306,6 +337,11 @@ impl qobject::DelimitationController {
                     })
                     .cloned()
                     .unwrap_or_default();
+                let linked = w
+                    .exchange_fields
+                    .get("basecraft_alignment_snapshot")
+                    .cloned()
+                    .unwrap_or(linked);
                 self.as_mut().set_linked_alignment(QString::from(linked));
                 let active = w
                     .hypotheses
@@ -331,7 +367,36 @@ impl qobject::DelimitationController {
             }
         }
     }
-    pub fn attach_tree(mut self: Pin<&mut Self>, path: &QString, rooted: bool) {
+    pub fn combine_files(mut self: Pin<&mut Self>, paths: &QString, output: &QString) -> bool {
+        let result = (|| -> Result<_, String> {
+            let paths: Vec<PathBuf> =
+                serde_json::from_str(&paths.to_string()).map_err(|e| e.to_string())?;
+            if paths.len() < 2 {
+                return Err("Choose at least two saved species hypothesis files".into());
+            }
+            let output = PathBuf::from(output.to_string());
+            if output.exists() || basecraft_ops::files::tree_sidecar(&output).exists() {
+                return Err("Choose a new filename for the combined hypotheses".into());
+            }
+            let mut session = Session::recoverable(crate::bridge::project_root(&output))
+                .map_err(|e| e.to_string())?;
+            let doc = session.open(&paths[0]).map_err(|e| e.to_string())?;
+            basecraft_ops::delimitation::combine(&mut session, doc, &paths[1..])
+                .map_err(|e| e.to_string())?;
+            session
+                .save(doc, Some(&output))
+                .map_err(|e| e.to_string())?;
+            Ok(())
+        })();
+        match result {
+            Ok(()) => true,
+            Err(error) => {
+                self.as_mut().fail(&error);
+                false
+            }
+        }
+    }
+    pub fn attach_tree(mut self: Pin<&mut Self>, path: &QString, rooted: bool) -> bool {
         let result = (|| -> Result<_, Box<dyn std::error::Error>> {
             let p = PathBuf::from(path.to_string());
             let bytes = std::fs::read(&p)?;
@@ -366,7 +431,7 @@ impl qobject::DelimitationController {
                     Ok(path) => path,
                     Err(e) => {
                         self.fail(&e.to_string());
-                        return;
+                        return false;
                     }
                 };
                 self.as_mut().rust_mut().display_tree = Some(tree.clone());
@@ -394,15 +459,25 @@ impl qobject::DelimitationController {
                 let new_display = Some(retained.to_string_lossy().into_owned());
                 if view.display_tree != new_display {
                     view.display_tree = new_display;
-                    let _ = self.as_mut().edit(DelimitationEdit::SetView { view });
+                    if self
+                        .as_mut()
+                        .edit(DelimitationEdit::SetView { view })
+                        .is_err()
+                    {
+                        return false;
+                    }
                 }
                 if rooted {
                     if let Some(warning) = warning {
                         self.fail(&warning);
                     }
                 }
+                true
             }
-            Err(e) => self.fail(&format!("Cannot attach tree: {e}")),
+            Err(e) => {
+                self.fail(&format!("Cannot attach tree: {e}"));
+                false
+            }
         }
     }
     pub fn activate(mut self: Pin<&mut Self>, id: &QString) {
@@ -538,7 +613,23 @@ impl qobject::DelimitationController {
         })();
         match result {
             Ok(edit) => {
-                let _ = self.edit(edit);
+                let created = match &edit {
+                    DelimitationEdit::Add { hypothesis } => Some(hypothesis.id.clone()),
+                    DelimitationEdit::Derive { id, .. } => Some(id.clone()),
+                    _ => None,
+                };
+                let mut this = self;
+                if this.as_mut().edit(edit).is_ok() {
+                    if let Some(id) = created {
+                        this.as_mut().activate(&QString::from(&id));
+                        let state = this.rust();
+                        if let Some((session, doc)) = state.session.as_ref().zip(state.doc) {
+                            let mut view = session.delimitation(doc).view.clone();
+                            view.visible.push(id);
+                            let _ = this.edit(DelimitationEdit::SetView { view });
+                        }
+                    }
+                }
             }
             Err(e) => self.fail(&e),
         }
@@ -810,8 +901,19 @@ impl qobject::DelimitationController {
                 boundary: "node_age_le_threshold".into(),
             }
         };
+        let created = match &edit {
+            DelimitationEdit::SaveCut { hypothesis, .. } => hypothesis.id.clone(),
+            _ => return,
+        };
         if self.as_mut().edit(edit).is_ok() {
-            self.cancel_cut();
+            self.as_mut().cancel_cut();
+            self.as_mut().activate(&QString::from(&created));
+            let state = self.rust();
+            if let Some((session, doc)) = state.session.as_ref().zip(state.doc) {
+                let mut view = session.delimitation(doc).view.clone();
+                view.visible.push(created);
+                let _ = self.edit(DelimitationEdit::SetView { view });
+            }
         }
     }
     fn history(mut self: Pin<&mut Self>, redo: bool) {
@@ -1006,11 +1108,30 @@ impl qobject::DelimitationController {
         if self.rust().busy {
             return;
         }
+        let display_job = method.to_string().starts_with("display_");
+        let display_rooted = method.to_string() == "display_upgma";
         let result = (|| -> Result<_, String> {
             let r = self.rust();
             let (session, doc) = r.session.as_ref().zip(r.doc).ok_or("No workspace open")?;
+            let workspace = session.delimitation(doc);
+            let expected_alignment = if workspace
+                .exchange_fields
+                .get("basecraft_alignment_snapshot")
+                .is_some_and(|p| p == &input.to_string())
+            {
+                Some(
+                    workspace
+                        .exchange_fields
+                        .get("basecraft_alignment_hash")
+                        .ok_or("Retained alignment hash is missing")?,
+                )
+            } else {
+                None
+            };
             let method = method.to_string();
             if ![
+                "display_upgma",
+                "display_nj",
                 "gmyc_single",
                 "gmyc_multiple",
                 "gmyc_alignment_single",
@@ -1026,17 +1147,26 @@ impl qobject::DelimitationController {
             {
                 return Err("Unknown analysis".into());
             }
-            let output = session
-                .root()
-                .join(format!("analysis-{}.json", ulid::Ulid::generate()));
+            let display_job = method.starts_with("display_");
+            let output = session.root().join(format!(
+                "analysis-{}.{}",
+                ulid::Ulid::generate(),
+                if display_job { "nwk" } else { "json" }
+            ));
             let alignment_pipeline = method.starts_with("gmyc_alignment_");
             let mut job = basecraft_plugin_host::FileJob::from_file(
                 session,
                 doc,
                 Path::new(&input.to_string()),
                 (
-                    &crate::bridge::plugin_dir("delimitation"),
-                    if alignment_pipeline {
+                    &crate::bridge::plugin_dir(if display_job {
+                        "distance"
+                    } else {
+                        "delimitation"
+                    }),
+                    if display_job {
+                        "tree"
+                    } else if alignment_pipeline {
                         "haplotypes"
                     } else {
                         &method
@@ -1049,6 +1179,11 @@ impl qobject::DelimitationController {
                 },
             )
             .map_err(|e| e.to_string())?;
+            if expected_alignment.is_some_and(|hash| hash != &job.input_key.1) {
+                return Err(
+                    "The retained alignment changed; select an intact input explicitly".into(),
+                );
+            }
             let progress = output.with_extension("progress.json");
             let cancel = output.with_extension("cancel");
             job.params.extend([
@@ -1081,6 +1216,16 @@ impl qobject::DelimitationController {
                 {
                     job.params.insert(key, value);
                 }
+            }
+            if display_job {
+                job.params.insert(
+                    "method".into(),
+                    json!(if method == "display_upgma" {
+                        "upgma"
+                    } else {
+                        "njstar"
+                    }),
+                );
             }
             if method == "group_statistics" {
                 let h = session
@@ -1137,7 +1282,10 @@ impl qobject::DelimitationController {
         let (workflow, generation, progress, cancel, id) = match result {
             Ok(job) => job,
             Err(e) => {
-                self.fail(&e);
+                self.as_mut().fail(&e);
+                if display_job {
+                    self.display_tree_ready(false);
+                }
                 return;
             }
         };
@@ -1158,6 +1306,7 @@ impl qobject::DelimitationController {
                     if session.generation(doc) != generation {
                         return Err("Analysis completed for its saved input; workspace changed, so result remains an artifact".into());
                     }
+                    if display_job { return Ok(json!({"display_tree":output})); }
                     let value: Value = serde_json::from_slice(&std::fs::read(&output).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
                     if value.get("workspace").is_some_and(|v|!v.is_null()) {
                         let work: basecraft_protocol::delimitation::DelimitationWorkspace = serde_json::from_value(value["workspace"].clone()).map_err(|e|e.to_string())?;
@@ -1181,6 +1330,13 @@ impl qobject::DelimitationController {
                 ctl.as_mut().rust_mut().job_paths = None;
                 match applied {
                     Ok(value) => {
+                        if display_job {
+                            if let Some(path) = value["display_tree"].as_str() {
+                                let success = ctl.as_mut().attach_tree(&QString::from(path), display_rooted);
+                                ctl.as_mut().display_tree_ready(success);
+                            }
+                            return;
+                        }
                         if let Some(hypotheses)=value["workspace"]["hypotheses"].as_array() {
                             if let Some(first)=hypotheses.first().and_then(|h|h["id"].as_str()) {ctl.as_mut().activate(&QString::from(first));}
                             let inferred_alignment=hypotheses.first().is_some_and(|h|h["provenance"]["parameters"].get("tree_inference").is_some());
@@ -1203,7 +1359,10 @@ impl qobject::DelimitationController {
                         ctl.as_mut().set_message(QString::from("Analysis completed"));
                         ctl.refresh();
                     }
-                    Err(error) => ctl.fail(&error),
+                    Err(error) => {
+                        ctl.as_mut().fail(&error);
+                        if display_job { ctl.display_tree_ready(false); }
+                    },
                 }
             });
         });

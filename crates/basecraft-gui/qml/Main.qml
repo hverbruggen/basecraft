@@ -229,8 +229,7 @@ ApplicationWindow {
 
     function openTextRepresentation() {
         if (!currentView) return
-        // Delimitation embeds the same tree controller as the tree editor.
-        const source = delimitationOpen ? currentView.treeController : current
+        const source = current
         if (!source || typeof source.accessible_page !== "function") return
         textRepresentation.source = source
         textRepresentation.open()
@@ -238,7 +237,7 @@ ApplicationWindow {
     TextRepresentationDialog { id: textRepresentation }
 
     function focusRegion(backward) {
-        const regions = [ribbonTabBar, tree, tabs, currentView].filter(item => item && item.visible && item.enabled)
+        const regions = [ribbonTabBar, tree, tabs, delimitationOpen ? docs.itemAt(tabs.currentIndex) : currentView].filter(item => item && item.visible && item.enabled)
         if (!regions.length) return
         let active = -1
         for (let i = 0; i < regions.length; ++i) {
@@ -263,6 +262,70 @@ ApplicationWindow {
         if (!shell.project_dir.length) shell.use_project_of(path)
         openFiles.append({ path: path, dirty: false, kind: shell.file_kind(path) })
         tabs.currentIndex = openFiles.count - 1
+    }
+
+    property var delimitationSource: null
+    function beginDelimitation(method) {
+        if (!current || current.busy) return
+        delimitationSource = current
+        speciesDialog.show(method, alignmentOpen ? current.file_path : current.linked_alignment || "",
+            treeOpen ? current.file_path : delimitationOpen ? current.display_path : "")
+    }
+    DelimitationAnalysisDialog {
+        id: speciesDialog
+        pathResolver: shell
+        workers: window.localCpuThreads
+        onRequested: (method, input, rooted, settings, displayMethod) => {
+            const source = window.delimitationSource
+            if (!source) return
+            if (window.delimitationOpen && source === window.current) {
+                docs.itemAt(tabs.currentIndex).startAnalysis(method, input, rooted, settings, displayMethod)
+                return
+            }
+            const usesOpenAlignment = window.alignmentOpen && input === source.file_path
+            const path = source.create_delimitation()
+            if (!path.length) return
+            window.openPath(path)
+            const index = tabs.currentIndex
+            Qt.callLater(() => {
+                const document = docs.itemAt(index)
+                if (document && document.kind === "delimitation") {
+                    window.ribbonTabName = "Delimitation"
+                    document.startAnalysis(method, usesOpenAlignment ? document.controller.linked_alignment : input, rooted, settings, displayMethod)
+                }
+            })
+        }
+    }
+    DelimitationController { id: combineController }
+    FileDialog {
+        id: combinePicker
+        title: "Combine saved species hypotheses"
+        fileMode: FileDialog.OpenFiles
+        nameFilters: ["Species hypotheses (*.spart *.spartxml *.spart-xml *.xml)"]
+        onAccepted: {
+            if (selectedFiles.length < 2) { combineError.message = "Choose at least two species hypothesis files."; combineError.open(); return }
+            combinedDestination.open()
+        }
+    }
+    FileDialog {
+        id: combinedDestination
+        title: "Save combined species hypotheses as a new file"
+        fileMode: FileDialog.SaveFile
+        defaultSuffix: "spart"
+        nameFilters: ["Species hypotheses (*.spart)"]
+        onAccepted: {
+            const paths = Array.from(combinePicker.selectedFiles, url => window.localPath(url))
+            const output = window.localPath(selectedFile)
+            if (combineController.combine_files(JSON.stringify(paths), output)) window.openPath(output)
+            else { combineError.message = combineController.message; combineError.open() }
+        }
+    }
+    AppContentDialog {
+        id: combineError
+        property string message: ""
+        title: "Could not combine hypotheses"
+        standardButtons: Dialog.Close
+        body: AppErrorLabel { text: combineError.message; wrapMode: Text.Wrap }
     }
 
     function startTraceReview(paths, reference, target, cutoff = 20, forceNew = false) {
@@ -625,6 +688,16 @@ ApplicationWindow {
                 : modeButton.hovered ? Qt.alpha(shell.foreground, 0.05) : "transparent"
             border.color: modeButton.active || modeButton.visualFocus ? shell.accent : "transparent"
         }
+    }
+    component SpeciesMethodsGroup: RibbonGroup {
+        id: speciesMethods
+        required property string commandSuffix
+        title: "Species delimitation"
+        RibbonButton { commandId: "species.gmyc-" + speciesMethods.commandSuffix; text: "GMYC"; iconName: "delimitation"; enabled: window.current !== null && !window.current.busy; onInvoked: window.beginDelimitation("gmyc") }
+        RibbonButton { commandId: "species.asap-" + speciesMethods.commandSuffix; text: "ASAP"; iconName: "delimitation"; enabled: window.current !== null && !window.current.busy; onInvoked: window.beginDelimitation("asap") }
+        RibbonButton { commandId: "species.ptp-" + speciesMethods.commandSuffix; text: "PTP"; iconName: "delimitation"; enabled: window.current !== null && !window.current.busy; onInvoked: window.beginDelimitation("ptp") }
+        RibbonButton { commandId: "species.manual-" + speciesMethods.commandSuffix; text: "Manual"; iconName: "tree"; enabled: window.current !== null && !window.current.busy; onInvoked: window.beginDelimitation("manual") }
+        RibbonButton { commandId: "species.combine-" + speciesMethods.commandSuffix; text: "Combine"; iconName: "align"; onInvoked: combinePicker.open() }
     }
     component ShortcutsGroup: RibbonGroup {
         title: "Keys"
@@ -989,9 +1062,10 @@ ApplicationWindow {
                 // values and figures.
                 RibbonPage {
                     spacing: 6
+                    SpeciesMethodsGroup { commandSuffix: "tree" }
+                    ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
                         title: "Clade"
-                        RibbonButton { commandId: "ribbon.delimitation-2"; text: "Delimitation…"; iconName: "delimitation"; onInvoked: { const path = window.current.create_delimitation(); if (path.length) window.openPath(path) } }
                         RibbonButton { commandId: "ribbon.name-the-selected-clade-with-a-bar-or-a"; text: "Annotate…"; tip: "Name the selected clade, with a bar or a coloured field"; keys: "Enter"; enabled: window.current !== null && window.current.has_selection === true; onInvoked: cladeEditor.openSelected() }
                         RibbonButton { commandId: "ribbon.root-the-tree-on-the-branch-above-the-selection"; text: "Reroot"; tip: "Root the tree on the branch above the selection"; enabled: window.current !== null && window.current.has_selection === true; onInvoked: window.current.reroot() }
                         RibbonButton { commandId: "ribbon.move-the-root-along-its-branch"; text: "Root position…"; tip: "Move the root along its branch"; onInvoked: rootDialog.ask() }
@@ -1055,10 +1129,7 @@ ApplicationWindow {
                         }
                     }
                     ToolSeparator { Layout.fillHeight: true }
-                    RibbonGroup {
-                        title: "Species delimitation"
-                        RibbonButton { commandId: "ribbon.delimitation"; text: "Delimitation…"; iconName: "delimitation"; onInvoked: { const path = window.current.create_delimitation(); if (path.length) window.openPath(path) } }
-                    }
+                    SpeciesMethodsGroup { commandSuffix: "alignment" }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
                         title: "Maximum likelihood"
@@ -1079,7 +1150,11 @@ ApplicationWindow {
                     ShortcutsGroup {}
                 }
                 RibbonPage {
-                    Label { text: "Create, derive and edit hypotheses in the workspace below" }
+                    SpeciesMethodsGroup { commandSuffix: "workspace" }
+                    RibbonGroup {
+                        title: "Display"
+                        RibbonButton { commandId: "species.display"; text: "Tree / groups…"; iconName: "tree"; enabled: window.current !== null && !window.current.busy; onInvoked: window.beginDelimitation("view") }
+                    }
                     Item { Layout.fillWidth: true }
                     ShortcutsGroup {}
                 }
@@ -1948,7 +2023,8 @@ ApplicationWindow {
     function runDelimSteps(c) {
         while (window.delimPending.length && !c.busy) {
             const step=window.delimPending.shift()
-            if (step.action === "attach") c.attach_tree(step.path,step.rooted)
+            if (step.action === "start") docs.itemAt(tabs.currentIndex).startAnalysis(step.method, step.input, step.rooted || false, JSON.stringify(step.settings || {}), step.display || "existing")
+            else if (step.action === "attach") c.attach_tree(step.path,step.rooted)
             else if (step.action === "select") c.highlight_taxa(JSON.stringify(step.ids))
             else if (step.action === "activate_last") { const work = JSON.parse(c.workspace_json); c.activate(work.hypotheses[work.hypotheses.length-1].id) }
             else if (step.action === "cut") c.preview_cut(step.threshold)
@@ -2115,6 +2191,7 @@ ApplicationWindow {
                 console.log("activity:", shell.activity_log(files.join("\n"), -new Date().getTimezoneOffset()))
             }
             if (arg("--distance-action")) c.distance_action(arg("--distance-action"), arg("--distance-options") || "{}")
+            if (arg("--species-dialog")) window.beginDelimitation(arg("--species-dialog"))
             if (arg("--distance-dialog")) {
                 const dialog = arg("--distance-dialog") === "matrix" ? matrixDialog : arg("--distance-dialog") === "upgma" ? upgmaDialog : njDialog
                 dialog.target = c

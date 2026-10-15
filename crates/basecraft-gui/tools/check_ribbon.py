@@ -41,6 +41,7 @@ def main():
     pages += [
         (alignment, 2, "Alignment"),
         (alignment, 3, "Build phylogeny"),
+        *[(alignment, 3, "Species " + method) for method in ["gmyc", "asap", "ptp", "manual"]],
         (alignment, 3, "Distance matrix"),
         (alignment, 3, "Distance nj"),
         (alignment, 3, "Distance upgma"),
@@ -92,7 +93,7 @@ def main():
                     *(
                         ["--distance-dialog", name.split()[-1]]
                         if name.startswith("Distance ")
-                        else []
+                        else ["--species-dialog", name.split()[-1]] if name.startswith("Species ") else []
                     ),
                 ],
                 env=env,
@@ -157,7 +158,7 @@ def main():
                 assert len(records) == 1, log
                 assert "saved true" in log, log
                 record = records[0]
-                expected = "Build phylogeny" if name.startswith("Distance ") else name
+                expected = "Build phylogeny" if name.startswith(("Distance ", "Species ")) else name
                 assert record["page"] == expected, record
                 assert record["groups"], record
                 caption = record["groups"][0]["caption"]

@@ -26,10 +26,47 @@ FocusScope {
     property var mergeGroups: []
     property bool settingsOpen: false
     property bool detailsOpen: false
+    property var pendingAnalysis: null
+    property bool showGroups: !ctl.display_path.length
+    property alias treeController: tree
+    function startAnalysis(method, input, rooted, settings, displayMethod) {
+        if (ctl.busy) return
+        if (method === "manual" || method === "view") {
+            if (method === "manual") {
+            ctl.action("create", JSON.stringify({name: "Manual species"}))
+            const hypotheses = JSON.parse(ctl.workspace_json).hypotheses || []
+            if (hypotheses.length) ctl.activate(hypotheses[hypotheses.length - 1].id)
+            }
+            if (displayMethod === "upgma" || displayMethod === "nj") {
+                showGroups = false
+                ctl.run_analysis("display_" + displayMethod, input, false, settings)
+            } else if (displayMethod === "existing") { ctl.attach_tree(input, rooted); showGroups = false }
+            else showGroups = true
+            return
+        }
+        if (method === "asap" && (displayMethod === "upgma" || displayMethod === "nj")) {
+            pendingAnalysis = {method: method, input: input, rooted: rooted, settings: settings}
+            ctl.run_analysis("display_" + displayMethod, input, false, settings)
+        } else {
+            showGroups = displayMethod === "none"
+            ctl.run_analysis(method, input, rooted, settings)
+        }
+    }
+    Connections {
+        target: ctl
+        function onDisplayTreeReady(success) {
+            if (success) doc.showGroups = false
+            const pending = doc.pendingAnalysis
+            doc.pendingAnalysis = null
+            if (success && pending) ctl.run_analysis(pending.method, pending.input, pending.rooted, pending.settings)
+        }
+    }
     component WorkspaceButton: AppButton {
+        id: workspaceButton
+        FontMetrics { id: buttonMetrics; font: workspaceButton.font }
         padding: 6
         implicitHeight: Math.max(32, implicitContentHeight + topPadding + bottomPadding)
-        implicitWidth: Math.max(50, contentItem.implicitWidth + 16)
+        implicitWidth: Math.max(50, buttonMetrics.advanceWidth(text) + leftPadding + rightPadding)
     }
     Timer { interval: 250; running: ctl.busy; repeat: true; onTriggered: ctl.poll_job() }
     signal openFile(string path)
@@ -47,12 +84,13 @@ FocusScope {
         anchors.fill: parent
         spacing: 4
         Flow {
+            enabled: !ctl.busy
             Layout.fillWidth: true
             Layout.preferredHeight: childrenRect.height
             spacing: 4
             TextField { id: name; width: Math.max(170, implicitWidth); Accessible.name: "Hypothesis / group name"; placeholderText: "Hypothesis / group name" }
             WorkspaceButton { text: "New"; onClicked: ctl.action("create", JSON.stringify({name:name.text})) }
-            WorkspaceButton { text: "Derive"; enabled: ctl.active_hypothesis.length > 0; onClicked: ctl.action("derive", JSON.stringify({name:name.text})) }
+            WorkspaceButton { text: "Edit copy"; enabled: ctl.active_hypothesis.length > 0; onClicked: ctl.action("derive", JSON.stringify({name:name.text})) }
             WorkspaceButton { text: "Rename"; onClicked: ctl.action("rename",JSON.stringify({name:name.text})) }
             WorkspaceButton { text: "Group selection"; enabled: doc.selection.length > 0; onClicked: ctl.action("group",JSON.stringify({label:name.text})) }
             WorkspaceButton { text: "Merge checked"; enabled: doc.mergeGroups.length > 1; onClicked: { ctl.action("merge",JSON.stringify({groups:doc.mergeGroups,label:name.text})); doc.mergeGroups = [] } }
@@ -61,7 +99,16 @@ FocusScope {
             WorkspaceButton { text: "Cut"; checkable: true; checked: doc.tool === "cut"; enabled: ctl.can_cut; onClicked: doc.tool = "cut" }
             WorkspaceButton { text: "SVG"; onClicked: ctl.export_svg(doc.path + ".svg") }
             WorkspaceButton { text: "Details"; checkable: true; checked: doc.detailsOpen; onClicked: doc.detailsOpen = !doc.detailsOpen }
-            WorkspaceButton { text: doc.settingsOpen ? "Hide analysis settings" : "Analysis settings"; onClicked: doc.settingsOpen = !doc.settingsOpen }
+            WorkspaceButton { text: doc.showGroups ? "Tree view" : "Sequence groups"; enabled: ctl.display_path.length > 0; onClicked: doc.showGroups = !doc.showGroups }
+            WorkspaceButton { text: doc.settingsOpen ? "Hide advanced tools" : "Advanced tools"; onClicked: doc.settingsOpen = !doc.settingsOpen }
+        }
+        RowLayout {
+            Layout.fillWidth: true
+            visible: ctl.busy || ctl.message.length > 0
+            BusyIndicator { running: ctl.busy; visible: running; implicitWidth: 24; implicitHeight: 24 }
+            AppErrorLabel { Layout.fillWidth: true; wrapMode: Text.Wrap; visible: ctl.message_kind === "error"; text: ctl.message }
+            Label { Layout.fillWidth: true; wrapMode: Text.Wrap; visible: ctl.message_kind !== "error"; text: ctl.message }
+            WorkspaceButton { text: "Cancel analysis"; visible: ctl.busy; onClicked: ctl.cancel_job() }
         }
         ScrollView {
             visible: doc.settingsOpen
@@ -175,11 +222,11 @@ FocusScope {
                     anchors { left: parent.left; top: parent.top; bottom: parent.bottom; right: barArea.left }
                     controller: tree
                     annotationEnabled: false
-                    visible: ctl.display_path.length > 0
+                    visible: ctl.display_path.length > 0 && !doc.showGroups
                 }
                 Item {
                     id: cutHandle
-                    visible: doc.tool === "cut" && ctl.can_cut
+                    visible: doc.tool === "cut" && ctl.can_cut && !doc.showGroups
                     readonly property var geometry: JSON.parse(tree.canvas_geometry)
                     x: geometry.root ? geometry.root[0] + (geometry.tips_x - geometry.root[0]) * (1 - ctl.threshold / ctl.root_height) - 7 : 0
                     width: 14; height: treeCanvas.height
@@ -191,9 +238,46 @@ FocusScope {
                         onPositionChanged: event => { if (pressed) ctl.preview_position(tree.canvas_geometry,mapToItem(treeCanvas,event.x,event.y).x) }
                     }
                 }
-                Label { anchors.centerIn: parent; visible: !treeCanvas.visible; text: "Attach a tree or use the specimen table" }
+                ScrollView {
+                    anchors.fill: parent
+                    visible: doc.showGroups || !ctl.display_path.length
+                    contentWidth: availableWidth
+                    ColumnLayout {
+                        width: parent.width
+                        Label { text: "Sequence groups"; font.bold: true }
+                        Label { text: "Select sequences, then choose Group selection to define a species."; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                        Repeater {
+                            model: (doc.workspace.hypotheses || []).filter(h => (doc.workspace.view.visible || []).includes(h.id) || h.id === ctl.active_hypothesis)
+                            delegate: ColumnLayout {
+                                required property var modelData
+                                Layout.fillWidth: true
+                                Label { text: modelData.name; font.bold: true }
+                                Repeater {
+                                    model: modelData.groups
+                                    delegate: ColumnLayout {
+                                        required property var modelData
+                                        Layout.fillWidth: true
+                                        Label { text: modelData.label + " · " + modelData.members.length + " sequences"; font.bold: true }
+                                        Label { text: modelData.members.join(", "); wrapMode: Text.Wrap; Layout.fillWidth: true }
+                                    }
+                                }
+                                Label { text: "Unassigned: " + modelData.unassigned.join(", "); wrapMode: Text.Wrap; Layout.fillWidth: true }
+                            }
+                        }
+                        Repeater {
+                            model: doc.workspace.specimens || []
+                            delegate: CheckBox {
+                                required property var modelData
+                                text: modelData.label
+                                checked: doc.selection.includes(modelData.id)
+                                onClicked: ctl.highlight_taxa(JSON.stringify(checked ? doc.selection.concat([modelData.id]) : doc.selection.filter(id => id !== modelData.id)))
+                            }
+                        }
+                    }
+                }
                 Item {
                     id: barArea
+                    visible: !doc.showGroups && ctl.display_path.length > 0
                     anchors { right: parent.right; top: parent.top; bottom: parent.bottom }
                     readonly property real naturalWidth: (doc.workspace.view ? doc.workspace.view.visible.length : 0) * 36 + 36
                     width: Math.min(naturalWidth, parent.width * 0.45)

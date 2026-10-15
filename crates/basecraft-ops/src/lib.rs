@@ -15,3 +15,5 @@ pub use error::{Error, Result};
 pub use session::{DocId, Session};
 
 pub mod document_record;
+
+pub mod delimitation;

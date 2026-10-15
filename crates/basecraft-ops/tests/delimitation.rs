@@ -219,3 +219,103 @@ fn save_as_xml_replays_the_selected_exchange_format() {
     let report = replay::replay(dir.path()).unwrap();
     assert!(report.ok(), "{:?}", report.problems);
 }
+
+#[test]
+fn combine_is_atomic_undoable_and_replayable() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = dir.path().join("first.spart");
+    let second = dir.path().join("second.spart");
+    std::fs::write(&first, SPART).unwrap();
+    std::fs::write(&second, SPART).unwrap();
+    let mut session = Session::new(dir.path());
+    let doc = session.open(&first).unwrap();
+    let original = session.delimitation(doc).clone();
+    basecraft_ops::delimitation::combine(&mut session, doc, std::slice::from_ref(&second)).unwrap();
+    let combined = session.delimitation(doc).clone();
+    assert_eq!(combined.hypotheses.len(), original.hypotheses.len() * 2);
+    assert_eq!(
+        combined.view.visible,
+        combined
+            .hypotheses
+            .iter()
+            .map(|h| h.id.clone())
+            .collect::<Vec<_>>()
+    );
+    for hypothesis in &combined.hypotheses[original.hypotheses.len()..] {
+        assert!(
+            hypothesis
+                .provenance
+                .parameters
+                .contains_key("combined_source")
+        );
+        assert!(!original.hypotheses.iter().any(|h| h.id == hypothesis.id));
+    }
+    session.undo(doc).unwrap();
+    assert_eq!(session.delimitation(doc), &original);
+    session.redo(doc).unwrap();
+    assert_eq!(session.delimitation(doc), &combined);
+    let output = dir.path().join("combined.spart");
+    session.save(doc, Some(&output)).unwrap();
+    assert_eq!(
+        basecraft_ops::files::load_delimitation(&output).unwrap(),
+        combined
+    );
+    assert_eq!(std::fs::read_to_string(&first).unwrap(), SPART);
+    drop(session);
+    assert!(replay::replay(dir.path()).unwrap().ok());
+}
+
+#[test]
+fn combine_rejects_a_bad_later_source_without_importing_earlier_sources() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = dir.path().join("first.spart");
+    let bad = dir.path().join("bad.spart");
+    std::fs::write(&first, SPART).unwrap();
+    std::fs::write(&bad, "not a species hypothesis file").unwrap();
+    let mut session = Session::new(dir.path());
+    let doc = session.open(&first).unwrap();
+    let original = session.delimitation(doc).clone();
+    assert!(basecraft_ops::delimitation::combine(&mut session, doc, &[first, bad]).is_err());
+    assert_eq!(session.delimitation(doc), &original);
+}
+
+#[test]
+fn combine_preserves_parent_mapping_and_rejects_mismatched_specimens() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = dir.path().join("first.spart");
+    let second = dir.path().join("second.spart");
+    let mismatch = dir.path().join("mismatch.spart");
+    for path in [&first, &second] {
+        std::fs::write(path, SPART).unwrap();
+    }
+    std::fs::write(&mismatch, SPART.replace("\na :", "\nother :")).unwrap();
+    let mut source = Session::new(dir.path());
+    let input = source.open(&second).unwrap();
+    source
+        .apply(
+            input,
+            Op::DelimitationEdit {
+                edit: Box::new(Edit::Derive {
+                    source: "partition-1".into(),
+                    id: "derived".into(),
+                    name: "Manual copy".into(),
+                }),
+            },
+        )
+        .unwrap();
+    source.save(input, None).unwrap();
+    let doc = source.open(&first).unwrap();
+    let original = source.delimitation(doc).clone();
+    assert!(
+        basecraft_ops::delimitation::combine(&mut source, doc, &[second.clone(), mismatch])
+            .is_err()
+    );
+    assert_eq!(source.delimitation(doc), &original);
+    basecraft_ops::delimitation::combine(&mut source, doc, &[second]).unwrap();
+    let imported = &source.delimitation(doc).hypotheses[original.hypotheses.len()..];
+    assert_eq!(
+        imported.last().unwrap().parent.as_ref(),
+        Some(&imported[0].id)
+    );
+    assert_eq!(imported[0].scores, original.hypotheses[0].scores);
+}

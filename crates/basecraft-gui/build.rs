@@ -72,6 +72,7 @@ fn main() {
     let builder = CxxQtBuilder::new_qml_module(QmlModule::new("Basecraft").qml_files([
         "qml/Main.qml",
         "qml/FileTreeDelegate.qml",
+        "qml/DelimitationAnalysisDialog.qml",
         "qml/DocumentRecordDialog.qml",
         "qml/TasksDialog.qml",
         "qml/AppRibbonButton.qml",

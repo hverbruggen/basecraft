@@ -584,7 +584,18 @@ fn empty_workspace(
             display_tree: tree.then(|| request.input.clone()),
             ..DelimitationView::default()
         },
-        exchange_fields: BTreeMap::new(),
+        exchange_fields: if tree {
+            BTreeMap::new()
+        } else {
+            [
+                ("basecraft_alignment_snapshot".into(), request.input.clone()),
+                (
+                    "basecraft_alignment_hash".into(),
+                    request.input_hash.clone(),
+                ),
+            ]
+            .into()
+        },
     })
 }
 

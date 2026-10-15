@@ -111,6 +111,10 @@ fn fail<T>(message: &str) -> Result<T, EditError> {
 pub fn apply(work: &mut DelimitationWorkspace, edit: &DelimitationEdit) -> Result<(), EditError> {
     let mut next = work.clone();
     match edit {
+        DelimitationEdit::Combine { hypotheses } => {
+            next.hypotheses.extend(hypotheses.clone());
+            next.view.visible = next.hypotheses.iter().map(|h| h.id.clone()).collect();
+        }
         DelimitationEdit::Add { hypothesis } => next.hypotheses.push(hypothesis.clone()),
         DelimitationEdit::SaveCut {
             hypothesis,

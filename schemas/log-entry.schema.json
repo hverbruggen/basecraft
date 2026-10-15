@@ -1379,6 +1379,26 @@
       "description": "One atomic edit. Inferred and imported results must first be derived.",
       "oneOf": [
         {
+          "description": "Import a validated batch without splitting lineage across separate edits.",
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "combine"
+            },
+            "hypotheses": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Hypothesis"
+              }
+            }
+          },
+          "required": [
+            "action",
+            "hypotheses"
+          ]
+        },
+        {
           "type": "object",
           "properties": {
             "action": {
