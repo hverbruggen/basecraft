@@ -205,6 +205,18 @@ ApplicationWindow {
         const path = traceOpen && current && current.export_path ? current.export_path : current && current.file_path ? current.file_path : currentPath
         return path.length ? shell.parent_folder_url(path) : shell.local_file_url(shell.project_dir)
     }
+    function projectPickerFolder() {
+        const home = window.localPath(StandardPaths.writableLocation(StandardPaths.HomeLocation))
+        return shell.local_file_url(preferences.project_picker_directory(home))
+    }
+    property var projectDialog: null
+    function openProjectPicker() {
+        if (projectDialog && projectDialog.visible) return
+        // Qt applies FolderDialog.currentFolder to the backend on its first
+        // show only. A fresh native dialog makes every opening use our policy.
+        projectDialog = projectDialogComponent.createObject(window, {currentFolder: projectPickerFolder()})
+        if (projectDialog) projectDialog.open()
+    }
 
     function showActivity() { tasksDialog.open() }
     function localPath(url) { return shell.local_file_path(url) }
@@ -413,7 +425,7 @@ ApplicationWindow {
         text: "Open project…"
         iconName: "project"
         tooltip: "Choose or create a project folder"
-        onTriggered: projectDialog.open()
+        onTriggered: window.openProjectPicker()
     }
     AppCommand {
         id: shortcutsCommand
@@ -1353,12 +1365,18 @@ ApplicationWindow {
         }
     }
 
-    FolderDialog {
-        id: projectDialog
-        title: "Open or create a project folder"
-        currentFolder: window.activeFolder()
-        onVisibleChanged: if (visible) currentFolder = window.activeFolder()
-        onAccepted: window.selectProject(window.localPath(selectedFolder))
+    Component {
+        id: projectDialogComponent
+        FolderDialog {
+            parentWindow: window
+            title: "Open or create a project folder"
+            onAccepted: {
+                window.selectProject(window.localPath(selectedFolder))
+                window.projectDialog = null
+                destroy()
+            }
+            onRejected: { window.projectDialog = null; destroy() }
+        }
     }
 
     SplitView {
@@ -2050,10 +2068,41 @@ ApplicationWindow {
     // --label TEXT [--no-click 1]  --add LOCATION  --extract 1  --hover X,Y
     // --no-sidebar 1  --fit 1  --aln STEPS  --keys KEYS  --shot-delay MS
     // --screenshot FILE
+    // Exercise the actual project command and native picker for integration checks.
+    Timer {
+        id: projectPickerCheck
+        interval: 150
+        repeat: true
+        property var steps: []
+        property string previousAction: ""
+        onTriggered: {
+            if (previousAction.length) console.log("PROJECT_PICKER_AUDIT", JSON.stringify({
+                action: previousAction, folder: projectDialog ? projectDialog.currentFolder.toString() : window.projectPickerFolder().toString(),
+                policyFolder: window.projectPickerFolder().toString(),
+                visible: projectDialog !== null && projectDialog.visible, project: shell.project_dir,
+                historyError: window.recentProjectsError, preferencesError: preferences.error,
+                preferencesReady: window.preferencesReady
+            }))
+            if (!steps.length) { stop(); Qt.quit(); return }
+            const step = steps.shift()
+            previousAction = step.action
+            if (step.action === "open") projectCommand.trigger()
+            else if (step.action === "browse") projectDialog.selectedFolder = shell.local_file_url(step.path)
+            else if (step.action === "choose") projectDialog.selectedFolder = shell.local_file_url(step.path)
+            else if (step.action === "accept") projectDialog.accept()
+            else if (step.action === "reject") projectDialog.reject()
+            else if (step.action === "select") window.selectProject(step.path)
+        }
+    }
     Timer {
         interval: 900
         running: arg("--screenshot") !== undefined
         onTriggered: {
+            if (arg("--project-picker")) {
+                projectPickerCheck.steps = JSON.parse(arg("--project-picker"))
+                projectPickerCheck.start()
+                return
+            }
             const c = window.current
             const v = window.currentView
             if (!c) { console.log("no document open"); shot.start(); return }
