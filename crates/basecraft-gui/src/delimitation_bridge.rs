@@ -1229,6 +1229,16 @@ impl qobject::DelimitationController {
                 return Err("Exact sequence deduplication requires a verified alignment and representative tree. Tree-only preprocessing is unavailable; use alignment GMYC/ASAP, or prepare and root a representative tree with its mapping before fitting. No tips were removed.".into());
             }
             if display_job {
+                // Analysis sampling is independent of the all-specimen display.
+                for key in [
+                    "deduplicate",
+                    "unique_haplotypes",
+                    "mapping",
+                    "replicates",
+                    "candidate_budget",
+                ] {
+                    job.params.remove(key);
+                }
                 job.params.insert(
                     "tree_role".into(),
                     json!("display only; does not change species assignments"),
@@ -1258,6 +1268,8 @@ impl qobject::DelimitationController {
                 let model = job.params.remove("iqtree_model").unwrap_or(json!("MFP"));
                 job.params.insert("model".into(), model);
                 job.params.insert("keep_identical".into(), json!(true));
+                job.params.remove("method");
+                job.params.remove("min_overlap");
             }
             if method == "group_statistics" {
                 let h = session

@@ -20,8 +20,8 @@ class InputOptions(unittest.TestCase):
         self.source = self.root / "input.fa"
         self.source.write_text(">a\nACGT\n>b\nACGT\n>c\nACGA\n>d\nTCGT\n")
         self.output = self.root / "tree.nwk"
-        self.params = dict(input=str(self.source), output=str(self.output), model="JC",
-                           seed=7, threads=1, keep_identical=True, tree_role="display only")
+        self.params = {"input": str(self.source), "output": str(self.output), "model": "JC",
+                       "seed": 7, "threads": 1, "keep_identical": True, "tree_role": "display only"}
 
     def executable(self, body):
         path = self.root / "iqtree"
@@ -47,9 +47,8 @@ class InputOptions(unittest.TestCase):
         for tree in ("(t0:1,t1:1,t2:1);", "(t0:1,t1:1,t2:1,t2:1);"):
             self.output.write_text("previous tree")
             with self.executable("prefix = pathlib.Path(sys.argv[sys.argv.index('-pre')+1])\n"
-                                 f"prefix.with_suffix('.treefile').write_text({tree!r})\n"):
-                with self.assertRaisesRegex(RuntimeError, "specimen labels"):
-                    iqtree_plugin.tree(None, self.params)
+                                 f"prefix.with_suffix('.treefile').write_text({tree!r})\n"), self.assertRaisesRegex(RuntimeError, "specimen labels"):
+                iqtree_plugin.tree(None, self.params)
             self.assertEqual(self.output.read_text(), "previous tree")
 
     def test_cancellation_stops_process_without_output(self):
@@ -66,9 +65,8 @@ class InputOptions(unittest.TestCase):
         self.assertFalse(self.output.exists())
 
     def test_missing_tool_and_pre_cancel_fail_usefully(self):
-        with patch.object(iqtree_plugin, "executable", side_effect=FileNotFoundError("Install IQ-TREE")):
-            with self.assertRaisesRegex(FileNotFoundError, "Install IQ-TREE"):
-                iqtree_plugin.tree(None, self.params)
+        with patch.object(iqtree_plugin, "executable", side_effect=FileNotFoundError("Install IQ-TREE")), self.assertRaisesRegex(FileNotFoundError, "Install IQ-TREE"):
+            iqtree_plugin.tree(None, self.params)
         cancel = self.root / "cancel"
         cancel.touch()
         self.params["cancel_file"] = str(cancel)
