@@ -76,6 +76,19 @@ Item {
         selectedName: "File"
         onSelected: name => selectedName = name
     }
+    Component {
+        id: fractionalRibbon
+        Ribbon {
+            width: 320
+            height: implicitHeight
+            RibbonPage {
+                RibbonGroup {
+                    objectName: "fractionalGroup"
+                    title: ""
+                }
+            }
+        }
+    }
     TestCase {
         name: "Ribbon"
         when: windowShown
@@ -89,7 +102,9 @@ Item {
             host.dark = false
             command.enabled = true
             failOnWarning(/Binding loop/)
-            waitForPolish(ribbon)
+            // The Control itself has no pending polish; its nested layouts do.
+            // Wait for the whole window before inspecting their geometry.
+            verify(waitForPolish(ribbon.Window.window))
         }
         function test_geometry_data() {
             const rows = []
@@ -104,6 +119,23 @@ Item {
         function test_action_toolbar_is_compact() {
             verify(actions.implicitHeight < 50, "style background must not force 40-pixel toolbar buttons")
         }
+        function test_fractional_caption_width_data() {
+            // Exercise both sides of half a pixel independently of installed fonts.
+            return [{tag: "below-half", width: 32.21875}, {tag: "above-half", width: 32.78125}]
+        }
+        function test_fractional_caption_width(data) {
+            const control = createTemporaryObject(fractionalRibbon, host)
+            verify(control)
+            const group = findChild(control, "fractionalGroup")
+            const caption = group.children.find(child => child instanceof Label && child.text === group.title)
+            verify(caption)
+            // Fractional padding gives the empty caption a deterministic natural width.
+            caption.leftPadding = data.width
+            verify(waitForPolish(control.Window.window))
+            compare(group.implicitWidth, 33, "group must request the next whole pixel")
+            verify(group.width >= caption.implicitWidth, "group must reserve enough pixels for its caption")
+            verify(caption.width >= caption.implicitWidth, "caption must retain its natural width")
+        }
         function test_geometry(data) {
             ribbon.width = data.width
             host.textSize = data.font
@@ -111,13 +143,14 @@ Item {
             host.rtl = data.rtl
             host.dark = data.dark
             host.longLabels = true
-            waitForPolish(ribbon)
+            verify(waitForPolish(ribbon.Window.window))
             verify(page.height >= page.implicitHeight, "page must fit its natural height")
             for (const group of [actions, fields, progress, last]) {
                 fuzzyCompare(group.height, actions.height, 1)
                 fuzzyCompare(group.captionY, actions.captionY, 1)
                 fuzzyCompare(group.bodyCenterY, actions.bodyCenterY, 1)
-                verify(group.width >= group.implicitWidth, "no clipped controls/captions")
+                verify(group.width >= group.implicitWidth,
+                       `no clipped controls/captions: ${group.title} width=${group.width} implicitWidth=${group.implicitWidth} pageWidth=${page.width} pageImplicitWidth=${page.implicitWidth}`)
                 const pos = group.mapToItem(ribbon, 0, 0)
                 verify(pos.y + group.height <= ribbon.height, "caption below clip edge")
             }
@@ -126,7 +159,7 @@ Item {
         }
         function test_keyboard_reveals_overflow_fields() {
             ribbon.width = 180
-            waitForPolish(ribbon)
+            verify(waitForPolish(ribbon.Window.window))
             verify(ribbon.overflowing)
             workers.forceActiveFocus(Qt.TabFocusReason)
             tryVerify(() => ribbon.scrollPosition > 0)
@@ -145,16 +178,16 @@ Item {
         function test_page_change_resets_scroll_and_height() {
             host.busy = true
             ribbon.width = 180
-            waitForPolish(ribbon)
+            verify(waitForPolish(ribbon.Window.window))
             const tall = ribbon.height
             help.forceActiveFocus()
             tryVerify(() => ribbon.scrollPosition > 0)
             ribbon.currentIndex = 1
-            waitForPolish(ribbon)
+            verify(waitForPolish(ribbon.Window.window))
             compare(ribbon.scrollPosition, 0)
             verify(ribbon.height < tall)
             ribbon.currentIndex = -1
-            waitForPolish(ribbon)
+            verify(waitForPolish(ribbon.Window.window))
             compare(ribbon.currentPage, null)
         }
         function findActionButton(item, action) {
