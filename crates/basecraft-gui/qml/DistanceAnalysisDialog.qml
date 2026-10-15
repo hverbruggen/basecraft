@@ -1,9 +1,8 @@
 import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
-import org.kde.kirigami as Kirigami
 
-AppFormDialog {
+AppContentDialog {
     id: dialog
     required property string kind
     property var target: null
@@ -21,12 +20,131 @@ AppFormDialog {
         }
         return p
     }
-    AppComboBox { objectName: "distanceModel"; Kirigami.FormData.label: "DNA model"; id: distanceModel; model: ["p", "jc69", "k2p"]; currentIndex: dialog.kind === "matrix" ? 0 : 2 }
-    SpinBox { Kirigami.FormData.label: "Minimum shared sites"; id: distanceOverlap; from: 1; to: 100000000; value: 1; editable: true }
-    AppComboBox { objectName: "distanceMethod"; Kirigami.FormData.label: "Missing-distance method"; id: distanceMethod; model: ["njstar", "sorted", "fourpoint", "mvrstar"]; visible: dialog.kind === "nj"; enabled: !distanceBootstrap.checked }
-    CheckBox { objectName: "distanceBootstrap"; id: distanceBootstrap; Kirigami.FormData.label: "Support"; text: "Bootstrap support"; visible: dialog.kind !== "matrix"; onCheckedChanged: if (checked && dialog.kind === "nj") distanceMethod.currentIndex = 1 }
-    SpinBox { Kirigami.FormData.label: "Bootstrap replicates"; id: bootstrapReplicates; from: 1; to: 1000000; value: 1000; editable: true; visible: dialog.kind !== "matrix"; enabled: distanceBootstrap.checked }
-    SpinBox { Kirigami.FormData.label: "Bootstrap seed"; id: bootstrapSeed; from: 0; to: 2147483647; value: 1; editable: true; visible: dialog.kind !== "matrix"; enabled: distanceBootstrap.checked }
-    Label { Kirigami.FormData.isSection: true; Layout.fillWidth: true; wrapMode: Text.Wrap; visible: dialog.kind !== "matrix"; text: "Bootstrap uses complete distances; any failed replicate withholds support." }
-    Label { Kirigami.FormData.isSection: true; Layout.fillWidth: true; wrapMode: Text.Wrap; text: (dialog.kind === "upgma" ? "UPGMA requires complete distances within each connected group.\n" : "") + "Gaps and ambiguous residues are excluded pairwise." }
+    body: ColumnLayout {
+        spacing: 10
+        AppFormRow {
+            objectName: "distanceSettings"
+            ColumnLayout {
+                Layout.minimumWidth: 0
+                Label {
+                    id: modelLabel
+                    text: "DNA model"
+                    Layout.fillWidth: true
+                    wrapMode: Text.Wrap
+                }
+                AppComboBox {
+                    id: distanceModel
+                    objectName: "distanceModel"
+                    Accessible.labelledBy: modelLabel
+                    Accessible.name: modelLabel.text
+                    model: ["p", "jc69", "k2p"]
+                    currentIndex: dialog.kind === "matrix" ? 0 : 2
+                }
+            }
+            ColumnLayout {
+                Layout.minimumWidth: 0
+                Label {
+                    id: overlapLabel
+                    text: "Minimum shared sites"
+                    Layout.fillWidth: true
+                    wrapMode: Text.Wrap
+                }
+                AppSpinBox {
+                    id: distanceOverlap
+                    objectName: "distanceOverlap"
+                    Accessible.labelledBy: overlapLabel
+                    Accessible.name: overlapLabel.text
+                    from: 1
+                    to: 100000000
+                    value: 1
+                    editable: true
+                }
+            }
+        }
+        ColumnLayout {
+            visible: dialog.kind === "nj"
+            Layout.fillWidth: true
+            Layout.minimumWidth: 0
+            Label {
+                id: methodLabel
+                text: "Missing-distance method"
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+            }
+            AppComboBox {
+                id: distanceMethod
+                objectName: "distanceMethod"
+                Accessible.labelledBy: methodLabel
+                Accessible.name: methodLabel.text
+                model: ["njstar", "sorted", "fourpoint", "mvrstar"]
+                enabled: !distanceBootstrap.checked
+            }
+        }
+        AppFormRow {
+            objectName: "bootstrapSettings"
+            visible: dialog.kind !== "matrix"
+            AppCheckBox {
+                id: distanceBootstrap
+                objectName: "distanceBootstrap"
+                Layout.minimumWidth: 0
+                text: "Bootstrap"
+                Accessible.name: "Bootstrap support"
+                onCheckedChanged: if (checked && dialog.kind === "nj")
+                    distanceMethod.currentIndex = 1
+            }
+            ColumnLayout {
+                enabled: distanceBootstrap.checked
+                Layout.minimumWidth: 0
+                Label {
+                    id: replicatesLabel
+                    text: "Replicates"
+                    Layout.fillWidth: true
+                    wrapMode: Text.Wrap
+                }
+                AppSpinBox {
+                    id: bootstrapReplicates
+                    objectName: "bootstrapReplicates"
+                    Accessible.labelledBy: replicatesLabel
+                    Accessible.name: "Bootstrap " + replicatesLabel.text.toLowerCase()
+                    from: 1
+                    to: 1000000
+                    value: 1000
+                    editable: true
+                }
+            }
+            ColumnLayout {
+                enabled: distanceBootstrap.checked
+                Layout.minimumWidth: 0
+                Label {
+                    id: seedLabel
+                    text: "Seed"
+                    Layout.fillWidth: true
+                    wrapMode: Text.Wrap
+                }
+                AppSpinBox {
+                    id: bootstrapSeed
+                    objectName: "bootstrapSeed"
+                    Accessible.labelledBy: seedLabel
+                    Accessible.name: "Bootstrap " + seedLabel.text.toLowerCase()
+                    from: 0
+                    to: 2147483647
+                    value: 1
+                    editable: true
+                }
+            }
+        }
+        Label {
+            Layout.preferredWidth: 1
+            Layout.fillWidth: true
+            wrapMode: Text.Wrap
+            visible: dialog.kind !== "matrix"
+            text: "Bootstrap uses complete distances; any failed replicate withholds support."
+        }
+        Label {
+            Layout.preferredWidth: 1
+            Layout.fillWidth: true
+            wrapMode: Text.Wrap
+            text: (dialog.kind === "upgma" ? "UPGMA requires complete distances within each connected group.\n" : "") + "Gaps and ambiguous residues are excluded pairwise."
+        }
+    }
 }
