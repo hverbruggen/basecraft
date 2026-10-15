@@ -22,8 +22,8 @@ def trim(snapshot, params):
     with tempfile.TemporaryDirectory(prefix="basecraft-trimal-") as work:
         renamed, output = Path(work) / "input.fa", Path(work) / "output.fa"
         renamed.write_text("".join(f">t{i}\n{s}\n" for i, (_, s) in enumerate(records)))
-        run = subprocess.run([exe, "-in", str(renamed), "-out", str(output),
-                              "-fasta", "-" + method], capture_output=True, text=True, check=False)
+        argv = [exe, "-in", str(renamed), "-out", str(output), "-fasta", "-" + method]
+        run = subprocess.run(argv, capture_output=True, text=True, check=False)
         if run.returncode or not output.exists():
             raise RuntimeError(run.stderr.strip() or "trimAl produced no alignment")
         trimmed = read_alignment(output)
@@ -34,7 +34,8 @@ def trim(snapshot, params):
     version = subprocess.run([exe, "--version"], capture_output=True, text=True, check=False)
     return {"ops": [], "outputs": [str(target)],
             "message": f"Trimmed {len(records[0][1])} to {len(trimmed[0][1])} columns ({method})",
-            "tool": {"name": "trimAl", "version": (version.stdout or version.stderr).strip()}}
+            "tool": {"name": "trimAl", "version": (version.stdout or version.stderr).strip()},
+            "execution": {"argv": argv, "resolved_parameters": {"method": method}, "preprocessing": ["Sequence identifiers mapped to neutral t0..tN identifiers and restored after trimming"], "environment": {}, "methods_template": "trimal.trim.v1", "methods": {"description": "The alignment was trimmed", "citations": ["Capella-Gutierrez et al. (2009), trimAl. https://doi.org/10.1093/bioinformatics/btp348"]}}}
 
 
 if __name__ == "__main__":

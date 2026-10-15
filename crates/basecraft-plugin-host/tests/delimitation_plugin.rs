@@ -50,10 +50,17 @@ fn snapshots_and_terminal_outcomes_survive_success_failure_and_cancel() {
         let outcome = job.run();
         job.record_terminal(&mut session, doc, &outcome, started.elapsed().as_secs_f64())
             .unwrap();
-        let report: Value = serde_json::from_slice(
-            &std::fs::read(format!("{}.run.json", output.display())).unwrap(),
-        )
-        .unwrap();
+        let paths = basecraft_platform::paths::AppPaths::discover().unwrap();
+        let run_directory = paths
+            .state
+            .join("jobs")
+            .join(job.params["job_id"].as_str().unwrap());
+        let retained = std::fs::read(run_directory.join("input.snapshot")).unwrap();
+        assert_eq!(basecraft_io::hash_bytes(&retained), job.input_key.1);
+        let run: Value =
+            serde_json::from_slice(&std::fs::read(run_directory.join("manifest.json")).unwrap())
+                .unwrap();
+        let report = json!({"job": run});
         assert_eq!(
             report["job"]["status"],
             if rooted && !cancel {
@@ -104,7 +111,22 @@ fn exact_identity_precedes_public_tree_inference_and_restores_specimens() {
     )
     .unwrap();
     let plugin = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/delimitation");
-    let native = std::env::var("BASECRAFT_DELIMITATION").unwrap();
+    let native = std::env::var_os("BASECRAFT_DELIMITATION").map_or_else(
+        || {
+            std::env::current_exe()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .join("basecraft-delimitation")
+        },
+        std::path::PathBuf::from,
+    );
+    assert!(
+        native.is_file(),
+        "Build basecraft-delimitation before this integration test"
+    );
     let mut session = Session::new(root.path());
     let doc = session.open(&source).unwrap();
     for (unique, name) in [(true, "unique"), (false, "all")] {

@@ -104,6 +104,7 @@ def tree(snapshot, params):
         "message": f"Built a {model} tree of {len(records)} sequences",
         "outputs": [str(target)],
         "tool": {"name": "fasttree", "version": fasttree_version(exe)},
+        "execution": {"argv": args, "resolved_parameters": {"model": model, "sequence_type": "nucleotide" if nucleotide else "protein", "support": "SH-like local support", "rate_categories": "CAT (tool default)"}, "preprocessing": ["FASTA headers replaced with neutral t0..tN identifiers before execution; original names restored in Newick"], "environment": {}, "methods_template": "fasttree.tree.v1", "methods": {"description": "A phylogenetic tree was inferred", "citations": ["Price et al. (2010), FastTree 2. https://doi.org/10.1371/journal.pone.0009490"]}},
     }
 
 

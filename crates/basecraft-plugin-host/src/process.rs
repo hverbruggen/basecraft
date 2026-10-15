@@ -21,6 +21,7 @@ pub struct PluginProcess {
     child: Child,
     rx: Receiver,
     next_id: u64,
+    cpu_budget: usize,
     _socket_dir: tempfile::TempDir,
 }
 
@@ -61,6 +62,15 @@ impl PluginProcess {
     }
 
     pub fn spawn_with(manifest: &Manifest, python: &Path) -> Result<Self> {
+        Self::spawn_allocated(manifest, python, crate::compute::effective_allocation()?)
+    }
+
+    pub fn spawn_with_allocation(manifest: &Manifest, budget: usize) -> Result<Self> {
+        Self::spawn_allocated(manifest, &python_interpreter(), budget)
+    }
+
+    fn spawn_allocated(manifest: &Manifest, python: &Path, budget: usize) -> Result<Self> {
+        let cpu_budget = budget.clamp(1, crate::compute::available());
         let started = Instant::now();
         let script = manifest.python_entry()?;
         let dir = tempfile::Builder::new()
@@ -69,7 +79,18 @@ impl PluginProcess {
         let socket = dir.path().join("rpc.sock");
         let listener = UnixListener::bind(&socket)?;
         listener.set_nonblocking(true)?;
-        let mut child = Command::new(python)
+        let mut command = Command::new(python);
+        for name in [
+            "BASECRAFT_CPU_THREADS",
+            "OMP_NUM_THREADS",
+            "OPENBLAS_NUM_THREADS",
+            "MKL_NUM_THREADS",
+            "NUMEXPR_NUM_THREADS",
+            "RAYON_NUM_THREADS",
+        ] {
+            command.env(name, cpu_budget.to_string());
+        }
+        let mut child = command
             .arg(&script)
             .env("BASECRAFT_SOCKET", &socket)
             .env("PYTHONPATH", sdk_path())
@@ -103,6 +124,7 @@ impl PluginProcess {
             child,
             rx: Receiver::new(stream),
             next_id: 1,
+            cpu_budget,
             _socket_dir: dir,
         };
         let (result, _) = p.call("initialize", json!({ "protocol": PROTOCOL_VERSION }), &[])?;
@@ -161,6 +183,14 @@ impl PluginProcess {
         params: Value,
         snapshot: Option<&Snapshot>,
     ) -> Result<InvokeResult> {
+        let params = match params {
+            Value::Object(params) => Value::Object(crate::compute::parameters(
+                &self.info.id,
+                params,
+                self.cpu_budget,
+            )),
+            value => value,
+        };
         let req = Invoke {
             operation: operation.to_string(),
             params,

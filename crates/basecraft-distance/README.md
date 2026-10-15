@@ -75,7 +75,7 @@ groups use lexical order. Tree completion never modifies the saved observed cach
 
 ## Basecraft integration
 
-The alignment ribbon's **basecraft-distance** group offers Matrix, NJ and UPGMA.
+The alignment ribbon's **Distance tree** group offers Matrix, NJ and UPGMA.
 The settings popup holds the model, overlap, workers and bootstrap controls.
 Work runs through the existing background public-plugin path, using NJ* for
 incomplete components and optimized NJ for complete ones. Trees, distance cache and

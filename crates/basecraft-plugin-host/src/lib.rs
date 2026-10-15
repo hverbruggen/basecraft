@@ -6,6 +6,7 @@
 //! current document version and applies through the ops session.
 
 pub mod apply;
+pub mod compute;
 pub mod delimitation_pipeline;
 pub mod file_tool;
 pub mod manifest;
