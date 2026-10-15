@@ -3,6 +3,7 @@ use basecraft_platform::{
     paths::AppPaths,
     settings::{Change, Preferences, SettingsStore},
 };
+use cxx_qt::CxxQtType;
 use cxx_qt_lib::QString;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -28,7 +29,9 @@ pub mod qobject {
         #[qinvokable]
         fn project_history(self: &AppSettings) -> QString;
         #[qinvokable]
-        fn remember_project(self: &AppSettings, path: &QString) -> QString;
+        fn remember_project(self: Pin<&mut AppSettings>, path: &QString) -> QString;
+        #[qinvokable]
+        fn project_picker_directory(self: &AppSettings, home: &QString) -> QString;
         #[qinvokable]
         fn project_is_directory(self: &AppSettings, path: &QString) -> bool;
     }
@@ -36,12 +39,14 @@ pub mod qobject {
 pub struct SettingsRust {
     snapshot: QString,
     error: QString,
+    project_picker: ProjectPickerLocation,
 }
 impl Default for SettingsRust {
     fn default() -> Self {
         Self {
             snapshot: snapshot(&Preferences::default()).unwrap_or_default(),
             error: QString::default(),
+            project_picker: ProjectPickerLocation::default(),
         }
     }
 }
@@ -119,8 +124,21 @@ impl qobject::AppSettings {
     fn project_history(&self) -> QString {
         history_reply(load_project_history())
     }
-    fn remember_project(&self, path: &QString) -> QString {
-        history_reply(remember_project_path(Path::new(&path.to_string())))
+    fn remember_project(mut self: Pin<&mut Self>, path: &QString) -> QString {
+        let result = self
+            .as_mut()
+            .rust_mut()
+            .project_picker
+            .opened(Path::new(&path.to_string()))
+            .and_then(|path| remember_project_path(&path));
+        history_reply(result)
+    }
+    fn project_picker_directory(&self, home: &QString) -> QString {
+        let folder = self.project_picker.directory(
+            &load_project_history().unwrap_or_default(),
+            Path::new(&home.to_string()),
+        );
+        QString::from(folder.to_string_lossy().as_ref())
     }
     fn project_is_directory(&self, path: &QString) -> bool {
         Path::new(&path.to_string()).is_dir()
@@ -164,6 +182,58 @@ impl qobject::AppSettings {
 const PROJECT_HISTORY_VERSION: u32 = 1;
 const PROJECT_HISTORY_LIMIT: usize = 10;
 
+#[derive(Default)]
+struct ProjectPickerLocation {
+    last_opened: Option<PathBuf>,
+}
+
+impl ProjectPickerLocation {
+    // Session state follows successful folder opens, even when history cannot
+    // be saved. Failed opens and merely browsing/cancelling a picker leave it alone.
+    fn opened(&mut self, path: &Path) -> Result<PathBuf, String> {
+        let path = project_directory(path)?;
+        self.last_opened = Some(path.clone());
+        Ok(path)
+    }
+
+    fn directory(&self, history: &[PathBuf], home: &Path) -> PathBuf {
+        if let Some(path) = &self.last_opened
+            && path.is_dir()
+        {
+            return path.clone();
+        }
+        let mut usable = history
+            .iter()
+            .filter(|path| path.is_absolute())
+            .filter_map(|path| project_directory(path).ok());
+        let Some(mut common) = usable.next() else {
+            return home.into();
+        };
+        for path in usable {
+            while !path.starts_with(&common) {
+                if !common.pop() {
+                    return home.into();
+                }
+            }
+        }
+        // A filesystem root shared by unrelated projects is no useful starting point.
+        if common.parent().is_none() {
+            home.into()
+        } else {
+            common
+        }
+    }
+}
+
+fn project_directory(path: &Path) -> Result<PathBuf, String> {
+    let canonical = std::fs::canonicalize(path)
+        .map_err(|e| format!("cannot open project {}: {e}", path.display()))?;
+    if !canonical.is_dir() {
+        return Err(format!("project {} is not a folder", canonical.display()));
+    }
+    Ok(canonical)
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 struct ProjectHistory {
     version: u32,
@@ -204,11 +274,7 @@ fn remember_project_path(path: &Path) -> Result<Vec<PathBuf>, String> {
 }
 
 fn remember_project_path_at(path: &Path, file: &Path) -> Result<Vec<PathBuf>, String> {
-    let canonical = std::fs::canonicalize(path)
-        .map_err(|e| format!("cannot open project {}: {e}", path.display()))?;
-    if !canonical.is_dir() {
-        return Err(format!("project {} is not a folder", canonical.display()));
-    }
+    let canonical = project_directory(path)?;
     let mut projects = load_project_history_at(file)?;
     projects.retain(|existing| existing != &canonical);
     projects.insert(0, canonical);
@@ -228,6 +294,103 @@ fn remember_project_path_at(path: &Path, file: &Path) -> Result<Vec<PathBuf>, St
 #[cfg(test)]
 mod project_history_tests {
     use super::*;
+
+    #[test]
+    fn picker_uses_available_directories_and_component_ancestors() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let first = temp.path().join("projects/étude one");
+        let second = temp.path().join("projects/étude two");
+        let lookalike = temp.path().join("projects-other/three");
+        for path in [&home, &first, &second, &lookalike] {
+            std::fs::create_dir_all(path).unwrap();
+        }
+        let file = temp.path().join("not-a-directory");
+        std::fs::write(&file, b"document").unwrap();
+        let picker = ProjectPickerLocation::default();
+        assert_eq!(picker.directory(&[], &home), home);
+        assert_eq!(
+            picker.directory(
+                &[temp.path().join("missing"), file, "relative".into()],
+                &home
+            ),
+            home
+        );
+        assert_eq!(
+            picker.directory(std::slice::from_ref(&first), &home),
+            first.canonicalize().unwrap()
+        );
+        assert_eq!(
+            picker.directory(&[first.clone(), second], &home),
+            temp.path().join("projects").canonicalize().unwrap()
+        );
+        // "projects" and "projects-other" share no directory component.
+        assert_eq!(
+            picker.directory(&[first.clone(), lookalike], &home),
+            temp.path().canonicalize().unwrap()
+        );
+        let root = first.ancestors().last().unwrap().to_path_buf();
+        assert_eq!(picker.directory(&[first, root], &home), home);
+    }
+
+    #[test]
+    fn picker_session_survives_failed_opens_and_history_writes() {
+        let temp = tempfile::tempdir().unwrap();
+        let first = temp.path().join("first");
+        let second = temp.path().join("second");
+        std::fs::create_dir(&first).unwrap();
+        std::fs::create_dir(&second).unwrap();
+        let home = temp.path().join("home");
+        let mut picker = ProjectPickerLocation::default();
+        picker.opened(&first).unwrap();
+        assert!(picker.opened(&temp.path().join("missing")).is_err());
+        assert_eq!(
+            picker.directory(std::slice::from_ref(&second), &home),
+            first.canonicalize().unwrap()
+        );
+        let damaged = temp.path().join("history.json");
+        std::fs::write(&damaged, b"damaged").unwrap();
+        let opened = picker.opened(&second).unwrap();
+        assert!(remember_project_path_at(&opened, &damaged).is_err());
+        assert_eq!(picker.directory(&[], &home), second.canonicalize().unwrap());
+        assert_eq!(std::fs::read(&damaged).unwrap(), b"damaged");
+        std::fs::remove_dir(&second).unwrap();
+        assert_eq!(
+            picker.directory(std::slice::from_ref(&first), &home),
+            first.canonicalize().unwrap()
+        );
+        std::fs::remove_dir(&first).unwrap();
+        assert_eq!(picker.directory(&[], &home), home);
+    }
+
+    #[test]
+    fn unavailable_or_malformed_history_falls_back_without_writing() {
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("history.json");
+        let picker = ProjectPickerLocation::default();
+        let home = temp.path().join("home");
+        assert_eq!(
+            picker.directory(&load_project_history_at(&file).unwrap(), &home),
+            home
+        );
+        assert!(!file.exists());
+        for bytes in [b"damaged".as_slice(), br#"{"version":99,"projects":[]}"#] {
+            std::fs::write(&file, bytes).unwrap();
+            assert!(load_project_history_at(&file).is_err());
+            assert_eq!(
+                picker.directory(&load_project_history_at(&file).unwrap_or_default(), &home),
+                home
+            );
+            assert_eq!(std::fs::read(&file).unwrap(), bytes);
+        }
+        std::fs::remove_file(&file).unwrap();
+        std::fs::create_dir(&file).unwrap();
+        assert!(load_project_history_at(&file).is_err());
+        assert_eq!(
+            picker.directory(&load_project_history_at(&file).unwrap_or_default(), &home),
+            home
+        );
+    }
 
     #[test]
     fn recent_projects_are_deduplicated_and_damaged_history_is_retained() {
