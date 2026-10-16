@@ -163,7 +163,11 @@ fn exact_identity_precedes_public_tree_inference_and_restores_specimens() {
         let output = pipeline.output.clone();
         let outcome = pipeline.record(&mut session, doc);
         if unique {
-            outcome.unwrap();
+            let result = outcome.unwrap();
+            assert_eq!(
+                result.outputs[0],
+                root.path().join("unique.spart").display().to_string()
+            );
             let result: Value = serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
             assert_eq!(
                 result["workspace"]["specimens"].as_array().unwrap().len(),
@@ -431,8 +435,16 @@ fn tree_methods_update_one_canonical_spart_and_export_without_sources() {
     assert_eq!(before, std::fs::read(&canonical).unwrap());
     let issues = basecraft_ops::provenance::verify(&canonical).unwrap();
     assert!(issues.is_empty(), "{issues:?}");
+    let saved_folder = parent.path().join("saved-copy");
+    std::fs::create_dir(&saved_folder).unwrap();
+    let copied = saved_folder.join("species.spart");
+    session.save(doc, Some(&copied)).unwrap();
+    assert_eq!(
+        basecraft_ops::provenance::verify(&copied).unwrap(),
+        Vec::<String>::new()
+    );
     let package = parent.path().join("package");
-    basecraft_ops::provenance::package(&canonical, &package).unwrap();
+    basecraft_ops::provenance::package(&copied, &package).unwrap();
     let expected = session
         .delimitation(doc)
         .hypotheses
@@ -441,6 +453,7 @@ fn tree_methods_update_one_canonical_spart_and_export_without_sources() {
         .collect::<Vec<_>>();
     drop(session);
     std::fs::rename(&root, parent.path().join("unavailable")).unwrap();
+    std::fs::rename(&saved_folder, parent.path().join("saved-unavailable")).unwrap();
     let relocated_package = parent.path().join("relocated-package");
     std::fs::rename(&package, &relocated_package).unwrap();
     let exported = relocated_package.join("species.spart");

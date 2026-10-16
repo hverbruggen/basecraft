@@ -341,6 +341,11 @@ impl PipelineOutcome {
             last.ok_or_else(|| Error::Protocol("pipeline produced no stages".into()))?;
         outputs.sort();
         outputs.dedup();
+        if let Some(primary) = self.primary {
+            if let Some(index) = outputs.iter().position(|p| PathBuf::from(p) == primary) {
+                outputs.swap(0, index);
+            }
+        }
         result.outputs = outputs;
         Ok(result)
     }

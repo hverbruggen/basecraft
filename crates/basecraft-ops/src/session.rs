@@ -1169,6 +1169,45 @@ impl Session {
                     }
                 }
             }
+            if self.is_delimitation(id) {
+                // Species publications retain immutable generated files in their
+                // run. Copied parent records still resolve those checked paths
+                // in the new bundle; clean source references remain references.
+                for entry in std::fs::read_dir(previous_bundle.join("records"))? {
+                    let entry = entry?;
+                    let record: Publication =
+                        serde_json::from_slice(&crate::provenance::read_record(&entry.path())?)?;
+                    for output in record.outputs {
+                        let Some(name) = output.retained else {
+                            continue;
+                        };
+                        if Path::new(&name)
+                            .components()
+                            .any(|c| !matches!(c, std::path::Component::Normal(_)))
+                        {
+                            return Err(invalid("Unsafe retained species output path"));
+                        }
+                        let destination = bundle.join(&name);
+                        if destination.is_file() {
+                            continue;
+                        }
+                        let source = previous_bundle.join(&name);
+                        if basecraft_io::hash_file(&source)? != output.hash {
+                            return Err(invalid("Retained species output changed"));
+                        }
+                        if let Some(parent) = destination.parent() {
+                            std::fs::create_dir_all(parent)?;
+                        }
+                        basecraft_io::write_atomic(&destination, |w| {
+                            std::io::copy(&mut std::fs::File::open(&source)?, w)?;
+                            Ok(())
+                        })?;
+                        if basecraft_io::hash_file(&destination)? != output.hash {
+                            return Err(invalid("Species output changed during Save As"));
+                        }
+                    }
+                }
+            }
         }
         // Save As keeps a live reference to the contributing run's evidence
         // decisions; it does not automatically copy unchanged source files.
@@ -2552,9 +2591,9 @@ impl Session {
         };
         let mut artifacts = Vec::new();
         for path in outputs {
-            let retained = if input.extra.contains_key("species_result")
-                && *path == files::tree_sidecar(target)
-            {
+            let retained = if !input.extra.contains_key("species_result") {
+                None
+            } else if *path == files::tree_sidecar(target) {
                 let hash = basecraft_io::hash_file(path)?;
                 let name = format!("artifacts/{}", hash.trim_start_matches("b3:"));
                 basecraft_io::write_atomic(&run.directory().join(&name), |w| {
