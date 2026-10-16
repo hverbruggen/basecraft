@@ -192,3 +192,48 @@ print(json.dumps(run(sys.argv[1],sys.argv[2],method='gmyc_multiple',analysis_inp
         Vec::<String>::new()
     );
 }
+
+#[test]
+fn distance_matrix_cli_keeps_only_tsv_visible() {
+    let parent = tempfile::tempdir().unwrap();
+    let root = parent.path().join("working");
+    std::fs::create_dir(&root).unwrap();
+    let source = root.join("source.afa");
+    let output = root.join("matrix.tsv");
+    std::fs::write(&source, ">a\nAAAA\n>b\nAAAT\n>c\nAATT\n").unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_basecraft"))
+        .args([
+            "distance",
+            source.to_str().unwrap(),
+            "--matrix",
+            "--output",
+            output.to_str().unwrap(),
+            "--model",
+            "p",
+        ])
+        .env("BASECRAFT_PROFILE_DIR", parent.path().join("profile"))
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let run = basecraft_ops::analysis_store::ArtifactRun::for_result(&output)
+        .unwrap()
+        .unwrap();
+    assert!(run.join("matrix.tsv.distances.json").is_file());
+    assert!(run.join("matrix.tsv.run.json").is_file());
+    assert!(!run.join("submitted.fasta").exists());
+    let mut names: Vec<_> = std::fs::read_dir(&root)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    assert_eq!(names, [".basecraft", "matrix.tsv", "source.afa"]);
+    assert!(
+        basecraft_ops::provenance::verify(&output)
+            .unwrap()
+            .is_empty()
+    );
+}

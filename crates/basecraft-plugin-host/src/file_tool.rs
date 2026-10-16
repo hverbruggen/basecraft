@@ -303,7 +303,9 @@ impl FileJob {
         let referenced = operation == "tree"
             || matches!(
                 (manifest.id.as_str(), operation),
-                ("basecraft.mafft", "align") | ("basecraft.trimal", "trim")
+                ("basecraft.mafft", "align")
+                    | ("basecraft.trimal", "trim")
+                    | ("basecraft.distance", "matrix")
             );
         let artifacts = if referenced {
             let _lock = basecraft_ops::input_evidence::lock()?;
