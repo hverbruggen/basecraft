@@ -1462,7 +1462,11 @@ impl Session {
         // recovery records nor history and never mutates the document.
         let prepared_tree =
             if matches!(op, Op::TreeMidpointRoot {} | Op::TreeMinimumVarianceRoot {}) {
-                let Loaded::Tree(tree) = &self.docs[doc.0].content else {
+                let slot = self
+                    .docs
+                    .get(doc.0)
+                    .ok_or_else(|| invalid("unknown document"))?;
+                let Loaded::Tree(tree) = &slot.content else {
                     return Err(invalid(format!("{} needs a tree", op.name())));
                 };
                 let mut candidate = tree.doc.clone();

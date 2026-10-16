@@ -75,9 +75,14 @@ Newick serialization are iterative, including the 12,001-tip comb regression.
   rerooting can change the descendants of that MRCA. An annotation combining
   a branch label with a bar/field is rejected if those targets would diverge.
 - A branch annotation that cannot name its new unary node with the existing
-  one/two-tip reference is rejected. Placing support on a named internal node
-  is also rejected because the current Newick representation cannot save
-  both. Such refusals leave the document, undo/redo and history unchanged.
+  one/two-tip reference is rejected. Placing support on a tip or a named
+  internal node is also rejected because the current Newick representation
+  cannot save both the name and support. This check covers every rebuilt
+  branch, including a pendant edge formed by suppressing the old root.
+  For example, `(A:1,(B:10,C:1)90:1);` is refused by both automatic methods:
+  suppression would leave support 90 on tip A. No support is dropped or moved
+  to another split, and no artificial carrier is inserted. Such refusals
+  leave the document, undo/redo, history and recovery tracking unchanged.
 - Multiple support sets preserve missing-value `-` placeholders on reload.
   Generic source Newick comments that the existing importer does not model
   are outside the rooting metadata contract.

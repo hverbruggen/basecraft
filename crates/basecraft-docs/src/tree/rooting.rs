@@ -294,14 +294,21 @@ impl TreeDoc {
                 edited.clade = clade;
             }
         }
-        if result.nodes.iter().enumerate().any(|(i, n)| {
-            !n.name.is_empty()
-                && !n.is_tip()
-                && result.supports.iter().any(|s| s.values[i].is_some())
-        }) {
-            return err(
-                "rooting would place support on a named internal node that Newick cannot preserve",
-            );
+        // Newick serializes support only on unnamed internal nodes. Check
+        // every rebuilt branch, not just the newly split root edge: old-root
+        // suppression can also leave support on an unsplit pendant edge.
+        for (i, node) in result.nodes.iter().enumerate() {
+            if !result.supports.iter().any(|set| set.values[i].is_some()) {
+                continue;
+            }
+            if node.is_tip() {
+                return err("rooting would place support on a tip that Newick cannot preserve");
+            }
+            if !node.name.is_empty() {
+                return err(
+                    "rooting would place support on a named internal node that Newick cannot preserve",
+                );
+            }
         }
         result.edited();
         *self = result;
