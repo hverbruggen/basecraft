@@ -547,7 +547,7 @@ fn ptp_and_mptp_keep_upstream_directories_hidden_and_preserve_imported_groups() 
     use std::os::unix::fs::PermissionsExt;
     let fixture = tempfile::tempdir().unwrap();
     let upstream = fixture.path().join("mptp-fixture");
-    std::fs::write(&upstream,r#"#!/usr/bin/env python3
+    std::fs::write(&upstream,r"#!/usr/bin/env python3
 import sys
 from pathlib import Path
 if '--version' in sys.argv:
@@ -556,7 +556,7 @@ else:
     output = sys.argv[sys.argv.index('--output_file')+1]
     rate = 'single' if '--single' in sys.argv else 'multi'
     Path(output+'.txt').write_text('Best score for '+rate+' coalescent rate: -1\nNull-model score: -2\nNumber of delimited species: 2\nLRT: passed\nSpecies 1:\na\nb\nSpecies 2:\nc\nd\n')
-"#).unwrap();
+").unwrap();
     std::fs::set_permissions(&upstream, std::fs::Permissions::from_mode(0o700)).unwrap();
     for method in ["ptp", "mptp"] {
         let root = tempfile::tempdir().unwrap();
@@ -669,4 +669,65 @@ fn concurrent_species_publication_never_replaces_another_run() {
                 .is_file()
         );
     }
+}
+
+#[test]
+fn optional_display_tree_uses_hidden_reference_first_companions() {
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("source.afa");
+    std::fs::write(
+        &source,
+        ">a description\nAAAAA\nAAAAA\n>b\nAAAAAACCAA\n>c\nAAAAGGCCAA\n>d\nAATTGGCCAA\n",
+    )
+    .unwrap();
+    let plugins = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins");
+    let mut session = Session::recoverable(root.path()).unwrap();
+    let input = session.open(&source).unwrap();
+    let canonical = root.path().join("species.spart");
+    let setup = FileJob::from_alignment(
+        &session,
+        input,
+        (&plugins.join("delimitation"), "workspace_alignment"),
+        basecraft_plugin_host::file_tool::AlignmentInput::Aligned,
+        canonical.clone(),
+    )
+    .unwrap();
+    let result = setup.run().unwrap();
+    setup.record(&mut session, input, &result).unwrap();
+    let workspace = session.open(&canonical).unwrap();
+    let display = root.path().join("display.nwk");
+    let mut job = FileJob::from_file(
+        &session,
+        workspace,
+        &source,
+        (&plugins.join("distance"), "tree"),
+        display.clone(),
+    )
+    .unwrap();
+    job.params.extend([
+        ("method".into(), json!("upgma")),
+        ("model".into(), json!("p")),
+        ("min_overlap".into(), json!(1)),
+    ]);
+    let result = job.run().unwrap();
+    job.record(&mut session, workspace, &result).unwrap();
+    assert_eq!(
+        visible_files(root.path()),
+        ["display.nwk", "source.afa", "species.spart"]
+    );
+    assert_eq!(
+        job.input_io().unwrap()["persistent_submitted_copy_bytes"],
+        0
+    );
+    let tree = basecraft_ops::files::load_tree(&display).unwrap();
+    let link = basecraft_ops::links::AlignmentLink::read(&display).unwrap();
+    let snapshot = link.checked_snapshot(&display, &tree.doc).unwrap();
+    assert_eq!(
+        basecraft_io::hash_file(&snapshot).unwrap(),
+        basecraft_io::hash_file(&source).unwrap()
+    );
+    assert_eq!(
+        basecraft_ops::provenance::verify(&display).unwrap(),
+        Vec::<String>::new()
+    );
 }

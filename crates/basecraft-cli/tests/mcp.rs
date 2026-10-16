@@ -159,3 +159,70 @@ fn document_record_describes_unsaved_headless_edits_and_undo() {
     assert_eq!(after["paragraphs"], json!([]));
     assert!(!basecraft_ops::provenance::companion(&dir.path().join("gene.fasta")).exists());
 }
+
+#[test]
+fn species_mcp_uses_the_canonical_workspace_contract() {
+    let parent = tempfile::tempdir().unwrap();
+    let root = parent.path().join("working");
+    std::fs::create_dir(&root).unwrap();
+    std::fs::write(
+        root.join("source.nwk"),
+        "((a:0.1,b:0.1):0.9,(c:0.2,d:0.2):0.8);\n",
+    )
+    .unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_basecraft"))
+        .args(["mcp", root.to_str().unwrap(), "--allow-writes"])
+        .env("BASECRAFT_PROFILE_DIR", parent.path().join("profile"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let messages = [
+        json!({"jsonrpc":"2.0","id":0,"method":"initialize"}),
+        request(1, "open", json!({"path":"source.nwk"})),
+        request(
+            2,
+            "run_tool",
+            json!({"document":0,"tool":"delimitation","output":"species.spart","params":{"method":"workspace_tree"}}),
+        ),
+        request(3, "open", json!({"path":"species.spart"})),
+        request(
+            4,
+            "run_tool",
+            json!({"document":1,"tool":"delimitation","output":"fit.json","params":{"method":"gmyc_single","rooted":true,"analysis_input":"source.nwk"}}),
+        ),
+    ];
+    let mut input = child.stdin.take().unwrap();
+    for message in messages {
+        writeln!(input, "{message}").unwrap();
+    }
+    drop(input);
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    let replies: Vec<Value> = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    for reply in &replies[1..] {
+        assert_eq!(reply["result"]["isError"], false, "{reply}");
+    }
+    let manifest: Value =
+        serde_json::from_str(replies[4]["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        manifest["outputs"][0],
+        root.join("species.spart").to_str().unwrap()
+    );
+    assert!(!root.join("fit.json").exists());
+    assert_eq!(
+        basecraft_ops::files::load_delimitation(&root.join("species.spart"))
+            .unwrap()
+            .hypotheses
+            .len(),
+        1
+    );
+    assert_eq!(
+        basecraft_ops::provenance::verify(&root.join("species.spart")).unwrap(),
+        Vec::<String>::new()
+    );
+}

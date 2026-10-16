@@ -489,7 +489,55 @@ impl FileJob {
             Some((input, &input_stamp)),
             "identity-v1",
         )?;
+        if session.is_delimitation(doc) && operation == "tree" {
+            job.prepare_species_display(input, &input_stamp)?;
+        }
         Ok(job)
+    }
+
+    fn prepare_species_display(
+        &mut self,
+        input: &Path,
+        accepted: &basecraft_protocol::provenance::FileStamp,
+    ) -> Result<()> {
+        use basecraft_ops::{analysis_store::ArtifactRun, input_evidence};
+        if !matches!(
+            Manifest::load(&self.plugin)?.id.as_str(),
+            "basecraft.distance" | "basecraft.iqtree"
+        ) {
+            return Ok(());
+        }
+        let _lock = input_evidence::lock()?;
+        let source = input.canonicalize()?;
+        let stamp = input_evidence::stamp(&source)?;
+        if &stamp != accepted {
+            return Err(Error::Protocol(
+                "Display alignment changed during submission".into(),
+            ));
+        }
+        let run = ArtifactRun::create(&self.output, &self.run_id)?;
+        let input = input_evidence::SubmittedInput {
+            schema_version: 1,
+            source: Some(basecraft_protocol::provenance::InputReference {
+                path: input_evidence::relative(run.directory(), &source)?,
+                hash: self.input_key.1.clone(),
+                stamp,
+                extra: std::collections::BTreeMap::new(),
+            }),
+            submitted_hash: self.input_key.1.clone(),
+            submitted_size: accepted.size,
+            transformation: "identity-v1".into(),
+            state: "referenced".into(),
+            extra: std::collections::BTreeMap::new(),
+        };
+        input_evidence::write_json(&run.artifact("input.json")?, &input)?;
+        input_evidence::write_json(
+            &run.artifact("run.json")?,
+            &json!({"schema_version":1,"id":run.id(),"result":self.output.file_name().and_then(|n|n.to_str()),"status":"prepared"}),
+        )?;
+        input_evidence::register(&run)?;
+        self.artifacts = Some(run);
+        Ok(())
     }
 
     /// Compose a dependent public file operation without accessing a document on
@@ -1530,7 +1578,8 @@ fn file_input_record(
             | "validate_time_tree"
             | "relative_time"
     );
-    if Manifest::load(plugin)?.id == "basecraft.delimitation"
+    let species = Manifest::load(plugin)?.id == "basecraft.delimitation";
+    if (species || operation == "tree")
         && (format.is_none() || tree && input.file_name().is_some_and(|n| n == "submitted.fasta"))
     {
         // Preserved originals and exported content-addressed artifacts need no

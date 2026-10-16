@@ -572,7 +572,13 @@ impl AlignmentLink {
             let alignment = load_alignment(&source)?;
             let mut hashing = crate::files::HashingWriter::new(std::io::sink());
             crate::files::write_alignment(&alignment, &mut hashing)?;
-            if hashing.hash() != self.snapshot_hash {
+            let raw = input.transformation == "identity-v1";
+            let actual = if raw {
+                basecraft_io::hash_file(&source)?
+            } else {
+                hashing.hash()
+            };
+            if actual != self.snapshot_hash {
                 return Err(invalid(
                     "linked input differs from actual submitted alignment",
                 ));
@@ -581,10 +587,11 @@ impl AlignmentLink {
             // canonical cache only on explicit use, after verifying the original;
             // never treat this cache as repair for a missing/changed reference.
             if crate::files::Format::from_path(&source).ok() != Some(crate::files::Format::Fasta)
-                || input
-                    .source
-                    .as_ref()
-                    .is_some_and(|r| r.hash != self.snapshot_hash)
+                || !raw
+                    && input
+                        .source
+                        .as_ref()
+                        .is_some_and(|r| r.hash != self.snapshot_hash)
             {
                 let paths = basecraft_platform::paths::AppPaths::discover()
                     .map_err(|e| invalid(e.to_string()))?;
@@ -597,7 +604,12 @@ impl AlignmentLink {
                     .ok_or_else(|| invalid("invalid submitted input digest"))?;
                 let target = folder.join(format!("{digest}.afa"));
                 basecraft_io::write_atomic(&target, |w| {
-                    crate::files::write_alignment(&alignment, w)
+                    if raw {
+                        std::io::copy(&mut std::fs::File::open(&source)?, w)?;
+                        Ok(())
+                    } else {
+                        crate::files::write_alignment(&alignment, w)
+                    }
                 })?;
                 return Ok(target);
             }

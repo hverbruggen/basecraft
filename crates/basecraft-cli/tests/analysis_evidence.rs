@@ -161,11 +161,11 @@ fn species_cli_and_public_sdk_add_to_one_canonical_workspace() {
             .len(),
         1
     );
-    let sdk = Command::new("python3").args(["-c",r#"
+    let sdk = Command::new("python3").args(["-c",r"
 import json, sys
 from basecraft.delimitation import run
 print(json.dumps(run(sys.argv[1],sys.argv[2],method='gmyc_multiple',analysis_input=sys.argv[3],rooted=True,candidate_budget=100)))
-"#,canonical.to_str().unwrap(),root.join("sdk.json").to_str().unwrap(),source.to_str().unwrap()]).env("BASECRAFT",binary).env("BASECRAFT_PROFILE_DIR",&profile).env("PYTHONPATH",std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../python/src")).output().unwrap();
+",canonical.to_str().unwrap(),root.join("sdk.json").to_str().unwrap(),source.to_str().unwrap()]).env("BASECRAFT",binary).env("BASECRAFT_PROFILE_DIR",&profile).env("PYTHONPATH",std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../python/src")).output().unwrap();
     assert!(
         sdk.status.success(),
         "{}",
