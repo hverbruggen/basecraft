@@ -158,6 +158,11 @@ pub enum DelimitationEdit {
     SetView {
         view: DelimitationView,
     },
+    SetDisplayTree {
+        path: String,
+        hash: String,
+        evidence_run: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]

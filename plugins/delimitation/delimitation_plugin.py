@@ -140,6 +140,16 @@ def invoke(method, params):
                     values["alignment_snapshot"] = alignment_evidence["path"]
                     values["alignment_input_hash"] = alignment_evidence.get("source_hash") or alignment_evidence["submitted_hash"]
                     values["alignment_evidence"] = alignment_evidence
+            if workspace.get("view", {}).get("display_tree") == evidence.get("path"):
+                fields["basecraft_display_evidence_run"] = evidence["run_directory"]
+                fields["basecraft_display_hash"] = evidence.get("source_hash") or input_hash
+            if evidence.get("source_hash") and evidence.get("path"):
+                raw_hash = evidence["source_hash"]
+                metadata["job"]["inputs"][evidence["path"]] = raw_hash
+                for hypothesis in workspace["hypotheses"]:
+                    inputs = hypothesis["provenance"]["inputs"]
+                    if evidence["path"] in inputs:
+                        inputs[evidence["path"]] = raw_hash
             # Retain exact submission identity separately from its raw reference.
             for hypothesis in workspace["hypotheses"]:
                 hypothesis["provenance"]["parameters"]["input_evidence"] = evidence

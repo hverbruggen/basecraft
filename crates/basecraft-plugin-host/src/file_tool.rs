@@ -163,6 +163,15 @@ impl FileJob {
                 PathBuf::from(format!("{}.spart", anchor.display()))
             }
         });
+        let internal_name = format!(
+            "{}-result.{}",
+            self.run_id,
+            if self.operation == "tree" {
+                "nwk"
+            } else {
+                "json"
+            }
+        );
         let record = input_evidence::SubmittedInput {
             schema_version: 1,
             state: if source.is_some() {
@@ -175,7 +184,7 @@ impl FileJob {
             submitted_hash: self.input_key.1.clone(),
             submitted_size: std::fs::metadata(&self.input)?.len(),
             transformation: transformation.into(),
-            extra: std::collections::BTreeMap::new(),
+            extra: [("species_result".into(), json!(internal_name))].into(),
         };
         input_evidence::write_json(&run.directory().join("input.json"), &record)?;
         input_evidence::write_json(
@@ -183,15 +192,7 @@ impl FileJob {
             &json!({"schema_version":1,"id":self.run_id,"result":anchor.file_name().and_then(|n| n.to_str()),"status":"prepared"}),
         )?;
         input_evidence::register(&run)?;
-        self.output = run.artifact(&format!(
-            "{}-result.{}",
-            self.run_id,
-            if self.operation == "tree" {
-                "nwk"
-            } else {
-                "json"
-            }
-        ))?;
+        self.output = run.artifact(&internal_name)?;
         self.source_hash = record
             .source
             .as_ref()
@@ -537,6 +538,10 @@ impl FileJob {
                             &parent.directory().join(&source.path).canonicalize()?,
                         )?;
                     }
+                    inherited.extra.insert(
+                        "species_result".into(),
+                        json!(job.output.file_name().and_then(|n| n.to_str())),
+                    );
                     basecraft_ops::input_evidence::write_json(
                         &run.directory().join("input.json"),
                         &inherited,

@@ -825,7 +825,55 @@ impl Session {
                     Ok(())
                 })?;
                 if let Some(run) = &new_run {
+                    let input = crate::input_evidence::SubmittedInput {
+                        schema_version: 1,
+                        source: None,
+                        submitted_hash: main_hash.clone(),
+                        submitted_size: std::fs::metadata(&target)?.len(),
+                        transformation: "identity-v1".into(),
+                        state: "generated".into(),
+                        extra: std::collections::BTreeMap::new(),
+                    };
+                    basecraft_io::write_atomic(&run.artifact("submitted.fasta")?, |w| {
+                        std::io::copy(&mut std::fs::File::open(&target)?, w)?;
+                        Ok(())
+                    })?;
+                    crate::input_evidence::write_json(&run.artifact("input.json")?, &input)?;
+                    crate::input_evidence::write_json(
+                        &run.artifact("run.json")?,
+                        &serde_json::json!({"schema_version":1,"id":run.id(),"result":target.file_name().and_then(|n| n.to_str()),"status":"saved"}),
+                    )?;
+                    crate::input_evidence::register(run)?;
                     run.bind(&target)?;
+                }
+                if let Some(run) = crate::analysis_store::ArtifactRun::for_result(&target)? {
+                    let mut input = crate::input_evidence::read_input(&run)?;
+                    let mut upstream = input
+                        .extra
+                        .get("upstream")
+                        .and_then(serde_json::Value::as_array)
+                        .cloned()
+                        .unwrap_or_default();
+                    for dependency in crate::delimitation::dependencies(work)? {
+                        let dependency = dependency.canonicalize()?;
+                        if dependency == run {
+                            continue;
+                        }
+                        let bytes =
+                            crate::provenance::read_record(&dependency.join("manifest.json"))?;
+                        let publication: basecraft_protocol::provenance::Publication =
+                            serde_json::from_slice(&bytes)?;
+                        let reference = serde_json::json!({"bundle":crate::input_evidence::relative(&run, &dependency)?,"id":publication.id,"hash":basecraft_io::hash_bytes(&bytes)});
+                        if !upstream.contains(&reference) {
+                            upstream.push(reference);
+                        }
+                    }
+                    if !upstream.is_empty() {
+                        input
+                            .extra
+                            .insert("upstream".into(), serde_json::json!(upstream));
+                    }
+                    crate::input_evidence::write_json(&run.join("input.json"), &input)?;
                 }
                 hashes.push((self.relative(&target), main_hash));
                 hashes.push((self.relative(&sidecar), side_hash));
@@ -2389,7 +2437,12 @@ impl Session {
             ArtifactRevision, Completeness, EditActivity, Publication,
         };
         let mut input = crate::input_evidence::read_input(run.directory())?;
-        let mut upstream = Vec::new();
+        let mut upstream = input
+            .extra
+            .get("upstream")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
         for (bundle, origin) in &snapshot.origins {
             let mut bytes = serde_json::to_vec_pretty(origin)?;
             bytes.push(b'\n');
@@ -2446,7 +2499,11 @@ impl Session {
                 )?,
                 hash: basecraft_io::hash_file(path)?,
                 size: std::fs::metadata(path)?.len(),
-                retained: None,
+                retained: path
+                    .strip_prefix(run.directory())
+                    .ok()
+                    .and_then(|p| p.to_str())
+                    .map(str::to_owned),
                 reference: None,
             });
         }

@@ -319,3 +319,131 @@ fn combine_preserves_parent_mapping_and_rejects_mismatched_specimens() {
     );
     assert_eq!(imported[0].scores, original.hypotheses[0].scores);
 }
+
+#[test]
+fn hidden_workspace_moves_with_its_folder_and_passive_open_writes_nothing() {
+    let parent = tempfile::tempdir().unwrap();
+    let root = parent.path().join("original");
+    std::fs::create_dir(&root).unwrap();
+    let path = root.join("species.spart");
+    let tree = root.join("tree.nwk");
+    std::fs::write(&path, SPART).unwrap();
+    std::fs::write(&tree, "((a:1,b:1):1,(c:1,d:1):1);\n").unwrap();
+    let mut session = Session::new(&root);
+    let doc = session.open(&path).unwrap();
+    assert!(!root.join(".basecraft").exists());
+    let hash = basecraft_io::hash_file(&tree).unwrap();
+    let run = basecraft_ops::delimitation::reference_input(&path, &tree, &hash).unwrap();
+    session
+        .apply(
+            doc,
+            Op::DelimitationEdit {
+                edit: Box::new(Edit::SetDisplayTree {
+                    path: tree.display().to_string(),
+                    hash,
+                    evidence_run: run.directory().display().to_string(),
+                }),
+            },
+        )
+        .unwrap();
+    session.save(doc, None).unwrap();
+    assert!(!root.join("species.spart.basecraft.json").exists());
+    assert!(!root.join("species.spart.provenance").exists());
+    assert!(
+        basecraft_ops::files::tree_sidecar(&path).starts_with(root.join(".basecraft/analyses-v1"))
+    );
+    session.undo(doc).unwrap();
+    assert!(session.delimitation(doc).view.display_tree.is_none());
+    session.redo(doc).unwrap();
+    drop(session);
+    let replay = replay::replay(&root).unwrap();
+    assert!(replay.ok(), "{:?}", replay.problems);
+    let moved = parent.path().join("moved");
+    std::fs::rename(&root, &moved).unwrap();
+    let work = basecraft_ops::files::load_delimitation(&moved.join("species.spart")).unwrap();
+    assert_eq!(
+        basecraft_ops::delimitation::checked_display_tree(&work)
+            .unwrap()
+            .unwrap()
+            .canonicalize()
+            .unwrap(),
+        moved.join("tree.nwk")
+    );
+    let before = std::fs::read(basecraft_ops::files::tree_sidecar(
+        &moved.join("species.spart"),
+    ))
+    .unwrap();
+    let mut reopened = Session::unlogged(&moved);
+    reopened.open(&moved.join("species.spart")).unwrap();
+    assert_eq!(
+        before,
+        std::fs::read(basecraft_ops::files::tree_sidecar(
+            &moved.join("species.spart")
+        ))
+        .unwrap()
+    );
+}
+
+#[test]
+fn damaged_species_binding_refuses_legacy_fallback_and_foreign_store_refuses_save() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("species.spart");
+    std::fs::write(&path, SPART).unwrap();
+    let mut session = Session::unlogged(root.path());
+    let doc = session.open(&path).unwrap();
+    std::fs::create_dir_all(root.path().join(".basecraft/analyses-v1")).unwrap();
+    assert!(session.save(doc, None).is_err());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), SPART);
+    assert!(!root.path().join("species.spart.basecraft.json").exists());
+    let safe = tempfile::tempdir().unwrap();
+    let path = safe.path().join("species.spart");
+    std::fs::write(&path, SPART).unwrap();
+    let mut session = Session::unlogged(safe.path());
+    let doc = session.open(&path).unwrap();
+    session.save(doc, None).unwrap();
+    let bindings = safe.path().join(".basecraft/analyses-v1/bindings");
+    for entry in std::fs::read_dir(bindings).unwrap() {
+        std::fs::write(entry.unwrap().path(), "broken").unwrap();
+    }
+    assert!(basecraft_ops::files::load_delimitation(&path).is_err());
+}
+
+#[test]
+fn referenced_display_preserve_copy_is_idempotent_and_never_uses_changed_bytes() {
+    use basecraft_ops::input_evidence::{SavePolicy, conflicts, resolve};
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("species.spart");
+    let tree = root.path().join("tree.nwk");
+    std::fs::write(&path, SPART).unwrap();
+    let original = "((a:1,b:1):1,(c:1,d:1):1);\n";
+    std::fs::write(&tree, original).unwrap();
+    let hash = basecraft_io::hash_file(&tree).unwrap();
+    let run = basecraft_ops::delimitation::reference_input(&path, &tree, &hash).unwrap();
+    let mut work = basecraft_io::spart::parse_text(SPART).unwrap();
+    basecraft_docs::delimitation::apply(
+        &mut work,
+        &Edit::SetDisplayTree {
+            path: tree.display().to_string(),
+            hash,
+            evidence_run: run.directory().display().to_string(),
+        },
+    )
+    .unwrap();
+    let conflict = conflicts(&tree).unwrap();
+    assert!(resolve(&conflict, SavePolicy::Cancel).is_err());
+    resolve(&conflict, SavePolicy::PreserveCopy).unwrap();
+    std::fs::write(&tree, "(changed:1,bytes:1);\n").unwrap();
+    resolve(&conflict, SavePolicy::PreserveCopy).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(
+            basecraft_ops::delimitation::checked_display_tree(&work)
+                .unwrap()
+                .unwrap()
+        )
+        .unwrap(),
+        original
+    );
+    std::fs::write(run.directory().join("preserved-input"), "damaged").unwrap();
+    assert!(resolve(&conflict, SavePolicy::PreserveCopy).is_err());
+    assert!(basecraft_ops::delimitation::checked_display_tree(&work).is_err());
+}

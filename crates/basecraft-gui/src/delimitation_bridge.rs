@@ -398,7 +398,14 @@ impl qobject::DelimitationController {
     }
     pub fn attach_tree(mut self: Pin<&mut Self>, path: &QString, rooted: bool) -> bool {
         let result = (|| -> Result<_, Box<dyn std::error::Error>> {
-            let p = PathBuf::from(path.to_string());
+            let mut p = PathBuf::from(path.to_string());
+            if let Some((session, doc)) = self.rust().session.as_ref().zip(self.rust().doc) {
+                let work = session.delimitation(doc);
+                if work.view.display_tree.as_deref() == Some(path.to_string().as_str()) {
+                    p = basecraft_ops::delimitation::checked_display_tree(work)?
+                        .ok_or("No display tree")?;
+                }
+            }
             let bytes = std::fs::read(&p)?;
             let trees = basecraft_io::newick::parse_trees(std::str::from_utf8(&bytes)?)?;
             if trees.len() != 1 {
@@ -416,7 +423,7 @@ impl qobject::DelimitationController {
                 let warning = time.as_ref().err().map(ToString::to_string);
                 if let Ok(time) = time {
                     let height = time.root_height;
-                    self.as_mut().rust_mut().time_tree = Some((tree, time, hash));
+                    self.as_mut().rust_mut().time_tree = Some((tree, time, hash.clone()));
                     self.as_mut().set_can_cut(true);
                     self.as_mut().set_root_height(height);
                 } else {
@@ -425,21 +432,41 @@ impl qobject::DelimitationController {
                 }
                 self.as_mut()
                     .set_display_path(QString::from(retained.to_string_lossy().as_ref()));
-                let mut view = {
-                    let r = self.rust();
-                    r.session
-                        .as_ref()
-                        .unwrap()
-                        .delimitation(r.doc.unwrap())
+                let changed = {
+                    let state = self.rust();
+                    let session = state.session.as_ref().unwrap();
+                    session
+                        .delimitation(state.doc.unwrap())
                         .view
-                        .clone()
+                        .display_tree
+                        .as_deref()
+                        != Some(retained.to_string_lossy().as_ref())
                 };
-                let new_display = Some(retained.to_string_lossy().into_owned());
-                if view.display_tree != new_display {
-                    view.display_tree = new_display;
+                if changed {
+                    let evidence = (|| -> basecraft_ops::Result<_> {
+                        let state = self.rust();
+                        let session = state.session.as_ref().unwrap();
+                        let _lock = basecraft_ops::input_evidence::lock()?;
+                        basecraft_ops::delimitation::reference_input(
+                            &session.root().join(session.doc_key(state.doc.unwrap())),
+                            &retained,
+                            &hash,
+                        )
+                    })();
+                    let run = match evidence {
+                        Ok(run) => run,
+                        Err(error) => {
+                            self.fail(&error.to_string());
+                            return false;
+                        }
+                    };
                     if self
                         .as_mut()
-                        .edit(DelimitationEdit::SetView { view })
+                        .edit(DelimitationEdit::SetDisplayTree {
+                            path: retained.to_string_lossy().into_owned(),
+                            hash: hash.clone(),
+                            evidence_run: run.directory().display().to_string(),
+                        })
                         .is_err()
                     {
                         return false;

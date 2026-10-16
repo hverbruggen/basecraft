@@ -109,7 +109,7 @@ impl AlignmentJob {
         }
         let prepare = &result.stages[0].job;
         let setup = (|| -> Result<FileJob> {
-            let mut fit = prepare.following(
+            let mut fit = result.stages[1].job.following(
                 &result.stages[1].job.output,
                 (&prepare.plugin, &self.fit_method),
                 self.output,
@@ -276,7 +276,14 @@ impl PipelineOutcome {
         for stage in self.stages {
             stage
                 .job
-                .record_terminal(session, doc, &stage.outcome, stage.elapsed)?;
+                .record_terminal(session, doc, &stage.outcome, stage.elapsed)
+                .map_err(|error| {
+                    Error::Protocol(format!(
+                        "Recording {} outcome at {}: {error}",
+                        stage.job.operation,
+                        stage.job.output.display()
+                    ))
+                })?;
             let result = stage.outcome?;
             stage.job.record(session, doc, &result).map_err(|error| {
                 Error::Protocol(format!(

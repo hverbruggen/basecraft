@@ -161,6 +161,27 @@ impl ArtifactRun {
             .filter(|p| !p.as_os_str().is_empty())
             .unwrap_or(Path::new("."))
             .canonicalize()?;
+        // Species stage documents live inside an allocated run. Their explicit
+        // declaration reuses the same discovery contract as visible bindings.
+        if parent
+            .parent()
+            .is_some_and(|p| p.file_name().is_some_and(|n| n == "runs"))
+        {
+            if let Some(store) = parent.parent().and_then(Path::parent) {
+                if store.file_name().is_some_and(|n| n == "analyses-v1") {
+                    Self::validate_store(store)?;
+                    let input = crate::input_evidence::read_input(&parent)?;
+                    if input
+                        .extra
+                        .get("species_result")
+                        .and_then(serde_json::Value::as_str)
+                        == result.file_name().and_then(|n| n.to_str())
+                    {
+                        return Ok(Some(parent));
+                    }
+                }
+            }
+        }
         let hidden = parent.join(".basecraft");
         if std::fs::symlink_metadata(&hidden).is_ok_and(|m| m.file_type().is_symlink()) {
             return Err(invalid("hidden analysis directory is a symlink"));

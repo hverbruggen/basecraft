@@ -819,12 +819,18 @@ fn rebase_delimitation_paths(
     old: &Path,
     new: &Path,
 ) {
-    let rebase = |s: &str| {
+    map_delimitation_paths(work, |s| {
         Path::new(s).strip_prefix(old).map_or_else(
             |_| s.to_owned(),
             |p| new.join(p).to_string_lossy().into_owned(),
         )
-    };
+    });
+}
+
+pub(crate) fn map_delimitation_paths(
+    work: &mut basecraft_protocol::delimitation::DelimitationWorkspace,
+    rebase: impl Fn(&str) -> String,
+) {
     for specimen in &mut work.specimens {
         specimen.sources = std::mem::take(&mut specimen.sources)
             .into_iter()
@@ -834,8 +840,13 @@ fn rebase_delimitation_paths(
     if let Some(tree) = &mut work.view.display_tree {
         *tree = rebase(tree);
     }
-    if let Some(path) = work.exchange_fields.get_mut("basecraft_alignment_snapshot") {
-        *path = rebase(path);
+    for name in [
+        "basecraft_alignment_snapshot",
+        "basecraft_display_evidence_run",
+    ] {
+        if let Some(path) = work.exchange_fields.get_mut(name) {
+            *path = rebase(path);
+        }
     }
     for hypothesis in &mut work.hypotheses {
         hypothesis.provenance.inputs = std::mem::take(&mut hypothesis.provenance.inputs)
@@ -849,7 +860,12 @@ fn rebase_delimitation_paths(
                 }
             }
         }
-        for name in ["analysis_report", "combined_source"] {
+        for name in [
+            "analysis_report",
+            "combined_source",
+            "alignment_evidence",
+            "input_evidence",
+        ] {
             if let Some(value) = hypothesis
                 .provenance
                 .parameters
@@ -858,6 +874,17 @@ fn rebase_delimitation_paths(
             {
                 if let Some(s) = value.as_str() {
                     *value = serde_json::json!(rebase(s));
+                }
+            }
+        }
+        for name in ["combined_source", "alignment_evidence", "input_evidence"] {
+            if let Some(value) = hypothesis.provenance.parameters.get_mut(name) {
+                for key in ["run_directory", "evidence_run"] {
+                    if let Some(field) = value.get_mut(key) {
+                        if let Some(s) = field.as_str() {
+                            *field = serde_json::json!(rebase(s));
+                        }
+                    }
                 }
             }
         }

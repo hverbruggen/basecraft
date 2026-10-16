@@ -236,6 +236,19 @@ pub fn apply(work: &mut DelimitationWorkspace, edit: &DelimitationEdit) -> Resul
             h.groups.retain(|g| !g.members.is_empty());
         }
         DelimitationEdit::SetView { view } => next.view.clone_from(view),
+        DelimitationEdit::SetDisplayTree {
+            path,
+            hash,
+            evidence_run,
+        } => {
+            next.view.display_tree = Some(path.clone());
+            next.exchange_fields
+                .insert("basecraft_display_hash".into(), hash.clone());
+            next.exchange_fields.insert(
+                "basecraft_display_evidence_run".into(),
+                evidence_run.clone(),
+            );
+        }
     }
     validate(&next)?;
     *work = next;

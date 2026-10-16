@@ -637,6 +637,22 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
     let upstream = ancestors(&bundle)?;
     let mut roots = vec![(bundle.clone(), publication.clone())];
     roots.extend(upstream);
+    let species = crate::files::Format::from_path(result)? == crate::files::Format::Delimitation;
+    let mut species_paths = BTreeMap::new();
+    if species {
+        for (directory, record) in &roots {
+            for artifact in record.inputs.iter().chain(&record.outputs) {
+                let original = if let Some(reference) = &artifact.reference {
+                    Some(directory.join(&reference.path))
+                } else {
+                    artifact.retained.as_ref().map(|name| directory.join(name))
+                };
+                if let Some(original) = original {
+                    species_paths.insert(normalized_path(&original), artifact.hash.clone());
+                }
+            }
+        }
+    }
     let (mut exported, archived) = export_history(&roots, &target_bundle)?;
     publication = exported.remove(0);
     if let Some(index) = publication
@@ -690,6 +706,78 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
         };
         copy(&source, &staging.path().join(&name))?;
         artifact.logical_name = name;
+    }
+    if species {
+        let mut work = crate::files::load_delimitation(result)?;
+        let final_folder = parent.canonicalize()?.join(
+            destination
+                .file_name()
+                .ok_or_else(|| invalid("package destination has no name"))?,
+        );
+        let final_bundle = crate::provenance::companion(
+            &final_folder.join(copied.file_name().unwrap_or_default()),
+        );
+        // Resolve declared paths to the checked, materialized dependency closure.
+        // Immutable scientific reports stay byte-for-byte; only the derived
+        // workspace metadata is relocated for use without its originals.
+        crate::files::map_delimitation_paths(&mut work, |path| {
+            species_paths
+                .get(&normalized_path(Path::new(path)))
+                .map_or_else(
+                    || path.to_owned(),
+                    |hash| {
+                        final_bundle
+                            .join("artifacts")
+                            .join(hash.trim_start_matches("b3:"))
+                            .display()
+                            .to_string()
+                    },
+                )
+        });
+        work.exchange_fields
+            .remove("basecraft_display_evidence_run");
+        for hypothesis in &mut work.hypotheses {
+            if let Some(source) = hypothesis
+                .provenance
+                .parameters
+                .get_mut("combined_source")
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                source.remove("evidence_run");
+            }
+        }
+        let sidecar = crate::files::tree_sidecar(&copied);
+        basecraft_io::write_atomic(&sidecar, |w| {
+            crate::files::write_delimitation_sidecar_at(
+                &work,
+                &publication.outputs[0].hash,
+                &copied,
+                w,
+            )
+        })?;
+        let side_hash = basecraft_io::hash_file(&sidecar)?;
+        if let Some(artifact) = publication
+            .outputs
+            .iter_mut()
+            .find(|a| a.logical_name == sidecar.file_name().unwrap_or_default().to_string_lossy())
+        {
+            artifact.hash = side_hash;
+            artifact.size = std::fs::metadata(&sidecar)?.len();
+            artifact.retained = None;
+        } else {
+            publication.outputs.push(ArtifactRevision {
+                id: format!("{}:species-context", publication.id),
+                logical_name: sidecar
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned(),
+                hash: side_hash,
+                size: std::fs::metadata(&sidecar)?.len(),
+                retained: None,
+                reference: None,
+            });
+        }
     }
     // Complete tree exports deliberately materialize the legacy exchange
     // association, so extraction still works with the original store absent.
@@ -765,6 +853,20 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
     std::fs::create_dir(destination)?;
     std::fs::rename(staging.path(), destination)?;
     Ok(())
+}
+
+fn normalized_path(path: &Path) -> PathBuf {
+    let mut result = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::ParentDir => {
+                result.pop();
+            }
+            Component::CurDir => {}
+            other => result.push(other.as_os_str()),
+        }
+    }
+    result
 }
 
 /// Copy checked bytes into the package's content-addressed artifact directory.
