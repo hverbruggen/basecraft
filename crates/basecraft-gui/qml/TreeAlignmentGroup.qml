@@ -1,4 +1,6 @@
 import QtQuick
+import QtQuick.Controls.Basic
+import QtQuick.Layouts
 
 RibbonGroup {
     id: group
@@ -10,6 +12,18 @@ RibbonGroup {
     readonly property string sourcePath: controller ? (controller.source_alignment || "") : ""
     readonly property var commands: [link.commandAction, extract.commandAction]
     signal linkRequested(var target)
+    FontMetrics { id: statusMetrics; font: group.font }
+    Label {
+        objectName: "treeAlignmentStatus"
+        text: group.linkStatus
+        visible: text.length > 0
+        Layout.maximumWidth: statusMetrics.averageCharacterWidth * 26
+        elide: Text.ElideMiddle
+        Accessible.name: text
+        ToolTip.text: text
+        ToolTip.visible: statusHover.hovered
+        HoverHandler { id: statusHover }
+    }
     AppCommandButton {
         id: link
         objectName: "linkTreeAlignment"

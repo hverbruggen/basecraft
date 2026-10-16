@@ -29,6 +29,7 @@ mod sanger_bridge;
 #[allow(unused_imports)] // harness=false omits the included module's #[test] bodies.
 mod settings_bridge;
 #[path = "../src/tree_bridge.rs"]
+#[allow(unused_imports)] // harness=false omits the included module's #[test] bodies.
 mod tree_bridge;
 
 use cxx_qt_lib::{QByteArray, QGuiApplication, QQmlApplicationEngine, QUrl};

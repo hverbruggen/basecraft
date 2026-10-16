@@ -100,6 +100,7 @@ Item {
             controller.linked_alignment = "/view.afa"
             controller.source_alignment = "/original.afa"
             controller.alignment_link_status = "Linked to retained input snapshot"
+            compare(findChild(alignment, "treeAlignmentStatus").text, controller.alignment_link_status)
             compare(link.text, "Change linked alignment…")
             verify(link.tip.includes("/view.afa"))
             verify(link.tip.includes("Original analysis source: /original.afa"))

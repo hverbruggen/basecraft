@@ -20,7 +20,12 @@ fn display_names_preserve_support_tip_identity_links_and_replay() {
         let mut session = Session::new(root);
         let doc = session.open(&path).unwrap();
         AlignmentLink::associate(&path, session.tree(doc), &source).unwrap();
-        let link = std::fs::read(basecraft_ops::links::view_sidecar(&path)).unwrap();
+        let link = std::fs::read(basecraft_ops::links::sidecar(&path)).unwrap();
+        let snapshot = AlignmentLink::read(&path)
+            .unwrap()
+            .checked_snapshot(&path, session.tree(doc))
+            .unwrap();
+        let snapshot_bytes = std::fs::read(&snapshot).unwrap();
         let scientific = session.tree(doc).to_newick();
         let supports = session.tree(doc).supports().to_vec();
         for (id, clade, label) in [
@@ -69,9 +74,10 @@ fn display_names_preserve_support_tip_identity_links_and_replay() {
         assert!(reopened.find_tip("A").is_some());
         assert!(reopened.find_tip("Tip display name").is_none());
         assert_eq!(
-            std::fs::read(basecraft_ops::links::view_sidecar(&path)).unwrap(),
+            std::fs::read(basecraft_ops::links::sidecar(&path)).unwrap(),
             link
         );
+        assert_eq!(std::fs::read(snapshot).unwrap(), snapshot_bytes);
         session.flush().unwrap();
         let report = replay::replay(root).unwrap();
         assert!(report.ok(), "{:#?}", report.problems);
