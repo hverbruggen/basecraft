@@ -90,7 +90,7 @@ def invoke(method, params, native, run_native):
         raise RuntimeError(diagnostic)
     parsed = parse_result(Path(str(output) + ".txt").read_text(), expected)
     parameters = dict(params, input=str(snapshot), **parsed, mptp_version=version, command=command,
-                      min_branch=minimum, units="substitutions per site", original_source=str(source))
+                      min_branch=minimum, units="substitutions per site", original_source=params.get("original_source", str(source)))
     result = run_native(method, parameters)
     result["outputs"] += [str(path) for path in directory.iterdir() if path.is_file()]
     return result

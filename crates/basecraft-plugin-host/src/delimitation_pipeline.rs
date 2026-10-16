@@ -278,7 +278,13 @@ impl PipelineOutcome {
                 .job
                 .record_terminal(session, doc, &stage.outcome, stage.elapsed)?;
             let result = stage.outcome?;
-            stage.job.record(session, doc, &result)?;
+            stage.job.record(session, doc, &result).map_err(|error| {
+                Error::Protocol(format!(
+                    "Recording {} at {}: {error}",
+                    stage.job.operation,
+                    stage.job.output.display()
+                ))
+            })?;
             outputs.extend(result.outputs.iter().cloned());
             last = Some(result);
         }

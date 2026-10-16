@@ -98,7 +98,7 @@ impl FileJob {
     fn prepare_species(
         &mut self,
         document: Option<(&Session, DocId)>,
-        file: Option<&Path>,
+        file: Option<(&Path, &basecraft_protocol::provenance::FileStamp)>,
         transformation: &str,
     ) -> Result<()> {
         let anchor = self.output.clone();
@@ -109,7 +109,7 @@ impl FileJob {
     fn prepare_species_at(
         &mut self,
         document: Option<(&Session, DocId)>,
-        file: Option<&Path>,
+        file: Option<(&Path, &basecraft_protocol::provenance::FileStamp)>,
         transformation: &str,
         anchor: &Path,
         standalone: bool,
@@ -123,13 +123,10 @@ impl FileJob {
         use basecraft_ops::{analysis_store::ArtifactRun, input_evidence};
         let _lock = input_evidence::lock()?;
         let run = ArtifactRun::create(anchor, &self.run_id)?;
-        let source = if let Some(file) = file {
+        let source = if let Some((file, accepted_stamp)) = file {
             let path = file.canonicalize()?;
             let stamp = input_evidence::stamp(&path)?;
-            if stamp.size != std::fs::metadata(&self.input)?.len()
-                || basecraft_io::hash_file(&path).map_err(basecraft_ops::Error::from)?
-                    != self.input_key.1
-            {
+            if &stamp != accepted_stamp || stamp.size != std::fs::metadata(&self.input)?.len() {
                 return Err(Error::Protocol(
                     "Analysis source changed during submission".into(),
                 ));
@@ -195,6 +192,10 @@ impl FileJob {
                 "json"
             }
         ))?;
+        self.source_hash = record
+            .source
+            .as_ref()
+            .map_or_else(String::new, |r| r.hash.clone());
         self.species = Some(SpeciesStorage {
             anchor: anchor.to_path_buf(),
             primary,
@@ -311,6 +312,8 @@ impl FileJob {
             basecraft_ops::input_evidence::read_input(run.directory())?
                 .source
                 .map_or_else(String::new, |r| r.hash)
+        } else if manifest.id == "basecraft.delimitation" {
+            String::new()
         } else {
             basecraft_io::hash_file(&source_path).map_err(basecraft_ops::Error::from)?
         };
@@ -384,8 +387,11 @@ impl FileJob {
             source_path: source_path.clone(),
             source_version: session.generation(doc),
             source_record: session.document_record(doc)?,
-            source_hash: basecraft_io::hash_file(&source_path)
-                .map_err(basecraft_ops::Error::from)?,
+            source_hash: if Manifest::load(plugin)?.id == "basecraft.delimitation" {
+                String::new()
+            } else {
+                basecraft_io::hash_file(&source_path).map_err(basecraft_ops::Error::from)?
+            },
             cpu_budget: crate::compute::effective_allocation()?,
             granted_budget: std::sync::atomic::AtomicUsize::new(0),
             artifacts: None,
@@ -407,7 +413,7 @@ impl FileJob {
         (plugin, operation): (&Path, &str),
         output: PathBuf,
     ) -> Result<Self> {
-        let source_path = session.root().join(session.doc_key(doc));
+        let source_path = input.canonicalize()?;
         if output.exists() && output.canonicalize()? == input.canonicalize()? {
             return Err(Error::Protocol(
                 "output must differ from analysis input".into(),
@@ -421,6 +427,7 @@ impl FileJob {
                 .file_name()
                 .unwrap_or_else(|| std::ffi::OsStr::new("input")),
         );
+        let input_stamp = basecraft_ops::input_evidence::stamp(input)?;
         std::fs::copy(input, &snapshot)?;
         let hash = basecraft_io::hash_file(&snapshot).map_err(basecraft_ops::Error::from)?;
         let run_id = ulid::Ulid::generate().to_string();
@@ -428,15 +435,14 @@ impl FileJob {
             plugin: plugin.into(),
             operation: operation.into(),
             input: snapshot,
-            input_key: (input.display().to_string(), hash),
+            input_key: (input.display().to_string(), hash.clone()),
             output,
             params: [("job_id".into(), json!(run_id.clone()))]
                 .into_iter()
                 .collect(),
             source_version: session.generation(doc),
             source_record: basecraft_ops::document_record::DocumentRecord::from_file(input)?,
-            source_hash: basecraft_io::hash_file(&source_path)
-                .map_err(basecraft_ops::Error::from)?,
+            source_hash: hash.clone(),
             source_path,
             run_id,
             cpu_budget: crate::compute::effective_allocation()?,
@@ -448,7 +454,11 @@ impl FileJob {
             submitted_copy_bytes: std::sync::atomic::AtomicU64::new(0),
             _dir: dir,
         };
-        job.prepare_species(Some((session, doc)), Some(input), "identity-v1")?;
+        job.prepare_species(
+            Some((session, doc)),
+            Some((input, &input_stamp)),
+            "identity-v1",
+        )?;
         Ok(job)
     }
 
@@ -473,6 +483,7 @@ impl FileJob {
                 .file_name()
                 .unwrap_or_else(|| std::ffi::OsStr::new("input")),
         );
+        let input_stamp = basecraft_ops::input_evidence::stamp(input)?;
         std::fs::copy(input, &snapshot)?;
         let hash = basecraft_io::hash_file(&snapshot).map_err(basecraft_ops::Error::from)?;
         let run_id = ulid::Ulid::generate().to_string();
@@ -503,7 +514,7 @@ impl FileJob {
             let temporary = input.starts_with(self._dir.path());
             job.prepare_species_at(
                 None,
-                (!temporary).then_some(input),
+                (!temporary).then_some((input, &input_stamp)),
                 if temporary {
                     "canonical-fasta-v1"
                 } else {
