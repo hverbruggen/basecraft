@@ -443,7 +443,7 @@ impl qobject::DelimitationController {
                         != Some(path.to_string().as_str())
                 };
                 if changed {
-                    let evidence = (|| -> basecraft_ops::Result<_> {
+                    let evidence = {
                         let state = self.rust();
                         let session = state.session.as_ref().unwrap();
                         basecraft_ops::delimitation::reference_input(
@@ -451,7 +451,7 @@ impl qobject::DelimitationController {
                             &retained,
                             &hash,
                         )
-                    })();
+                    };
                     let run = match evidence {
                         Ok(run) => run,
                         Err(error) => {
@@ -1349,12 +1349,13 @@ impl qobject::DelimitationController {
             Ok((
                 workflow,
                 session.generation(doc),
+                (session.id().to_owned(), session.doc_key(doc).to_owned()),
                 progress,
                 cancel,
                 progress_id,
             ))
         })();
-        let (workflow, generation, progress, cancel, id) = match result {
+        let (workflow, generation, identity, progress, cancel, id) = match result {
             Ok(job) => job,
             Err(e) => {
                 self.as_mut().fail(&e);
@@ -1377,6 +1378,9 @@ impl qobject::DelimitationController {
                     let state = &mut *state;
                     let (session, doc) = state.session.as_mut().zip(state.doc).ok_or("Workspace closed")?;
                     let output = finished.output().to_owned();
+                    if session.id() != identity.0 || session.doc_key(doc) != identity.1 {
+                        return Err("Analysis completed for its original workspace; its result remains available for review".into());
+                    }
                     finished.record(session,doc).map_err(|e|e.to_string())?;
                     if session.generation(doc) != generation {
                         return Err("Analysis completed for its saved input; workspace changed, so result remains an artifact".into());
