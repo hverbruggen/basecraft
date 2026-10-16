@@ -64,13 +64,18 @@ Before replacement, the shared Session save guard inspects known stores and
 ancestor-folder stores, using metadata only. It lists direct and declared downstream
 analyses. Cancel performs no replacement. Preserve-copy verifies/copies the actual
 old source into affected direct runs before any replacement and publishes evidence
-state before save; descendants follow the owning ledger. If old bytes are missing
+state before save. Candidate bytes are verified in a temporary file before
+no-clobber publication. A repeated decision verifies/reuses the retained copy;
+it never replaces existing retained bytes with the current source. Damaged
+retained bytes are reported and left in place for recovery; descendants follow the owning ledger. If old bytes are missing
 or changed, preservation is refused. Remove-analysis moves only affected hidden run
 records into store trash; scientific results and user source files remain. Break-
 evidence keeps records/results and explicitly marks evidence broken. Failed decisions
 abort the save; partial preservation/trash decisions remain recoverable. Save As
 new paths normally needs no decision and keeps references to the contributing
-ledger. CLI/MCP/default Rust Session saves return a structured conflict/options
+ledger, including bounded delegation through saved companions. Relinking a saved
+copy repairs that effective owning ledger only after checking original identity.
+CLI/MCP/default Rust Session saves return a structured conflict/options
 without an interactive prompt; Rust callers can choose `save_with_evidence`.
 
 External editors cannot be intercepted. Verification reports changed/missing
@@ -90,6 +95,14 @@ retaining duplicate clean inputs. Optional provenance None/LocalOnly remains
 separate from the minimum analysis/evidence record needed for these protections.
 Complete export is explicit: it materializes the dependency closure in a new
 package and provides a standard tree/alignment association when applicable.
+Saved companions select this path by their evidence content as well as hidden
+bindings. The entire immutable parent graph and declared upstream records are
+included: export assigns new relocation identities and recomputes parent checksums,
+materializes input references, and retains the original immutable JSON byte-for-byte
+as checked artifacts. A checked `export-map.json` artifact maps original IDs/hashes
+to export IDs. Source records remain untouched, and export verifies independently
+of the original source, hidden store and saved companion. Run/binding filenames
+are explicit UTF-8 JSON strings; unsupported native filenames are refused.
 
 Host input-I/O counters cover post-open source-identity hashing, execution-scratch
 reads and persistent generated-input copies. They exclude initial document loading,

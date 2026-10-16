@@ -2462,7 +2462,7 @@ impl Session {
         };
         match self.provenance_policy {
             basecraft_platform::settings::ProvenancePolicy::Portable => {
-                crate::provenance::publish(run.directory(), &publication)?
+                crate::provenance::publish(run.directory(), &publication)?;
             }
             basecraft_platform::settings::ProvenancePolicy::LocalOnly => {
                 let bundle = self.local_provenance_root.join(
