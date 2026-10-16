@@ -6,6 +6,29 @@ use std::{
     path::PathBuf,
 };
 
+/// Publish a new canonical exchange file without replacing a user file. The
+/// authoritative workspace is hidden; native per-fit SPARTs stay in their runs.
+pub fn publish_workspace(
+    target: &std::path::Path,
+    work: &basecraft_protocol::delimitation::DelimitationWorkspace,
+    run: &crate::analysis_store::ArtifactRun,
+) -> Result<()> {
+    let name = target
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| invalid("SPART filename must be UTF-8"))?;
+    let staged = run.staging(name)?;
+    basecraft_io::write_atomic(&staged, |w| {
+        files::write_delimitation(work, files::delimitation_xml(target), w)
+    })?;
+    let hash = basecraft_io::hash_file(&staged)?;
+    basecraft_io::write_atomic(&run.artifact(&format!("{name}.basecraft.json"))?, |w| {
+        files::write_delimitation_sidecar_at(work, &hash, target, w)
+    })?;
+    run.publish_primary(name)?;
+    run.bind(target)
+}
+
 pub fn combine(session: &mut Session, doc: DocId, paths: &[PathBuf]) -> Result<()> {
     if !session.is_delimitation(doc) {
         return Err(invalid("Choose a species workspace"));
@@ -18,10 +41,10 @@ pub fn combine(session: &mut Session, doc: DocId, paths: &[PathBuf]) -> Result<(
         .collect();
     let mut hypotheses = vec![];
     for path in paths {
-        let hash = session.snapshot_file(path)?;
+        let hash = basecraft_io::hash_file(path)?;
         let sidecar = files::tree_sidecar(path);
         let side_hash = if sidecar.exists() {
-            Some(session.snapshot_file(&sidecar)?)
+            Some(basecraft_io::hash_file(&sidecar)?)
         } else {
             None
         };

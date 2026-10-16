@@ -27,7 +27,8 @@ pub struct PipelineOutcome {
 }
 impl AlignmentJob {
     /// No session access: this method can run on a worker thread.
-    pub fn run(self) -> PipelineOutcome {
+    pub fn run(mut self) -> PipelineOutcome {
+        self.output = self.preparation.output.with_file_name("fit.json");
         let mut result = PipelineOutcome {
             stages: vec![],
             unavailable: None,
@@ -140,6 +141,7 @@ impl AlignmentJob {
                 return result;
             }
         };
+        result.output.clone_from(&fit.output);
         let started = Instant::now();
         let outcome = fit.run();
         result.stages.push(Stage {
@@ -185,10 +187,7 @@ fn following_alignment(
 fn sampling_parameters(prepare: &FileJob, fit: &mut FileJob, unique: bool) -> Result<()> {
     let metadata: Value = serde_json::from_slice(&std::fs::read(&prepare.output)?)?;
     let counts = &metadata["metrics"]["haplotypes"];
-    let snapshot = metadata["job"]["inputs"]
-        .as_object()
-        .and_then(|inputs| inputs.keys().next())
-        .ok_or_else(|| Error::Protocol("Preparation has no retained alignment".into()))?;
+    let snapshot = prepare.input.display().to_string();
     fit.params.extend([
         ("deduplicate".into(), json!(unique)),
         ("alignment_input_hash".into(), json!(prepare.input_key.1)),
@@ -212,6 +211,10 @@ fn sampling_parameters(prepare: &FileJob, fit: &mut FileJob, unique: bool) -> Re
             }),
         ),
     ]);
+    fit.params.insert(
+        "alignment_evidence".into(),
+        prepare.species_input_evidence()?,
+    );
     if unique {
         let mapping = format!("{}.haplotypes.json", prepare.output.display());
         let hash = metadata["job"]["outputs"]
@@ -241,6 +244,7 @@ fn run_asap(mut result: PipelineOutcome, unique: bool) -> PipelineOutcome {
     })();
     match setup {
         Ok(job) => {
+            result.output.clone_from(&job.output);
             let started = Instant::now();
             let outcome = job.run();
             result.stages.push(Stage {

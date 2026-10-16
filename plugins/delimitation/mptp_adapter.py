@@ -54,8 +54,9 @@ def invoke(method, params, native, run_native):
         raise ValueError("Output must differ from input")
     directory = target.with_name(target.name + ".mptp-" + params.get("job_id", str(uuid.uuid4())))
     directory.mkdir(parents=True)
-    snapshot = directory / "input.nwk"
-    shutil.copyfile(source, snapshot)
+    snapshot = source if params.get("analysis_artifacts") else directory / "input.nwk"
+    if snapshot != source:
+        shutil.copyfile(source, snapshot)
     inspect = dict(params, input=str(snapshot), output=str(directory / "input.json"))
     run_native("inspect_tree", inspect)
     expected = json.loads((directory / "input.json").read_text())["metrics"]["tips"]

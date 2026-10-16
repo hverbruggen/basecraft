@@ -55,8 +55,18 @@ fn snapshots_and_terminal_outcomes_survive_success_failure_and_cancel() {
             .state
             .join("jobs")
             .join(job.params["job_id"].as_str().unwrap());
-        let retained = std::fs::read(run_directory.join("input.snapshot")).unwrap();
-        assert_eq!(basecraft_io::hash_bytes(&retained), job.input_key.1);
+        assert!(!run_directory.join("input.snapshot").exists());
+        let evidence = job.species_input_evidence().unwrap();
+        assert_eq!(evidence["state"], "referenced");
+        assert_eq!(
+            basecraft_io::hash_file(Path::new(evidence["path"].as_str().unwrap())).unwrap(),
+            evidence["source_hash"]
+        );
+        assert!(!output.exists());
+        assert!(
+            job.output
+                .starts_with(root.path().join(".basecraft/analyses-v1/runs"))
+        );
         let run: Value =
             serde_json::from_slice(&std::fs::read(run_directory.join("manifest.json")).unwrap())
                 .unwrap();
@@ -143,14 +153,15 @@ fn exact_identity_precedes_public_tree_inference_and_restores_specimens() {
             ("executable".into(), json!(native)),
             ("model".into(), json!("p")),
         ]);
-        let outcome = AlignmentJob {
+        let pipeline = AlignmentJob {
             preparation,
             unique_haplotypes: unique,
             fit_method: "gmyc_single".into(),
             output: output.clone(),
         }
-        .run()
-        .record(&mut session, doc);
+        .run();
+        let output = pipeline.output.clone();
+        let outcome = pipeline.record(&mut session, doc);
         if unique {
             outcome.unwrap();
             let result: Value = serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
@@ -207,17 +218,15 @@ fn exact_identity_precedes_public_tree_inference_and_restores_specimens() {
         .params
         .insert("executable".into(), json!(native));
     let output = root.path().join("single.json");
-    assert!(
-        AlignmentJob {
-            preparation,
-            unique_haplotypes: true,
-            fit_method: "gmyc_single".into(),
-            output: output.clone()
-        }
-        .run()
-        .record(&mut session, single_doc)
-        .is_err()
-    );
+    let pipeline = AlignmentJob {
+        preparation,
+        unique_haplotypes: true,
+        fit_method: "gmyc_single".into(),
+        output,
+    }
+    .run();
+    let output = pipeline.output.clone();
+    assert!(pipeline.record(&mut session, single_doc).is_err());
     let report: Value =
         serde_json::from_slice(&std::fs::read(format!("{}.run.json", output.display())).unwrap())
             .unwrap();
@@ -269,15 +278,15 @@ Path(r['worker_metadata']).write_text(json.dumps({'version':'contract fixture, n
         )
         .unwrap();
         preparation.params.insert("model".into(), json!("p"));
-        AlignmentJob {
+        let pipeline = AlignmentJob {
             preparation,
             unique_haplotypes: unique,
             fit_method: "asap".into(),
             output: output.clone(),
         }
-        .run()
-        .record(&mut session, doc)
-        .unwrap();
+        .run();
+        let output = pipeline.output.clone();
+        pipeline.record(&mut session, doc).unwrap();
         let result: Value = serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
         let workspace = &result["workspace"];
         assert_eq!(workspace["specimens"].as_array().unwrap().len(), 5);

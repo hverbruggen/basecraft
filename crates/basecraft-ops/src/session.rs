@@ -790,6 +790,15 @@ impl Session {
                         "a delimitation workspace requires SPART or SPART-XML",
                     ));
                 }
+                let new_run = if crate::analysis_store::ArtifactRun::for_result(&target)?.is_none()
+                {
+                    Some(crate::analysis_store::ArtifactRun::create(
+                        &target,
+                        &ulid::Ulid::generate().to_string(),
+                    )?)
+                } else {
+                    None
+                };
                 let xml = files::delimitation_xml(&target);
                 basecraft_io::write_atomic(&target, |w| {
                     let mut hw = HashingWriter::new(w);
@@ -797,14 +806,27 @@ impl Session {
                     main_hash = hw.hash();
                     Ok(())
                 })?;
-                let sidecar = files::tree_sidecar(&target);
+                let sidecar = if let Some(run) = &new_run {
+                    run.artifact(&format!(
+                        "{}.basecraft.json",
+                        target
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .ok_or_else(|| invalid("SPART filename must be UTF-8"))?
+                    ))?
+                } else {
+                    files::tree_sidecar(&target)
+                };
                 let mut side_hash = String::new();
                 basecraft_io::write_atomic(&sidecar, |w| {
                     let mut hw = HashingWriter::new(w);
-                    files::write_delimitation_sidecar(work, &main_hash, &mut hw)?;
+                    files::write_delimitation_sidecar_at(work, &main_hash, &target, &mut hw)?;
                     side_hash = hw.hash();
                     Ok(())
                 })?;
+                if let Some(run) = &new_run {
+                    run.bind(&target)?;
+                }
                 hashes.push((self.relative(&target), main_hash));
                 hashes.push((self.relative(&sidecar), side_hash));
                 return self.log_save(id, &target, hashes);
@@ -1551,7 +1573,12 @@ impl Session {
                 files::write_delimitation(work, files::delimitation_xml(target), &mut main)?;
                 let hash = main.hash();
                 let mut side = HashingWriter::new(std::io::sink());
-                files::write_delimitation_sidecar(work, &hash, &mut side)?;
+                files::write_delimitation_sidecar_at(
+                    work,
+                    &hash,
+                    &self.resolve(&target.to_string_lossy()),
+                    &mut side,
+                )?;
                 return Ok(vec![hash, side.hash()]);
             }
             Loaded::Sequence(o) => o,

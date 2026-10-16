@@ -725,6 +725,8 @@ fn extract_range(doc: &SequenceDoc, start: u64, end: u64) -> genbank::Record {
 struct DelimitationSidecar {
     version: u32,
     exchange_hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    path_base: Option<PathBuf>,
     workspace: basecraft_protocol::delimitation::DelimitationWorkspace,
 }
 
@@ -737,15 +739,24 @@ pub fn load_delimitation(
     } else {
         basecraft_io::spart::parse_text(&text)?
     };
+    // A damaged hidden binding must never silently select stale legacy data.
+    crate::analysis_store::ArtifactRun::for_result(path)?;
     let sidecar = tree_sidecar(path);
     if sidecar.exists() {
         let side: DelimitationSidecar = serde_json::from_slice(&std::fs::read(sidecar)?)?;
-        if side.version != 1 || side.exchange_hash != cache::content_hash(path)? {
+        if !matches!(side.version, 1 | 2) || side.exchange_hash != cache::content_hash(path)? {
             return Err(crate::error::invalid(
                 "SPART sidecar version or exchange hash differs",
             ));
         }
         work = side.workspace;
+        if side.version == 2 {
+            let old = side
+                .path_base
+                .ok_or_else(|| crate::error::invalid("Species metadata has no path base"))?;
+            let new = path.parent().unwrap_or(Path::new(".")).canonicalize()?;
+            rebase_delimitation_paths(&mut work, &old, &new);
+        }
     }
     basecraft_docs::delimitation::validate(&work).map_err(|e| crate::error::invalid(e.0))?;
     Ok(work)
@@ -772,10 +783,85 @@ pub fn write_delimitation_sidecar(
     let side = DelimitationSidecar {
         version: 1,
         exchange_hash: hash.into(),
+        path_base: None,
         workspace: work.clone(),
     };
     serde_json::to_writer_pretty(&mut *w, &side)?;
     writeln!(w)
+}
+
+pub fn write_delimitation_sidecar_at(
+    work: &basecraft_protocol::delimitation::DelimitationWorkspace,
+    hash: &str,
+    target: &Path,
+    w: &mut dyn Write,
+) -> io::Result<()> {
+    let side = DelimitationSidecar {
+        version: 2,
+        exchange_hash: hash.into(),
+        path_base: Some(
+            target
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or(Path::new("."))
+                .canonicalize()?,
+        ),
+        workspace: work.clone(),
+    };
+    serde_json::to_writer_pretty(&mut *w, &side)?;
+    writeln!(w)
+}
+
+/// Rebase only declared workspace path fields; authored text and scientific
+/// parameters remain untouched. Historical reports retain their original bytes.
+fn rebase_delimitation_paths(
+    work: &mut basecraft_protocol::delimitation::DelimitationWorkspace,
+    old: &Path,
+    new: &Path,
+) {
+    let rebase = |s: &str| {
+        Path::new(s).strip_prefix(old).map_or_else(
+            |_| s.to_owned(),
+            |p| new.join(p).to_string_lossy().into_owned(),
+        )
+    };
+    for specimen in &mut work.specimens {
+        specimen.sources = std::mem::take(&mut specimen.sources)
+            .into_iter()
+            .map(|(key, value)| (rebase(&key), value))
+            .collect();
+    }
+    if let Some(tree) = &mut work.view.display_tree {
+        *tree = rebase(tree);
+    }
+    if let Some(path) = work.exchange_fields.get_mut("basecraft_alignment_snapshot") {
+        *path = rebase(path);
+    }
+    for hypothesis in &mut work.hypotheses {
+        hypothesis.provenance.inputs = std::mem::take(&mut hypothesis.provenance.inputs)
+            .into_iter()
+            .map(|(key, value)| (rebase(&key), value))
+            .collect();
+        for name in ["alignment_snapshot", "mapping", "original_source", "cache"] {
+            if let Some(value) = hypothesis.provenance.parameters.get_mut(name) {
+                if let Some(s) = value.as_str() {
+                    *value = serde_json::json!(rebase(s));
+                }
+            }
+        }
+        for name in ["analysis_report", "combined_source"] {
+            if let Some(value) = hypothesis
+                .provenance
+                .parameters
+                .get_mut(name)
+                .and_then(|v| v.get_mut("path"))
+            {
+                if let Some(s) = value.as_str() {
+                    *value = serde_json::json!(rebase(s));
+                }
+            }
+        }
+    }
 }
 
 pub fn delimitation_xml(path: &Path) -> bool {

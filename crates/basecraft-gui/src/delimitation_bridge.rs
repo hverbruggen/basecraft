@@ -410,30 +410,8 @@ impl qobject::DelimitationController {
             Ok((p, tree, time, hash, bytes))
         })();
         match result {
-            Ok((_source, tree, time, hash, bytes)) => {
-                // Render the exact retained tree buffer; later source edits cannot
-                // alter cut previews or exported scientific coordinates.
-                let retained = (|| -> Result<_, Box<dyn std::error::Error>> {
-                    let r = self.rust();
-                    let session = r.session.as_ref().ok_or("No workspace open")?;
-                    let digest = session.snapshot_bytes(&bytes)?;
-                    let display = session
-                        .root()
-                        .join(".basecraft/displays")
-                        .join(format!("{}.nwk", digest.trim_start_matches("b3:")));
-                    std::fs::create_dir_all(display.parent().unwrap())?;
-                    if !display.exists() {
-                        basecraft_io::write_atomic(&display, |w| w.write_all(&bytes))?;
-                    }
-                    Ok(display)
-                })();
-                let retained = match retained {
-                    Ok(path) => path,
-                    Err(e) => {
-                        self.fail(&e.to_string());
-                        return false;
-                    }
-                };
+            Ok((source, tree, time, hash, _bytes)) => {
+                let retained = source;
                 self.as_mut().rust_mut().display_tree = Some(tree.clone());
                 let warning = time.as_ref().err().map(ToString::to_string);
                 if let Ok(time) = time {
@@ -1187,8 +1165,8 @@ impl qobject::DelimitationController {
                     "The retained alignment changed; select an intact input explicitly".into(),
                 );
             }
-            let progress = output.with_extension("progress.json");
-            let cancel = output.with_extension("cancel");
+            let progress = job.output.with_extension("progress.json");
+            let cancel = job.output.with_extension("cancel");
             job.params.extend([
                 ("rooted".into(), json!(rooted)),
                 ("generation".into(), json!(session.generation(doc))),
@@ -1463,7 +1441,7 @@ pub(crate) fn create_workspace(session: &mut Session, doc: DocId) -> Result<Stri
     use basecraft_plugin_host::{FileJob, file_tool::AlignmentInput};
     let output = session
         .root()
-        .join(format!("species-{}.json", ulid::Ulid::generate()));
+        .join(format!("species-{}.spart", ulid::Ulid::generate()));
     let plugin = crate::bridge::plugin_dir("delimitation");
     let job = if session.is_tree(doc) {
         FileJob::from_tree(session, doc, (&plugin, "workspace_tree"), output)

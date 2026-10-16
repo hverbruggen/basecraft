@@ -28,10 +28,11 @@ def invoke(method, params):
     job_id = params.get("job_id") or str(uuid.uuid4())
     if not isinstance(job_id, str) or len(job_id) > 100 or not all(c.isascii() and (c.isalnum() or c in "-_") for c in job_id):
         raise ValueError("job_id must contain only 1-100 ASCII letters, digits, '-' or '_'")
-    snapshot = Path(str(target) + ".input." + job_id + source.suffix)
+    allocation = params.get("analysis_artifacts")
+    snapshot = source if allocation else Path(str(target) + ".input." + job_id + source.suffix)
     spart = Path(str(target) + ".spart")
     sidecar = Path(str(spart) + ".basecraft.json")
-    paths = [source, target, report, snapshot, spart, sidecar]
+    paths = [source, target, report, spart, sidecar] + ([] if allocation else [snapshot])
     for name in ("progress", "cancel_file"):
         if name in params:
             paths.append(Path(params[name]).resolve())
@@ -44,17 +45,20 @@ def invoke(method, params):
         raise ValueError("Workers must be between 1 and 256")
     engine = executable(params)
     target.parent.mkdir(parents=True, exist_ok=True)
-    # Destination-local snapshot survives worker completion and belongs in the manifest.
-    with tempfile.NamedTemporaryFile(dir=target.parent, prefix=".delimitation-input-", delete=False) as staged:
-        staged_path = Path(staged.name)
-        try:
-            with source.open("rb") as original:
-                shutil.copyfileobj(original, staged)
-            staged.flush()
-            os.fsync(staged.fileno())
-            os.replace(staged_path, snapshot)
-        finally:
-            staged_path.unlink(missing_ok=True)
+    # Host allocation owns input evidence. Clean originals are referenced, and
+    # the host retains exact generated submissions once. Execution uses scratch.
+    if not allocation:
+        # Destination-local snapshot survives worker completion and belongs in the manifest.
+        with tempfile.NamedTemporaryFile(dir=target.parent, prefix=".delimitation-input-", delete=False) as staged:
+            staged_path = Path(staged.name)
+            try:
+                with source.open("rb") as original:
+                    shutil.copyfileobj(original, staged)
+                staged.flush()
+                os.fsync(staged.fileno())
+                os.replace(staged_path, snapshot)
+            finally:
+                staged_path.unlink(missing_ok=True)
     input_hash = subprocess.check_output([engine, "--hash", str(snapshot)], text=True).strip()
     request = {"version": 1, "job_id": job_id, "generation": params.get("generation", 0),
                    "method": method, "input": str(snapshot), "input_hash": input_hash, "output": str(target.parent / (".delimitation-job-" + job_id) / "result.json"),
@@ -97,14 +101,52 @@ def invoke(method, params):
     # An old destination is never mistaken for a newly failed engine run.
     if process.returncode == 0 and metadata["job"]["status"] == "completed":
         published = {}
+        relocations = {}
         for artifact, digest in metadata["job"]["outputs"].items():
             artifact_path = Path(artifact)
             if artifact_path.parent != staged_output.parent:
                 raise ValueError("Engine artifact escaped its job directory")
             suffix = artifact_path.name.removeprefix(staged_output.name)
             destination = Path(str(target) + suffix)
-            os.replace(artifact_path, destination)
+            # A unique allocated run must never adopt/replace an earlier artifact.
+            if allocation:
+                os.link(artifact_path, destination)
+                artifact_path.unlink()
+            else:
+                os.replace(artifact_path, destination)
+            relocations[str(artifact_path)] = str(destination)
             published[str(destination)] = digest
+        evidence = params.get("input_evidence", {})
+        if allocation and str(source) == params.get("input") and evidence.get("path"):
+            relocations[str(snapshot)] = evidence["path"]
+        def relocate(value):
+            if isinstance(value, dict):
+                return {relocations.get(k, k): relocate(v) for k, v in value.items()}
+            if isinstance(value, list):
+                return [relocate(v) for v in value]
+            return relocations.get(value, value) if isinstance(value, str) else value
+        metadata = relocate(metadata)
+        workspace = metadata.get("workspace")
+        if workspace and allocation:
+            fields = workspace.get("exchange_fields", {})
+            if fields.get("basecraft_alignment_snapshot") == evidence.get("path"):
+                fields["basecraft_alignment_hash"] = evidence.get("source_hash") or input_hash
+            alignment_evidence = params.get("alignment_evidence", {})
+            # Native validation consumed the frozen canonical alignment. Reopen
+            # uses the accepted raw source identity, retaining both hashes.
+            if alignment_evidence.get("path"):
+                for hypothesis in workspace["hypotheses"]:
+                    values = hypothesis["provenance"]["parameters"]
+                    values["alignment_snapshot"] = alignment_evidence["path"]
+                    values["alignment_input_hash"] = alignment_evidence.get("source_hash") or alignment_evidence["submitted_hash"]
+                    values["alignment_evidence"] = alignment_evidence
+            # Retain exact submission identity separately from its raw reference.
+            for hypothesis in workspace["hypotheses"]:
+                hypothesis["provenance"]["parameters"]["input_evidence"] = evidence
+            if sidecar.is_file():
+                sidecar.write_text(json.dumps({"version": 1, "exchange_hash": published[str(spart)],
+                                               "workspace": workspace}, indent=2) + "\n")
+                published[str(sidecar)] = subprocess.check_output([engine, "--hash", str(sidecar)], text=True).strip()
         metadata["job"]["outputs"] = published
         with staged_output.open("w") as stream:
             json.dump(metadata, stream, indent=2)
@@ -118,7 +160,7 @@ def invoke(method, params):
     os.replace(report_path, report)
     if process.returncode or metadata["job"]["status"] != "completed":
         raise RuntimeError("; ".join(metadata["job"]["diagnostics"]) or "Delimitation failed")
-    outputs = [str(target), str(report), str(snapshot)]
+    outputs = [str(target), str(report)] + ([] if allocation else [str(snapshot)])
     outputs += list(metadata["job"]["outputs"])
     if mapping_snapshot:
         outputs.append(str(mapping_snapshot))
