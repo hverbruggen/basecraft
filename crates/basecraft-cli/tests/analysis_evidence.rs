@@ -187,9 +187,8 @@ print(json.dumps(run(sys.argv[1],sys.argv[2],method='gmyc_multiple',analysis_inp
         .collect();
     visible.sort();
     assert_eq!(visible, ["source.nwk", "species.spart"]);
-    assert!(
-        basecraft_ops::provenance::verify(&canonical)
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        basecraft_ops::provenance::verify(&canonical).unwrap(),
+        Vec::<String>::new()
     );
 }

@@ -353,7 +353,7 @@ fn hidden_workspace_moves_with_its_folder_and_passive_open_writes_nothing() {
         basecraft_ops::files::tree_sidecar(&path).starts_with(root.join(".basecraft/analyses-v1"))
     );
     session.undo(doc).unwrap();
-    assert!(session.delimitation(doc).view.display_tree.is_none());
+    assert_eq!(session.delimitation(doc).view.display_tree, None);
     session.redo(doc).unwrap();
     drop(session);
     let replay = replay::replay(&root).unwrap();
@@ -562,10 +562,9 @@ fn combined_workspace_move_and_complete_export_keep_declared_source_evidence() {
     drop(session);
     std::fs::rename(&root, parent.path().join("moved")).unwrap();
     let exported = package.join("combined.spart");
-    assert!(
-        basecraft_ops::provenance::verify(&exported)
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        basecraft_ops::provenance::verify(&exported).unwrap(),
+        Vec::<String>::new()
     );
     let work = basecraft_ops::files::load_delimitation(&exported).unwrap();
     assert_eq!(

@@ -117,8 +117,12 @@ def invoke(method, params):
             relocations[str(artifact_path)] = str(destination)
             published[str(destination)] = digest
         evidence = params.get("input_evidence", {})
-        if allocation and str(source) == params.get("input") and evidence.get("path"):
+        same_submission = input_hash == evidence.get("submitted_hash")
+        if allocation and same_submission and evidence.get("path"):
             relocations[str(snapshot)] = evidence["path"]
+        alignment_evidence = params.get("alignment_evidence", {})
+        if alignment_evidence.get("path") and params.get("alignment_snapshot"):
+            relocations[params["alignment_snapshot"]] = alignment_evidence["path"]
         def relocate(value):
             if isinstance(value, dict):
                 return {relocations.get(k, k): relocate(v) for k, v in value.items()}
@@ -131,7 +135,6 @@ def invoke(method, params):
             fields = workspace.get("exchange_fields", {})
             if fields.get("basecraft_alignment_snapshot") == evidence.get("path"):
                 fields["basecraft_alignment_hash"] = evidence.get("source_hash") or input_hash
-            alignment_evidence = params.get("alignment_evidence", {})
             # Native validation consumed the frozen canonical alignment. Reopen
             # uses the accepted raw source identity, retaining both hashes.
             if alignment_evidence.get("path"):
@@ -140,10 +143,13 @@ def invoke(method, params):
                     values["alignment_snapshot"] = alignment_evidence["path"]
                     values["alignment_input_hash"] = alignment_evidence.get("source_hash") or alignment_evidence["submitted_hash"]
                     values["alignment_evidence"] = alignment_evidence
+                    inputs = hypothesis["provenance"]["inputs"]
+                    if alignment_evidence["path"] in inputs:
+                        inputs[alignment_evidence["path"]] = alignment_evidence.get("source_hash") or alignment_evidence["submitted_hash"]
             if workspace.get("view", {}).get("display_tree") == evidence.get("path"):
                 fields["basecraft_display_evidence_run"] = evidence["run_directory"]
                 fields["basecraft_display_hash"] = evidence.get("source_hash") or input_hash
-            if evidence.get("source_hash") and evidence.get("path"):
+            if same_submission and evidence.get("source_hash") and evidence.get("path"):
                 raw_hash = evidence["source_hash"]
                 metadata["job"]["inputs"][evidence["path"]] = raw_hash
                 for hypothesis in workspace["hypotheses"]:

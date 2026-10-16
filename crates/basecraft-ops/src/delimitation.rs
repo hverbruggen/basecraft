@@ -39,6 +39,7 @@ pub fn reference_input(
     use basecraft_protocol::provenance::{
         ArtifactRevision, Completeness, InputReference, Publication,
     };
+    let _lock = crate::input_evidence::lock()?;
     let run =
         crate::analysis_store::ArtifactRun::create(anchor, &ulid::Ulid::generate().to_string())?;
     let source = source.canonicalize()?;
@@ -146,6 +147,13 @@ pub fn checked_display_tree(
         return Ok(None);
     };
     let Some(run) = work.exchange_fields.get("basecraft_display_evidence_run") else {
+        if let Some(hash) = work.exchange_fields.get("basecraft_display_hash") {
+            if &basecraft_io::hash_file(std::path::Path::new(path))? != hash {
+                return Err(invalid(
+                    "Display tree changed; select an unchanged tree explicitly",
+                ));
+            }
+        }
         return Ok(Some(PathBuf::from(path)));
     };
     let run = std::path::Path::new(run);
@@ -260,7 +268,6 @@ pub fn combine(session: &mut Session, doc: DocId, paths: &[PathBuf]) -> Result<(
                 "A source changed while combining; retry with unchanged files",
             ));
         }
-        let _lock = crate::input_evidence::lock()?;
         let anchor = session.root().join(session.doc_key(doc));
         let evidence = reference_input(&anchor, path, &hash)?;
         if work

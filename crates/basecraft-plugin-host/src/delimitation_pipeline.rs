@@ -200,11 +200,12 @@ fn sampling_parameters(prepare: &FileJob, fit: &mut FileJob, unique: bool) -> Re
     let metadata: Value = serde_json::from_slice(&std::fs::read(&prepare.output)?)?;
     let counts = &metadata["metrics"]["haplotypes"];
     let snapshot = prepare.input.display().to_string();
+    let evidence = prepare.species_input_evidence()?;
     fit.params.extend([
         ("deduplicate".into(), json!(unique)),
         ("alignment_input_hash".into(), json!(prepare.input_key.1)),
         ("alignment_snapshot".into(), json!(snapshot)),
-        ("original_source".into(), json!(prepare.input_key.0)),
+        ("original_source".into(), evidence["path"].clone()),
         ("original_count".into(), counts["original_count"].clone()),
         (
             "retained_count".into(),
@@ -223,10 +224,7 @@ fn sampling_parameters(prepare: &FileJob, fit: &mut FileJob, unique: bool) -> Re
             }),
         ),
     ]);
-    fit.params.insert(
-        "alignment_evidence".into(),
-        prepare.species_input_evidence()?,
-    );
+    fit.params.insert("alignment_evidence".into(), evidence);
     if unique {
         let mapping = format!("{}.haplotypes.json", prepare.output.display());
         let hash = metadata["job"]["outputs"]

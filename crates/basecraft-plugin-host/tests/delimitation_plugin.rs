@@ -399,7 +399,10 @@ fn tree_methods_update_one_canonical_spart_and_export_without_sources() {
             count += hypotheses.len();
             if method == "manual_cut" {
                 assert_eq!(value["metrics"]["groups"], json!([["a", "b"], ["c", "d"]]));
-                assert!(hypotheses[0]["scores"].as_array().unwrap().is_empty());
+                assert_eq!(
+                    hypotheses[0]["scores"].as_array().unwrap(),
+                    &Vec::<Value>::new()
+                );
             }
             session.save(doc, None).unwrap();
         }
@@ -441,10 +444,9 @@ fn tree_methods_update_one_canonical_spart_and_export_without_sources() {
     let relocated_package = parent.path().join("relocated-package");
     std::fs::rename(&package, &relocated_package).unwrap();
     let exported = relocated_package.join("species.spart");
-    assert!(
-        basecraft_ops::provenance::verify(&exported)
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        basecraft_ops::provenance::verify(&exported).unwrap(),
+        Vec::<String>::new()
     );
     let work = basecraft_ops::files::load_delimitation(&exported).unwrap();
     assert_eq!(
@@ -473,7 +475,7 @@ fn dirty_tree_submission_retains_generated_bytes_without_stale_original_claim() 
     let source = root.path().join("source.nwk");
     std::fs::write(&source, "((a:0.1,b:0.1):0.9,(c:0.2,d:0.2):0.8);\n").unwrap();
     let plugin = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/delimitation");
-    let mut session = Session::new(root.path());
+    let mut session = Session::recoverable(root.path()).unwrap();
     let doc = session.open(&source).unwrap();
     session
         .apply(
@@ -509,6 +511,34 @@ fn dirty_tree_submission_retains_generated_bytes_without_stale_original_claim() 
     let work = basecraft_ops::files::load_delimitation(&root.path().join("species.spart")).unwrap();
     assert!(work.specimens.iter().any(|s| s.id == "unsaved"));
     assert!(!work.specimens.iter().any(|s| s.id == "a"));
+    assert!(
+        work.specimens
+            .iter()
+            .all(|s| s.sources.contains_key(generated.to_str().unwrap()))
+    );
+    let workspace = session.open(&root.path().join("species.spart")).unwrap();
+    let mut reused = FileJob::from_file(
+        &session,
+        workspace,
+        generated,
+        (&plugin, "gmyc_single"),
+        root.path().join("reuse.json"),
+    )
+    .unwrap();
+    reused.params.insert("rooted".into(), json!(true));
+    let result = reused.run().unwrap();
+    reused.record(&mut session, workspace, &result).unwrap();
+    basecraft_ops::delimitation::add_analysis_result(&mut session, workspace, &reused.output)
+        .unwrap();
+    session.save(workspace, None).unwrap();
+    assert_eq!(
+        basecraft_ops::files::load_delimitation(&root.path().join("species.spart"))
+            .unwrap()
+            .hypotheses
+            .len(),
+        1
+    );
+
     assert!(std::fs::read_to_string(source).unwrap().contains("a:"));
 }
 
@@ -569,10 +599,9 @@ else:
         assert_eq!(visible_files(root.path()), ["source.nwk", "species.spart"]);
         assert!(result.outputs.iter().any(|p| p.ends_with("stdout.log")
             && Path::new(p).starts_with(root.path().join(".basecraft"))));
-        assert!(
-            basecraft_ops::provenance::verify(&root.path().join("species.spart"))
-                .unwrap()
-                .is_empty()
+        assert_eq!(
+            basecraft_ops::provenance::verify(&root.path().join("species.spart")).unwrap(),
+            Vec::<String>::new()
         );
     }
 }

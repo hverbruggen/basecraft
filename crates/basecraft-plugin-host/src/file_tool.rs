@@ -85,7 +85,7 @@ pub struct FileJob {
     allocation_started: std::sync::atomic::AtomicBool,
     scratch_read_bytes: std::sync::atomic::AtomicU64,
     submitted_copy_bytes: std::sync::atomic::AtomicU64,
-    _dir: tempfile::TempDir,
+    scratch_dir: tempfile::TempDir,
 }
 
 struct SpeciesStorage {
@@ -115,13 +115,13 @@ impl FileJob {
         anchor: &Path,
         standalone: bool,
     ) -> Result<()> {
+        use basecraft_ops::{analysis_store::ArtifactRun, input_evidence};
         let plugin = Manifest::load(&self.plugin)?.id;
         if plugin != "basecraft.delimitation"
             && !(document.is_none() && plugin == "basecraft.distance" && self.operation == "tree")
         {
             return Ok(());
         }
-        use basecraft_ops::{analysis_store::ArtifactRun, input_evidence};
         let _lock = input_evidence::lock()?;
         let run = ArtifactRun::create(anchor, &self.run_id)?;
         let source = if let Some((file, accepted_stamp)) = file {
@@ -245,8 +245,8 @@ impl FileJob {
     /// companions of the scientific result.
     pub fn control_paths(&self) -> (PathBuf, PathBuf) {
         (
-            self._dir.path().join("progress.json"),
-            self._dir.path().join("cancel"),
+            self.scratch_dir.path().join("progress.json"),
+            self.scratch_dir.path().join("cancel"),
         )
     }
 
@@ -368,7 +368,7 @@ impl FileJob {
             allocation_started: std::sync::atomic::AtomicBool::new(false),
             scratch_read_bytes: std::sync::atomic::AtomicU64::new(0),
             submitted_copy_bytes: std::sync::atomic::AtomicU64::new(0),
-            _dir: dir,
+            scratch_dir: dir,
         };
         job.prepare_species(
             Some((session, doc)),
@@ -429,7 +429,7 @@ impl FileJob {
             allocation_started: std::sync::atomic::AtomicBool::new(false),
             scratch_read_bytes: std::sync::atomic::AtomicU64::new(0),
             submitted_copy_bytes: std::sync::atomic::AtomicU64::new(0),
-            _dir: dir,
+            scratch_dir: dir,
         };
         job.prepare_species(Some((session, doc)), None, "canonical-newick-v1")?;
         Ok(job)
@@ -471,7 +471,7 @@ impl FileJob {
                 .into_iter()
                 .collect(),
             source_version: session.generation(doc),
-            source_record: basecraft_ops::document_record::DocumentRecord::from_file(input)?,
+            source_record: file_input_record(input, plugin, operation)?,
             source_hash: hash.clone(),
             source_path,
             run_id,
@@ -482,7 +482,7 @@ impl FileJob {
             allocation_started: std::sync::atomic::AtomicBool::new(false),
             scratch_read_bytes: std::sync::atomic::AtomicU64::new(0),
             submitted_copy_bytes: std::sync::atomic::AtomicU64::new(0),
-            _dir: dir,
+            scratch_dir: dir,
         };
         job.prepare_species(
             Some((session, doc)),
@@ -538,10 +538,10 @@ impl FileJob {
             allocation_started: std::sync::atomic::AtomicBool::new(false),
             scratch_read_bytes: std::sync::atomic::AtomicU64::new(0),
             submitted_copy_bytes: std::sync::atomic::AtomicU64::new(0),
-            _dir: dir,
+            scratch_dir: dir,
         };
         if let Some(storage) = &self.species {
-            let temporary = input.starts_with(self._dir.path());
+            let temporary = input.starts_with(self.scratch_dir.path());
             job.prepare_species_at(
                 None,
                 (!temporary).then_some((input, &input_stamp)),
@@ -1205,6 +1205,9 @@ impl FileJob {
                     || run.directory().join("submitted.fasta"),
                     |source| run.directory().join(&source.path),
                 );
+                if evidence.source.is_none() {
+                    params.insert("original_source".into(), json!(stable.canonicalize()?));
+                }
                 params.insert(
                     "input_evidence".into(),
                     json!({
@@ -1506,6 +1509,38 @@ impl FileJob {
         )?;
         Ok(())
     }
+}
+
+fn file_input_record(
+    input: &Path,
+    plugin: &Path,
+    operation: &str,
+) -> Result<basecraft_ops::document_record::DocumentRecord> {
+    let format = basecraft_ops::files::Format::from_path(input).ok();
+    let tree = matches!(
+        operation,
+        "workspace_tree"
+            | "gmyc_single"
+            | "gmyc_multiple"
+            | "gmyc_exhaustive"
+            | "ptp"
+            | "mptp"
+            | "manual_cut"
+            | "inspect_tree"
+            | "validate_time_tree"
+            | "relative_time"
+    );
+    if Manifest::load(plugin)?.id == "basecraft.delimitation"
+        && (format.is_none() || tree && input.file_name().is_some_and(|n| n == "submitted.fasta"))
+    {
+        // Preserved originals and exported content-addressed artifacts need no
+        // format-bearing filename. The method validates their actual bytes;
+        // absence of an imported document history stays an honest boundary.
+        return Ok(basecraft_ops::document_record::DocumentRecord::empty(
+            &input.display().to_string(),
+        ));
+    }
+    basecraft_ops::document_record::DocumentRecord::from_file(input).map_err(Into::into)
 }
 
 /// `<stem>.<suffix>.<ext>` beside `file`, numbered if that name is taken:

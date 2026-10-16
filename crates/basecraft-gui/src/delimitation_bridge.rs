@@ -440,13 +440,12 @@ impl qobject::DelimitationController {
                         .view
                         .display_tree
                         .as_deref()
-                        != Some(retained.to_string_lossy().as_ref())
+                        != Some(path.to_string().as_str())
                 };
                 if changed {
                     let evidence = (|| -> basecraft_ops::Result<_> {
                         let state = self.rust();
                         let session = state.session.as_ref().unwrap();
-                        let _lock = basecraft_ops::input_evidence::lock()?;
                         basecraft_ops::delimitation::reference_input(
                             &session.root().join(session.doc_key(state.doc.unwrap())),
                             &retained,
