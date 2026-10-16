@@ -1372,6 +1372,7 @@ impl qobject::AlignmentController {
             "matrix" => {
                 params.remove("bootstrap");
                 params.remove("seed");
+                params.remove("bootstrap_destination");
                 ("Distance matrix", "matrix", "distances", "tsv")
             }
             "nj" => ("Neighbor joining", "tree", "nj", "nwk"),

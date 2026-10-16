@@ -129,6 +129,10 @@ Item {
                 reveal(dialog, seed)
                 keyClick(Qt.Key_Up)
                 compare(dialog.parameters().seed, 2)
+                const destination = checkField(dialog, "bootstrapDestination", data.size)
+                reveal(dialog, destination)
+                keyClick(Qt.Key_Down)
+                compare(dialog.parameters().bootstrap_destination, "working")
                 seed.value = seed.to
                 waitForPolish(dialog.contentItem)
                 tryVerify(() => seed.contentItem.width >= seed.contentItem.contentWidth,

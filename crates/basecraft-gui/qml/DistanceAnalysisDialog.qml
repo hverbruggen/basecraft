@@ -17,6 +17,7 @@ AppContentDialog {
         if (kind !== "matrix" && distanceBootstrap.checked) {
             p.bootstrap = bootstrapReplicates.value
             p.seed = bootstrapSeed.value
+            p.bootstrap_destination = bootstrapDestination.currentIndex === 0 ? "metadata" : "working"
         }
         return p
     }
@@ -131,6 +132,27 @@ AppContentDialog {
                     value: 1
                     editable: true
                 }
+            }
+        }
+        ColumnLayout {
+            visible: dialog.kind !== "matrix" && distanceBootstrap.checked
+            Layout.fillWidth: true
+            Layout.minimumWidth: 0
+            Label {
+                id: destinationLabel
+                text: "Save bootstrap trees in"
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+            }
+            AppComboBox {
+                id: bootstrapDestination
+                objectName: "bootstrapDestination"
+                Layout.fillWidth: true
+                Layout.minimumWidth: 0
+                Accessible.labelledBy: destinationLabel
+                Accessible.name: destinationLabel.text
+                model: ["Metadata directory (.basecraft/)", "Working directory"]
+                currentIndex: 0
             }
         }
         Label {

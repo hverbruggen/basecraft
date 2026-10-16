@@ -1,5 +1,6 @@
 use basecraft_distance::{
-    Alignment, BootstrapOptions, DistanceMatrix, Method, Model, Result, bootstrap, write_json,
+    Alignment, BootstrapOptions, DistanceMatrix, Method, Model, Result, bootstrap,
+    partial_collection_path, write_json,
 };
 use clap::Parser;
 use serde_json::json;
@@ -38,6 +39,10 @@ struct Args {
     /// Ordinary site bootstrap replicates (off by default; alignment and tree required).
     #[arg(long, default_value_t = 0)]
     bootstrap: usize,
+    /// Retain successful bootstrap replicates as NEXUS; requires a new path.
+    /// Incomplete runs use <stem>.partial.nex instead.
+    #[arg(long)]
+    bootstrap_trees: Option<PathBuf>,
     /// Bootstrap seed, independent of worker counts.
     #[arg(long, default_value_t = 1)]
     seed: u64,
@@ -66,6 +71,9 @@ fn run(a: &Args) -> Result<()> {
     if threads == 0 || tt == 0 {
         return Err("worker counts must be positive".into());
     }
+    if a.bootstrap_trees.is_some() && a.bootstrap == 0 {
+        return Err("--bootstrap-trees requires a positive --bootstrap count".into());
+    }
     if a.bootstrap > 0
         && (a.input.is_none()
             || a.tree.is_none()
@@ -89,6 +97,7 @@ fn run(a: &Args) -> Result<()> {
         }
     };
     let mut outputs = std::collections::HashSet::new();
+    let partial_trees = a.bootstrap_trees.as_deref().map(partial_collection_path);
     for path in [
         &a.cache,
         &a.matrix,
@@ -96,6 +105,8 @@ fn run(a: &Args) -> Result<()> {
         &a.summary,
         &a.report,
         &a.progress,
+        &a.bootstrap_trees,
+        &partial_trees,
     ]
     .into_iter()
     .flatten()
@@ -151,6 +162,7 @@ fn run(a: &Args) -> Result<()> {
                 tree_threads: tt,
                 progress: a.progress.clone(),
                 cancel_file: a.cancel_file.clone(),
+                replicate_trees: a.bootstrap_trees.clone(),
             },
         )?;
         (result.tree, Some(result.report))
