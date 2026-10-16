@@ -57,15 +57,36 @@ def retained_output(metadata, expected):
     collection = report.get("replicate_trees") if isinstance(report, dict) else None
     if not isinstance(collection, dict):
         raise RuntimeError("Distance engine did not report the requested bootstrap collection")  # noqa: TRY004 - invalid engine response
+    counts = [report.get(key) for key in ("requested", "attempted", "completed", "failed_replicates")]
+    if (any(type(value) is not int or value < 0 for value in counts)
+            or not counts[0] >= counts[1] == counts[2] + counts[3]
+            or type(report.get("support_withheld")) is not bool
+            or type(report.get("cancelled")) is not bool):
+        raise RuntimeError("Distance engine returned invalid bootstrap artifact counts or flags")
     actual = Path(collection.get("path", ""))
     path = expected.with_suffix(".partial.nex") if report["support_withheld"] else expected
     status = ("cancelled" if report["cancelled"] else "original_failed" if report["attempted"] == 0
               else "partial" if report["support_withheld"] else "complete")
-    if (actual != path or actual.is_symlink() or not actual.is_file()
+    if (actual != path or actual.is_symlink() or not actual.is_file() or actual.resolve() != actual
             or collection.get("format") != "nexus" or collection.get("status") != status
-            or collection.get("trees") != report["completed"]):
+            or type(collection.get("trees")) is not int or collection["trees"] != report["completed"]
+            or (not report["support_withheld"] and (report["completed"] != report["requested"] or report["cancelled"]))):
         raise RuntimeError("Distance engine returned an invalid bootstrap artifact path or status")
     return str(actual)
+
+
+def recovery_error(diagnostic, metadata, report, retained, save_report=True):
+    """Preserve only already-validated publication evidence from this invocation."""
+    failed = dict(metadata, output_status="failed", error=diagnostic)
+    if save_report:
+        try:
+            write_atomic(report, json.dumps(failed, indent=2) + "\n")
+        except OSError as error:
+            diagnostic += f"; failed run report could not be saved: {error}"
+    if retained:
+        evidence = failed["bootstrap"]["replicate_trees"]
+        diagnostic += f"; retained bootstrap artifacts: {json.dumps(evidence)}; report: {report}"
+    return RuntimeError(diagnostic)
 
 
 def invoke(kind, params):
@@ -123,36 +144,39 @@ def invoke(kind, params):
             # Preserve structured diagnostics even when the original matrix has no tree.
             # The host currently logs completed tool runs only.
             retained = []
+            failed = None
             if run.stdout.strip():
                 try:
                     failed = json.loads(run.stdout)
                     if collection:
                         retained = [retained_output(failed, collection)]
-                    write_atomic(report, json.dumps(failed, indent=2) + "\n")
                 except ValueError:
-                    pass
-                except OSError as error:
-                    raise RuntimeError(f"Failed run report could not be saved; retained bootstrap artifacts: {retained}: {error}") from error
+                    failed = None
             diagnostic = run.stderr.strip() or "Distance calculation failed"
-            if retained:
-                diagnostic += f"; retained bootstrap artifacts: {retained}; report: {report}"
+            if failed is not None:
+                raise recovery_error(diagnostic, failed, report, retained)
             raise RuntimeError(diagnostic)
         metadata = json.loads(run.stdout)
         retained = [retained_output(metadata, collection)] if collection else []
         # Publish on the destination filesystem, including for cross-device temp dirs.
-        with tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as temporary:
-            partial = Path(temporary.name)
+        partial = None
         try:
+            with tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as temporary:
+                partial = Path(temporary.name)
             shutil.copyfile(staged, partial)
             os.replace(partial, target)
         except OSError as error:
-            raise RuntimeError(f"Primary output publication failed; retained bootstrap artifacts: {retained}: {error}") from error
-        finally:
-            partial.unlink(missing_ok=True)
+            diagnostic = f"Primary output publication failed: {error}"
+            if partial is not None:
+                try:
+                    partial.unlink(missing_ok=True)
+                except OSError as cleanup_error:
+                    diagnostic += f"; primary scratch cleanup failed at {partial}: {cleanup_error}"
+            raise recovery_error(diagnostic, metadata, report, retained) from error
     try:
         write_atomic(report, json.dumps(metadata, indent=2) + "\n")
     except OSError as error:
-        raise RuntimeError(f"Run report publication failed; retained bootstrap artifacts: {retained}: {error}") from error
+        raise recovery_error(f"Run report publication failed: {error}", metadata, report, retained, save_report=False) from error
     extra_trees = []
     count = len(metadata["tree"]["trees"]) if metadata["tree"] else 0
     if count > 1:

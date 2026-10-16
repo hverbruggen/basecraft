@@ -63,24 +63,44 @@ pub fn parse_newick(text: &str) -> Result<ParsedTree> {
 }
 
 fn parse_nexus(text: &str) -> Result<Vec<ParsedTree>> {
-    let lower = text.to_ascii_lowercase();
-    let Some(start) = lower.find("begin trees;") else {
-        return Err(parse_error("NEXUS", 1, "no TREES block"));
-    };
-    let body_start = start + "begin trees;".len();
-    let end = lower[body_start..]
-        .find("end;")
-        .or_else(|| lower[body_start..].find("endblock;"))
-        .map_or(text.len(), |e| body_start + e);
+    // Commands end at semicolons outside quotes and nested comments. In
+    // particular, a quoted taxon or comment containing "end;" is not a boundary.
+    let header_end = text.len() - text.trim_start().len() + "#NEXUS".len();
+    let mut commands = Parser::new(text, header_end);
     let mut translate: Vec<(String, String)> = Vec::new();
     let mut trees = Vec::new();
-    let mut p = Parser::new(&text[..end], body_start);
-    loop {
+    let mut block = String::new();
+    let mut found = false;
+    while let Some((start, end)) = commands.nexus_command()? {
+        let mut p = Parser::new(&text[..end], start);
         p.skip_space();
-        if p.at_end() {
-            break;
-        }
         let word = p.word().to_ascii_lowercase();
+        if block.is_empty() {
+            if word == "begin" {
+                p.skip_space();
+                block = p.word().to_ascii_lowercase();
+                p.skip_space();
+                if p.next() != Some(b';') {
+                    return Err(p.error("expected ; after NEXUS block name"));
+                }
+                found |= block == "trees";
+            }
+            continue;
+        }
+        if word == "end" || word == "endblock" {
+            p.skip_space();
+            if p.next() != Some(b';') {
+                return Err(p.error("expected ; after NEXUS block end"));
+            }
+            if block == "trees" {
+                break;
+            }
+            block.clear();
+            continue;
+        }
+        if block != "trees" {
+            continue;
+        }
         match word.as_str() {
             "translate" => loop {
                 p.skip_space();
@@ -117,18 +137,11 @@ fn parse_nexus(text: &str) -> Result<Vec<ParsedTree>> {
                 }
                 trees.push(t);
             }
-            "" => {
-                p.next();
-            }
-            _ => {
-                // Another command: skip to its semicolon.
-                while let Some(b) = p.next() {
-                    if b == b';' {
-                        break;
-                    }
-                }
-            }
+            _ => {} // Other commands were already scanned as a complete unit.
         }
+    }
+    if !found {
+        return Err(parse_error("NEXUS", 1, "no TREES block"));
     }
     if trees.is_empty() {
         return Err(parse_error("NEXUS", 1, "no tree in the TREES block"));
@@ -205,6 +218,46 @@ impl<'a> Parser<'a> {
 
     fn skip_space(&mut self) {
         self.skip_space_keep();
+    }
+
+    /// Return a complete NEXUS command's byte range, including its terminator.
+    /// No allocation of command bodies or quoted names is needed for scanning.
+    fn nexus_command(&mut self) -> Result<Option<(usize, usize)>> {
+        let start = self.pos;
+        let mut quote = None;
+        let mut depth = 0usize;
+        let mut content = false;
+        while let Some(b) = self.next() {
+            if depth > 0 {
+                if b == b'[' {
+                    depth += 1;
+                } else if b == b']' {
+                    depth -= 1;
+                }
+            } else if let Some(q) = quote {
+                if b == q {
+                    if self.peek() == Some(q) {
+                        self.pos += 1;
+                    } else {
+                        quote = None;
+                    }
+                }
+            } else {
+                match b {
+                    b'[' => depth = 1,
+                    b'\'' | b'"' => {
+                        quote = Some(b);
+                        content = true;
+                    }
+                    b';' => return Ok(Some((start, self.pos))),
+                    _ => content |= !b.is_ascii_whitespace(),
+                }
+            }
+        }
+        if quote.is_some() || depth > 0 || content {
+            return Err(self.error("unterminated NEXUS command, quote or comment"));
+        }
+        Ok(None)
     }
 
     /// A bare word (letters, digits, `_`, `.`), for NEXUS commands.
@@ -438,6 +491,55 @@ mod tests {
         let inner = trees[0].nodes[0].children[0];
         assert_eq!(trees[0].nodes[inner].comment, "prob=1.0");
         assert_eq!(trees[0].nodes[0].comment, "");
+    }
+
+    #[test]
+    fn nexus_boundaries_ignore_quoted_names_and_nested_comments() {
+        let text = r#"#NEXUS
+            [begin trees; TREE fake = (wrong,names); end;]
+            BEGIN TAXA;
+              TAXLABELS 'begin trees; end;' "endblock;";
+            END;
+            BeGiN [a comment] TrEeS ;
+              [end; [nested endblock;] 'quoted' text]
+              TRANSLATE 1 'weekend;sample', 2 'it''s endblock;', 3 "begin trees;";
+              TITLE 'a title; end;';
+              TREE 'named end; tree' = [&R] (1:0.1[&note='end;'],2:0.2,3:0.3);
+              [endblock;]
+              UTREE next = ('friend;sample':0.4,'x[end;]':0.5);
+            EnDbLoCk [end;] ;
+            BEGIN TREES; TREE ignored = (other,taxa); END;
+        "#;
+        let trees = parse_trees(text).unwrap();
+        assert_eq!(trees.len(), 2);
+        assert_eq!(trees[0].name, "named end; tree");
+        assert_eq!(
+            tips(&trees[0]),
+            ["weekend;sample", "it's endblock;", "begin trees;"]
+        );
+        assert_eq!(trees[0].nodes[1].length, Some(0.1));
+        assert_eq!(trees[0].nodes[1].comment, "note='end;'");
+        assert_eq!(tips(&trees[1]), ["friend;sample", "x[end;]"]);
+    }
+
+    #[test]
+    fn nexus_requires_real_commands_and_preserves_eof_compatibility() {
+        assert!(parse_trees("#NEXUS [begin trees; TREE fake = (a,b); end;]").is_err());
+        assert!(parse_trees("#NEXUS BEGIN TAXA; TITLE 'begin trees;'; END;").is_err());
+        // Existing files may omit the closing END after a complete tree command.
+        assert_eq!(
+            parse_trees("#NEXUS BEGIN\nTREES; TREE t=(a,b);")
+                .unwrap()
+                .len(),
+            1
+        );
+        for text in [
+            "#NEXUS BEGIN TREES; TITLE 'end;",
+            "#NEXUS BEGIN TREES; [unterminated end;",
+            "#NEXUS BEGIN TREES; TREE t=('end;sample,b);",
+        ] {
+            assert!(parse_trees(text).is_err(), "{text}");
+        }
     }
 
     #[test]

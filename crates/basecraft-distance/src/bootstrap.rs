@@ -55,9 +55,28 @@ pub struct BootstrapReport {
     /// Set only after atomic publication. Progress never advertises scratch files.
     pub replicate_trees: Option<ReplicateCollection>,
 }
+#[derive(Debug)]
 pub struct BootstrapResult {
     pub tree: Option<TreeResult>,
     pub report: BootstrapReport,
+}
+
+/// A collection was published by this invocation, but the final progress write failed.
+/// Callers must preserve this evidence even though the operation returned an error.
+#[derive(Debug)]
+pub struct BootstrapPublicationError {
+    pub report: BootstrapReport,
+    cause: Box<dyn std::error::Error + Send + Sync>,
+}
+impl std::fmt::Display for BootstrapPublicationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "final bootstrap progress write failed: {}", self.cause)
+    }
+}
+impl std::error::Error for BootstrapPublicationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.cause.as_ref())
+    }
 }
 
 /// A partial collection has a distinct name even when all attempts finished.
@@ -560,7 +579,9 @@ pub fn bootstrap(
         report.replicate_trees = Some(collection.finish(&report)?);
     }
     if let Some(path) = &options.progress {
-        crate::write_json(path, &report)?;
+        if let Err(cause) = crate::write_json(path, &report) {
+            return Err(Box::new(BootstrapPublicationError { report, cause }));
+        }
     }
     Ok(BootstrapResult { tree, report })
 }

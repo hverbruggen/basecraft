@@ -206,6 +206,22 @@ and never advertises it as a complete collection. Atomic collection publication
 and report/primary-tree writes are separate operations; an error after publication
 can leave the collection recoverable at its destination.
 
+If cache, primary tree, matrix, summary, final progress or report writing fails
+after collection publication, the native CLI exits nonzero but still emits JSON
+with `output_status: "failed"`, an `error`, and the actual published collection's
+path/status/count under `bootstrap.replicate_trees`. A complete collection can
+therefore belong to a failed output operation; its scientific status is preserved.
+The wrapper validates that evidence against the requested destination and counts,
+then saves a failed recovery report when possible and includes the evidence in its
+error. Scratch creation/cleanup errors take the same recovery path. It never
+claims ownership of a collection merely because a file exists at the expected
+path. The library exposes `BootstrapPublicationError.report` when final progress
+writing fails after publication; other errors before publication carry no retained
+collection claim.
+
+NEXUS block boundaries are recognized as commands outside quoted names and nested
+comments, preserving taxa such as `weekend;sample` when reopening collections.
+
 IQ-TREE currently requests no support replicates; FastTree reports its SH-like
 local support. Neither wrapper produces an ordinary bootstrap-tree collection,
 and this option does not change those methods.
