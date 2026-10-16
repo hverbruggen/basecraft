@@ -1,12 +1,14 @@
 """Public file-operation adapter for the shared Rust distance engine."""
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 
 from basecraft.plugin import Plugin
+from basecraft.tools import write_atomic
 
 plugin = Plugin("basecraft.distance", "0.1.0")
 
@@ -19,6 +21,72 @@ def executable(params):
     if found:
         return found
     raise FileNotFoundError("Install basecraft-distance or set BASECRAFT_DISTANCE")
+
+
+def collection_path(params):
+    """Consume public host allocation; never create or guess a hidden namespace."""
+    destination = params.get("bootstrap_destination", "metadata")
+    if destination not in ("metadata", "working"):
+        raise ValueError("Bootstrap destination must be metadata or working")
+    if "bootstrap_trees" in params:
+        if "analysis_artifacts" in params:
+            raise ValueError("bootstrap_trees and analysis_artifacts are ambiguous together")
+        path = Path(params["bootstrap_trees"])
+        if not path.is_absolute() or path.is_symlink():
+            raise ValueError("bootstrap_trees must be an absolute, non-symlink output path")
+        return path.parent.resolve(strict=True) / path.name
+    allocation = params.get("analysis_artifacts")
+    if not isinstance(allocation, dict):
+        raise TypeError("Bootstrap retention requires host analysis_artifacts allocation or an explicit absolute bootstrap_trees path")
+    run_id = allocation.get("run_id")
+    if not isinstance(run_id, str) or not re.fullmatch(r"[A-Za-z0-9-]+", run_id):
+        raise ValueError("Invalid bootstrap artifact run_id")
+    key = "metadata_directory" if destination == "metadata" else "working_directory"
+    value = allocation.get(key)
+    if not isinstance(value, str):
+        raise TypeError(f"Missing allocated {key}")
+    directory = Path(value)
+    if not directory.is_absolute() or not directory.is_dir() or directory.resolve() != directory:
+        raise ValueError(f"Allocated {key} must be an existing absolute directory without symlinks")
+    return directory / f"bootstrap-{run_id}.nex"
+
+
+def retained_output(metadata, expected):
+    """Never register an engine-returned file outside the allocated collection."""
+    report = metadata.get("bootstrap")
+    collection = report.get("replicate_trees") if isinstance(report, dict) else None
+    if not isinstance(collection, dict):
+        raise RuntimeError("Distance engine did not report the requested bootstrap collection")  # noqa: TRY004 - invalid engine response
+    counts = [report.get(key) for key in ("requested", "attempted", "completed", "failed_replicates")]
+    if (any(type(value) is not int or value < 0 for value in counts)
+            or not counts[0] >= counts[1] == counts[2] + counts[3]
+            or type(report.get("support_withheld")) is not bool
+            or type(report.get("cancelled")) is not bool):
+        raise RuntimeError("Distance engine returned invalid bootstrap artifact counts or flags")
+    actual = Path(collection.get("path", ""))
+    path = expected.with_suffix(".partial.nex") if report["support_withheld"] else expected
+    status = ("cancelled" if report["cancelled"] else "original_failed" if report["attempted"] == 0
+              else "partial" if report["support_withheld"] else "complete")
+    if (actual != path or actual.is_symlink() or not actual.is_file() or actual.resolve() != actual
+            or collection.get("format") != "nexus" or collection.get("status") != status
+            or type(collection.get("trees")) is not int or collection["trees"] != report["completed"]
+            or (not report["support_withheld"] and (report["completed"] != report["requested"] or report["cancelled"]))):
+        raise RuntimeError("Distance engine returned an invalid bootstrap artifact path or status")
+    return str(actual)
+
+
+def recovery_error(diagnostic, metadata, report, retained, save_report=True):
+    """Preserve only already-validated publication evidence from this invocation."""
+    failed = dict(metadata, output_status="failed", error=diagnostic)
+    if save_report:
+        try:
+            write_atomic(report, json.dumps(failed, indent=2) + "\n")
+        except OSError as error:
+            diagnostic += f"; failed run report could not be saved: {error}"
+    if retained:
+        evidence = failed["bootstrap"]["replicate_trees"]
+        diagnostic += f"; retained bootstrap artifacts: {json.dumps(evidence)}; report: {report}"
+    return RuntimeError(diagnostic)
 
 
 def invoke(kind, params):
@@ -37,10 +105,16 @@ def invoke(kind, params):
         raise ValueError("Bootstrap must be a nonnegative integer")
     if bootstrap and method not in ("sorted", "upgma"):
         raise ValueError("Bootstrap supports only sorted NJ and UPGMA")
+    collection = collection_path(params) if bootstrap else None
     cache = Path(params.get("cache", str(target) + ".distances.json")).resolve()
     report = Path(str(target) + ".run.json")
     if len({target, source, cache, report}) != 4:
         raise ValueError("Input, output, cache, and report paths must differ")
+    if collection:
+        reserved = {target, source, cache, report}
+        reserved.update(Path(params[key]).resolve() for key in ("original_source", "progress", "cancel_file") if key in params)
+        if {collection, collection.with_suffix(".partial.nex")} & reserved:
+            raise ValueError("Bootstrap collection paths must differ from all inputs and other outputs")
     with tempfile.TemporaryDirectory(prefix="basecraft-distance-") as work:
         staged = Path(work) / "result"
         args = [executable(params), "--cache", str(cache), "--model", model,
@@ -57,7 +131,8 @@ def invoke(kind, params):
         else:
             args += ["--input", str(source), "--" + kind, str(staged)]
         if bootstrap:
-            args += ["--bootstrap", str(bootstrap), "--seed", str(params.get("seed", 1))]
+            args += ["--bootstrap", str(bootstrap), "--seed", str(params.get("seed", 1)),
+                     "--bootstrap-trees", str(collection)]
             for name in ("progress", "cancel_file"):
                 if name in params:
                     args += ["--" + name.replace("_", "-"), str(params[name])]
@@ -68,18 +143,40 @@ def invoke(kind, params):
         if run.returncode:
             # Preserve structured diagnostics even when the original matrix has no tree.
             # The host currently logs completed tool runs only.
+            retained = []
+            failed = None
             if run.stdout.strip():
                 try:
-                    report.write_text(json.dumps(json.loads(run.stdout), indent=2) + "\n")
-                except (ValueError, OSError):
-                    pass
-            raise RuntimeError(run.stderr.strip() or "Distance calculation failed")
+                    failed = json.loads(run.stdout)
+                    if collection:
+                        retained = [retained_output(failed, collection)]
+                except ValueError:
+                    failed = None
+            diagnostic = run.stderr.strip() or "Distance calculation failed"
+            if failed is not None:
+                raise recovery_error(diagnostic, failed, report, retained)
+            raise RuntimeError(diagnostic)
         metadata = json.loads(run.stdout)
+        retained = [retained_output(metadata, collection)] if collection else []
         # Publish on the destination filesystem, including for cross-device temp dirs.
-        partial = target.with_name(target.name + ".part")
-        shutil.copyfile(staged, partial)
-        os.replace(partial, target)
-    report.write_text(json.dumps(metadata, indent=2) + "\n")
+        partial = None
+        try:
+            with tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as temporary:
+                partial = Path(temporary.name)
+            shutil.copyfile(staged, partial)
+            os.replace(partial, target)
+        except OSError as error:
+            diagnostic = f"Primary output publication failed: {error}"
+            if partial is not None:
+                try:
+                    partial.unlink(missing_ok=True)
+                except OSError as cleanup_error:
+                    diagnostic += f"; primary scratch cleanup failed at {partial}: {cleanup_error}"
+            raise recovery_error(diagnostic, metadata, report, retained) from error
+    try:
+        write_atomic(report, json.dumps(metadata, indent=2) + "\n")
+    except OSError as error:
+        raise recovery_error(f"Run report publication failed: {error}", metadata, report, retained, save_report=False) from error
     extra_trees = []
     count = len(metadata["tree"]["trees"]) if metadata["tree"] else 0
     if count > 1:
@@ -94,7 +191,8 @@ def invoke(kind, params):
             message += "; bootstrap support withheld: " + "; ".join(bootstrap_report["failures"])
         else:
             message += f"; {bootstrap_report['completed']} bootstrap replicates (seed {bootstrap_report['seed']})"
-    return {"ops": [], "message": message, "outputs": [str(target), str(cache), str(report), *extra_trees],
+        message += f"; bootstrap trees: {retained[0]}"
+    return {"ops": [], "message": message, "outputs": [str(target), str(cache), str(report), *extra_trees, *retained],
             "tool": {"name": "basecraft-distance", "version": metadata["version"]}}
 
 

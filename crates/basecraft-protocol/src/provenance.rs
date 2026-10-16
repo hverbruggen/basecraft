@@ -12,6 +12,9 @@ pub struct ArtifactRevision {
     pub size: u64,
     /// Relative path inside the bundle; None means bytes are unavailable.
     pub retained: Option<String>,
+    /// Original disk evidence. Relative to the publication bundle; never a write destination.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference: Option<InputReference>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -51,4 +54,27 @@ pub struct Publication {
     pub effective_edits: Vec<EditActivity>,
     pub completeness: Completeness,
     pub report_template_version: u32,
+}
+
+/// Cheap change signal captured during an existing verified read. Matching time
+/// and length alone do not prove content identity.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct FileStamp {
+    pub size: u64,
+    pub modified_seconds: u64,
+    pub modified_nanos: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inode: Option<u64>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct InputReference {
+    pub path: String,
+    pub stamp: FileStamp,
+    /// Source bytes hash reused from the verified document read.
+    pub hash: String,
+    #[serde(flatten)]
+    pub extra: std::collections::BTreeMap<String, serde_json::Value>,
 }

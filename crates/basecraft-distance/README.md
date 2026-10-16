@@ -165,6 +165,67 @@ The public plugin saves and hashes reports through `tool.run`, including runs
 with failed replicates. Original-inference failures retain a diagnostic report,
 but the current host does not log failed tool invocations as `tool.run`.
 
+The GUI's **Save bootstrap trees in** choice and the application CLI's
+`--bootstrap-destination metadata|working` select a supporting collection in the
+allocated metadata directory (default) or beside the primary output. The plugin
+parameter is `bootstrap_destination`, also available to SDK callers. Host-managed
+runs use the public `analysis_artifacts` object with absolute existing
+`metadata_directory`, `working_directory`, and ASCII alphanumeric/hyphen `run_id`.
+The host reserves the run once, anchored to the final primary output. The wrapper
+selects `bootstrap-<run_id>.nex`; it does not derive storage from its temporary
+engine output path. Returned collections are registered, not copied or republished.
+
+A direct plugin caller can instead supply an absolute `bootstrap_trees` path.
+Combining that override with `analysis_artifacts` is an error. Bootstrap without
+either allocation or an explicit path fails with a useful error. Runs without
+bootstrap need no collection allocation. The standalone engine takes an explicit
+path and does not allocate a hidden store:
+
+```sh
+basecraft-distance --input genes.afa --model p --method sorted \
+  --tree genes.nwk --bootstrap 1000 --seed 71 \
+  --bootstrap-trees genes.replicates.nex --report genes.run.json
+```
+
+`basecraft-distance --bootstrap-trees PATH` retains the actual successful
+replicates in a NEXUS TREES block. Each `TREE replicate_N` uses the original
+one-based attempt number, taxon names and inferred branch lengths. Records stream
+in attempt order; retention does not accumulate a forest in memory, resample
+again, change support, or make another input copy. Existing destination files
+are never replaced.
+
+The report's `bootstrap.replicate_trees` gives the published path, format, status
+and tree count. Complete collections use the requested path; withheld runs use
+`<stem>.partial.nex`. The file footer records requested, attempted, retained and
+failed counts. Status is `complete`, `partial`, `cancelled`, or `original_failed`.
+Failed attempts leave gaps in tree numbers; diagnostics remain in the run report.
+Zero-success partial collections contain an empty TREES block and counts, so
+there is no tree to open. Cancellation is checked between replicates as before.
+An I/O error aborts retention, removes only the writer's disposable temporary file,
+and never advertises it as a complete collection. Atomic collection publication
+and report/primary-tree writes are separate operations; an error after publication
+can leave the collection recoverable at its destination.
+
+If cache, primary tree, matrix, summary, final progress or report writing fails
+after collection publication, the native CLI exits nonzero but still emits JSON
+with `output_status: "failed"`, an `error`, and the actual published collection's
+path/status/count under `bootstrap.replicate_trees`. A complete collection can
+therefore belong to a failed output operation; its scientific status is preserved.
+The wrapper validates that evidence against the requested destination and counts,
+then saves a failed recovery report when possible and includes the evidence in its
+error. Scratch creation/cleanup errors take the same recovery path. It never
+claims ownership of a collection merely because a file exists at the expected
+path. The library exposes `BootstrapPublicationError.report` when final progress
+writing fails after publication; other errors before publication carry no retained
+collection claim.
+
+NEXUS block boundaries are recognized as commands outside quoted names and nested
+comments, preserving taxa such as `weekend;sample` when reopening collections.
+
+IQ-TREE currently requests no support replicates; FastTree reports its SH-like
+local support. Neither wrapper produces an ordinary bootstrap-tree collection,
+and this option does not change those methods.
+
 `--progress PATH` atomically updates bootstrap status JSON; creating
 `--cancel-file PATH` requests cancellation between replicates. The public plugin
 parameters are `progress` and `cancel_file`. The GUI owns a unique temporary job

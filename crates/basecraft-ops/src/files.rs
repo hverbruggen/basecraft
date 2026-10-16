@@ -181,6 +181,10 @@ pub fn gff_sidecar(path: &Path) -> PathBuf {
 
 /// A tree file's sidecar: `NAME.nwk.basecraft.json` beside `NAME.nwk`.
 pub fn tree_sidecar(path: &Path) -> PathBuf {
+    if let Ok(Some(run)) = crate::analysis_store::ArtifactRun::for_result(path) {
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        return run.join(format!("{name}.basecraft.json"));
+    }
     let mut name = path.file_name().unwrap_or_default().to_os_string();
     name.push(".basecraft.json");
     path.with_file_name(name)

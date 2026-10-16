@@ -1,5 +1,6 @@
 use basecraft_distance::{
-    Alignment, BootstrapOptions, DistanceMatrix, Method, Model, Result, bootstrap, write_json,
+    Alignment, BootstrapOptions, BootstrapPublicationError, DistanceMatrix, Method, Model, Result,
+    bootstrap, partial_collection_path, write_json,
 };
 use clap::Parser;
 use serde_json::json;
@@ -38,6 +39,10 @@ struct Args {
     /// Ordinary site bootstrap replicates (off by default; alignment and tree required).
     #[arg(long, default_value_t = 0)]
     bootstrap: usize,
+    /// Retain successful bootstrap replicates as NEXUS; requires a new path.
+    /// Incomplete runs use <stem>.partial.nex instead.
+    #[arg(long)]
+    bootstrap_trees: Option<PathBuf>,
     /// Bootstrap seed, independent of worker counts.
     #[arg(long, default_value_t = 1)]
     seed: u64,
@@ -66,6 +71,9 @@ fn run(a: &Args) -> Result<()> {
     if threads == 0 || tt == 0 {
         return Err("worker counts must be positive".into());
     }
+    if a.bootstrap_trees.is_some() && a.bootstrap == 0 {
+        return Err("--bootstrap-trees requires a positive --bootstrap count".into());
+    }
     if a.bootstrap > 0
         && (a.input.is_none()
             || a.tree.is_none()
@@ -89,6 +97,7 @@ fn run(a: &Args) -> Result<()> {
         }
     };
     let mut outputs = std::collections::HashSet::new();
+    let partial_trees = a.bootstrap_trees.as_deref().map(partial_collection_path);
     for path in [
         &a.cache,
         &a.matrix,
@@ -96,6 +105,8 @@ fn run(a: &Args) -> Result<()> {
         &a.summary,
         &a.report,
         &a.progress,
+        &a.bootstrap_trees,
+        &partial_trees,
     ]
     .into_iter()
     .flatten()
@@ -151,8 +162,19 @@ fn run(a: &Args) -> Result<()> {
                 tree_threads: tt,
                 progress: a.progress.clone(),
                 cancel_file: a.cancel_file.clone(),
+                replicate_trees: a.bootstrap_trees.clone(),
             },
-        )?;
+        );
+        let result = match result {
+            Ok(result) => result,
+            Err(error) => {
+                if let Some(published) = error.downcast_ref::<BootstrapPublicationError>() {
+                    let mut metadata = json!({"tool":"basecraft-distance", "version":env!("CARGO_PKG_VERSION"), "bootstrap":published.report});
+                    return finish_report(a, &mut metadata, Err(error));
+                }
+                return Err(error);
+            }
+        };
         (result.tree, Some(result.report))
     } else {
         (
@@ -163,49 +185,75 @@ fn run(a: &Args) -> Result<()> {
             None,
         )
     };
-    let summary = a
-        .groups
-        .as_ref()
-        .map(|p| -> Result<_> {
-            let groups: BTreeMap<String, String> = serde_json::from_reader(fs::File::open(p)?)?;
-            matrix.groups(&groups)
-        })
-        .transpose()?;
-    if let Some(path) = &a.cache {
-        if !cached {
-            matrix.write(path)?;
+    let publication = (|| -> Result<()> {
+        let summary = a
+            .groups
+            .as_ref()
+            .map(|p| -> Result<_> {
+                let groups: BTreeMap<String, String> = serde_json::from_reader(fs::File::open(p)?)?;
+                matrix.groups(&groups)
+            })
+            .transpose()?;
+        if let Some(path) = &a.cache {
+            if !cached {
+                matrix.write(path)?;
+            }
         }
-    }
-    if let Some(path) = &a.matrix {
-        matrix.export_tsv(path)?;
-    }
-    if let (Some(path), Some(tree)) = (&a.tree, &tree) {
-        fs::write(path, tree.trees.concat())?;
-    }
-    if let (Some(path), Some(summary)) = (&a.summary, &summary) {
-        write_json(
-            path,
-            &json!({"model":matrix.model,"min_overlap":matrix.min_overlap,"gap_policy":matrix.gap_policy,"input_hash":matrix.input_hash,"unassigned":matrix.names.len()-summary.iter().map(|g|g.specimens).sum::<usize>(),"groups":summary}),
-        )?;
-    }
-    let result = json!({"tool":"basecraft-distance","version":env!("CARGO_PKG_VERSION"),"model":matrix.model,"method":a.method,"min_overlap":matrix.min_overlap,"gap_policy":matrix.gap_policy,"input_hash":matrix.input_hash,"cache_reused":cached,"sequences":matrix.names.len(),"columns":matrix.columns,"distance_threads":threads,"tree_threads":tt,"distance_s":distance_s,"total_s":start.elapsed().as_secs_f64(),"zero_overlap_pairs":matrix.shared_sites.iter().filter(|&&n|n==0).count(),"short_overlap_pairs":matrix.shared_sites.iter().filter(|&&n|n>0&&n<matrix.min_overlap).count(),"saturated_pairs":matrix.distances.iter().zip(&matrix.shared_sites).filter(|(d,s)|!d.is_finite()&&**s>=matrix.min_overlap).count(),"tree":tree,"bootstrap":bootstrap_report});
-    if let Some(path) = &a.report {
-        write_json(path, &result)?;
-    }
-    println!("{result}");
-    if let Some(report) = &bootstrap_report {
-        if report.support_withheld {
-            eprintln!("Bootstrap support withheld: {}", report.failures.join("; "));
+        if let Some(path) = &a.matrix {
+            matrix.export_tsv(path)?;
         }
-        if tree.is_none() {
+        if let (Some(path), Some(tree)) = (&a.tree, &tree) {
+            fs::write(path, tree.trees.concat())?;
+        }
+        if let (Some(path), Some(summary)) = (&a.summary, &summary) {
+            write_json(
+                path,
+                &json!({"model":matrix.model,"min_overlap":matrix.min_overlap,"gap_policy":matrix.gap_policy,"input_hash":matrix.input_hash,"unassigned":matrix.names.len()-summary.iter().map(|g|g.specimens).sum::<usize>(),"groups":summary}),
+            )?;
+        }
+        if bootstrap_report.is_some() && tree.is_none() {
             return Err(
                 "original distances do not define a complete tree; see bootstrap failure report"
                     .into(),
             );
         }
+        Ok(())
+    })();
+    let mut result = json!({"tool":"basecraft-distance","version":env!("CARGO_PKG_VERSION"),"model":matrix.model,"method":a.method,"min_overlap":matrix.min_overlap,"gap_policy":matrix.gap_policy,"input_hash":matrix.input_hash,"cache_reused":cached,"sequences":matrix.names.len(),"columns":matrix.columns,"distance_threads":threads,"tree_threads":tt,"distance_s":distance_s,"total_s":start.elapsed().as_secs_f64(),"zero_overlap_pairs":matrix.shared_sites.iter().filter(|&&n|n==0).count(),"short_overlap_pairs":matrix.shared_sites.iter().filter(|&&n|n>0&&n<matrix.min_overlap).count(),"saturated_pairs":matrix.distances.iter().zip(&matrix.shared_sites).filter(|(d,s)|!d.is_finite()&&**s>=matrix.min_overlap).count(),"tree":tree,"bootstrap":bootstrap_report});
+    if let Some(report) = &bootstrap_report {
+        if report.support_withheld {
+            eprintln!("Bootstrap support withheld: {}", report.failures.join("; "));
+        }
     }
-    Ok(())
+    finish_report(a, &mut result, publication)
 }
+
+// Publication status is separate from scientific bootstrap status. Only a
+// collection returned by the writer can appear here; no filesystem discovery.
+fn finish_report(a: &Args, result: &mut serde_json::Value, publication: Result<()>) -> Result<()> {
+    let mut error = publication.err();
+    result["output_status"] = json!(if error.is_some() { "failed" } else { "written" });
+    if let Some(error) = &error {
+        result["error"] = json!(error.to_string());
+    }
+    if let Some(path) = &a.report {
+        if let Err(report_error) = write_json(path, result) {
+            let diagnostic = error.as_ref().map_or_else(
+                || format!("run report write failed: {report_error}"),
+                |error| format!("{error}; run report write failed: {report_error}"),
+            );
+            result["output_status"] = json!("failed");
+            result["error"] = json!(diagnostic);
+            error = Some(diagnostic.into());
+        }
+    }
+    println!("{result}");
+    match error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
+}
+
 fn main() -> std::process::ExitCode {
     match run(&Args::parse()) {
         Ok(()) => std::process::ExitCode::SUCCESS,

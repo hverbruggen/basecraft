@@ -19,6 +19,18 @@ pub mod qobject {
         #[qproperty(QString, notifications)]
         type AppProvenance = super::ProvenanceRust;
         #[qinvokable]
+        fn save_conflicts(self: &AppProvenance, path: &QString) -> QString;
+        #[qinvokable]
+        fn resolve_save(self: Pin<&mut AppProvenance>, path: &QString, policy: &QString) -> bool;
+        #[qinvokable]
+        fn relink_run(self: Pin<&mut AppProvenance>, run: &QString, original: &QString) -> bool;
+        #[qinvokable]
+        fn relink_input(
+            self: Pin<&mut AppProvenance>,
+            result: &QString,
+            original: &QString,
+        ) -> bool;
+        #[qinvokable]
         fn cancel_run(self: Pin<&mut AppProvenance>, id: &QString);
         #[qinvokable]
         fn saved_report(self: &AppProvenance, path: &QString) -> QString;
@@ -116,6 +128,62 @@ fn run(operation: &str, result: &Path, destination: &Path) -> Result<String, Str
     outcome.map_err(|e| e.to_string())
 }
 impl qobject::AppProvenance {
+    fn save_conflicts(&self, path: &QString) -> QString {
+        report_json(
+            basecraft_ops::input_evidence::conflicts(Path::new(&path.to_string()))
+                .and_then(|value| serde_json::to_string(&value).map_err(Into::into))
+                .map_err(|e| e.to_string()),
+        )
+    }
+    fn resolve_save(self: Pin<&mut Self>, path: &QString, policy: &QString) -> bool {
+        let result = (|| -> basecraft_ops::Result<()> {
+            let policy = serde_json::from_value::<basecraft_ops::input_evidence::SavePolicy>(
+                serde_json::json!(policy.to_string()),
+            )?;
+            let _lock = basecraft_ops::input_evidence::lock()?;
+            let conflict = basecraft_ops::input_evidence::conflicts(Path::new(&path.to_string()))?;
+            basecraft_ops::input_evidence::resolve(&conflict, policy)
+        })();
+        match result {
+            Ok(()) => true,
+            Err(e) => {
+                self.set_message(QString::from(format!("fail: Save cancelled: {e}").as_str()));
+                false
+            }
+        }
+    }
+    fn relink_run(self: Pin<&mut Self>, run: &QString, original: &QString) -> bool {
+        let result = basecraft_ops::input_evidence::relink(
+            Path::new(&run.to_string()),
+            Path::new(&original.to_string()),
+        );
+        let success = result.is_ok();
+        self.set_message(QString::from(
+            match result {
+                Ok(()) => "done: Verified original relinked".into(),
+                Err(e) => format!("fail: {e}"),
+            }
+            .as_str(),
+        ));
+        success
+    }
+    fn relink_input(self: Pin<&mut Self>, result: &QString, original: &QString) -> bool {
+        let result = (|| -> basecraft_ops::Result<()> {
+            let result = std::path::PathBuf::from(result.to_string());
+            basecraft_ops::provenance::inspect(&result)?;
+            let run = basecraft_ops::provenance::bundle_for_result(&result);
+            basecraft_ops::input_evidence::relink(&run, Path::new(&original.to_string()))
+        })();
+        let success = result.is_ok();
+        self.set_message(QString::from(
+            match result {
+                Ok(()) => "done: Verified original relinked".into(),
+                Err(e) => format!("fail: {e}"),
+            }
+            .as_str(),
+        ));
+        success
+    }
     fn cancel_run(self: Pin<&mut Self>, id: &QString) {
         let result = basecraft_plugin_host::file_tool::cancel_run(&id.to_string());
         self.set_message(QString::from(

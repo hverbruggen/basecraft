@@ -59,6 +59,12 @@ pub fn read_origin(
     path: &Path,
     hashes: &[(String, String)],
 ) -> (Option<Publication>, Option<String>) {
+    if let Err(e) = crate::analysis_store::ArtifactRun::for_result(path) {
+        return (
+            None,
+            Some(format!("Hidden analysis binding could not be read: {e}")),
+        );
+    }
     let bundle = crate::provenance::bundle_for_result(path);
     if !bundle.join("manifest.json").exists() {
         return (None, None);

@@ -36,7 +36,7 @@ fn distance_outputs_are_logged_and_replay() {
     job.params.insert("model".into(), serde_json::json!("jc69"));
     job.params.insert("threads".into(), serde_json::json!(2));
     let result = job.run().unwrap();
-    assert_eq!(result.outputs.len(), 5);
+    assert_eq!(result.outputs.len(), 4);
     job.record(&mut session, doc, &result).unwrap();
     let tree = session.open(&output).unwrap();
     assert_eq!(session.tree(tree).tip_count(), 4);
@@ -45,13 +45,13 @@ fn distance_outputs_are_logged_and_replay() {
         .iter()
         .find(|e| matches!(e.op, Op::ToolRun { .. }))
         .unwrap();
-    assert_eq!(entry.result.hashes.len(), 6);
+    assert_eq!(entry.result.hashes.len(), 5);
     if let Op::ToolRun {
         params, outputs, ..
     } = &entry.op
     {
         assert_eq!(params["model"], "jc69");
-        assert_eq!(outputs.len(), 5);
+        assert_eq!(outputs.len(), 4);
     }
     let mut upgma = FileJob::from_alignment(
         &session,
@@ -67,8 +67,14 @@ fn distance_outputs_are_logged_and_replay() {
         .insert("method".into(), serde_json::json!("upgma"));
     let result = upgma.run().unwrap();
     upgma.record(&mut session, doc, &result).unwrap();
-    let metadata: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(root.join("upgma.nwk.run.json")).unwrap()).unwrap();
+    let metadata: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(
+            basecraft_ops::provenance::bundle_for_result(&root.join("upgma.nwk"))
+                .join("upgma.nwk.run.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
     assert_eq!(metadata["method"], "upgma");
     let tree = session.open(&root.join("upgma.nwk")).unwrap();
     assert_eq!(session.tree(tree).tip_count(), 4);
@@ -136,7 +142,7 @@ fn forest_members_share_one_alignment_snapshot() {
             .iter()
             .filter(|p| p.ends_with(".alignment.afa"))
             .count(),
-        1
+        0
     );
     session.flush().unwrap();
     assert!(basecraft_ops::replay::replay(dir.path()).unwrap().ok());
@@ -184,7 +190,10 @@ fn bootstrap_provenance_success_and_withheld_support_replay() {
             let result = job.run().unwrap();
             job.record(&mut session, doc, &result).unwrap();
             let report: serde_json::Value = serde_json::from_slice(
-                &std::fs::read(format!("{}.run.json", output.display())).unwrap(),
+                &std::fs::read(basecraft_ops::provenance::bundle_for_result(&output).join(
+                    format!("{}.run.json", output.file_name().unwrap().to_string_lossy()),
+                ))
+                .unwrap(),
             )
             .unwrap();
             assert_eq!(report["bootstrap"]["requested"], 64);
@@ -233,4 +242,147 @@ fn bootstrap_provenance_success_and_withheld_support_replay() {
     }
     let replay = basecraft_ops::replay::replay(root).unwrap();
     assert!(replay.ok(), "{:?}", replay.problems);
+}
+
+#[test]
+fn failed_native_publication_registers_structured_bootstrap_evidence_without_input_copies() {
+    let binary = std::env::var_os("BASECRAFT_DISTANCE_TEST_BINARY")
+        .expect("set matching distance test binary for combined host acceptance");
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("input.afa");
+    std::fs::write(&source, ">a\nAAAAAC\n>b\nAAAAAT\n>c\nACAAAC\n").unwrap();
+    let output = root.path().join("failed.nwk");
+    let mut session = Session::recoverable(root.path()).unwrap();
+    let doc = session.open(&source).unwrap();
+    let plugin = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/distance");
+    let mut job = FileJob::from_alignment(
+        &session,
+        doc,
+        (&plugin, "tree"),
+        AlignmentInput::Aligned,
+        output.clone(),
+    )
+    .unwrap();
+    let cache_directory = root.path().join("read-only");
+    std::fs::create_dir(&cache_directory).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&cache_directory, std::fs::Permissions::from_mode(0o555)).unwrap();
+    }
+    let missing = cache_directory.join("cache.json");
+    job.params.extend([
+        (
+            "executable".into(),
+            serde_json::json!(std::path::PathBuf::from(binary)),
+        ),
+        ("model".into(), serde_json::json!("p")),
+        ("method".into(), serde_json::json!("sorted")),
+        ("bootstrap".into(), serde_json::json!(8)),
+        ("threads".into(), serde_json::json!(1)),
+        ("cache".into(), serde_json::json!(missing)),
+    ]);
+    let result = job.run();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&cache_directory, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    assert!(result.is_err(), "{result:?}");
+    job.record_terminal(&mut session, doc, &result, 0.0)
+        .unwrap();
+    assert!(!output.exists());
+    let paths = basecraft_platform::paths::AppPaths::discover().unwrap();
+    let run_id = job.params["job_id"].as_str().unwrap();
+    let execution: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(paths.state.join("jobs").join(run_id).join("manifest.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(execution["status"], "failed");
+    let collection = root
+        .path()
+        .join(".basecraft/analyses-v1/runs")
+        .join(run_id)
+        .join(format!("bootstrap-{run_id}.nex"));
+    assert!(collection.is_file());
+    assert!(
+        execution["outputs"]
+            .get(collection.to_str().unwrap())
+            .is_some(),
+        "{execution}"
+    );
+    assert_eq!(execution["recovery_artifact"]["status"], "complete");
+    assert_eq!(execution["recovery_artifact"]["trees"], 8);
+    assert_eq!(job.input_io().unwrap()["persistent_original_copy_bytes"], 0);
+    assert!(
+        !collection
+            .parent()
+            .unwrap()
+            .join("submitted.fasta")
+            .exists()
+    );
+}
+
+#[test]
+fn reference_tree_save_as_and_complete_export_retain_alignment_and_support() {
+    let binary =
+        std::env::var_os("BASECRAFT_DISTANCE_TEST_BINARY").expect("matching engine required");
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("input.afa");
+    std::fs::write(
+        &source,
+        ">a\nAAAAAACCAA\n>b\nAAAAAACCAA\n>c\nAAGGAACCAA\n>d\nAAGGAACCAA\n",
+    )
+    .unwrap();
+    let output = root.path().join("tree.nwk");
+    let mut session = Session::recoverable(root.path()).unwrap();
+    let doc = session.open(&source).unwrap();
+    let plugin = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/distance");
+    let mut job = FileJob::from_alignment(
+        &session,
+        doc,
+        (&plugin, "tree"),
+        AlignmentInput::Aligned,
+        output.clone(),
+    )
+    .unwrap();
+    job.params.extend([
+        (
+            "executable".into(),
+            serde_json::json!(std::path::PathBuf::from(binary)),
+        ),
+        ("model".into(), serde_json::json!("p")),
+        ("method".into(), serde_json::json!("sorted")),
+        ("bootstrap".into(), serde_json::json!(8)),
+        ("threads".into(), serde_json::json!(1)),
+    ]);
+    let result = job.run().unwrap();
+    job.record(&mut session, doc, &result).unwrap();
+    let tree = session.open(&output).unwrap();
+    let copied = root.path().join("copied.nwk");
+    session.save(tree, Some(&copied)).unwrap();
+    let link = basecraft_ops::links::AlignmentLink::read(&copied).unwrap();
+    assert_eq!(link.schema, 2);
+    assert!(link.checked_snapshot(&copied, session.tree(tree)).is_ok());
+    assert!(!std::fs::read_dir(root.path()).unwrap().any(|e| {
+        e.unwrap()
+            .file_name()
+            .to_string_lossy()
+            .ends_with(".alignment.afa")
+    }));
+    let package = root.path().join("portable");
+    basecraft_ops::provenance::package(&output, &package).unwrap();
+    std::fs::remove_file(&source).unwrap();
+    let exported = package.join("tree.nwk");
+    assert_eq!(
+        basecraft_ops::provenance::verify(&exported).unwrap(),
+        Vec::<String>::new()
+    );
+    let tree = basecraft_ops::files::load_tree(&exported).unwrap().doc;
+    assert_eq!(
+        tree.supports()[0].kind,
+        basecraft_protocol::SupportKind::Bootstrap
+    );
+    let link = basecraft_ops::links::AlignmentLink::read(&exported).unwrap();
+    assert!(link.checked_snapshot(&exported, &tree).is_ok());
 }

@@ -8,7 +8,8 @@ use serde::Serialize;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Write as _,
-    path::PathBuf,
+    io::{BufWriter, Write as _},
+    path::{Path, PathBuf},
     time::Instant,
 };
 
@@ -23,6 +24,15 @@ pub struct BootstrapOptions {
     pub progress: Option<PathBuf>,
     /// Creating this file requests cancellation between replicates.
     pub cancel_file: Option<PathBuf>,
+    /// Stream successful replicates to a new NEXUS file; never replace an existing file.
+    pub replicate_trees: Option<PathBuf>,
+}
+#[derive(Debug, Serialize)]
+pub struct ReplicateCollection {
+    pub path: PathBuf,
+    pub format: &'static str,
+    pub status: &'static str,
+    pub trees: usize,
 }
 #[derive(Debug, Serialize)]
 pub struct BootstrapReport {
@@ -42,10 +52,124 @@ pub struct BootstrapReport {
     pub total_s: f64,
     pub algorithm: &'static str,
     pub rng: &'static str,
+    /// Set only after atomic publication. Progress never advertises scratch files.
+    pub replicate_trees: Option<ReplicateCollection>,
 }
+#[derive(Debug)]
 pub struct BootstrapResult {
     pub tree: Option<TreeResult>,
     pub report: BootstrapReport,
+}
+
+/// A collection was published by this invocation, but the final progress write failed.
+/// Callers must preserve this evidence even though the operation returned an error.
+#[derive(Debug)]
+pub struct BootstrapPublicationError {
+    pub report: BootstrapReport,
+    cause: Box<dyn std::error::Error + Send + Sync>,
+}
+impl std::fmt::Display for BootstrapPublicationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "final bootstrap progress write failed: {}", self.cause)
+    }
+}
+impl std::error::Error for BootstrapPublicationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.cause.as_ref())
+    }
+}
+
+/// A partial collection has a distinct name even when all attempts finished.
+pub fn partial_collection_path(path: &Path) -> PathBuf {
+    let mut name = path.file_stem().unwrap_or_default().to_os_string();
+    name.push(".partial.nex");
+    path.with_file_name(name)
+}
+
+struct CollectionWriter {
+    file: BufWriter<tempfile::NamedTempFile>,
+    destination: PathBuf,
+}
+impl CollectionWriter {
+    fn new(path: &Path, options: &BootstrapOptions) -> Result<Self> {
+        for candidate in [path.to_path_buf(), partial_collection_path(path)] {
+            if candidate.try_exists()? || candidate.symlink_metadata().is_ok() {
+                return Err(format!(
+                    "bootstrap collection already exists: {}",
+                    candidate.display()
+                )
+                .into());
+            }
+        }
+        let parent = path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        let mut file = BufWriter::new(tempfile::NamedTempFile::new_in(parent)?);
+        writeln!(
+            file,
+            "#NEXUS\n[Basecraft ordinary site bootstrap; seed={}; requested={}]\nBEGIN TREES;",
+            options.seed, options.replicates
+        )?;
+        Ok(Self {
+            file,
+            destination: path.to_path_buf(),
+        })
+    }
+
+    fn tree(&mut self, replicate: usize, newick: &str, rooted: bool) -> Result<()> {
+        writeln!(
+            self.file,
+            "TREE replicate_{} = [&{}] {}",
+            replicate + 1,
+            if rooted { "R" } else { "U" },
+            newick.trim()
+        )?;
+        Ok(())
+    }
+
+    fn finish(mut self, report: &BootstrapReport) -> Result<ReplicateCollection> {
+        let status = if report.cancelled {
+            "cancelled"
+        } else if report.attempted == 0 {
+            "original_failed"
+        } else if report.support_withheld {
+            "partial"
+        } else {
+            "complete"
+        };
+        writeln!(
+            self.file,
+            "END;\n[status={status}; requested={}; attempted={}; retained={}; failed={}; support_withheld={}]",
+            report.requested,
+            report.attempted,
+            report.completed,
+            report.failed_replicates,
+            report.support_withheld
+        )?;
+        self.file.flush()?;
+        let temporary = self.file.into_inner()?;
+        temporary.as_file().sync_all()?;
+        let path = if report.support_withheld {
+            partial_collection_path(&self.destination)
+        } else {
+            self.destination
+        };
+        temporary.persist_noclobber(&path)?;
+        Ok(ReplicateCollection {
+            path,
+            format: "nexus",
+            status,
+            trees: report.completed,
+        })
+    }
+}
+
+fn complete_tree(tree: TreeResult) -> Result<TreeResult> {
+    if tree.trees.len() != 1 || tree.components != 1 || tree.unresolved {
+        return Err("bootstrap requires one complete tree; disconnected or unresolved forests are unsupported".into());
+    }
+    Ok(tree)
 }
 
 // SplitMix64 and unbiased rejection sampling are specified here rather than depending on
@@ -330,13 +454,22 @@ pub fn bootstrap(
             "exact site multiplicities; explicit packed resampling"
         },
         rng: "splitmix64-rejection-v1",
+        replicate_trees: None,
     };
+    let mut collection = options
+        .replicate_trees
+        .as_ref()
+        .map(|path| CollectionWriter::new(path, options))
+        .transpose()?;
     let mut tree = None;
     if let Some(cause) = undefined(original) {
         report.failures.push(format!("original: {cause}"));
     } else {
         let now = Instant::now();
-        match original.tree(options.method, options.tree_threads) {
+        match original
+            .tree(options.method, options.tree_threads)
+            .and_then(complete_tree)
+        {
             Ok(value) => tree = Some(value),
             Err(error) => report.failures.push(format!("original inference: {error}")),
         }
@@ -388,7 +521,9 @@ pub fn bootstrap(
             let result = if let Some(cause) = undefined(&matrix) {
                 Err(cause.into())
             } else {
-                matrix.tree(options.method, options.tree_threads)
+                matrix
+                    .tree(options.method, options.tree_threads)
+                    .and_then(complete_tree)
             };
             match result {
                 Ok(replicate_tree) => {
@@ -402,6 +537,13 @@ pub fn bootstrap(
                         if let Some(count) = frequencies.get_mut(&split) {
                             *count += 1;
                         }
+                    }
+                    if let Some(collection) = &mut collection {
+                        collection.tree(
+                            replicate,
+                            &replicate_tree.trees[0],
+                            options.method == Method::Upgma,
+                        )?;
                     }
                     report.completed += 1;
                 }
@@ -433,8 +575,13 @@ pub fn bootstrap(
         report.support_withheld = false;
     }
     report.total_s = start.elapsed().as_secs_f64();
+    if let Some(collection) = collection {
+        report.replicate_trees = Some(collection.finish(&report)?);
+    }
     if let Some(path) = &options.progress {
-        crate::write_json(path, &report)?;
+        if let Err(cause) = crate::write_json(path, &report) {
+            return Err(Box::new(BootstrapPublicationError { report, cause }));
+        }
     }
     Ok(BootstrapResult { tree, report })
 }
@@ -464,6 +611,7 @@ mod tests {
             tree_threads: threads,
             progress: None,
             cancel_file: None,
+            replicate_trees: None,
         }
     }
     fn explicit(a: &Alignment, weights: &[u64]) -> Alignment {
@@ -483,6 +631,181 @@ mod tests {
                 .collect(),
         }
     }
+    #[test]
+    fn retained_trees_match_exact_resampling_without_changing_support() {
+        use basecraft_io::newick::parse_trees;
+        let dir = tempfile::tempdir().unwrap();
+        let a = alignment();
+        let matrix = DistanceMatrix::calculate(&a, Model::P, 1, 1).unwrap();
+        for method in [Method::Sorted, Method::Upgma] {
+            let mut settings = options(method, 2);
+            let baseline = bootstrap(&a, &matrix, &settings).unwrap();
+            let path = dir.path().join(format!("{method:?}.nex"));
+            settings.replicate_trees = Some(path.clone());
+            let result = bootstrap(&a, &matrix, &settings).unwrap();
+            assert_eq!(baseline.tree.unwrap().trees, result.tree.unwrap().trees);
+            let retained = result.report.replicate_trees.unwrap();
+            assert_eq!(retained.path, path);
+            assert_eq!(retained.status, "complete");
+            assert_eq!(retained.trees, settings.replicates);
+            let text = std::fs::read_to_string(&path).unwrap();
+            assert!(text.contains("status=complete"));
+            let trees = parse_trees(&text).unwrap();
+            assert_eq!(trees.len(), settings.replicates);
+            for (r, tree) in trees.iter().enumerate() {
+                assert_eq!(tree.name, format!("replicate_{}", r + 1));
+                let weights = multiplicities(matrix.columns, settings.seed, r);
+                let sampled = explicit(&a, &weights);
+                let expected = DistanceMatrix::calculate(&sampled, Model::P, 1, 1)
+                    .unwrap()
+                    .tree(method, 1)
+                    .unwrap();
+                assert_eq!(tree.nodes, parse_newick(&expected.trees[0]).unwrap().nodes);
+            }
+            assert!(!partial_collection_path(&path).exists());
+        }
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn partial_collection_retains_only_actual_successes_with_original_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = Alignment {
+            names: vec!["a".into(), "b".into()],
+            sequences: vec![b"A---".to_vec(), b"AAAA".to_vec()],
+        };
+        let matrix = DistanceMatrix::calculate(&a, Model::P, 1, 1).unwrap();
+        let mut settings = options(Method::Sorted, 2);
+        let path = dir.path().join("replicates.nex");
+        settings.replicate_trees = Some(path.clone());
+        let result = bootstrap(&a, &matrix, &settings).unwrap();
+        assert!(result.report.support_withheld);
+        assert_eq!(result.report.attempted, settings.replicates);
+        let retained = result.report.replicate_trees.unwrap();
+        assert_eq!(retained.status, "partial");
+        assert!(!path.exists());
+        let trees =
+            basecraft_io::newick::parse_trees(&std::fs::read_to_string(&retained.path).unwrap())
+                .unwrap();
+        let mut expected_ids = vec![];
+        for r in 0..settings.replicates {
+            let sampled = explicit(&a, &multiplicities(matrix.columns, settings.seed, r));
+            let sampled_matrix = DistanceMatrix::calculate(&sampled, Model::P, 1, 1).unwrap();
+            if undefined(&sampled_matrix).is_none() {
+                expected_ids.push(format!("replicate_{}", r + 1));
+            }
+        }
+        assert_eq!(
+            trees.iter().map(|t| t.name.clone()).collect::<Vec<_>>(),
+            expected_ids
+        );
+        assert_eq!(trees.len(), result.report.completed);
+        assert_eq!(
+            trees.len() + result.report.failed_replicates,
+            settings.replicates
+        );
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn cancelled_and_disconnected_collections_are_explicitly_incomplete() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut a = alignment();
+        let matrix = DistanceMatrix::calculate(&a, Model::P, 1, 1).unwrap();
+        let mut settings = options(Method::Upgma, 1);
+        settings.replicate_trees = Some(dir.path().join("cancelled.nex"));
+        settings.cancel_file = Some(dir.path().join("cancel"));
+        std::fs::write(settings.cancel_file.as_ref().unwrap(), "").unwrap();
+        let result = bootstrap(&a, &matrix, &settings).unwrap();
+        let retained = result.report.replicate_trees.unwrap();
+        assert_eq!(retained.status, "cancelled");
+        assert_eq!(retained.trees, 0);
+        assert!(retained.path.ends_with("cancelled.partial.nex"));
+        assert!(
+            std::fs::read_to_string(retained.path)
+                .unwrap()
+                .contains("status=cancelled")
+        );
+        settings.cancel_file = None;
+        settings.replicate_trees = Some(dir.path().join("disconnected.nex"));
+        a.names = vec!["a".into(), "b".into()];
+        a.sequences = vec![b"AAA---".to_vec(), b"---AAA".to_vec()];
+        let matrix = DistanceMatrix::calculate(&a, Model::P, 1, 1).unwrap();
+        let result = bootstrap(&a, &matrix, &settings).unwrap();
+        assert!(result.tree.is_none());
+        assert_eq!(result.report.attempted, 0);
+        assert!(result.report.failures[0].contains("no comparable sites"));
+        assert_eq!(
+            result.report.replicate_trees.unwrap().status,
+            "original_failed"
+        );
+    }
+
+    #[test]
+    fn cancellation_after_progress_retains_exact_successful_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = alignment();
+        let matrix = DistanceMatrix::calculate(&a, Model::P, 1, 1).unwrap();
+        let mut settings = options(Method::Sorted, 1);
+        settings.replicates = 10000;
+        settings.progress = Some(dir.path().join("progress.json"));
+        settings.cancel_file = Some(dir.path().join("cancel"));
+        settings.replicate_trees = Some(dir.path().join("trees.nex"));
+        let progress = settings.progress.clone().unwrap();
+        let cancel = settings.cancel_file.clone().unwrap();
+        let requester = std::thread::spawn(move || {
+            let start = Instant::now();
+            while !progress.exists() {
+                assert!(start.elapsed().as_secs() < 10, "no bootstrap progress");
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            std::fs::write(cancel, "").unwrap();
+        });
+        let result = bootstrap(&a, &matrix, &settings).unwrap();
+        requester.join().unwrap();
+        assert!(result.report.cancelled);
+        assert!(result.report.completed > 0);
+        assert!(result.report.completed < settings.replicates);
+        assert_eq!(result.report.completed, result.report.attempted);
+        let collection = result.report.replicate_trees.unwrap();
+        let trees =
+            basecraft_io::newick::parse_trees(&std::fs::read_to_string(collection.path).unwrap())
+                .unwrap();
+        assert_eq!(trees.len(), result.report.completed);
+        for (r, tree) in trees.iter().enumerate() {
+            assert_eq!(tree.name, format!("replicate_{}", r + 1));
+        }
+    }
+
+    #[test]
+    fn collection_io_errors_preserve_existing_files_and_remove_own_scratch() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = alignment();
+        let matrix = DistanceMatrix::calculate(&a, Model::P, 1, 1).unwrap();
+        let mut settings = options(Method::Sorted, 1);
+        let path = dir.path().join("trees.nex");
+        settings.replicate_trees = Some(path.clone());
+        for collision in [&path, &partial_collection_path(&path)] {
+            std::fs::write(collision, "existing").unwrap();
+            assert!(bootstrap(&a, &matrix, &settings).is_err());
+            assert_eq!(std::fs::read_to_string(collision).unwrap(), "existing");
+            std::fs::remove_file(collision).unwrap();
+        }
+        settings.progress = Some(dir.path().join("missing/progress.json"));
+        assert!(bootstrap(&a, &matrix, &settings).is_err());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+        settings.progress = None;
+        settings.replicate_trees = Some(dir.path().join("missing/trees.nex"));
+        assert!(bootstrap(&a, &matrix, &settings).is_err());
+        // A race after preflight must also be no-clobber.
+        let writer = CollectionWriter::new(&path, &settings).unwrap();
+        std::fs::write(&path, "racing writer").unwrap();
+        let result = bootstrap(&a, &matrix, &options(Method::Sorted, 1)).unwrap();
+        assert!(writer.finish(&result.report).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "racing writer");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
     #[test]
     fn exact_integer_counts_and_corrections_match_resampled_packed_engine() {
         let mut a = alignment();

@@ -13,6 +13,11 @@ pub fn companion(path: &Path) -> PathBuf {
 /// Locate explicitly published project or standalone history. A missing portable
 /// bundle is an error, never reconstructed from a filename or local journal.
 pub fn bundle_for_result(result: &Path) -> PathBuf {
+    if let Ok(Some(hidden)) = crate::analysis_store::ArtifactRun::for_result(result) {
+        if hidden.join("manifest.json").is_file() {
+            return hidden;
+        }
+    }
     let standalone = companion(result);
     if standalone.join("manifest.json").is_file() {
         return standalone;
@@ -65,7 +70,7 @@ fn safe_relative(root: &Path, name: &str) -> Result<PathBuf> {
     Ok(canonical)
 }
 
-pub(crate) fn read_record(path: &Path) -> Result<Vec<u8>> {
+pub fn read_record(path: &Path) -> Result<Vec<u8>> {
     use std::io::Read;
     const LIMIT: u64 = 64 << 20;
     let file = std::fs::File::open(path)?;
@@ -90,6 +95,8 @@ fn copy_atomic(source: &Path, target: &Path) -> Result<()> {
 }
 
 pub fn inspect(result: &Path) -> Result<Publication> {
+    // A damaged hidden binding is an error, never a reason to use stale legacy context.
+    crate::analysis_store::ArtifactRun::for_result(result)?;
     let bundle = bundle_for_result(result);
     let publication: Publication =
         serde_json::from_slice(&read_record(&bundle.join("manifest.json"))?)?;
@@ -104,7 +111,16 @@ pub fn verify(result: &Path) -> Result<Vec<String>> {
     let publication = inspect(result)?;
     let bundle = bundle_for_result(result);
     let mut issues = verify_records(&bundle, &publication)?;
-    for artifact in publication.inputs.iter().chain(&publication.outputs) {
+    if bundle.join("input.json").is_file() {
+        if crate::input_evidence::read_input(&bundle)?.state == "broken" {
+            issues.push("Input evidence explicitly broken".into());
+        }
+        match crate::input_evidence::verify_ancestors(&bundle) {
+            Ok(upstream) => issues.extend(upstream),
+            Err(e) => issues.push(format!("Upstream evidence unavailable: {e}")),
+        }
+    }
+    for artifact in &publication.inputs {
         if let Some(relative) = &artifact.retained {
             match safe_relative(&bundle, relative).and_then(|path| {
                 let size = std::fs::metadata(&path)?.len();
@@ -115,6 +131,16 @@ pub fn verify(result: &Path) -> Result<Vec<String>> {
                 Ok(false) => issues.push(format!("{}: retained bytes differ", artifact.id)),
                 Err(e) => issues.push(format!("{}: {e}", artifact.id)),
             }
+        } else if let Some(reference) = &artifact.reference {
+            if artifact.hash != reference.hash || artifact.size != reference.stamp.size {
+                issues.push(format!(
+                    "{}: input revision/reference identity differs",
+                    artifact.id
+                ));
+            }
+            if let Err(e) = crate::input_evidence::verified_source(&bundle, reference) {
+                issues.push(format!("{}: {e}", artifact.id));
+            }
         } else {
             issues.push(format!("{}: input bytes unavailable", artifact.id));
         }
@@ -122,18 +148,15 @@ pub fn verify(result: &Path) -> Result<Vec<String>> {
     if publication.outputs.is_empty() {
         return Err(invalid("publication has no output"));
     }
+    let hidden = crate::analysis_store::ArtifactRun::for_result(result)?.is_some();
     for (index, output) in publication.outputs.iter().enumerate() {
-        let path = if index == 0 {
+        let path = if index == 0 && !hidden {
             result.to_path_buf()
         } else {
-            let name = Path::new(&output.logical_name);
-            if name
-                .components()
-                .any(|c| !matches!(c, Component::Normal(_)))
-            {
-                return Err(invalid("unsafe output logical name"));
-            }
-            result.parent().unwrap_or(Path::new(".")).join(name)
+            safe_relative(
+                result.parent().unwrap_or(Path::new(".")),
+                &output.logical_name,
+            )?
         };
         match basecraft_io::hash_file(&path) {
             Ok(hash) if hash == output.hash => {}
@@ -147,7 +170,7 @@ pub fn verify(result: &Path) -> Result<Vec<String>> {
     Ok(issues)
 }
 
-fn verify_records(bundle: &Path, current: &Publication) -> Result<Vec<String>> {
+pub(crate) fn verify_records(bundle: &Path, current: &Publication) -> Result<Vec<String>> {
     let mut issues = Vec::new();
     let mut states = std::collections::HashMap::<String, u8>::new();
     let mut hashes = std::collections::HashMap::<String, String>::new();
@@ -228,7 +251,17 @@ fn verify_records(bundle: &Path, current: &Publication) -> Result<Vec<String>> {
                 if size != artifact.size || basecraft_io::hash_file(&retained)? != artifact.hash {
                     issues.push(format!("{}: ancestor retained bytes differ", artifact.id));
                 }
-            } else {
+            } else if let Some(reference) = &artifact.reference {
+                if artifact.hash != reference.hash || artifact.size != reference.stamp.size {
+                    issues.push(format!(
+                        "{}: ancestor input revision/reference identity differs",
+                        artifact.id
+                    ));
+                }
+                if let Err(e) = crate::input_evidence::verified_source(bundle, reference) {
+                    issues.push(format!("{}: {e}", artifact.id));
+                }
+            } else if publication.inputs.iter().any(|a| a.id == artifact.id) {
                 issues.push(format!("{}: ancestor input bytes unavailable", artifact.id));
             }
         }
@@ -350,6 +383,11 @@ fn copy_tree(source: &Path, target: &Path) -> Result<()> {
 /// Result and complete retained bundle copied into a new directory. This is a
 /// data package, not a promise that external software can reproduce the result.
 pub fn package(result: &Path, destination: &Path) -> Result<()> {
+    if crate::analysis_store::ArtifactRun::for_result(result)?.is_some()
+        || bundle_for_result(result).join("input.json").is_file()
+    {
+        return crate::input_evidence::package(result, destination);
+    }
     let issues = verify(result)?;
     if !issues.is_empty() {
         return Err(invalid(issues.join("; ")));

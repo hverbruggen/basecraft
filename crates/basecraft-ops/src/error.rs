@@ -14,6 +14,8 @@ pub enum Error {
     Empty(PathBuf),
     #[error("invalid operation: {0}")]
     Invalid(String),
+    #[error("{0}")]
+    EvidenceConflict(Box<crate::input_evidence::EvidenceConflict>),
     #[error("nothing to {0}")]
     NothingTo(&'static str),
 }

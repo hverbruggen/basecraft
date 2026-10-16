@@ -19,11 +19,20 @@ def trim(snapshot, params):
         raise ValueError("Unknown trimAl method")
     records = read_alignment(source)
     exe = executable(("trimal",), "BASECRAFT_TRIMAL")
+    diagnostics = []
     with tempfile.TemporaryDirectory(prefix="basecraft-trimal-") as work:
         renamed, output = Path(work) / "input.fa", Path(work) / "output.fa"
         renamed.write_text("".join(f">t{i}\n{s}\n" for i, (_, s) in enumerate(records)))
         argv = [exe, "-in", str(renamed), "-out", str(output), "-fasta", "-" + method]
         run = subprocess.run(argv, capture_output=True, text=True, check=False)
+        if allocation := params.get("analysis_artifacts"):
+            folder = Path(allocation["metadata_directory"])
+            log = folder / "trimal.stderr.txt"
+            mapping = folder / "trimal-identifiers.json"
+            import json
+            write_atomic(log, run.stderr)
+            write_atomic(mapping, json.dumps({f"t{i}": h for i, (h, _) in enumerate(records)}, indent=2) + "\n")
+            diagnostics.extend([str(log), str(mapping)])
         if run.returncode or not output.exists():
             raise RuntimeError(run.stderr.strip() or "trimAl produced no alignment")
         trimmed = read_alignment(output)
@@ -32,7 +41,7 @@ def trim(snapshot, params):
             raise RuntimeError("trimAl changed the sequence identifiers")
         write_atomic(target, "".join(f">{original[h]}\n{s}\n" for h, s in trimmed))
     version = subprocess.run([exe, "--version"], capture_output=True, text=True, check=False)
-    return {"ops": [], "outputs": [str(target)],
+    return {"ops": [], "outputs": [str(target), *diagnostics],
             "message": f"Trimmed {len(records[0][1])} to {len(trimmed[0][1])} columns ({method})",
             "tool": {"name": "trimAl", "version": (version.stdout or version.stderr).strip()},
             "execution": {"argv": argv, "resolved_parameters": {"method": method}, "preprocessing": ["Sequence identifiers mapped to neutral t0..tN identifiers and restored after trimming"], "environment": {}, "methods_template": "trimal.trim.v1", "methods": {"description": "The alignment was trimmed", "citations": ["Capella-Gutierrez et al. (2009), trimAl. https://doi.org/10.1093/bioinformatics/btp348"]}}}

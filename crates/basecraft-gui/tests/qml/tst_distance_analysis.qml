@@ -23,7 +23,7 @@ Item {
         function test_escape_data() {
             const rows = []
             for (const kind of ["matrix", "nj", "upgma"])
-                for (const focus of ["number", "button"])
+                for (const focus of (kind === "matrix" ? ["number", "button"] : ["number", "button", "destination"]))
                     rows.push({tag: kind + "-" + focus, kind, focus})
             return rows
         }
@@ -34,8 +34,9 @@ Item {
             accepted.target = d; accepted.clear()
             d.open()
             tryCompare(findChild(d, "distanceModel"), "activeFocus", true)
+            if (data.focus === "destination") findChild(d, "distanceBootstrap").checked = true
             const field = data.focus === "number" ? findChild(d, "distanceOverlap").contentItem
-                : d.standardButton(Dialog.Ok)
+                : data.focus === "destination" ? findChild(d, "bootstrapDestination") : d.standardButton(Dialog.Ok)
             field.forceActiveFocus(Qt.TabFocusReason)
             tryCompare(field, "activeFocus", true)
             if (data.focus === "number") { keyClick(Qt.Key_A, Qt.ControlModifier); keyClick("9") }
@@ -56,6 +57,7 @@ Item {
             compare(d.parameters().model, data.tag === "matrix" ? "p" : "k2p")
             compare(findChild(d, "distanceMethod").visible, data.tag === "nj")
             compare(findChild(d, "distanceBootstrap").visible, data.tag !== "matrix")
+            verify(!findChild(d, "bootstrapDestination").visible)
             verify(!("threads" in d.parameters()))
             verify(!("tree_threads" in d.parameters()))
             const before = backend.calls
@@ -69,6 +71,11 @@ Item {
             else {
                 compare(p.bootstrap, 1000)
                 compare(p.seed, 1)
+                compare(p.bootstrap_destination, "metadata")
+                verify(findChild(d, "bootstrapDestination").visible)
+                findChild(d, "bootstrapDestination").currentIndex = 1
+                compare(d.parameters().bootstrap_destination, "working")
+                findChild(d, "bootstrapDestination").currentIndex = 0
                 if (data.tag === "nj") {
                     compare(p.method, "sorted")
                     compare(findChild(d, "distanceMethod").currentText, "sorted")

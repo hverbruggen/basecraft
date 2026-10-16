@@ -172,6 +172,10 @@ fn materialise(
             stored
         } else if basecraft_io::cache::content_hash(&original).ok().as_deref() == Some(hash) {
             original
+        } else if let Some(retained) =
+            crate::analysis_store::retained_source(root, hash).map_err(|e| e.to_string())?
+        {
+            retained
         } else {
             return Err(format!("input {rel} changed and no stored copy exists"));
         };
