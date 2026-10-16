@@ -236,3 +236,113 @@ fn distance_matrix_cli_keeps_only_tsv_visible() {
         Vec::<String>::new()
     );
 }
+
+#[test]
+fn public_matrix_cache_creation_reuse_and_failures_are_managed() {
+    let parent = tempfile::tempdir().unwrap();
+    let root = parent.path().join("working");
+    std::fs::create_dir(&root).unwrap();
+    let source = root.join("source.afa");
+    let cache = root.join("chosen-cache.json");
+    std::fs::write(&source, ">a\nAAAA\n>b\nAAAT\n>c\nAATT\n").unwrap();
+    let run_cli = |output: &std::path::Path, chosen: &std::path::Path| {
+        Command::new(env!("CARGO_BIN_EXE_basecraft"))
+            .args([
+                "distance",
+                source.to_str().unwrap(),
+                "--matrix",
+                "--output",
+                output.to_str().unwrap(),
+                "--model",
+                "p",
+                "--cache",
+                chosen.to_str().unwrap(),
+            ])
+            .env("BASECRAFT_PROFILE_DIR", parent.path().join("profile"))
+            .output()
+            .unwrap()
+    };
+    for (stem, reused) in [("created", false), ("reused", true)] {
+        let before = std::fs::read(&cache).ok();
+        let output = root.join(format!("{stem}.tsv"));
+        let result = run_cli(&output, &cache);
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let run = basecraft_ops::analysis_store::ArtifactRun::for_result(&output)
+            .unwrap()
+            .unwrap();
+        let report: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(run.join(format!("{stem}.tsv.run.json"))).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(report["cache_reused"], reused);
+        assert!(run.join(format!("{stem}.tsv.distances.json")).is_file());
+        assert!(run.join("manifest.json").is_file());
+        if let Some(before) = before {
+            assert_eq!(std::fs::read(&cache).unwrap(), before);
+        }
+        assert_eq!(
+            basecraft_ops::provenance::verify(&output).unwrap(),
+            Vec::<String>::new()
+        );
+    }
+    let source_before = std::fs::read(&source).unwrap();
+    let alias_output = root.join("alias.tsv");
+    assert!(!run_cli(&alias_output, &source).status.success());
+    assert!(!alias_output.exists());
+    assert_eq!(std::fs::read(&source).unwrap(), source_before);
+    let same = root.join("same.tsv");
+    assert!(!run_cli(&same, &same).status.success());
+    assert!(!same.exists());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let read_only = root.join("read-only");
+        std::fs::create_dir(&read_only).unwrap();
+        std::fs::set_permissions(&read_only, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let output = root.join("failed.tsv");
+        let failed_cache = read_only.join("cache.json");
+        let failure = run_cli(&output, &failed_cache);
+        std::fs::set_permissions(&read_only, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(!failure.status.success());
+        assert!(!output.exists());
+        assert!(!failed_cache.exists());
+        assert!(
+            basecraft_ops::analysis_store::ArtifactRun::for_result(&output)
+                .unwrap()
+                .is_none()
+        );
+        let runs = root.join(".basecraft/analyses-v1/runs");
+        assert!(
+            std::fs::read_dir(runs).unwrap().any(|e| e
+                .unwrap()
+                .path()
+                .join("pending/failed.tsv")
+                .is_file())
+        );
+    }
+    let mut files: Vec<_> = std::fs::read_dir(&root)
+        .unwrap()
+        .filter_map(|e| {
+            let e = e.unwrap();
+            e.file_type()
+                .unwrap()
+                .is_file()
+                .then(|| e.file_name().to_string_lossy().into_owned())
+        })
+        .collect();
+    files.sort();
+    assert_eq!(
+        files,
+        [
+            "chosen-cache.json",
+            "created.tsv",
+            "reused.tsv",
+            "source.afa"
+        ]
+    );
+    println!("matrix --cache CLI files: {files:?}");
+}

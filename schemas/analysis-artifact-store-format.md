@@ -150,3 +150,28 @@ common dependency-closure exporter and relocates the derived workspace's input,
 display and report paths into checked package artifacts, preserving the original
 scientific records as immutable evidence. Historical command paths describe the
 actual execution environment; exports do not claim executable scientific replay.
+
+Explicit distance `cache` paths are handled by the shared host for matrix and
+ordinary tree jobs. Computed observed-distance evidence always stays in the
+allocated run. An existing ordinary cache is a candidate input: the host freezes
+and verifies its bytes as `cache-input.json`, records its accepted hash/stat and
+source location in `cache-input-record.json`, and declares a checked retained
+auxiliary input in the publication. The native engine still validates dimensions,
+model, alignment identity and overlap before reuse. A valid nonmatching cache
+causes computation inside the run; the existing external file is left intact.
+Malformed caches fail without replacement. Cache data is derived evidence; this
+retention does not create a permanent copy of a clean original alignment.
+
+A previously absent caller-selected cache is an intentional secondary export,
+declared before execution in `cache-publication.json`. The host rejects aliases
+to inputs/results/control files, symlinks, invalid parents and returned paths
+outside allocation. All plugin-returned paths are checked before publication.
+Supporting data is retained first; the explicit secondary is staged on its chosen
+filesystem and published with no-clobber semantics before primary/component
+results. A late collision or failed secondary write leaves the primary staged,
+records failure and keeps hidden evidence/recovery, including any already
+published bootstrap collection. Multiple publications are not a transaction.
+The public result and tool log include a newly exported cache; portable provenance
+uses its checked hidden evidence and destination/publication record, allowing an
+explicit export outside the primary folder without unsafe relative artifacts.
+Deleting that separate export does not delete the owning analysis evidence.

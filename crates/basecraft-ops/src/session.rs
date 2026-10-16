@@ -2589,6 +2589,38 @@ impl Session {
                 reference: None,
             }
         };
+        let mut inputs = vec![source];
+        if let Some(retained) = input.extra.get("retained_inputs") {
+            let additional: Vec<ArtifactRevision> = serde_json::from_value(retained.clone())?;
+            if additional.len() > 64 {
+                return Err(invalid("too many retained analysis inputs"));
+            }
+            for artifact in additional {
+                let name = artifact
+                    .retained
+                    .as_deref()
+                    .ok_or_else(|| invalid("auxiliary input is not retained"))?;
+                if name.is_empty()
+                    || Path::new(name)
+                        .components()
+                        .any(|c| !matches!(c, std::path::Component::Normal(_)))
+                    || artifact.reference.is_some()
+                {
+                    return Err(invalid("unsafe retained analysis input"));
+                }
+                let path = run.directory().join(name);
+                let metadata = std::fs::symlink_metadata(&path)?;
+                if !metadata.is_file()
+                    || metadata.file_type().is_symlink()
+                    || path.canonicalize()? != path
+                    || metadata.len() != artifact.size
+                    || basecraft_io::hash_file(&path)? != artifact.hash
+                {
+                    return Err(invalid("retained analysis input changed"));
+                }
+                inputs.push(artifact);
+            }
+        }
         let mut artifacts = Vec::new();
         for path in outputs {
             let retained = if !input.extra.contains_key("species_result") {
@@ -2657,7 +2689,7 @@ impl Session {
         let publication = Publication {
             schema_version: 1, id: activity.id, session: self.id.clone(), parents: Vec::new(), parent_hashes: std::collections::BTreeMap::new(),
             created: activity.t, origin: "Referenced source; submitted transformation recorded in input.json. Declared immutable upstream records are referenced without copying input bytes. Earlier history before import remains unknown.".into(),
-            inputs: vec![source], outputs: artifacts, events, effective_edits: effective,
+            inputs, outputs: artifacts, events, effective_edits: effective,
             completeness: Completeness { ancestry_known: false, input_bytes_available: input.state != "broken", execution_specification_available: false, replay_verified: false }, report_template_version: 2,
         };
         match self.provenance_policy {
@@ -2684,6 +2716,21 @@ impl Session {
                         )?;
                         Ok(())
                     })?;
+                }
+                for artifact in &publication.inputs {
+                    if let Some(name) = artifact
+                        .retained
+                        .as_deref()
+                        .filter(|n| *n != "submitted.fasta")
+                    {
+                        basecraft_io::write_atomic(&bundle.join(name), |w| {
+                            std::io::copy(
+                                &mut std::fs::File::open(run.directory().join(name))?,
+                                w,
+                            )?;
+                            Ok(())
+                        })?;
+                    }
                 }
                 crate::provenance::publish(&bundle, &publication)?;
             }

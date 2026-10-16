@@ -13,6 +13,7 @@ pub mod manifest;
 pub mod process;
 pub mod snapshot;
 
+mod distance_cache;
 mod error;
 
 pub use error::{Error, Result};

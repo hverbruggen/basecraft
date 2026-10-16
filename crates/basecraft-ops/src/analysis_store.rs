@@ -150,6 +150,32 @@ impl ArtifactRun {
         let _ = std::fs::remove_file(source);
         Ok(destination)
     }
+
+    /// Explicit secondary export of an already retained artifact. Stage on the
+    /// chosen filesystem and never replace a destination created by another writer.
+    /// The caller owns destination preflight and records the declared export.
+    pub fn publish_secondary(&self, name: &str, destination: &Path) -> Result<()> {
+        let source = self.artifact(name)?;
+        let metadata = std::fs::symlink_metadata(&source)?;
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return Err(invalid("secondary artifact must be an ordinary file"));
+        }
+        let parent = destination
+            .parent()
+            .ok_or_else(|| invalid("secondary output has no parent"))?;
+        let mut candidate = tempfile::NamedTempFile::new_in(parent)?;
+        let mut hashing = crate::files::HashingWriter::new(candidate.as_file_mut());
+        let size = std::io::copy(&mut std::fs::File::open(&source)?, &mut hashing)?;
+        if size != metadata.len() || hashing.hash() != basecraft_io::hash_file(&source)? {
+            return Err(invalid("secondary artifact changed during export"));
+        }
+        candidate.as_file().sync_all()?;
+        candidate
+            .persist_noclobber(destination)
+            .map_err(|e| e.error)?;
+        std::fs::File::open(parent)?.sync_all()?;
+        Ok(())
+    }
 }
 
 impl ArtifactRun {

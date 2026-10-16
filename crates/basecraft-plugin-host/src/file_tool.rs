@@ -1133,6 +1133,33 @@ impl FileJob {
                 }
             }
         }
+        if Manifest::load(&self.plugin)?.id == "basecraft.distance" {
+            let declaration = run.artifact("cache-publication.json")?;
+            if declaration.is_file() {
+                let record: serde_json::Value =
+                    serde_json::from_slice(&std::fs::read(&declaration)?)?;
+                paths.push(declaration);
+                if let (Some(name), Some(hash)) =
+                    (record["cache"].as_str(), record["hash"].as_str())
+                {
+                    let path = run.artifact(name)?;
+                    if basecraft_io::hash_file(&path).map_err(basecraft_ops::Error::from)? != hash {
+                        return Err(Error::Protocol("retained cache evidence changed".into()));
+                    }
+                    paths.push(path);
+                    let report = run.artifact(&format!(
+                        "{}.run.json",
+                        self.output
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                    ))?;
+                    if report.is_file() {
+                        paths.push(report);
+                    }
+                }
+            }
+        }
         let mut outputs = std::collections::BTreeMap::new();
         for path in paths {
             if std::fs::symlink_metadata(&path)?.file_type().is_symlink() {
@@ -1291,6 +1318,41 @@ impl FileJob {
             "output".into(),
             serde_json::to_value(&tool_output).map_err(|e| Error::Protocol(e.to_string()))?,
         );
+        let cache = if manifest.id == "basecraft.distance" {
+            if let Some(run) = &self.artifacts {
+                let mut protected = vec![
+                    self.source_path.clone(),
+                    frozen_input.into(),
+                    self.output.clone(),
+                    tool_output.clone(),
+                    PathBuf::from(format!("{}.run.json", self.output.display())),
+                ];
+                protected.extend([
+                    self.expected_bootstrap_path(run, false)?,
+                    self.expected_bootstrap_path(run, true)?,
+                ]);
+                protected.extend(
+                    ["progress", "cancel_file", "groups"]
+                        .into_iter()
+                        .filter_map(|key| {
+                            params
+                                .get(key)
+                                .and_then(serde_json::Value::as_str)
+                                .map(PathBuf::from)
+                        }),
+                );
+                crate::distance_cache::DistanceCache::prepare(
+                    run,
+                    &mut params,
+                    &tool_output,
+                    &protected,
+                )?
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         let mut result =
             process.invoke(&self.operation, serde_json::Value::Object(params), None)?;
         if !tool_output.is_file() {
@@ -1312,7 +1374,7 @@ impl FileJob {
                     .map(PathBuf::from)
                     .filter(|p| *p != tool_output),
             );
-            let mut published = Vec::new();
+            let mut allocated = Vec::new();
             for path in paths {
                 if std::fs::symlink_metadata(&path)?.file_type().is_symlink() {
                     return Err(Error::Protocol("plugin returned a symlink artifact".into()));
@@ -1328,20 +1390,12 @@ impl FileJob {
                             && path
                                 .extension()
                                 .is_some_and(|e| e.eq_ignore_ascii_case("nwk"));
-                    let destination = run.publish(
-                        name,
-                        if visible {
-                            basecraft_ops::analysis_store::ArtifactDestination::WorkingDirectory
-                        } else {
-                            basecraft_ops::analysis_store::ArtifactDestination::Metadata
-                        },
-                    )?;
-                    published.push(destination.to_string_lossy().into_owned());
+                    allocated.push((path.clone(), Some((name.to_owned(), visible))));
                 } else if path.starts_with(run.directory())
                     || path == self.expected_bootstrap_path(run, false)?
                     || path == self.expected_bootstrap_path(run, true)?
                 {
-                    published.push(path.to_string_lossy().into_owned()); // Register; never republish/copy.
+                    allocated.push((path, None)); // Register; never republish/copy.
                 } else {
                     return Err(Error::Protocol(format!(
                         "plugin returned unallocated artifact {}; publication incomplete; staged data retained",
@@ -1349,7 +1403,59 @@ impl FileJob {
                     )));
                 }
             }
-            result.outputs = published;
+            // Validate the entire return before publishing anything. Retain
+            // support files and finish declared secondary exports before making
+            // primary/component results visible. These steps are not a transaction.
+            for (_, allocation) in &allocated {
+                if let Some((name, true)) = allocation {
+                    let destination = run.destination(
+                        basecraft_ops::analysis_store::ArtifactDestination::WorkingDirectory,
+                        name,
+                    )?;
+                    if cache.as_ref().is_some_and(|c| c.is_secondary(&destination)) {
+                        return Err(Error::Protocol(
+                            "secondary cache collides with a scientific result".into(),
+                        ));
+                    }
+                }
+            }
+            let mut published = std::collections::HashMap::new();
+            for (path, allocation) in &allocated {
+                if let Some((name, false)) = allocation {
+                    let destination = run.publish(
+                        name,
+                        basecraft_ops::analysis_store::ArtifactDestination::Metadata,
+                    )?;
+                    published.insert(path.clone(), destination);
+                }
+            }
+            let secondary = if let Some(cache) = &cache {
+                cache
+                    .finish(run)
+                    .map_err(|error| self.publication_failure(run, error))?
+            } else {
+                Vec::new()
+            };
+            for (path, allocation) in &allocated {
+                if let Some((name, true)) = allocation {
+                    let destination = run.publish(
+                        name,
+                        basecraft_ops::analysis_store::ArtifactDestination::WorkingDirectory,
+                    )?;
+                    published.insert(path.clone(), destination);
+                }
+            }
+            result.outputs = allocated
+                .into_iter()
+                .map(|(path, _)| {
+                    published
+                        .remove(&path)
+                        .unwrap_or(path)
+                        .display()
+                        .to_string()
+                })
+                .collect();
+            result.outputs.extend(secondary);
             if self.operation == "tree" {
                 run.bind(&self.output)?;
             }
@@ -1383,6 +1489,7 @@ impl FileJob {
                 if path
                     .extension()
                     .is_some_and(|e| e.eq_ignore_ascii_case("nwk"))
+                    && !cache.as_ref().is_some_and(|c| c.is_secondary(&path))
                 {
                     let path = path.canonicalize()?;
                     if !trees.contains(&path) {
@@ -1455,6 +1562,36 @@ impl FileJob {
             }
         }
         Ok(result)
+    }
+
+    fn publication_failure(
+        &self,
+        run: &basecraft_ops::analysis_store::ArtifactRun,
+        failure: Error,
+    ) -> Error {
+        let report = run.directory().join(format!(
+            "{}.run.json",
+            self.output
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+        ));
+        if let Ok(bytes) = std::fs::read(&report) {
+            if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                if let Some(collection) = value.pointer("/bootstrap/replicate_trees") {
+                    if self
+                        .valid_bootstrap_artifact(run, collection)
+                        .unwrap_or(false)
+                    {
+                        return Error::Protocol(format!(
+                            "{failure}; retained bootstrap artifacts: {collection}; report: {}",
+                            report.display()
+                        ));
+                    }
+                }
+            }
+        }
+        failure
     }
 
     /// Log the run against the document its input came from.
@@ -1539,7 +1676,11 @@ impl FileJob {
                         .and_then(|s| s.primary.as_deref())
                         .filter(|p| p.is_file())
                         .unwrap_or(&self.output),
-                    &outputs,
+                    &if manifest.id == "basecraft.distance" {
+                        crate::distance_cache::publication_outputs(run, &outputs)?
+                    } else {
+                        outputs.clone()
+                    },
                     &self.source_record,
                     run,
                 )
