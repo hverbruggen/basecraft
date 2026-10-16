@@ -24,6 +24,11 @@ tempfile.workspace = true
 cxx = "1.0"
 cxx-qt = "0.10"
 cxx-qt-lib = { version = "0.10", features = ["qt_full"] }
+cxx-qt-lib-extras = "=0.10.0"
+
+[[test]]
+name = "application_bootstrap"
+harness = false
 
 [build-dependencies]
 cxx-qt-build = { version = "0.10", features = ["link_qt_object_files"] }
@@ -42,4 +47,3 @@ missing_panics_doc = "allow"
 module_name_repetitions = "allow"
 similar_names = "allow"
 too_many_lines = "allow"
-

@@ -10,6 +10,7 @@
 )]
 
 mod alignment_bridge;
+mod application;
 mod bridge;
 mod delimitation_bridge;
 mod provenance_bridge;
@@ -17,37 +18,14 @@ mod sanger_bridge;
 mod settings_bridge;
 mod tree_bridge;
 
-use cxx_qt_lib::{QGuiApplication, QQmlApplicationEngine, QString, QUrl};
+use cxx_qt_lib::{QQmlApplicationEngine, QUrl};
 
 fn main() {
     bridge::qobject::configure_canvas_graphics();
-    let mut app = QGuiApplication::new();
-    // A stable Wayland app-id (X11 class): desktop entries and window rules
-    // match on it.
     let args: Vec<_> = std::env::args().collect();
-    let kind = args
-        .windows(2)
-        .find(|a| a[0] == "--editor-kind")
-        .map(|a| a[1].as_str());
     let gui_test = std::env::var_os("BASECRAFT_GUI_TEST").is_some_and(|value| value == "1")
         || args.iter().any(|arg| arg == "--screenshot");
-    let app_id = match (gui_test, kind) {
-        (true, _) => "org.basecraft.Validation",
-        (false, Some("Sequence")) => "org.basecraft.Sequence",
-        (false, Some("Alignment")) => "org.basecraft.Alignment",
-        (false, Some("Tree")) => "org.basecraft.Tree",
-        _ => "org.basecraft.Basecraft",
-    };
-    QGuiApplication::set_desktop_file_name(&QString::from(app_id));
-    // Retain the legacy QSettings identity for one-time preferences migration.
-    if let Some(mut app) = app.as_mut() {
-        app.as_mut()
-            .set_organization_name(&QString::from("Basecraft"));
-        app.as_mut()
-            .set_organization_domain(&QString::from("basecraft.org"));
-        app.as_mut()
-            .set_application_name(&QString::from("Basecraft"));
-    }
+    let mut app = application::new(&args, gui_test);
     let mut engine = QQmlApplicationEngine::new();
     if let Some(mut engine) = engine.as_mut() {
         engine

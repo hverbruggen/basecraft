@@ -253,6 +253,7 @@ dependencies = [
  "cxx-qt",
  "cxx-qt-build",
  "cxx-qt-lib",
+ "cxx-qt-lib-extras",
  "serde",
  "serde_json",
  "tempfile",
@@ -712,6 +713,18 @@ dependencies = [
  "cxx-qt",
  "cxx-qt-build",
  "qt-build-utils",
+]
+
+[[package]]
+name = "cxx-qt-lib-extras"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a1760564c2d3afbb98961ac76f5606ef1b5324ce3b214dad7cdcffddf5ea021f"
+dependencies = [
+ "cxx",
+ "cxx-qt",
+ "cxx-qt-build",
+ "cxx-qt-lib",
 ]
 
 [[package]]

@@ -125,6 +125,7 @@ fn main() {
         "src/sanger_bridge.rs",
         "src/tree_bridge.rs",
         "src/delimitation_bridge.rs",
+        "src/application_test_bridge.rs",
     ])
     .cpp_file("cpp/instanceview.h")
     .cpp_file("cpp/instanceview.cpp")
