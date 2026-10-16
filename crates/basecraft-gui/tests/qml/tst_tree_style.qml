@@ -12,7 +12,7 @@ Item {
         property var removed: []
         function style_json() {
             return JSON.stringify({
-                sets: [{name: "Bootstrap", source: "", decimals: 0}, {name: "BPP", source: "", decimals: 2}],
+                sets: [{name: "Bootstrap", source: "", decimals: 0, automatic_decimals: 0}, {name: "BPP", source: "", decimals: 2, automatic_decimals: 2}],
                 style: {support_shown: [], support_min: 0, support_decimals: {}, support_proportions: {},
                     symbols: null, tip_font: 13, support_font: 10, branch_width: 1,
                     vertical_bar_labels: true, scale_bar: true, future_option: {value: 42}}
@@ -25,7 +25,7 @@ Item {
         name: "TreeStyle"
         when: windowShown
         function init() { controller.saved = null; controller.removed = []; dialog.openStyle(); tryCompare(dialog, "opened", true); wait(20) }
-        function cleanup() { dialog.close(); tryCompare(dialog, "opened", false) }
+        function cleanup() { dialog.close(); tryCompare(dialog, "opened", false); root.width = 800; dialog.font.pixelSize = 13 }
         function test_independent_precision_keyboard_and_unknown_settings() {
             const auto = findChild(dialog.contentItem, "autoDecimals0")
             const bootstrap = findChild(dialog.contentItem, "supportDecimals0")
@@ -84,6 +84,24 @@ Item {
             dialog.save()
             compare(controller.removed.length, 1)
             compare(controller.removed[0], "Bootstrap")
+        }
+        function test_new_controls_fit_font_and_window_data() {
+            return [{tag: "small", width: 480, fontSize: 16},
+                {tag: "large-font-small", width: 480, fontSize: 24},
+                {tag: "large-font-wide", width: 800, fontSize: 24}]
+        }
+        function test_new_controls_fit_font_and_window(data) {
+            root.width = data.width
+            dialog.font.pixelSize = data.fontSize
+            wait(20)
+            for (const name of ["autoDecimals0", "supportDecimals0", "supportScale0"]) {
+                const field = findChild(dialog.contentItem, name)
+                const point = field.mapToItem(dialog.contentItem, 0, 0)
+                verify(point.x >= -1, name + " left edge")
+                verify(point.x + field.width <= dialog.contentItem.width + 1, name + " right edge")
+            }
+            const precision = findChild(dialog.contentItem, "supportDecimals0")
+            verify(precision.width >= precision.implicitWidth - 1)
         }
         function test_auto_preserves_semantic_defaults() {
             dialog.save()

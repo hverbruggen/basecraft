@@ -1318,6 +1318,7 @@ impl qobject::TreeController {
                         "name": s.name,
                         "source": s.source,
                         "decimals": s.decimals(d.style()),
+                        "automatic_decimals": if s.proportions { 2 } else { 0 },
                         "proportions": s.uses_proportions(d.style()),
                         "kind": s.kind,
                     })).collect::<Vec<_>>(),
@@ -1411,7 +1412,10 @@ impl qobject::TreeController {
         }
         let mut added = Vec::new();
         for (set, values) in sets {
-            let kind = other.doc.support(&set).map_or_default(|s| s.kind);
+            let kind = other
+                .doc
+                .support(&set)
+                .map_or(basecraft_protocol::SupportKind::Unknown, |s| s.kind);
             let name = match (base.is_empty(), many) {
                 (true, _) => set,
                 (false, false) => base.clone(),
