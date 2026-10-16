@@ -136,37 +136,35 @@ impl PreviousMetadata {
 }
 
 struct StagedLink {
-    snapshot: PathBuf,
+    snapshot: Option<PathBuf>,
     metadata: Vec<u8>,
 }
 
 impl StagedLink {
     fn copy(link: &AlignmentLink, from: &Path, to: &Path) -> Result<Self> {
-        let snapshot = if link.schema == 2 {
-            let source = link.verify_snapshot(from)?;
-            let alignment = load_alignment(&source)?;
-            let snapshot = retain_file(to, ".alignment.afa", |out| {
-                crate::files::write_alignment(&alignment, out)
-            })?;
-            if basecraft_io::hash_file(&snapshot)? != link.snapshot_hash {
-                return Err(invalid(
-                    "materialized alignment differs from submitted input",
-                ));
-            }
-            snapshot
-        } else {
-            retain_snapshot(to, &link.snapshot_path(from), &link.snapshot_hash)?
-        };
+        if link.schema == 2 {
+            link.verify_snapshot(from)?;
+            let run = link.evidence_run(from)?;
+            let mut copied = link.clone();
+            copied.source = relative_to(&link.source, to)?;
+            copied.extra.insert(
+                "analysis_run".into(),
+                serde_json::json!(relative_to(&run, to)?),
+            );
+            return Ok(Self {
+                snapshot: None,
+                metadata: serde_json::to_vec_pretty(&copied)?,
+            });
+        }
+        let snapshot = retain_snapshot(to, &link.snapshot_path(from), &link.snapshot_hash)?;
         let mut copied = link.clone();
-        copied.schema = 1;
-        copied.extra.remove("analysis_run");
         copied.source = relative_to(&link.source, to)?;
         copied.snapshot = snapshot
             .file_name()
             .ok_or_else(|| invalid("snapshot filename"))?
             .into();
         Ok(Self {
-            snapshot,
+            snapshot: Some(snapshot),
             metadata: serde_json::to_vec_pretty(&copied)?,
         })
     }
@@ -253,7 +251,10 @@ impl PreparedLinks {
             ] {
                 if let Some(link) = staged {
                     basecraft_io::write_atomic(&metadata, |out| out.write_all(&link.metadata))?;
-                    outputs.extend([link.snapshot.clone(), metadata]);
+                    if let Some(snapshot) = &link.snapshot {
+                        outputs.push(snapshot.clone());
+                    }
+                    outputs.push(metadata);
                 } else if metadata_present(&metadata)? {
                     // Intentional absence is part of Save As state. Prior entries
                     // are preserved in recovery, and their snapshots are untouched.
@@ -540,11 +541,18 @@ impl AlignmentLink {
             .join(name)
             .canonicalize()?;
         // Never trust an arbitrary run supplied by association metadata.
-        if crate::analysis_store::ArtifactRun::for_result(tree_path)?.as_ref() != Some(&run) {
-            return Err(invalid(
-                "reference association disagrees with result binding",
-            ));
+        if let Some(bound) = crate::analysis_store::ArtifactRun::for_result(tree_path)? {
+            if bound != run {
+                return Err(invalid(
+                    "reference association disagrees with result binding",
+                ));
+            }
         }
+        let store = run
+            .parent()
+            .and_then(Path::parent)
+            .ok_or_else(|| invalid("reference run has no store"))?;
+        crate::analysis_store::ArtifactRun::validate_store(store)?;
         Ok(run)
     }
 

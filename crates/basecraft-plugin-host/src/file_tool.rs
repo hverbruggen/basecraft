@@ -520,7 +520,11 @@ impl FileJob {
                         },
                         method: self.operation.clone(),
                         inputs: std::iter::once(self.input_key.clone()).collect(),
-                        outputs: self.retained_outputs(run, outcome.as_ref().ok())?,
+                        outputs: self.retained_outputs(
+                            run,
+                            outcome.as_ref().ok(),
+                            outcome.as_ref().err(),
+                        )?,
                         diagnostics: outcome
                             .as_ref()
                             .err()
@@ -700,10 +704,52 @@ impl FileJob {
         Ok(run.destination(location, &name)?)
     }
 
+    fn diagnostic_artifact(&self, failure: Option<&Error>) -> Option<serde_json::Value> {
+        let message = failure?.to_string();
+        let (_, json) = message.split_once("; retained bootstrap artifacts: ")?;
+        serde_json::Deserializer::from_str(json)
+            .into_iter::<serde_json::Value>()
+            .next()?
+            .ok()
+    }
+
+    fn valid_bootstrap_artifact(
+        &self,
+        run: &basecraft_ops::analysis_store::ArtifactRun,
+        collection: &serde_json::Value,
+    ) -> Result<bool> {
+        if !self
+            .allocation_started
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return Ok(false);
+        }
+        let requested = self
+            .params
+            .get("bootstrap")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        let status = collection["status"].as_str();
+        let expected = self.expected_bootstrap_path(run, status != Some("complete"))?;
+        let count = collection["trees"].as_u64();
+        Ok(requested > 0
+            && collection["format"] == "nexus"
+            && collection["path"]
+                .as_str()
+                .is_some_and(|p| Path::new(p) == expected)
+            && matches!(
+                status,
+                Some("complete" | "partial" | "cancelled" | "original_failed")
+            )
+            && count
+                .is_some_and(|n| n <= requested && (status != Some("complete") || n == requested)))
+    }
+
     fn retained_outputs(
         &self,
         run: &basecraft_ops::analysis_store::ArtifactRun,
         result: Option<&InvokeResult>,
+        failure: Option<&Error>,
     ) -> Result<std::collections::BTreeMap<String, String>> {
         let mut paths =
             result.map_or_else(Vec::new, |r| r.outputs.iter().map(PathBuf::from).collect());
@@ -753,6 +799,13 @@ impl FileJob {
                 }
             }
         }
+        if let Some(collection) = self.diagnostic_artifact(failure) {
+            if self.valid_bootstrap_artifact(run, &collection)? {
+                if let Some(path) = collection["path"].as_str() {
+                    paths.push(PathBuf::from(path));
+                }
+            }
+        }
         let mut outputs = std::collections::BTreeMap::new();
         for path in paths {
             if std::fs::symlink_metadata(&path)?.file_type().is_symlink() {
@@ -779,7 +832,11 @@ impl FileJob {
         parameters.insert("job_id".into(), json!(self.run_id));
         let mut outputs = serde_json::Map::new();
         if let Some(run) = &self.artifacts {
-            for (path, hash) in self.retained_outputs(run, outcome.and_then(|o| o.as_ref().ok()))? {
+            for (path, hash) in self.retained_outputs(
+                run,
+                outcome.and_then(|o| o.as_ref().ok()),
+                outcome.and_then(|o| o.as_ref().err()),
+            )? {
                 outputs.insert(path, json!(hash));
             }
         } else if outcome.is_some_and(Result::is_ok) {
@@ -790,6 +847,7 @@ impl FileJob {
             serde_json::to_value(&self.source_path).map_err(|e| Error::Protocol(e.to_string()))?;
         let value = json!({
             "schema_version": 1, "id": self.run_id, "status": status, "input_io": self.input_io(),
+            "recovery_artifact": self.diagnostic_artifact(outcome.and_then(|o| o.as_ref().err())),
             "owner_instance": basecraft_platform::process_instance(),
             "source_record": self.source_record,
             "started": started, "ended": outcome.map(|_| basecraft_platform::now_rfc3339()),

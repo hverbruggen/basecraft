@@ -1078,6 +1078,32 @@ impl Session {
                 }
             }
         }
+        // Save As keeps a live reference to the contributing run's evidence
+        // decisions; it does not automatically copy unchanged source files.
+        if previous.is_some()
+            && previous_bundle != &bundle
+            && previous_bundle.join("input.json").is_file()
+        {
+            let mut input = crate::input_evidence::read_input(previous_bundle)?;
+            if input.source.is_some() {
+                input.extra.insert(
+                    "origin_run".into(),
+                    serde_json::json!(crate::input_evidence::relative(
+                        &bundle.canonicalize()?,
+                        &previous_bundle.canonicalize()?
+                    )?),
+                );
+            } else if previous_bundle.join("submitted.fasta").is_file() {
+                basecraft_io::write_atomic(&bundle.join("submitted.fasta"), |w| {
+                    std::io::copy(
+                        &mut std::fs::File::open(previous_bundle.join("submitted.fasta"))?,
+                        w,
+                    )?;
+                    Ok(())
+                })?;
+            }
+            crate::input_evidence::write_json(&bundle.join("input.json"), &input)?;
+        }
         let retain =
             |path: &Path, hash: &str, revision: String, name: String| -> Result<ArtifactRevision> {
                 let bytes = std::fs::read(path)?;
@@ -2333,10 +2359,15 @@ impl Session {
             .find(|e| e.doc == self.docs[id.0].key && matches!(e.op, Op::ToolRun { .. }))
             .ok_or_else(|| invalid("analysis has no recorded activity"))?
             .clone();
+        std::fs::create_dir_all(run.directory().join("artifacts"))?;
         let source = if let Some(reference) = input.source.clone() {
             ArtifactRevision {
                 id: format!("{}:source", run.id()),
-                logical_name: reference.path.clone(),
+                logical_name: Path::new(&reference.path)
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned(),
                 hash: reference.hash.clone(),
                 size: reference.stamp.size,
                 retained: None,
@@ -2346,7 +2377,7 @@ impl Session {
             ArtifactRevision {
                 id: format!("{}:submitted", run.id()),
                 logical_name: "submitted.fasta".into(),
-                hash: input.submitted_hash,
+                hash: input.submitted_hash.clone(),
                 size: input.submitted_size,
                 retained: Some("submitted.fasta".into()),
                 reference: None,
@@ -2377,13 +2408,65 @@ impl Session {
             id: activity.id.clone(),
             operation: activity.op,
         });
+        for event in &mut events {
+            event.host.clear();
+            event.doc = Path::new(&event.doc)
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
+            if matches!(event.actor, Actor::Human { .. }) {
+                event.actor = Actor::Human {
+                    user: "redacted".into(),
+                };
+            }
+            redact_operation_paths(&mut event.op);
+            for (key, _) in &mut event.result.hashes {
+                *key = Path::new(key)
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned();
+            }
+        }
+        for edit in &mut effective {
+            redact_operation_paths(&mut edit.operation);
+        }
         let publication = Publication {
             schema_version: 1, id: activity.id, session: self.id.clone(), parents: Vec::new(), parent_hashes: std::collections::BTreeMap::new(),
             created: activity.t, origin: "Referenced source; submitted transformation recorded in input.json. Flattened contributing history; earlier byte closure is not claimed.".into(),
             inputs: vec![source], outputs: artifacts, events, effective_edits: effective,
             completeness: Completeness { ancestry_known: false, input_bytes_available: input.state != "broken", execution_specification_available: false, replay_verified: false }, report_template_version: 2,
         };
-        crate::provenance::publish(run.directory(), &publication)?;
+        match self.provenance_policy {
+            basecraft_platform::settings::ProvenancePolicy::Portable => {
+                crate::provenance::publish(run.directory(), &publication)?
+            }
+            basecraft_platform::settings::ProvenancePolicy::LocalOnly => {
+                let bundle = self.local_provenance_root.join(
+                    basecraft_io::hash_bytes(target.as_os_str().as_encoded_bytes())
+                        .trim_start_matches("b3:"),
+                );
+                std::fs::create_dir_all(bundle.join("artifacts"))?;
+                let mut local_input = input.clone();
+                local_input.extra.insert(
+                    "origin_run".into(),
+                    serde_json::json!(crate::input_evidence::relative(&bundle, run.directory())?),
+                );
+                crate::input_evidence::write_json(&bundle.join("input.json"), &local_input)?;
+                if input.source.is_none() {
+                    basecraft_io::write_atomic(&bundle.join("submitted.fasta"), |w| {
+                        std::io::copy(
+                            &mut std::fs::File::open(run.directory().join("submitted.fasta"))?,
+                            w,
+                        )?;
+                        Ok(())
+                    })?;
+                }
+                crate::provenance::publish(&bundle, &publication)?;
+            }
+            basecraft_platform::settings::ProvenancePolicy::None => {}
+        }
         crate::input_evidence::write_json(
             &run.directory().join("run.json"),
             &serde_json::json!({"schema_version":1,"id":run.id(),"result":target.file_name(),"status":"completed","outputs":publication.outputs}),

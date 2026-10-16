@@ -14,7 +14,9 @@ pub fn companion(path: &Path) -> PathBuf {
 /// bundle is an error, never reconstructed from a filename or local journal.
 pub fn bundle_for_result(result: &Path) -> PathBuf {
     if let Ok(Some(hidden)) = crate::analysis_store::ArtifactRun::for_result(result) {
-        return hidden;
+        if hidden.join("manifest.json").is_file() {
+            return hidden;
+        }
     }
     let standalone = companion(result);
     if standalone.join("manifest.json").is_file() {

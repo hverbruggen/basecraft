@@ -216,5 +216,24 @@ fn common_save_route_preserves_actual_original_and_dirty_submitted_input() {
             .unwrap()
             .is_empty()
     );
+    let result_doc = session.open(&output).unwrap();
+    session
+        .apply(
+            result_doc,
+            Op::AlnReplace {
+                row: 1,
+                start: 0,
+                end: 1,
+                residues: "C".into(),
+            },
+        )
+        .unwrap();
+    let copied_result = dir.path().join("copied-result.fasta");
+    session.save(result_doc, Some(&copied_result)).unwrap();
+    assert!(
+        basecraft_ops::provenance::verify(&copied_result)
+            .unwrap()
+            .is_empty()
+    );
     assert!(basecraft_ops::replay::replay(dir.path()).unwrap().ok());
 }

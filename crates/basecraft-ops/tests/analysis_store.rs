@@ -192,3 +192,64 @@ fn symlink_and_hardlink_aliases_are_detected_without_content_reads() {
         1
     );
 }
+
+#[test]
+fn session_save_policies_and_copy_failure_leave_source_safe() {
+    use basecraft_ops::{
+        Session,
+        input_evidence::{self, SavePolicy},
+    };
+    for policy in [
+        SavePolicy::Cancel,
+        SavePolicy::PreserveCopy,
+        SavePolicy::RemoveAnalysis,
+        SavePolicy::BreakEvidence,
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.afa");
+        let original = ">a\nAAAA\n>b\nAAAT\n";
+        std::fs::write(&source, original).unwrap();
+        let mut session = Session::recoverable(dir.path()).unwrap();
+        let doc = session.open(&source).unwrap();
+        let run = reference_run(dir.path(), &source, "run");
+        session
+            .apply(
+                doc,
+                basecraft_protocol::Op::AlnReplace {
+                    row: 0,
+                    start: 0,
+                    end: 1,
+                    residues: "T".into(),
+                },
+            )
+            .unwrap();
+        if policy == SavePolicy::Cancel {
+            assert!(matches!(
+                session.save_with_evidence(doc, None, policy),
+                Err(basecraft_ops::Error::EvidenceConflict(_))
+            ));
+            assert_eq!(std::fs::read_to_string(&source).unwrap(), original);
+        } else {
+            if policy == SavePolicy::PreserveCopy {
+                std::fs::create_dir(run.directory().join("preserved-input")).unwrap();
+                assert!(session.save_with_evidence(doc, None, policy).is_err());
+                assert_eq!(std::fs::read_to_string(&source).unwrap(), original);
+                std::fs::remove_dir(run.directory().join("preserved-input")).unwrap();
+            }
+            session.save_with_evidence(doc, None, policy).unwrap();
+            assert!(std::fs::read_to_string(&source).unwrap().contains("TAAA"));
+            match policy {
+                SavePolicy::PreserveCopy => assert_eq!(
+                    std::fs::read_to_string(run.directory().join("preserved-input")).unwrap(),
+                    original
+                ),
+                SavePolicy::RemoveAnalysis => assert!(!run.directory().exists()),
+                SavePolicy::BreakEvidence => assert_eq!(
+                    input_evidence::read_input(run.directory()).unwrap().state,
+                    "broken"
+                ),
+                SavePolicy::Cancel => {}
+            }
+        }
+    }
+}

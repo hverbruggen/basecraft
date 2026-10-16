@@ -221,7 +221,7 @@ pub fn conflicts(target: &Path) -> Result<EvidenceConflict> {
     let mut all = stores()?;
     let target = std::path::absolute(target)?;
     let canonical = target.canonicalize().unwrap_or_else(|_| target.clone());
-    if let Some(parent) = canonical.parent() {
+    for parent in canonical.ancestors().skip(1) {
         let nearby = parent.join(".basecraft/analyses-v1");
         if nearby.exists() && !all.contains(&nearby) {
             all.push(nearby);
@@ -376,7 +376,26 @@ pub fn resolve(conflict: &EvidenceConflict, policy: SavePolicy) -> Result<()> {
 
 /// Resolve evidence only on explicit verification/export/relink. No UI-event hashing.
 pub fn verified_source(bundle: &Path, reference: &InputReference) -> Result<PathBuf> {
-    let input = read_input(bundle)?;
+    let mut location = bundle.to_path_buf();
+    let mut input = read_input(&location)?;
+    let mut visited = std::collections::HashSet::new();
+    for _ in 0..32 {
+        let Some(origin) = input
+            .extra
+            .get("origin_run")
+            .and_then(serde_json::Value::as_str)
+        else {
+            break;
+        };
+        location = location.join(origin).canonicalize()?;
+        if !visited.insert(location.clone()) {
+            return Err(invalid("input evidence contains a cycle"));
+        }
+        input = read_input(&location)?;
+    }
+    if input.extra.contains_key("origin_run") {
+        return Err(invalid("input evidence ancestry exceeds 32 references"));
+    }
     if input.state == "broken" {
         return Err(invalid("evidence chain explicitly broken"));
     }
@@ -388,9 +407,9 @@ pub fn verified_source(bundle: &Path, reference: &InputReference) -> Result<Path
         return Err(invalid("input reference identity changed"));
     }
     let path = if input.state == "preserved" {
-        bundle.join("preserved-input")
+        location.join("preserved-input")
     } else {
-        bundle.join(&effective.path)
+        location.join(&effective.path)
     };
     if basecraft_io::hash_file(&path)? != reference.hash
         || std::fs::metadata(&path)?.len() != reference.stamp.size

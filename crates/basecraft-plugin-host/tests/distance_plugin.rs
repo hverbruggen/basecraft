@@ -243,3 +243,70 @@ fn bootstrap_provenance_success_and_withheld_support_replay() {
     let replay = basecraft_ops::replay::replay(root).unwrap();
     assert!(replay.ok(), "{:?}", replay.problems);
 }
+
+#[test]
+fn failed_native_publication_registers_structured_bootstrap_evidence_without_input_copies() {
+    let binary = std::env::var_os("BASECRAFT_DISTANCE_TEST_BINARY")
+        .expect("set matching distance test binary for combined host acceptance");
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("input.afa");
+    std::fs::write(&source, ">a\nAAAAAC\n>b\nAAAAAT\n>c\nACAAAC\n").unwrap();
+    let output = root.path().join("failed.nwk");
+    let mut session = Session::recoverable(root.path()).unwrap();
+    let doc = session.open(&source).unwrap();
+    let plugin = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/distance");
+    let mut job = FileJob::from_alignment(
+        &session,
+        doc,
+        (&plugin, "tree"),
+        AlignmentInput::Aligned,
+        output.clone(),
+    )
+    .unwrap();
+    let missing = root.path().join("missing/cache.json");
+    job.params.extend([
+        (
+            "executable".into(),
+            serde_json::json!(std::path::PathBuf::from(binary)),
+        ),
+        ("model".into(), serde_json::json!("p")),
+        ("method".into(), serde_json::json!("sorted")),
+        ("bootstrap".into(), serde_json::json!(8)),
+        ("threads".into(), serde_json::json!(1)),
+        ("cache".into(), serde_json::json!(missing)),
+    ]);
+    let result = job.run();
+    assert!(result.is_err());
+    job.record_terminal(&mut session, doc, &result, 0.0)
+        .unwrap();
+    assert!(!output.exists());
+    let paths = basecraft_platform::paths::AppPaths::discover().unwrap();
+    let run_id = job.params["job_id"].as_str().unwrap();
+    let execution: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(paths.state.join("jobs").join(run_id).join("manifest.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(execution["status"], "failed");
+    let collection = root
+        .path()
+        .join(".basecraft/analyses-v1/runs")
+        .join(run_id)
+        .join(format!("bootstrap-{run_id}.nex"));
+    assert!(collection.is_file());
+    assert!(
+        execution["outputs"]
+            .get(collection.to_str().unwrap())
+            .is_some(),
+        "{execution}"
+    );
+    assert_eq!(execution["recovery_artifact"]["status"], "complete");
+    assert_eq!(execution["recovery_artifact"]["trees"], 8);
+    assert_eq!(job.input_io().unwrap()["persistent_original_copy_bytes"], 0);
+    assert!(
+        !collection
+            .parent()
+            .unwrap()
+            .join("submitted.fasta")
+            .exists()
+    );
+}
