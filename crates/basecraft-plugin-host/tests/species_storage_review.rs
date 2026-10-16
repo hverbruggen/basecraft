@@ -12,6 +12,111 @@ fn plugin() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/delimitation")
 }
 
+#[test]
+fn rereview_alignment_move_and_explicit_evidence_decisions() {
+    use basecraft_ops::input_evidence::{SavePolicy, conflicts, resolve};
+    for policy in [SavePolicy::BreakEvidence, SavePolicy::RemoveAnalysis] {
+        let parent = tempfile::tempdir().unwrap();
+        let folder = parent.path().join("working");
+        std::fs::create_dir(&folder).unwrap();
+        let source = folder.join("source.afa");
+        let original = ">a\nAA\nAA\n>b\nAA\nAC\n>c\nAA\nCC\n>d\nCC\nCC\n";
+        std::fs::write(&source, original).unwrap();
+        let canonical = folder.join("species.spart");
+        let mut session = Session::recoverable(&folder).unwrap();
+        let input = session.open(&source).unwrap();
+        let job = FileJob::from_alignment(
+            &session,
+            input,
+            (&plugin(), "workspace_alignment"),
+            canonical.clone(),
+            AlignmentInput::default(),
+        )
+        .unwrap();
+        let result = job.run().unwrap();
+        job.record(&mut session, input, &result).unwrap();
+        drop(session);
+        let moved = parent.path().join("moved");
+        std::fs::rename(&folder, &moved).unwrap();
+        let source = moved.join("source.afa");
+        let canonical = moved.join("species.spart");
+        let work = files::load_delimitation(&canonical).unwrap();
+        let checked = || basecraft_ops::delimitation::checked_alignment(&work, &canonical);
+        assert_eq!(checked().unwrap().unwrap().canonicalize().unwrap(), source);
+        std::fs::write(&source, ">a\nTTTT\n>b\nTTTC\n>c\nTTCC\n>d\nCCCC\n").unwrap();
+        assert!(checked().is_err(), "changed unpreserved input must fail");
+        std::fs::remove_file(&source).unwrap();
+        assert!(checked().is_err(), "missing unpreserved input must fail");
+        std::fs::write(&source, original).unwrap();
+        assert!(
+            checked().is_ok(),
+            "accepted bytes remain usable after restoration"
+        );
+        let conflict = conflicts(&source).unwrap();
+        assert!(conflict.analyses.iter().any(|a| a.direct));
+        resolve(&conflict, policy).unwrap();
+        assert!(checked().is_err(), "explicit {policy:?} must prevent reuse");
+        assert_eq!(std::fs::read_to_string(&source).unwrap(), original);
+        assert!(canonical.is_file());
+        assert!(provenance::package(&canonical, &parent.path().join("rejected")).is_err());
+    }
+}
+
+#[test]
+fn rereview_legacy_sidecar_break_and_remove_reach_combined_workspace() {
+    use basecraft_ops::input_evidence::{SavePolicy, conflicts, read_input, resolve};
+    for policy in [SavePolicy::BreakEvidence, SavePolicy::RemoveAnalysis] {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("legacy.spart");
+        let original = include_str!("../../../testdata/fixtures/delimitation/manual.spart");
+        std::fs::write(&source, original).unwrap();
+        let work = files::load_delimitation(&source).unwrap();
+        let mut bytes = Vec::new();
+        files::write_delimitation_sidecar(
+            &work,
+            &basecraft_io::hash_file(&source).unwrap(),
+            &mut bytes,
+        )
+        .unwrap();
+        let sidecar = files::tree_sidecar(&source);
+        std::fs::write(&sidecar, &bytes).unwrap();
+        let target = root.path().join("combined.spart");
+        std::fs::copy(&source, &target).unwrap();
+        let mut session = Session::recoverable(root.path()).unwrap();
+        let doc = session.open(&target).unwrap();
+        basecraft_ops::delimitation::combine(&mut session, doc, std::slice::from_ref(&source))
+            .unwrap();
+        session.save(doc, None).unwrap();
+        assert!(provenance::verify(&target).unwrap().is_empty());
+        let conflict = conflicts(&sidecar).unwrap();
+        assert!(conflict.analyses.iter().any(|a| a.direct));
+        assert!(conflict.analyses.iter().any(|a| !a.direct));
+        resolve(&conflict, policy).unwrap();
+        for affected in &conflict.analyses {
+            match policy {
+                SavePolicy::BreakEvidence => {
+                    assert_eq!(read_input(&affected.run).unwrap().state, "broken");
+                }
+                SavePolicy::RemoveAnalysis => assert!(!affected.run.exists()),
+                _ => unreachable!(),
+            }
+        }
+        assert!(
+            !matches!(provenance::verify(&target), Ok(issues) if issues.is_empty()),
+            "explicit {policy:?} must never verify complete"
+        );
+        assert!(provenance::package(&target, &root.path().join("rejected")).is_err());
+        assert_eq!(std::fs::read(&sidecar).unwrap(), bytes);
+        assert_eq!(std::fs::read_to_string(&source).unwrap(), original);
+        assert!(
+            !files::load_delimitation(&target)
+                .unwrap()
+                .hypotheses
+                .is_empty()
+        );
+    }
+}
+
 fn setup_tree(session: &mut Session, source: &Path, output: &Path) {
     let doc = session.open(source).unwrap();
     let job =
