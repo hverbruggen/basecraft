@@ -139,3 +139,26 @@ fn complete_export_after_in_place_edit_keeps_history() {
         "complete export lost evidence: {issues:?}"
     );
 }
+
+#[test]
+fn repeated_preserve_decision_never_replaces_verified_old_bytes() {
+    let (_dir, _session, _, source, first) = setup();
+    let old = std::fs::read(&source).unwrap();
+    let conflict = input_evidence::conflicts(&source).unwrap();
+    input_evidence::resolve(&conflict, input_evidence::SavePolicy::PreserveCopy).unwrap();
+    let run = ArtifactRun::for_result(&first).unwrap().unwrap();
+    assert_eq!(std::fs::read(run.join("preserved-input")).unwrap(), old);
+    std::fs::write(&source, ">a\nTTTT\n>b\nTTTA\n").unwrap();
+    // A retry of the same public decision must not overwrite the protected copy,
+    // even if it rejects the now-stale source afterwards.
+    let _ = input_evidence::resolve(&conflict, input_evidence::SavePolicy::PreserveCopy);
+    assert_eq!(std::fs::read(run.join("preserved-input")).unwrap(), old);
+}
+
+#[test]
+fn overwrite_conflict_identifies_the_completed_result() {
+    let (_dir, _session, _, source, _first) = setup();
+    let conflict = input_evidence::conflicts(&source).unwrap();
+    assert_eq!(conflict.analyses.len(), 1);
+    assert_eq!(conflict.analyses[0].result, "first.afa");
+}
