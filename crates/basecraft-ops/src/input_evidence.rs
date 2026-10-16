@@ -261,21 +261,43 @@ pub fn conflicts(target: &Path) -> Result<EvidenceConflict> {
 }
 
 // A folder can move/disappear outside the cooperative evidence lock. Treat it
-// exactly like a store already unavailable at query start, but never suppress
-// missing/corrupt metadata in a store that is still present. Partial scan results
+// exactly like metadata already unavailable at query start, but never suppress
+// missing/corrupt records in a directory that is still present. Partial scan results
 // are discarded so unavailable stores cannot contribute dangling conflicts.
-fn available_store<T>(store: &Path, inspect: impl FnOnce() -> Result<T>) -> Result<Option<T>> {
-    if !store.try_exists()? {
-        return Ok(None);
+fn directory_present(path: &Path) -> Result<bool> {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error.into()),
     }
-    match inspect() {
-        Ok(value) => Ok(store.try_exists()?.then_some(value)),
-        Err(crate::Error::Io(error))
-            if error.kind() == std::io::ErrorKind::NotFound && !store.try_exists()? =>
-        {
-            Ok(None)
+}
+
+fn available_directory<T>(
+    directory: &Path,
+    mut inspect: impl FnMut() -> Result<T>,
+) -> Result<Option<T>> {
+    // Removal unlinks children before the directory itself. A missing record
+    // while its directory still exists can therefore be a short teardown window.
+    // Retry only NotFound, then keep the original refusal if damage persists.
+    let mut delays = [1, 4, 16].into_iter();
+    loop {
+        if !directory_present(directory)? {
+            return Ok(None);
         }
-        Err(error) => Err(error),
+        match inspect() {
+            Ok(value) => return Ok(directory_present(directory)?.then_some(value)),
+            Err(crate::Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                if !directory_present(directory)? {
+                    return Ok(None);
+                }
+                if let Some(delay) = delays.next() {
+                    std::thread::sleep(std::time::Duration::from_millis(delay));
+                } else {
+                    return Err(error.into());
+                }
+            }
+            Err(error) => return Err(error),
+        }
     }
 }
 
@@ -302,44 +324,59 @@ fn scan_store(store: &Path, target: &Path, metadata_bytes: u64) -> Result<StoreS
             ));
         }
         let entry = entry?;
-        if !entry.file_type()?.is_dir() {
-            return Err(invalid("unsafe entry in analysis store"));
-        }
         let run = entry.path();
-        if !run.join("input.json").exists() {
-            continue;
-        } // Reserved, no input registered yet.
-        scan.metadata_bytes = scan
-            .metadata_bytes
-            .saturating_add(std::fs::metadata(run.join("input.json"))?.len());
-        if scan.metadata_bytes > 64 << 20 {
-            return Err(invalid(
-                "known analysis metadata exceeds 64 MiB query limit",
-            ));
+        if let Some(Some((input, analysis, bytes))) =
+            available_directory(&run, || scan_run(&entry, target, scan.metadata_bytes))?
+        {
+            scan.metadata_bytes = bytes;
+            scan.runs.push((run, input));
+            scan.analyses.extend(analysis);
         }
-        let input = read_input(&run)?;
-        scan.runs.push((run.clone(), input.clone()));
-        if input.state != "referenced" {
-            continue;
-        }
-        if let Some(reference) = input.source {
-            if same_source(&run, &reference, target) {
+    }
+    Ok(scan)
+}
+
+type RunScan = (SubmittedInput, Option<AffectedAnalysis>, u64);
+
+fn scan_run(
+    entry: &std::fs::DirEntry,
+    target: &Path,
+    metadata_bytes: u64,
+) -> Result<Option<RunScan>> {
+    if !entry.file_type()?.is_dir() {
+        return Err(invalid("unsafe entry in analysis store"));
+    }
+    let run = entry.path();
+    if !run.join("input.json").try_exists()? {
+        return Ok(None); // Reserved, no input registered yet.
+    }
+    let bytes = metadata_bytes.saturating_add(std::fs::metadata(run.join("input.json"))?.len());
+    if bytes > 64 << 20 {
+        return Err(invalid(
+            "known analysis metadata exceeds 64 MiB query limit",
+        ));
+    }
+    let input = read_input(&run)?;
+    let mut analysis = None;
+    if input.state == "referenced" {
+        if let Some(reference) = &input.source {
+            if same_source(&run, reference, target) {
                 let can_preserve = stamp(target).is_ok_and(|s| {
                     s.size == reference.stamp.size
                         && s.modified_seconds == reference.stamp.modified_seconds
                         && s.modified_nanos == reference.stamp.modified_nanos
                 });
-                scan.analyses.push(AffectedAnalysis {
+                analysis = Some(AffectedAnalysis {
                     result: result_name(&run)?,
                     run,
-                    source_hash: reference.hash,
+                    source_hash: reference.hash.clone(),
                     can_preserve,
                     direct: true,
                 });
             }
         }
     }
-    Ok(scan)
+    Ok(Some((input, analysis, bytes)))
 }
 
 pub fn conflicts_in(target: &Path, stores: &[PathBuf]) -> Result<EvidenceConflict> {
@@ -347,7 +384,9 @@ pub fn conflicts_in(target: &Path, stores: &[PathBuf]) -> Result<EvidenceConflic
     let mut known_runs = Vec::new();
     let mut metadata_bytes = 0u64;
     for store in stores {
-        if let Some(scan) = available_store(store, || scan_store(store, target, metadata_bytes))? {
+        if let Some(scan) =
+            available_directory(store, || scan_store(store, target, metadata_bytes))?
+        {
             metadata_bytes = scan.metadata_bytes;
             known_runs.extend(scan.runs);
             analyses.extend(scan.analyses);
@@ -1222,7 +1261,7 @@ mod store_scan_tests {
             std::fs::write(&source, "(a:1,b:1);").unwrap();
             let run = fixture(root.path(), &source);
             let store = run.directory().parent().unwrap().parent().unwrap();
-            let result = available_store(store, || {
+            let result = available_directory(store, || {
                 let partial = scan_store(store, &source, 0)?;
                 assert_eq!(partial.analyses.len(), 1);
                 if delete {
@@ -1244,13 +1283,13 @@ mod store_scan_tests {
     }
 
     #[test]
-    fn moved_scan_discards_partial_conflicts_and_keeps_available_store_guard() {
+    fn moved_scan_discards_partial_conflicts_and_keeps_available_directory_guard() {
         let root = tempfile::tempdir().unwrap();
         let source = root.path().join("input.nwk");
         std::fs::write(&source, "(a:1,b:1);").unwrap();
         let run = fixture(root.path(), &source);
         let store = run.directory().parent().unwrap().parent().unwrap();
-        let result = available_store(store, || {
+        let result = available_directory(store, || {
             let scan = scan_store(store, &source, 0)?;
             assert_eq!(scan.analyses.len(), 1);
             std::fs::rename(store, root.path().join("moved-store")).unwrap();
@@ -1268,6 +1307,71 @@ mod store_scan_tests {
             resolve(&conflict, SavePolicy::Cancel),
             Err(crate::Error::EvidenceConflict(_))
         ));
+    }
+
+    #[test]
+    fn partial_directory_teardown_is_rechecked_without_accepting_live_damage() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("input.nwk");
+        std::fs::write(&source, "(a:1,b:1);").unwrap();
+        let run = fixture(root.path(), &source);
+        let store = run.directory().parent().unwrap().parent().unwrap();
+        let mut inspections = 0;
+        let result = available_directory(store, || {
+            if inspections == 0 {
+                std::fs::remove_file(store.join("store.json")).unwrap();
+                assert!(store.is_dir());
+            } else {
+                std::fs::remove_dir_all(store).unwrap();
+            }
+            inspections += 1;
+            scan_store(store, &source, 0)
+        })
+        .unwrap();
+        assert!(result.is_none());
+        assert_eq!(inspections, 2);
+    }
+
+    #[test]
+    fn individual_run_trashed_during_scan_is_discarded() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("input.nwk");
+        std::fs::write(&source, "(a:1,b:1);").unwrap();
+        let run = fixture(root.path(), &source);
+        let store = run.directory().parent().unwrap().parent().unwrap();
+        let entry = std::fs::read_dir(run.directory().parent().unwrap())
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap();
+        let result = available_directory(run.directory(), || {
+            let partial = scan_run(&entry, &source, 0)?.unwrap();
+            assert!(partial.1.is_some());
+            std::fs::rename(run.directory(), store.join("trashed-run")).unwrap();
+            scan_run(&entry, &source, 0)
+        })
+        .unwrap();
+        assert!(result.is_none());
+        assert!(store.is_dir());
+        assert!(
+            conflicts_in(&source, &[store.into()])
+                .unwrap()
+                .analyses
+                .is_empty()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dangling_run_symlinks_are_not_treated_as_disappeared_directories() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("input.nwk");
+        std::fs::write(&source, "(a:1,b:1);").unwrap();
+        let run = fixture(root.path(), &source);
+        let runs = run.directory().parent().unwrap();
+        let store = runs.parent().unwrap();
+        std::os::unix::fs::symlink(root.path().join("missing"), runs.join("unsafe")).unwrap();
+        assert!(conflicts_in(&source, &[store.into()]).is_err());
     }
 
     #[test]
