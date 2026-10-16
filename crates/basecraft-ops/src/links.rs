@@ -144,7 +144,7 @@ impl StagedLink {
     fn copy(link: &AlignmentLink, from: &Path, to: &Path) -> Result<Self> {
         let snapshot = if link.schema == 2 {
             let source = link.verify_snapshot(from)?;
-            let alignment = crate::files::load_alignment(&source)?.doc;
+            let alignment = load_alignment(&source)?;
             let snapshot = retain_file(to, ".alignment.afa", |out| {
                 crate::files::write_alignment(&alignment, out)
             })?;
@@ -290,6 +290,13 @@ fn relative_to(path: &Path, tree: &Path) -> Result<PathBuf> {
         out.push(part.as_os_str());
     }
     Ok(out)
+}
+
+fn load_alignment(path: &Path) -> Result<basecraft_docs::AlignmentDoc> {
+    match crate::files::load(path)? {
+        crate::files::Loaded::Alignment(opened) => Ok(opened.doc),
+        _ => Err(invalid("linked input is not an alignment")),
+    }
 }
 
 fn names(path: &Path) -> Result<BTreeSet<String>> {
@@ -550,7 +557,7 @@ impl AlignmentLink {
             } else {
                 run.join("submitted.fasta")
             };
-            let alignment = crate::files::load_alignment(&source)?.doc;
+            let alignment = load_alignment(&source)?;
             let mut hashing = crate::files::HashingWriter::new(std::io::sink());
             crate::files::write_alignment(&alignment, &mut hashing)?;
             if hashing.hash() != self.snapshot_hash {

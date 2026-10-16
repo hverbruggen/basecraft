@@ -65,6 +65,7 @@ struct Slot {
     undo: Vec<Applied>,
     redo: Vec<Applied>,
     baseline: Option<LogEntry>,
+    baseline_logged: bool,
     accepted_hashes: Vec<(String, String)>,
     saved_state_hashes: Vec<String>,
     absent_sidecars: Vec<String>,
@@ -420,6 +421,7 @@ impl Session {
             undo: Vec::new(),
             redo: Vec::new(),
             baseline: None,
+            baseline_logged: false,
             accepted_hashes: hashes.clone(),
             saved_state_hashes: Vec::new(),
             absent_sidecars,
@@ -483,7 +485,9 @@ impl Session {
                 w.write_all(&manifest)
             })?;
         }
-        self.write(&entry)?;
+        if !self.docs[id.0].baseline_logged {
+            self.write(&entry)?;
+        }
         self.docs[id.0].baseline = None;
         Ok(())
     }
@@ -525,8 +529,10 @@ impl Session {
         if let Some(issue) = &slot.origin_issue {
             record.warnings.push(issue.clone());
         }
-        if let Some(baseline) = &slot.baseline {
-            record.events.push(baseline.clone());
+        if !slot.baseline_logged {
+            if let Some(baseline) = &slot.baseline {
+                record.events.push(baseline.clone());
+            }
         }
         record
             .events
@@ -544,6 +550,16 @@ impl Session {
             }));
         record.deduplicate();
         Ok(record)
+    }
+
+    fn reference_baseline(&mut self, id: DocId) -> Result<()> {
+        if !self.docs[id.0].baseline_logged {
+            if let Some(entry) = self.docs[id.0].baseline.clone() {
+                self.write(&entry)?;
+            }
+            self.docs[id.0].baseline_logged = true;
+        }
+        Ok(())
     }
 
     /// Use an accepted disk revision only for a clean, unchanged document. This
@@ -980,7 +996,9 @@ impl Session {
         };
         let bundle = match self.provenance_policy {
             basecraft_platform::settings::ProvenancePolicy::Portable => {
-                if self.root.join(".basecraft/project.toml").is_file() {
+                if let Some(hidden) = crate::analysis_store::ArtifactRun::for_result(target)? {
+                    hidden
+                } else if self.root.join(".basecraft/project.toml").is_file() {
                     self.root.join(".basecraft/provenance").join(
                         basecraft_io::hash_bytes(self.relative(target).as_bytes())
                             .trim_start_matches("b3:"),
@@ -1410,6 +1428,7 @@ impl Session {
         inputs: &[(String, String)],
         outputs: &[PathBuf],
     ) -> Result<()> {
+        self.reference_baseline(id)?;
         self.flush()?;
         let mut hashes = inputs.to_vec();
         let mut keys = Vec::new();
@@ -1547,6 +1566,7 @@ impl Session {
         id: DocId,
         report: basecraft_protocol::delimitation::JobRecord,
     ) -> Result<()> {
+        self.reference_baseline(id)?;
         self.flush()?;
         let entry = self.entry(
             id,

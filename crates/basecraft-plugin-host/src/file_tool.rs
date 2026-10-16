@@ -81,6 +81,7 @@ pub struct FileJob {
     source_version: u64,
     source_hash: String,
     artifacts: Option<basecraft_ops::analysis_store::ArtifactRun>,
+    allocation_started: std::sync::atomic::AtomicBool,
     _dir: tempfile::TempDir,
 }
 
@@ -183,6 +184,7 @@ impl FileJob {
             cpu_budget: crate::compute::effective_allocation()?,
             granted_budget: std::sync::atomic::AtomicUsize::new(0),
             artifacts,
+            allocation_started: std::sync::atomic::AtomicBool::new(false),
             _dir: dir,
         })
     }
@@ -228,6 +230,7 @@ impl FileJob {
             cpu_budget: crate::compute::effective_allocation()?,
             granted_budget: std::sync::atomic::AtomicUsize::new(0),
             artifacts: None,
+            allocation_started: std::sync::atomic::AtomicBool::new(false),
             _dir: dir,
         })
     }
@@ -275,6 +278,7 @@ impl FileJob {
             cpu_budget: crate::compute::effective_allocation()?,
             granted_budget: std::sync::atomic::AtomicUsize::new(0),
             artifacts: None,
+            allocation_started: std::sync::atomic::AtomicBool::new(false),
             _dir: dir,
         })
     }
@@ -320,6 +324,7 @@ impl FileJob {
             cpu_budget: self.cpu_budget,
             granted_budget: std::sync::atomic::AtomicUsize::new(0),
             artifacts: None,
+            allocation_started: std::sync::atomic::AtomicBool::new(false),
             _dir: dir,
         })
     }
@@ -469,6 +474,37 @@ impl FileJob {
         if self.artifacts.is_none() {
             session.snapshot_file(&self.retained_input()?)?;
         }
+        if let Some(run) = &self.artifacts {
+            let cancelled = self
+                .params
+                .get("cancel_file")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|p| Path::new(p).exists());
+            return session
+                .log_referenced_job_finished(
+                    doc,
+                    JobRecord {
+                        id: self.run_id.clone(),
+                        generation: self.source_version,
+                        status: if outcome.is_ok() {
+                            JobStatus::Completed
+                        } else if cancelled {
+                            JobStatus::Cancelled
+                        } else {
+                            JobStatus::Failed
+                        },
+                        method: self.operation.clone(),
+                        inputs: std::iter::once(self.input_key.clone()).collect(),
+                        outputs: self.retained_outputs(run, outcome.as_ref().ok())?,
+                        diagnostics: outcome
+                            .as_ref()
+                            .err()
+                            .map_or_else(Vec::new, |e| vec![e.to_string()]),
+                        elapsed_seconds,
+                    },
+                )
+                .map_err(Into::into);
+        }
         let cancelled = self
             .params
             .get("cancel_file")
@@ -553,6 +589,33 @@ impl FileJob {
             basecraft_io::write_atomic(&run_dir.join("input.snapshot"), |w| w.write_all(&input))
                 .map_err(basecraft_ops::Error::from)?;
         }
+        if let Some(run) = &self.artifacts {
+            if self.params.contains_key("analysis_artifacts")
+                || self.params.contains_key("bootstrap_trees")
+            {
+                return Err(Error::Protocol("host-managed allocation cannot be combined with caller allocation or bootstrap_trees".into()));
+            }
+            if self
+                .params
+                .get("bootstrap")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0)
+                > 0
+            {
+                for partial in [false, true] {
+                    if std::fs::symlink_metadata(self.expected_bootstrap_path(run, partial)?)
+                        .is_ok()
+                    {
+                        return Err(Error::Protocol(
+                            "bootstrap artifact destination already exists; nothing was adopted"
+                                .into(),
+                        ));
+                    }
+                }
+            }
+            self.allocation_started
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
         let started = basecraft_platform::now_rfc3339();
         self.write_run_manifest(&run_dir, &started, "running", None)?;
         let _registration = self
@@ -588,6 +651,92 @@ impl FileJob {
         result
     }
 
+    fn expected_bootstrap_path(
+        &self,
+        run: &basecraft_ops::analysis_store::ArtifactRun,
+        partial: bool,
+    ) -> Result<PathBuf> {
+        let suffix = if partial { ".partial.nex" } else { ".nex" };
+        let name = format!("bootstrap-{}{suffix}", run.id());
+        let location = if self
+            .params
+            .get("bootstrap_destination")
+            .and_then(serde_json::Value::as_str)
+            == Some("working")
+        {
+            basecraft_ops::analysis_store::ArtifactDestination::WorkingDirectory
+        } else {
+            basecraft_ops::analysis_store::ArtifactDestination::Metadata
+        };
+        Ok(run.destination(location, &name)?)
+    }
+
+    fn retained_outputs(
+        &self,
+        run: &basecraft_ops::analysis_store::ArtifactRun,
+        result: Option<&InvokeResult>,
+    ) -> Result<std::collections::BTreeMap<String, String>> {
+        let mut paths =
+            result.map_or_else(Vec::new, |r| r.outputs.iter().map(PathBuf::from).collect());
+        // Failed execution paths are registered only from structured reports
+        // written in this run's allocated locations, never from path existence.
+        if self
+            .allocation_started
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            let report_name = format!(
+                "{}.run.json",
+                self.output
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+            );
+            for report in [
+                run.directory().join(&report_name),
+                run.directory().join("pending").join(&report_name),
+            ] {
+                if !report.is_file() {
+                    continue;
+                }
+                let value: serde_json::Value =
+                    serde_json::from_slice(&basecraft_ops::provenance::read_record(&report)?)?;
+                if let Some(collection) = value.pointer("/bootstrap/replicate_trees") {
+                    let path = collection
+                        .get("path")
+                        .and_then(serde_json::Value::as_str)
+                        .map(PathBuf::from);
+                    let status = collection.get("status").and_then(serde_json::Value::as_str);
+                    let expected = self.expected_bootstrap_path(run, status != Some("complete"))?;
+                    if path.as_ref() == Some(&expected)
+                        && collection["format"] == "nexus"
+                        && collection["trees"].as_u64()
+                            == value
+                                .pointer("/bootstrap/completed")
+                                .and_then(serde_json::Value::as_u64)
+                        && matches!(
+                            status,
+                            Some("complete" | "partial" | "cancelled" | "original_failed")
+                        )
+                    {
+                        paths.push(expected);
+                        paths.push(report.clone());
+                    }
+                }
+            }
+        }
+        let mut outputs = std::collections::BTreeMap::new();
+        for path in paths {
+            if std::fs::symlink_metadata(&path)?.file_type().is_symlink() {
+                return Err(Error::Protocol("retained artifact is a symlink".into()));
+            }
+            outputs.insert(
+                path.display().to_string(),
+                basecraft_io::hash_file(&path).map_err(basecraft_ops::Error::from)?,
+            );
+        }
+        Ok(outputs)
+    }
+
     fn write_run_manifest(
         &self,
         directory: &Path,
@@ -600,7 +749,11 @@ impl FileJob {
             crate::compute::parameters(&manifest.id, self.params.clone(), self.execution_budget());
         parameters.insert("job_id".into(), json!(self.run_id));
         let mut outputs = serde_json::Map::new();
-        if outcome.is_some_and(Result::is_ok) {
+        if let Some(run) = &self.artifacts {
+            for (path, hash) in self.retained_outputs(run, outcome.and_then(|o| o.as_ref().ok()))? {
+                outputs.insert(path, json!(hash));
+            }
+        } else if outcome.is_some_and(Result::is_ok) {
             let hash = basecraft_io::hash_file(&self.output).map_err(basecraft_ops::Error::from)?;
             outputs.insert(self.output.display().to_string(), json!(hash));
         }
@@ -625,6 +778,12 @@ impl FileJob {
         let mut bytes =
             serde_json::to_vec_pretty(&value).map_err(|e| Error::Protocol(e.to_string()))?;
         bytes.push(b'\n');
+        if let Some(run) = &self.artifacts {
+            basecraft_io::write_atomic(&run.directory().join("execution.json"), |w| {
+                w.write_all(&bytes)
+            })
+            .map_err(basecraft_ops::Error::from)?;
+        }
         basecraft_io::write_atomic(&directory.join("manifest.json"), |w| w.write_all(&bytes))
             .map_err(basecraft_ops::Error::from)?;
         Ok(())
@@ -636,6 +795,11 @@ impl FileJob {
             .get("cancel_file")
             .and_then(serde_json::Value::as_str)
             .map(Path::new);
+        if self.artifacts.is_some() && std::fs::symlink_metadata(&self.output).is_ok() {
+            return Err(Error::Protocol(
+                "analysis output already exists; choose a new result filename".into(),
+            ));
+        }
         let permit = crate::compute::reserve_cpu(self.cpu_budget, cancel)?;
         let granted_budget = permit.threads();
         self.granted_budget
@@ -669,18 +833,82 @@ impl FileJob {
             "input".into(),
             serde_json::to_value(frozen_input).map_err(|e| Error::Protocol(e.to_string()))?,
         );
+        let tool_output = if let Some(run) = &self.artifacts {
+            run.staging(
+                self.output
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .ok_or_else(|| Error::Protocol("output filename is not UTF-8".into()))?,
+            )?
+        } else {
+            self.output.clone()
+        };
         params.insert(
             "output".into(),
-            serde_json::to_value(&self.output).map_err(|e| Error::Protocol(e.to_string()))?,
+            serde_json::to_value(&tool_output).map_err(|e| Error::Protocol(e.to_string()))?,
         );
         let mut result =
             process.invoke(&self.operation, serde_json::Value::Object(params), None)?;
-        if !self.output.exists() {
+        if !tool_output.is_file() {
             return Err(Error::Protocol(format!(
                 "{} wrote no {}",
                 manifest.id,
-                self.output.display()
+                tool_output.display()
             )));
+        }
+        if let Some(run) = &self.artifacts {
+            // The engine already published bootstrap streams. Only outputs in
+            // this run's pending directory are promoted by the host.
+            let pending = run.directory().join("pending");
+            let mut paths = vec![tool_output.clone()];
+            paths.extend(
+                result
+                    .outputs
+                    .iter()
+                    .map(PathBuf::from)
+                    .filter(|p| *p != tool_output),
+            );
+            let mut published = Vec::new();
+            for path in paths {
+                if std::fs::symlink_metadata(&path)?.file_type().is_symlink() {
+                    return Err(Error::Protocol("plugin returned a symlink artifact".into()));
+                }
+                let path = path.canonicalize()?;
+                if path.parent() == Some(pending.as_path()) {
+                    let name = path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .ok_or_else(|| Error::Protocol("artifact filename is not UTF-8".into()))?;
+                    let visible = path == tool_output
+                        || self.operation == "tree"
+                            && path
+                                .extension()
+                                .is_some_and(|e| e.eq_ignore_ascii_case("nwk"));
+                    let destination = run.publish(
+                        name,
+                        if visible {
+                            basecraft_ops::analysis_store::ArtifactDestination::WorkingDirectory
+                        } else {
+                            basecraft_ops::analysis_store::ArtifactDestination::Metadata
+                        },
+                    )?;
+                    published.push(destination.to_string_lossy().into_owned());
+                } else if path.starts_with(run.directory())
+                    || path == self.expected_bootstrap_path(run, false)?
+                    || path == self.expected_bootstrap_path(run, true)?
+                {
+                    published.push(path.to_string_lossy().into_owned()); // Register; never republish/copy.
+                } else {
+                    return Err(Error::Protocol(format!(
+                        "plugin returned unallocated artifact {}; publication incomplete; staged data retained",
+                        path.display()
+                    )));
+                }
+            }
+            result.outputs = published;
+            if self.operation == "tree" {
+                run.bind(&self.output)?;
+            }
         }
         if self.operation == "tree" {
             let mut trees = vec![self.output.canonicalize()?];

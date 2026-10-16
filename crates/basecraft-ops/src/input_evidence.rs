@@ -147,7 +147,7 @@ pub fn lock() -> Result<std::fs::File> {
         .read(true)
         .write(true)
         .open(parent.join("analysis-evidence.lock"))?;
-    lock.try_lock_exclusive()
+    lock.lock_exclusive()
         .map_err(|_| invalid("analysis evidence is busy; retry shortly"))?;
     Ok(lock)
 }
@@ -368,7 +368,7 @@ pub fn resolve(conflict: &EvidenceConflict, policy: SavePolicy) -> Result<()> {
                 ));
                 std::fs::rename(&affected.run, destination)?;
             }
-            SavePolicy::Cancel => unreachable!(),
+            SavePolicy::Cancel => return Err(invalid("save cancelled")),
         }
     }
     Ok(())
@@ -380,10 +380,17 @@ pub fn verified_source(bundle: &Path, reference: &InputReference) -> Result<Path
     if input.state == "broken" {
         return Err(invalid("evidence chain explicitly broken"));
     }
+    let effective = input
+        .source
+        .as_ref()
+        .ok_or_else(|| invalid("reference evidence is missing"))?;
+    if effective.hash != reference.hash {
+        return Err(invalid("input reference identity changed"));
+    }
     let path = if input.state == "preserved" {
         bundle.join("preserved-input")
     } else {
-        bundle.join(&reference.path)
+        bundle.join(&effective.path)
     };
     if basecraft_io::hash_file(&path)? != reference.hash
         || std::fs::metadata(&path)?.len() != reference.stamp.size

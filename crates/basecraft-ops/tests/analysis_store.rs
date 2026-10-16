@@ -56,3 +56,139 @@ fn symlink_namespace_and_staged_symlinks_are_rejected() {
     std::os::unix::fs::symlink("/etc/passwd", run.staging("bad").unwrap()).unwrap();
     assert!(run.publish("bad", ArtifactDestination::Metadata).is_err());
 }
+
+fn reference_run(root: &std::path::Path, source: &std::path::Path, id: &str) -> ArtifactRun {
+    use basecraft_ops::input_evidence::{self, SubmittedInput};
+    use basecraft_protocol::provenance::InputReference;
+    let run = ArtifactRun::create(&root.join(format!("{id}.fasta")), id).unwrap();
+    input_evidence::write_json(
+        &run.directory().join("run.json"),
+        &serde_json::json!({"result":format!("{id}.fasta")}),
+    )
+    .unwrap();
+    let hash = basecraft_io::hash_file(source).unwrap();
+    input_evidence::write_json(
+        &run.directory().join("input.json"),
+        &SubmittedInput {
+            schema_version: 1,
+            source: Some(InputReference {
+                path: input_evidence::relative(run.directory(), source).unwrap(),
+                stamp: input_evidence::stamp(source).unwrap(),
+                hash: hash.clone(),
+                extra: Default::default(),
+            }),
+            submitted_hash: hash,
+            submitted_size: std::fs::metadata(source).unwrap().len(),
+            transformation: "canonical-fasta-v1".into(),
+            state: "referenced".into(),
+            extra: Default::default(),
+        },
+    )
+    .unwrap();
+    run
+}
+
+#[test]
+fn reference_lifecycle_multiple_analyses_preserve_break_trash_and_cancel() {
+    use basecraft_ops::input_evidence::{self, SavePolicy};
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source.fasta");
+    let old = ">a\nAAAA\n>b\nAAAT\n";
+    std::fs::write(&source, old).unwrap();
+    let a = reference_run(dir.path(), &source, "one");
+    let b = reference_run(dir.path(), &source, "two");
+    let store = dir.path().join(".basecraft/analyses-v1");
+    let conflict = input_evidence::conflicts_in(&source, std::slice::from_ref(&store)).unwrap();
+    assert_eq!(conflict.analyses.len(), 2);
+    assert!(input_evidence::resolve(&conflict, SavePolicy::Cancel).is_err());
+    assert_eq!(std::fs::read_to_string(&source).unwrap(), old);
+    assert!(!a.directory().join("preserved-input").exists());
+    input_evidence::resolve(&conflict, SavePolicy::PreserveCopy).unwrap();
+    std::fs::write(&source, ">a\nTTTT\n>b\nTTTT\n").unwrap();
+    for run in [&a, &b] {
+        let input = input_evidence::read_input(run.directory()).unwrap();
+        assert_eq!(input.state, "preserved");
+        let path = input_evidence::verified_source(run.directory(), input.source.as_ref().unwrap())
+            .unwrap();
+        assert_eq!(std::fs::read_to_string(path).unwrap(), old);
+    }
+    assert!(
+        input_evidence::conflicts_in(&source, std::slice::from_ref(&store))
+            .unwrap()
+            .analyses
+            .is_empty()
+    );
+    let c = reference_run(dir.path(), &source, "three");
+    let conflict = input_evidence::conflicts_in(&source, std::slice::from_ref(&store)).unwrap();
+    input_evidence::resolve(&conflict, SavePolicy::BreakEvidence).unwrap();
+    let input = input_evidence::read_input(c.directory()).unwrap();
+    assert!(
+        input_evidence::verified_source(c.directory(), input.source.as_ref().unwrap()).is_err()
+    );
+    let d = reference_run(dir.path(), &source, "four");
+    let conflict = input_evidence::conflicts_in(&source, &[store.clone()]).unwrap();
+    input_evidence::resolve(&conflict, SavePolicy::RemoveAnalysis).unwrap();
+    assert!(!d.directory().exists());
+    assert_eq!(std::fs::read_dir(store.join("trash")).unwrap().count(), 1);
+    assert!(source.exists());
+    assert!(a.directory().exists());
+}
+
+#[test]
+fn changed_missing_and_failed_copy_cannot_claim_preserved_evidence() {
+    use basecraft_ops::input_evidence::{self, SavePolicy};
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source.fasta");
+    std::fs::write(&source, ">a\nAAAA\n>b\nAAAT\n").unwrap();
+    let run = reference_run(dir.path(), &source, "run");
+    let store = dir.path().join(".basecraft/analyses-v1");
+    let conflict = input_evidence::conflicts_in(&source, std::slice::from_ref(&store)).unwrap();
+    // A destination directory forces copying/publication failure; old input stays.
+    std::fs::create_dir(run.directory().join("preserved-input")).unwrap();
+    assert!(input_evidence::resolve(&conflict, SavePolicy::PreserveCopy).is_err());
+    assert_eq!(
+        input_evidence::read_input(run.directory()).unwrap().state,
+        "referenced"
+    );
+    std::fs::remove_dir(run.directory().join("preserved-input")).unwrap();
+    std::fs::write(&source, ">a\nTTTT\n>b\nTTTT\n").unwrap();
+    assert!(input_evidence::resolve(&conflict, SavePolicy::PreserveCopy).is_err());
+    let input = input_evidence::read_input(run.directory()).unwrap();
+    assert_eq!(input.state, "referenced");
+    assert!(
+        input_evidence::verified_source(run.directory(), input.source.as_ref().unwrap()).is_err()
+    );
+    std::fs::remove_file(&source).unwrap();
+    let missing = input_evidence::conflicts_in(&source, &[store]).unwrap();
+    assert_eq!(missing.analyses.len(), 1);
+    assert!(!missing.options.contains(&SavePolicy::PreserveCopy));
+}
+
+#[cfg(unix)]
+#[test]
+fn symlink_and_hardlink_aliases_are_detected_without_content_reads() {
+    use basecraft_ops::input_evidence;
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source.fasta");
+    std::fs::write(&source, ">a\nAAAA\n>b\nAAAT\n").unwrap();
+    reference_run(dir.path(), &source, "run");
+    let store = dir.path().join(".basecraft/analyses-v1");
+    let hard = dir.path().join("hard.fasta");
+    std::fs::hard_link(&source, &hard).unwrap();
+    assert_eq!(
+        input_evidence::conflicts_in(&hard, std::slice::from_ref(&store))
+            .unwrap()
+            .analyses
+            .len(),
+        1
+    );
+    let soft = dir.path().join("soft.fasta");
+    std::os::unix::fs::symlink(&source, &soft).unwrap();
+    assert_eq!(
+        input_evidence::conflicts_in(&soft.canonicalize().unwrap(), &[store])
+            .unwrap()
+            .analyses
+            .len(),
+        1
+    );
+}

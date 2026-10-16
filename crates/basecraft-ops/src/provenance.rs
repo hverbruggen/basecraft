@@ -68,7 +68,7 @@ fn safe_relative(root: &Path, name: &str) -> Result<PathBuf> {
     Ok(canonical)
 }
 
-pub(crate) fn read_record(path: &Path) -> Result<Vec<u8>> {
+pub fn read_record(path: &Path) -> Result<Vec<u8>> {
     use std::io::Read;
     const LIMIT: u64 = 64 << 20;
     let file = std::fs::File::open(path)?;

@@ -79,7 +79,11 @@ fn realigns_with_mafft_and_logs_the_run() {
         .find(|e| matches!(e.op, Op::ToolRun { .. }))
         .expect("tool.run logged");
     assert!(matches!(&run.actor, Actor::Tool { tool, .. } if tool == "mafft"));
-    assert_eq!(run.result.hashes.len(), 2, "input and output hashed");
+    assert_eq!(
+        run.result.hashes.len(),
+        3,
+        "input, output and diagnostic log hashed"
+    );
     let report = basecraft_ops::replay::replay(root).unwrap();
     assert!(report.ok(), "{:#?}", report.problems);
 }

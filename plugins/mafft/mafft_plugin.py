@@ -49,6 +49,12 @@ def align(snapshot, params):
     argv = [exe, "--preservecase", "--thread", str(threads), str(source)]
     with partial.open("wb") as out:
         run = subprocess.run(argv, stdout=out, stderr=subprocess.PIPE, check=False)
+    diagnostics = []
+    if allocation := params.get("analysis_artifacts"):
+        log = Path(allocation["metadata_directory"]) / "mafft.stderr.txt"
+        from basecraft.tools import write_atomic
+        write_atomic(log, run.stderr.decode(errors="replace"))
+        diagnostics.append(str(log))
     if run.returncode != 0 or partial.stat().st_size == 0:
         partial.unlink(missing_ok=True)
         detail = run.stderr.decode(errors="replace").strip().splitlines()
@@ -57,7 +63,7 @@ def align(snapshot, params):
     return {
         "ops": [],
         "message": f"Aligned {count} sequences",
-        "outputs": [str(target)],
+        "outputs": [str(target), *diagnostics],
         "tool": {"name": "mafft", "version": mafft_version(exe)},
         "execution": {"argv": argv, "resolved_parameters": {"threads": threads, "preserve_case": True}, "preprocessing": [], "environment": {}, "methods_template": "mafft.align.v1", "methods": {"description": "Sequences were aligned", "citations": ["Katoh and Standley (2013), MAFFT version 7. https://doi.org/10.1093/molbev/mst010"]}},
     }

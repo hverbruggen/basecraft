@@ -189,6 +189,10 @@ impl ArtifactRun {
         if !run.exists() {
             return Ok(None);
         } // Explicitly removed analysis is in trash.
+        let metadata = std::fs::symlink_metadata(&run)?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err(invalid("unsafe analysis run"));
+        }
         Ok(Some(run))
     }
 
@@ -218,4 +222,41 @@ pub(crate) fn bind_existing(run: &Path, id: &str, result: &Path) -> Result<()> {
         id: id.into(),
     };
     artifact_run.bind(result)
+}
+
+impl ArtifactRun {
+    /// Promote a staged primary/component output without replacing existing data.
+    /// Its basename is preserved; allocation remains anchored to the final folder.
+    pub fn publish_primary(&self, name: &str) -> Result<PathBuf> {
+        self.publish(name, ArtifactDestination::WorkingDirectory)
+    }
+}
+
+pub(crate) fn retained_source(root: &Path, hash: &str) -> Result<Option<PathBuf>> {
+    let store = root.join(".basecraft/analyses-v1");
+    if !store.exists() {
+        return Ok(None);
+    }
+    ArtifactRun::validate_store(&store)?;
+    for (index, entry) in std::fs::read_dir(store.join("runs"))?.enumerate() {
+        if index >= 4096 {
+            return Err(invalid("replay analysis-store run limit exceeded"));
+        }
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let run = entry.path();
+        if !run.join("input.json").is_file() {
+            continue;
+        }
+        let input = crate::input_evidence::read_input(&run)?;
+        if input.state == "preserved" && input.source.as_ref().is_some_and(|r| r.hash == hash) {
+            return Ok(Some(run.join("preserved-input")));
+        }
+        if input.state == "generated" && input.submitted_hash == hash {
+            return Ok(Some(run.join("submitted.fasta")));
+        }
+    }
+    Ok(None)
 }

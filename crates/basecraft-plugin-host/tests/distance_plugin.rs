@@ -36,7 +36,7 @@ fn distance_outputs_are_logged_and_replay() {
     job.params.insert("model".into(), serde_json::json!("jc69"));
     job.params.insert("threads".into(), serde_json::json!(2));
     let result = job.run().unwrap();
-    assert_eq!(result.outputs.len(), 5);
+    assert_eq!(result.outputs.len(), 4);
     job.record(&mut session, doc, &result).unwrap();
     let tree = session.open(&output).unwrap();
     assert_eq!(session.tree(tree).tip_count(), 4);
@@ -45,13 +45,13 @@ fn distance_outputs_are_logged_and_replay() {
         .iter()
         .find(|e| matches!(e.op, Op::ToolRun { .. }))
         .unwrap();
-    assert_eq!(entry.result.hashes.len(), 6);
+    assert_eq!(entry.result.hashes.len(), 5);
     if let Op::ToolRun {
         params, outputs, ..
     } = &entry.op
     {
         assert_eq!(params["model"], "jc69");
-        assert_eq!(outputs.len(), 5);
+        assert_eq!(outputs.len(), 4);
     }
     let mut upgma = FileJob::from_alignment(
         &session,
@@ -67,8 +67,14 @@ fn distance_outputs_are_logged_and_replay() {
         .insert("method".into(), serde_json::json!("upgma"));
     let result = upgma.run().unwrap();
     upgma.record(&mut session, doc, &result).unwrap();
-    let metadata: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(root.join("upgma.nwk.run.json")).unwrap()).unwrap();
+    let metadata: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(
+            basecraft_ops::provenance::bundle_for_result(&root.join("upgma.nwk"))
+                .join("upgma.nwk.run.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
     assert_eq!(metadata["method"], "upgma");
     let tree = session.open(&root.join("upgma.nwk")).unwrap();
     assert_eq!(session.tree(tree).tip_count(), 4);
@@ -136,7 +142,7 @@ fn forest_members_share_one_alignment_snapshot() {
             .iter()
             .filter(|p| p.ends_with(".alignment.afa"))
             .count(),
-        1
+        0
     );
     session.flush().unwrap();
     assert!(basecraft_ops::replay::replay(dir.path()).unwrap().ok());
@@ -184,7 +190,10 @@ fn bootstrap_provenance_success_and_withheld_support_replay() {
             let result = job.run().unwrap();
             job.record(&mut session, doc, &result).unwrap();
             let report: serde_json::Value = serde_json::from_slice(
-                &std::fs::read(format!("{}.run.json", output.display())).unwrap(),
+                &std::fs::read(basecraft_ops::provenance::bundle_for_result(&output).join(
+                    format!("{}.run.json", output.file_name().unwrap().to_string_lossy()),
+                ))
+                .unwrap(),
             )
             .unwrap();
             assert_eq!(report["bootstrap"]["requested"], 64);
