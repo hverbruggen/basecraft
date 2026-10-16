@@ -29,8 +29,8 @@ fn rereview_alignment_move_and_explicit_evidence_decisions() {
             &session,
             input,
             (&plugin(), "workspace_alignment"),
+            AlignmentInput::Aligned,
             canonical.clone(),
-            AlignmentInput::default(),
         )
         .unwrap();
         let result = job.run().unwrap();
