@@ -16,6 +16,8 @@ ToolButton {
     property string keys
     property string badge
     property string iconName
+    readonly property real captionBaseline: contentItem.y + caption.y + caption.baselineOffset
+    readonly property real symbolHeight: Math.max(16, Math.ceil(symbolMetrics.height))
     Accessible.name: text.length ? text : tip
     ToolTip.text: keys.length ? tip + "   " + keys : tip
     ToolTip.visible: (hovered || activeFocus) && tip.length > 0
@@ -35,13 +37,19 @@ ToolButton {
     contentItem: Item {
         implicitWidth: Math.max(symbols.implicitWidth, caption.implicitWidth)
         implicitHeight: (symbols.visible ? symbols.implicitHeight : 0) + (caption.visible ? caption.implicitHeight : 0) + (symbols.visible && caption.visible ? 2 : 0)
-        Row {
+        Item {
             id: symbols
             anchors.horizontalCenter: parent.horizontalCenter
             visible: button.iconName.length > 0 || button.badge.length > 0
-            spacing: 3
-            AppIcon { visible: button.iconName.length > 0; name: button.iconName; size: button.icon.width; color: button.palette.buttonText }
-            Text { visible: button.badge.length > 0; text: button.badge; font: button.font; color: button.palette.buttonText }
+            implicitWidth: symbolRow.implicitWidth
+            implicitHeight: button.symbolHeight
+            Row {
+                id: symbolRow
+                anchors.centerIn: parent
+                spacing: 3
+                AppIcon { anchors.verticalCenter: parent.verticalCenter; visible: button.iconName.length > 0; name: button.iconName; size: button.icon.width; color: button.palette.buttonText }
+                Text { anchors.verticalCenter: parent.verticalCenter; visible: button.badge.length > 0; text: button.badge; font: button.font; color: button.palette.buttonText }
+            }
         }
         Text {
             id: caption
@@ -53,4 +61,5 @@ ToolButton {
             color: button.palette.buttonText
         }
     }
+    FontMetrics { id: symbolMetrics; font: button.font }
 }

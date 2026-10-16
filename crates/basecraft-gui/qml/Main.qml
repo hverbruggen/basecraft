@@ -1083,18 +1083,17 @@ ApplicationWindow {
                         Component.onCompleted: commands.forEach(command => window.registerRibbonCommand(command))
                     }
                     ToolSeparator { Layout.fillHeight: true }
-                    RibbonGroup {
-                        title: "Clade"
-                        RibbonButton { commandId: "ribbon.name-the-selected-clade-with-a-bar-or-a"; text: "Annotate…"; tip: "Name the selected clade, with a bar or a coloured field"; keys: "Enter"; enabled: window.current !== null && window.current.has_selection === true; onInvoked: cladeEditor.openSelected() }
-                        RibbonButton { commandId: "ribbon.move-the-root-along-its-branch"; text: "Root position…"; tip: "Move the root along its branch"; onInvoked: rootDialog.ask() }
-                        RibbonButton { commandId: "ribbon.reverse-the-order-of-the-branches-in-the-selected"; text: "Flip"; tip: "Reverse the order of the branches in the selected subtree (for a tip, its parent's)"; enabled: window.current !== null && window.current.has_selection === true; onInvoked: window.current.rotate() }
-                        RibbonButton { commandId: "ribbon.rename-the-selected-tip"; text: "Rename…"; tip: "Rename the selected tip"; keys: "F2"; enabled: window.current !== null && window.current.tip_selected === true; onInvoked: tipDialog.ask() }
+                    TreeCladeGroup {
+                        controller: window.current
+                        customization: window.customization
+                        onAnnotateRequested: cladeEditor.openSelected()
+                        Component.onCompleted: commands.forEach(command => window.registerRibbonCommand(command))
                     }
                     ToolSeparator { Layout.fillHeight: true }
-                    RibbonGroup {
-                        title: "Order"
-                        RibbonButton { commandId: "ribbon.order-every-clade-s-branches-by-size-smallest-first"; text: "Small on top"; tip: "Order every clade's branches by size, smallest first"; onInvoked: window.current.ladderize(true) }
-                        RibbonButton { commandId: "ribbon.order-every-clade-s-branches-by-size-largest-first"; text: "Large on top"; tip: "Order every clade's branches by size, largest first"; onInvoked: window.current.ladderize(false) }
+                    TreeBranchOrderGroup {
+                        controller: window.current
+                        customization: window.customization
+                        Component.onCompleted: commands.forEach(command => window.registerRibbonCommand(command))
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
@@ -1106,10 +1105,11 @@ ApplicationWindow {
                         RibbonButton { commandId: "ribbon.which-support-values-show-circles-at-nodes-sizes"; text: "Style…"; tip: "Which support values show, circles at nodes, sizes"; onInvoked: treeStyle.openStyle() }
                     }
                     ToolSeparator { Layout.fillHeight: true }
-                    RibbonGroup {
-                        title: "Linked alignment"
-                        RibbonButton { commandId: "ribbon.associate-an-imported-tree-with-an-alignment-after-validating"; text: "Link alignment…"; tip: "Associate an imported tree with an alignment after validating its identifiers"; onInvoked: linkAlignmentFile.open() }
-                        RibbonButton { commandId: "ribbon.extract-aligned-rows-without-realigning-ctrl-click-to-select"; text: "Open selected clade(s)"; enabled: window.current !== null && !window.current.busy; tip: "Extract aligned rows without realigning; Ctrl-click to select multiple clades"; onInvoked: window.current.extract_clade_alignment() }
+                    TreeAlignmentGroup {
+                        controller: window.current
+                        customization: window.customization
+                        onLinkRequested: (target) => linkAlignmentFile.ask(target)
+                        Component.onCompleted: commands.forEach(command => window.registerRibbonCommand(command))
                     }
                     RibbonGroup {
                         title: "Figure"
@@ -1555,10 +1555,11 @@ ApplicationWindow {
                             // Not "TreeView": that's Qt's, used by the
                             // files sidebar.
                             PhyloView {
+                                id: treeDocument
                                 notificationSink: provenance
                                 onOpenFile: (path) => window.openPath(path)
                                 onDirtyChanged: openFiles.setProperty(index, "dirty", dirty)
-                                onContextMenu: (info) => { treeMenu.info = info; treeMenu.popup() }
+                                onContextMenu: (info) => treeMenu.showFor(treeDocument.controller, info)
                                 onToggleSidebar: window.sidebarOpen = !window.sidebarOpen
                                 onRenameTip: tipDialog.ask()
                                 onAnnotate: cladeEditor.openSelected()
@@ -1713,19 +1714,13 @@ ApplicationWindow {
     }
 
     // Tree context menu: what applies to the clade or tip under the pointer.
-    Menu {
+    TreeContextMenu {
         id: treeMenu
-        property var info: ({ node: false, tip: false, root: false, annotated: false, annotation: 0 })
-        component TreeItem: MenuItem { height: visible ? implicitHeight : 0 }
-
-        TreeItem { text: treeMenu.info.annotated ? "Edit annotation…" : "Annotate clade…"; visible: treeMenu.info.node; onTriggered: cladeEditor.openSelected() }
-        TreeItem { text: "Remove annotation"; visible: treeMenu.info.annotated; onTriggered: window.current.remove_annotation(treeMenu.info.annotation) }
-        TreeItem { text: "Reroot here"; visible: treeMenu.info.node && !treeMenu.info.root; onTriggered: window.current.reroot() }
-        TreeItem { text: "Root position…"; visible: treeMenu.info.rootBranch === true; onTriggered: rootDialog.ask() }
-        TreeItem { text: "Flip subtree"; visible: treeMenu.info.node; onTriggered: window.current.rotate() }
-        TreeItem { text: "Rename tip…"; visible: treeMenu.info.tip; onTriggered: tipDialog.ask() }
-        TreeItem { text: "Add support from tree…"; visible: !treeMenu.info.node; onTriggered: supportFile.open() }
-        TreeItem { text: "Tree style…"; visible: !treeMenu.info.node; onTriggered: treeStyle.openStyle() }
+        onNameRequested: (target, annotation, revision) => cladeEditor.openCaptured(target, annotation, revision, true)
+        onRenameTipRequested: (target, name, revision) => tipDialog.openCaptured(target, name, revision)
+        onRootPositionRequested: rootDialog.ask()
+        onSupportRequested: supportFile.open()
+        onStyleRequested: treeStyle.openStyle()
     }
 
     // Where the root sits along its branch: a share of the branch on each
@@ -1775,36 +1770,9 @@ ApplicationWindow {
         }
     }
 
-    AppContentDialog {
+    TreeTipNameDialog {
         id: tipDialog
-        initialFocusItem: tipName
-        title: "Rename tip"
-        modal: true
-        standardButtons: Dialog.Ok | Dialog.Cancel
-        function ask() {
-            if (!window.treeOpen || !window.current.tip_selected) return
-            tipName.text = window.current.tip_name()
-            tipError.text = ""
-            open()
-        }
-        onOpened: { tipName.forceActiveFocus(); tipName.selectAll() }
-        onAccepted: {
-            const err = window.current.rename_tip(tipName.text)
-            if (err.length > 0) { tipError.text = err; open() }
-        }
-        body: ColumnLayout {
-            spacing: 6
-            Label { id: tipNameLabel; text: "Tip name" }
-            TextField {
-                Accessible.labelledBy: tipNameLabel
-                Accessible.name: tipNameLabel.text
-                id: tipName
-                Layout.preferredWidth: 320
-                Keys.onReturnPressed: tipDialog.accept()
-                Keys.onEnterPressed: tipDialog.accept()
-            }
-            AppErrorLabel { id: tipError; visible: text.length > 0; color: shell.accent; wrapMode: Text.Wrap; Layout.fillWidth: true }
-        }
+        controller: window.treeOpen ? window.current : null
     }
 
     // Support from another tree: pick the file, then name the values.
@@ -1852,11 +1820,26 @@ ApplicationWindow {
 
     FileDialog {
         id: linkAlignmentFile
+        property var editController: null
+        property string editRevision: ""
+        function ask(target) {
+            editController = target
+            editRevision = target.record_revision()
+            open()
+        }
         currentFolder: window.activeFolder()
         onVisibleChanged: if (visible) currentFolder = window.activeFolder()
         title: "Link an alignment to this tree"
         nameFilters: ["FASTA alignments (*.fasta *.fa *.fas *.afa)"]
-        onAccepted: if (window.treeOpen) window.current.link_alignment(window.localPath(selectedFile))
+        onAccepted: {
+            if (!editController) return
+            if (editController.record_revision() !== editRevision) {
+                editController.message_kind = "error"
+                editController.message = "The tree changed. Choose the linked alignment again."
+                return
+            }
+            editController.link_alignment(window.localPath(selectedFile))
+        }
     }
 
     function exportSvg() {

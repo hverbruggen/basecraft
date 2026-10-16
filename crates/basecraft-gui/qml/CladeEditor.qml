@@ -10,6 +10,8 @@ AppContentDialog {
     initialFocusItem: label
     property var controller
     property var annotation: ({})
+    property var editController: null
+    property string editRevision: ""
 
     title: annotation.exists ? "Edit clade annotation" : "Annotate clade"
     modal: true
@@ -19,12 +21,20 @@ AppContentDialog {
     readonly property var swatches: ["#000000", "#808080", "#c0392b", "#e67e22", "#d4ac0d", "#27ae60", "#2980b9", "#8e44ad"]
 
     function openSelected() {
-        const a = JSON.parse(controller.annotation_json())
+        if (!controller) return
+        openCaptured(controller, JSON.parse(controller.annotation_json()), controller.record_revision())
+    }
+
+    // A context menu captures this before opening: selection or tabs may change
+    // while the menu/dialog is shown, but the annotation keeps its original clade.
+    function openCaptured(target, a, revision, nameOnBranch = false) {
         if (!a) return
+        editController = target
+        editRevision = revision
         annotation = a
         label.text = a.label
-        onBranch.checked = a.on_branch
-        bar.checked = a.bar
+        onBranch.checked = a.on_branch || (nameOnBranch && !a.exists)
+        bar.checked = a.bar && !(nameOnBranch && !a.exists)
         barWidth.value = a.bar_width
         field.checked = a.field
         colour.text = a.colour
@@ -34,7 +44,16 @@ AppContentDialog {
         open()
     }
 
+    function validTarget() {
+        if (!editController || !editRevision.length || editController.record_revision() !== editRevision) {
+            error.text = "The tree changed or closed. Close this editor and open the annotation again."
+            return false
+        }
+        return true
+    }
+
     function save() {
+        if (!validTarget()) return
         const a = Object.assign({}, annotation, {
             label: label.text,
             on_branch: onBranch.checked,
@@ -45,7 +64,7 @@ AppContentDialog {
             opacity_left: Math.round(left.value),
             opacity_right: Math.round(right.value),
         })
-        const err = controller.set_annotation(JSON.stringify(a))
+        const err = editController.set_annotation(JSON.stringify(a))
         if (err.length > 0) error.text = err
         else close()
     }
@@ -76,9 +95,9 @@ AppContentDialog {
             }
         }
 
-        CheckBox { id: onBranch; text: "Name on the stem branch" }
+        CheckBox { id: onBranch; objectName: "onBranch"; text: "Name on the stem branch" }
         RowLayout {
-            CheckBox { id: bar; text: "Bar along the tips, named beside it" }
+            CheckBox { id: bar; objectName: "bar"; text: "Bar along the tips, named beside it" }
             Item { Layout.fillWidth: true }
             Label { id: barWidthLabel; text: "Thickness"; enabled: bar.checked }
             SpinBox { id: barWidth; objectName: "barWidth"; Accessible.labelledBy: barWidthLabel; Accessible.name: barWidthLabel.text; from: 1; to: 30; enabled: bar.checked; editable: true }
@@ -125,16 +144,20 @@ AppContentDialog {
             }
         }
 
-        AppErrorLabel { id: error; visible: text.length > 0; color: palette.highlight; wrapMode: Text.Wrap; Layout.fillWidth: true }
+        AppErrorLabel { id: error; objectName: "annotationError"; visible: text.length > 0; color: palette.highlight; wrapMode: Text.Wrap; Layout.fillWidth: true }
 
         RowLayout {
             AppButton {
                 text: "Remove"
                 visible: annotation.exists === true
-                onClicked: { controller.remove_annotation(annotation.id); dialog.close() }
+                onClicked: {
+                    if (!dialog.validTarget()) return
+                    editController.remove_annotation(annotation.id)
+                    dialog.close()
+                }
             }
             Item { Layout.fillWidth: true }
-            AppButton { text: "Cancel"; onClicked: dialog.close() }
+            AppButton { text: "Cancel"; onClicked: dialog.reject() }
             AppButton { text: "Save"; highlighted: true; onClicked: dialog.save() }
         }
     }
