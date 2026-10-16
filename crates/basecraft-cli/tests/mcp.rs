@@ -226,3 +226,87 @@ fn species_mcp_uses_the_canonical_workspace_contract() {
         Vec::<String>::new()
     );
 }
+
+#[test]
+fn tree_mcp_routes_share_hidden_storage() {
+    let parent = tempfile::tempdir().unwrap();
+    let root = parent.path().join("working");
+    std::fs::create_dir(&root).unwrap();
+    std::fs::write(root.join("source.afa"), ">a\nACGTACGTACGTACGTACGTACGT\n>b\nACGTACGTTCGTACGTACGTACGT\n>c\nTCGTACGTACGTACGTACGTACGA\n>d\nTCGTACGTTCGTACGTACGTACGA\n").unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_basecraft"))
+        .args(["mcp", root.to_str().unwrap(), "--allow-writes"])
+        .env("BASECRAFT_PROFILE_DIR", parent.path().join("profile"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let messages = [
+        json!({"jsonrpc":"2.0","id":0,"method":"initialize"}),
+        request(1, "open", json!({"path":"source.afa"})),
+        request(
+            2,
+            "run_tool",
+            json!({"document":0,"tool":"distance","output":"nj.nwk","params":{"method":"sorted","model":"p","threads":1}}),
+        ),
+        request(
+            3,
+            "run_tool",
+            json!({"document":0,"tool":"distance","output":"upgma.nwk","params":{"method":"upgma","model":"p","threads":1}}),
+        ),
+        request(
+            4,
+            "run_tool",
+            json!({"document":0,"tool":"fasttree","output":"fasttree.nwk","params":{"threads":1}}),
+        ),
+        request(
+            5,
+            "run_tool",
+            json!({"document":0,"tool":"iqtree","output":"iqtree.nwk","params":{"model":"JC","threads":1,"seed":71}}),
+        ),
+    ];
+    let mut input = child.stdin.take().unwrap();
+    for message in messages {
+        writeln!(input, "{message}").unwrap();
+    }
+    drop(input);
+    let result = child.wait_with_output().unwrap();
+    assert!(result.status.success());
+    let replies: Vec<Value> = String::from_utf8(result.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(replies.len(), 6);
+    for reply in &replies[1..] {
+        assert_eq!(reply["result"]["isError"], false, "{reply}");
+    }
+    let mut visible: Vec<_> = std::fs::read_dir(&root)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    visible.sort();
+    assert_eq!(
+        visible,
+        [
+            ".basecraft",
+            "fasttree.nwk",
+            "iqtree.nwk",
+            "nj.nwk",
+            "source.afa",
+            "upgma.nwk"
+        ]
+    );
+    println!("MCP trees: {visible:?}");
+    for name in ["fasttree.nwk", "iqtree.nwk", "nj.nwk", "upgma.nwk"] {
+        let output = root.join(name);
+        let run = basecraft_ops::analysis_store::ArtifactRun::for_result(&output)
+            .unwrap()
+            .unwrap();
+        assert!(!run.join("submitted.fasta").exists());
+        assert!(run.join("execution.json").is_file());
+        assert_eq!(
+            basecraft_ops::provenance::verify(&output).unwrap(),
+            Vec::<String>::new()
+        );
+    }
+}

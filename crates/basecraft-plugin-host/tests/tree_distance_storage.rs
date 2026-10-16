@@ -78,7 +78,7 @@ fn matrix_reference_generated_failure_move_and_export_use_the_common_store() {
         clean.input_io().unwrap()["persistent_original_copy_bytes"],
         0
     );
-    assert!(provenance::verify(&output).unwrap().is_empty());
+    assert_eq!(provenance::verify(&output).unwrap(), Vec::<String>::new());
     listing(&root, &run, "matrix-clean");
 
     session
@@ -142,18 +142,22 @@ fn matrix_reference_generated_failure_move_and_export_use_the_common_store() {
             .ok()
     );
     drop(session);
+    std::fs::write(&source, ALIGNMENT.replace("ACGT", "TCGT")).unwrap();
+    assert_ne!(provenance::verify(&output).unwrap(), Vec::<String>::new());
+    std::fs::remove_file(&source).unwrap();
+    assert_ne!(provenance::verify(&output).unwrap(), Vec::<String>::new());
+    std::fs::write(&source, ALIGNMENT).unwrap();
 
     let moved = parent.path().join("moved");
     std::fs::rename(&root, &moved).unwrap();
     let output = moved.join("matrix.tsv");
-    assert!(provenance::verify(&output).unwrap().is_empty());
+    assert_eq!(provenance::verify(&output).unwrap(), Vec::<String>::new());
     let package = parent.path().join("export");
     provenance::package(&output, &package).unwrap();
     std::fs::rename(&moved, parent.path().join("unavailable")).unwrap();
-    assert!(
-        provenance::verify(&package.join("matrix.tsv"))
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        provenance::verify(&package.join("matrix.tsv")).unwrap(),
+        Vec::<String>::new()
     );
     println!("matrix-export: {:?}", names(&package));
 }

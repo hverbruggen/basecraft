@@ -231,9 +231,8 @@ fn distance_matrix_cli_keeps_only_tsv_visible() {
         .collect();
     names.sort();
     assert_eq!(names, [".basecraft", "matrix.tsv", "source.afa"]);
-    assert!(
-        basecraft_ops::provenance::verify(&output)
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        basecraft_ops::provenance::verify(&output).unwrap(),
+        Vec::<String>::new()
     );
 }
