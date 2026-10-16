@@ -194,3 +194,88 @@ fn fitted_workspace_survives_folder_move_then_save_and_export() {
     assert!(provenance::verify(&canonical).unwrap().is_empty());
     provenance::package(&canonical, &parent.path().join("package")).unwrap();
 }
+
+#[test]
+fn preserved_alignment_remains_usable_by_workspace_default_input() {
+    use basecraft_ops::input_evidence::{SavePolicy, conflicts, resolve};
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("source.afa");
+    std::fs::write(&source, ">a\nAAAA\n>b\nAAAC\n>c\nAACC\n>d\nCCCC\n").unwrap();
+    let canonical = root.path().join("species.spart");
+    let mut session = Session::recoverable(root.path()).unwrap();
+    let input = session.open(&source).unwrap();
+    let setup = FileJob::from_alignment(
+        &session,
+        input,
+        (&plugin(), "workspace_alignment"),
+        AlignmentInput::Aligned,
+        canonical.clone(),
+    )
+    .unwrap();
+    let result = setup.run().unwrap();
+    setup.record(&mut session, input, &result).unwrap();
+    resolve(&conflicts(&source).unwrap(), SavePolicy::PreserveCopy).unwrap();
+    std::fs::write(&source, ">a\nTTTT\n>b\nTTTC\n>c\nTTCC\n>d\nCCCC\n").unwrap();
+    assert!(provenance::verify(&canonical).unwrap().is_empty());
+    let doc = session.open(&canonical).unwrap();
+    let work = session.delimitation(doc);
+    // Mirrors open_file's linked_alignment default and run_analysis's hash gate.
+    let linked = &work.exchange_fields["basecraft_alignment_snapshot"];
+    let expected = &work.exchange_fields["basecraft_alignment_hash"];
+    let job = FileJob::from_file(
+        &session,
+        doc,
+        Path::new(linked),
+        (&plugin(), "haplotypes"),
+        root.path().join("prep.json"),
+    )
+    .unwrap();
+    assert_eq!(
+        &job.input_key.1, expected,
+        "GUI default must follow the verified preserved alignment, as checked_display_tree does for trees"
+    );
+}
+
+#[test]
+fn combine_complete_export_includes_legacy_sidecar_evidence() {
+    let parent = tempfile::tempdir().unwrap();
+    let root = parent.path().join("working");
+    std::fs::create_dir(&root).unwrap();
+    let text = include_str!("../../../testdata/fixtures/delimitation/manual.spart");
+    let source = root.join("legacy.spart");
+    let target = root.join("target.spart");
+    std::fs::write(&source, text).unwrap();
+    std::fs::write(&target, text).unwrap();
+    let mut legacy = basecraft_io::spart::parse_text(text).unwrap();
+    legacy.exchange_fields.insert(
+        "authored_metadata".into(),
+        "Distinct original sidecar context".into(),
+    );
+    let mut bytes = Vec::new();
+    files::write_delimitation_sidecar(
+        &legacy,
+        &basecraft_io::hash_file(&source).unwrap(),
+        &mut bytes,
+    )
+    .unwrap();
+    std::fs::write(files::tree_sidecar(&source), &bytes).unwrap();
+    let side_hash = basecraft_io::hash_bytes(&bytes);
+    let mut session = Session::recoverable(&root).unwrap();
+    let doc = session.open(&target).unwrap();
+    basecraft_ops::delimitation::combine(&mut session, doc, &[source]).unwrap();
+    let combined = root.join("combined.spart");
+    session.save(doc, Some(&combined)).unwrap();
+    let package = parent.path().join("package");
+    provenance::package(&combined, &package).unwrap();
+    drop(session);
+    std::fs::rename(&root, parent.path().join("unavailable")).unwrap();
+    let exported = package.join("combined.spart");
+    assert!(provenance::verify(&exported).unwrap().is_empty());
+    let artifacts = provenance::companion(&exported).join("artifacts");
+    assert!(
+        std::fs::read_dir(&artifacts)
+            .unwrap()
+            .any(|entry| basecraft_io::hash_file(&entry.unwrap().path()).unwrap() == side_hash),
+        "complete export omitted the legacy sidecar whose hash Combine declares: {side_hash}"
+    );
+}
