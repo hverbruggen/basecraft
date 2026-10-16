@@ -260,60 +260,97 @@ pub fn conflicts(target: &Path) -> Result<EvidenceConflict> {
     conflicts_in(&canonical, &all)
 }
 
+// A folder can move/disappear outside the cooperative evidence lock. Treat it
+// exactly like a store already unavailable at query start, but never suppress
+// missing/corrupt metadata in a store that is still present. Partial scan results
+// are discarded so unavailable stores cannot contribute dangling conflicts.
+fn available_store<T>(store: &Path, inspect: impl FnOnce() -> Result<T>) -> Result<Option<T>> {
+    if !store.try_exists()? {
+        return Ok(None);
+    }
+    match inspect() {
+        Ok(value) => Ok(store.try_exists()?.then_some(value)),
+        Err(crate::Error::Io(error))
+            if error.kind() == std::io::ErrorKind::NotFound && !store.try_exists()? =>
+        {
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+#[derive(Default)]
+struct StoreScan {
+    runs: Vec<(PathBuf, SubmittedInput)>,
+    analyses: Vec<AffectedAnalysis>,
+    metadata_bytes: u64,
+}
+
+fn scan_store(store: &Path, target: &Path, metadata_bytes: u64) -> Result<StoreScan> {
+    let mut scan = StoreScan {
+        metadata_bytes,
+        ..StoreScan::default()
+    };
+    ArtifactRun::validate_store(store)?;
+    let runs = store.join("runs");
+    let mut count = 0;
+    for entry in std::fs::read_dir(&runs)? {
+        count += 1;
+        if count > 4096 {
+            return Err(invalid(
+                "store exceeds 4096 runs; explicit inspection required",
+            ));
+        }
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            return Err(invalid("unsafe entry in analysis store"));
+        }
+        let run = entry.path();
+        if !run.join("input.json").exists() {
+            continue;
+        } // Reserved, no input registered yet.
+        scan.metadata_bytes = scan
+            .metadata_bytes
+            .saturating_add(std::fs::metadata(run.join("input.json"))?.len());
+        if scan.metadata_bytes > 64 << 20 {
+            return Err(invalid(
+                "known analysis metadata exceeds 64 MiB query limit",
+            ));
+        }
+        let input = read_input(&run)?;
+        scan.runs.push((run.clone(), input.clone()));
+        if input.state != "referenced" {
+            continue;
+        }
+        if let Some(reference) = input.source {
+            if same_source(&run, &reference, target) {
+                let can_preserve = stamp(target).is_ok_and(|s| {
+                    s.size == reference.stamp.size
+                        && s.modified_seconds == reference.stamp.modified_seconds
+                        && s.modified_nanos == reference.stamp.modified_nanos
+                });
+                scan.analyses.push(AffectedAnalysis {
+                    result: result_name(&run)?,
+                    run,
+                    source_hash: reference.hash,
+                    can_preserve,
+                    direct: true,
+                });
+            }
+        }
+    }
+    Ok(scan)
+}
+
 pub fn conflicts_in(target: &Path, stores: &[PathBuf]) -> Result<EvidenceConflict> {
     let mut analyses = Vec::new();
     let mut known_runs = Vec::new();
     let mut metadata_bytes = 0u64;
     for store in stores {
-        if !store.exists() {
-            continue;
-        } // Moved/unmounted store is not silently rewritten.
-        ArtifactRun::validate_store(store)?;
-        let runs = store.join("runs");
-        let mut count = 0;
-        for entry in std::fs::read_dir(&runs)? {
-            count += 1;
-            if count > 4096 {
-                return Err(invalid(
-                    "store exceeds 4096 runs; explicit inspection required",
-                ));
-            }
-            let entry = entry?;
-            if !entry.file_type()?.is_dir() {
-                return Err(invalid("unsafe entry in analysis store"));
-            }
-            let run = entry.path();
-            if !run.join("input.json").exists() {
-                continue;
-            } // Reserved, no input registered yet.
-            metadata_bytes =
-                metadata_bytes.saturating_add(std::fs::metadata(run.join("input.json"))?.len());
-            if metadata_bytes > 64 << 20 {
-                return Err(invalid(
-                    "known analysis metadata exceeds 64 MiB query limit",
-                ));
-            }
-            let input = read_input(&run)?;
-            known_runs.push((run.clone(), input.clone()));
-            if input.state != "referenced" {
-                continue;
-            }
-            if let Some(reference) = input.source {
-                if same_source(&run, &reference, target) {
-                    let can_preserve = stamp(target).is_ok_and(|s| {
-                        s.size == reference.stamp.size
-                            && s.modified_seconds == reference.stamp.modified_seconds
-                            && s.modified_nanos == reference.stamp.modified_nanos
-                    });
-                    analyses.push(AffectedAnalysis {
-                        result: result_name(&run)?,
-                        run,
-                        source_hash: reference.hash,
-                        can_preserve,
-                        direct: true,
-                    });
-                }
-            }
+        if let Some(scan) = available_store(store, || scan_store(store, target, metadata_bytes))? {
+            metadata_bytes = scan.metadata_bytes;
+            known_runs.extend(scan.runs);
+            analyses.extend(scan.analyses);
         }
     }
     // Metadata-only transitive closure: preserving the direct original repairs
@@ -1142,4 +1179,114 @@ pub(crate) fn verify_ancestors(bundle: &Path) -> Result<Vec<String>> {
         issues.extend(crate::provenance::verify_records(&directory, &publication)?);
     }
     Ok(issues)
+}
+
+#[cfg(test)]
+mod store_scan_tests {
+    use super::*;
+
+    fn fixture(root: &Path, source: &Path) -> ArtifactRun {
+        let run = ArtifactRun::create(&root.join("species.spart"), "scan-test").unwrap();
+        write_json(
+            &run.artifact("input.json").unwrap(),
+            &SubmittedInput {
+                schema_version: 1,
+                source: Some(InputReference {
+                    path: relative(run.directory(), source).unwrap(),
+                    stamp: stamp(source).unwrap(),
+                    hash: basecraft_io::hash_file(source).unwrap(),
+                    extra: BTreeMap::new(),
+                }),
+                submitted_hash: basecraft_io::hash_file(source).unwrap(),
+                submitted_size: stamp(source).unwrap().size,
+                transformation: "identity-v1".into(),
+                state: "referenced".into(),
+                extra: BTreeMap::new(),
+            },
+        )
+        .unwrap();
+        write_json(
+            &run.artifact("run.json").unwrap(),
+            &serde_json::json!({"result":"species.spart"}),
+        )
+        .unwrap();
+        run
+    }
+
+    #[test]
+    fn store_disappearing_mid_scan_does_not_block_unrelated_save() {
+        // Move/delete at a deterministic scan boundary, without timing sleeps.
+        for delete in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let source = root.path().join("input.nwk");
+            std::fs::write(&source, "(a:1,b:1);").unwrap();
+            let run = fixture(root.path(), &source);
+            let store = run.directory().parent().unwrap().parent().unwrap();
+            let result = available_store(store, || {
+                let partial = scan_store(store, &source, 0)?;
+                assert_eq!(partial.analyses.len(), 1);
+                if delete {
+                    std::fs::remove_dir_all(store).unwrap();
+                } else {
+                    std::fs::rename(store, root.path().join("moved-store")).unwrap();
+                }
+                // The next real evidence read fails exactly as in the packaging
+                // race. Discard the earlier conflict along with the failed scan.
+                let read = read_input(run.directory());
+                assert!(matches!(&read, Err(crate::Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound));
+                read?;
+                Ok(partial)
+            })
+            .unwrap();
+            assert!(result.is_none());
+            assert_eq!(std::fs::read_to_string(&source).unwrap(), "(a:1,b:1);");
+        }
+    }
+
+    #[test]
+    fn moved_scan_discards_partial_conflicts_and_keeps_available_store_guard() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("input.nwk");
+        std::fs::write(&source, "(a:1,b:1);").unwrap();
+        let run = fixture(root.path(), &source);
+        let store = run.directory().parent().unwrap().parent().unwrap();
+        let result = available_store(store, || {
+            let scan = scan_store(store, &source, 0)?;
+            assert_eq!(scan.analyses.len(), 1);
+            std::fs::rename(store, root.path().join("moved-store")).unwrap();
+            Ok(scan)
+        })
+        .unwrap();
+        assert!(result.is_none());
+        let live = tempfile::tempdir().unwrap();
+        let live_run = fixture(live.path(), &source);
+        let live_store = live_run.directory().parent().unwrap().parent().unwrap();
+        let conflict = conflicts_in(&source, &[store.into(), live_store.into()]).unwrap();
+        assert_eq!(conflict.analyses.len(), 1);
+        assert_eq!(conflict.analyses[0].run, live_run.directory());
+        assert!(matches!(
+            resolve(&conflict, SavePolicy::Cancel),
+            Err(crate::Error::EvidenceConflict(_))
+        ));
+    }
+
+    #[test]
+    fn present_store_with_damaged_metadata_still_refuses_save() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("input.nwk");
+        std::fs::write(&source, "(a:1,b:1);").unwrap();
+        let run = fixture(root.path(), &source);
+        let store = run.directory().parent().unwrap().parent().unwrap();
+        // A registered reference cannot silently lose its run details.
+        std::fs::remove_file(run.artifact("run.json").unwrap()).unwrap();
+        assert!(
+            matches!(conflicts_in(&source, &[store.into()]), Err(crate::Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound)
+        );
+        std::fs::write(run.artifact("input.json").unwrap(), "damaged").unwrap();
+        assert!(conflicts_in(&source, &[store.into()]).is_err());
+        std::fs::remove_file(store.join("store.json")).unwrap();
+        assert!(conflicts_in(&source, &[store.into()]).is_err());
+        assert!(store.is_dir());
+        assert_eq!(std::fs::read_to_string(&source).unwrap(), "(a:1,b:1);");
+    }
 }
