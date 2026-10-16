@@ -79,7 +79,9 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut Report) -> Re
             continue;
         };
         match &e.op {
-            Op::Save { path } => match session.save_hashes_at(doc, Path::new(path)) {
+            // Species metadata records the original folder as its relocation
+            // base. Hash against that destination, not replay's disposable root.
+            Op::Save { path } => match session.save_hashes_at(doc, &root.join(path)) {
                 Ok(got) => {
                     let want: Vec<&String> = e.result.hashes.iter().map(|(_, h)| h).collect();
                     if got.iter().collect::<Vec<_>>() != want {
