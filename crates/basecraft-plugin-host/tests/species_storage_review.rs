@@ -1,4 +1,6 @@
 //! Independent storage review probes and regression coverage for their corrections.
+// Preserve the independently reviewed assertions verbatim.
+#![allow(clippy::assert_is_empty)]
 use basecraft_ops::{Session, files, provenance};
 use basecraft_plugin_host::{
     FileJob, delimitation_pipeline::AlignmentJob, file_tool::AlignmentInput,
@@ -267,10 +269,12 @@ fn preserved_alignment_remains_usable_by_workspace_default_input() {
     )
     .unwrap();
     display.params.insert("method".into(), json!("upgma"));
+    display.params.insert("model".into(), json!("p"));
     assert_eq!(&display.input_key.1, expected);
+    let outcome = display.run();
     assert!(
-        display.run().is_ok(),
-        "display job must reuse the preserved alignment"
+        outcome.is_ok(),
+        "display job must reuse the preserved alignment: {outcome:?}"
     );
     std::fs::remove_file(&source).unwrap();
     let mut old = work.clone();
@@ -397,7 +401,7 @@ fn combine_discovers_legacy_provenance_and_guards_sidecar_changes() {
     std::fs::copy(&source, &target).unwrap();
     let mut session = Session::recoverable(root.path()).unwrap();
     let doc = session.open(&target).unwrap();
-    basecraft_ops::delimitation::combine(&mut session, doc, &[source.clone()]).unwrap();
+    basecraft_ops::delimitation::combine(&mut session, doc, std::slice::from_ref(&source)).unwrap();
     session.save(doc, None).unwrap();
     let conflict = conflicts(&sidecar).unwrap();
     assert!(conflict.analyses.iter().any(|a| a.direct));
@@ -406,7 +410,9 @@ fn combine_discovers_legacy_provenance_and_guards_sidecar_changes() {
     assert!(!provenance::verify(&target).unwrap().is_empty());
     assert!(provenance::package(&target, &root.path().join("rejected")).is_err());
     std::fs::write(&sidecar, &side).unwrap();
-    resolve(&conflicts(&sidecar).unwrap(), SavePolicy::PreserveCopy).unwrap();
+    // The original decision remains valid only because preservation rechecks
+    // the exact accepted bytes; a fresh stat-only offer would reject the rewrite.
+    resolve(&conflict, SavePolicy::PreserveCopy).unwrap();
     std::fs::remove_file(&sidecar).unwrap();
     let package = root.path().join("complete");
     provenance::package(&target, &package).unwrap();
