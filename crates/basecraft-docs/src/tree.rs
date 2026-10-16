@@ -950,7 +950,7 @@ mod tests {
         assert_eq!(t.supports()[0].decimals(t.style()), 2);
         t.set_support_kind("Support 1", SupportKind::Bootstrap);
         assert!(!t.supports()[0].proportions);
-        assert_eq!(t.supports()[0].percent(node), Some(0.654321));
+        assert_eq!(t.supports()[0].percent(node), Some(0.654_321));
         assert_eq!(
             t.supports()[0].formatted(node, t.style()).as_deref(),
             Some("1")

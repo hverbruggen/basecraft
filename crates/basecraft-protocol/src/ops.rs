@@ -168,7 +168,12 @@ pub enum Op {
     #[serde(rename = "tree.remove_support")]
     TreeRemoveSupport { name: String },
     #[serde(rename = "tree.style")]
-    TreeStyle { style: TreeStyle },
+    TreeStyle {
+        style: TreeStyle,
+        /// Support sets removed on accepting Style; cancellation makes no edits.
+        #[serde(default)]
+        remove_supports: Vec<String>,
+    },
     /// A figure or other derived file written from a document, such as a
     /// tree as SVG. The result holds its hash; replay doesn't rewrite it.
     #[serde(rename = "doc.export")]

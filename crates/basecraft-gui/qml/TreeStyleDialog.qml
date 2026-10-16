@@ -9,6 +9,7 @@ AppContentDialog {
     initialFocusItem: minimum
     property var controller
     property var style: ({})
+    property var removedSets: []
 
     title: "Tree style"
     modal: true
@@ -21,6 +22,7 @@ AppContentDialog {
         if (!s) return
         style = s.style
         sets.clear()
+        removedSets = []
         // Shown sets first, in their order; then the hidden ones.
         const shown = style.support_shown.length ? style.support_shown : s.sets.map(x => x.name)
         for (const name of shown) {
@@ -61,12 +63,16 @@ AppContentDialog {
             if (set.scale === 0) delete proportions[set.name]
             else proportions[set.name] = set.scale === 2
         }
+        for (const name of removedSets) {
+            delete decimals[name]
+            delete proportions[name]
+        }
         const s = Object.assign({}, style, {
             support_decimals: decimals,
             support_proportions: proportions,
             support_shown: shown,
             support_min: minimum.value,
-            symbols: symbols.checked && symbolSet.currentText.length
+            symbols: symbols.checked && symbolSet.currentText.length && !removedSets.includes(symbolSet.currentText)
                 ? { set: symbolSet.currentText, high: high.value, low: low.value } : null,
             tip_font: tipFont.value,
             support_font: supportFont.value,
@@ -74,7 +80,7 @@ AppContentDialog {
             vertical_bar_labels: verticalLabels.checked,
             scale_bar: scaleBar.checked,
         })
-        const err = controller.set_style(JSON.stringify(s))
+        const err = controller.set_style_with_removals(JSON.stringify(s), JSON.stringify(removedSets))
         if (err.length > 0) error.text = err
         else close()
     }
@@ -109,7 +115,11 @@ AppContentDialog {
                     AppIconButton { iconName: "down"; description: "Move support set down"; enabled: supportRow.index < sets.count - 1; onClicked: sets.move(supportRow.index, supportRow.index + 1, 1) }
                     ToolButton {
                         text: "Remove"
-                        onClicked: { controller.remove_support(supportRow.name); dialog.openStyle() }
+                        objectName: "removeSupport" + supportRow.index
+                        onClicked: {
+                            dialog.removedSets = dialog.removedSets.concat([supportRow.name])
+                            sets.remove(supportRow.index)
+                        }
                     }
                 }
                 RowLayout {

@@ -4,6 +4,7 @@ use basecraft_docs::TreeDoc;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
+    fmt::Write as _,
     path::{Path, PathBuf},
 };
 
@@ -199,7 +200,9 @@ impl AlignmentLink {
         }
         match self.checked_snapshot(tree_path, tree) {
             Ok(_) => status.push_str("; retained snapshot available"),
-            Err(e) => status.push_str(&format!("; retained snapshot unavailable: {e}")),
+            Err(e) => {
+                let _ = write!(status, "; retained snapshot unavailable: {e}");
+            }
         }
         status
     }

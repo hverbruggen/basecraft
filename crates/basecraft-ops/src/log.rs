@@ -451,6 +451,12 @@ pub fn describe(op: &Op) -> String {
             format!("Added support values {name:?} from {source}")
         }
         Op::TreeRemoveSupport { name } => format!("Removed support values {name:?}"),
+        Op::TreeStyle {
+            remove_supports, ..
+        } if !remove_supports.is_empty() => format!(
+            "Changed tree style and removed support values: {}",
+            remove_supports.join(", ")
+        ),
         Op::TreeStyle { .. } => "Changed the tree's style".into(),
         Op::Undo { .. } => "Undo".into(),
         Op::Redo { .. } => "Redo".into(),
