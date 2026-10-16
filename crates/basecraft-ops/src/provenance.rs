@@ -383,7 +383,9 @@ fn copy_tree(source: &Path, target: &Path) -> Result<()> {
 /// Result and complete retained bundle copied into a new directory. This is a
 /// data package, not a promise that external software can reproduce the result.
 pub fn package(result: &Path, destination: &Path) -> Result<()> {
-    if crate::analysis_store::ArtifactRun::for_result(result)?.is_some() {
+    if crate::analysis_store::ArtifactRun::for_result(result)?.is_some()
+        || bundle_for_result(result).join("input.json").is_file()
+    {
         return crate::input_evidence::package(result, destination);
     }
     let issues = verify(result)?;

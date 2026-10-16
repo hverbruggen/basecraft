@@ -1369,6 +1369,7 @@ ApplicationWindow {
         onRejected: window.pendingEvidenceSave = null
         onRelinkOriginal: function(path) {
             for (const analysis of conflict.analyses || []) {
+                if (analysis.direct === false) continue
                 if (!provenance.relink_run(analysis.run, path)) { errorText = provenance.message; return }
             }
             const pending = window.pendingEvidenceSave

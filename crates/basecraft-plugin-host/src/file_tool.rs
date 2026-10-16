@@ -156,7 +156,7 @@ impl FileJob {
             };
             basecraft_ops::input_evidence::write_json(
                 &run.directory().join("run.json"),
-                &json!({"schema_version":1,"id":run_id,"result":output.file_name(),"status":"prepared"}),
+                &json!({"schema_version":1,"id":run_id,"result":output.file_name().and_then(|n| n.to_str()).ok_or_else(|| Error::Protocol("result filename is not UTF-8".into()))?,"status":"prepared"}),
             )?;
             basecraft_ops::input_evidence::write_json(
                 &run.directory().join("input.json"),

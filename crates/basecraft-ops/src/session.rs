@@ -2491,7 +2491,7 @@ impl Session {
         }
         crate::input_evidence::write_json(
             &run.directory().join("run.json"),
-            &serde_json::json!({"schema_version":1,"id":run.id(),"result":target.file_name(),"status":"completed","outputs":publication.outputs}),
+            &serde_json::json!({"schema_version":1,"id":run.id(),"result":target.file_name().and_then(|n| n.to_str()).ok_or_else(|| invalid("result filename is not UTF-8"))?,"status":"completed","outputs":publication.outputs}),
         )?;
         run.bind(target)
     }

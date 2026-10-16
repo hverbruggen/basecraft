@@ -325,19 +325,20 @@ pub fn conflicts_in(target: &Path, stores: &[PathBuf]) -> Result<EvidenceConflic
             if analyses.iter().any(|a| &a.run == run) {
                 continue;
             }
-            if input
+            let mut dependent = false;
+            if let Some(parents) = input
                 .extra
                 .get("upstream")
                 .and_then(serde_json::Value::as_array)
-                .is_some_and(|parents| {
-                    parents.iter().any(|parent| {
-                        parent["bundle"].as_str().is_some_and(|path| {
-                            let location = lexical(&run.join(path));
-                            analyses.iter().any(|a| lexical(&a.run) == location)
-                        })
-                    })
-                })
             {
+                for parent in parents {
+                    let path = parent["bundle"]
+                        .as_str()
+                        .ok_or_else(|| invalid("ancestor location is missing"))?;
+                    dependent |= depends_on(&run.join(path), &analyses)?;
+                }
+            }
+            if dependent {
                 analyses.push(AffectedAnalysis {
                     run: run.clone(),
                     result: result_name(run)?,
@@ -364,6 +365,34 @@ pub fn conflicts_in(target: &Path, stores: &[PathBuf]) -> Result<EvidenceConflic
         analyses,
         options,
     })
+}
+
+// Save As companions are not store runs. Include each delegation location
+// before reading it, so a removed owner can still be matched by its old path.
+fn depends_on(bundle: &Path, analyses: &[AffectedAnalysis]) -> Result<bool> {
+    let mut location = lexical(bundle);
+    let mut seen = std::collections::HashSet::new();
+    for _ in 0..32 {
+        if analyses.iter().any(|a| lexical(&a.run) == location) {
+            return Ok(true);
+        }
+        if !seen.insert(location.clone()) {
+            return Err(invalid("input evidence contains a cycle"));
+        }
+        if !location.join("input.json").try_exists()? {
+            return Ok(false);
+        }
+        let input = read_input(&location)?;
+        let Some(origin) = input
+            .extra
+            .get("origin_run")
+            .and_then(serde_json::Value::as_str)
+        else {
+            return Ok(false);
+        };
+        location = lexical(&location.join(origin));
+    }
+    Err(invalid("input evidence ancestry exceeds 32 references"))
 }
 
 fn result_name(run: &Path) -> Result<String> {
@@ -400,23 +429,43 @@ pub fn resolve(conflict: &EvidenceConflict, policy: SavePolicy) -> Result<()> {
                     .source
                     .as_ref()
                     .ok_or_else(|| invalid("reference is missing"))?;
-                let source = affected.run.join(&reference.path);
-                let destination = affected.run.join("preserved-input");
-                let mut hash = String::new();
-                let mut copied = 0;
-                basecraft_io::write_atomic(&destination, |writer| {
-                    let mut hashing = crate::files::HashingWriter::new(writer);
-                    copied = std::io::copy(&mut std::fs::File::open(&source)?, &mut hashing)?;
-                    hash = hashing.hash();
-                    Ok(())
-                })?;
-                if hash != reference.hash
-                    || std::fs::metadata(&destination)?.len() != reference.stamp.size
-                {
-                    return Err(invalid(
-                        "source changed: copied bytes are not the analysed original; overwrite cancelled",
-                    ));
+                if reference.hash != affected.source_hash {
+                    return Err(invalid("stale input preservation decision"));
                 }
+                let destination = affected.run.join("preserved-input");
+                // A public retry must never touch the live source or replace
+                // retained bytes. The owning ledger may have advanced already.
+                if input.state == "preserved" {
+                    verify_preserved(&destination, reference)?;
+                    continue;
+                }
+                if input.state != "referenced" {
+                    return Err(invalid("input evidence changed; refresh the save decision"));
+                }
+                let source = affected.run.join(&reference.path);
+                if !same_source(&affected.run, reference, &conflict.target) {
+                    return Err(invalid("input reference moved; refresh the save decision"));
+                }
+                let copied = if destination.try_exists()? {
+                    // A previous ledger write may have failed after publication.
+                    verify_preserved(&destination, reference)?;
+                    0
+                } else {
+                    let mut candidate = tempfile::NamedTempFile::new_in(&affected.run)?;
+                    let mut hashing = crate::files::HashingWriter::new(candidate.as_file_mut());
+                    let copied = std::io::copy(&mut std::fs::File::open(&source)?, &mut hashing)?;
+                    if hashing.hash() != reference.hash || copied != reference.stamp.size {
+                        return Err(invalid(
+                            "source changed: copied bytes are not the analysed original; overwrite cancelled",
+                        ));
+                    }
+                    candidate.as_file().sync_all()?;
+                    candidate
+                        .persist_noclobber(&destination)
+                        .map_err(|e| e.error)?;
+                    std::fs::File::open(&affected.run)?.sync_all()?;
+                    copied
+                };
                 input.state = "preserved".into();
                 input
                     .extra
@@ -457,11 +506,25 @@ pub fn resolve(conflict: &EvidenceConflict, policy: SavePolicy) -> Result<()> {
     Ok(())
 }
 
-/// Resolve evidence only on explicit verification/export/relink. No UI-event hashing.
-pub fn verified_source(bundle: &Path, reference: &InputReference) -> Result<PathBuf> {
-    let mut location = bundle.to_path_buf();
+fn verify_preserved(path: &Path, reference: &InputReference) -> Result<()> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.len() != reference.stamp.size
+        || basecraft_io::hash_file(path)? != reference.hash
+    {
+        return Err(invalid(
+            "retained original is damaged; existing bytes preserved",
+        ));
+    }
+    Ok(())
+}
+
+/// Follow only the bounded Save As delegation, never a source file or cache.
+fn owning_ledger(bundle: &Path) -> Result<(PathBuf, SubmittedInput)> {
+    let mut location = bundle.canonicalize()?;
     let mut input = read_input(&location)?;
-    let mut visited = std::collections::HashSet::new();
+    let mut visited = std::collections::HashSet::from([location.clone()]);
     for _ in 0..32 {
         let Some(origin) = input
             .extra
@@ -479,6 +542,12 @@ pub fn verified_source(bundle: &Path, reference: &InputReference) -> Result<Path
     if input.extra.contains_key("origin_run") {
         return Err(invalid("input evidence ancestry exceeds 32 references"));
     }
+    Ok((location, input))
+}
+
+/// Resolve evidence only on explicit verification/export/relink. No UI-event hashing.
+pub fn verified_source(bundle: &Path, reference: &InputReference) -> Result<PathBuf> {
+    let (location, input) = owning_ledger(bundle)?;
     if input.state == "broken" {
         return Err(invalid("evidence chain explicitly broken"));
     }
@@ -507,19 +576,25 @@ pub fn verified_source(bundle: &Path, reference: &InputReference) -> Result<Path
 /// Honest repair: only a byte-verified original may replace a missing/changed reference.
 pub fn relink(bundle: &Path, original: &Path) -> Result<()> {
     let _lock = lock()?;
-    let mut input = read_input(bundle)?;
+    let local = read_input(bundle)?;
+    let (owner, mut input) = owning_ledger(bundle)?;
+    if local.source.as_ref().map(|r| &r.hash) != input.source.as_ref().map(|r| &r.hash) {
+        return Err(invalid("delegated input reference identity changed"));
+    }
     let reference = input
         .source
         .as_mut()
         .ok_or_else(|| invalid("generated input has no disk reference"))?;
     let original = original.canonicalize()?;
-    if basecraft_io::hash_file(&original)? != reference.hash {
+    if basecraft_io::hash_file(&original)? != reference.hash
+        || std::fs::metadata(&original)?.len() != reference.stamp.size
+    {
         return Err(invalid("selected file is not the analysed original"));
     }
-    reference.path = relative(bundle, &original)?;
+    reference.path = relative(&owner, &original)?;
     reference.stamp = stamp(&original)?;
     input.state = "referenced".into();
-    write_json(&bundle.join("input.json"), &input)
+    write_json(&owner.join("input.json"), &input)
 }
 
 /// Explicit portable export materializes referenced dependencies; ordinary analysis does not.
@@ -555,37 +630,36 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
     );
     let target_bundle = crate::provenance::companion(&copied);
     std::fs::create_dir_all(target_bundle.join("artifacts"))?;
-    let mut evidence_inputs: Vec<_> = publication
-        .inputs
+    // Rebase the whole immutable record graph, not only today's inputs.
+    // Original record bytes are retained as checked artifacts; relocated records
+    // get new identities and recomputed parent checksums in dependency order.
+    let original_id = publication.id.clone();
+    let upstream = ancestors(&bundle)?;
+    let mut roots = vec![(bundle.clone(), publication.clone())];
+    roots.extend(upstream);
+    let (mut exported, archived) = export_history(&roots, &target_bundle)?;
+    publication = exported.remove(0);
+    if let Some(index) = publication
+        .outputs
         .iter()
-        .cloned()
-        .map(|a| (bundle.clone(), a))
-        .collect();
-    for (directory, ancestor) in ancestors(&bundle)? {
-        for artifact in ancestor.inputs {
-            if !evidence_inputs.iter().any(|(_, a)| a.id == artifact.id) {
-                evidence_inputs.push((directory.clone(), artifact));
-            }
+        .position(|a| Path::new(&a.logical_name).file_name() == result.file_name())
+    {
+        publication.outputs.swap(0, index);
+    }
+    for ancestor in exported {
+        if !publication.parents.contains(&ancestor.id) {
+            publication.parent_hashes.insert(
+                ancestor.id.clone(),
+                basecraft_io::hash_file(
+                    &target_bundle
+                        .join("records")
+                        .join(format!("{}.json", ancestor.id)),
+                )?,
+            );
+            publication.parents.push(ancestor.id);
         }
     }
-    publication.inputs.clear();
-    for (directory, mut artifact) in evidence_inputs {
-        let source = if let Some(reference) = &artifact.reference {
-            verified_source(&directory, reference)?
-        } else {
-            directory.join(
-                artifact
-                    .retained
-                    .as_ref()
-                    .ok_or_else(|| invalid("ancestor input bytes unavailable"))?,
-            )
-        };
-        let name = format!("artifacts/{}", artifact.hash.trim_start_matches("b3:"));
-        copy(&source, &target_bundle.join(&name))?;
-        artifact.retained = Some(name);
-        artifact.reference = None;
-        publication.inputs.push(artifact);
-    }
+    publication.inputs.extend(archived);
     for (index, artifact) in publication.outputs.iter_mut().enumerate() {
         let source = if index == 0 {
             result.to_path_buf()
@@ -672,9 +746,8 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
     }
     publication.origin = format!(
         "Portable export of revision {}. {}",
-        publication.id, publication.origin
+        original_id, publication.origin
     );
-    publication.id = ulid::Ulid::generate().to_string();
     crate::provenance::publish(&target_bundle, &publication)?;
     let authored = bundle.join("reports/methods.md");
     if authored.is_file() {
@@ -692,6 +765,177 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
     std::fs::create_dir(destination)?;
     std::fs::rename(staging.path(), destination)?;
     Ok(())
+}
+
+/// Copy checked bytes into the package's content-addressed artifact directory.
+fn materialize(
+    directory: &Path,
+    target: &Path,
+    artifact: &mut basecraft_protocol::provenance::ArtifactRevision,
+) -> Result<()> {
+    let source = if let Some(reference) = &artifact.reference {
+        verified_source(directory, reference)?
+    } else {
+        directory.join(
+            artifact
+                .retained
+                .as_ref()
+                .ok_or_else(|| invalid("input bytes unavailable"))?,
+        )
+    };
+    let name = format!("artifacts/{}", artifact.hash.trim_start_matches("b3:"));
+    let destination = target.join(&name);
+    if !destination.try_exists()? {
+        copy(&source, &destination)?;
+    }
+    if std::fs::metadata(&destination)?.len() != artifact.size
+        || basecraft_io::hash_file(&destination)? != artifact.hash
+    {
+        return Err(invalid("evidence changed during export"));
+    }
+    artifact.retained = Some(name);
+    artifact.reference = None;
+    Ok(())
+}
+
+type RecordKey = (PathBuf, String);
+type Publication = basecraft_protocol::provenance::Publication;
+type ArtifactRevision = basecraft_protocol::provenance::ArtifactRevision;
+
+/// Bounded, iterative postorder traversal of each bundle's parent graph. Export
+/// records are explicit relocations, while original immutable JSON stays intact
+/// as a hash-checked input artifact. No source records are rewritten.
+fn export_history(
+    roots: &[(PathBuf, Publication)],
+    target: &Path,
+) -> Result<(Vec<Publication>, Vec<ArtifactRevision>)> {
+    let mut stack = Vec::new();
+    let mut root_keys = Vec::new();
+    for (directory, publication) in roots {
+        let key = (directory.canonicalize()?, publication.id.clone());
+        stack.push((key.clone(), false));
+        root_keys.push(key);
+    }
+    let mut states = std::collections::HashMap::new();
+    let mut records = std::collections::HashMap::new();
+    let mut order = Vec::new();
+    let mut record_bytes = 0usize;
+    let mut scheduled = stack.len();
+    while let Some((key, leaving)) = stack.pop() {
+        if leaving {
+            states.insert(key.clone(), 2);
+            order.push(key);
+            continue;
+        }
+        match states.get(&key) {
+            Some(1) => return Err(invalid("export history contains a cycle")),
+            Some(2) => continue,
+            _ => {}
+        }
+        if key.1.is_empty()
+            || !key
+                .1
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        {
+            return Err(invalid("unsafe publication identity"));
+        }
+        let bytes =
+            crate::provenance::read_record(&key.0.join("records").join(format!("{}.json", key.1)))?;
+        record_bytes = record_bytes.saturating_add(bytes.len());
+        if record_bytes > 128 << 20 || scheduled > 10_000 {
+            return Err(invalid("export history exceeds bounded record limit"));
+        }
+        let record: Publication = serde_json::from_slice(&bytes)?;
+        if record.id != key.1 || record.schema_version != 1 {
+            return Err(invalid("inconsistent export history record"));
+        }
+        states.insert(key.clone(), 1);
+        stack.push((key.clone(), true));
+        for parent in &record.parents {
+            scheduled += 1;
+            stack.push(((key.0.clone(), parent.clone()), false));
+        }
+        records.insert(key, (record, bytes));
+    }
+    let mut rebased = std::collections::HashMap::<RecordKey, Publication>::new();
+    let mut hashes = std::collections::HashMap::<RecordKey, String>::new();
+    let mut archives = Vec::new();
+    let mut mapping = Vec::new();
+    std::fs::create_dir_all(target.join("records"))?;
+    for key in order {
+        let (mut publication, bytes) = records
+            .remove(&key)
+            .ok_or_else(|| invalid("export history is missing"))?;
+        let hash = basecraft_io::hash_bytes(&bytes);
+        let name = format!("artifacts/{}", hash.trim_start_matches("b3:"));
+        basecraft_io::write_atomic(&target.join(&name), |w| w.write_all(&bytes))?;
+        let old_id = publication.id.clone();
+        publication.id = ulid::Ulid::generate().to_string();
+        mapping.push(serde_json::json!({"original_id":old_id,"original_hash":hash,"export_id":publication.id}));
+        archives.push(ArtifactRevision {
+            id: format!("{}:original-record", publication.id),
+            logical_name: format!("original-record-{old_id}.json"),
+            hash,
+            size: bytes.len() as u64,
+            retained: Some(name),
+            reference: None,
+        });
+        let mut parents = Vec::new();
+        let mut parent_hashes = BTreeMap::new();
+        for parent in &publication.parents {
+            let parent_key = (key.0.clone(), parent.clone());
+            let rewritten = rebased
+                .get(&parent_key)
+                .ok_or_else(|| invalid("export parent missing"))?;
+            parents.push(rewritten.id.clone());
+            parent_hashes.insert(rewritten.id.clone(), hashes[&parent_key].clone());
+        }
+        publication.parents = parents;
+        publication.parent_hashes = parent_hashes;
+        for artifact in publication
+            .inputs
+            .iter_mut()
+            .chain(&mut publication.outputs)
+        {
+            if artifact.retained.is_some() || artifact.reference.is_some() {
+                materialize(&key.0, target, artifact)?;
+            }
+        }
+        publication.origin = format!(
+            "Relocated export record of {old_id}. {}",
+            publication.origin
+        );
+        let path = target
+            .join("records")
+            .join(format!("{}.json", publication.id));
+        write_json(&path, &publication)?;
+        hashes.insert(key.clone(), basecraft_io::hash_file(&path)?);
+        rebased.insert(key, publication);
+    }
+    let bytes =
+        serde_json::to_vec_pretty(&serde_json::json!({"schema_version":1,"records":mapping}))?;
+    let hash = basecraft_io::hash_bytes(&bytes);
+    let name = format!("artifacts/{}", hash.trim_start_matches("b3:"));
+    basecraft_io::write_atomic(&target.join(&name), |w| w.write_all(&bytes))?;
+    archives.push(ArtifactRevision {
+        id: format!("{}:export-map", ulid::Ulid::generate()),
+        logical_name: "export-map.json".into(),
+        hash,
+        size: bytes.len() as u64,
+        retained: Some(name),
+        reference: None,
+    });
+    let exported = root_keys
+        .iter()
+        .map(|key| {
+            rebased
+                .get(key)
+                .cloned()
+                .ok_or_else(|| invalid("export root missing"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok((exported, archives))
 }
 
 fn copy(source: &Path, destination: &Path) -> Result<()> {

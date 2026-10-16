@@ -279,3 +279,36 @@ fn export_and_extraction_cannot_bypass_known_input_guard() {
     ));
     assert_eq!(std::fs::read_to_string(source).unwrap(), original);
 }
+
+#[test]
+fn preserve_retries_and_failed_candidates_never_replace_retained_bytes() {
+    use basecraft_ops::input_evidence::{self, SavePolicy};
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source.afa");
+    let original = b">a\nAAAA\n>b\nAAAT\n";
+    std::fs::write(&source, original).unwrap();
+    let run = reference_run(dir.path(), &source, "retry");
+    let store = dir.path().join(".basecraft/analyses-v1");
+    let conflict = input_evidence::conflicts_in(&source, &[store]).unwrap();
+    std::fs::write(&source, b">a\nTTTT\n>b\nTTTA\n").unwrap();
+    assert!(input_evidence::resolve(&conflict, SavePolicy::PreserveCopy).is_err());
+    assert!(!run.directory().join("preserved-input").exists());
+    std::fs::write(&source, original).unwrap();
+    // Recover a verified copy whose ledger publication previously failed.
+    std::fs::write(run.directory().join("preserved-input"), original).unwrap();
+    input_evidence::resolve(&conflict, SavePolicy::PreserveCopy).unwrap();
+    std::fs::remove_file(&source).unwrap();
+    input_evidence::resolve(&conflict, SavePolicy::PreserveCopy).unwrap();
+    assert_eq!(
+        std::fs::read(run.directory().join("preserved-input")).unwrap(),
+        original
+    );
+    // An invalid existing destination is retained for recovery, not replaced.
+    let damaged = b"retained but damaged";
+    std::fs::write(run.directory().join("preserved-input"), damaged).unwrap();
+    assert!(input_evidence::resolve(&conflict, SavePolicy::PreserveCopy).is_err());
+    assert_eq!(
+        std::fs::read(run.directory().join("preserved-input")).unwrap(),
+        damaged
+    );
+}

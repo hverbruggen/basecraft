@@ -286,3 +286,148 @@ fn downstream_evidence_follows_preservation_and_complete_export_keeps_dependency
             .is_empty()
     );
 }
+
+#[test]
+fn save_as_descendants_receive_each_explicit_evidence_decision() {
+    for policy in [
+        SavePolicy::PreserveCopy,
+        SavePolicy::RemoveAnalysis,
+        SavePolicy::BreakEvidence,
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source.afa");
+        std::fs::write(&source, ">a\nAAAA\n>b\nAAAT\n").unwrap();
+        let first = root.path().join("first.afa");
+        let saved = root.path().join("saved.afa");
+        let last = root.path().join("last.afa");
+        let plugin = fixture(root.path());
+        let mut session = Session::recoverable(root.path()).unwrap();
+        for (input, output) in [(&source, &first), (&saved, &last)] {
+            let doc = session.open(input).unwrap();
+            let job = FileJob::from_alignment(
+                &session,
+                doc,
+                (&plugin, "align"),
+                AlignmentInput::Ungapped,
+                output.clone(),
+            )
+            .unwrap();
+            let outcome = job.run().unwrap();
+            job.record(&mut session, doc, &outcome).unwrap();
+            if output == &first {
+                let doc = session.open(&first).unwrap();
+                session.save(doc, Some(&saved)).unwrap();
+            }
+        }
+        let conflict = input_evidence::conflicts(&source).unwrap();
+        assert_eq!(conflict.analyses.len(), 2, "{conflict:?}");
+        input_evidence::resolve(&conflict, policy).unwrap();
+        std::fs::write(&source, ">a\nTTTT\n>b\nTTTA\n").unwrap();
+        match policy {
+            SavePolicy::PreserveCopy => {
+                assert!(basecraft_ops::provenance::verify(&last).unwrap().is_empty())
+            }
+            SavePolicy::RemoveAnalysis => {
+                assert!(conflict.analyses.iter().all(|a| !a.run.exists()));
+                assert!(first.is_file() && saved.is_file() && last.is_file());
+            }
+            SavePolicy::BreakEvidence => {
+                assert!(
+                    conflict
+                        .analyses
+                        .iter()
+                        .all(|a| input_evidence::read_input(&a.run).unwrap().state == "broken")
+                );
+                assert!(!basecraft_ops::provenance::verify(&last).unwrap().is_empty());
+            }
+            SavePolicy::Cancel => unreachable!(),
+        }
+    }
+}
+
+#[test]
+fn complete_export_remaps_history_and_retains_original_records_without_store() {
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("source.afa");
+    std::fs::write(&source, ">a\nAAAA\n>b\nAAAT\n").unwrap();
+    let first = root.path().join("first.afa");
+    let saved = root.path().join("saved.afa");
+    let plugin = fixture(root.path());
+    let mut session = Session::recoverable(root.path()).unwrap();
+    let doc = session.open(&source).unwrap();
+    let job = FileJob::from_alignment(
+        &session,
+        doc,
+        (&plugin, "align"),
+        AlignmentInput::Ungapped,
+        first.clone(),
+    )
+    .unwrap();
+    job.record(&mut session, doc, &job.run().unwrap()).unwrap();
+    let doc = session.open(&first).unwrap();
+    for residue in ["T", "C"] {
+        session
+            .apply(
+                doc,
+                Op::AlnReplace {
+                    row: 0,
+                    start: 0,
+                    end: 1,
+                    residues: residue.into(),
+                },
+            )
+            .unwrap();
+        session.save(doc, None).unwrap();
+    }
+    session.save(doc, Some(&saved)).unwrap();
+    let bundle = basecraft_ops::provenance::bundle_for_result(&saved);
+    let originals: Vec<_> = std::fs::read_dir(bundle.join("records"))
+        .unwrap()
+        .map(|e| std::fs::read(e.unwrap().path()).unwrap())
+        .collect();
+    let package = root.path().join("portable");
+    basecraft_ops::provenance::package(&saved, &package).unwrap();
+    let exported = package.join("saved.afa");
+    let exported_bundle = basecraft_ops::provenance::bundle_for_result(&exported);
+    let publication = basecraft_ops::provenance::inspect(&exported).unwrap();
+    for bytes in originals {
+        let hash = basecraft_io::hash_bytes(&bytes);
+        let artifact = publication
+            .inputs
+            .iter()
+            .find(|a| a.hash == hash)
+            .expect("original immutable JSON retained");
+        assert_eq!(
+            std::fs::read(exported_bundle.join(artifact.retained.as_ref().unwrap())).unwrap(),
+            bytes
+        );
+    }
+    std::fs::remove_file(source).unwrap();
+    std::fs::rename(
+        root.path().join(".basecraft"),
+        root.path().join("unavailable-store"),
+    )
+    .unwrap();
+    std::fs::rename(bundle, root.path().join("unavailable-companion")).unwrap();
+    assert!(
+        basecraft_ops::provenance::verify(&exported)
+            .unwrap()
+            .is_empty()
+    );
+    // Archived immutable records participate in package verification too.
+    let archive = publication
+        .inputs
+        .iter()
+        .find(|a| a.logical_name.starts_with("original-record-"))
+        .unwrap();
+    std::fs::write(
+        exported_bundle.join(archive.retained.as_ref().unwrap()),
+        "corrupt",
+    )
+    .unwrap();
+    assert!(
+        !basecraft_ops::provenance::verify(&exported)
+            .unwrap()
+            .is_empty()
+    );
+}
