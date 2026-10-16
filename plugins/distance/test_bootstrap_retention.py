@@ -47,7 +47,7 @@ class AllocationContract(unittest.TestCase):
         unrelated = self.root / "user.nex"
         unrelated.write_text("user data")
         metadata = {"bootstrap": {"support_withheld": False, "cancelled": False,
-                    "attempted": 2, "completed": 2, "replicate_trees": {
+                    "requested": 2, "attempted": 2, "completed": 2, "failed_replicates": 0, "replicate_trees": {
                         "path": str(unrelated), "format": "nexus", "status": "complete", "trees": 2}}}
         with self.assertRaisesRegex(RuntimeError, "invalid bootstrap artifact"):
             retained_output(metadata, self.root / "expected.nex")
@@ -127,6 +127,34 @@ class NativeRetention(AllocationContract):
         self.assertEqual(self.target.read_text(), "previous primary")
         self.assertEqual(expected.read_text().count("TREE replicate_"), 16)
         self.assertEqual(len(list(self.metadata.iterdir())), 1)
+
+    def test_failed_native_run_does_not_adopt_existing_collection(self):
+        expected = collection_path(self.params)
+        expected.write_text("unrelated existing collection")
+        with self.assertRaises(RuntimeError) as failed:
+            invoke("tree", self.params)
+        self.assertNotIn("retained bootstrap artifacts:", str(failed.exception))
+        self.assertFalse(Path(str(self.target) + ".run.json").exists())
+        self.assertEqual(expected.read_text(), "unrelated existing collection")
+
+    def test_scratch_setup_failure_saves_failed_report_with_validated_collection(self):
+        create = tempfile.NamedTemporaryFile
+
+        def fail_primary_only(*args, **kwargs):
+            if "mode" not in kwargs:
+                raise OSError("scratch unavailable")
+            return create(*args, **kwargs)  # Recovery report uses text-mode scratch.
+
+        with (patch("distance_plugin.tempfile.NamedTemporaryFile", side_effect=fail_primary_only),
+              self.assertRaisesRegex(RuntimeError, "retained bootstrap artifacts")):
+            invoke("tree", self.params)
+        report = json.loads(Path(str(self.target) + ".run.json").read_text())
+        self.assertEqual(report["output_status"], "failed")
+        self.assertIn("scratch unavailable", report["error"])
+        self.assertEqual(report["bootstrap"]["replicate_trees"]["path"], str(collection_path(self.params)))
+        self.assertEqual(report["bootstrap"]["replicate_trees"]["status"], "complete")
+        self.assertEqual(report["bootstrap"]["replicate_trees"]["trees"], 16)
+        self.assertFalse(self.target.exists())
 
     def test_explicit_path_and_no_bootstrap(self):
         params = dict(self.params)

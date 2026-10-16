@@ -17,8 +17,8 @@ mod incomplete;
 mod optimized;
 mod upgma;
 pub use bootstrap::{
-    BootstrapOptions, BootstrapReport, BootstrapResult, ReplicateCollection, bootstrap,
-    partial_collection_path,
+    BootstrapOptions, BootstrapPublicationError, BootstrapReport, BootstrapResult,
+    ReplicateCollection, bootstrap, partial_collection_path,
 };
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, clap::ValueEnum, PartialEq, Eq)]

@@ -323,3 +323,63 @@ fn python_plugin_retention_contract_with_native_engine() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn late_output_errors_keep_structured_publication_evidence() {
+    for output in ["--tree", "--matrix", "--report", "--summary", "--progress"] {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let input = if output == "--progress" {
+            ">a\nAAA---\n>b\n---AAA\n"
+        } else {
+            ">a\nAAAAAC\n>b\nAAAAAT\n>c\nACAAAC\n"
+        };
+        std::fs::write(root.join("input.fa"), input).unwrap();
+        std::fs::write(root.join("groups.json"), r#"{"a":"one","b":"one"}"#).unwrap();
+        std::fs::create_dir(root.join("blocked")).unwrap();
+        let mut command = Command::new(env!("CARGO_BIN_EXE_basecraft-distance"));
+        command.current_dir(root).args([
+            "--input",
+            "input.fa",
+            "--model",
+            "p",
+            "--bootstrap",
+            "4",
+            "--bootstrap-trees",
+            "trees.nex",
+            "--threads",
+            "1",
+        ]);
+        if output != "--tree" {
+            command.args(["--tree", "primary.nwk"]);
+        }
+        if output == "--summary" {
+            command.args(["--groups", "groups.json"]);
+        }
+        let result = command.args([output, "blocked"]).output().unwrap();
+        assert!(!result.status.success(), "{output}");
+        let metadata: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+        assert_eq!(metadata["output_status"], "failed");
+        assert!(metadata["error"].as_str().is_some_and(|s| !s.is_empty()));
+        let collection = &metadata["bootstrap"]["replicate_trees"];
+        let partial = output == "--progress";
+        assert_eq!(
+            collection["path"],
+            if partial {
+                "trees.partial.nex"
+            } else {
+                "trees.nex"
+            }
+        );
+        assert_eq!(
+            collection["status"],
+            if partial {
+                "original_failed"
+            } else {
+                "complete"
+            }
+        );
+        assert_eq!(collection["trees"], if partial { 0 } else { 4 });
+        assert!(root.join(collection["path"].as_str().unwrap()).is_file());
+    }
+}
