@@ -346,7 +346,7 @@ fn tree_methods_update_one_canonical_spart_and_export_without_sources() {
     )
     .unwrap();
     let plugin = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/delimitation");
-    let mut session = Session::new(&root);
+    let mut session = Session::recoverable(&root).unwrap();
     let input = session.open(&source).unwrap();
     let canonical = root.join("species.spart");
     let setup = FileJob::from_tree(
@@ -438,7 +438,9 @@ fn tree_methods_update_one_canonical_spart_and_export_without_sources() {
         .collect::<Vec<_>>();
     drop(session);
     std::fs::rename(&root, parent.path().join("unavailable")).unwrap();
-    let exported = package.join("species.spart");
+    let relocated_package = parent.path().join("relocated-package");
+    std::fs::rename(&package, &relocated_package).unwrap();
+    let exported = relocated_package.join("species.spart");
     assert!(
         basecraft_ops::provenance::verify(&exported)
             .unwrap()

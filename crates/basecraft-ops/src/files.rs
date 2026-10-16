@@ -801,16 +801,24 @@ pub fn write_delimitation_sidecar_at(
     target: &Path,
     w: &mut dyn Write,
 ) -> io::Result<()> {
+    let base = target
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."))
+        .canonicalize()?;
+    write_delimitation_sidecar_in(work, hash, &base, w)
+}
+
+pub(crate) fn write_delimitation_sidecar_in(
+    work: &basecraft_protocol::delimitation::DelimitationWorkspace,
+    hash: &str,
+    base: &Path,
+    w: &mut dyn Write,
+) -> io::Result<()> {
     let side = DelimitationSidecar {
         version: 2,
         exchange_hash: hash.into(),
-        path_base: Some(
-            target
-                .parent()
-                .filter(|p| !p.as_os_str().is_empty())
-                .unwrap_or(Path::new("."))
-                .canonicalize()?,
-        ),
+        path_base: Some(base.to_path_buf()),
         workspace: work.clone(),
     };
     serde_json::to_writer_pretty(&mut *w, &side)?;

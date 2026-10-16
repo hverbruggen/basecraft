@@ -961,6 +961,28 @@ impl qobject::DelimitationController {
         };
         match result {
             Some(Ok(())) => {
+                if path != &self.rust().file_path {
+                    let adopted = (|| -> basecraft_ops::Result<_> {
+                        let target = PathBuf::from(path.to_string());
+                        let mut session =
+                            Session::recoverable(crate::bridge::project_root(&target))?;
+                        let doc = session.open(&target)?;
+                        Ok((session, doc))
+                    })();
+                    match adopted {
+                        Ok((session, doc)) => {
+                            let mut state = self.as_mut().rust_mut();
+                            state.session = Some(session);
+                            state.doc = Some(doc);
+                        }
+                        Err(error) => {
+                            self.fail(&format!(
+                                "Saved, but could not reopen the new workspace: {error}"
+                            ));
+                            return false;
+                        }
+                    }
+                }
                 self.as_mut().set_file_path(path.clone());
                 self.as_mut().set_dirty(false);
                 self.as_mut().set_message_kind(QString::from("ok"));
@@ -1154,11 +1176,15 @@ impl qobject::DelimitationController {
                 return Err("Unknown analysis".into());
             }
             let display_job = method.starts_with("display_");
-            let output = session.root().join(format!(
-                "analysis-{}.{}",
-                ulid::Ulid::generate(),
-                if display_job { "nwk" } else { "json" }
-            ));
+            let workspace_path = session.root().join(session.doc_key(doc));
+            let output = workspace_path
+                .parent()
+                .unwrap_or(session.root())
+                .join(format!(
+                    "analysis-{}.{}",
+                    ulid::Ulid::generate(),
+                    if display_job { "nwk" } else { "json" }
+                ));
             let alignment_pipeline = method.starts_with("gmyc_alignment_") || method == "asap";
             let mut job = basecraft_plugin_host::FileJob::from_file(
                 session,
@@ -1451,8 +1477,10 @@ impl qobject::DelimitationController {
 /// Entry actions use the same public snapshot/plugin/artifact boundary as CLI.
 pub(crate) fn create_workspace(session: &mut Session, doc: DocId) -> Result<String, String> {
     use basecraft_plugin_host::{FileJob, file_tool::AlignmentInput};
-    let output = session
-        .root()
+    let source_path = session.root().join(session.doc_key(doc));
+    let output = source_path
+        .parent()
+        .unwrap_or(session.root())
         .join(format!("species-{}.spart", ulid::Ulid::generate()));
     let plugin = crate::bridge::plugin_dir("delimitation");
     let job = if session.is_tree(doc) {

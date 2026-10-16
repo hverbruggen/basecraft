@@ -754,10 +754,10 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
         }
         let sidecar = crate::files::tree_sidecar(&copied);
         basecraft_io::write_atomic(&sidecar, |w| {
-            crate::files::write_delimitation_sidecar_at(
+            crate::files::write_delimitation_sidecar_in(
                 &work,
                 &publication.outputs[0].hash,
-                &copied,
+                &final_folder,
                 w,
             )
         })?;
