@@ -54,7 +54,7 @@ fn matrix_reference_generated_failure_move_and_export_use_the_common_store() {
     std::fs::create_dir(&root).unwrap();
     let source = root.join("source.afa");
     std::fs::write(&source, ALIGNMENT).unwrap();
-    let mut session = Session::new(&root);
+    let mut session = Session::recoverable(&root).unwrap();
     let doc = session.open(&source).unwrap();
     let output = root.join("matrix.tsv");
     let clean = job(&session, doc, "distance", "matrix", &output);
@@ -136,7 +136,11 @@ fn matrix_reference_generated_failure_move_and_export_use_the_common_store() {
         [".basecraft", "dirty.tsv", "matrix.tsv", "source.afa"]
     );
     session.flush().unwrap();
-    assert!(basecraft_ops::replay::replay(&root).unwrap().ok());
+    assert!(
+        basecraft_ops::replay::replay(session.recovery_root())
+            .unwrap()
+            .ok()
+    );
     drop(session);
 
     let moved = parent.path().join("moved");
