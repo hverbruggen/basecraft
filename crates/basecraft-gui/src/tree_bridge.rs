@@ -39,6 +39,7 @@ pub mod qobject {
         #[qproperty(f64, vscroll_size)]
         /// A node is selected; `tip_selected` if it's a tip.
         #[qproperty(bool, has_selection)]
+        #[qproperty(bool, can_auto_root)]
         #[qproperty(QString, linked_alignment)]
         #[qproperty(bool, tip_selected)]
         /// Where support values sit: "natural", "above" or "below".
@@ -125,6 +126,10 @@ pub mod qobject {
         /// Root on the branch above the selected clade.
         #[qinvokable]
         fn reroot(self: Pin<&mut TreeController>);
+        #[qinvokable]
+        fn midpoint_root(self: Pin<&mut TreeController>);
+        #[qinvokable]
+        fn minimum_variance_root(self: Pin<&mut TreeController>);
         #[qinvokable]
         fn rotate(self: Pin<&mut TreeController>);
         #[qinvokable]
@@ -229,6 +234,7 @@ pub struct TreeRust {
     vscroll_pos: f64,
     vscroll_size: f64,
     has_selection: bool,
+    can_auto_root: bool,
     tip_selected: bool,
     linked_alignment: QString,
     support_placement: QString,
@@ -265,6 +271,7 @@ impl Default for TreeRust {
             vscroll_pos: 0.0,
             vscroll_size: 1.0,
             has_selection: false,
+            can_auto_root: false,
             tip_selected: false,
             linked_alignment: QString::default(),
             support_placement: QString::from("natural"),
@@ -361,6 +368,8 @@ impl qobject::TreeController {
         self.as_mut().set_hscroll_pos(f64::from(h.0));
         self.as_mut().set_vscroll_size(f64::from(v.1));
         self.as_mut().set_vscroll_pos(f64::from(v.0));
+        let can_auto_root = self.with_doc(TreeView::can_auto_root).unwrap_or(false);
+        self.as_mut().set_can_auto_root(can_auto_root);
         self.as_mut().set_has_selection(sel);
         self.as_mut().set_tip_selected(tip);
         self.as_mut()
@@ -387,6 +396,8 @@ impl qobject::TreeController {
     /// Apply an edit through the session; on failure, say why and return
     /// the message.
     fn edit(mut self: Pin<&mut Self>, op: Op) -> Result<(), String> {
+        let clears_selection =
+            matches!(op, Op::TreeMidpointRoot {} | Op::TreeMinimumVarianceRoot {});
         let result = {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
@@ -399,6 +410,11 @@ impl qobject::TreeController {
         };
         match result {
             Ok(_) => {
+                if clears_selection {
+                    let mut state = self.as_mut().rust_mut();
+                    state.view.selected = None;
+                    state.view.multi_taxa = None;
+                }
                 self.as_mut().set_dirty(true);
                 self.as_mut().notify("");
                 self.refresh();
@@ -989,6 +1005,20 @@ impl qobject::TreeController {
                 }
             }
             None => self.notify("Select a branch to root on"),
+        }
+    }
+
+    pub fn midpoint_root(self: Pin<&mut Self>) {
+        self.automatic_root(Op::TreeMidpointRoot {}, "Midpoint rooted");
+    }
+
+    pub fn minimum_variance_root(self: Pin<&mut Self>) {
+        self.automatic_root(Op::TreeMinimumVarianceRoot {}, "MRTTV rooted");
+    }
+
+    fn automatic_root(mut self: Pin<&mut Self>, op: Op, message: &str) {
+        if self.as_mut().edit(op).is_ok() {
+            self.done(message);
         }
     }
 

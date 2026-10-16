@@ -467,6 +467,11 @@ impl TreeView {
 
     // Operations on the selection.
 
+    /// Whole-tree commands do not depend on the current selection.
+    pub fn can_auto_root(doc: &TreeDoc) -> bool {
+        doc.tip_count() >= 2 && doc.has_lengths()
+    }
+
     pub fn reroot_op(&self, doc: &TreeDoc) -> Option<Op> {
         let s = self.selected.filter(|&s| s != doc.root())?;
         Some(Op::TreeReroot {

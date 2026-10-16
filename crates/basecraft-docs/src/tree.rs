@@ -6,6 +6,8 @@
 //! branch, so rerooting moves them along the reversed path. Clades are
 //! named by tips (see [`CladeRef`]), which survive restructuring.
 
+mod rooting;
+
 use std::collections::BTreeMap;
 
 use basecraft_io::newick::{self, ParsedTree};
@@ -96,8 +98,11 @@ impl TreeDoc {
                 length: p.length,
             })
             .collect();
-        let support_label =
-            |s: &str| !s.is_empty() && s.split('/').all(|part| part.trim().parse::<f64>().is_ok());
+        let support_label = |s: &str| {
+            s.split('/').any(|part| part.trim().parse::<f64>().is_ok())
+                && s.split('/')
+                    .all(|part| part.trim() == "-" || part.trim().parse::<f64>().is_ok())
+        };
         let parts = parsed
             .nodes
             .iter()
@@ -113,7 +118,11 @@ impl TreeDoc {
                     if p.children.is_empty() || !support_label(&p.name) {
                         return None;
                     }
-                    p.name.split('/').nth(k).map(|v| v.trim().to_string())
+                    p.name
+                        .split('/')
+                        .nth(k)
+                        .filter(|v| v.trim() != "-")
+                        .map(|v| v.trim().to_string())
                 })
                 .collect();
             let name = if parts == 1 {
@@ -762,40 +771,41 @@ impl TreeDoc {
     /// with `/`, in set order, or their name.
     pub fn to_newick(&self) -> String {
         let mut out = String::new();
-        self.write_node(self.root, &mut out);
+        // Iterative events also handle very deep trees after rerooting.
+        let mut stack = vec![(self.root, false, false)];
+        while let Some((i, close, comma)) = stack.pop() {
+            if comma {
+                out.push(',');
+            }
+            let node = &self.nodes[i];
+            if !close && !node.is_tip() {
+                out.push('(');
+                stack.push((i, true, false));
+                for (k, &child) in node.children.iter().enumerate().rev() {
+                    stack.push((child, false, k > 0));
+                }
+                continue;
+            }
+            if close {
+                out.push(')');
+            }
+            let support = self.support_text(i);
+            if node.is_tip() || support.is_empty() {
+                if !node.name.is_empty() {
+                    out.push_str(&newick::quote_name(&node.name));
+                }
+            } else {
+                out.push_str(&support);
+            }
+            if i != self.root
+                && let Some(length) = node.length
+            {
+                out.push(':');
+                out.push_str(&newick::format_length(length));
+            }
+        }
         out.push(';');
         out
-    }
-
-    fn write_node(&self, i: usize, out: &mut String) {
-        let node = &self.nodes[i];
-        if !node.is_tip() {
-            out.push('(');
-            for (k, &c) in node.children.iter().enumerate() {
-                if k > 0 {
-                    out.push(',');
-                }
-                self.write_node(c, out);
-            }
-            out.push(')');
-        }
-        let label = if node.is_tip() || self.supports.is_empty() || self.support_text(i).is_empty()
-        {
-            if node.name.is_empty() {
-                String::new()
-            } else {
-                newick::quote_name(&node.name)
-            }
-        } else {
-            self.support_text(i)
-        };
-        out.push_str(&label);
-        if i != self.root
-            && let Some(l) = node.length
-        {
-            out.push(':');
-            out.push_str(&newick::format_length(l));
-        }
     }
 
     /// Every set's value at `node`, joined with `/`; empty if none has one.

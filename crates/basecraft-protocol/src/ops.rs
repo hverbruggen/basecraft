@@ -126,6 +126,12 @@ pub enum Op {
     /// Root the tree halfway along the branch above `clade`.
     #[serde(rename = "tree.reroot")]
     TreeReroot { clade: CladeRef },
+    /// Root halfway along a longest tip-to-tip branch-length path.
+    #[serde(rename = "tree.midpoint_root")]
+    TreeMidpointRoot {},
+    /// Globally minimize unweighted root-to-all-tip distance variance.
+    #[serde(rename = "tree.minimum_variance_root")]
+    TreeMinimumVarianceRoot {},
     /// Move the root along its branch: `clade`, one of the root's two
     /// children, gets `fraction` of the branch's length, the other the
     /// rest.
@@ -219,6 +225,8 @@ impl Op {
             Op::AlnRemoveRows { .. } => "aln.remove_rows",
             Op::AlnAddSequences { .. } => "aln.add_sequences",
             Op::TreeReroot { .. } => "tree.reroot",
+            Op::TreeMidpointRoot {} => "tree.midpoint_root",
+            Op::TreeMinimumVarianceRoot {} => "tree.minimum_variance_root",
             Op::TreeRootPosition { .. } => "tree.root_position",
             Op::TreeRotate { .. } => "tree.rotate",
             Op::TreeLadderize { .. } => "tree.ladderize",

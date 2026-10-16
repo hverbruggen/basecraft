@@ -83,6 +83,7 @@ fn main() {
         "qml/Ribbon.qml",
         "qml/AppCommand.qml",
         "qml/AppCommandButton.qml",
+        "qml/TreeRootingGroup.qml",
         "qml/PreferencesDialog.qml",
         "qml/AppCanvas.qml",
         "qml/TextRepresentationDialog.qml",
