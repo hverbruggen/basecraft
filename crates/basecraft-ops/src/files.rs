@@ -740,8 +740,13 @@ pub fn load_delimitation(
         basecraft_io::spart::parse_text(&text)?
     };
     // A damaged hidden binding must never silently select stale legacy data.
-    crate::analysis_store::ArtifactRun::for_result(path)?;
+    let hidden = crate::analysis_store::ArtifactRun::for_result(path)?;
     let sidecar = tree_sidecar(path);
+    if hidden.is_some() && !sidecar.is_file() {
+        return Err(crate::error::invalid(
+            "Hidden species workspace metadata is missing; restore its folder context or explicitly open a standalone SPART copy",
+        ));
+    }
     if sidecar.exists() {
         let side: DelimitationSidecar = serde_json::from_slice(&std::fs::read(sidecar)?)?;
         if !matches!(side.version, 1 | 2) || side.exchange_hash != cache::content_hash(path)? {

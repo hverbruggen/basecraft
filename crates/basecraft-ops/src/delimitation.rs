@@ -48,7 +48,7 @@ pub fn reference_input(
         hash: hash.into(),
         extra: BTreeMap::new(),
     };
-    let input = crate::input_evidence::SubmittedInput {
+    let mut input = crate::input_evidence::SubmittedInput {
         schema_version: 1,
         source: Some(reference.clone()),
         submitted_hash: hash.into(),
@@ -57,6 +57,14 @@ pub fn reference_input(
         state: "referenced".into(),
         extra: BTreeMap::new(),
     };
+    if let Some(origin) = crate::analysis_store::ArtifactRun::for_result(&source)? {
+        let manifest = origin.join("manifest.json");
+        if manifest.is_file() {
+            let bytes = crate::provenance::read_record(&manifest)?;
+            let record: Publication = serde_json::from_slice(&bytes)?;
+            input.extra.insert("upstream".into(),serde_json::json!([{"bundle":crate::input_evidence::relative(run.directory(), &origin)?,"id":record.id,"hash":basecraft_io::hash_bytes(&bytes)}]));
+        }
+    }
     crate::input_evidence::write_json(&run.artifact("input.json")?, &input)?;
     crate::input_evidence::write_json(
         &run.artifact("run.json")?,
@@ -161,6 +169,64 @@ pub fn checked_display_tree(
         ));
     }
     Ok(Some(source))
+}
+
+/// Apply an immutable method result to the current canonical workspace. GUI,
+/// CLI and MCP callers share roster validation and report identity semantics.
+pub fn add_analysis_result(
+    session: &mut Session,
+    doc: DocId,
+    output: &std::path::Path,
+) -> Result<serde_json::Value> {
+    let value: serde_json::Value = serde_json::from_slice(&std::fs::read(output)?)?;
+    if value
+        .get("workspace")
+        .is_none_or(serde_json::Value::is_null)
+    {
+        return Ok(value);
+    }
+    let work: basecraft_protocol::delimitation::DelimitationWorkspace =
+        serde_json::from_value(value["workspace"].clone())?;
+    let current = session.delimitation(doc);
+    if current
+        .specimens
+        .iter()
+        .map(|s| &s.id)
+        .collect::<BTreeSet<_>>()
+        != work.specimens.iter().map(|s| &s.id).collect()
+    {
+        return Err(invalid(
+            "Analysis specimen mapping differs; result saved separately",
+        ));
+    }
+    let report_hash = basecraft_io::hash_file(output)?;
+    let mut edits = Vec::new();
+    let mut view = current.view.clone();
+    for mut hypothesis in work.hypotheses {
+        view.visible.push(hypothesis.id.clone());
+        hypothesis.provenance.parameters.insert(
+            "analysis_report".into(),
+            serde_json::json!({"path":output,"hash":report_hash}),
+        );
+        edits.push(DelimitationEdit::Add { hypothesis });
+    }
+    if edits.is_empty() {
+        return Ok(value);
+    }
+    edits.push(DelimitationEdit::SetView { view });
+    let mut checked = current.clone();
+    for edit in &edits {
+        basecraft_docs::delimitation::apply(&mut checked, edit).map_err(|e| invalid(e.0))?;
+    }
+    for edit in edits {
+        session.apply(
+            doc,
+            Op::DelimitationEdit {
+                edit: Box::new(edit),
+            },
+        )?;
+    }
+    Ok(value)
 }
 
 pub fn combine(session: &mut Session, doc: DocId, paths: &[PathBuf]) -> Result<()> {

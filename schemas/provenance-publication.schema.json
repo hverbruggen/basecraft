@@ -533,6 +533,30 @@
             "action",
             "view"
           ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "set_display_tree"
+            },
+            "evidence_run": {
+              "type": "string"
+            },
+            "hash": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "action",
+            "path",
+            "hash",
+            "evidence_run"
+          ]
         }
       ]
     },

@@ -1155,6 +1155,40 @@ impl Session {
             && previous_bundle.join("input.json").is_file()
         {
             let mut input = crate::input_evidence::read_input(previous_bundle)?;
+            let mut upstream = input
+                .extra
+                .get("upstream")
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            for reference in &mut upstream {
+                let path = reference["bundle"]
+                    .as_str()
+                    .ok_or_else(|| invalid("ancestor location missing"))?;
+                reference["bundle"] = serde_json::json!(crate::input_evidence::relative(
+                    &bundle.canonicalize()?,
+                    &previous_bundle.join(path).canonicalize()?
+                )?);
+            }
+            if bundle.join("input.json").is_file() {
+                let current = crate::input_evidence::read_input(&bundle)?;
+                if let Some(dependencies) = current
+                    .extra
+                    .get("upstream")
+                    .and_then(serde_json::Value::as_array)
+                {
+                    for dependency in dependencies {
+                        if !upstream.contains(dependency) {
+                            upstream.push(dependency.clone());
+                        }
+                    }
+                }
+            }
+            if !upstream.is_empty() {
+                input
+                    .extra
+                    .insert("upstream".into(), serde_json::json!(upstream));
+            }
             if input.source.is_some() {
                 input.extra.insert(
                     "origin_run".into(),
@@ -2487,6 +2521,22 @@ impl Session {
         };
         let mut artifacts = Vec::new();
         for path in outputs {
+            let retained = if input.extra.contains_key("species_result")
+                && *path == files::tree_sidecar(target)
+            {
+                let hash = basecraft_io::hash_file(path)?;
+                let name = format!("artifacts/{}", hash.trim_start_matches("b3:"));
+                basecraft_io::write_atomic(&run.directory().join(&name), |w| {
+                    std::io::copy(&mut std::fs::File::open(path)?, w)?;
+                    Ok(())
+                })?;
+                Some(name)
+            } else {
+                path.strip_prefix(run.directory())
+                    .ok()
+                    .and_then(|p| p.to_str())
+                    .map(str::to_owned)
+            };
             artifacts.push(ArtifactRevision {
                 id: format!("{}:output:{}", run.id(), artifacts.len()),
                 logical_name: crate::input_evidence::relative(
@@ -2499,11 +2549,7 @@ impl Session {
                 )?,
                 hash: basecraft_io::hash_file(path)?,
                 size: std::fs::metadata(path)?.len(),
-                retained: path
-                    .strip_prefix(run.directory())
-                    .ok()
-                    .and_then(|p| p.to_str())
-                    .map(str::to_owned),
+                retained,
                 reference: None,
             });
         }
@@ -2572,6 +2618,21 @@ impl Session {
                 crate::provenance::publish(&bundle, &publication)?;
             }
             basecraft_platform::settings::ProvenancePolicy::None => {}
+        }
+        if input.extra.contains_key("species_result")
+            && !run.directory().join("manifest.json").is_file()
+        {
+            std::fs::create_dir_all(run.directory().join("records"))?;
+            crate::input_evidence::write_json(
+                &run.directory()
+                    .join("records")
+                    .join(format!("{}.json", publication.id)),
+                &publication,
+            )?;
+            crate::input_evidence::write_json(
+                &run.directory().join("manifest.json"),
+                &publication,
+            )?;
         }
         crate::input_evidence::write_json(
             &run.directory().join("run.json"),

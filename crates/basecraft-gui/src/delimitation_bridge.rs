@@ -1297,6 +1297,7 @@ impl qobject::DelimitationController {
                 );
             }
             let id = job.params["job_id"].as_str().unwrap().to_string();
+            job.params.insert("progress_job_id".into(), json!(id));
             let (workflow, progress_id) = if alignment_pipeline {
                 let unique_haplotypes = job
                     .params
@@ -1313,7 +1314,7 @@ impl qobject::DelimitationController {
                             output,
                         },
                     ),
-                    format!("{id}-fit"),
+                    id,
                 )
             } else {
                 (
@@ -1357,23 +1358,7 @@ impl qobject::DelimitationController {
                         return Err("Analysis completed for its saved input; workspace changed, so result remains an artifact".into());
                     }
                     if display_job { return Ok(json!({"display_tree":output})); }
-                    let value: Value = serde_json::from_slice(&std::fs::read(&output).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
-                    if value.get("workspace").is_some_and(|v|!v.is_null()) {
-                        let work: basecraft_protocol::delimitation::DelimitationWorkspace = serde_json::from_value(value["workspace"].clone()).map_err(|e|e.to_string())?;
-                        let roster: BTreeSet<_> = session.delimitation(doc).specimens.iter().map(|s|s.id.clone()).collect();
-                        if roster != work.specimens.iter().map(|s|s.id.clone()).collect() {
-                            return Err("Analysis specimen mapping differs; result saved separately".into());
-                        }
-                        let report_hash = session.snapshot_file(&output).map_err(|e|e.to_string())?;
-                        let added:Vec<_>=work.hypotheses.iter().map(|h|h.id.clone()).collect();
-                        for mut hypothesis in work.hypotheses {
-                            hypothesis.provenance.parameters.insert("analysis_report".into(),json!({"path":output,"hash":report_hash}));
-                            session.apply(doc, Op::DelimitationEdit { edit: Box::new(DelimitationEdit::Add {hypothesis}) }).map_err(|e|e.to_string())?;
-                        }
-                        let mut view=session.delimitation(doc).view.clone();
-                        view.visible.extend(added);
-                        session.apply(doc,Op::DelimitationEdit {edit:Box::new(DelimitationEdit::SetView {view})}).map_err(|e|e.to_string())?;
-                    }
+                    let value = basecraft_ops::delimitation::add_analysis_result(session, doc, &output).map_err(|e| e.to_string())?;
                     Ok(value)
                 })();
                 ctl.as_mut().set_busy(false);

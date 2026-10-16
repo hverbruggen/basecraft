@@ -323,3 +323,254 @@ Path(r['worker_metadata']).write_text(json.dumps({'version':'contract fixture, n
     let report = replay::replay(root.path()).unwrap();
     assert!(report.ok(), "{:?}", report.problems);
 }
+
+fn visible_files(root: &Path) -> Vec<String> {
+    let mut names: Vec<_> = std::fs::read_dir(root)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n != ".basecraft")
+        .collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn tree_methods_update_one_canonical_spart_and_export_without_sources() {
+    let parent = tempfile::tempdir().unwrap();
+    let root = parent.path().join("working");
+    std::fs::create_dir(&root).unwrap();
+    let source = root.join("source.nwk");
+    std::fs::write(
+        &source,
+        include_str!("../../../testdata/fixtures/delimitation/gmyc-small.nwk"),
+    )
+    .unwrap();
+    let plugin = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/delimitation");
+    let mut session = Session::new(&root);
+    let input = session.open(&source).unwrap();
+    let canonical = root.join("species.spart");
+    let setup = FileJob::from_tree(
+        &session,
+        input,
+        (&plugin, "workspace_tree"),
+        canonical.clone(),
+    )
+    .unwrap();
+    let outcome = setup.run();
+    setup
+        .record_terminal(&mut session, input, &outcome, 0.0)
+        .unwrap();
+    setup
+        .record(&mut session, input, &outcome.unwrap())
+        .unwrap();
+    assert_eq!(visible_files(&root), ["source.nwk", "species.spart"]);
+    let doc = session.open(&canonical).unwrap();
+    let mut count = 0;
+    for method in [
+        "gmyc_single",
+        "gmyc_multiple",
+        "gmyc_exhaustive",
+        "manual_cut",
+        "validate_time_tree",
+        "relative_time",
+        "inspect_tree",
+    ] {
+        let mut job = FileJob::from_file(
+            &session,
+            doc,
+            &source,
+            (&plugin, method),
+            root.join(format!("{method}.json")),
+        )
+        .unwrap();
+        job.params.extend([
+            ("rooted".into(), json!(true)),
+            ("threshold".into(), json!(0.25)),
+            ("candidate_budget".into(), json!(100)),
+        ]);
+        let outcome = job.run();
+        job.record_terminal(&mut session, doc, &outcome, 0.0)
+            .unwrap();
+        job.record(&mut session, doc, &outcome.unwrap()).unwrap();
+        let value =
+            basecraft_ops::delimitation::add_analysis_result(&mut session, doc, &job.output)
+                .unwrap();
+        if let Some(hypotheses) = value["workspace"]["hypotheses"].as_array() {
+            count += hypotheses.len();
+            if method == "manual_cut" {
+                assert_eq!(value["metrics"]["groups"], json!([["a", "b"], ["c", "d"]]));
+                assert!(hypotheses[0]["scores"].as_array().unwrap().is_empty());
+            }
+            session.save(doc, None).unwrap();
+        }
+        assert_eq!(
+            basecraft_ops::files::load_delimitation(&canonical)
+                .unwrap()
+                .hypotheses
+                .len(),
+            count
+        );
+        assert_eq!(
+            visible_files(&root),
+            ["source.nwk", "species.spart"],
+            "{method}"
+        );
+    }
+    let duplicate = FileJob::from_tree(
+        &session,
+        input,
+        (&plugin, "workspace_tree"),
+        canonical.clone(),
+    )
+    .unwrap();
+    let before = std::fs::read(&canonical).unwrap();
+    assert!(duplicate.run().is_err());
+    assert_eq!(before, std::fs::read(&canonical).unwrap());
+    let issues = basecraft_ops::provenance::verify(&canonical).unwrap();
+    assert!(issues.is_empty(), "{issues:?}");
+    let package = parent.path().join("package");
+    basecraft_ops::provenance::package(&canonical, &package).unwrap();
+    let expected = session
+        .delimitation(doc)
+        .hypotheses
+        .iter()
+        .map(|h| h.groups.clone())
+        .collect::<Vec<_>>();
+    drop(session);
+    std::fs::rename(&root, parent.path().join("unavailable")).unwrap();
+    let exported = package.join("species.spart");
+    assert!(
+        basecraft_ops::provenance::verify(&exported)
+            .unwrap()
+            .is_empty()
+    );
+    let work = basecraft_ops::files::load_delimitation(&exported).unwrap();
+    assert_eq!(
+        work.hypotheses
+            .iter()
+            .map(|h| h.groups.clone())
+            .collect::<Vec<_>>(),
+        expected
+    );
+    let display = basecraft_ops::delimitation::checked_display_tree(&work)
+        .unwrap()
+        .unwrap();
+    assert!(display.is_file(), "{}", display.display());
+    for h in &work.hypotheses {
+        let report = &h.provenance.parameters["analysis_report"];
+        assert_eq!(
+            basecraft_io::hash_file(Path::new(report["path"].as_str().unwrap())).unwrap(),
+            report["hash"]
+        );
+    }
+}
+
+#[test]
+fn dirty_tree_submission_retains_generated_bytes_without_stale_original_claim() {
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("source.nwk");
+    std::fs::write(&source, "((a:0.1,b:0.1):0.9,(c:0.2,d:0.2):0.8);\n").unwrap();
+    let plugin = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/delimitation");
+    let mut session = Session::new(root.path());
+    let doc = session.open(&source).unwrap();
+    session
+        .apply(
+            doc,
+            basecraft_protocol::Op::TreeRenameTip {
+                from: "a".into(),
+                to: "unsaved".into(),
+            },
+        )
+        .unwrap();
+    let job = FileJob::from_tree(
+        &session,
+        doc,
+        (&plugin, "workspace_tree"),
+        root.path().join("species.spart"),
+    )
+    .unwrap();
+    let result = job.run().unwrap();
+    job.record(&mut session, doc, &result).unwrap();
+    let evidence = job.species_input_evidence().unwrap();
+    assert_eq!(evidence["state"], "generated");
+    assert!(evidence["source_hash"].is_null());
+    let generated = Path::new(evidence["path"].as_str().unwrap());
+    assert!(
+        std::fs::read_to_string(generated)
+            .unwrap()
+            .contains("unsaved")
+    );
+    assert_eq!(
+        job.input_io().unwrap()["persistent_submitted_copy_bytes"],
+        std::fs::metadata(generated).unwrap().len()
+    );
+    let work = basecraft_ops::files::load_delimitation(&root.path().join("species.spart")).unwrap();
+    assert!(work.specimens.iter().any(|s| s.id == "unsaved"));
+    assert!(!work.specimens.iter().any(|s| s.id == "a"));
+    assert!(std::fs::read_to_string(source).unwrap().contains("a:"));
+}
+
+#[test]
+fn ptp_and_mptp_keep_upstream_directories_hidden_and_preserve_imported_groups() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = tempfile::tempdir().unwrap();
+    let upstream = fixture.path().join("mptp-fixture");
+    std::fs::write(&upstream,r#"#!/usr/bin/env python3
+import sys
+from pathlib import Path
+if '--version' in sys.argv:
+    print('storage contract fixture, not mPTP inference')
+else:
+    output = sys.argv[sys.argv.index('--output_file')+1]
+    rate = 'single' if '--single' in sys.argv else 'multi'
+    Path(output+'.txt').write_text('Best score for '+rate+' coalescent rate: -1\nNull-model score: -2\nNumber of delimited species: 2\nLRT: passed\nSpecies 1:\na\nb\nSpecies 2:\nc\nd\n')
+"#).unwrap();
+    std::fs::set_permissions(&upstream, std::fs::Permissions::from_mode(0o700)).unwrap();
+    for method in ["ptp", "mptp"] {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source.nwk");
+        std::fs::write(&source, "((a:0.1,b:0.1):0.9,(c:0.2,d:0.2):0.8);\n").unwrap();
+        let plugin = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/delimitation");
+        let mut session = Session::new(root.path());
+        let doc = session.open(&source).unwrap();
+        let mut job = FileJob::from_tree(
+            &session,
+            doc,
+            (&plugin, method),
+            root.path().join("species.spart"),
+        )
+        .unwrap();
+        job.params.extend([
+            ("mptp_executable".into(), json!(upstream)),
+            ("rooted".into(), json!(true)),
+        ]);
+        let outcome = job.run();
+        job.record_terminal(&mut session, doc, &outcome, 0.0)
+            .unwrap();
+        let result = outcome.unwrap();
+        job.record(&mut session, doc, &result).unwrap();
+        let work =
+            basecraft_ops::files::load_delimitation(&root.path().join("species.spart")).unwrap();
+        assert_eq!(
+            work.hypotheses[0]
+                .groups
+                .iter()
+                .map(|g| g.members.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                ["a".into(), "b".into()].into(),
+                ["c".into(), "d".into()].into()
+            ]
+        );
+        assert_eq!(work.hypotheses[0].provenance.method, method);
+        assert_eq!(work.hypotheses[0].scores[0].value, -1.0);
+        assert_eq!(visible_files(root.path()), ["source.nwk", "species.spart"]);
+        assert!(result.outputs.iter().any(|p| p.ends_with("stdout.log")
+            && Path::new(p).starts_with(root.path().join(".basecraft"))));
+        assert!(
+            basecraft_ops::provenance::verify(&root.path().join("species.spart"))
+                .unwrap()
+                .is_empty()
+        );
+    }
+}

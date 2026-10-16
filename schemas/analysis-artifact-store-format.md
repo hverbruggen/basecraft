@@ -109,3 +109,35 @@ reads and persistent generated-input copies. They exclude initial document loadi
 mmap page faults and external-tool reads. Preservation records actual verified
 copied bytes. They establish avoidance of extra host I/O, not storage-device timing
 or biological reproducibility.
+
+Species workspace routes use the same allocator and evidence lifecycle for
+GMYC single/multiple/exhaustive, ASAP, PTP/mPTP, manual cuts and workspace setup.
+A standalone run publishes one canonical SPART (the requested SPART/XML path,
+or the output stem with `.spart`). JSON envelopes, per-fit exchange files,
+mappings, fits, preparation trees and raw upstream directories remain inside
+reserved runs. Adding a method to an open workspace applies typed hypotheses to
+that same SPART. The GUI leaves those edits pending Save; CLI/SDK/MCP save them
+through the normal guarded Session API. Useful explicitly requested display
+trees remain ordinary results. Internal preparation trees remain hidden.
+
+Species execution uses `analysis_artifacts` allocation directly, preserving
+stable embedded paths rather than relocating JSON after generic staging. Public
+`input_evidence` identifies the accepted raw source and exact submitted hash;
+`canonical-newick-v1` denotes the tree document's Newick serializer, and
+`identity-v1` denotes a frozen raw file read. Generated submissions retain one
+`submitted.fasta` (the historical evidence filename is format-neutral).
+Clean sources are not copied by the native wrapper. Run-local generated outputs
+can be retained in place; mutable canonical workspace metadata gets an immutable
+content-addressed revision. Input ledgers declare immutable upstream records for
+pipelines, fitted hypotheses, attached displays and combined source workspaces.
+
+SPART workspace metadata version 2 records its original folder as `path_base`.
+Readers rebase declared path fields when the whole folder moves; authored text
+and immutable historical reports are unchanged. Version 1 visible sidecars stay
+readable and are never moved or deleted on passive open. A damaged binding or
+missing bound workspace metadata is an error rather than a legacy fallback.
+New saves and Save As use hidden metadata. Explicit complete export uses the
+common dependency-closure exporter and relocates the derived workspace's input,
+display and report paths into checked package artifacts, preserving the original
+scientific records as immutable evidence. Historical command paths describe the
+actual execution environment; exports do not claim executable scientific replay.

@@ -637,13 +637,19 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
     let upstream = ancestors(&bundle)?;
     let mut roots = vec![(bundle.clone(), publication.clone())];
     roots.extend(upstream);
-    let species = crate::files::Format::from_path(result)? == crate::files::Format::Delimitation;
+    let species =
+        crate::files::Format::from_path(result).ok() == Some(crate::files::Format::Delimitation);
     let mut species_paths = BTreeMap::new();
     if species {
         for (directory, record) in &roots {
             for artifact in record.inputs.iter().chain(&record.outputs) {
                 let original = if let Some(reference) = &artifact.reference {
-                    Some(directory.join(&reference.path))
+                    let (owner, input) = owning_ledger(directory)?;
+                    let original = input.source.as_ref().map_or_else(
+                        || directory.join(&reference.path),
+                        |source| owner.join(&source.path),
+                    );
+                    Some(original)
                 } else {
                     artifact.retained.as_ref().map(|name| directory.join(name))
                 };

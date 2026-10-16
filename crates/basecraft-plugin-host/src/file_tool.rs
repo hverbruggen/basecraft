@@ -91,6 +91,7 @@ pub struct FileJob {
 struct SpeciesStorage {
     anchor: PathBuf,
     primary: Option<PathBuf>,
+    standalone: bool,
     dependencies: Vec<PathBuf>,
 }
 
@@ -157,10 +158,12 @@ impl FileJob {
                     | "asap_import"
             ))
         .then(|| {
-            if anchor.extension().is_some_and(|e| e == "spart") {
+            if basecraft_ops::files::Format::from_path(anchor).ok()
+                == Some(basecraft_ops::files::Format::Delimitation)
+            {
                 anchor.to_path_buf()
             } else {
-                PathBuf::from(format!("{}.spart", anchor.display()))
+                anchor.with_extension("spart")
             }
         });
         let internal_name = format!(
@@ -200,6 +203,7 @@ impl FileJob {
         self.species = Some(SpeciesStorage {
             anchor: anchor.to_path_buf(),
             primary,
+            standalone,
             dependencies: Vec::new(),
         });
         self.artifacts = Some(run);
@@ -219,6 +223,22 @@ impl FileJob {
         Ok(
             json!({"run_directory":run.directory(),"path":path.canonicalize()?,"source_hash":input.source.as_ref().map(|r| &r.hash),"submitted_hash":input.submitted_hash,"transformation":input.transformation,"state":input.state}),
         )
+    }
+
+    pub fn species_workspace_target(&self, output: &Path) -> Option<PathBuf> {
+        self.species.as_ref().filter(|s| s.standalone).map(|_| {
+            if output.extension().is_some_and(|e| e == "spart") {
+                output.to_path_buf()
+            } else {
+                PathBuf::from(format!("{}.spart", output.display()))
+            }
+        })
+    }
+
+    pub fn publish_species_workspace_at(&mut self, target: Option<PathBuf>) {
+        if let Some(storage) = &mut self.species {
+            storage.primary = target;
+        }
     }
 
     /// Supporting species stages stay in their reserved run, never beside the SPART.
@@ -1095,6 +1115,14 @@ impl FileJob {
     }
 
     fn execute_run(&self, frozen_input: &Path) -> Result<InvokeResult> {
+        if self
+            .species
+            .as_ref()
+            .and_then(|s| s.primary.as_ref())
+            .is_some_and(|p| std::fs::symlink_metadata(p).is_ok())
+        {
+            return Err(Error::Protocol("Species workspace already exists; choose a new filename or open it to add hypotheses".into()));
+        }
         let cancel = self
             .params
             .get("cancel_file")

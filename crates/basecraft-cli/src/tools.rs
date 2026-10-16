@@ -94,7 +94,10 @@ fn run_delimitation(
         || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins"),
         PathBuf::from,
     );
-    if matches!(method, "gmyc_alignment_single" | "gmyc_alignment_multiple") {
+    if matches!(
+        method,
+        "gmyc_alignment_single" | "gmyc_alignment_multiple" | "asap"
+    ) {
         let preparation_output = PathBuf::from(format!("{}.preparation.json", output.display()));
         let mut preparation = if session.is_delimitation(doc) {
             let input = params
@@ -126,7 +129,7 @@ fn run_delimitation(
         let unique_haplotypes = params
             .get("unique_haplotypes")
             .and_then(Value::as_bool)
-            .unwrap_or(true);
+            .unwrap_or(method != "asap");
         preparation.params.extend(params);
         let job = basecraft_plugin_host::delimitation_pipeline::AlignmentJob {
             preparation,
@@ -134,7 +137,22 @@ fn run_delimitation(
             fit_method: method.replace("_alignment", ""),
             output,
         };
-        return Ok(serde_json::to_value(job.run().record(session, doc)?)?);
+        let outcome = job.run();
+        let output = outcome.output.clone();
+        let mut result = outcome.record(session, doc)?;
+        if session.is_delimitation(doc) {
+            basecraft_ops::delimitation::add_analysis_result(session, doc, &output)?;
+            session.save(doc, None)?;
+            result.outputs.insert(
+                0,
+                session
+                    .root()
+                    .join(session.doc_key(doc))
+                    .display()
+                    .to_string(),
+            );
+        }
+        return Ok(serde_json::to_value(result)?);
     }
     let mut job = if session.is_delimitation(doc) {
         let input = params
@@ -171,7 +189,19 @@ fn run_delimitation(
     let started = std::time::Instant::now();
     let outcome = job.run();
     job.record_terminal(session, doc, &outcome, started.elapsed().as_secs_f64())?;
-    let result = outcome?;
+    let mut result = outcome?;
     job.record(session, doc, &result)?;
+    if session.is_delimitation(doc) {
+        basecraft_ops::delimitation::add_analysis_result(session, doc, &job.output)?;
+        session.save(doc, None)?;
+        result.outputs.insert(
+            0,
+            session
+                .root()
+                .join(session.doc_key(doc))
+                .display()
+                .to_string(),
+        );
+    }
     Ok(serde_json::to_value(result)?)
 }

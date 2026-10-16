@@ -416,12 +416,23 @@ fn run(
                     .get("threshold")
                     .and_then(serde_json::Value::as_f64)
                     .ok_or("manual cut requires threshold")?;
-                result.metrics.insert(
-                    "groups".into(),
-                    serde_json::to_value(basecraft_delimitation::time_tree::cut(
-                        &tree, &time, threshold,
-                    )?)?,
-                );
+                let groups = basecraft_delimitation::time_tree::cut(&tree, &time, threshold)?;
+                result
+                    .metrics
+                    .insert("groups".into(), serde_json::to_value(&groups)?);
+                let mut work = workspace(request, &tree, groups, 0.0);
+                for hypothesis in &mut work.hypotheses {
+                    hypothesis.origin =
+                        basecraft_protocol::delimitation::HypothesisOrigin::ManualCut;
+                    hypothesis.scores.clear();
+                    hypothesis.provenance.seed = None;
+                    hypothesis.provenance.workers = None;
+                    hypothesis.provenance.parameters.insert(
+                        "boundary".into(),
+                        serde_json::json!("node_age_le_threshold"),
+                    );
+                }
+                result.workspace = Some(work);
             }
             result
                 .metrics
@@ -606,7 +617,7 @@ fn progress(
         basecraft_io::write_atomic(Path::new(path), |w| {
             serde_json::to_writer(
                 w,
-                &serde_json::json!({"job_id":request.job_id,"generation":request.generation,"phase":phase,"completed":completed,"total":total}),
+                &serde_json::json!({"job_id":request.parameters.get("progress_job_id").and_then(serde_json::Value::as_str).unwrap_or(&request.job_id),"stage_job_id":request.job_id,"generation":request.generation,"phase":phase,"completed":completed,"total":total}),
             )?;
             Ok(())
         })?;

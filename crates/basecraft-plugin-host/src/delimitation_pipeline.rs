@@ -24,15 +24,18 @@ pub struct PipelineOutcome {
     stages: Vec<Stage>,
     unavailable: Option<String>,
     pub output: PathBuf,
+    primary: Option<PathBuf>,
 }
 impl AlignmentJob {
     /// No session access: this method can run on a worker thread.
     pub fn run(mut self) -> PipelineOutcome {
+        let primary = self.preparation.species_workspace_target(&self.output);
         self.output = self.preparation.output.with_file_name("fit.json");
         let mut result = PipelineOutcome {
             stages: vec![],
             unavailable: None,
             output: self.output.clone(),
+            primary,
         };
         let started = Instant::now();
         let outcome = self.preparation.run();
@@ -79,7 +82,15 @@ impl AlignmentJob {
                 PathBuf::from(format!("{}.upgma.nwk", self.output.display())),
             )?;
             tree.params.insert("method".into(), "upgma".into());
-            for name in ["model", "min_overlap", "threads", "tree_threads"] {
+            for name in [
+                "model",
+                "min_overlap",
+                "threads",
+                "tree_threads",
+                "cancel_file",
+                "progress",
+                "progress_job_id",
+            ] {
                 if let Some(value) = prepare.params.get(name) {
                     tree.params.insert(name.into(), value.clone());
                 }
@@ -134,13 +145,14 @@ impl AlignmentJob {
             );
             Ok(fit)
         })();
-        let fit = match setup {
+        let mut fit = match setup {
             Ok(fit) => fit,
             Err(error) => {
                 result.unavailable = Some(error.to_string());
                 return result;
             }
         };
+        fit.publish_species_workspace_at(result.primary.clone());
         result.output.clone_from(&fit.output);
         let started = Instant::now();
         let outcome = fit.run();
@@ -243,7 +255,8 @@ fn run_asap(mut result: PipelineOutcome, unique: bool) -> PipelineOutcome {
         Ok(fit)
     })();
     match setup {
-        Ok(job) => {
+        Ok(mut job) => {
+            job.publish_species_workspace_at(result.primary.clone());
             result.output.clone_from(&job.output);
             let started = Instant::now();
             let outcome = job.run();

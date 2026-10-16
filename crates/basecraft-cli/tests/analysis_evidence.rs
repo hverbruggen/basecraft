@@ -105,3 +105,91 @@ fn managed_bootstrap_destinations_and_structured_save_conflict() {
     );
     assert_eq!(std::fs::read(&source).unwrap(), original);
 }
+
+#[test]
+fn species_cli_and_public_sdk_add_to_one_canonical_workspace() {
+    let parent = tempfile::tempdir().unwrap();
+    let root = parent.path().join("working");
+    std::fs::create_dir(&root).unwrap();
+    let profile = parent.path().join("profile");
+    let source = root.join("source.nwk");
+    let canonical = root.join("species.spart");
+    std::fs::write(&source, "((a:0.1,b:0.1):0.9,(c:0.2,d:0.2):0.8);\n").unwrap();
+    let binary = env!("CARGO_BIN_EXE_basecraft");
+    let setup = Command::new(binary)
+        .args([
+            "tool",
+            "delimitation",
+            source.to_str().unwrap(),
+            "--output",
+            canonical.to_str().unwrap(),
+            "--params",
+            r#"{"method":"workspace_tree"}"#,
+        ])
+        .env("BASECRAFT_PROFILE_DIR", &profile)
+        .output()
+        .unwrap();
+    assert!(
+        setup.status.success(),
+        "{}",
+        String::from_utf8_lossy(&setup.stderr)
+    );
+    let params = serde_json::json!({"method":"gmyc_single","analysis_input":source,"rooted":true})
+        .to_string();
+    let fitted = Command::new(binary)
+        .args([
+            "tool",
+            "delimitation",
+            canonical.to_str().unwrap(),
+            "--output",
+            root.join("fit.json").to_str().unwrap(),
+            "--params",
+            &params,
+        ])
+        .env("BASECRAFT_PROFILE_DIR", &profile)
+        .output()
+        .unwrap();
+    assert!(
+        fitted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&fitted.stderr)
+    );
+    assert_eq!(
+        basecraft_ops::files::load_delimitation(&canonical)
+            .unwrap()
+            .hypotheses
+            .len(),
+        1
+    );
+    let sdk = Command::new("python3").args(["-c",r#"
+import json, sys
+from basecraft.delimitation import run
+print(json.dumps(run(sys.argv[1],sys.argv[2],method='gmyc_multiple',analysis_input=sys.argv[3],rooted=True,candidate_budget=100)))
+"#,canonical.to_str().unwrap(),root.join("sdk.json").to_str().unwrap(),source.to_str().unwrap()]).env("BASECRAFT",binary).env("BASECRAFT_PROFILE_DIR",&profile).env("PYTHONPATH",std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../python/src")).output().unwrap();
+    assert!(
+        sdk.status.success(),
+        "{}",
+        String::from_utf8_lossy(&sdk.stderr)
+    );
+    let result: serde_json::Value = serde_json::from_slice(&sdk.stdout).unwrap();
+    assert_eq!(result["outputs"][0], canonical.to_str().unwrap());
+    assert_eq!(
+        basecraft_ops::files::load_delimitation(&canonical)
+            .unwrap()
+            .hypotheses
+            .len(),
+        2
+    );
+    let mut visible: Vec<_> = std::fs::read_dir(&root)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n != ".basecraft")
+        .collect();
+    visible.sort();
+    assert_eq!(visible, ["source.nwk", "species.spart"]);
+    assert!(
+        basecraft_ops::provenance::verify(&canonical)
+            .unwrap()
+            .is_empty()
+    );
+}
