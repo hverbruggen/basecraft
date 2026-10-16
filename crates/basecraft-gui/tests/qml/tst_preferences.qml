@@ -10,7 +10,7 @@ Item {
     property int invocations: 0
     QtObject {
         id: store
-        property string snapshot: JSON.stringify({ui: {show_gc: true, sidebar_open: true, orf_min_codons: 100}, files: {provenance: "portable", recovery: true}, compute: {local_cpu_threads: 4}, customization: {shortcuts: {}, ribbon_hidden: []}})
+        property string snapshot: JSON.stringify({ui: {show_gc: true, sidebar_open: true, orf_min_codons: 100, alignment_insert: true}, files: {provenance: "portable", recovery: true}, compute: {local_cpu_threads: 4}, customization: {shortcuts: {}, ribbon_hidden: []}})
         property string lastKey
         property var lastValue
         function update(key, value) { lastKey = key; lastValue = JSON.parse(value); return true }
@@ -32,9 +32,71 @@ Item {
         onInvoked: host.invocations++
     }
     PreferencesDialog { id: preferences; settings: store; commands: [command] }
+    SignalSpy { id: rejected; target: preferences; signalName: "rejected" }
     TestCase {
         name: "Preferences"
         when: windowShown
+        function test_escape_does_not_commit_pending_number_data() {
+            return ["interfaceFontSize", "orfMinCodons", "localCpuThreads"].map(name => ({tag: name}))
+        }
+        function test_escape_does_not_commit_pending_number(data) {
+            editor.forceActiveFocus()
+            preferences.open()
+            tryCompare(preferences, "opened", true)
+            wait(0)
+            const size = findChild(preferences, data.tag)
+            size.forceActiveFocus()
+            tryCompare(size.contentItem, "activeFocus", true)
+            keyClick(Qt.Key_A, Qt.ControlModifier)
+            keyClick("1")
+            keyClick("5")
+            store.lastKey = ""
+            rejected.clear()
+            keyClick(Qt.Key_Escape)
+            tryCompare(preferences, "opened", false)
+            compare(rejected.count, 1)
+            compare(store.lastKey, "")
+            tryCompare(editor, "activeFocus", true)
+        }
+        function test_escape_preserves_applied_number() {
+            editor.forceActiveFocus()
+            preferences.open()
+            tryCompare(preferences, "opened", true)
+            wait(0)
+            const size = findChild(preferences, "interfaceFontSize")
+            const before = size.value
+            size.forceActiveFocus()
+            keyClick(Qt.Key_Up)
+            compare(store.lastValue, before + 1)
+            keyClick(Qt.Key_A, Qt.ControlModifier)
+            keyClick("2"); keyClick("0")
+            store.lastKey = ""
+            keyClick(Qt.Key_Escape)
+            tryCompare(preferences, "opened", false)
+            compare(store.lastKey, "")
+            compare(size.value, before + 1, "Escape preserves the earlier applied value")
+            compare(store.lastValue, before + 1)
+            size.value = before
+        }
+        function test_escape_does_not_commit_pending_shortcut() {
+            editor.forceActiveFocus()
+            preferences.open()
+            tryCompare(preferences, "opened", true)
+            wait(0)
+            tryVerify(() => findChild(preferences.contentItem, "shortcut-test.run") !== null)
+            const shortcut = findChild(preferences.contentItem, "shortcut-test.run")
+            shortcut.forceActiveFocus()
+            tryCompare(shortcut, "activeFocus", true)
+            keyClick(Qt.Key_A, Qt.ControlModifier)
+            for (const ch of "Ctrl+Alt+K") keyClick(ch)
+            store.lastKey = ""
+            rejected.clear()
+            keyClick(Qt.Key_Escape)
+            tryCompare(preferences, "opened", false)
+            compare(rejected.count, 1)
+            compare(store.lastKey, "")
+            tryCompare(editor, "activeFocus", true)
+        }
         function cleanup() { preferences.close(); command.customization = ({shortcuts: {}, ribbon_hidden: []}) }
         function test_overrides_missing_ids_and_reset() {
             command.customization = ({shortcuts: {"test.run": "Ctrl+Alt+R", "missing.plugin": "Ctrl+Alt+J"}, ribbon_hidden: ["test.run", "missing.plugin"]})

@@ -17,6 +17,8 @@ Dialog {
         Overlay.overlay ? Overlay.overlay.width - 32 : implicitWidth))
     height: Math.max(0, Math.min(implicitHeight,
         Overlay.overlay ? Overlay.overlay.height - 32 : implicitHeight))
+    // Dialog's Escape handling calls reject(), including for Close-only dialogs.
+    // Keep it local to the focused popup so nested combo menus close first.
     closePolicy: Popup.CloseOnEscape
 
     // Basic's header/footer backgrounds can cover the outline, and its default
@@ -90,7 +92,9 @@ Dialog {
     }
 
     function focusInitialControl() {
-        if (!opened) return
+        // A nested dialog may have opened before this deferred callback ran.
+        // Only the popup that still owns focus may choose its initial control.
+        if (!opened || !activeFocus) return
         const safeCancel = (standardButtons & Dialog.Discard) && (standardButtons & Dialog.Cancel)
             ? standardButton(Dialog.Cancel) : null
         const target = usable(initialFocusItem) ? initialFocusItem
@@ -109,7 +113,12 @@ Dialog {
         function onClosed() {
             const target = dialog.usable(dialog.returnFocusItem) ? dialog.returnFocusItem
                 : dialog.previousFocusItem
-            if (dialog.usable(target)) target.forceActiveFocus(Qt.PopupFocusReason)
+            // An accept/reject handler can open the next popup before closed
+            // is delivered. Do not restore focus underneath that new popup.
+            let focused = dialog.hostWindow ? dialog.hostWindow.activeFocusItem : null
+            const overlay = dialog.parent ? dialog.parent.Overlay.overlay : null
+            while (focused && focused !== overlay) focused = focused.parent
+            if (!focused && dialog.usable(target)) target.forceActiveFocus(Qt.PopupFocusReason)
             dialog.previousFocusItem = null
         }
     }

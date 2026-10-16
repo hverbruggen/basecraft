@@ -65,7 +65,7 @@ AppContentDialog {
         AppErrorLabel { text: dialog.validationMessage; visible: text.length > 0; wrapMode: Text.Wrap; Layout.fillWidth: true; color: palette.highlight }
         RowLayout {
             Item { Layout.fillWidth: true }
-            AppButton { text: "Cancel"; enabled: !dialog.controller.busy; onClicked: dialog.close() }
+            AppButton { text: "Cancel"; enabled: !dialog.controller.busy; onClicked: dialog.reject() }
             AppButton { text: dialog.controller.busy ? "Adding…" : "Add"; enabled: !dialog.controller.busy && (dialog.inputKind === "fasta" || sequenceName.text.trim().length > 0) && (dialog.inputKind === "reviewed" || sequenceInput.text.trim().length > 0); onClicked: dialog.submit(keepReference.checked) }
         }
     }

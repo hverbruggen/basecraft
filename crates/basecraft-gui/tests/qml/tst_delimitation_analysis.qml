@@ -7,9 +7,43 @@ Item {
     width: 800; height: 700
     Component { id: factory; DelimitationAnalysisDialog {} }
     SignalSpy { id: requests; signalName: "requested" }
+    TextField { id: invoker; text: "Document" }
+    SignalSpy { id: rejected; signalName: "rejected" }
+    SignalSpy { id: accepted; signalName: "accepted" }
     TestCase {
         name: "DelimitationAnalysis"
         when: windowShown
+        function test_escape_data() {
+            const rows = []
+            for (const method of ["gmyc", "asap", "ptp", "manual", "view"])
+                for (const focus of ["text", "number", "button"])
+                    rows.push({tag: method + "-" + focus, method, focus})
+            return rows
+        }
+        function test_escape(data) {
+            invoker.forceActiveFocus()
+            const dialog = createTemporaryObject(factory, parent)
+            requests.target = dialog; requests.clear()
+            rejected.target = dialog; rejected.clear()
+            accepted.target = dialog; accepted.clear()
+            dialog.show(data.method, "/input.afa", "/input.nwk")
+            tryCompare(dialog, "opened", true)
+            wait(0)
+            if (dialog.viewSetup) findChild(dialog, "manualTree").currentIndex = 4
+            if (data.method === "ptp") findChild(dialog, "rootedTree").checked = true
+            const field = data.focus === "button" ? dialog.standardButton(Dialog.Ok)
+                : data.focus === "number" ? findChild(dialog, "randomSeed").contentItem
+                : findChild(dialog, dialog.viewSetup ? "iqtreeModel" : "analysisInput")
+            field.forceActiveFocus(Qt.TabFocusReason)
+            tryCompare(field, "activeFocus", true)
+            if (data.focus !== "button") { keyClick(Qt.Key_A, Qt.ControlModifier); keyClick("9") }
+            keyClick(Qt.Key_Escape)
+            tryCompare(dialog, "opened", false)
+            compare(rejected.count, 1)
+            compare(accepted.count, 0)
+            compare(requests.count, 0, "Escape cannot request an analysis or workspace")
+            tryCompare(invoker, "activeFocus", true)
+        }
         function test_methods_data() { return [{tag:"gmyc"}, {tag:"asap"}, {tag:"ptp"}, {tag:"manual"}] }
         function test_methods(data) {
             const dialog = createTemporaryObject(factory, parent)

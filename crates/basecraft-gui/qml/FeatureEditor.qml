@@ -178,7 +178,7 @@ AppContentDialog {
                 visible: dialog.featureId >= 0
                 onClicked: { dialog.controller.delete_feature(dialog.featureId); dialog.close() }
             }
-            AppButton { text: "Cancel"; onClicked: dialog.close() }
+            AppButton { text: "Cancel"; onClicked: dialog.reject() }
             AppButton { text: "Save"; highlighted: true; onClicked: dialog.save() }
         }
         AppErrorLabel {

@@ -14,9 +14,39 @@ Item {
         function distance_action(k, p) { calls++; kind = k; options = JSON.parse(p) }
     }
     Component { id: dialogComponent; DistanceAnalysisDialog {} }
+    TextField { id: invoker; text: "Document" }
+    SignalSpy { id: rejected; signalName: "rejected" }
+    SignalSpy { id: accepted; signalName: "accepted" }
     TestCase {
         name: "DistanceAnalysis"
         when: windowShown
+        function test_escape_data() {
+            const rows = []
+            for (const kind of ["matrix", "nj", "upgma"])
+                for (const focus of ["number", "button"])
+                    rows.push({tag: kind + "-" + focus, kind, focus})
+            return rows
+        }
+        function test_escape(data) {
+            invoker.forceActiveFocus()
+            const d = createTemporaryObject(dialogComponent, parent, {kind: data.kind, target: backend})
+            rejected.target = d; rejected.clear()
+            accepted.target = d; accepted.clear()
+            d.open()
+            tryCompare(findChild(d, "distanceModel"), "activeFocus", true)
+            const field = data.focus === "number" ? findChild(d, "distanceOverlap").contentItem
+                : d.standardButton(Dialog.Ok)
+            field.forceActiveFocus(Qt.TabFocusReason)
+            tryCompare(field, "activeFocus", true)
+            if (data.focus === "number") { keyClick(Qt.Key_A, Qt.ControlModifier); keyClick("9") }
+            const before = backend.calls
+            keyClick(Qt.Key_Escape)
+            tryCompare(d, "opened", false)
+            compare(rejected.count, 1)
+            compare(accepted.count, 0)
+            compare(backend.calls, before, "Escape cannot launch a distance job")
+            tryCompare(invoker, "activeFocus", true)
+        }
         function test_analysis_data() { return [{tag: "matrix"}, {tag: "nj"}, {tag: "upgma"}] }
         function test_analysis(data) {
             const d = createTemporaryObject(dialogComponent, parent, {kind: data.tag, target: backend})

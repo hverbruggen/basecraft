@@ -203,7 +203,7 @@ AppContentDialog {
 
         RowLayout {
             Item { Layout.fillWidth: true }
-            AppButton { text: "Cancel"; onClicked: dialog.close() }
+            AppButton { text: "Cancel"; onClicked: dialog.reject() }
             AppButton { text: "Save"; highlighted: true; onClicked: dialog.save() }
         }
     }

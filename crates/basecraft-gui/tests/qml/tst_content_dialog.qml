@@ -11,21 +11,43 @@ Item {
     Component {
         id: contentComponent
         AppContentDialog {
+            id: contentDialog
+            property bool trailingContent: false
             title: "Long explanation"
             standardButtons: Dialog.Close
             body: ColumnLayout {
                 Label {
+                    objectName: "explanation"
                     Layout.fillWidth: true
                     wrapMode: Text.Wrap
                     text: "A long actionable error with retained input and instructions for retrying. ".repeat(60)
                 }
                 TextField { objectName: "retainedInput"; Layout.fillWidth: true; text: "Unsaved input" }
+                Item { visible: contentDialog.trailingContent; Layout.preferredHeight: 300 }
             }
         }
     }
     TestCase {
         name: "ContentDialog"
         when: windowShown
+        function test_reveal_after_content_reflow() {
+            const dialog = createTemporaryObject(contentComponent, root, {trailingContent: true})
+            dialog.open()
+            tryCompare(dialog, "opened", true)
+            const input = findChild(dialog.body, "retainedInput")
+            tryCompare(input, "activeFocus", true)
+            function revealed() {
+                const p = input.mapToItem(dialog.contentItem, 0, 0)
+                return p.y >= -1 && p.y + input.height <= dialog.contentItem.height + 1
+            }
+            tryVerify(revealed)
+            // Layout can settle after focus has already scrolled the field.
+            const before = dialog.contentItem.contentHeight
+            findChild(dialog.body, "explanation").text += "More wrapped content. ".repeat(60)
+            tryVerify(() => dialog.contentItem.contentHeight > before)
+            tryVerify(revealed, 1000, "Reflow keeps the focused field visible without another focus event")
+            verify(input.activeFocus)
+        }
         function test_narrow_scrolling_data() { return [{tag: "normal", size: 12}, {tag: "large", size: 24}] }
         function test_narrow_scrolling(data) {
             failOnWarning(/Binding loop|only supports Flickable/)
