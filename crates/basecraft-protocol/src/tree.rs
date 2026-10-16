@@ -1,6 +1,8 @@
 //! Phylogenetic tree annotations and drawing style, as tree operations
 //! carry them and the tree's sidecar file stores them.
 
+use std::collections::BTreeMap;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -89,6 +91,18 @@ pub struct SupportSymbols {
     pub low: u32,
 }
 
+/// Scientific support semantics supplied by a producer, never guessed from its name.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SupportKind {
+    #[default]
+    Unknown,
+    Bootstrap,
+    Probability,
+    /// Percentage support from a method other than ordinary bootstrap.
+    Percentage,
+}
+
 /// How a tree is drawn. Sizes are pixels at 100 % zoom.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
@@ -97,10 +111,17 @@ pub struct TreeStyle {
     /// Support sets shown at nodes, in order, joined with "/". Empty shows
     /// every set.
     pub support_shown: Vec<String>,
-    /// Hide support values below this percentage. Sets whose values are
-    /// all at most 1, such as posterior probabilities, count as
-    /// proportions. 0 shows them all.
+    /// Hide support values below this percentage. Known producer metadata sets
+    /// the scale; ambiguous imported sets with all finite values in 0–1 use
+    /// proportions. `support_proportions` overrides this fallback. 0 shows all.
     pub support_min: u32,
+    /// Decimal places per set; missing entries use the support semantics. Maximum 10.
+    pub support_decimals: BTreeMap<String, u8>,
+    /// Optional display-scale overrides for ambiguous imports (true means 0–1).
+    pub support_proportions: BTreeMap<String, bool>,
+    /// Preserve settings written by newer versions.
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
     pub symbols: Option<SupportSymbols>,
     pub tip_font: u32,
     pub support_font: u32,
@@ -116,6 +137,9 @@ impl Default for TreeStyle {
             support_placement: SupportPlacement::Natural,
             support_shown: Vec::new(),
             support_min: 0,
+            support_decimals: BTreeMap::new(),
+            support_proportions: BTreeMap::new(),
+            extra: BTreeMap::new(),
             symbols: None,
             tip_font: 13,
             support_font: 10,

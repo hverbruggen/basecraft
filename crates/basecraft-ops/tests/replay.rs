@@ -575,6 +575,7 @@ fn tree_session_replays_exactly() {
         s.apply(
             d,
             Op::TreeAddSupport {
+                kind: basecraft_protocol::SupportKind::Probability,
                 name: "PP".into(),
                 source: "other.tre".into(),
                 values: sets[0].1.clone(),

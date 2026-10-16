@@ -11,7 +11,7 @@ mod rooting;
 use std::collections::BTreeMap;
 
 use basecraft_io::newick::{self, ParsedTree};
-use basecraft_protocol::{CladeAnnotation, CladeRef, TreeStyle};
+use basecraft_protocol::{CladeAnnotation, CladeRef, SupportKind, TreeStyle};
 
 pub use crate::alignment::EditError;
 
@@ -45,22 +45,74 @@ pub struct SupportSet {
     pub name: String,
     pub source: String,
     pub values: Vec<Option<String>>,
-    /// Every value is at most 1: proportions rather than percentages.
+    pub kind: SupportKind,
+    /// Effective automatic scale, before a user style override.
     pub proportions: bool,
 }
 
 impl SupportSet {
     fn new(name: String, source: String, values: Vec<Option<String>>) -> Self {
-        let proportions = values
-            .iter()
-            .flatten()
-            .all(|v| v.parse::<f64>().is_ok_and(|x| x <= 1.0));
+        let proportions = values.iter().flatten().next().is_some()
+            && values.iter().flatten().all(|v| {
+                v.parse::<f64>()
+                    .is_ok_and(|x| x.is_finite() && (0.0..=1.0).contains(&x))
+            });
         Self {
             name,
             source,
             values,
             proportions,
+            kind: SupportKind::Unknown,
         }
+    }
+
+    pub fn set_kind(&mut self, kind: SupportKind) {
+        self.kind = kind;
+        match kind {
+            SupportKind::Bootstrap | SupportKind::Percentage => self.proportions = false,
+            SupportKind::Probability => self.proportions = true,
+            SupportKind::Unknown => {}
+        }
+    }
+
+    pub fn uses_proportions(&self, style: &TreeStyle) -> bool {
+        style
+            .support_proportions
+            .get(&self.name)
+            .copied()
+            .unwrap_or(self.proportions)
+    }
+
+    pub fn decimals(&self, style: &TreeStyle) -> u8 {
+        style
+            .support_decimals
+            .get(&self.name)
+            .copied()
+            .unwrap_or(if self.uses_proportions(style) { 2 } else { 0 })
+            .min(10)
+    }
+
+    /// Presentation only. Raw strings remain unchanged in Newick and provenance.
+    pub fn formatted(&self, node: usize, style: &TreeStyle) -> Option<String> {
+        let raw = self.values.get(node)?.as_ref()?;
+        let Ok(value) = raw.parse::<f64>() else {
+            return Some(raw.clone());
+        };
+        if !value.is_finite() {
+            return Some(raw.clone());
+        }
+        Some(format!("{:.*}", usize::from(self.decimals(style)), value))
+    }
+
+    pub fn display_percent(&self, node: usize, style: &TreeStyle) -> Option<f64> {
+        let value: f64 = self.values.get(node)?.as_ref()?.parse().ok()?;
+        value.is_finite().then(|| {
+            if self.uses_proportions(style) {
+                value * 100.0
+            } else {
+                value
+            }
+        })
     }
 
     /// A node's value as a percentage, for thresholds.
@@ -144,15 +196,13 @@ impl TreeDoc {
                 if p.children.is_empty() {
                     return None;
                 }
-                comment_value(&p.comment, "prob").map(|v| tidy_number(&v))
+                comment_value(&p.comment, "prob")
             })
             .collect();
         if posterior.iter().any(Option::is_some) {
-            supports.push(SupportSet::new(
-                "Posterior".into(),
-                String::new(),
-                posterior,
-            ));
+            let mut set = SupportSet::new("Posterior".into(), String::new(), posterior);
+            set.set_kind(SupportKind::Probability);
+            supports.push(set);
         }
         let mut doc = Self {
             name: name.into(),
@@ -469,6 +519,13 @@ impl TreeDoc {
         Ok(())
     }
 
+    /// Producer metadata or metadata restored from the tree sidecar.
+    pub fn set_support_kind(&mut self, name: &str, kind: SupportKind) {
+        if let Some(set) = self.supports.iter_mut().find(|s| s.name == name) {
+            set.set_kind(kind);
+        }
+    }
+
     pub fn remove_support(&mut self, name: &str) -> Result<(), EditError> {
         let i = self
             .supports
@@ -477,6 +534,8 @@ impl TreeDoc {
             .ok_or_else(|| EditError(format!("no support set named {name:?}")))?;
         self.supports.remove(i);
         self.style.support_shown.retain(|s| s != name);
+        self.style.support_decimals.remove(name);
+        self.style.support_proportions.remove(name);
         if self.style.symbols.as_ref().is_some_and(|s| s.set == name) {
             self.style.symbols = None;
         }
@@ -863,18 +922,6 @@ fn comment_value(comment: &str, key: &str) -> Option<String> {
     })
 }
 
-/// "1.00000000e+00" as "1", "9.87e-01" as "0.99".
-fn tidy_number(s: &str) -> String {
-    match s.parse::<f64>() {
-        Ok(v) if v.fract() == 0.0 => format!("{v:.0}"),
-        Ok(v) => {
-            let t = format!("{v:.2}");
-            t.trim_end_matches('0').trim_end_matches('.').to_string()
-        }
-        Err(_) => s.to_string(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -895,6 +942,68 @@ mod tests {
     }
 
     #[test]
+    fn support_semantics_defaults_and_raw_values() {
+        let mut t = tree("((a,b)0.654321/0.987654321[&prob=9.87654321e-1],c);");
+        let node = t.resolve(&names(&["a", "b"])).unwrap();
+        let original = t.to_newick();
+        assert_eq!(t.supports()[0].kind, SupportKind::Unknown);
+        assert_eq!(t.supports()[0].decimals(t.style()), 2);
+        t.set_support_kind("Support 1", SupportKind::Bootstrap);
+        assert!(!t.supports()[0].proportions);
+        assert_eq!(t.supports()[0].percent(node), Some(0.654321));
+        assert_eq!(
+            t.supports()[0].formatted(node, t.style()).as_deref(),
+            Some("1")
+        );
+        assert_eq!(t.supports()[2].kind, SupportKind::Probability);
+        assert_eq!(
+            t.supports()[2].formatted(node, t.style()).as_deref(),
+            Some("0.99")
+        );
+        let mut style = t.style().clone();
+        style.support_decimals.insert("Support 1".into(), 3);
+        style.support_decimals.insert("Support 2".into(), 4);
+        t.set_style(style);
+        assert_eq!(
+            t.supports()[0].formatted(node, t.style()).as_deref(),
+            Some("0.654")
+        );
+        assert_eq!(
+            t.supports()[1].formatted(node, t.style()).as_deref(),
+            Some("0.9877")
+        );
+        assert_eq!(t.to_newick(), original);
+        let legacy: TreeStyle =
+            serde_json::from_str(r#"{"tip_font":15,"future_setting":{"x":1}}"#).unwrap();
+        assert!(legacy.support_decimals.is_empty());
+        assert_eq!(
+            serde_json::to_value(&legacy).unwrap()["future_setting"]["x"],
+            1
+        );
+    }
+
+    #[test]
+    fn ambiguous_imports_use_only_finite_nonnegative_proportion_values() {
+        for (value, decimals) in [
+            ("0.7", 2),
+            ("1", 2),
+            ("1.1", 0),
+            ("90.75", 0),
+            ("-0.5", 0),
+            ("NaN", 0),
+            ("inf", 0),
+        ] {
+            let t = tree(&format!("((a,b){value},c);"));
+            assert_eq!(t.supports()[0].decimals(t.style()), decimals, "{value}");
+        }
+        // A user-assigned name alone is not scientific metadata.
+        let mut t = tree("((a,b)0.5,c);");
+        t.rename_support("Support", "Bootstrap");
+        assert_eq!(t.supports()[0].kind, SupportKind::Unknown);
+        assert_eq!(t.supports()[0].decimals(t.style()), 2);
+    }
+
+    #[test]
     fn reads_supports_from_labels_and_comments() {
         let t = tree("((A:1,B:1)95/1:1,(C:1,D:1)80/0.9[&prob=0.987]:1)root;");
         assert_eq!(t.supports().len(), 3);
@@ -904,11 +1013,11 @@ mod tests {
         assert_eq!(t.supports()[1].values[ab].as_deref(), Some("1"));
         assert!(t.supports()[1].proportions && !t.supports()[0].proportions);
         let cd = t.resolve(&names(&["C", "D"])).unwrap();
-        assert_eq!(t.supports()[2].values[cd].as_deref(), Some("0.99"));
+        assert_eq!(t.supports()[2].values[cd].as_deref(), Some("0.987"));
         assert_eq!(t.node(t.root()).name, "root");
         assert_eq!(
             t.to_newick(),
-            "((A:1,B:1)95/1/-:1,(C:1,D:1)80/0.9/0.99:1)root;"
+            "((A:1,B:1)95/1/-:1,(C:1,D:1)80/0.9/0.987:1)root;"
         );
     }
 

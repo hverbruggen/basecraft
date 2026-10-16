@@ -6,7 +6,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{CladeAnnotation, CladeRef, Feature, TreeStyle};
+use crate::{CladeAnnotation, CladeRef, Feature, SupportKind, TreeStyle};
 
 /// Log format version, written into every entry.
 pub const LOG_VERSION: u32 = 1;
@@ -162,6 +162,8 @@ pub enum Op {
         #[serde(default)]
         source: String,
         values: Vec<Option<String>>,
+        #[serde(default)]
+        kind: SupportKind,
     },
     #[serde(rename = "tree.remove_support")]
     TreeRemoveSupport { name: String },

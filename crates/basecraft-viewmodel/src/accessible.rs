@@ -59,10 +59,14 @@ pub fn alignment(doc: &AlignmentDoc, requested: i32) -> TextPage {
 pub fn tree(doc: &TreeDoc, requested: i32) -> TextPage {
     let (page, pages, start, end) = bounds(requested, doc.nodes().len() as u64, 50);
     let mut text = format!(
-        "Tree, {} tips. Node identifiers are one-based. Root: {}.\nNode\tName\tParent\tBranch length\n",
+        "Tree, {} tips. Node identifiers are one-based. Root: {}.\nNode\tName\tParent\tBranch length",
         doc.tip_count(),
         doc.root() + 1
     );
+    for set in doc.supports() {
+        let _ = write!(text, "\t{}", set.name);
+    }
+    text.push('\n');
     for (i, node) in doc
         .nodes()
         .iter()
@@ -70,7 +74,7 @@ pub fn tree(doc: &TreeDoc, requested: i32) -> TextPage {
         .skip(usize::try_from(start).unwrap_or(usize::MAX))
         .take(usize::try_from(end - start).unwrap_or(0))
     {
-        let _ = writeln!(
+        let _ = write!(
             text,
             "{}\t{}\t{}\t{}",
             i + 1,
@@ -80,6 +84,14 @@ pub fn tree(doc: &TreeDoc, requested: i32) -> TextPage {
             node.length
                 .map_or_else(|| "not recorded".into(), |v| v.to_string())
         );
+        for set in doc.supports() {
+            let _ = write!(
+                text,
+                "\t{}",
+                set.formatted(i, doc.style()).unwrap_or_else(|| "-".into())
+            );
+        }
+        text.push('\n');
     }
     TextPage { page, pages, text }
 }
@@ -144,7 +156,7 @@ pub fn review(bases: &[u8], masked: &[bool], unresolved: &[bool], requested: i32
                 .get(i)
                 .map_or("not recorded", |v| if *v { "yes" } else { "no" })
         };
-        let _ = writeln!(
+        let _ = write!(
             text,
             "{}\t{}\t{}\t{}",
             i + 1,
