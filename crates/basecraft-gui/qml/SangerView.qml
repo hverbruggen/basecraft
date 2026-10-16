@@ -70,7 +70,7 @@ FocusScope {
             AppErrorLabel { text: ctl.message; visible: text.length > 0; Layout.fillWidth: true; wrapMode: Text.Wrap; color: ctl.accent }
             RowLayout {
                 Item { Layout.fillWidth: true }
-                AppButton { text: "Cancel"; onClicked: exportName.close() }
+                AppButton { text: "Cancel"; onClicked: exportName.reject() }
                 AppButton { text: exportName.target === "clipboard" ? "Copy" : "Choose FASTA file…"; enabled: exportId.text.trim().length > 0; onClicked: doc.confirmExportName() }
             }
         }
@@ -155,7 +155,7 @@ FocusScope {
             }
             RowLayout {
                 Item { Layout.fillWidth: true }
-                AppButton { text: "Cancel"; onClicked: signalDialog.close() }
+                AppButton { text: "Cancel"; onClicked: signalDialog.reject() }
                 AppButton {
                     text: "Create draft"
                     onClicked: {
@@ -211,7 +211,7 @@ FocusScope {
             AppErrorLabel { text: ctl.message; visible: text.length > 0; wrapMode: Text.Wrap; Layout.fillWidth: true; color: ctl.accent }
             RowLayout {
                 Item { Layout.fillWidth: true }
-                AppButton { text: "Cancel"; onClicked: maskDialog.close() }
+                AppButton { text: "Cancel"; onClicked: maskDialog.reject() }
                 AppButton { text: "Apply mask"; enabled: keepStart.value <= keepEnd.value; onClicked: if (ctl.mask_ends(keepStart.value, keepEnd.value)) { maskDialog.close(); view.forceActiveFocus() } }
             }
         }
@@ -243,7 +243,7 @@ FocusScope {
             AppErrorLabel { text: ctl.message; visible: text.length > 0; wrapMode: Text.Wrap; Layout.fillWidth: true; color: ctl.accent }
             RowLayout {
                 Item { Layout.fillWidth: true }
-                AppButton { text: "Cancel"; onClicked: primerDialog.close() }
+                AppButton { text: "Cancel"; onClicked: primerDialog.reject() }
                 AppButton { text: "Apply primer masks"; enabled: primerDialog.proposal.length > 0; onClicked: if (ctl.apply_primers(primerDialog.proposal)) { primerDialog.close(); view.forceActiveFocus() } }
             }
         }

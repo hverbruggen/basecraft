@@ -105,19 +105,9 @@ FocusScope {
         id: additionError
         onCopyMessage: (text) => doc.copyText(text)
     }
-    AppContentDialog {
+    AdditionGapsDialog {
         id: insertionDialog
-        initialFocusItem: abortAddition
-        property int count: 0
-        title: "New bases require reference gaps"
-        modal: true
-        body: ColumnLayout {
-            Label { text: insertionDialog.count + " bases in the new sequences cannot fit without adding gaps to the reference. Allow new gaps to retain every base, or abort the addition."; wrapMode: Text.Wrap; Layout.fillWidth: true }
-            RowLayout {
-                AppButton { id: abortAddition; text: "Abort addition"; onClicked: { insertionDialog.close(); if (doc.activeAdditionDialog) doc.activeAdditionDialog.close() } }
-                AppButton { text: "Allow new gaps"; onClicked: { insertionDialog.close(); if (doc.activeAdditionDialog) doc.activeAdditionDialog.submit(false) } }
-            }
-        }
+        additionDialog: doc.activeAdditionDialog
     }
 
     Binding { target: ctl; property: "insert_mode"; value: doc.insertMode }

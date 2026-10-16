@@ -107,6 +107,7 @@ fn main() {
         "qml/AppButton.qml",
         "qml/AddSequenceDialog.qml",
         "qml/AdditionErrorDialog.qml",
+        "qml/AdditionGapsDialog.qml",
         "qml/TraceReviewControls.qml",
         "qml/AppComboBox.qml",
         "qml/FeatureEditor.qml",

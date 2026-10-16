@@ -26,6 +26,7 @@ Item {
         standardButtons: Dialog.Discard | Dialog.Cancel
         initialFocusItem: standardButton(Dialog.Cancel)
     }
+    SignalSpy { id: underlyingFocus; target: dialog.field; signalName: "activeFocusChanged" }
     TestCase {
         name: "DialogFocus"
         when: windowShown
@@ -56,6 +57,22 @@ Item {
             keyClick(Qt.Key_Escape)
             tryCompare(dialog.field, "activeFocus", true)
             dialog.close()
+            tryCompare(editor, "activeFocus", true)
+        }
+        function test_nested_open_before_deferred_focus() {
+            dialog.open()
+            confirmation.open()
+            underlyingFocus.clear()
+            tryCompare(confirmation.standardButton(Dialog.Cancel), "activeFocus", true)
+            wait(0)
+            compare(underlyingFocus.count, 0, "The underlying field must never take focus from the nested modal")
+            verify(confirmation.standardButton(Dialog.Cancel).activeFocus,
+                "The underlying dialog's deferred initial focus must not escape the active modal")
+            keyClick(Qt.Key_Escape)
+            tryCompare(confirmation, "opened", false)
+            verify(dialog.opened)
+            keyClick(Qt.Key_Escape)
+            tryCompare(dialog, "opened", false)
             tryCompare(editor, "activeFocus", true)
         }
         function test_accept_restores() {

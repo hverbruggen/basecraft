@@ -16,9 +16,18 @@ AppFormDialog {
             .filter((id, index, ids) => ids.indexOf(id) === index && !commands.some(command => command.commandId === id)) : []
     function change(key, value) { settings.update(key, JSON.stringify(value)) }
 
+    component PreferenceSpinBox: SpinBox {
+        // Focus loss normally commits typed numbers. Escape discards the text
+        // first; values already applied with Enter or the steppers stay applied.
+        Keys.onEscapePressed: {
+            contentItem.text = textFromValue(value, locale)
+            dialog.reject()
+        }
+    }
+
     Label { text: "Appearance"; font.bold: true }
     Label { text: "Colours and the monospace font family follow the system theme. Font-size changes apply immediately."; wrapMode: Text.Wrap; Layout.fillWidth: true }
-    SpinBox {
+    PreferenceSpinBox {
         objectName: "interfaceFontSize"
         Kirigami.FormData.label: "Interface font size (pt):"
         Accessible.name: "Interface font size in points"
@@ -30,7 +39,7 @@ AppFormDialog {
     AppButton { objectName: "resetInterfaceFontSize"; text: "Use default size (" + dialog.defaultFontSizePoints + " pt)"; onClicked: dialog.change("fontSizePoints", null) }
     CheckBox { text: "Show GC content"; checked: dialog.values.ui ? dialog.values.ui.show_gc : true; onToggled: dialog.change("showGc", checked) }
     CheckBox { text: "Open files sidebar"; checked: dialog.values.ui ? dialog.values.ui.sidebar_open : true; onToggled: dialog.change("sidebarOpen", checked) }
-    SpinBox { Kirigami.FormData.label: "Minimum ORF (codons):"; from: 1; to: 1000000; editable: true; value: dialog.values.ui ? dialog.values.ui.orf_min_codons : 100; onValueModified: dialog.change("orfMinCodons", value) }
+    PreferenceSpinBox { objectName: "orfMinCodons"; Kirigami.FormData.label: "Minimum ORF (codons):"; from: 1; to: 1000000; editable: true; value: dialog.values.ui ? dialog.values.ui.orf_min_codons : 100; onValueModified: dialog.change("orfMinCodons", value) }
     CheckBox { text: "Insert alignment bases (rather than overwrite)"; checked: dialog.values.ui ? dialog.values.ui.alignment_insert : true; onToggled: dialog.change("alignmentInsert", checked) }
     Label { text: "Files, provenance and recovery"; font.bold: true }
     Label { text: "These policy defaults are reserved for recovery and provenance workflows. They do not create history for existing files."; wrapMode: Text.Wrap; Layout.fillWidth: true }
@@ -43,7 +52,7 @@ AppFormDialog {
     }
     CheckBox { text: "Enable unsaved-work recovery"; checked: dialog.values.files ? dialog.values.files.recovery : true; onToggled: dialog.change("recovery", checked) }
     Label { text: "Compute"; font.bold: true }
-    SpinBox { Kirigami.FormData.label: "CPU threads per task:"; from: 1; to: 65536; editable: true; value: dialog.values.compute ? dialog.values.compute.local_cpu_threads : 4; onValueModified: dialog.change("localCpuThreads", value) }
+    PreferenceSpinBox { objectName: "localCpuThreads"; Kirigami.FormData.label: "CPU threads per task:"; from: 1; to: 65536; editable: true; value: dialog.values.compute ? dialog.values.compute.local_cpu_threads : 4; onValueModified: dialog.change("localCpuThreads", value) }
     Label { text: "New tasks use this allocation, capped by available CPUs. Running tasks retain their allocation."; wrapMode: Text.Wrap; Layout.fillWidth: true }
     Label { text: "Ribbon and shortcuts"; font.bold: true }
     Label { text: "Use Ctrl, Alt, Shift or Meta with one key, or a function key. Canvas keys and F6 are reserved. Empty shortcuts disable the command's shortcut. Reset restores defaults. Unavailable command IDs remain stored for future availability."; wrapMode: Text.Wrap; Layout.fillWidth: true }
@@ -58,12 +67,25 @@ AppFormDialog {
             Layout.fillWidth: true
             Label { text: row.modelData.text; Layout.preferredWidth: 180; wrapMode: Text.Wrap }
             TextField {
+                objectName: "shortcut-" + row.modelData.commandId
                 Layout.fillWidth: true
                 Accessible.name: row.modelData.text + " shortcut"
                 text: row.modelData.shortcut.toString()
                 placeholderText: "No shortcut"
                 maximumLength: 128
-                onEditingFinished: dialog.change("shortcut", { id: row.modelData.commandId, value: text })
+                property bool edited: false
+                onTextEdited: edited = true
+                // Escape rejects the dialog, so focus loss must not save this
+                // field's unfinished edit. Other preferences apply immediately.
+                Keys.onEscapePressed: {
+                    edited = false
+                    text = Qt.binding(() => row.modelData.shortcut.toString())
+                    dialog.reject()
+                }
+                onEditingFinished: if (edited) {
+                    edited = false
+                    dialog.change("shortcut", { id: row.modelData.commandId, value: text })
+                }
             }
             CheckBox {
                 text: "Show"

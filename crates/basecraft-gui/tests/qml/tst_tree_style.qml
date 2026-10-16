@@ -21,10 +21,13 @@ Item {
         function set_style_with_removals(value, names) { saved = JSON.parse(value); removed = JSON.parse(names); return "" }
     }
     TreeStyleDialog { id: dialog; controller: controller }
+    TextField { id: invoker; text: "Document" }
+    SignalSpy { id: rejected; target: dialog; signalName: "rejected" }
+    SignalSpy { id: accepted; target: dialog; signalName: "accepted" }
     TestCase {
         name: "TreeStyle"
         when: windowShown
-        function init() { controller.saved = null; controller.removed = []; dialog.openStyle(); tryCompare(dialog, "opened", true); wait(20) }
+        function init() { controller.saved = null; controller.removed = []; invoker.forceActiveFocus(); rejected.clear(); accepted.clear(); dialog.openStyle(); tryCompare(dialog, "opened", true); wait(20) }
         function cleanup() { dialog.close(); tryCompare(dialog, "opened", false); root.width = 800; dialog.font.pixelSize = 13 }
         function test_independent_precision_keyboard_and_unknown_settings() {
             const auto = findChild(dialog.contentItem, "autoDecimals0")
@@ -58,7 +61,10 @@ Item {
             compare(bootstrap.value, 1)
             keyClick(Qt.Key_Escape)
             tryCompare(dialog, "opened", false)
+            compare(rejected.count, 1)
+            compare(accepted.count, 0)
             compare(controller.saved, null)
+            tryCompare(invoker, "activeFocus", true)
             dialog.openStyle()
             tryCompare(dialog, "opened", true)
             compare(findChild(dialog.contentItem, "supportDecimals0").value, 0)
@@ -71,7 +77,10 @@ Item {
             compare(controller.saved, null)
             keyClick(Qt.Key_Escape)
             tryCompare(dialog, "opened", false)
+            compare(rejected.count, 1)
+            compare(accepted.count, 0)
             compare(controller.removed.length, 0)
+            tryCompare(invoker, "activeFocus", true)
             dialog.openStyle()
             tryCompare(dialog, "opened", true)
             compare(dialog.removedSets.length, 0)

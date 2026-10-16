@@ -19,6 +19,10 @@ Item {
     AddSequenceDialog { id: fasta; controller: fake; inputKind: "fasta" }
     AddSequenceDialog { id: reviewed; controller: fake; inputKind: "reviewed" }
     AdditionErrorDialog { id: error; onCopyMessage: text => fake.copied = text }
+    TextField { id: invoker; text: "Alignment" }
+    AdditionGapsDialog { id: gaps; count: 2; additionDialog: plain }
+    SignalSpy { id: gapRejected; target: gaps; signalName: "rejected" }
+    SignalSpy { id: additionRejected; target: plain; signalName: "rejected" }
     TraceReviewControls { id: controls; controller: fake; width: 1000 }
     Component {
         id: largeTextControls
@@ -33,7 +37,24 @@ Item {
     TestCase {
         name: "AdditionControls"
         when: windowShown
-        function cleanup() { plain.close(); fasta.close(); reviewed.close(); error.close(); fake.calls = []; inputErrors.clear() }
+        function cleanup() { gaps.close(); plain.close(); fasta.close(); reviewed.close(); error.close(); fake.calls = []; inputErrors.clear() }
+        function test_gap_cancellation_data() { return [{tag: "escape"}, {tag: "abort-button"}] }
+        function test_gap_cancellation(data) {
+            invoker.forceActiveFocus()
+            plain.prepare("ACGT", "pending_sample")
+            tryCompare(findChild(plain.contentItem, "sequenceName"), "activeFocus", true)
+            gapRejected.clear(); additionRejected.clear()
+            gaps.open()
+            const abort = findChild(gaps.contentItem, "abortAddition")
+            tryCompare(abort, "activeFocus", true)
+            keyClick(data.tag === "escape" ? Qt.Key_Escape : Qt.Key_Space)
+            tryCompare(gaps, "opened", false)
+            tryCompare(plain, "opened", false)
+            compare(gapRejected.count, 1)
+            compare(additionRejected.count, 1)
+            compare(fake.calls.length, 0, "Cancelling never retries or starts an addition")
+            tryCompare(invoker, "activeFocus", true)
+        }
         function test_review_fields_inherit_enlarged_ui_font() {
             const wrapper = createTemporaryObject(largeTextControls, parent)
             verify(wrapper)

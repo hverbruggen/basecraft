@@ -31,4 +31,7 @@ ScrollView {
         function onActiveFocusItemChanged() { Qt.callLater(scroll.revealFocus) }
     }
     onHeightChanged: Qt.callLater(revealFocus)
+    // Wrapped text and newly visible rows can finish laying out after the focus
+    // notification. Reveal again with the final geometry, without moving focus.
+    onContentHeightChanged: Qt.callLater(revealFocus)
 }

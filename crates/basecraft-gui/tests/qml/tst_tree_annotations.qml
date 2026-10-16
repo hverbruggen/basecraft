@@ -39,6 +39,10 @@ Item {
     TextField { id: invoker; y: 850; text: "Original focus" }
     CladeEditor { id: editor; controller: first }
     TreeTipNameDialog { id: tipEditor; controller: first }
+    SignalSpy { id: rejected; target: editor; signalName: "rejected" }
+    SignalSpy { id: accepted; target: editor; signalName: "accepted" }
+    SignalSpy { id: tipRejected; target: tipEditor; signalName: "rejected" }
+    SignalSpy { id: tipAccepted; target: tipEditor; signalName: "accepted" }
     TreeContextMenu {
         id: menu
         onNameRequested: (target, annotation, revision) => editor.openCaptured(target, annotation, revision, true)
@@ -65,6 +69,7 @@ Item {
             first.current = {id: 2, exists: false, tips: 2, clade: ["A", "B"], label: "",
                 on_branch: false, bar: true, bar_width: 3, field: false, colour: "#808080", opacity_left: 30, opacity_right: 30}
             renameSpy.clear()
+            rejected.clear(); accepted.clear(); tipRejected.clear(); tipAccepted.clear()
         }
         function cleanup() {
             editor.close()
@@ -111,6 +116,8 @@ Item {
             field("label").text = "Discard me"
             keyClick(Qt.Key_Escape)
             tryCompare(editor, "visible", false)
+            compare(rejected.count, 1)
+            compare(accepted.count, 0)
             compare(first.saved, "")
             compare(first.removed, 0)
             tryVerify(() => invoker.activeFocus)
@@ -167,6 +174,8 @@ Item {
             name.text = "Discard this"
             keyClick(Qt.Key_Escape)
             tryCompare(tipEditor, "visible", false)
+            compare(tipRejected.count, 1)
+            compare(tipAccepted.count, 0)
             compare(first.renamed, "")
             tryVerify(() => invoker.activeFocus)
         }
