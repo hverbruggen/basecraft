@@ -7,7 +7,7 @@ use basecraft_ops::{
 };
 use basecraft_plugin_host::{FileJob, file_tool::AlignmentInput};
 use basecraft_protocol::Op;
-use std::path::Path;
+use std::{fmt::Write as _, path::Path};
 
 fn fixture(root: &Path) -> std::path::PathBuf {
     let plugin = root.join("plugin");
@@ -15,7 +15,7 @@ fn fixture(root: &Path) -> std::path::PathBuf {
     std::fs::write(plugin.join("plugin.toml"), "schema = 1\nid = 'basecraft.mafft'\nname = 'Storage test'\nversion = 'test'\n[entry]\noperation = 'python:test.py'\n").unwrap();
     std::fs::write(
         plugin.join("test.py"),
-        r#"
+        r"
 import json
 from pathlib import Path
 from basecraft.plugin import Plugin
@@ -33,7 +33,7 @@ def align(snapshot, params):
     receipt.write_text(json.dumps(allocation))
     return {'ops': [], 'outputs': [str(target), str(receipt)]}
 plugin.run()
-"#,
+",
     )
     .unwrap();
     plugin
@@ -62,7 +62,7 @@ fn synthetic_large_clean_source_has_metadata_only_evidence_and_relocates() {
     let sequence = "ACGT".repeat(125_000);
     let mut text = String::new();
     for name in 0..32 {
-        text.push_str(&format!(">{name}\n"));
+        writeln!(text, ">{name}").unwrap();
         for line in sequence.as_bytes().chunks(60) {
             text.push_str(std::str::from_utf8(line).unwrap());
             text.push('\n');
@@ -106,10 +106,9 @@ fn synthetic_large_clean_source_has_metadata_only_evidence_and_relocates() {
         "metadata footprint {bytes} bytes for {} input bytes",
         text.len()
     );
-    assert!(
-        basecraft_ops::provenance::verify(&result)
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        basecraft_ops::provenance::verify(&result).unwrap(),
+        Vec::<String>::new()
     );
     println!(
         "input_bytes={} metadata_bytes={bytes} host_input_io={io}",
@@ -120,23 +119,20 @@ fn synthetic_large_clean_source_has_metadata_only_evidence_and_relocates() {
     let moved = dir.path().join("moved");
     std::fs::rename(&folder, &moved).unwrap();
     let result = moved.join("aligned.fasta");
-    assert!(
-        basecraft_ops::provenance::verify(&result)
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        basecraft_ops::provenance::verify(&result).unwrap(),
+        Vec::<String>::new()
     );
     let package = dir.path().join("package");
     basecraft_ops::provenance::package(&result, &package).unwrap();
     std::fs::remove_file(moved.join("input.fasta")).unwrap();
-    assert!(
-        !basecraft_ops::provenance::verify(&result)
-            .unwrap()
-            .is_empty()
+    assert_ne!(
+        basecraft_ops::provenance::verify(&result).unwrap(),
+        Vec::<String>::new()
     );
-    assert!(
-        basecraft_ops::provenance::verify(&package.join("aligned.fasta"))
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        basecraft_ops::provenance::verify(&package.join("aligned.fasta")).unwrap(),
+        Vec::<String>::new()
     );
 }
 
@@ -211,10 +207,9 @@ fn common_save_route_preserves_actual_original_and_dirty_submitted_input() {
         .unwrap();
     let run = ArtifactRun::for_result(&output).unwrap().unwrap();
     assert_eq!(std::fs::read(run.join("preserved-input")).unwrap(), old);
-    assert!(
-        basecraft_ops::provenance::verify(&output)
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        basecraft_ops::provenance::verify(&output).unwrap(),
+        Vec::<String>::new()
     );
     let result_doc = session.open(&output).unwrap();
     session
@@ -230,10 +225,9 @@ fn common_save_route_preserves_actual_original_and_dirty_submitted_input() {
         .unwrap();
     let copied_result = dir.path().join("copied-result.fasta");
     session.save(result_doc, Some(&copied_result)).unwrap();
-    assert!(
-        basecraft_ops::provenance::verify(&copied_result)
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        basecraft_ops::provenance::verify(&copied_result).unwrap(),
+        Vec::<String>::new()
     );
     assert!(basecraft_ops::replay::replay(dir.path()).unwrap().ok());
 }
@@ -265,25 +259,22 @@ fn downstream_evidence_follows_preservation_and_complete_export_keeps_dependency
     assert_eq!(conflict.analyses.iter().filter(|a| a.direct).count(), 1);
     input_evidence::resolve(&conflict, SavePolicy::PreserveCopy).unwrap();
     std::fs::remove_file(&source).unwrap();
-    assert!(
-        basecraft_ops::provenance::verify(&second)
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        basecraft_ops::provenance::verify(&second).unwrap(),
+        Vec::<String>::new()
     );
     let package = root.path().join("portable");
     basecraft_ops::provenance::package(&second, &package).unwrap();
     let first_run = ArtifactRun::for_result(&first).unwrap().unwrap();
     std::fs::write(first_run.join("preserved-input"), ">a\nTTTT\n>b\nTTTT\n").unwrap();
-    assert!(
-        !basecraft_ops::provenance::verify(&second)
-            .unwrap()
-            .is_empty()
+    assert_ne!(
+        basecraft_ops::provenance::verify(&second).unwrap(),
+        Vec::<String>::new()
     );
     std::fs::remove_file(first).unwrap();
-    assert!(
-        basecraft_ops::provenance::verify(&package.join("second.afa"))
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        basecraft_ops::provenance::verify(&package.join("second.afa")).unwrap(),
+        Vec::<String>::new()
     );
 }
 
@@ -325,7 +316,10 @@ fn save_as_descendants_receive_each_explicit_evidence_decision() {
         std::fs::write(&source, ">a\nTTTT\n>b\nTTTA\n").unwrap();
         match policy {
             SavePolicy::PreserveCopy => {
-                assert!(basecraft_ops::provenance::verify(&last).unwrap().is_empty())
+                assert_eq!(
+                    basecraft_ops::provenance::verify(&last).unwrap(),
+                    Vec::<String>::new()
+                )
             }
             SavePolicy::RemoveAnalysis => {
                 assert!(conflict.analyses.iter().all(|a| !a.run.exists()));
@@ -338,7 +332,10 @@ fn save_as_descendants_receive_each_explicit_evidence_decision() {
                         .iter()
                         .all(|a| input_evidence::read_input(&a.run).unwrap().state == "broken")
                 );
-                assert!(!basecraft_ops::provenance::verify(&last).unwrap().is_empty());
+                assert_ne!(
+                    basecraft_ops::provenance::verify(&last).unwrap(),
+                    Vec::<String>::new()
+                );
             }
             SavePolicy::Cancel => unreachable!(),
         }
@@ -409,10 +406,9 @@ fn complete_export_remaps_history_and_retains_original_records_without_store() {
     )
     .unwrap();
     std::fs::rename(bundle, root.path().join("unavailable-companion")).unwrap();
-    assert!(
-        basecraft_ops::provenance::verify(&exported)
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        basecraft_ops::provenance::verify(&exported).unwrap(),
+        Vec::<String>::new()
     );
     // Archived immutable records participate in package verification too.
     let archive = publication
@@ -425,9 +421,8 @@ fn complete_export_remaps_history_and_retains_original_records_without_store() {
         "corrupt",
     )
     .unwrap();
-    assert!(
-        !basecraft_ops::provenance::verify(&exported)
-            .unwrap()
-            .is_empty()
+    assert_ne!(
+        basecraft_ops::provenance::verify(&exported).unwrap(),
+        Vec::<String>::new()
     );
 }

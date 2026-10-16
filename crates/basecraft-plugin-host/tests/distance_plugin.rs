@@ -374,10 +374,9 @@ fn reference_tree_save_as_and_complete_export_retain_alignment_and_support() {
     basecraft_ops::provenance::package(&output, &package).unwrap();
     std::fs::remove_file(&source).unwrap();
     let exported = package.join("tree.nwk");
-    assert!(
-        basecraft_ops::provenance::verify(&exported)
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        basecraft_ops::provenance::verify(&exported).unwrap(),
+        Vec::<String>::new()
     );
     let tree = basecraft_ops::files::load_tree(&exported).unwrap().doc;
     assert_eq!(

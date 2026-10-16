@@ -1,4 +1,6 @@
 //! Independent combined-storage lifecycle regression probes.
+// Preserve the independently reviewed assertions verbatim.
+#![allow(clippy::assert_is_empty)]
 use basecraft_ops::{Session, analysis_store::ArtifactRun, input_evidence, provenance};
 use basecraft_plugin_host::{FileJob, file_tool::AlignmentInput};
 use basecraft_protocol::Op;
@@ -10,7 +12,7 @@ fn fixture(root: &Path) -> std::path::PathBuf {
     std::fs::write(plugin.join("plugin.toml"), "schema = 1\nid = 'basecraft.mafft'\nname = 'Storage test'\nversion = 'test'\n[entry]\noperation = 'python:test.py'\n").unwrap();
     std::fs::write(
         plugin.join("test.py"),
-        r#"
+        r"
 import json
 from pathlib import Path
 from basecraft.plugin import Plugin
@@ -28,7 +30,7 @@ def align(snapshot, params):
     receipt.write_text(json.dumps(allocation))
     return {'ops': [], 'outputs': [str(target), str(receipt)]}
 plugin.run()
-"#,
+",
     )
     .unwrap();
     plugin
