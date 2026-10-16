@@ -18,6 +18,9 @@ Item {
         property bool tip_selected: true
         property string renamed: ""
         property string renameError: ""
+        property string linked_alignment: ""
+        property string source_alignment: ""
+        property bool alignment_link_inferred: false
         property var current: ({id: 2, exists: false, tips: 2, clade: ["A", "B"], label: "",
             on_branch: false, bar: true, bar_width: 3, field: false, colour: "#808080", opacity_left: 30, opacity_right: 30})
         function annotation_json() { return JSON.stringify(current) }
@@ -56,6 +59,9 @@ Item {
             first.tip = "A"
             first.renamed = ""
             first.renameError = ""
+            first.linked_alignment = ""
+            first.source_alignment = ""
+            first.alignment_link_inferred = false
             first.current = {id: 2, exists: false, tips: 2, clade: ["A", "B"], label: "",
                 on_branch: false, bar: true, bar_width: 3, field: false, colour: "#808080", opacity_left: 30, opacity_right: 30}
             renameSpy.clear()
@@ -185,6 +191,30 @@ Item {
             compare(first.renamed, "Bee", "active tab cannot redirect the rename")
             compare(second.saved, "")
             tryCompare(tipEditor, "visible", false)
+        }
+        function test_linked_tip_identity_is_preserved() {
+            tipEditor.ask()
+            tryCompare(tipEditor, "opened", true)
+            findChild(tipEditor, "tipName").text = "Bee"
+            first.linked_alignment = "/source.afa"
+            tipEditor.save()
+            compare(first.renamed, "")
+            verify(findChild(tipEditor, "tipNameError").text.includes("Use a tip annotation"))
+            first.linked_alignment = ""
+            first.alignment_link_inferred = true
+            tipEditor.save()
+            compare(first.renamed, "")
+            verify(tipEditor.visible)
+        }
+        function test_ambiguous_annotation_target_is_explained() {
+            first.current = {error: "Cannot name this clade: its tip identifiers are not unique"}
+            editor.openSelected()
+            verify(!editor.visible)
+            compare(first.message, first.current.error)
+            menu.showFor(first, {node: true, tip: false})
+            tryCompare(menu, "opened", true)
+            verify(!findChild(menu, "nameAnnotation").enabled)
+            compare(first.saved, "")
         }
     }
 }

@@ -29,6 +29,11 @@ AppContentDialog {
     // while the menu/dialog is shown, but the annotation keeps its original clade.
     function openCaptured(target, a, revision, nameOnBranch = false) {
         if (!a) return
+        if (a.error) {
+            target.message_kind = "error"
+            target.message = a.error
+            return
+        }
         editController = target
         editRevision = revision
         annotation = a

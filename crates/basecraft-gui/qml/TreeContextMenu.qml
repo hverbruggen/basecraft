@@ -19,6 +19,11 @@ Menu {
         info = context
         revision = target.record_revision()
         annotation = context.node ? JSON.parse(target.annotation_json()) : null
+        if (annotation && annotation.error) {
+            target.message_kind = "error"
+            target.message = annotation.error
+            annotation = null
+        }
         tipName = context.tip ? target.tip_name() : ""
         popup()
     }
@@ -46,7 +51,7 @@ Menu {
         visible: menu.info.annotated === true
         onTriggered: if (menu.validTarget()) menu.controller.remove_annotation(menu.info.annotation)
     }
-    TreeItem { text: "Reroot here"; visible: menu.info.node && !menu.info.root; onTriggered: if (menu.validTarget()) menu.controller.reroot() }
+    TreeItem { text: "Reroot here"; visible: menu.info.node === true && !menu.info.root; onTriggered: if (menu.validTarget()) menu.controller.reroot() }
     TreeItem { text: "Root position…"; visible: menu.info.rootBranch === true; onTriggered: if (menu.validTarget()) menu.rootPositionRequested() }
     TreeItem { text: "Flip subtree"; visible: menu.info.node === true; onTriggered: if (menu.validTarget()) menu.controller.rotate() }
     TreeItem {

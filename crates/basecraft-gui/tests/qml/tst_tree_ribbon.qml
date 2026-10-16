@@ -117,8 +117,10 @@ Item {
             const reference = controls[0].mapToItem(ribbon, 0, controls[0].captionBaseline).y
             for (const button of controls) {
                 fuzzyCompare(button.mapToItem(ribbon, 0, button.captionBaseline).y, reference, 0.5,
-                             "tree action captions share a baseline, including the smaller reroot arrow")
+                             "tree action captions share a baseline")
                 compare(button.symbolHeight, controls[0].symbolHeight)
+                compare(button.icon.width, 16)
+                compare(button.icon.height, 16)
                 verify(button.height >= button.implicitHeight)
                 verify(button.width >= button.implicitWidth)
             }

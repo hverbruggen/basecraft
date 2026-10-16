@@ -29,6 +29,16 @@ AppContentDialog {
             tipError.text = "The tree or selected tip changed. Close this editor and choose the tip again."
             return
         }
+        if (tipName.text.trim() !== oldName && (editController.linked_alignment
+                || editController.source_alignment || editController.alignment_link_inferred)) {
+            tipError.text = "This tree is linked to an alignment. Use a tip annotation to change its displayed name while keeping the linked identity."
+            return
+        }
+        const identity = JSON.parse(editController.annotation_json())
+        if (!identity || identity.error) {
+            tipError.text = identity && identity.error ? identity.error : "Choose an unambiguous tip first."
+            return
+        }
         const err = editController.rename_tip(tipName.text)
         if (err.length > 0) tipError.text = err
         else close()

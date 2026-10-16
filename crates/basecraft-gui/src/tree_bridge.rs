@@ -317,6 +317,106 @@ fn placement_name(p: SupportPlacement) -> &'static str {
     }
 }
 
+// Viewer annotations use the existing clade identity. Refuse targets that this
+// identity cannot represent exactly (duplicate tips or a unary ancestor).
+fn annotation_clade(doc: &TreeDoc, node: usize) -> Result<Vec<String>, String> {
+    if node >= doc.nodes().len() {
+        return Err("The annotation target no longer exists".into());
+    }
+    let clade = doc.clade_ref(node);
+    check_annotation_clade(doc, node, &clade)?;
+    Ok(clade)
+}
+
+fn check_annotation_clade(doc: &TreeDoc, node: usize, clade: &[String]) -> Result<(), String> {
+    for name in clade {
+        if doc
+            .nodes()
+            .iter()
+            .filter(|n| n.is_tip() && n.name == *name)
+            .count()
+            != 1
+        {
+            return Err("Cannot name this clade: its tip identifiers are not unique".into());
+        }
+    }
+    if doc.resolve(clade).ok() != Some(node) {
+        return Err(
+            "Cannot name this node separately from its unary child using a clade annotation".into(),
+        );
+    }
+    Ok(())
+}
+
+fn annotation_request(
+    doc: &TreeDoc,
+    view: &TreeView,
+    revision: &str,
+    colour: &str,
+) -> Result<Value, String> {
+    let node = view.selected.ok_or("Select a branch, node or tip first")?;
+    let clade = annotation_clade(doc, node)?;
+    let original = view.selected_annotation(doc);
+    let (id, annotation) = original.clone().unwrap_or_else(|| {
+        let mut annotation = CladeAnnotation::new(clade, doc.node(node).name.clone());
+        annotation.colour = colour.into();
+        (doc.next_annotation_id(), annotation)
+    });
+    check_annotation_clade(doc, node, &annotation.clade)?;
+    let mut value = serde_json::to_value(annotation).map_err(|e| e.to_string())?;
+    value["id"] = json!(id);
+    value["exists"] = json!(original.is_some());
+    value["tips"] = json!(doc.tip_counts()[node]);
+    value["target"] = json!({
+        "revision": revision,
+        "node": node,
+        "original": original.map(|(_, a)| a),
+    });
+    Ok(value)
+}
+
+fn checked_annotation(
+    doc: &TreeDoc,
+    revision: &str,
+    value: &Value,
+) -> Result<(u32, CladeAnnotation), String> {
+    let target = &value["target"];
+    if revision.is_empty() || target["revision"].as_str() != Some(revision) {
+        return Err("The tree changed or closed. Open the annotation again".into());
+    }
+    let node = target["node"]
+        .as_u64()
+        .and_then(|n| usize::try_from(n).ok())
+        .ok_or("Missing annotation target")?;
+    annotation_clade(doc, node)?;
+    let id = value["id"]
+        .as_u64()
+        .and_then(|i| u32::try_from(i).ok())
+        .ok_or("Missing annotation identifier")?;
+    let original: Option<CladeAnnotation> = serde_json::from_value(
+        target
+            .get("original")
+            .ok_or("Missing original annotation")?
+            .clone(),
+    )
+    .map_err(|e| format!("Bad original annotation: {e}"))?;
+    if doc.annotations().get(&id) != original.as_ref()
+        || (original.is_none() && id != doc.next_annotation_id())
+    {
+        return Err("The annotation changed. Open it again".into());
+    }
+    let annotation: CladeAnnotation =
+        serde_json::from_value(value.clone()).map_err(|e| format!("Bad annotation: {e}"))?;
+    check_annotation_clade(doc, node, &annotation.clade)?;
+    if original
+        .as_ref()
+        .is_some_and(|a| a.clade != annotation.clade)
+    {
+        return Err("The annotation target changed. Open it again".into());
+    }
+    Ok((id, annotation))
+}
+
 impl qobject::TreeController {
     pub fn document_record(&self) -> QString {
         crate::provenance_bridge::session_report(self.rust().session.as_ref(), self.rust().doc)
@@ -1146,22 +1246,14 @@ impl qobject::TreeController {
     pub fn annotation_json(&self) -> QString {
         let v = self
             .with_doc(|d| {
-                let view = &self.rust().view;
-                let s = view.selected?;
-                let (id, a, exists) = if let Some((id, a)) = view.selected_annotation(d) {
-                    (id, a, true)
-                } else {
-                    let mut a = CladeAnnotation::new(d.clade_ref(s), d.node(s).name.clone());
-                    a.colour = css(self.rust().theme.foreground);
-                    (d.next_annotation_id(), a, false)
-                };
-                let mut v = serde_json::to_value(&a).ok()?;
-                v["id"] = json!(id);
-                v["exists"] = json!(exists);
-                v["tips"] = json!(d.tip_counts()[s]);
-                Some(v)
+                annotation_request(
+                    d,
+                    &self.rust().view,
+                    &self.record_revision().to_string(),
+                    &css(self.rust().theme.foreground),
+                )
+                .unwrap_or_else(|error| json!({"error": error}))
             })
-            .flatten()
             .unwrap_or(Value::Null);
         QString::from(&v.to_string())
     }
@@ -1171,13 +1263,10 @@ impl qobject::TreeController {
             serde_json::from_str::<Value>(&json.to_string())
                 .map_err(|e| e.to_string())
                 .and_then(|v| {
-                    let id = v["id"]
-                        .as_u64()
-                        .and_then(|i| u32::try_from(i).ok())
-                        .unwrap_or(1);
-                    let a: CladeAnnotation =
-                        serde_json::from_value(v).map_err(|e| format!("Bad annotation: {e}"))?;
-                    Ok((id, a))
+                    self.with_doc(|d| {
+                        checked_annotation(d, &self.record_revision().to_string(), &v)
+                    })
+                    .ok_or_else(|| "No tree open".to_string())?
                 });
         match parsed {
             Ok((id, annotation)) => {
@@ -1408,5 +1497,73 @@ impl qobject::TreeController {
 impl TreeRust {
     fn view_size(&self) -> (f32, f32) {
         self.view.size()
+    }
+}
+
+#[cfg(test)]
+mod annotation_tests {
+    use super::{annotation_request, checked_annotation};
+    use basecraft_docs::TreeDoc;
+    use basecraft_viewmodel::TreeView;
+    use serde_json::json;
+
+    #[test]
+    fn captured_annotation_keeps_target_and_rejects_stale_or_retargeted_requests() {
+        let mut doc = TreeDoc::from_newick("test", "((A,B)95,C);").unwrap();
+        let node = doc.resolve(&["A".into(), "B".into()]).unwrap();
+        let mut view = TreeView::new(600.0, 400.0);
+        view.selected = Some(node);
+        let mut value = annotation_request(&doc, &view, "session:0:1:4", "#808080").unwrap();
+        value["label"] = json!("95 / display name");
+        view.selected = Some(doc.root());
+        let (id, annotation) = checked_annotation(&doc, "session:0:1:4", &value).unwrap();
+        assert_eq!(doc.resolve(&annotation.clade).unwrap(), node);
+        assert_eq!(annotation.label, "95 / display name");
+        assert!(checked_annotation(&doc, "session:1:1:4", &value).is_err());
+        assert!(checked_annotation(&doc, "session:0:2:4", &value).is_err());
+        let mut changed = value.clone();
+        changed["clade"] = json!(["C"]);
+        assert!(checked_annotation(&doc, "session:0:1:4", &changed).is_err());
+        changed = value.clone();
+        changed["id"] = json!(99);
+        assert!(checked_annotation(&doc, "session:0:1:4", &changed).is_err());
+        changed = value.clone();
+        changed["target"]["node"] = json!(u64::MAX);
+        assert!(checked_annotation(&doc, "session:0:1:4", &changed).is_err());
+        assert!(checked_annotation(&doc, "", &json!({})).is_err());
+        doc.annotate(id, Some(annotation)).unwrap();
+        assert!(checked_annotation(&doc, "session:0:1:4", &value).is_err());
+    }
+
+    #[test]
+    fn existing_annotation_edits_survive_branch_reordering() {
+        let mut doc = TreeDoc::from_newick("test", "((A,B)95,C);").unwrap();
+        let node = doc.resolve(&["A".into(), "B".into()]).unwrap();
+        let mut view = TreeView::new(600.0, 400.0);
+        view.selected = Some(node);
+        let request = annotation_request(&doc, &view, "before", "#808080").unwrap();
+        let (id, mut annotation) = checked_annotation(&doc, "before", &request).unwrap();
+        annotation.label = "original".into();
+        doc.annotate(id, Some(annotation)).unwrap();
+        doc.rotate(&["A".into(), "B".into()]).unwrap();
+        let mut request = annotation_request(&doc, &view, "after", "#808080").unwrap();
+        assert_eq!(request["label"], "original");
+        assert_eq!(request["exists"], true);
+        request["label"] = json!("edited");
+        let (_, annotation) = checked_annotation(&doc, "after", &request).unwrap();
+        assert_eq!(doc.resolve(&annotation.clade).unwrap(), node);
+    }
+
+    #[test]
+    fn ambiguous_targets_are_refused_without_mutation() {
+        for text in ["((A)unary,B);", "((A,A),B);"] {
+            let doc = TreeDoc::from_newick("test", text).unwrap();
+            let original = doc.to_newick();
+            let mut view = TreeView::new(600.0, 400.0);
+            view.selected = Some(1);
+            assert!(annotation_request(&doc, &view, "revision", "#808080").is_err());
+            assert_eq!(doc.to_newick(), original);
+            assert!(doc.annotations().is_empty());
+        }
     }
 }
