@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Independent Basecraft v1 bundle reader. Optional hash verification needs blake3.
+"""Independent Basecraft v1 reader; hash verification optionally needs blake3.
 
 python verify_provenance.py RESULT --metadata-only
-python verify_provenance.py RESULT    # requires the open-source blake3 Python package
+python verify_provenance.py RESULT --bundle PATH_TO_BUNDLE
 
-Only reads JSON and artifact bytes; never executes bundle contents.
+Only reads declared JSON and artifact bytes. Never executes bundle contents.
 """
 import argparse
 import json
+import re
 from pathlib import Path
 
 
@@ -21,44 +22,156 @@ def relative(root, name):
     return resolved
 
 
+def record(path):
+    if path.is_symlink() or path.stat().st_size > 64 * 1024 * 1024:
+        raise ValueError(f"unsafe or oversized record: {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def discover(result):
+    store = result.parent / ".basecraft" / "analyses-v1"
+    if store.exists():
+        marker = record(store / "store.json")
+        if marker.get("format") != "basecraft.analysis-store" or marker.get("schema_version") != 1:
+            raise ValueError("foreign or unsupported analysis namespace")
+        bindings = store / "bindings"
+        if bindings.is_symlink() or store.is_symlink():
+            raise ValueError("unsafe analysis namespace")
+        found = []
+        if bindings.is_dir():
+            for index, path in enumerate(bindings.iterdir()):
+                if index >= 4096:
+                    raise ValueError("too many result bindings")
+                binding = record(path)
+                if binding.get("result") == result.name:
+                    if binding.get("schema_version") != 1 or not re.fullmatch(r"[A-Za-z0-9-]+", binding["run"]):
+                        raise ValueError("unsupported or unsafe binding")
+                    run = relative(store, "runs/" + binding["run"])
+                    if (run / "manifest.json").is_file():
+                        found.append(run)
+        if len(found) > 1:
+            raise ValueError("ambiguous result binding")
+        if found:
+            return found[0]
+    return Path(str(result) + ".provenance")
+
+
+def source(bundle, reference):
+    seen = set()
+    for _ in range(32):
+        bundle = bundle.resolve(strict=True)
+        if bundle in seen:
+            raise ValueError("input evidence cycle")
+        seen.add(bundle)
+        evidence = record(bundle / "input.json")
+        if evidence.get("schema_version") != 1 or evidence.get("state") == "broken":
+            raise ValueError("input evidence unavailable or explicitly broken")
+        if "origin_run" not in evidence:
+            break
+        bundle = bundle / evidence["origin_run"]
+    else:
+        raise ValueError("input evidence exceeds 32 references")
+    if evidence.get("source", {}).get("hash") != reference["hash"]:
+        raise ValueError("input reference identity differs")
+    return bundle / ("preserved-input" if evidence["state"] == "preserved" else evidence["source"]["path"])
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("result", type=Path)
+    parser.add_argument("--bundle", type=Path)
     parser.add_argument("--metadata-only", action="store_true")
     args = parser.parse_args()
-    bundle = Path(str(args.result) + ".provenance")
-    manifest = bundle / "manifest.json"
-    if manifest.stat().st_size > 64 * 1024 * 1024:
-        raise ValueError("manifest exceeds 64 MiB")
-    publication = json.loads(manifest.read_text(encoding="utf-8"))
-    if publication["schema_version"] != 1:
-        raise ValueError("unsupported schema version")
-    if not publication["outputs"]:
-        raise ValueError("publication has no outputs")
+    bundle = args.bundle or discover(args.result)
+    publication = record(bundle / "manifest.json")
+    if publication["schema_version"] != 1 or not publication["outputs"]:
+        raise ValueError("unsupported or empty publication")
     if not args.metadata_only:
         try:
             from blake3 import blake3
         except ImportError as error:
-            raise ValueError("hash verification needs the open-source blake3 Python package; --metadata-only reads records without verifying hashes") from error
+            raise ValueError("hash verification needs blake3; --metadata-only checks records and sizes without verifying hashes") from error
+
+    total_bytes = 0
+
+    def digest(path):
+        if args.metadata_only:
+            return None
+        hashing = blake3()
+        with path.open("rb") as stream:
+            for block in iter(lambda: stream.read(1024 * 1024), b""):
+                hashing.update(block)
+        return "b3:" + hashing.hexdigest()
+
     def check(path, artifact):
+        nonlocal total_bytes
+        total_bytes += path.stat().st_size
+        if total_bytes > 8 * 1024**3:
+            raise ValueError("artifact verification exceeds 8 GiB")
         if path.stat().st_size != artifact["size"]:
-            raise ValueError(f"size differs: {path.name}")
-        if not args.metadata_only:
-            digest = blake3()
-            with path.open("rb") as source:
-                for block in iter(lambda: source.read(1024 * 1024), b""):
-                    digest.update(block)
-            if "b3:" + digest.hexdigest() != artifact["hash"]:
-                raise ValueError(f"hash differs: {path.name}")
-    for artifact in publication["inputs"] + publication["outputs"]:
-        retained = artifact.get("retained")
-        if retained is None:
-            raise ValueError(f"input bytes unavailable: {artifact['id']}")
-        check(relative(bundle, retained), artifact)
+            raise ValueError(f"size differs: {path}")
+        if not args.metadata_only and digest(path) != artifact["hash"]:
+            raise ValueError(f"hash differs: {path}")
+
+    pending = [(bundle, publication, False)]
+    seen = set()
+    active = set()
+    while pending:
+        location, current, leaving = pending.pop()
+        identity = (location.resolve(strict=True), current["id"])
+        if leaving:
+            active.remove(identity)
+            continue
+        if identity in active:
+            raise ValueError("evidence ancestry cycle")
+        if identity in seen:
+            continue
+        seen.add(identity)
+        active.add(identity)
+        pending.append((location, current, True))
+        if len(seen) > 10000:
+            raise ValueError("too many ancestor records")
+        if current["schema_version"] != 1:
+            raise ValueError("unsupported ancestor version")
+        for artifact in current["inputs"] + current["outputs"]:
+            if artifact.get("retained") is not None:
+                check(relative(location, artifact["retained"]), artifact)
+            elif artifact.get("reference") is not None:
+                check(source(location, artifact["reference"]), artifact)
+            elif artifact in current["inputs"]:
+                raise ValueError(f"input bytes unavailable: {artifact['id']}")
+        ancestors = [(location, parent, current["parent_hashes"][parent]) for parent in current["parents"]]
+        if (location / "input.json").is_file():
+            evidence = record(location / "input.json")
+            if evidence.get("state") == "broken":
+                raise ValueError("input evidence explicitly broken")
+            ledgers = [(location, evidence)]
+            ledger_seen = set()
+            while ledgers:
+                ledger_root, ledger = ledgers.pop()
+                canonical = ledger_root.resolve(strict=True)
+                if canonical in ledger_seen:
+                    raise ValueError("input evidence cycle")
+                ledger_seen.add(canonical)
+                for ancestor in ledger.get("upstream", []):
+                    ancestors.append((ledger_root / ancestor["bundle"], ancestor["id"], ancestor["hash"]))
+                if "origin_run" in ledger:
+                    origin = ledger_root / ledger["origin_run"]
+                    ledgers.append((origin, record(origin / "input.json")))
+        for directory, identity, expected in ancestors:
+            if not re.fullmatch(r"[A-Za-z0-9-]+", identity):
+                raise ValueError("unsafe ancestor identity")
+            path = relative(directory, f"records/{identity}.json")
+            if not args.metadata_only and digest(path) != expected:
+                raise ValueError("ancestor checksum differs")
+            ancestor = record(path)
+            if ancestor["id"] != identity:
+                raise ValueError("ancestor identity differs")
+            pending.append((directory, ancestor, False))
     for index, artifact in enumerate(publication["outputs"]):
         live = args.result if index == 0 else relative(args.result.parent, artifact["logical_name"])
         check(live, artifact)
-    print(json.dumps({"publication": publication["id"], "effective_operations": [a["operation"] for a in publication["effective_edits"]], "completeness": publication["completeness"], "hashes_checked": not args.metadata_only}, indent=2))
+    print(json.dumps({"publication": publication["id"], "effective_operations": [a["operation"] for a in publication["effective_edits"]], "completeness": publication["completeness"], "hashes_checked": not args.metadata_only, "records_checked": len(seen)}, indent=2))
 
 
 if __name__ == "__main__":

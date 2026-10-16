@@ -1,5 +1,4 @@
 //! CLI routes use the same host allocation and shared guarded save as the GUI.
-use serde_json::Value;
 use std::process::Command;
 
 #[test]
@@ -41,21 +40,38 @@ fn managed_bootstrap_destinations_and_structured_save_conflict() {
             "{}",
             String::from_utf8_lossy(&result.stderr)
         );
-        let result: Value = serde_json::from_slice(&result.stdout).unwrap();
-        let collection = result["outputs"]
-            .as_array()
+        let run = basecraft_ops::analysis_store::ArtifactRun::for_result(&output)
             .unwrap()
-            .iter()
-            .filter_map(Value::as_str)
-            .find(|p| p.ends_with(".nex"))
             .unwrap();
-        let collection = std::path::Path::new(collection);
+        let filename = format!(
+            "bootstrap-{}.nex",
+            run.file_name().unwrap().to_string_lossy()
+        );
+        let collection = if destination == "metadata" {
+            run.join(filename)
+        } else {
+            root.path().join(filename)
+        };
+        assert!(String::from_utf8_lossy(&result.stdout).contains(collection.to_str().unwrap()));
         assert!(collection.is_file());
         if destination == "metadata" {
             assert!(collection.starts_with(root.path().join(".basecraft/analyses-v1/runs")));
         } else {
             assert_eq!(collection.parent(), Some(root.path()));
         }
+        let reader = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../schemas/verify_provenance.py");
+        let inspected = Command::new("python3")
+            .arg(reader)
+            .arg(&output)
+            .args(["--metadata-only"])
+            .output()
+            .unwrap();
+        assert!(
+            inspected.status.success(),
+            "{}",
+            String::from_utf8_lossy(&inspected.stderr)
+        );
         assert!(!std::fs::read_dir(root.path()).unwrap().any(|e| {
             e.unwrap()
                 .file_name()

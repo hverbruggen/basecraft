@@ -610,7 +610,15 @@ impl FileJob {
             return Err(Error::Protocol("job input changed before launch".into()));
         }
         if let Some(run) = &self.artifacts {
-            if basecraft_ops::input_evidence::read_input(run.directory())?.state == "generated" {
+            let recorded = basecraft_ops::input_evidence::read_input(run.directory())?;
+            if recorded.submitted_hash != self.input_key.1
+                || recorded.submitted_size != input.len() as u64
+            {
+                return Err(Error::Protocol(
+                    "submitted input record changed before launch".into(),
+                ));
+            }
+            if recorded.state == "generated" {
                 basecraft_io::write_atomic(&run.directory().join("submitted.fasta"), |w| {
                     w.write_all(&input)
                 })
@@ -848,6 +856,7 @@ impl FileJob {
             serde_json::to_value(&self.source_path).map_err(|e| Error::Protocol(e.to_string()))?;
         let value = json!({
             "schema_version": 1, "id": self.run_id, "status": status, "input_io": self.input_io(),
+            "primary_output": if outcome.is_some_and(Result::is_ok) { Some(&self.output) } else { None },
             "recovery_artifact": self.diagnostic_artifact(outcome.and_then(|o| o.as_ref().err())),
             "owner_instance": basecraft_platform::process_instance(),
             "source_record": self.source_record,
@@ -1032,6 +1041,9 @@ impl FileJob {
             };
             if let Some((name, kind)) = support {
                 for tree in &trees {
+                    if let Some(run) = &self.artifacts {
+                        run.bind(tree)?;
+                    }
                     let mut doc = basecraft_ops::files::load_tree(tree)?.doc;
                     if doc.supports().len() == 1 {
                         let old = doc.supports()[0].name.clone();

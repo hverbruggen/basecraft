@@ -132,6 +132,12 @@ pub fn verify(result: &Path) -> Result<Vec<String>> {
                 Err(e) => issues.push(format!("{}: {e}", artifact.id)),
             }
         } else if let Some(reference) = &artifact.reference {
+            if artifact.hash != reference.hash || artifact.size != reference.stamp.size {
+                issues.push(format!(
+                    "{}: input revision/reference identity differs",
+                    artifact.id
+                ));
+            }
             if let Err(e) = crate::input_evidence::verified_source(&bundle, reference) {
                 issues.push(format!("{}: {e}", artifact.id));
             }
@@ -142,8 +148,9 @@ pub fn verify(result: &Path) -> Result<Vec<String>> {
     if publication.outputs.is_empty() {
         return Err(invalid("publication has no output"));
     }
+    let hidden = crate::analysis_store::ArtifactRun::for_result(result)?.is_some();
     for (index, output) in publication.outputs.iter().enumerate() {
-        let path = if index == 0 {
+        let path = if index == 0 && !hidden {
             result.to_path_buf()
         } else {
             safe_relative(
@@ -245,6 +252,12 @@ pub(crate) fn verify_records(bundle: &Path, current: &Publication) -> Result<Vec
                     issues.push(format!("{}: ancestor retained bytes differ", artifact.id));
                 }
             } else if let Some(reference) = &artifact.reference {
+                if artifact.hash != reference.hash || artifact.size != reference.stamp.size {
+                    issues.push(format!(
+                        "{}: ancestor input revision/reference identity differs",
+                        artifact.id
+                    ));
+                }
                 if let Err(e) = crate::input_evidence::verified_source(bundle, reference) {
                     issues.push(format!("{}: {e}", artifact.id));
                 }
