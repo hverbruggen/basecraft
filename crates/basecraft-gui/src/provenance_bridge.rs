@@ -23,21 +23,8 @@ pub mod qobject {
         #[qinvokable]
         fn resolve_save(self: Pin<&mut AppProvenance>, path: &QString, policy: &QString) -> bool;
         #[qinvokable]
-        fn relink_run(self: Pin<&mut Self>, run: &QString, original: &QString) -> bool {
-            let result = basecraft_ops::input_evidence::relink(
-                Path::new(&run.to_string()),
-                Path::new(&original.to_string()),
-            );
-            let success = result.is_ok();
-            self.set_message(QString::from(
-                match result {
-                    Ok(()) => "done: Verified original relinked".into(),
-                    Err(e) => format!("fail: {e}"),
-                }
-                .as_str(),
-            ));
-            success
-        }
+        fn relink_run(self: Pin<&mut AppProvenance>, run: &QString, original: &QString) -> bool;
+        #[qinvokable]
         fn relink_input(
             self: Pin<&mut AppProvenance>,
             result: &QString,
@@ -165,14 +152,26 @@ impl qobject::AppProvenance {
             }
         }
     }
+    fn relink_run(self: Pin<&mut Self>, run: &QString, original: &QString) -> bool {
+        let result = basecraft_ops::input_evidence::relink(
+            Path::new(&run.to_string()),
+            Path::new(&original.to_string()),
+        );
+        let success = result.is_ok();
+        self.set_message(QString::from(
+            match result {
+                Ok(()) => "done: Verified original relinked".into(),
+                Err(e) => format!("fail: {e}"),
+            }
+            .as_str(),
+        ));
+        success
+    }
     fn relink_input(self: Pin<&mut Self>, result: &QString, original: &QString) -> bool {
         let result = (|| -> basecraft_ops::Result<()> {
-            let run = basecraft_ops::analysis_store::ArtifactRun::for_result(Path::new(
-                &result.to_string(),
-            ))?
-            .ok_or_else(|| {
-                basecraft_ops::Error::Invalid("No referenced analysis record exists".into())
-            })?;
+            let result = std::path::PathBuf::from(result.to_string());
+            basecraft_ops::provenance::inspect(&result)?;
+            let run = basecraft_ops::provenance::bundle_for_result(&result);
             basecraft_ops::input_evidence::relink(&run, Path::new(&original.to_string()))
         })();
         let success = result.is_ok();
