@@ -322,3 +322,68 @@ fn failed_native_publication_registers_structured_bootstrap_evidence_without_inp
             .exists()
     );
 }
+
+#[test]
+fn reference_tree_save_as_and_complete_export_retain_alignment_and_support() {
+    let binary =
+        std::env::var_os("BASECRAFT_DISTANCE_TEST_BINARY").expect("matching engine required");
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("input.afa");
+    std::fs::write(
+        &source,
+        ">a\nAAAAAACCAA\n>b\nAAAAAACCAA\n>c\nAAGGAACCAA\n>d\nAAGGAACCAA\n",
+    )
+    .unwrap();
+    let output = root.path().join("tree.nwk");
+    let mut session = Session::recoverable(root.path()).unwrap();
+    let doc = session.open(&source).unwrap();
+    let plugin = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/distance");
+    let mut job = FileJob::from_alignment(
+        &session,
+        doc,
+        (&plugin, "tree"),
+        AlignmentInput::Aligned,
+        output.clone(),
+    )
+    .unwrap();
+    job.params.extend([
+        (
+            "executable".into(),
+            serde_json::json!(std::path::PathBuf::from(binary)),
+        ),
+        ("model".into(), serde_json::json!("p")),
+        ("method".into(), serde_json::json!("sorted")),
+        ("bootstrap".into(), serde_json::json!(8)),
+        ("threads".into(), serde_json::json!(1)),
+    ]);
+    let result = job.run().unwrap();
+    job.record(&mut session, doc, &result).unwrap();
+    let tree = session.open(&output).unwrap();
+    let copied = root.path().join("copied.nwk");
+    session.save(tree, Some(&copied)).unwrap();
+    let link = basecraft_ops::links::AlignmentLink::read(&copied).unwrap();
+    assert_eq!(link.schema, 2);
+    assert!(link.checked_snapshot(&copied, session.tree(tree)).is_ok());
+    assert!(!std::fs::read_dir(root.path()).unwrap().any(|e| {
+        e.unwrap()
+            .file_name()
+            .to_string_lossy()
+            .ends_with(".alignment.afa")
+    }));
+    let package = root.path().join("portable");
+    basecraft_ops::provenance::package(&output, &package).unwrap();
+    std::fs::remove_file(&source).unwrap();
+    let exported = package.join("tree.nwk");
+    assert!(
+        basecraft_ops::provenance::verify(&exported)
+            .unwrap()
+            .is_empty()
+    );
+    let tree = basecraft_ops::files::load_tree(&exported).unwrap().doc;
+    assert_eq!(
+        tree.supports()[0].kind,
+        basecraft_protocol::SupportKind::Bootstrap
+    );
+    let link = basecraft_ops::links::AlignmentLink::read(&exported).unwrap();
+    assert!(link.checked_snapshot(&exported, &tree).is_ok());
+}

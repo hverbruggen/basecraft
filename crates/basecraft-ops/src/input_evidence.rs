@@ -108,6 +108,10 @@ pub fn relative(base: &Path, target: &Path) -> Result<String> {
 }
 
 pub fn read_input(run: &Path) -> Result<SubmittedInput> {
+    let metadata = std::fs::symlink_metadata(run.join("input.json"))?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(invalid("unsafe input evidence record"));
+    }
     let record: SubmittedInput =
         serde_json::from_slice(&crate::provenance::read_record(&run.join("input.json"))?)?;
     if record.schema_version != 1
@@ -117,6 +121,16 @@ pub fn read_input(run: &Path) -> Result<SubmittedInput> {
         )
     {
         return Err(invalid("unsupported input evidence record"));
+    }
+    if !matches!(
+        record.transformation.as_str(),
+        "canonical-fasta-v1" | "ungapped-fasta-v1"
+    ) || matches!(record.state.as_str(), "referenced" | "preserved") && record.source.is_none()
+        || record.state == "generated" && record.source.is_some()
+    {
+        return Err(invalid(
+            "unsupported or inconsistent submitted input evidence",
+        ));
     }
     Ok(record)
 }
@@ -153,21 +167,37 @@ pub fn lock() -> Result<std::fs::File> {
     Ok(lock)
 }
 
-fn stores() -> Result<Vec<PathBuf>> {
-    match std::fs::read(registry()?) {
-        Ok(bytes) => {
+fn store_registry() -> Result<serde_json::Value> {
+    use std::io::Read as _;
+    match std::fs::File::open(registry()?) {
+        Ok(file) => {
+            if file.metadata()?.len() > 1024 * 1024 {
+                return Err(invalid("known-store registry exceeds 1 MiB"));
+            }
+            let mut bytes = Vec::new();
+            file.take(1024 * 1024 + 1).read_to_end(&mut bytes)?;
             if bytes.len() > 1024 * 1024 {
                 return Err(invalid("known-store registry exceeds 1 MiB"));
             }
             let value: serde_json::Value = serde_json::from_slice(&bytes)?;
-            if value["schema_version"] != 1 {
+            if value["schema_version"] != 1 || !value["stores"].is_array() {
                 return Err(invalid("unsupported known-store registry"));
             }
-            Ok(serde_json::from_value(value["stores"].clone())?)
+            Ok(value)
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            Ok(serde_json::json!({"schema_version":1,"stores":[]}))
+        }
         Err(e) => Err(e.into()),
     }
+}
+
+fn stores() -> Result<Vec<PathBuf>> {
+    let paths: Vec<PathBuf> = serde_json::from_value(store_registry()?["stores"].clone())?;
+    if paths.len() > 4096 || paths.iter().any(|p| !p.is_absolute()) {
+        return Err(invalid("known-store paths must be absolute and bounded"));
+    }
+    Ok(paths)
 }
 
 /// Caller holds `lock`. Only explicit analysis execution registers a store.
@@ -183,10 +213,9 @@ pub fn register(run: &ArtifactRun) -> Result<()> {
             return Err(invalid("known-store registry limit reached"));
         }
         all.push(store.into());
-        write_json(
-            &registry()?,
-            &serde_json::json!({"schema_version":1,"stores":all}),
-        )?;
+        let mut value = store_registry()?;
+        value["stores"] = serde_json::json!(all);
+        write_json(&registry()?, &value)?;
     }
     Ok(())
 }
@@ -234,6 +263,7 @@ pub fn conflicts(target: &Path) -> Result<EvidenceConflict> {
 pub fn conflicts_in(target: &Path, stores: &[PathBuf]) -> Result<EvidenceConflict> {
     let mut analyses = Vec::new();
     let mut known_runs = Vec::new();
+    let mut metadata_bytes = 0u64;
     for store in stores {
         if !store.exists() {
             continue;
@@ -256,6 +286,13 @@ pub fn conflicts_in(target: &Path, stores: &[PathBuf]) -> Result<EvidenceConflic
             if !run.join("input.json").exists() {
                 continue;
             } // Reserved, no input registered yet.
+            metadata_bytes =
+                metadata_bytes.saturating_add(std::fs::metadata(run.join("input.json"))?.len());
+            if metadata_bytes > 64 << 20 {
+                return Err(invalid(
+                    "known analysis metadata exceeds 64 MiB query limit",
+                ));
+            }
             let input = read_input(&run)?;
             known_runs.push((run.clone(), input.clone()));
             if input.state != "referenced" {
@@ -504,6 +541,13 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
         .tempdir_in(parent)?;
     let bundle = crate::provenance::bundle_for_result(result);
     let mut publication = crate::provenance::inspect(result)?;
+    if let Some(index) = publication
+        .outputs
+        .iter()
+        .position(|a| Path::new(&a.logical_name).file_name() == result.file_name())
+    {
+        publication.outputs.swap(0, index);
+    }
     let copied = staging.path().join(
         result
             .file_name()
@@ -557,6 +601,12 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
                 .unwrap_or_default()
                 .to_string_lossy()
                 .into_owned()
+        } else if source == crate::files::tree_sidecar(result) {
+            crate::files::tree_sidecar(&copied)
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned()
         } else {
             format!(
                 "support-{}-{}",
@@ -567,6 +617,64 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
         copy(&source, &staging.path().join(&name))?;
         artifact.logical_name = name;
     }
+    // Complete tree exports deliberately materialize the legacy exchange
+    // association, so extraction still works with the original store absent.
+    if let Ok(tree) = crate::files::load_tree(result) {
+        if crate::links::metadata_present(&crate::links::sidecar(result))? {
+            let link = crate::links::AlignmentLink::read(result)?;
+            let input_path = link.checked_snapshot(result, &tree.doc)?;
+            let indexed = std::sync::Arc::new(basecraft_io::cache::open_fasta(&input_path)?);
+            let alignment = basecraft_docs::AlignmentDoc::from_fasta("Exported input", &indexed);
+            let mut canonical = tempfile::Builder::new()
+                .suffix(".afa")
+                .tempfile_in(staging.path())?;
+            crate::files::write_alignment(&alignment, canonical.as_file_mut())?;
+            canonical.as_file().sync_all()?;
+            let source_artifact = publication
+                .inputs
+                .first()
+                .ok_or_else(|| invalid("tree export has no source"))?;
+            let source_path = target_bundle.join(
+                source_artifact
+                    .retained
+                    .as_ref()
+                    .ok_or_else(|| invalid("exported source is not retained"))?,
+            );
+            let paths = crate::links::AlignmentLink::create(
+                &copied,
+                &source_path,
+                canonical.path(),
+                link.alignment_version,
+                link.inferred,
+                None,
+            )?;
+            for path in paths {
+                publication
+                    .outputs
+                    .push(basecraft_protocol::provenance::ArtifactRevision {
+                        id: format!(
+                            "{}:package-link:{}",
+                            publication.id,
+                            publication.outputs.len()
+                        ),
+                        logical_name: path
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .into_owned(),
+                        hash: basecraft_io::hash_file(&path)?,
+                        size: std::fs::metadata(&path)?.len(),
+                        retained: None,
+                        reference: None,
+                    });
+            }
+        }
+    }
+    publication.origin = format!(
+        "Portable export of revision {}. {}",
+        publication.id, publication.origin
+    );
+    publication.id = ulid::Ulid::generate().to_string();
     crate::provenance::publish(&target_bundle, &publication)?;
     let authored = bundle.join("reports/methods.md");
     if authored.is_file() {
@@ -574,12 +682,14 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
     }
     if !crate::provenance::verify(&copied)?.is_empty() {
         return Err(invalid(
-            "export verification failed; source and staging preserved",
+            "export verification failed; original source and records preserved",
         ));
     }
     if destination.exists() {
         return Err(invalid("package destination appeared during export"));
     }
+    // Reserve the destination atomically; rename replaces only our empty slot.
+    std::fs::create_dir(destination)?;
     std::fs::rename(staging.path(), destination)?;
     Ok(())
 }
@@ -598,11 +708,24 @@ fn copy(source: &Path, destination: &Path) -> Result<()> {
 pub(crate) fn ancestors(
     bundle: &Path,
 ) -> Result<Vec<(PathBuf, basecraft_protocol::provenance::Publication)>> {
-    let mut stack = vec![bundle.to_path_buf()];
-    let mut visited = std::collections::HashSet::new();
+    let mut stack = vec![(bundle.to_path_buf(), false)];
+    let mut states = std::collections::HashMap::new();
+    let mut seen_records = std::collections::HashSet::new();
     let mut records = Vec::new();
     let mut bytes_read = 0usize;
-    while let Some(location) = stack.pop() {
+    while let Some((location, leaving)) = stack.pop() {
+        let location = location.canonicalize()?;
+        if leaving {
+            states.insert(location, 2);
+            continue;
+        }
+        match states.get(&location) {
+            Some(1) => return Err(invalid("evidence ancestry contains a cycle")),
+            Some(2) => continue,
+            _ => {}
+        }
+        states.insert(location.clone(), 1);
+        stack.push((location.clone(), true));
         if !location.join("input.json").is_file() {
             continue;
         }
@@ -612,11 +735,7 @@ pub(crate) fn ancestors(
             .get("origin_run")
             .and_then(serde_json::Value::as_str)
         {
-            let origin = location.join(origin).canonicalize()?;
-            if !visited.insert((origin.clone(), String::new())) {
-                return Err(invalid("evidence ancestry contains a cycle"));
-            }
-            stack.push(origin);
+            stack.push((location.join(origin), false));
         }
         if let Some(upstream) = input
             .extra
@@ -637,7 +756,8 @@ pub(crate) fn ancestors(
                 if id.is_empty() || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
                     return Err(invalid("unsafe ancestor identity"));
                 }
-                if !visited.insert((directory.clone(), id.into())) {
+                stack.push((directory.clone(), false));
+                if !seen_records.insert((directory.clone(), id.to_owned())) {
                     continue;
                 }
                 let bytes = crate::provenance::read_record(
@@ -655,8 +775,7 @@ pub(crate) fn ancestors(
                 if publication.id != id || publication.schema_version != 1 {
                     return Err(invalid("unsupported or inconsistent ancestor record"));
                 }
-                records.push((directory.clone(), publication));
-                stack.push(directory);
+                records.push((directory, publication));
             }
         }
     }

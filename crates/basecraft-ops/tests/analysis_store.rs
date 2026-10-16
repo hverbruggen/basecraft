@@ -253,3 +253,29 @@ fn session_save_policies_and_copy_failure_leave_source_safe() {
         }
     }
 }
+
+#[test]
+fn export_and_extraction_cannot_bypass_known_input_guard() {
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("sequence.fasta");
+    let original = ">example\nACGTACGT\n";
+    std::fs::write(&source, original).unwrap();
+    let mut session = basecraft_ops::Session::recoverable(root.path()).unwrap();
+    let doc = session.open(&source).unwrap();
+    reference_run(root.path(), &source, "analysis");
+    let mut wrote = false;
+    let export = session.export(doc, &source, "fasta", |writer| {
+        wrote = true;
+        writer.write_all(b"replacement")
+    });
+    assert!(matches!(
+        export,
+        Err(basecraft_ops::Error::EvidenceConflict(_))
+    ));
+    assert!(!wrote);
+    assert!(matches!(
+        session.extract(doc, (0, 4), &[], false, &source),
+        Err(basecraft_ops::Error::EvidenceConflict(_))
+    ));
+    assert_eq!(std::fs::read_to_string(source).unwrap(), original);
+}

@@ -1370,6 +1370,11 @@ impl Session {
         reverse: bool,
         path: &Path,
     ) -> Result<()> {
+        let _evidence_lock = crate::input_evidence::lock()?;
+        crate::input_evidence::resolve(
+            &crate::input_evidence::conflicts(path)?,
+            crate::input_evidence::SavePolicy::Cancel,
+        )?;
         self.track(id)?;
         self.flush()?;
         let doc = &self.sequence_of(id)?.doc;
@@ -1489,6 +1494,11 @@ impl Session {
         format: &str,
         f: impl FnOnce(&mut dyn std::io::Write) -> std::io::Result<()>,
     ) -> Result<()> {
+        let _evidence_lock = crate::input_evidence::lock()?;
+        crate::input_evidence::resolve(
+            &crate::input_evidence::conflicts(path)?,
+            crate::input_evidence::SavePolicy::Cancel,
+        )?;
         self.track(id)?;
         self.flush()?;
         let mut hash = String::new();

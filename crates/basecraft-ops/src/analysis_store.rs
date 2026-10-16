@@ -161,7 +161,11 @@ impl ArtifactRun {
             .filter(|p| !p.as_os_str().is_empty())
             .unwrap_or(Path::new("."))
             .canonicalize()?;
-        let store = parent.join(".basecraft/analyses-v1");
+        let hidden = parent.join(".basecraft");
+        if std::fs::symlink_metadata(&hidden).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Err(invalid("hidden analysis directory is a symlink"));
+        }
+        let store = hidden.join("analyses-v1");
         if !store.exists() {
             return Ok(None);
         }
@@ -172,9 +176,19 @@ impl ArtifactRun {
                 .ok_or_else(|| invalid("result filename missing"))?
                 .as_encoded_bytes(),
         );
-        let binding = store.join("bindings").join(key.trim_start_matches("b3:"));
-        if !binding.exists() {
-            return Ok(None);
+        let bindings = store.join("bindings");
+        if std::fs::symlink_metadata(&bindings).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Err(invalid("analysis bindings directory is a symlink"));
+        }
+        if std::fs::symlink_metadata(store.join("runs")).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Err(invalid("analysis runs directory is a symlink"));
+        }
+        let binding = bindings.join(key.trim_start_matches("b3:"));
+        match std::fs::symlink_metadata(&binding) {
+            Ok(m) if m.is_file() && !m.file_type().is_symlink() => {}
+            Ok(_) => return Err(invalid("unsafe result binding")),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e.into()),
         }
         let value: serde_json::Value =
             serde_json::from_slice(&crate::provenance::read_record(&binding)?)?;
@@ -210,7 +224,7 @@ impl ArtifactRun {
         let key = basecraft_io::hash_bytes(name.as_encoded_bytes());
         crate::input_evidence::write_json(
             &store.join("bindings").join(key.trim_start_matches("b3:")),
-            &serde_json::json!({"schema_version":1,"run":self.id,"result_hash":basecraft_io::hash_file(result)?}),
+            &serde_json::json!({"schema_version":1,"run":self.id,"result":name,"result_hash":basecraft_io::hash_file(result)?}),
         )
     }
 }

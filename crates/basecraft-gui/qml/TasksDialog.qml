@@ -11,6 +11,10 @@ AppDialog {
     implicitHeight: 570
     standardButtons: Dialog.Close
     property var service: null
+    function resultPath(job) {
+        if (job.primary_output !== undefined) return job.primary_output || ""
+        return Object.keys(job.outputs || {})[0] || ""
+    }
     property var jobData: ({jobs: []})
     readonly property var notices: service && service.notifications.length ? JSON.parse(service.notifications) : []
     signal openDocument(string path)
@@ -43,7 +47,7 @@ AppDialog {
                             AppButton { text: "Cancel"; visible: modelData.status === "running"; enabled: !!modelData.cancellable; onClicked: dialog.service.cancel_run(modelData.id) }
                             AppButton { text: "Open source"; onClicked: dialog.openDocument(modelData.source.path) }
                             AppButton { text: "Copy diagnostics"; onClicked: dialog.copyText(JSON.stringify(modelData, null, 2)) }
-                            AppButton { text: "Open result"; visible: Object.keys(modelData.outputs || {}).length > 0; onClicked: dialog.openDocument(Object.keys(modelData.outputs)[0]) }
+                            AppButton { objectName: "openTaskResult"; text: "Open result"; visible: dialog.resultPath(modelData).length > 0; onClicked: dialog.openDocument(dialog.resultPath(modelData)) }
                         }
                     }
                 }
