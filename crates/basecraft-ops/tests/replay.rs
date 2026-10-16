@@ -594,7 +594,14 @@ fn tree_session_replays_exactly() {
             support_placement: SupportPlacement::Below,
             ..TreeStyle::default()
         };
-        s.apply(d, Op::TreeStyle { style }).unwrap();
+        s.apply(
+            d,
+            Op::TreeStyle {
+                style,
+                remove_supports: Vec::new(),
+            },
+        )
+        .unwrap();
         // An edit undone, and a bad one refused.
         s.apply(
             d,

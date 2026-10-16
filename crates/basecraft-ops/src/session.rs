@@ -1457,28 +1457,25 @@ impl Session {
     }
 
     pub fn apply_as(&mut self, doc: DocId, op: Op, actor: Actor) -> Result<Outcome> {
-        // Automatic rooting can reject scientific inputs or metadata. Prepare
-        // the complete result before tracking, so a refusal creates neither
-        // recovery records nor history and never mutates the document.
-        let prepared_tree =
-            if matches!(op, Op::TreeMidpointRoot {} | Op::TreeMinimumVarianceRoot {}) {
-                let slot = self
-                    .docs
-                    .get(doc.0)
-                    .ok_or_else(|| invalid("unknown document"))?;
-                let Loaded::Tree(tree) = &slot.content else {
-                    return Err(invalid(format!("{} needs a tree", op.name())));
-                };
-                let mut candidate = tree.doc.clone();
-                match op {
-                    Op::TreeMidpointRoot {} => candidate.midpoint_root(),
-                    _ => candidate.minimum_variance_root(),
-                }
-                .map_err(|error| invalid(error.0))?;
-                Some(candidate)
-            } else {
-                None
+        // Prepare fallible tree edits before tracking. Rejection must not create
+        // recovery records, mutate supports, or clear the redo stack.
+        let prepared_tree = if matches!(
+            op,
+            Op::TreeMidpointRoot {} | Op::TreeMinimumVarianceRoot {} | Op::TreeStyle { .. }
+        ) {
+            let slot = self
+                .docs
+                .get(doc.0)
+                .ok_or_else(|| invalid("unknown document"))?;
+            let Loaded::Tree(tree) = &slot.content else {
+                return Err(invalid(format!("{} needs a tree", op.name())));
             };
+            let mut candidate = tree.doc.clone();
+            execute_tree(&mut candidate, &op)?;
+            Some(candidate)
+        } else {
+            None
+        };
         self.track(doc)?;
         if self.merge && self.try_merge(doc, &op, &actor)? {
             self.docs[doc.0].generation += 1;
@@ -1495,7 +1492,7 @@ impl Session {
         self.flush()?;
         let (inverse, feature) = if let Some(candidate) = prepared_tree {
             let Loaded::Tree(tree) = &mut self.docs[doc.0].content else {
-                return Err(invalid("automatic rooting needs a tree"));
+                return Err(invalid("tree edit needs a tree"));
             };
             (
                 Inverse::Tree(Box::new(std::mem::replace(&mut tree.doc, candidate))),
@@ -1897,9 +1894,23 @@ fn execute_tree(doc: &mut TreeDoc, op: &Op) -> Result<Box<TreeDoc>> {
             .add_support(name, source, values)
             .map(|()| doc.set_support_kind(name, *kind)),
         Op::TreeRemoveSupport { name } => doc.remove_support(name),
-        Op::TreeStyle { style } => {
-            doc.set_style(style.clone());
-            Ok(())
+        Op::TreeStyle {
+            style,
+            remove_supports,
+        } => {
+            if style
+                .support_decimals
+                .values()
+                .any(|&decimals| decimals > 10)
+            {
+                return Err(invalid("support decimal places must be between 0 and 10"));
+            }
+            let mut candidate = doc.clone();
+            candidate.set_style(style.clone());
+            remove_supports
+                .iter()
+                .try_for_each(|name| candidate.remove_support(name))
+                .map(|()| *doc = candidate)
         }
         _ => {
             return Err(invalid(format!(

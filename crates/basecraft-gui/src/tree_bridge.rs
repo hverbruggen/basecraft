@@ -168,6 +168,12 @@ pub mod qobject {
         #[qinvokable]
         fn set_style(self: Pin<&mut TreeController>, json: &QString) -> QString;
         #[qinvokable]
+        fn set_style_with_removals(
+            self: Pin<&mut TreeController>,
+            json: &QString,
+            removed: &QString,
+        ) -> QString;
+        #[qinvokable]
         fn place_support(self: Pin<&mut TreeController>, placement: &QString);
         /// Add the support values of the tree in `path`, matched branch by
         /// branch, named `name`.
@@ -1322,15 +1328,30 @@ impl qobject::TreeController {
         QString::from(&v.to_string())
     }
 
-    pub fn set_style(mut self: Pin<&mut Self>, json: &QString) -> QString {
+    pub fn set_style(self: Pin<&mut Self>, json: &QString) -> QString {
+        self.set_style_with_removals(json, &QString::from("[]"))
+    }
+
+    pub fn set_style_with_removals(
+        mut self: Pin<&mut Self>,
+        json: &QString,
+        removed: &QString,
+    ) -> QString {
+        let remove_supports: Vec<String> = match serde_json::from_str(&removed.to_string()) {
+            Ok(names) => names,
+            Err(e) => return QString::from(&format!("Bad support removals: {e}")),
+        };
         let style: TreeStyle = match serde_json::from_str(&json.to_string()) {
             Ok(s) => s,
             Err(e) => return QString::from(&format!("Bad style: {e}")),
         };
-        if self.with_doc(|d| *d.style() == style).unwrap_or(true) {
+        if remove_supports.is_empty() && self.with_doc(|d| *d.style() == style).unwrap_or(true) {
             return QString::default();
         }
-        match self.as_mut().edit(Op::TreeStyle { style }) {
+        match self.as_mut().edit(Op::TreeStyle {
+            style,
+            remove_supports,
+        }) {
             Ok(()) => QString::default(),
             Err(msg) => QString::from(&msg),
         }
@@ -1349,7 +1370,10 @@ impl qobject::TreeController {
             return;
         }
         style.support_placement = p;
-        let _ = self.as_mut().edit(Op::TreeStyle { style });
+        let _ = self.as_mut().edit(Op::TreeStyle {
+            style,
+            remove_supports: Vec::new(),
+        });
     }
 
     pub fn add_support_from(mut self: Pin<&mut Self>, path: &QString, name: &QString) {

@@ -1336,15 +1336,15 @@ mod tests {
     #[test]
     fn scale_labels_use_decimals_strictly_above_one_thousandth() {
         assert_eq!(format_length(0.001), "1.00e-3");
-        assert_eq!(format_length(0.0009999999), "1.00e-3");
+        assert_eq!(format_length(0.000_999_999_9), "1.00e-3");
         for value in [
-            0.00100000001,
+            0.001_000_000_01,
             0.0011,
             0.002,
             0.01,
             1.0,
             1000.0,
-            1234.56789,
+            1_234.567_89,
             1e20,
             f64::MAX,
         ] {

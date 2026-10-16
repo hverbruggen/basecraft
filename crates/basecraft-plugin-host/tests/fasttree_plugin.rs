@@ -74,6 +74,16 @@ fn builds_a_tree_with_fasttree_and_logs_the_run() {
     assert_eq!(t.tip_count(), 4);
     assert!(t.find_tip("Codium_fragile").is_some());
     assert_eq!(t.supports().len(), 1);
+    assert_eq!(t.supports()[0].name, "SH-like local support");
+    assert_eq!(
+        t.supports()[0].kind,
+        basecraft_protocol::SupportKind::Probability
+    );
+    assert_eq!(t.supports()[0].decimals(t.style()), 2);
+    let link = basecraft_ops::links::AlignmentLink::read(&output).unwrap();
+    assert!(link.inferred);
+    assert_eq!(link.source, file);
+    assert!(link.checked_snapshot(&output, t).is_ok());
 
     let entries = basecraft_ops::log::read_all(root).unwrap();
     let run = entries

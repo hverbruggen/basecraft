@@ -9,6 +9,7 @@ Item {
     QtObject {
         id: controller
         property var saved: null
+        property var removed: []
         function style_json() {
             return JSON.stringify({
                 sets: [{name: "Bootstrap", source: "", decimals: 0}, {name: "BPP", source: "", decimals: 2}],
@@ -17,13 +18,13 @@ Item {
                     vertical_bar_labels: true, scale_bar: true, future_option: {value: 42}}
             })
         }
-        function set_style(value) { saved = JSON.parse(value); return "" }
+        function set_style_with_removals(value, names) { saved = JSON.parse(value); removed = JSON.parse(names); return "" }
     }
     TreeStyleDialog { id: dialog; controller: controller }
     TestCase {
         name: "TreeStyle"
         when: windowShown
-        function init() { controller.saved = null; dialog.openStyle(); tryCompare(dialog, "opened", true) }
+        function init() { controller.saved = null; controller.removed = []; dialog.openStyle(); tryCompare(dialog, "opened", true); wait(20) }
         function cleanup() { dialog.close(); tryCompare(dialog, "opened", false) }
         function test_independent_precision_keyboard_and_unknown_settings() {
             const auto = findChild(dialog.contentItem, "autoDecimals0")
@@ -34,6 +35,7 @@ Item {
             compare(bootstrap.Accessible.name, "Bootstrap decimal places")
             verify(!bootstrap.enabled)
             auto.forceActiveFocus()
+            tryCompare(auto, "activeFocus", true)
             keyClick(Qt.Key_Space)
             verify(bootstrap.enabled)
             bootstrap.forceActiveFocus()
@@ -42,8 +44,46 @@ Item {
             verify(bootstrap.width >= bootstrap.implicitWidth)
             dialog.save()
             compare(controller.saved.support_decimals.Bootstrap, 1)
-            verify(!Object.hasOwn(controller.saved.support_decimals, "BPP"))
+            verify(!Object.prototype.hasOwnProperty.call(controller.saved.support_decimals, "BPP"))
             compare(controller.saved.future_option.value, 42)
+        }
+        function test_escape_discards_pending_changes() {
+            const auto = findChild(dialog.contentItem, "autoDecimals0")
+            auto.forceActiveFocus()
+            tryCompare(auto, "activeFocus", true)
+            keyClick(Qt.Key_Space)
+            const bootstrap = findChild(dialog.contentItem, "supportDecimals0")
+            bootstrap.forceActiveFocus()
+            keyClick(Qt.Key_Up)
+            compare(bootstrap.value, 1)
+            keyClick(Qt.Key_Escape)
+            tryCompare(dialog, "opened", false)
+            compare(controller.saved, null)
+            dialog.openStyle()
+            tryCompare(dialog, "opened", true)
+            compare(findChild(dialog.contentItem, "supportDecimals0").value, 0)
+        }
+        function test_escape_discards_staged_support_removal() {
+            const remove = findChild(dialog.contentItem, "removeSupport0")
+            remove.forceActiveFocus()
+            keyClick(Qt.Key_Space)
+            compare(dialog.removedSets.length, 1)
+            compare(controller.saved, null)
+            keyClick(Qt.Key_Escape)
+            tryCompare(dialog, "opened", false)
+            compare(controller.removed.length, 0)
+            dialog.openStyle()
+            tryCompare(dialog, "opened", true)
+            compare(dialog.removedSets.length, 0)
+            compare(findChild(dialog.contentItem, "supportDecimals0").value, 0)
+        }
+        function test_save_applies_staged_support_removal() {
+            const remove = findChild(dialog.contentItem, "removeSupport0")
+            remove.forceActiveFocus()
+            keyClick(Qt.Key_Space)
+            dialog.save()
+            compare(controller.removed.length, 1)
+            compare(controller.removed[0], "Bootstrap")
         }
         function test_auto_preserves_semantic_defaults() {
             dialog.save()

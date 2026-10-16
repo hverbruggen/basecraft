@@ -23,6 +23,7 @@ fn support_precision_scale_unknown_settings_save_undo_and_replay() {
             doc,
             Op::TreeStyle {
                 style: style.clone(),
+                remove_supports: Vec::new(),
             },
         )
         .unwrap();
@@ -44,7 +45,7 @@ fn support_precision_scale_unknown_settings_save_undo_and_replay() {
     );
     assert_eq!(
         session.tree(doc).supports()[0].display_percent(node, &style),
-        Some(0.654321)
+        Some(0.654_321)
     );
     assert_eq!(session.tree(doc).to_newick(), original);
     session.undo(doc).unwrap();
@@ -188,4 +189,83 @@ fn portable_links_and_corrupt_view_never_fall_back_to_scientific_input() {
     std::fs::write(basecraft_ops::links::view_sidecar(&tree_path), "damaged").unwrap();
     assert!(AlignmentLink::read_view(&tree_path).is_err());
     assert!(AlignmentLink::read(&tree_path).is_ok());
+}
+
+#[test]
+fn staged_support_removal_and_style_are_one_reversible_replayable_edit() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tree.nwk");
+    std::fs::write(&path, "((a,b)90.123/0.987,c);").unwrap();
+    let mut session = Session::new(dir.path());
+    let doc = session.open(&path).unwrap();
+    let original = session.tree(doc).to_newick();
+    let mut style = session.tree(doc).style().clone();
+    style.support_decimals.insert("Support 2".into(), 4);
+    session
+        .apply(
+            doc,
+            Op::TreeStyle {
+                style: style.clone(),
+                remove_supports: vec!["Support 1".into()],
+            },
+        )
+        .unwrap();
+    assert_eq!(session.tree(doc).supports().len(), 1);
+    assert_eq!(session.tree(doc).supports()[0].name, "Support 2");
+    assert_eq!(session.tree(doc).style(), &style);
+    session.undo(doc).unwrap();
+    assert_eq!(session.tree(doc).to_newick(), original);
+    assert!(session.tree(doc).style().support_decimals.is_empty());
+    session.redo(doc).unwrap();
+    session.save(doc, None).unwrap();
+    let reopened = files::load_tree(&path).unwrap().doc;
+    assert_eq!(reopened.supports().len(), 1);
+    assert_eq!(reopened.supports()[0].name, "Support 2");
+    assert_eq!(reopened.style(), &style);
+    session.flush().unwrap();
+    assert!(basecraft_ops::replay::replay(dir.path()).unwrap().ok());
+}
+
+#[test]
+fn invalid_style_and_removal_do_not_mutate_or_start_recovery_tracking() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tree.nwk");
+    std::fs::write(&path, "((a,b)90.123/0.987,c);").unwrap();
+    let mut session = Session::new(dir.path());
+    let doc = session.open(&path).unwrap();
+    let original = session.tree(doc).to_newick();
+    let version = session.tree(doc).version();
+    let style = session.tree(doc).style().clone();
+    assert!(
+        session
+            .apply(
+                doc,
+                Op::TreeStyle {
+                    style: style.clone(),
+                    remove_supports: vec!["Support 1".into(), "missing".into()]
+                }
+            )
+            .is_err()
+    );
+    assert_eq!(session.tree(doc).to_newick(), original);
+    assert_eq!(session.tree(doc).version(), version);
+    assert!(!dir.path().join(".basecraft").exists());
+    let mut invalid = style.clone();
+    invalid.support_decimals.insert("Support 1".into(), 255);
+    assert!(
+        session
+            .apply(
+                doc,
+                Op::TreeStyle {
+                    style: invalid,
+                    remove_supports: Vec::new()
+                }
+            )
+            .is_err()
+    );
+    assert_eq!(session.tree(doc).style(), &style);
+    assert!(!dir.path().join(".basecraft").exists());
+    // Old operation logs still deserialize with no staged removals.
+    let old: Op = serde_json::from_value(json!({"op":"tree.style","params":{"style":{}}})).unwrap();
+    assert!(matches!(old, Op::TreeStyle { remove_supports, .. } if remove_supports.is_empty()));
 }

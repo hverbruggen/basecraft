@@ -347,14 +347,16 @@ fn readable_details(event: &LogEntry) -> crate::Result<String> {
 }
 
 fn presentation(op: &Op) -> bool {
-    matches!(
-        op,
-        Op::TreeStyle { .. }
-            | Op::TreeRotate { .. }
-            | Op::TreeLadderize { .. }
-            | Op::TreeAnnotate { .. }
-            | Op::Export { .. }
-    )
+    match op {
+        Op::TreeStyle {
+            remove_supports, ..
+        } => remove_supports.is_empty(),
+        Op::TreeRotate { .. }
+        | Op::TreeLadderize { .. }
+        | Op::TreeAnnotate { .. }
+        | Op::Export { .. } => true,
+        _ => false,
+    }
 }
 
 impl Report {
