@@ -319,7 +319,7 @@ fn save_as_descendants_receive_each_explicit_evidence_decision() {
                 assert_eq!(
                     basecraft_ops::provenance::verify(&last).unwrap(),
                     Vec::<String>::new()
-                )
+                );
             }
             SavePolicy::RemoveAnalysis => {
                 assert!(conflict.analyses.iter().all(|a| !a.run.exists()));
