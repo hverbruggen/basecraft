@@ -135,6 +135,7 @@ def invoke(method, params):
             fields = workspace.get("exchange_fields", {})
             if fields.get("basecraft_alignment_snapshot") == evidence.get("path"):
                 fields["basecraft_alignment_hash"] = evidence.get("source_hash") or input_hash
+                fields["basecraft_alignment_evidence_run"] = evidence["run_directory"]
             # Native validation consumed the frozen canonical alignment. Reopen
             # uses the accepted raw source identity, retaining both hashes.
             if alignment_evidence.get("path"):

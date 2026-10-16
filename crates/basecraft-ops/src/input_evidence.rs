@@ -742,6 +742,8 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
         });
         work.exchange_fields
             .remove("basecraft_display_evidence_run");
+        work.exchange_fields
+            .remove("basecraft_alignment_evidence_run");
         for hypothesis in &mut work.hypotheses {
             if let Some(source) = hypothesis
                 .provenance

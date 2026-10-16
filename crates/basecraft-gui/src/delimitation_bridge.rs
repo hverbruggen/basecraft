@@ -1186,7 +1186,11 @@ impl qobject::DelimitationController {
                 ));
             let alignment_pipeline = method.starts_with("gmyc_alignment_") || method == "asap";
             let requested_input = PathBuf::from(input.to_string());
-            let analysis_input = if !display_job
+            let analysis_input = if expected_alignment.is_some() {
+                basecraft_ops::delimitation::checked_alignment(workspace, &workspace_path)
+                    .map_err(|e| e.to_string())?
+                    .ok_or("No linked alignment available")?
+            } else if !display_job
                 && (workspace.view.display_tree.as_deref() == Some(input.to_string().as_str())
                     || r.display_path == *input)
             {

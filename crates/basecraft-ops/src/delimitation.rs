@@ -36,6 +36,15 @@ pub fn reference_input(
     source: &std::path::Path,
     hash: &str,
 ) -> Result<crate::analysis_store::ArtifactRun> {
+    reference_input_with_dependencies(anchor, source, hash, &[])
+}
+
+fn reference_input_with_dependencies(
+    anchor: &std::path::Path,
+    source: &std::path::Path,
+    hash: &str,
+    dependencies: &[PathBuf],
+) -> Result<crate::analysis_store::ArtifactRun> {
     use basecraft_protocol::provenance::{
         ArtifactRevision, Completeness, InputReference, Publication,
     };
@@ -43,6 +52,11 @@ pub fn reference_input(
     let run =
         crate::analysis_store::ArtifactRun::create(anchor, &ulid::Ulid::generate().to_string())?;
     let source = source.canonicalize()?;
+    if basecraft_io::hash_file(&source)? != hash {
+        return Err(invalid(
+            "Species input changed while registering its evidence",
+        ));
+    }
     let reference = InputReference {
         path: crate::input_evidence::relative(run.directory(), &source)?,
         stamp: crate::input_evidence::stamp(&source)?,
@@ -58,13 +72,20 @@ pub fn reference_input(
         state: "referenced".into(),
         extra: BTreeMap::new(),
     };
-    if let Some(origin) = crate::analysis_store::ArtifactRun::for_result(&source)? {
-        let manifest = origin.join("manifest.json");
+    let origin = crate::provenance::bundle_for_result(&source);
+    let mut upstream = Vec::new();
+    for dependency in dependencies.iter().chain(std::iter::once(&origin)) {
+        let manifest = dependency.join("manifest.json");
         if manifest.is_file() {
             let bytes = crate::provenance::read_record(&manifest)?;
             let record: Publication = serde_json::from_slice(&bytes)?;
-            input.extra.insert("upstream".into(),serde_json::json!([{"bundle":crate::input_evidence::relative(run.directory(), &origin)?,"id":record.id,"hash":basecraft_io::hash_bytes(&bytes)}]));
+            upstream.push(serde_json::json!({"bundle":crate::input_evidence::relative(run.directory(), dependency)?,"id":record.id,"hash":basecraft_io::hash_bytes(&bytes)}));
         }
+    }
+    if !upstream.is_empty() {
+        input
+            .extra
+            .insert("upstream".into(), serde_json::json!(upstream));
     }
     crate::input_evidence::write_json(&run.artifact("input.json")?, &input)?;
     crate::input_evidence::write_json(
@@ -112,8 +133,13 @@ pub(crate) fn dependencies(
     work: &basecraft_protocol::delimitation::DelimitationWorkspace,
 ) -> Result<Vec<PathBuf>> {
     let mut runs = BTreeSet::new();
-    if let Some(run) = work.exchange_fields.get("basecraft_display_evidence_run") {
-        runs.insert(PathBuf::from(run));
+    for field in [
+        "basecraft_display_evidence_run",
+        "basecraft_alignment_evidence_run",
+    ] {
+        if let Some(run) = work.exchange_fields.get(field) {
+            runs.insert(PathBuf::from(run));
+        }
     }
     for hypothesis in &work.hypotheses {
         if let Some(report) = hypothesis.provenance.parameters.get("analysis_report") {
@@ -138,6 +164,73 @@ pub(crate) fn dependencies(
         }
     }
     Ok(runs.into_iter().collect())
+}
+
+/// Resolve the default alignment only when submitting a job. Passive reopen
+/// keeps the original link, while preservation decisions stay with their owner.
+pub fn checked_alignment(
+    work: &basecraft_protocol::delimitation::DelimitationWorkspace,
+    workspace_path: &std::path::Path,
+) -> Result<Option<PathBuf>> {
+    let Some(path) = work.exchange_fields.get("basecraft_alignment_snapshot") else {
+        return Ok(None);
+    };
+    let hash = work
+        .exchange_fields
+        .get("basecraft_alignment_hash")
+        .ok_or_else(|| invalid("Retained alignment hash is missing"))?;
+    if let Some(run) = work.exchange_fields.get("basecraft_alignment_evidence_run") {
+        return checked_workspace_input(std::path::Path::new(run), hash).map(Some);
+    }
+    // Workspaces written before the owning field was introduced still have a
+    // bound input ledger (or its Save As delegation / contributing ancestry).
+    let bundle = crate::provenance::bundle_for_result(workspace_path);
+    if bundle.join("input.json").is_file() {
+        let mut candidates = vec![bundle.clone()];
+        candidates.extend(
+            crate::input_evidence::ancestors(&bundle)?
+                .into_iter()
+                .map(|(p, _)| p),
+        );
+        for candidate in candidates {
+            if !candidate.join("input.json").is_file() {
+                continue;
+            }
+            let input = crate::input_evidence::read_input(&candidate)?;
+            let accepted = input
+                .source
+                .as_ref()
+                .map_or(&input.submitted_hash, |r| &r.hash);
+            if accepted == hash {
+                return checked_workspace_input(&candidate, hash).map(Some);
+            }
+        }
+    }
+    let path = PathBuf::from(path);
+    if basecraft_io::hash_file(&path)? != *hash {
+        return Err(invalid(
+            "The retained alignment changed; select an intact input explicitly",
+        ));
+    }
+    Ok(Some(path))
+}
+
+fn checked_workspace_input(run: &std::path::Path, hash: &str) -> Result<PathBuf> {
+    let input = crate::input_evidence::read_input(run)?;
+    if input.state == "broken" {
+        return Err(invalid("Workspace input evidence was explicitly broken"));
+    }
+    let source = if let Some(reference) = &input.source {
+        crate::input_evidence::verified_source(run, reference)?
+    } else {
+        run.join("submitted.fasta")
+    };
+    if basecraft_io::hash_file(&source)? != hash {
+        return Err(invalid(
+            "Workspace input changed; select an unchanged input explicitly",
+        ));
+    }
+    Ok(source)
 }
 
 pub fn checked_display_tree(
@@ -269,7 +362,6 @@ pub fn combine(session: &mut Session, doc: DocId, paths: &[PathBuf]) -> Result<(
             ));
         }
         let anchor = session.root().join(session.doc_key(doc));
-        let evidence = reference_input(&anchor, path, &hash)?;
         if work
             .specimens
             .iter()
@@ -282,6 +374,18 @@ pub fn combine(session: &mut Session, doc: DocId, paths: &[PathBuf]) -> Result<(
                 path.display()
             )));
         }
+        let side_evidence = side_hash
+            .as_ref()
+            .map(|hash| {
+                reference_input(&anchor, &sidecar, hash).map(|run| run.directory().to_path_buf())
+            })
+            .transpose()?;
+        let evidence = reference_input_with_dependencies(
+            &anchor,
+            path,
+            &hash,
+            &side_evidence.into_iter().collect::<Vec<_>>(),
+        )?;
         let ids: BTreeMap<_, _> = work
             .hypotheses
             .iter()

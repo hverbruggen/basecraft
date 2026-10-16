@@ -857,6 +857,7 @@ pub(crate) fn map_delimitation_paths(
     }
     for name in [
         "basecraft_alignment_snapshot",
+        "basecraft_alignment_evidence_run",
         "basecraft_display_evidence_run",
     ] {
         if let Some(path) = work.exchange_fields.get_mut(name) {
