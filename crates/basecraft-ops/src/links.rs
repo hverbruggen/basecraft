@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Write as _,
+    io::{self, Write as _},
     path::{Path, PathBuf},
 };
 
@@ -37,6 +38,196 @@ fn view_tree(tree: &Path) -> PathBuf {
 
 pub fn view_sidecar(tree: &Path) -> PathBuf {
     sidecar(&view_tree(tree))
+}
+
+/// A dangling symlink is an explicit entry, not an absent association.
+/// Errors inspecting an association must propagate rather than enable fallback.
+pub fn metadata_present(path: &Path) -> Result<bool> {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// Never replace retained bytes. Metadata is the sole publication point for a
+/// new snapshot. Old snapshots (including legacy fixed-name files) remain intact.
+fn retain_file(
+    tree: &Path,
+    suffix: &str,
+    write: impl FnOnce(&mut std::fs::File) -> io::Result<()>,
+) -> Result<PathBuf> {
+    let prefix = format!(
+        "{}.",
+        tree.file_name().unwrap_or_default().to_string_lossy()
+    );
+    let mut temporary = tempfile::Builder::new()
+        .prefix(&prefix)
+        .suffix(suffix)
+        .tempfile_in(tree.parent().unwrap_or(Path::new(".")))?;
+    write(temporary.as_file_mut())?;
+    temporary.as_file().sync_all()?;
+    let (_, path) = temporary.keep().map_err(|error| error.error)?;
+    Ok(path)
+}
+
+fn retain_snapshot(tree: &Path, input: &Path, expected: &str) -> Result<PathBuf> {
+    let snapshot = retain_file(tree, ".alignment.afa", |out| {
+        io::copy(&mut std::fs::File::open(input)?, out)?;
+        Ok(())
+    })?;
+    if basecraft_io::hash_file(&snapshot)? != expected {
+        return Err(invalid(format!(
+            "alignment changed while retaining its snapshot; staged evidence remains at {}",
+            snapshot.display()
+        )));
+    }
+    Ok(snapshot)
+}
+
+#[derive(Serialize)]
+#[serde(tag = "entry", content = "value", rename_all = "snake_case")]
+enum PreviousMetadata {
+    Absent,
+    /// Preserve bytes even when the old metadata cannot be decoded.
+    File(Vec<u8>),
+    /// Preserve the directory entry without following a possibly dangling link.
+    Symlink(PathBuf),
+}
+
+impl PreviousMetadata {
+    fn read(path: &Path) -> Result<Self> {
+        match std::fs::symlink_metadata(path) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                Ok(Self::Symlink(std::fs::read_link(path)?))
+            }
+            Ok(metadata) if metadata.is_file() => Ok(Self::File(std::fs::read(path)?)),
+            Ok(_) => Err(invalid(format!(
+                "association metadata is not a file: {}",
+                path.display()
+            ))),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Self::Absent),
+            Err(error) => Err(error.into()),
+        }
+    }
+}
+
+struct StagedLink {
+    snapshot: PathBuf,
+    metadata: Vec<u8>,
+}
+
+impl StagedLink {
+    fn copy(link: &AlignmentLink, from: &Path, to: &Path) -> Result<Self> {
+        let snapshot = retain_snapshot(to, &link.snapshot_path(from), &link.snapshot_hash)?;
+        let mut copied = link.clone();
+        copied.source = relative_to(&link.source, to)?;
+        copied.snapshot = snapshot
+            .file_name()
+            .ok_or_else(|| invalid("snapshot filename"))?
+            .into();
+        Ok(Self {
+            snapshot,
+            metadata: serde_json::to_vec_pretty(&copied)?,
+        })
+    }
+}
+
+/// Prepare all source associations before replacing a tree. Publication uses an
+/// explicit unavailable view entry until both metadata states are committed.
+/// A crash/error leaves extraction disabled and a recovery record beside the tree.
+pub(crate) struct PreparedLinks {
+    target: PathBuf,
+    origin: Option<StagedLink>,
+    view: Option<StagedLink>,
+    previous_origin: PreviousMetadata,
+    previous_view: PreviousMetadata,
+}
+
+impl PreparedLinks {
+    pub(crate) fn prepare(from: &Path, to: &Path) -> Result<Self> {
+        let origin = metadata_present(&sidecar(from))?
+            .then(|| AlignmentLink::read(from))
+            .transpose()?;
+        Self::with_origin(origin, from, to)
+    }
+
+    fn with_origin(origin: Option<AlignmentLink>, from: &Path, to: &Path) -> Result<Self> {
+        let view_path = view_tree(from);
+        let view = metadata_present(&sidecar(&view_path))?
+            .then(|| AlignmentLink::read(&view_path))
+            .transpose()?;
+        // Check every source before creating destination evidence or touching its tree.
+        for link in origin.iter().chain(view.iter()) {
+            link.verify_snapshot(from)?;
+        }
+        let previous_origin = PreviousMetadata::read(&sidecar(to))?;
+        let previous_view = PreviousMetadata::read(&view_sidecar(to))?;
+        Ok(Self {
+            target: to.to_path_buf(),
+            origin: origin
+                .as_ref()
+                .map(|link| StagedLink::copy(link, from, to))
+                .transpose()?,
+            view: view
+                .as_ref()
+                .map(|link| StagedLink::copy(link, from, &view_tree(to)))
+                .transpose()?,
+            previous_origin,
+            previous_view,
+        })
+    }
+
+    pub(crate) fn publish<T>(
+        &self,
+        save_data: impl FnOnce() -> Result<T>,
+    ) -> Result<(T, Vec<PathBuf>)> {
+        let recovery = serde_json::to_vec_pretty(&serde_json::json!({
+            "schema": 1,
+            "note": "Save As association recovery: previous entries and intended metadata; snapshots are retained separately",
+            "previous_origin": self.previous_origin,
+            "previous_view": self.previous_view,
+            "intended_origin": self.origin.as_ref().map(|link| &link.metadata),
+            "intended_view": self.view.as_ref().map(|link| &link.metadata),
+        }))?;
+        let recovery_path = retain_file(&self.target, ".alignment-recovery.json", |out| {
+            out.write_all(&recovery)
+        })?;
+        let unavailable = serde_json::to_vec_pretty(&serde_json::json!({
+            "schema": 1,
+            "unavailable": "Save As alignment publication incomplete",
+            "recovery": recovery_path.file_name(),
+        }))?;
+        // Install the guard before changing data or origin. If this fails, the old
+        // tree and all its associations are untouched. Never remove a failed guard.
+        basecraft_io::write_atomic(&view_sidecar(&self.target), |out| {
+            out.write_all(&unavailable)
+        })?;
+        let finish = || -> Result<(T, Vec<PathBuf>)> {
+            // The scientific origin must also become unavailable before replacing
+            // data, so partial files cannot claim the overwritten tree's origin.
+            basecraft_io::write_atomic(&sidecar(&self.target), |out| out.write_all(&unavailable))?;
+            let result = save_data()?;
+            let mut outputs = vec![recovery_path.clone()];
+            for (metadata, staged) in [
+                (sidecar(&self.target), &self.origin),
+                (view_sidecar(&self.target), &self.view),
+            ] {
+                if let Some(link) = staged {
+                    basecraft_io::write_atomic(&metadata, |out| out.write_all(&link.metadata))?;
+                    outputs.extend([link.snapshot.clone(), metadata]);
+                } else if metadata_present(&metadata)? {
+                    // Intentional absence is part of Save As state. Prior entries
+                    // are preserved in recovery, and their snapshots are untouched.
+                    std::fs::remove_file(&metadata)?;
+                }
+            }
+            Ok((result, outputs))
+        };
+        finish().map_err(|error| invalid(format!(
+            "Save As incomplete; alignment association may be unavailable; recovery metadata at {}: {error}", recovery_path.display()
+        )))
+    }
 }
 
 /// Store portable references relative to the document's directory where possible.
@@ -106,7 +297,9 @@ impl AlignmentLink {
     /// Associate an imported tree, keeping a standard FASTA snapshot beside it.
     pub fn associate(tree_path: &Path, tree: &TreeDoc, source: &Path) -> Result<Vec<PathBuf>> {
         validate_taxa(tree, source, false)?;
-        let target = if sidecar(tree_path).exists() && Self::read(tree_path)?.inferred {
+        let origin_inferred =
+            metadata_present(&sidecar(tree_path))? && Self::read(tree_path)?.inferred;
+        let target = if origin_inferred || metadata_present(&view_sidecar(tree_path))? {
             view_tree(tree_path)
         } else {
             tree_path.to_path_buf()
@@ -124,23 +317,12 @@ impl AlignmentLink {
         source_hash: Option<&str>,
     ) -> Result<Vec<PathBuf>> {
         names(input)?;
-        let mut filename = tree.as_os_str().to_os_string();
-        filename.push(".alignment.afa");
-        let snapshot = PathBuf::from(filename);
         let source = source.canonicalize()?;
-        if snapshot.exists() && snapshot.canonicalize()? == source {
-            return Err(invalid(
-                "alignment snapshot output would overwrite its source",
-            ));
-        }
         let source_hash = source_hash
             .map(str::to_owned)
             .map_or_else(|| basecraft_io::hash_file(&source), Ok)?;
         let snapshot_hash = basecraft_io::hash_file(input)?;
-        basecraft_io::write_atomic(&snapshot, |out| {
-            std::io::copy(&mut std::fs::File::open(input)?, out)?;
-            Ok(())
-        })?;
+        let snapshot = retain_snapshot(tree, input, &snapshot_hash)?;
         let link = Self {
             schema: 1,
             source_hash,
@@ -156,12 +338,31 @@ impl AlignmentLink {
         };
         let metadata = sidecar(tree);
         let bytes = serde_json::to_vec_pretty(&link)?;
-        basecraft_io::write_atomic(&metadata, |out| out.write_all(&bytes))?;
+        basecraft_io::write_atomic(&metadata, |out| out.write_all(&bytes)).map_err(|error| invalid(format!(
+            "alignment metadata replacement failed; previous snapshots are unchanged; staged snapshot retained at {}: {error}", snapshot.display()
+        )))?;
         Ok(vec![snapshot, metadata])
     }
 
     pub fn read(tree: &Path) -> Result<Self> {
-        let mut link: Self = serde_json::from_reader(std::fs::File::open(sidecar(tree))?)?;
+        let metadata: serde_json::Value =
+            serde_json::from_reader(std::fs::File::open(sidecar(tree))?)?;
+        if let Some(reason) = metadata
+            .get("unavailable")
+            .and_then(serde_json::Value::as_str)
+        {
+            let recovery = metadata.get("recovery").and_then(serde_json::Value::as_str);
+            return Err(invalid(recovery.map_or_else(
+                || reason.to_owned(),
+                |path| {
+                    format!(
+                        "{reason}; recover association metadata from {}",
+                        tree.parent().unwrap_or(Path::new(".")).join(path).display()
+                    )
+                },
+            )));
+        }
+        let mut link: Self = serde_json::from_value(metadata)?;
         if link.schema != 1 {
             return Err(invalid("unsupported tree–alignment link version"));
         }
@@ -178,7 +379,7 @@ impl AlignmentLink {
 
     /// Prefer an explicit view association. A damaged view link is an error, never a fallback.
     pub fn read_view(tree: &Path) -> Result<Self> {
-        Self::read(&if view_sidecar(tree).exists() {
+        Self::read(&if metadata_present(&view_sidecar(tree))? {
             view_tree(tree)
         } else {
             tree.to_path_buf()
@@ -207,16 +408,25 @@ impl AlignmentLink {
         status
     }
 
-    pub fn checked_snapshot(&self, tree_path: &Path, tree: &TreeDoc) -> Result<PathBuf> {
-        let snapshot = tree_path
+    fn snapshot_path(&self, tree_path: &Path) -> PathBuf {
+        tree_path
             .parent()
             .unwrap_or(Path::new("."))
-            .join(&self.snapshot);
+            .join(&self.snapshot)
+    }
+
+    fn verify_snapshot(&self, tree_path: &Path) -> Result<PathBuf> {
+        let snapshot = self.snapshot_path(tree_path);
         if basecraft_io::hash_file(&snapshot)? != self.snapshot_hash {
             return Err(invalid(
                 "linked alignment snapshot has changed; link the alignment again",
             ));
         }
+        Ok(snapshot)
+    }
+
+    pub fn checked_snapshot(&self, tree_path: &Path, tree: &TreeDoc) -> Result<PathBuf> {
+        let snapshot = self.verify_snapshot(tree_path)?;
         validate_taxa(tree, &snapshot, self.inferred)?;
         Ok(snapshot)
     }
@@ -241,37 +451,9 @@ impl AlignmentLink {
 
     /// Preserve a link when a tree is saved under a new name or directory.
     pub fn copy_to(&self, from: &Path, to: &Path) -> Result<Vec<PathBuf>> {
-        let old_snapshot = from.parent().unwrap_or(Path::new(".")).join(&self.snapshot);
-        if basecraft_io::hash_file(&old_snapshot)? != self.snapshot_hash {
-            return Err(invalid("linked alignment snapshot has changed"));
-        }
-        let mut filename = to.as_os_str().to_os_string();
-        filename.push(".alignment.afa");
-        let snapshot = PathBuf::from(filename);
-        if snapshot.exists() && snapshot.canonicalize()? == self.source {
-            return Err(invalid(
-                "alignment snapshot output would overwrite its source",
-            ));
-        }
-        basecraft_io::write_atomic(&snapshot, |out| {
-            std::io::copy(&mut std::fs::File::open(&old_snapshot)?, out)?;
-            Ok(())
-        })?;
-        let mut link = self.clone();
-        link.snapshot = snapshot
-            .file_name()
-            .ok_or_else(|| invalid("snapshot filename"))?
-            .into();
-        link.source = relative_to(&self.source, to)?;
-        let metadata = sidecar(to);
-        let bytes = serde_json::to_vec_pretty(&link)?;
-        basecraft_io::write_atomic(&metadata, |out| out.write_all(&bytes))?;
-        let mut outputs = vec![snapshot, metadata];
-        if view_sidecar(from).exists() {
-            let view = Self::read(&view_tree(from))?;
-            outputs.extend(view.copy_to(&view_tree(from), &view_tree(to))?);
-        }
-        Ok(outputs)
+        PreparedLinks::with_origin(Some(self.clone()), from, to)?
+            .publish(|| Ok(()))
+            .map(|(_, outputs)| outputs)
     }
 
     pub fn source_changed(&self) -> bool {

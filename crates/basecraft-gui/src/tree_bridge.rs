@@ -561,8 +561,14 @@ impl qobject::TreeController {
                 (link.source.to_string_lossy().into_owned(), status)
             }
             Err(e)
-                if basecraft_ops::links::sidecar(&path).exists()
-                    || basecraft_ops::links::view_sidecar(&path).exists() =>
+                if basecraft_ops::links::metadata_present(&basecraft_ops::links::sidecar(
+                    &path,
+                ))
+                .unwrap_or(true)
+                    || basecraft_ops::links::metadata_present(
+                        &basecraft_ops::links::view_sidecar(&path),
+                    )
+                    .unwrap_or(true) =>
             {
                 (String::new(), format!("Alignment link unavailable: {e}"))
             }

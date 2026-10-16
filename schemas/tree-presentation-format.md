@@ -31,11 +31,18 @@ support set changes scientific content and is reported as an edit, not merely
 presentation. Invalid removals/precision are rejected before recovery tracking.
 `tree.add_support` retains the source's known `kind` in its replayable payload.
 
-Generated trees use `.alignment.json` and `.alignment.afa` to retain scientific
+Generated trees use `.alignment.json` and a uniquely named `.alignment.afa` snapshot to retain scientific
 source identity/hash, alignment generation and exact tool input/hash. Changing
-the view association of an inferred tree creates `.view.alignment.json` and
-`.view.alignment.afa`; it never replaces the scientific origin. Save-as carries
-both snapshots and rebases relative source references. Legacy absolute sources
+the view association of an inferred tree creates `.view.alignment.json` pointing
+to its own immutable snapshot; it never replaces the scientific origin or prior
+retained bytes. Legacy fixed snapshot filenames remain readable. Save-as validates
+both associations before replacing the tree, carries both snapshots, rebases
+relative source references, and removes stale destination associations when the
+saved document has none. During publication, unavailable metadata guards prevent
+extraction or claims of the previous destination's scientific origin. On failure,
+the guards remain and an adjacent `.alignment-recovery.json` record retains prior
+metadata bytes/symlink targets and intended replacements. Prior snapshots remain
+intact. Recovery records and unreferenced snapshots are not automatically deleted. Legacy absolute sources
 remain readable. Keep these companions with the tree when moving a project.
 
 Extraction checks snapshot hashes and exact tip identifiers (allowing additional

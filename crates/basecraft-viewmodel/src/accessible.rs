@@ -156,7 +156,7 @@ pub fn review(bases: &[u8], masked: &[bool], unresolved: &[bool], requested: i32
                 .get(i)
                 .map_or("not recorded", |v| if *v { "yes" } else { "no" })
         };
-        let _ = write!(
+        let _ = writeln!(
             text,
             "{}\t{}\t{}\t{}",
             i + 1,

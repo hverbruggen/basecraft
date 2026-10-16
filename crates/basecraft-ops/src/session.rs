@@ -755,15 +755,17 @@ impl Session {
                 if format != files::Format::Tree {
                     return Err(invalid("a tree can only be saved as a tree file"));
                 }
-                let hashes = self.save_tree(t, &target)?;
-                self.log_save(id, &target, hashes)?;
                 let original = self.resolve(&self.docs[id.0].key);
-                if original.canonicalize().unwrap_or_else(|_| original.clone())
-                    != target.canonicalize()?
-                    && crate::links::sidecar(&original).exists()
-                {
-                    let link = crate::links::AlignmentLink::read(&original)?;
-                    let outputs = link.copy_to(&original, &target)?;
+                let save_as = original.canonicalize().unwrap_or_else(|_| original.clone())
+                    != target.canonicalize().unwrap_or_else(|_| target.clone());
+                let (hashes, outputs) = if save_as {
+                    let links = crate::links::PreparedLinks::prepare(&original, &target)?;
+                    links.publish(|| self.save_tree(t, &target))?
+                } else {
+                    (self.save_tree(t, &target)?, Vec::new())
+                };
+                self.log_save(id, &target, hashes)?;
+                if !outputs.is_empty() {
                     self.log_tool_run(
                         id,
                         self.actor.clone(),
