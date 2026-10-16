@@ -1619,6 +1619,10 @@
             "params": {
               "type": "object",
               "properties": {
+                "kind": {
+                  "$ref": "#/$defs/SupportKind",
+                  "default": "unknown"
+                },
                 "name": {
                   "type": "string"
                 },
@@ -1682,6 +1686,14 @@
             "params": {
               "type": "object",
               "properties": {
+                "remove_supports": {
+                  "description": "Support sets removed on accepting Style; cancellation makes no edits.",
+                  "type": "array",
+                  "default": [],
+                  "items": {
+                    "type": "string"
+                  }
+                },
                 "style": {
                   "$ref": "#/$defs/TreeStyle"
                 }
@@ -2033,6 +2045,24 @@
         "unstranded"
       ]
     },
+    "SupportKind": {
+      "description": "Scientific support semantics supplied by a producer, never guessed from its name.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "unknown",
+            "bootstrap",
+            "probability"
+          ]
+        },
+        {
+          "description": "Percentage support from a method other than ordinary bootstrap.",
+          "type": "string",
+          "const": "percentage"
+        }
+      ]
+    },
     "SupportPlacement": {
       "description": "Where support values sit relative to their branch.",
       "oneOf": [
@@ -2104,6 +2134,17 @@
           "type": "boolean",
           "default": true
         },
+        "support_decimals": {
+          "description": "Decimal places per set; missing entries use the support semantics. Maximum 10.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0
+          },
+          "default": {}
+        },
         "support_font": {
           "type": "integer",
           "format": "uint32",
@@ -2111,7 +2152,7 @@
           "minimum": 0
         },
         "support_min": {
-          "description": "Hide support values below this percentage. Sets whose values are\nall at most 1, such as posterior probabilities, count as\nproportions. 0 shows them all.",
+          "description": "Hide support values below this percentage. Known producer metadata sets\nthe scale; ambiguous imported sets with all finite values in 0–1 use\nproportions. `support_proportions` overrides this fallback. 0 shows all.",
           "type": "integer",
           "format": "uint32",
           "default": 0,
@@ -2120,6 +2161,14 @@
         "support_placement": {
           "$ref": "#/$defs/SupportPlacement",
           "default": "natural"
+        },
+        "support_proportions": {
+          "description": "Optional display-scale overrides for ambiguous imports (true means 0–1).",
+          "type": "object",
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "default": {}
         },
         "support_shown": {
           "description": "Support sets shown at nodes, in order, joined with \"/\". Empty shows\nevery set.",
@@ -2151,7 +2200,8 @@
           "type": "boolean",
           "default": true
         }
-      }
+      },
+      "additionalProperties": true
     }
   }
 }

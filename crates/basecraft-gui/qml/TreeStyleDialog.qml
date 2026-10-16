@@ -16,6 +16,7 @@ AppContentDialog {
     padding: 16
 
     ListModel { id: sets }
+    FontMetrics { id: styleMetrics; font: dialog.font }
 
     function openStyle() {
         const s = JSON.parse(controller.style_json())
@@ -27,10 +28,10 @@ AppContentDialog {
         const shown = style.support_shown.length ? style.support_shown : s.sets.map(x => x.name)
         for (const name of shown) {
             const x = s.sets.find(x => x.name === name)
-            if (x) sets.append({ name: x.name, source: x.source, shown: true, decimals: x.decimals, scale: scaleIndex(x.name), autoDecimals: !Object.prototype.hasOwnProperty.call(style.support_decimals || {}, x.name) })
+            if (x) sets.append({ name: x.name, source: x.source, shown: true, decimals: x.decimals, autoDefault: x.automatic_decimals, scale: scaleIndex(x.name), autoDecimals: !Object.prototype.hasOwnProperty.call(style.support_decimals || {}, x.name) })
         }
         for (const x of s.sets)
-            if (!shown.includes(x.name)) sets.append({ name: x.name, source: x.source, shown: false, decimals: x.decimals, scale: scaleIndex(x.name), autoDecimals: !Object.prototype.hasOwnProperty.call(style.support_decimals || {}, x.name) })
+            if (!shown.includes(x.name)) sets.append({ name: x.name, source: x.source, shown: false, decimals: x.decimals, autoDefault: x.automatic_decimals, scale: scaleIndex(x.name), autoDecimals: !Object.prototype.hasOwnProperty.call(style.support_decimals || {}, x.name) })
         minimum.value = style.support_min
         symbols.checked = style.symbols !== null
         symbolSet.model = s.sets.map(x => x.name)
@@ -100,6 +101,7 @@ AppContentDialog {
                 required property string source
                 required property bool shown
                 required property int decimals
+                required property int autoDefault
                 required property int scale
                 required property bool autoDecimals
                 Layout.fillWidth: true
@@ -122,25 +124,34 @@ AppContentDialog {
                         }
                     }
                 }
-                RowLayout {
+                GridLayout {
+                    id: precisionSettings
+                    columns: width < styleMetrics.averageCharacterWidth * 50 ? 2 : 3
                     Layout.fillWidth: true
                     CheckBox {
                         objectName: "autoDecimals" + supportRow.index
                         text: "Auto decimals"
                         checked: supportRow.autoDecimals
                         Accessible.name: supportRow.name + " automatic decimal places"
-                        onToggled: sets.setProperty(supportRow.index, "autoDecimals", checked)
+                        onToggled: {
+                            sets.setProperty(supportRow.index, "decimals", precision.value)
+                            sets.setProperty(supportRow.index, "autoDecimals", checked)
+                        }
                     }
                     SpinBox {
+                        id: precision
                         objectName: "supportDecimals" + supportRow.index
                         Accessible.name: supportRow.name + " decimal places"
                         from: 0; to: 10; editable: true
-                        value: supportRow.decimals
+                        value: supportRow.autoDecimals
+                            ? (supportRow.scale === 0 ? supportRow.autoDefault : supportRow.scale === 2 ? 2 : 0)
+                            : supportRow.decimals
                         enabled: !supportRow.autoDecimals
                         onValueModified: sets.setProperty(supportRow.index, "decimals", value)
                     }
                     AppComboBox {
                         objectName: "supportScale" + supportRow.index
+                        Layout.columnSpan: precisionSettings.columns === 2 ? 2 : 1
                         Accessible.name: supportRow.name + " support scale"
                         model: ["Auto scale", "Percent (0–100)", "Proportion (0–1)"]
                         currentIndex: supportRow.scale
