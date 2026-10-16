@@ -782,7 +782,8 @@ impl FileJob {
                         .map(PathBuf::from);
                     let status = collection.get("status").and_then(serde_json::Value::as_str);
                     let expected = self.expected_bootstrap_path(run, status != Some("complete"))?;
-                    if path.as_ref() == Some(&expected)
+                    if self.valid_bootstrap_artifact(run, collection)?
+                        && path.as_ref() == Some(&expected)
                         && collection["format"] == "nexus"
                         && collection["trees"].as_u64()
                             == value

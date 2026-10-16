@@ -111,6 +111,15 @@ pub fn verify(result: &Path) -> Result<Vec<String>> {
     let publication = inspect(result)?;
     let bundle = bundle_for_result(result);
     let mut issues = verify_records(&bundle, &publication)?;
+    if bundle.join("input.json").is_file() {
+        if crate::input_evidence::read_input(&bundle)?.state == "broken" {
+            issues.push("Input evidence explicitly broken".into());
+        }
+        match crate::input_evidence::verify_ancestors(&bundle) {
+            Ok(upstream) => issues.extend(upstream),
+            Err(e) => issues.push(format!("Upstream evidence unavailable: {e}")),
+        }
+    }
     for artifact in &publication.inputs {
         if let Some(relative) = &artifact.retained {
             match safe_relative(&bundle, relative).and_then(|path| {
@@ -154,7 +163,7 @@ pub fn verify(result: &Path) -> Result<Vec<String>> {
     Ok(issues)
 }
 
-fn verify_records(bundle: &Path, current: &Publication) -> Result<Vec<String>> {
+pub(crate) fn verify_records(bundle: &Path, current: &Publication) -> Result<Vec<String>> {
     let mut issues = Vec::new();
     let mut states = std::collections::HashMap::<String, u8>::new();
     let mut hashes = std::collections::HashMap::<String, String>::new();

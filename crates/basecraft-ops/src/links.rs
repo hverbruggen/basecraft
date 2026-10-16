@@ -294,10 +294,11 @@ fn relative_to(path: &Path, tree: &Path) -> Result<PathBuf> {
 }
 
 fn load_alignment(path: &Path) -> Result<basecraft_docs::AlignmentDoc> {
-    match crate::files::load(path)? {
-        crate::files::Loaded::Alignment(opened) => Ok(opened.doc),
-        _ => Err(invalid("linked input is not an alignment")),
-    }
+    let file = std::sync::Arc::new(basecraft_io::cache::open_fasta(path)?);
+    Ok(basecraft_docs::AlignmentDoc::from_fasta(
+        "Linked input",
+        &file,
+    ))
 }
 
 fn names(path: &Path) -> Result<BTreeSet<String>> {
@@ -560,6 +561,9 @@ impl AlignmentLink {
         if self.schema == 2 {
             let run = self.evidence_run(tree_path)?;
             let input = crate::input_evidence::read_input(&run)?;
+            if input.state == "broken" {
+                return Err(invalid("alignment evidence explicitly broken"));
+            }
             let source = if let Some(reference) = &input.source {
                 crate::input_evidence::verified_source(&run, reference)?
             } else {
@@ -572,6 +576,30 @@ impl AlignmentLink {
                 return Err(invalid(
                     "linked input differs from actual submitted alignment",
                 ));
+            }
+            // The snapshot API needs a typed FASTA path. Materialize a disposable
+            // canonical cache only on explicit use, after verifying the original;
+            // never treat this cache as repair for a missing/changed reference.
+            if crate::files::Format::from_path(&source).ok() != Some(crate::files::Format::Fasta)
+                || input
+                    .source
+                    .as_ref()
+                    .is_some_and(|r| r.hash != self.snapshot_hash)
+            {
+                let paths = basecraft_platform::paths::AppPaths::discover()
+                    .map_err(|e| invalid(e.to_string()))?;
+                let folder = paths.cache.join("analysis-inputs");
+                std::fs::create_dir_all(&folder)?;
+                let digest = self
+                    .snapshot_hash
+                    .strip_prefix("b3:")
+                    .filter(|h| h.len() == 64 && h.bytes().all(|b| b.is_ascii_hexdigit()))
+                    .ok_or_else(|| invalid("invalid submitted input digest"))?;
+                let target = folder.join(format!("{digest}.afa"));
+                basecraft_io::write_atomic(&target, |w| {
+                    crate::files::write_alignment(&alignment, w)
+                })?;
+                return Ok(target);
             }
             return Ok(source);
         }

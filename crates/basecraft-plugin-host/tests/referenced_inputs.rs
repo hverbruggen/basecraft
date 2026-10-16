@@ -237,3 +237,52 @@ fn common_save_route_preserves_actual_original_and_dirty_submitted_input() {
     );
     assert!(basecraft_ops::replay::replay(dir.path()).unwrap().ok());
 }
+
+#[test]
+fn downstream_evidence_follows_preservation_and_complete_export_keeps_dependency_closure() {
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("source.afa");
+    std::fs::write(&source, ">a\nAAAA\n>b\nAAAT\n").unwrap();
+    let plugin = fixture(root.path());
+    let mut session = Session::recoverable(root.path()).unwrap();
+    let first = root.path().join("first.afa");
+    let second = root.path().join("second.afa");
+    for (source, output) in [(&source, &first), (&first, &second)] {
+        let doc = session.open(source).unwrap();
+        let job = FileJob::from_alignment(
+            &session,
+            doc,
+            (&plugin, "align"),
+            AlignmentInput::Ungapped,
+            output.clone(),
+        )
+        .unwrap();
+        let result = job.run().unwrap();
+        job.record(&mut session, doc, &result).unwrap();
+    }
+    let conflict = input_evidence::conflicts(&source).unwrap();
+    assert_eq!(conflict.analyses.len(), 2);
+    assert_eq!(conflict.analyses.iter().filter(|a| a.direct).count(), 1);
+    input_evidence::resolve(&conflict, SavePolicy::PreserveCopy).unwrap();
+    std::fs::remove_file(&source).unwrap();
+    assert!(
+        basecraft_ops::provenance::verify(&second)
+            .unwrap()
+            .is_empty()
+    );
+    let package = root.path().join("portable");
+    basecraft_ops::provenance::package(&second, &package).unwrap();
+    let first_run = ArtifactRun::for_result(&first).unwrap().unwrap();
+    std::fs::write(first_run.join("preserved-input"), ">a\nTTTT\n>b\nTTTT\n").unwrap();
+    assert!(
+        !basecraft_ops::provenance::verify(&second)
+            .unwrap()
+            .is_empty()
+    );
+    std::fs::remove_file(first).unwrap();
+    assert!(
+        basecraft_ops::provenance::verify(&package.join("second.afa"))
+            .unwrap()
+            .is_empty()
+    );
+}

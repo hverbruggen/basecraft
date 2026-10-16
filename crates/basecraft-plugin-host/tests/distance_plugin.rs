@@ -263,7 +263,14 @@ fn failed_native_publication_registers_structured_bootstrap_evidence_without_inp
         output.clone(),
     )
     .unwrap();
-    let missing = root.path().join("missing/cache.json");
+    let cache_directory = root.path().join("read-only");
+    std::fs::create_dir(&cache_directory).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&cache_directory, std::fs::Permissions::from_mode(0o555)).unwrap();
+    }
+    let missing = cache_directory.join("cache.json");
     job.params.extend([
         (
             "executable".into(),
@@ -276,7 +283,12 @@ fn failed_native_publication_registers_structured_bootstrap_evidence_without_inp
         ("cache".into(), serde_json::json!(missing)),
     ]);
     let result = job.run();
-    assert!(result.is_err());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&cache_directory, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    assert!(result.is_err(), "{result:?}");
     job.record_terminal(&mut session, doc, &result, 0.0)
         .unwrap();
     assert!(!output.exists());

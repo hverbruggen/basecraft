@@ -2351,7 +2351,19 @@ impl Session {
         use basecraft_protocol::provenance::{
             ArtifactRevision, Completeness, EditActivity, Publication,
         };
-        let input = crate::input_evidence::read_input(run.directory())?;
+        let mut input = crate::input_evidence::read_input(run.directory())?;
+        let mut upstream = Vec::new();
+        for (bundle, origin) in &snapshot.origins {
+            let mut bytes = serde_json::to_vec_pretty(origin)?;
+            bytes.push(b'\n');
+            upstream.push(serde_json::json!({"bundle":crate::input_evidence::relative(run.directory(), &bundle.canonicalize()?)?,"id":origin.id,"hash":basecraft_io::hash_bytes(&bytes)}));
+        }
+        if !upstream.is_empty() {
+            input
+                .extra
+                .insert("upstream".into(), serde_json::json!(upstream));
+            crate::input_evidence::write_json(&run.directory().join("input.json"), &input)?;
+        }
         let activity = self
             .events
             .iter()
@@ -2434,7 +2446,7 @@ impl Session {
         }
         let publication = Publication {
             schema_version: 1, id: activity.id, session: self.id.clone(), parents: Vec::new(), parent_hashes: std::collections::BTreeMap::new(),
-            created: activity.t, origin: "Referenced source; submitted transformation recorded in input.json. Flattened contributing history; earlier byte closure is not claimed.".into(),
+            created: activity.t, origin: "Referenced source; submitted transformation recorded in input.json. Declared immutable upstream records are referenced without copying input bytes. Earlier history before import remains unknown.".into(),
             inputs: vec![source], outputs: artifacts, events, effective_edits: effective,
             completeness: Completeness { ancestry_known: false, input_bytes_available: input.state != "broken", execution_specification_available: false, replay_verified: false }, report_template_version: 2,
         };

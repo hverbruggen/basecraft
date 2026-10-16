@@ -37,6 +37,7 @@ pub struct AffectedAnalysis {
     pub result: String,
     pub source_hash: String,
     pub can_preserve: bool,
+    pub direct: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -232,6 +233,7 @@ pub fn conflicts(target: &Path) -> Result<EvidenceConflict> {
 
 pub fn conflicts_in(target: &Path, stores: &[PathBuf]) -> Result<EvidenceConflict> {
     let mut analyses = Vec::new();
+    let mut known_runs = Vec::new();
     for store in stores {
         if !store.exists() {
             continue;
@@ -255,6 +257,7 @@ pub fn conflicts_in(target: &Path, stores: &[PathBuf]) -> Result<EvidenceConflic
                 continue;
             } // Reserved, no input registered yet.
             let input = read_input(&run)?;
+            known_runs.push((run.clone(), input.clone()));
             if input.state != "referenced" {
                 continue;
             }
@@ -270,9 +273,45 @@ pub fn conflicts_in(target: &Path, stores: &[PathBuf]) -> Result<EvidenceConflic
                         run,
                         source_hash: reference.hash,
                         can_preserve,
+                        direct: true,
                     });
                 }
             }
+        }
+    }
+    // Metadata-only transitive closure: preserving the direct original repairs
+    // descendants through their owning ledger, while removal lists every record
+    // that would otherwise be left with a missing ancestor.
+    loop {
+        let before = analyses.len();
+        for (run, input) in &known_runs {
+            if analyses.iter().any(|a| &a.run == run) {
+                continue;
+            }
+            if input
+                .extra
+                .get("upstream")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|parents| {
+                    parents.iter().any(|parent| {
+                        parent["bundle"].as_str().is_some_and(|path| {
+                            let location = lexical(&run.join(path));
+                            analyses.iter().any(|a| lexical(&a.run) == location)
+                        })
+                    })
+                })
+            {
+                analyses.push(AffectedAnalysis {
+                    run: run.clone(),
+                    result: result_name(run)?,
+                    source_hash: String::new(),
+                    can_preserve: true,
+                    direct: false,
+                });
+            }
+        }
+        if before == analyses.len() {
+            break;
         }
     }
     let mut options = vec![
@@ -317,6 +356,9 @@ pub fn resolve(conflict: &EvidenceConflict, policy: SavePolicy) -> Result<()> {
         let mut input = read_input(&affected.run)?;
         match policy {
             SavePolicy::PreserveCopy => {
+                if !affected.direct {
+                    continue;
+                }
                 let reference = input
                     .source
                     .as_ref()
@@ -324,9 +366,10 @@ pub fn resolve(conflict: &EvidenceConflict, policy: SavePolicy) -> Result<()> {
                 let source = affected.run.join(&reference.path);
                 let destination = affected.run.join("preserved-input");
                 let mut hash = String::new();
+                let mut copied = 0;
                 basecraft_io::write_atomic(&destination, |writer| {
                     let mut hashing = crate::files::HashingWriter::new(writer);
-                    std::io::copy(&mut std::fs::File::open(&source)?, &mut hashing)?;
+                    copied = std::io::copy(&mut std::fs::File::open(&source)?, &mut hashing)?;
                     hash = hashing.hash();
                     Ok(())
                 })?;
@@ -338,6 +381,9 @@ pub fn resolve(conflict: &EvidenceConflict, policy: SavePolicy) -> Result<()> {
                     ));
                 }
                 input.state = "preserved".into();
+                input
+                    .extra
+                    .insert("preserved_original_bytes".into(), serde_json::json!(copied));
                 write_json(&affected.run.join("input.json"), &input)?;
             }
             SavePolicy::BreakEvidence => {
@@ -465,21 +511,36 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
     );
     let target_bundle = crate::provenance::companion(&copied);
     std::fs::create_dir_all(target_bundle.join("artifacts"))?;
-    for artifact in &mut publication.inputs {
+    let mut evidence_inputs: Vec<_> = publication
+        .inputs
+        .iter()
+        .cloned()
+        .map(|a| (bundle.clone(), a))
+        .collect();
+    for (directory, ancestor) in ancestors(&bundle)? {
+        for artifact in ancestor.inputs {
+            if !evidence_inputs.iter().any(|(_, a)| a.id == artifact.id) {
+                evidence_inputs.push((directory.clone(), artifact));
+            }
+        }
+    }
+    publication.inputs.clear();
+    for (directory, mut artifact) in evidence_inputs {
         let source = if let Some(reference) = &artifact.reference {
-            verified_source(&bundle, reference)?
+            verified_source(&directory, reference)?
         } else {
-            bundle.join(
+            directory.join(
                 artifact
                     .retained
                     .as_ref()
-                    .ok_or_else(|| invalid("input bytes unavailable"))?,
+                    .ok_or_else(|| invalid("ancestor input bytes unavailable"))?,
             )
         };
         let name = format!("artifacts/{}", artifact.hash.trim_start_matches("b3:"));
         copy(&source, &target_bundle.join(&name))?;
         artifact.retained = Some(name);
         artifact.reference = None;
+        publication.inputs.push(artifact);
     }
     for (index, artifact) in publication.outputs.iter_mut().enumerate() {
         let source = if index == 0 {
@@ -529,4 +590,83 @@ fn copy(source: &Path, destination: &Path) -> Result<()> {
         Ok(())
     })?;
     Ok(())
+}
+
+/// Walk only declared immutable ancestor records. No ancestor input is copied.
+/// The mutable evidence ledger stays in its owning run so later preservation or
+/// explicit evidence-break decisions remain visible to descendants.
+pub(crate) fn ancestors(
+    bundle: &Path,
+) -> Result<Vec<(PathBuf, basecraft_protocol::provenance::Publication)>> {
+    let mut stack = vec![bundle.to_path_buf()];
+    let mut visited = std::collections::HashSet::new();
+    let mut records = Vec::new();
+    let mut bytes_read = 0usize;
+    while let Some(location) = stack.pop() {
+        if !location.join("input.json").is_file() {
+            continue;
+        }
+        let input = read_input(&location)?;
+        if let Some(origin) = input
+            .extra
+            .get("origin_run")
+            .and_then(serde_json::Value::as_str)
+        {
+            let origin = location.join(origin).canonicalize()?;
+            if !visited.insert((origin.clone(), String::new())) {
+                return Err(invalid("evidence ancestry contains a cycle"));
+            }
+            stack.push(origin);
+        }
+        if let Some(upstream) = input
+            .extra
+            .get("upstream")
+            .and_then(serde_json::Value::as_array)
+        {
+            for reference in upstream {
+                if records.len() + stack.len() >= 10_000 {
+                    return Err(invalid("evidence ancestry exceeds 10,000 references"));
+                }
+                let directory = reference["bundle"]
+                    .as_str()
+                    .ok_or_else(|| invalid("ancestor location is missing"))?;
+                let directory = location.join(directory).canonicalize()?;
+                let id = reference["id"]
+                    .as_str()
+                    .ok_or_else(|| invalid("ancestor identity is missing"))?;
+                if id.is_empty() || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
+                    return Err(invalid("unsafe ancestor identity"));
+                }
+                if !visited.insert((directory.clone(), id.into())) {
+                    continue;
+                }
+                let bytes = crate::provenance::read_record(
+                    &directory.join("records").join(format!("{id}.json")),
+                )?;
+                bytes_read = bytes_read.saturating_add(bytes.len());
+                if bytes_read > 128 << 20 {
+                    return Err(invalid("evidence ancestry exceeds 128 MiB"));
+                }
+                if reference["hash"].as_str() != Some(basecraft_io::hash_bytes(&bytes).as_str()) {
+                    return Err(invalid("ancestor record hash differs"));
+                }
+                let publication: basecraft_protocol::provenance::Publication =
+                    serde_json::from_slice(&bytes)?;
+                if publication.id != id || publication.schema_version != 1 {
+                    return Err(invalid("unsupported or inconsistent ancestor record"));
+                }
+                records.push((directory.clone(), publication));
+                stack.push(directory);
+            }
+        }
+    }
+    Ok(records)
+}
+
+pub(crate) fn verify_ancestors(bundle: &Path) -> Result<Vec<String>> {
+    let mut issues = Vec::new();
+    for (directory, publication) in ancestors(bundle)? {
+        issues.extend(crate::provenance::verify_records(&directory, &publication)?);
+    }
+    Ok(issues)
 }
