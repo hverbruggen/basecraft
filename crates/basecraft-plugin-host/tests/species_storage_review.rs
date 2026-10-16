@@ -251,6 +251,10 @@ fn combine_complete_export_includes_legacy_sidecar_evidence() {
         "authored_metadata".into(),
         "Distinct original sidecar context".into(),
     );
+    legacy.hypotheses[0].provenance.parameters.insert(
+        "reviewed_method_context".into(),
+        json!("Sidecar-only scientific context"),
+    );
     let mut bytes = Vec::new();
     files::write_delimitation_sidecar(
         &legacy,
@@ -278,4 +282,71 @@ fn combine_complete_export_includes_legacy_sidecar_evidence() {
             .any(|entry| basecraft_io::hash_file(&entry.unwrap().path()).unwrap() == side_hash),
         "complete export omitted the legacy sidecar whose hash Combine declares: {side_hash}"
     );
+}
+
+#[test]
+#[cfg(unix)]
+fn species_partial_save_retains_recoverable_edits_and_retries() {
+    use basecraft_protocol::{Op, delimitation::DelimitationEdit};
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let canonical = root.path().join("species.spart");
+    std::fs::write(
+        &canonical,
+        include_str!("../../../testdata/fixtures/delimitation/manual.spart"),
+    )
+    .unwrap();
+    let mut session = Session::recoverable(root.path()).unwrap();
+    let doc = session.open(&canonical).unwrap();
+    session
+        .apply(
+            doc,
+            Op::DelimitationEdit {
+                edit: Box::new(DelimitationEdit::Derive {
+                    source: "partition-1".into(),
+                    id: "editable".into(),
+                    name: "Original".into(),
+                }),
+            },
+        )
+        .unwrap();
+    session.save(doc, None).unwrap();
+    session
+        .apply(
+            doc,
+            Op::DelimitationEdit {
+                edit: Box::new(DelimitationEdit::Rename {
+                    hypothesis: "editable".into(),
+                    name: "Pending edit".into(),
+                }),
+            },
+        )
+        .unwrap();
+    let sidecar = files::tree_sidecar(&canonical);
+    let directory = sidecar.parent().unwrap();
+    let permissions = std::fs::metadata(directory).unwrap().permissions();
+    std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let result = session.save(doc, None);
+    std::fs::set_permissions(directory, permissions).unwrap();
+    let error = result.unwrap_err().to_string();
+    assert!(
+        error.contains("data saved") && error.contains("incomplete"),
+        "{error}"
+    );
+    assert!(session.recovery_root().join("pending-save.json").is_file());
+    let recovered = root.path().join("recovered");
+    basecraft_ops::replay::recover(session.recovery_root(), &recovered).unwrap();
+    let work = files::load_delimitation(&recovered.join("species.spart")).unwrap();
+    assert_eq!(work.hypotheses.last().unwrap().name, "Pending edit");
+    session.save(doc, None).unwrap();
+    assert_eq!(
+        files::load_delimitation(&canonical)
+            .unwrap()
+            .hypotheses
+            .last()
+            .unwrap()
+            .name,
+        "Pending edit"
+    );
+    assert!(provenance::verify(&canonical).unwrap().is_empty());
 }
