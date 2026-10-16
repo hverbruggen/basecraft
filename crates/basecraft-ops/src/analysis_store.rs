@@ -151,3 +151,71 @@ impl ArtifactRun {
         Ok(destination)
     }
 }
+
+impl ArtifactRun {
+    /// Bounded, read-only discovery beside a result. Hidden bindings take
+    /// precedence; legacy companions remain readable when no binding exists.
+    pub fn for_result(result: &Path) -> Result<Option<PathBuf>> {
+        let parent = result
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new("."))
+            .canonicalize()?;
+        let store = parent.join(".basecraft/analyses-v1");
+        if !store.exists() {
+            return Ok(None);
+        }
+        Self::validate_store(&store)?;
+        let key = basecraft_io::hash_bytes(
+            result
+                .file_name()
+                .ok_or_else(|| invalid("result filename missing"))?
+                .as_encoded_bytes(),
+        );
+        let binding = store.join("bindings").join(key.trim_start_matches("b3:"));
+        if !binding.exists() {
+            return Ok(None);
+        }
+        let value: serde_json::Value =
+            serde_json::from_slice(&crate::provenance::read_record(&binding)?)?;
+        if value["schema_version"] != 1 {
+            return Err(invalid("unsupported result binding"));
+        }
+        let id = value["run"]
+            .as_str()
+            .ok_or_else(|| invalid("result binding has no run"))?;
+        component(id)?;
+        let run = store.join("runs").join(id);
+        if !run.exists() {
+            return Ok(None);
+        } // Explicitly removed analysis is in trash.
+        Ok(Some(run))
+    }
+
+    /// Bind only after primary and supporting outputs plus manifest are durable.
+    pub fn bind(&self, result: &Path) -> Result<()> {
+        let store = self
+            .directory
+            .parent()
+            .and_then(Path::parent)
+            .ok_or_else(|| invalid("run has no store"))?;
+        directory(&store.join("bindings"))?;
+        let name = result
+            .file_name()
+            .ok_or_else(|| invalid("result filename missing"))?;
+        let key = basecraft_io::hash_bytes(name.as_encoded_bytes());
+        crate::input_evidence::write_json(
+            &store.join("bindings").join(key.trim_start_matches("b3:")),
+            &serde_json::json!({"schema_version":1,"run":self.id,"result_hash":basecraft_io::hash_file(result)?}),
+        )
+    }
+}
+
+pub(crate) fn bind_existing(run: &Path, id: &str, result: &Path) -> Result<()> {
+    let artifact_run = ArtifactRun {
+        directory: run.into(),
+        working_directory: result.parent().unwrap_or(Path::new(".")).canonicalize()?,
+        id: id.into(),
+    };
+    artifact_run.bind(result)
+}

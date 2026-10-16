@@ -75,6 +75,7 @@ fn main() {
         "qml/DelimitationAnalysisDialog.qml",
         "qml/DocumentRecordDialog.qml",
         "qml/TasksDialog.qml",
+        "qml/AnalysisEvidenceDialog.qml",
         "qml/AppRibbonButton.qml",
         "qml/AppTabButton.qml",
         "qml/RibbonGroup.qml",

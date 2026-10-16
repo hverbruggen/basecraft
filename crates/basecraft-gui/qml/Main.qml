@@ -405,7 +405,7 @@ ApplicationWindow {
         tooltip: "Save the current file or trace review"
         defaultShortcut: "Ctrl+S"
         enabled: window.current !== null && (!window.traceOpen || window.current.review_mode)
-        onTriggered: window.traceOpen ? window.traceDocument.saveReview() : window.current.save()
+        onTriggered: window.traceOpen ? window.traceDocument.saveReview() : window.saveDocument(tabs.currentIndex, "", null)
     }
     AppCommand {
         id: saveAsCommand
@@ -1342,6 +1342,58 @@ ApplicationWindow {
         onAccepted: window.openPath(window.localPath(selectedFile))
     }
 
+    property var pendingEvidenceSave: null
+    function saveDocument(index, path, continuation) {
+        const d = docs.itemAt(index)
+        if (!d) return
+        const target = path || openFiles.get(index).path
+        const conflict = JSON.parse(provenance.save_conflicts(target))
+        if (conflict.error) { provenance.notification(target, conflict.error, "fail"); return }
+        const perform = function() {
+            let success
+            if (path) {
+                success = d.controller.save_as(path)
+                if (success) { openFiles.setProperty(index, "path", path); Qt.callLater(window.refreshCurrent) }
+            } else { d.controller.save(); success = !d.controller.dirty }
+            if (continuation) continuation(success)
+        }
+        if ((conflict.analyses || []).length) {
+            pendingEvidenceSave = {target: target, perform: perform}
+            evidenceSaveDialog.conflict = conflict
+            evidenceSaveDialog.errorText = ""
+            evidenceSaveDialog.open()
+        } else perform()
+    }
+    AnalysisEvidenceDialog {
+        id: evidenceSaveDialog
+        onRejected: window.pendingEvidenceSave = null
+        onChoice: function(policy) {
+            const pending = window.pendingEvidenceSave
+            if (!pending) return
+            if (!provenance.resolve_save(pending.target, policy)) {
+                errorText = provenance.message
+                return
+            }
+            window.pendingEvidenceSave = null
+            close()
+            pending.perform()
+        }
+    }
+    function saveBeforeQuit(indexes, offset) {
+        if (offset >= indexes.length) {
+            const left = window.unsavedTabs()
+            if (left.length) {
+                quitDialog.unsaved = left
+                quitError.text = "Some files could not be saved. Review their notifications and retry."
+                quitDialog.open()
+            } else { window.closeConfirmed = true; window.close() }
+            return
+        }
+        window.saveDocument(indexes[offset], "", function(success) {
+            if (success) window.saveBeforeQuit(indexes, offset + 1)
+        })
+    }
+
     // Save the active tab under a new name; the tab then shows the new file.
     function saveAs() {
         if (!window.current) return
@@ -1364,10 +1416,7 @@ ApplicationWindow {
         onAccepted: {
             const d = docs.itemAt(index)
             const path = window.localPath(selectedFile)
-            if (d && d.controller.save_as(path)) {
-                openFiles.setProperty(index, "path", path)
-                Qt.callLater(window.refreshCurrent)
-            }
+            if (d) window.saveDocument(index, path, null)
         }
     }
 
@@ -1927,18 +1976,7 @@ ApplicationWindow {
             AppErrorLabel { id: quitError; visible: text.length > 0; color: shell.accent; wrapMode: Text.Wrap }
         }
         onAccepted: {
-            for (const i of unsaved) docs.itemAt(i).controller.save()
-            // A save that failed leaves its tab unsaved: stay open and say so.
-            const left = window.unsavedTabs()
-            if (left.length > 0) {
-                unsaved = left
-                quitError.text = "Couldn't save " + left.map(i => window.fileName(openFiles.get(i).path)).join(", ")
-                    + ": " + docs.itemAt(left[0]).controller.message
-                open()
-                return
-            }
-            window.closeConfirmed = true
-            window.close()
+            window.saveBeforeQuit(unsaved, 0)
         }
         onDiscarded: {
             close()
@@ -1964,15 +2002,16 @@ ApplicationWindow {
         }
         onAccepted: {
             const controller = docs.itemAt(index).controller
-            controller.save()
-            if (controller.dirty) {
-                saveError = controller.message || "Save the review to a file first"
-                open()
-                return
-            }
-            saveError = ""
-            openFiles.remove(index)
-            Qt.callLater(window.refreshCurrent)
+            window.saveDocument(index, "", function(success) {
+                if (!success) {
+                    confirmClose.saveError = controller.message || "Save the review to a file first"
+                    confirmClose.open()
+                    return
+                }
+                confirmClose.saveError = ""
+                openFiles.remove(confirmClose.index)
+                Qt.callLater(window.refreshCurrent)
+            })
         }
         onDiscarded: {
             close()

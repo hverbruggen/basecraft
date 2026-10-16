@@ -80,6 +80,7 @@ pub struct FileJob {
     source_path: PathBuf,
     source_version: u64,
     source_hash: String,
+    artifacts: Option<basecraft_ops::analysis_store::ArtifactRun>,
     _dir: tempfile::TempDir,
 }
 
@@ -117,6 +118,54 @@ impl FileJob {
         let hash = hw.hash();
         file.flush()?;
         let run_id = ulid::Ulid::generate().to_string();
+        let manifest = Manifest::load(plugin)?;
+        let referenced = operation == "tree"
+            || matches!(
+                (manifest.id.as_str(), operation),
+                ("basecraft.mafft", "align") | ("basecraft.trimal", "trim")
+            );
+        let artifacts = if referenced {
+            let _lock = basecraft_ops::input_evidence::lock()?;
+            let run = basecraft_ops::analysis_store::ArtifactRun::create(&output, &run_id)?;
+            let source = session.referenced_source(doc, run.directory())?;
+            let input_record = basecraft_ops::input_evidence::SubmittedInput {
+                schema_version: 1,
+                state: if source.is_some() {
+                    "referenced"
+                } else {
+                    "generated"
+                }
+                .into(),
+                source,
+                submitted_hash: hash.clone(),
+                submitted_size: std::fs::metadata(&path)?.len(),
+                transformation: match kind {
+                    AlignmentInput::Aligned => "canonical-fasta-v1",
+                    AlignmentInput::Ungapped => "ungapped-fasta-v1",
+                }
+                .into(),
+                extra: std::collections::BTreeMap::new(),
+            };
+            basecraft_ops::input_evidence::write_json(
+                &run.directory().join("run.json"),
+                &json!({"schema_version":1,"id":run_id,"result":output.file_name(),"status":"prepared"}),
+            )?;
+            basecraft_ops::input_evidence::write_json(
+                &run.directory().join("input.json"),
+                &input_record,
+            )?;
+            basecraft_ops::input_evidence::register(&run)?;
+            Some(run)
+        } else {
+            None
+        };
+        let source_hash = if let Some(run) = &artifacts {
+            basecraft_ops::input_evidence::read_input(run.directory())?
+                .source
+                .map_or_else(String::new, |r| r.hash)
+        } else {
+            basecraft_io::hash_file(&source_path).map_err(basecraft_ops::Error::from)?
+        };
         Ok(Self {
             plugin: plugin.to_path_buf(),
             operation: operation.to_string(),
@@ -130,10 +179,10 @@ impl FileJob {
             source_path: session.root().join(session.doc_key(doc)),
             source_version: session.generation(doc),
             source_record: session.document_record(doc)?,
-            source_hash: basecraft_io::hash_file(&session.root().join(session.doc_key(doc)))
-                .map_err(basecraft_ops::Error::from)?,
+            source_hash,
             cpu_budget: crate::compute::effective_allocation()?,
             granted_budget: std::sync::atomic::AtomicUsize::new(0),
+            artifacts,
             _dir: dir,
         })
     }
@@ -178,6 +227,7 @@ impl FileJob {
                 .map_err(basecraft_ops::Error::from)?,
             cpu_budget: crate::compute::effective_allocation()?,
             granted_budget: std::sync::atomic::AtomicUsize::new(0),
+            artifacts: None,
             _dir: dir,
         })
     }
@@ -224,6 +274,7 @@ impl FileJob {
             run_id,
             cpu_budget: crate::compute::effective_allocation()?,
             granted_budget: std::sync::atomic::AtomicUsize::new(0),
+            artifacts: None,
             _dir: dir,
         })
     }
@@ -268,6 +319,7 @@ impl FileJob {
             source_hash: self.source_hash.clone(),
             cpu_budget: self.cpu_budget,
             granted_budget: std::sync::atomic::AtomicUsize::new(0),
+            artifacts: None,
             _dir: dir,
         })
     }
@@ -414,7 +466,9 @@ impl FileJob {
         elapsed_seconds: f64,
     ) -> Result<()> {
         use basecraft_protocol::delimitation::{JobRecord, JobStatus};
-        session.snapshot_file(&self.retained_input()?)?;
+        if self.artifacts.is_none() {
+            session.snapshot_file(&self.retained_input()?)?;
+        }
         let cancelled = self
             .params
             .get("cancel_file")
@@ -465,7 +519,11 @@ impl FileJob {
                 }
             }
         }
-        session.log_job_finished(doc, report)?;
+        if self.artifacts.is_some() {
+            session.log_referenced_job_finished(doc, report)?;
+        } else {
+            session.log_job_finished(doc, report)?;
+        }
         Ok(())
     }
 
@@ -484,8 +542,17 @@ impl FileJob {
         if basecraft_io::hash_bytes(&input) != self.input_key.1 {
             return Err(Error::Protocol("job input changed before launch".into()));
         }
-        basecraft_io::write_atomic(&run_dir.join("input.snapshot"), |w| w.write_all(&input))
-            .map_err(basecraft_ops::Error::from)?;
+        if let Some(run) = &self.artifacts {
+            if basecraft_ops::input_evidence::read_input(run.directory())?.state == "generated" {
+                basecraft_io::write_atomic(&run.directory().join("submitted.fasta"), |w| {
+                    w.write_all(&input)
+                })
+                .map_err(basecraft_ops::Error::from)?;
+            }
+        } else {
+            basecraft_io::write_atomic(&run_dir.join("input.snapshot"), |w| w.write_all(&input))
+                .map_err(basecraft_ops::Error::from)?;
+        }
         let started = basecraft_platform::now_rfc3339();
         self.write_run_manifest(&run_dir, &started, "running", None)?;
         let _registration = self
@@ -499,7 +566,12 @@ impl FileJob {
                     .insert(self.run_id.clone(), PathBuf::from(path));
                 CancellationRegistration(self.run_id.clone())
             });
-        let result = self.execute_run(&run_dir.join("input.snapshot"));
+        let frozen_input = if self.artifacts.is_some() {
+            self.input.clone()
+        } else {
+            run_dir.join("input.snapshot")
+        };
+        let result = self.execute_run(&frozen_input);
         let cancelled = self
             .params
             .get("cancel_file")
@@ -542,7 +614,7 @@ impl FileJob {
             "plugin": { "id": manifest.id, "version": manifest.version },
             "operation": self.operation, "effective_parameters": parameters,
             "source": { "path": source_path, "generation": self.source_version, "disk_hash": self.source_hash },
-            "input": { "logical_name": self.input_key.0, "hash": self.input_key.1, "retained": "input.snapshot", "bytes": std::fs::metadata(&self.input)?.len() },
+            "input": { "logical_name": self.input_key.0, "hash": self.input_key.1, "retained": if self.artifacts.is_none() { Some("input.snapshot") } else { None }, "artifact_run": self.artifacts.as_ref().map(|r| r.directory()), "bytes": std::fs::metadata(&self.input)?.len() },
             "outputs": outputs, "requested_cpu_budget": self.cpu_budget, "cpu_budget": self.execution_budget(),
             "diagnostics": outcome.and_then(|r| r.as_ref().err()).map(ToString::to_string),
             "tool": outcome.and_then(|r| r.as_ref().ok()).and_then(|r| r.tool.as_ref()),
@@ -576,6 +648,23 @@ impl FileJob {
         params.entry("original_source").or_insert(
             serde_json::to_value(&self.source_path).map_err(|e| Error::Protocol(e.to_string()))?,
         );
+        if let Some(run) = &self.artifacts {
+            if params.contains_key("analysis_artifacts") || params.contains_key("bootstrap_trees") {
+                return Err(Error::Protocol("host-managed allocation cannot be combined with caller analysis_artifacts or bootstrap_trees; use bootstrap_destination".into()));
+            }
+            if let Some(destination) = params.get("bootstrap_destination") {
+                if !matches!(destination.as_str(), Some("metadata" | "working")) {
+                    return Err(Error::Protocol(
+                        "bootstrap_destination must be metadata or working".into(),
+                    ));
+                }
+            }
+            params.insert("analysis_artifacts".into(), json!({
+                "metadata_directory": run.directory(),
+                "working_directory": self.output.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new(".")).canonicalize()?,
+                "run_id": run.id(),
+            }));
+        }
         params.insert(
             "input".into(),
             serde_json::to_value(frozen_input).map_err(|e| Error::Protocol(e.to_string()))?,
@@ -641,14 +730,24 @@ impl FileJob {
                     }
                 }
             }
-            let artifacts = basecraft_ops::links::AlignmentLink::create(
-                &self.output,
-                &self.source_path,
-                frozen_input,
-                self.source_version,
-                true,
-                Some(&self.source_hash),
-            )?;
+            let artifacts = if let Some(run) = &self.artifacts {
+                basecraft_ops::links::AlignmentLink::create_referenced(
+                    &self.output,
+                    &self.source_path,
+                    frozen_input,
+                    self.source_version,
+                    run,
+                )?
+            } else {
+                basecraft_ops::links::AlignmentLink::create(
+                    &self.output,
+                    &self.source_path,
+                    frozen_input,
+                    self.source_version,
+                    true,
+                    Some(&self.source_hash),
+                )?
+            };
             result
                 .outputs
                 .extend(artifacts.iter().map(|p| p.to_string_lossy().into_owned()));
@@ -696,7 +795,22 @@ impl FileJob {
                 serde_json::to_value(tool).map_err(|e| Error::Protocol(e.to_string()))?,
             );
         }
-        session.snapshot_file(&self.retained_input()?)?;
+        if self.artifacts.is_none() {
+            session.snapshot_file(&self.retained_input()?)?;
+        }
+        if let Some(run) = &self.artifacts {
+            session.log_referenced_tool_run(
+                doc,
+                actor,
+                (&manifest.id, &self.operation),
+                serde_json::Value::Object(recorded_parameters),
+                std::slice::from_ref(&self.input_key),
+                &outputs,
+            )?;
+            return session
+                .publish_referenced_analysis(doc, &self.output, &outputs, &self.source_record, run)
+                .map_err(Into::into);
+        }
         session.log_tool_run(
             doc,
             actor,

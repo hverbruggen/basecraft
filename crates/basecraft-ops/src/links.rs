@@ -23,7 +23,18 @@ pub struct AlignmentLink {
     pub extra: BTreeMap<String, serde_json::Value>,
 }
 
+fn hidden_sidecar(run: &Path, tree: &Path) -> PathBuf {
+    let digest = basecraft_io::hash_bytes(tree.file_name().unwrap_or_default().as_encoded_bytes());
+    run.join(format!(
+        "{}.alignment.json",
+        digest.trim_start_matches("b3:")
+    ))
+}
+
 pub fn sidecar(tree: &Path) -> PathBuf {
+    if let Ok(Some(run)) = crate::analysis_store::ArtifactRun::for_result(tree) {
+        return hidden_sidecar(&run, tree);
+    }
     let mut name = tree.as_os_str().to_os_string();
     name.push(".alignment.json");
     PathBuf::from(name)
@@ -131,8 +142,24 @@ struct StagedLink {
 
 impl StagedLink {
     fn copy(link: &AlignmentLink, from: &Path, to: &Path) -> Result<Self> {
-        let snapshot = retain_snapshot(to, &link.snapshot_path(from), &link.snapshot_hash)?;
+        let snapshot = if link.schema == 2 {
+            let source = link.verify_snapshot(from)?;
+            let alignment = crate::files::load_alignment(&source)?.doc;
+            let snapshot = retain_file(to, ".alignment.afa", |out| {
+                crate::files::write_alignment(&alignment, out)
+            })?;
+            if basecraft_io::hash_file(&snapshot)? != link.snapshot_hash {
+                return Err(invalid(
+                    "materialized alignment differs from submitted input",
+                ));
+            }
+            snapshot
+        } else {
+            retain_snapshot(to, &link.snapshot_path(from), &link.snapshot_hash)?
+        };
         let mut copied = link.clone();
+        copied.schema = 1;
+        copied.extra.remove("analysis_run");
         copied.source = relative_to(&link.source, to)?;
         copied.snapshot = snapshot
             .file_name()
@@ -318,6 +345,41 @@ impl AlignmentLink {
         Self::create(&target, source, source, 0, false, None)
     }
 
+    /// Reference-first inferred association. Clean disk input is never copied;
+    /// dirty submitted input is already retained once by the job's artifact run.
+    pub fn create_referenced(
+        tree: &Path,
+        source: &Path,
+        input: &Path,
+        version: u64,
+        run: &crate::analysis_store::ArtifactRun,
+    ) -> Result<Vec<PathBuf>> {
+        names(input)?;
+        let record = crate::input_evidence::read_input(run.directory())?;
+        let link = Self {
+            schema: 2,
+            source: relative_to(&std::path::absolute(source)?, tree)?,
+            source_hash: record
+                .source
+                .as_ref()
+                .map_or_else(String::new, |r| r.hash.clone()),
+            snapshot: PathBuf::new(),
+            snapshot_hash: record.submitted_hash,
+            alignment_version: version,
+            inferred: true,
+            extra: [(
+                "analysis_run".into(),
+                serde_json::json!(relative_to(run.directory(), tree)?),
+            )]
+            .into_iter()
+            .collect(),
+        };
+        let metadata = hidden_sidecar(run.directory(), tree);
+        crate::input_evidence::write_json(&metadata, &link)?;
+        run.bind(tree)?;
+        Ok(vec![metadata])
+    }
+
     /// Called with the exact alignment supplied to a tree tool.
     pub fn create(
         tree: &Path,
@@ -356,6 +418,7 @@ impl AlignmentLink {
     }
 
     pub fn read(tree: &Path) -> Result<Self> {
+        crate::analysis_store::ArtifactRun::for_result(tree)?;
         let metadata: serde_json::Value =
             serde_json::from_reader(std::fs::File::open(sidecar(tree))?)?;
         if let Some(reason) = metadata
@@ -374,7 +437,7 @@ impl AlignmentLink {
             )));
         }
         let mut link: Self = serde_json::from_value(metadata)?;
-        if link.schema != 1 {
+        if !matches!(link.schema, 1 | 2) {
             return Err(invalid("unsupported tree–alignment link version"));
         }
         if link.source.is_relative() {
@@ -405,6 +468,38 @@ impl AlignmentLink {
             "Linked alignment"
         };
         let mut status = format!("{label}: {}", self.source.display());
+        if self.schema == 2 {
+            return match self
+                .evidence_run(tree_path)
+                .and_then(|run| crate::input_evidence::read_input(&run).map(|input| (run, input)))
+            {
+                Ok((_, input)) if input.state == "generated" => {
+                    format!("{status}; exact submitted input retained")
+                }
+                Ok((_, input)) if input.state == "preserved" => {
+                    format!("{status}; original preserved (verify before use)")
+                }
+                Ok((_, input)) if input.state == "broken" => {
+                    format!("{status}; evidence explicitly broken")
+                }
+                Ok((run, input)) => {
+                    if input.source.as_ref().is_some_and(|r| {
+                        crate::input_evidence::stamp(&run.join(&r.path)).is_ok_and(|s| {
+                            s.size == r.stamp.size
+                                && s.modified_seconds == r.stamp.modified_seconds
+                                && s.modified_nanos == r.stamp.modified_nanos
+                        })
+                    }) {
+                        format!(
+                            "{status}; referenced input metadata unchanged (content not rechecked)"
+                        )
+                    } else {
+                        format!("{status}; original missing or changed; verify or relink original")
+                    }
+                }
+                Err(e) => format!("{status}; evidence unavailable: {e}"),
+            };
+        }
         if !self.source.exists() {
             status.push_str(" (source missing or moved)");
         } else if self.source_changed() {
@@ -426,7 +521,45 @@ impl AlignmentLink {
             .join(&self.snapshot)
     }
 
+    fn evidence_run(&self, tree_path: &Path) -> Result<PathBuf> {
+        let name = self
+            .extra
+            .get("analysis_run")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| invalid("reference association has no artifact run"))?;
+        let run = tree_path
+            .parent()
+            .unwrap_or(Path::new("."))
+            .join(name)
+            .canonicalize()?;
+        // Never trust an arbitrary run supplied by association metadata.
+        if crate::analysis_store::ArtifactRun::for_result(tree_path)?.as_ref() != Some(&run) {
+            return Err(invalid(
+                "reference association disagrees with result binding",
+            ));
+        }
+        Ok(run)
+    }
+
     fn verify_snapshot(&self, tree_path: &Path) -> Result<PathBuf> {
+        if self.schema == 2 {
+            let run = self.evidence_run(tree_path)?;
+            let input = crate::input_evidence::read_input(&run)?;
+            let source = if let Some(reference) = &input.source {
+                crate::input_evidence::verified_source(&run, reference)?
+            } else {
+                run.join("submitted.fasta")
+            };
+            let alignment = crate::files::load_alignment(&source)?.doc;
+            let mut hashing = crate::files::HashingWriter::new(std::io::sink());
+            crate::files::write_alignment(&alignment, &mut hashing)?;
+            if hashing.hash() != self.snapshot_hash {
+                return Err(invalid(
+                    "linked input differs from actual submitted alignment",
+                ));
+            }
+            return Ok(source);
+        }
         let snapshot = self.snapshot_path(tree_path);
         if basecraft_io::hash_file(&snapshot)? != self.snapshot_hash {
             return Err(invalid(
@@ -445,6 +578,25 @@ impl AlignmentLink {
     /// Forest members share the same retained alignment instead of copying it per tree.
     pub fn share_to(&self, from: &Path, to: &Path) -> Result<PathBuf> {
         let mut link = self.clone();
+        if self.schema == 2 {
+            let run = self.evidence_run(from)?;
+            link.extra.insert(
+                "analysis_run".into(),
+                serde_json::json!(relative_to(&run, to)?),
+            );
+            link.source = relative_to(&self.source, to)?;
+            // Same-folder forest components share one run; no input copy.
+            let metadata = hidden_sidecar(&run, to);
+            crate::input_evidence::write_json(&metadata, &link)?;
+            let original_binding = crate::analysis_store::ArtifactRun::for_result(from)?
+                .ok_or_else(|| invalid("missing run binding"))?;
+            let id = original_binding
+                .file_name()
+                .ok_or_else(|| invalid("run identity missing"))?
+                .to_string_lossy();
+            crate::analysis_store::bind_existing(&run, &id, to)?;
+            return Ok(metadata);
+        }
         link.snapshot = relative_to(
             &from
                 .parent()
@@ -468,6 +620,9 @@ impl AlignmentLink {
     }
 
     pub fn source_changed(&self) -> bool {
+        if self.schema == 2 {
+            return !self.source.exists();
+        }
         basecraft_io::hash_file(&self.source).map_or(true, |h| h != self.source_hash)
     }
 }
