@@ -85,6 +85,9 @@ enum Command {
         /// Exact ordinary site bootstrap for sorted NJ/UPGMA (off by default).
         #[arg(long, default_value_t = 0)]
         bootstrap: usize,
+        /// Where to retain bootstrap replicate trees (relative to the output directory).
+        #[arg(long, default_value = "metadata", value_parser = ["metadata", "working"])]
+        bootstrap_destination: String,
         #[arg(long, default_value_t = 1)]
         seed: u64,
         #[arg(long)]
@@ -265,6 +268,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             threads,
             tree_threads,
             bootstrap,
+            bootstrap_destination,
             seed,
             progress,
             cancel_file,
@@ -305,6 +309,12 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             job.params
                 .insert("bootstrap".into(), serde_json::json!(bootstrap));
             job.params.insert("seed".into(), serde_json::json!(seed));
+            if bootstrap > 0 {
+                job.params.insert(
+                    "bootstrap_destination".into(),
+                    serde_json::json!(bootstrap_destination),
+                );
+            }
             if let Some(path) = progress {
                 job.params
                     .insert("progress".into(), serde_json::json!(path));
