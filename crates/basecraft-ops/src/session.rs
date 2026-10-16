@@ -244,6 +244,28 @@ impl Session {
         matches!(self.docs[id.0].content, Loaded::Delimitation(_))
     }
 
+    pub(crate) fn restore_replay_paths(&mut self, id: DocId, from: &Path, to: &Path) {
+        if let Loaded::Delimitation(work) = &mut self.docs[id.0].content {
+            files::rebase_delimitation_paths(work, from, to);
+        }
+    }
+
+    pub(crate) fn legacy_delimitation_hashes(
+        &self,
+        id: DocId,
+        target: &Path,
+    ) -> Result<Option<Vec<String>>> {
+        let Loaded::Delimitation(work) = &self.docs[id.0].content else {
+            return Ok(None);
+        };
+        let mut main = HashingWriter::new(std::io::sink());
+        files::write_delimitation(work, files::delimitation_xml(target), &mut main)?;
+        let hash = main.hash();
+        let mut side = HashingWriter::new(std::io::sink());
+        files::write_delimitation_sidecar(work, &hash, &mut side)?;
+        Ok(Some(vec![hash, side.hash()]))
+    }
+
     pub fn is_tree(&self, id: DocId) -> bool {
         matches!(self.docs[id.0].content, Loaded::Tree(_))
     }
@@ -1292,15 +1314,24 @@ impl Session {
         }
         let mut outputs = Vec::new();
         for (key, hash) in &save.result.hashes {
-            outputs.push(retain(
-                &self.resolve(key),
-                hash,
-                format!("{}:output:{}", save.id, outputs.len()),
+            let logical_name = if crate::analysis_store::ArtifactRun::for_result(target)?.is_some()
+            {
+                crate::input_evidence::relative(
+                    &target.parent().unwrap_or(Path::new(".")).canonicalize()?,
+                    &self.resolve(key).canonicalize()?,
+                )?
+            } else {
                 Path::new(key)
                     .file_name()
                     .unwrap_or_default()
                     .to_string_lossy()
-                    .into_owned(),
+                    .into_owned()
+            };
+            outputs.push(retain(
+                &self.resolve(key),
+                hash,
+                format!("{}:output:{}", save.id, outputs.len()),
+                logical_name,
             )?);
         }
         // Public reports use logical names and anonymous agents. Original local

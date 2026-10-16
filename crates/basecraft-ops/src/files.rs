@@ -801,11 +801,13 @@ pub fn write_delimitation_sidecar_at(
     target: &Path,
     w: &mut dyn Write,
 ) -> io::Result<()> {
-    let base = target
+    let parent = target
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or(Path::new("."))
-        .canonicalize()?;
+        .unwrap_or(Path::new("."));
+    let base = parent
+        .canonicalize()
+        .or_else(|_| std::path::absolute(parent))?;
     write_delimitation_sidecar_in(work, hash, &base, w)
 }
 
@@ -827,7 +829,7 @@ pub(crate) fn write_delimitation_sidecar_in(
 
 /// Rebase only declared workspace path fields; authored text and scientific
 /// parameters remain untouched. Historical reports retain their original bytes.
-fn rebase_delimitation_paths(
+pub(crate) fn rebase_delimitation_paths(
     work: &mut basecraft_protocol::delimitation::DelimitationWorkspace,
     old: &Path,
     new: &Path,

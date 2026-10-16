@@ -447,3 +447,85 @@ fn referenced_display_preserve_copy_is_idempotent_and_never_uses_changed_bytes()
     assert!(resolve(&conflict, SavePolicy::PreserveCopy).is_err());
     assert!(basecraft_ops::delimitation::checked_display_tree(&work).is_err());
 }
+
+#[test]
+fn application_state_replay_handles_hidden_baseline_and_missing_original_folder() {
+    let parent = tempfile::tempdir().unwrap();
+    let root = parent.path().join("working");
+    std::fs::create_dir(&root).unwrap();
+    let path = root.join("species.spart");
+    std::fs::write(&path, SPART).unwrap();
+    let mut initial = Session::recoverable(&root).unwrap();
+    let doc = initial.open(&path).unwrap();
+    initial
+        .apply(
+            doc,
+            Op::DelimitationEdit {
+                edit: Box::new(Edit::Rename {
+                    hypothesis: "partition-1".into(),
+                    name: "Saved original".into(),
+                }),
+            },
+        )
+        .unwrap();
+    initial.save(doc, None).unwrap();
+    drop(initial);
+    let mut edited = Session::recoverable(&root).unwrap();
+    let doc = edited.open(&path).unwrap();
+    edited
+        .apply(
+            doc,
+            Op::DelimitationEdit {
+                edit: Box::new(Edit::Rename {
+                    hypothesis: "partition-1".into(),
+                    name: "Saved new".into(),
+                }),
+            },
+        )
+        .unwrap();
+    edited.save(doc, None).unwrap();
+    // Leave an unsaved edit so application-state evidence remains owned/live.
+    edited
+        .apply(
+            doc,
+            Op::DelimitationEdit {
+                edit: Box::new(Edit::Rename {
+                    hypothesis: "partition-1".into(),
+                    name: "Pending".into(),
+                }),
+            },
+        )
+        .unwrap();
+    let recovery = edited.recovery_root().to_path_buf();
+    edited.flush().unwrap();
+    std::fs::rename(&root, parent.path().join("unavailable")).unwrap();
+    let report = replay::replay(&recovery).unwrap();
+    assert!(report.ok(), "{:?}", report.problems);
+    let recovered = parent.path().join("recovered");
+    replay::recover(&recovery, &recovered).unwrap();
+    let work = basecraft_ops::files::load_delimitation(&recovered.join("species.spart")).unwrap();
+    assert_eq!(work.hypotheses[0].name, "Pending");
+}
+
+#[test]
+fn legacy_visible_workspace_metadata_remains_read_only() {
+    use std::io::Write;
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("legacy.spart");
+    std::fs::write(&path, SPART).unwrap();
+    let work = basecraft_io::spart::parse_text(SPART).unwrap();
+    let hash = basecraft_io::hash_file(&path).unwrap();
+    let sidecar = basecraft_ops::files::tree_sidecar(&path);
+    let mut bytes = Vec::new();
+    basecraft_ops::files::write_delimitation_sidecar(&work, &hash, &mut bytes).unwrap();
+    std::fs::File::create(&sidecar)
+        .unwrap()
+        .write_all(&bytes)
+        .unwrap();
+    assert_eq!(
+        basecraft_ops::files::load_delimitation(&path).unwrap(),
+        work
+    );
+    assert_eq!(std::fs::read(&sidecar).unwrap(), bytes);
+    assert!(!root.path().join(".basecraft").exists());
+}

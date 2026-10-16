@@ -48,6 +48,7 @@ pub fn replay(root: &Path) -> Result<Report> {
 fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut Report) -> Result<()> {
     let work = tempfile::tempdir()?;
     let mut session = Session::unlogged(work.path());
+    let source_root = recorded_source_root(root)?;
     let mut docs: HashMap<&str, DocId> = HashMap::new();
     // Replay entry id -> logged entry id, to check undo and redo targets.
     let mut ids: HashMap<String, String> = HashMap::new();
@@ -66,6 +67,7 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut Report) -> Re
             match materialise(root, work.path(), &e.result.hashes) {
                 Ok(()) => match session.open(&work.path().join(path)) {
                     Ok(id) => {
+                        session.restore_replay_paths(id, work.path(), &source_root);
                         docs.insert(&e.doc, id);
                     }
                     Err(err) => problem(format!("can't open: {err}")),
@@ -81,11 +83,17 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut Report) -> Re
         match &e.op {
             // Species metadata records the original folder as its relocation
             // base. Hash against that destination, not replay's disposable root.
-            Op::Save { path } => match session.save_hashes_at(doc, &root.join(path)) {
+            Op::Save { path } => match session.save_hashes_at(doc, &source_root.join(path)) {
                 Ok(got) => {
                     let want: Vec<&String> = e.result.hashes.iter().map(|(_, h)| h).collect();
                     if got.iter().collect::<Vec<_>>() != want {
-                        problem(format!("saved content differs: {got:?} vs {want:?}"));
+                        let legacy = session.legacy_delimitation_hashes(doc, Path::new(path))?;
+                        if legacy
+                            .as_ref()
+                            .is_none_or(|hashes| hashes.iter().collect::<Vec<_>>() != want)
+                        {
+                            problem(format!("saved content differs: {got:?} vs {want:?}"));
+                        }
                     }
                 }
                 Err(err) => problem(err.to_string()),
@@ -149,6 +157,22 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut Report) -> Re
     Ok(())
 }
 
+fn recorded_source_root(root: &Path) -> Result<std::path::PathBuf> {
+    let manifest = root.join("recovery.json");
+    if !manifest.is_file() {
+        return Ok(root.to_path_buf());
+    }
+    let value: serde_json::Value =
+        serde_json::from_slice(&crate::provenance::read_record(&manifest)?)?;
+    if value["schema_version"] != 1 {
+        return Err(crate::error::invalid("Unsupported recovery metadata"));
+    }
+    value["source_root"]
+        .as_str()
+        .map(std::path::PathBuf::from)
+        .ok_or_else(|| crate::error::invalid("Recovery has no original source folder"))
+}
+
 /// Put each recorded input into `work` under its project-relative path.
 fn materialise(
     root: &Path,
@@ -184,7 +208,22 @@ fn materialise(
         if basecraft_io::hash_file(&source).map_err(|e| e.to_string())? != *hash {
             return Err(format!("retained input {rel} hash differs"));
         }
-        let dest = work.join(rel);
+        let mut dest = work.join(rel);
+        if let Some((main, _)) = inputs.first() {
+            if crate::files::Format::from_path(Path::new(main)).ok()
+                == Some(crate::files::Format::Delimitation)
+                && Path::new(rel)
+                    .components()
+                    .any(|c| c.as_os_str() == "analyses-v1")
+                && Path::new(rel).file_name()
+                    == crate::files::tree_sidecar(&work.join(main)).file_name()
+            {
+                // The replay namespace contains no live store bindings. Restore
+                // the checked baseline as a standalone companion, not a partial
+                // hidden namespace that could be mistaken for a real store.
+                dest = crate::files::tree_sidecar(&work.join(main));
+            }
+        }
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
@@ -229,6 +268,7 @@ pub fn recover(root: &Path, destination: &Path) -> Result<Vec<std::path::PathBuf
         .prefix(".basecraft-recover-")
         .tempdir_in(parent)?;
     let mut session = Session::unlogged(staging.path());
+    let source_root = recorded_source_root(root)?;
     let mut documents = std::collections::BTreeMap::<String, DocId>::new();
     for entry in entries {
         if let Op::Open { path } = &entry.op {
@@ -240,6 +280,7 @@ pub fn recover(root: &Path, destination: &Path) -> Result<Vec<std::path::PathBuf
             materialise(root, staging.path(), &entry.result.hashes)
                 .map_err(crate::error::invalid)?;
             let doc = session.open(&staging.path().join(path))?;
+            session.restore_replay_paths(doc, staging.path(), &source_root);
             documents.insert(entry.doc.clone(), doc);
             continue;
         }
