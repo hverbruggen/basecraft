@@ -461,8 +461,9 @@ fn application_state_replay_handles_hidden_baseline_and_missing_original_folder(
         .apply(
             doc,
             Op::DelimitationEdit {
-                edit: Box::new(Edit::Rename {
-                    hypothesis: "partition-1".into(),
+                edit: Box::new(Edit::Derive {
+                    source: "partition-1".into(),
+                    id: "editable".into(),
                     name: "Saved original".into(),
                 }),
             },
@@ -477,7 +478,7 @@ fn application_state_replay_handles_hidden_baseline_and_missing_original_folder(
             doc,
             Op::DelimitationEdit {
                 edit: Box::new(Edit::Rename {
-                    hypothesis: "partition-1".into(),
+                    hypothesis: "editable".into(),
                     name: "Saved new".into(),
                 }),
             },
@@ -490,7 +491,7 @@ fn application_state_replay_handles_hidden_baseline_and_missing_original_folder(
             doc,
             Op::DelimitationEdit {
                 edit: Box::new(Edit::Rename {
-                    hypothesis: "partition-1".into(),
+                    hypothesis: "editable".into(),
                     name: "Pending".into(),
                 }),
             },
@@ -504,7 +505,7 @@ fn application_state_replay_handles_hidden_baseline_and_missing_original_folder(
     let recovered = parent.path().join("recovered");
     replay::recover(&recovery, &recovered).unwrap();
     let work = basecraft_ops::files::load_delimitation(&recovered.join("species.spart")).unwrap();
-    assert_eq!(work.hypotheses[0].name, "Pending");
+    assert_eq!(work.hypotheses.last().unwrap().name, "Pending");
 }
 
 #[test]
@@ -528,4 +529,56 @@ fn legacy_visible_workspace_metadata_remains_read_only() {
     );
     assert_eq!(std::fs::read(&sidecar).unwrap(), bytes);
     assert!(!root.path().join(".basecraft").exists());
+}
+
+#[test]
+fn combined_workspace_move_and_complete_export_keep_declared_source_evidence() {
+    let parent = tempfile::tempdir().unwrap();
+    let root = parent.path().join("working");
+    std::fs::create_dir(&root).unwrap();
+    let first = root.join("first.spart");
+    let second = root.join("second.spart");
+    std::fs::write(&first, SPART).unwrap();
+    std::fs::write(&second, SPART).unwrap();
+    let mut session = Session::recoverable(&root).unwrap();
+    let doc = session.open(&first).unwrap();
+    basecraft_ops::delimitation::combine(&mut session, doc, std::slice::from_ref(&second)).unwrap();
+    let canonical = root.join("combined.spart");
+    session.save(doc, Some(&canonical)).unwrap();
+    let expected = session
+        .delimitation(doc)
+        .hypotheses
+        .iter()
+        .map(|h| h.groups.clone())
+        .collect::<Vec<_>>();
+    assert!(
+        !basecraft_ops::input_evidence::conflicts(&second)
+            .unwrap()
+            .analyses
+            .is_empty()
+    );
+    let package = parent.path().join("package");
+    basecraft_ops::provenance::package(&canonical, &package).unwrap();
+    drop(session);
+    std::fs::rename(&root, parent.path().join("moved")).unwrap();
+    let exported = package.join("combined.spart");
+    assert!(
+        basecraft_ops::provenance::verify(&exported)
+            .unwrap()
+            .is_empty()
+    );
+    let work = basecraft_ops::files::load_delimitation(&exported).unwrap();
+    assert_eq!(
+        work.hypotheses
+            .iter()
+            .map(|h| h.groups.clone())
+            .collect::<Vec<_>>(),
+        expected
+    );
+    for hypothesis in &work.hypotheses[3..] {
+        let source = hypothesis.provenance.parameters["combined_source"]["path"]
+            .as_str()
+            .unwrap();
+        assert!(std::path::Path::new(source).is_file(), "{source}");
+    }
 }

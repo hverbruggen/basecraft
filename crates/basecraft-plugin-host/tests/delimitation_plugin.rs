@@ -576,3 +576,68 @@ else:
         );
     }
 }
+
+#[test]
+fn concurrent_species_publication_never_replaces_another_run() {
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("source.nwk");
+    std::fs::write(&source, "((a:0.1,b:0.1):0.9,(c:0.2,d:0.2):0.8);\n").unwrap();
+    let plugin = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/delimitation");
+    let mut session = Session::recoverable(root.path()).unwrap();
+    let doc = session.open(&source).unwrap();
+    let canonical = root.path().join("species.spart");
+    let first = FileJob::from_tree(
+        &session,
+        doc,
+        (&plugin, "workspace_tree"),
+        canonical.clone(),
+    )
+    .unwrap();
+    let second = FileJob::from_tree(
+        &session,
+        doc,
+        (&plugin, "workspace_tree"),
+        canonical.clone(),
+    )
+    .unwrap();
+    assert_ne!(first.output.parent(), second.output.parent());
+    let (one, two) = std::thread::scope(|scope| {
+        let one = scope.spawn(|| first.run());
+        let two = scope.spawn(|| second.run());
+        (one.join().unwrap(), two.join().unwrap())
+    });
+    assert_ne!(one.is_ok(), two.is_ok());
+    first.record_terminal(&mut session, doc, &one, 0.0).unwrap();
+    second
+        .record_terminal(&mut session, doc, &two, 0.0)
+        .unwrap();
+    let (winner, result) = if let Ok(result) = one {
+        (&first, result)
+    } else {
+        (&second, two.unwrap())
+    };
+    winner.record(&mut session, doc, &result).unwrap();
+    assert_eq!(visible_files(root.path()), ["source.nwk", "species.spart"]);
+    assert_eq!(
+        basecraft_ops::analysis_store::ArtifactRun::for_result(&canonical)
+            .unwrap()
+            .unwrap(),
+        winner.output.parent().unwrap()
+    );
+    assert_eq!(
+        basecraft_ops::files::load_delimitation(&canonical)
+            .unwrap()
+            .specimens
+            .len(),
+        4
+    );
+    for job in [&first, &second] {
+        assert!(
+            job.output
+                .parent()
+                .unwrap()
+                .join("execution.json")
+                .is_file()
+        );
+    }
+}

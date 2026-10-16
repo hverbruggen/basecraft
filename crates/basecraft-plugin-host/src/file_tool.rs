@@ -241,6 +241,15 @@ impl FileJob {
         }
     }
 
+    /// Progress and cancellation live with execution scratch, never as durable
+    /// companions of the scientific result.
+    pub fn control_paths(&self) -> (PathBuf, PathBuf) {
+        (
+            self._dir.path().join("progress.json"),
+            self._dir.path().join("cancel"),
+        )
+    }
+
     /// Supporting species stages stay in their reserved run, never beside the SPART.
     pub fn species_artifact(&self, name: &str) -> Result<PathBuf> {
         self.artifacts
@@ -1011,6 +1020,35 @@ impl FileJob {
                 }
                 let value: serde_json::Value =
                     serde_json::from_slice(&basecraft_ops::provenance::read_record(&report)?)?;
+                if self.species.is_some()
+                    && value["job"]["id"] == self.run_id
+                    && value["job"]["method"] == self.operation
+                {
+                    paths.push(report.clone());
+                    if let Some(outputs) = value["job"]["outputs"].as_object() {
+                        if outputs.len() > 4096 {
+                            return Err(Error::Protocol(
+                                "Species recovery artifact limit exceeded".into(),
+                            ));
+                        }
+                        for (path, expected) in outputs {
+                            let path = PathBuf::from(path);
+                            if !path.canonicalize()?.starts_with(run.directory())
+                                || expected.as_str()
+                                    != Some(
+                                        basecraft_io::hash_file(&path)
+                                            .map_err(basecraft_ops::Error::from)?
+                                            .as_str(),
+                                    )
+                            {
+                                return Err(Error::Protocol(
+                                    "Species recovery artifact escaped its run or changed".into(),
+                                ));
+                            }
+                            paths.push(path);
+                        }
+                    }
+                }
                 if let Some(collection) = value.pointer("/bootstrap/replicate_trees") {
                     let path = collection
                         .get("path")

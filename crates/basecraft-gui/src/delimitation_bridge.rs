@@ -1218,8 +1218,7 @@ impl qobject::DelimitationController {
                     "The retained alignment changed; select an intact input explicitly".into(),
                 );
             }
-            let progress = job.output.with_extension("progress.json");
-            let cancel = job.output.with_extension("cancel");
+            let (progress, cancel) = job.control_paths();
             job.params.extend([
                 ("rooted".into(), json!(rooted)),
                 ("generation".into(), json!(session.generation(doc))),
