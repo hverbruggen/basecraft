@@ -420,6 +420,10 @@ pub fn describe(op: &Op) -> String {
         Op::AlnRemoveRows { rows: r } => format!("Deleted {}", rows(r)),
         Op::AlnAddSequences { rows, .. } => format!("Added {} sequences", rows.len()),
         Op::Export { path, format } => format!("Exported {format} to {path}"),
+        Op::TreeMidpointRoot {} => "Midpoint rooted on a longest tip-to-tip path".into(),
+        Op::TreeMinimumVarianceRoot {} => {
+            "MRTTV rooted by minimum unweighted root-to-all-tip variance".into()
+        }
         Op::TreeReroot { clade } => format!("Rerooted on {}", clade_name(clade)),
         Op::TreeRootPosition { clade, fraction } => format!(
             "Moved the root to {:.0} % of its branch from {}",

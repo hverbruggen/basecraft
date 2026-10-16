@@ -1076,10 +1076,16 @@ ApplicationWindow {
                     spacing: 6
                     SpeciesMethodsGroup { commandSuffix: "tree" }
                     ToolSeparator { Layout.fillHeight: true }
+                    TreeRootingGroup {
+                        controller: window.current
+                        treeOpen: window.treeOpen
+                        customization: window.customization
+                        Component.onCompleted: commands.forEach(command => window.registerRibbonCommand(command))
+                    }
+                    ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
                         title: "Clade"
                         RibbonButton { commandId: "ribbon.name-the-selected-clade-with-a-bar-or-a"; text: "Annotate…"; tip: "Name the selected clade, with a bar or a coloured field"; keys: "Enter"; enabled: window.current !== null && window.current.has_selection === true; onInvoked: cladeEditor.openSelected() }
-                        RibbonButton { commandId: "ribbon.root-the-tree-on-the-branch-above-the-selection"; text: "Reroot"; tip: "Root the tree on the branch above the selection"; enabled: window.current !== null && window.current.has_selection === true; onInvoked: window.current.reroot() }
                         RibbonButton { commandId: "ribbon.move-the-root-along-its-branch"; text: "Root position…"; tip: "Move the root along its branch"; onInvoked: rootDialog.ask() }
                         RibbonButton { commandId: "ribbon.reverse-the-order-of-the-branches-in-the-selected"; text: "Flip"; tip: "Reverse the order of the branches in the selected subtree (for a tip, its parent's)"; enabled: window.current !== null && window.current.has_selection === true; onInvoked: window.current.rotate() }
                         RibbonButton { commandId: "ribbon.rename-the-selected-tip"; text: "Rename…"; tip: "Rename the selected tip"; keys: "F2"; enabled: window.current !== null && window.current.tip_selected === true; onInvoked: tipDialog.ask() }

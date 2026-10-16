@@ -1620,6 +1620,40 @@
           ]
         },
         {
+          "description": "Root halfway along a longest tip-to-tip branch-length path.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "tree.midpoint_root"
+            },
+            "params": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Globally minimize unweighted root-to-all-tip distance variance.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "tree.minimum_variance_root"
+            },
+            "params": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
           "description": "Move the root along its branch: `clade`, one of the root's two\nchildren, gets `fraction` of the branch's length, the other the\nrest.",
           "type": "object",
           "properties": {
@@ -2801,6 +2835,40 @@
               "required": [
                 "clade"
               ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Root halfway along a longest tip-to-tip branch-length path.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "tree.midpoint_root"
+            },
+            "params": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "Globally minimize unweighted root-to-all-tip distance variance.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "tree.minimum_variance_root"
+            },
+            "params": {
+              "type": "object"
             }
           },
           "required": [

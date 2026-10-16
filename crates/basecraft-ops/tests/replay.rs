@@ -693,3 +693,72 @@ fn sequence_addition_expands_reference_and_replays_with_undo() {
     let report = replay::replay(root).unwrap();
     assert!(report.ok(), "{:#?}", report.problems);
 }
+
+#[test]
+fn automatic_root_operations_undo_redo_save_reload_and_replay() {
+    for op in [Op::TreeMidpointRoot {}, Op::TreeMinimumVarianceRoot {}] {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let path = root.join("root.nwk");
+        std::fs::write(&path, "(A:1,B:2,(C:3,D:9)90:4);").unwrap();
+        let saved;
+        {
+            let mut session = Session::new(root);
+            let doc = session.open(&path).unwrap();
+            let mut annotation =
+                basecraft_protocol::CladeAnnotation::new(clade(&["C", "D"]), "edge label");
+            annotation.on_branch = true;
+            annotation.bar = false;
+            session
+                .apply(
+                    doc,
+                    Op::TreeAnnotate {
+                        id: 1,
+                        annotation: Some(annotation),
+                    },
+                )
+                .unwrap();
+            let before = session.tree(doc).clone();
+            session.apply(doc, op.clone()).unwrap();
+            saved = session.tree(doc).clone();
+            assert_ne!(before.to_newick(), saved.to_newick());
+            session.undo(doc).unwrap();
+            assert_eq!(session.tree(doc).to_newick(), before.to_newick());
+            assert_eq!(session.tree(doc).annotations(), before.annotations());
+            session.redo(doc).unwrap();
+            assert_eq!(session.tree(doc).to_newick(), saved.to_newick());
+            assert_eq!(session.tree(doc).annotations(), saved.annotations());
+            session.save(doc, None).unwrap();
+        }
+        let reloaded = basecraft_ops::files::load_tree(&path).unwrap().doc;
+        assert_eq!(reloaded.to_newick(), saved.to_newick());
+        assert_eq!(reloaded.annotations(), saved.annotations());
+        assert_eq!(reloaded.supports(), saved.supports());
+        let entries = basecraft_ops::log::read_all(root).unwrap();
+        assert!(entries.iter().any(|e| e.op.name() == op.name()));
+        let report = replay::replay(root).unwrap();
+        assert!(report.ok(), "{:#?}", report.problems);
+    }
+}
+
+#[test]
+fn automatic_root_error_keeps_document_and_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("missing.nwk");
+    std::fs::write(&path, "(A,B:2);").unwrap();
+    let mut session = Session::new(dir.path());
+    let doc = session.open(&path).unwrap();
+    let before = session.tree(doc).to_newick();
+    session.flush().unwrap();
+    let entries = basecraft_ops::log::read_all(dir.path()).unwrap().len();
+    for op in [Op::TreeMidpointRoot {}, Op::TreeMinimumVarianceRoot {}] {
+        assert!(session.apply(doc, op).is_err());
+        assert_eq!(session.tree(doc).to_newick(), before);
+        assert!(!session.can_undo(doc));
+        session.flush().unwrap();
+        assert_eq!(
+            basecraft_ops::log::read_all(dir.path()).unwrap().len(),
+            entries
+        );
+    }
+}
