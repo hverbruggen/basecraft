@@ -129,7 +129,7 @@ impl ArtifactRun {
         Ok(self.directory.join("pending").join(name))
     }
 
-    /// Same-filesystem no-clobber publication. Unlike rename/write_atomic this
+    /// Same-filesystem no-clobber publication. Unlike `rename`/`write_atomic` this
     /// cannot replace another run or user file. Cross-filesystem export fails.
     pub fn publish(&self, name: &str, location: ArtifactDestination) -> Result<PathBuf> {
         let source = self.staging(name)?;

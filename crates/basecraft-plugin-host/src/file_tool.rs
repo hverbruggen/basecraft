@@ -82,6 +82,8 @@ pub struct FileJob {
     source_hash: String,
     artifacts: Option<basecraft_ops::analysis_store::ArtifactRun>,
     allocation_started: std::sync::atomic::AtomicBool,
+    scratch_read_bytes: std::sync::atomic::AtomicU64,
+    submitted_copy_bytes: std::sync::atomic::AtomicU64,
     _dir: tempfile::TempDir,
 }
 
@@ -185,6 +187,8 @@ impl FileJob {
             granted_budget: std::sync::atomic::AtomicUsize::new(0),
             artifacts,
             allocation_started: std::sync::atomic::AtomicBool::new(false),
+            scratch_read_bytes: std::sync::atomic::AtomicU64::new(0),
+            submitted_copy_bytes: std::sync::atomic::AtomicU64::new(0),
             _dir: dir,
         })
     }
@@ -231,6 +235,8 @@ impl FileJob {
             granted_budget: std::sync::atomic::AtomicUsize::new(0),
             artifacts: None,
             allocation_started: std::sync::atomic::AtomicBool::new(false),
+            scratch_read_bytes: std::sync::atomic::AtomicU64::new(0),
+            submitted_copy_bytes: std::sync::atomic::AtomicU64::new(0),
             _dir: dir,
         })
     }
@@ -279,6 +285,8 @@ impl FileJob {
             granted_budget: std::sync::atomic::AtomicUsize::new(0),
             artifacts: None,
             allocation_started: std::sync::atomic::AtomicBool::new(false),
+            scratch_read_bytes: std::sync::atomic::AtomicU64::new(0),
+            submitted_copy_bytes: std::sync::atomic::AtomicU64::new(0),
             _dir: dir,
         })
     }
@@ -325,6 +333,8 @@ impl FileJob {
             granted_budget: std::sync::atomic::AtomicUsize::new(0),
             artifacts: None,
             allocation_started: std::sync::atomic::AtomicBool::new(false),
+            scratch_read_bytes: std::sync::atomic::AtomicU64::new(0),
+            submitted_copy_bytes: std::sync::atomic::AtomicU64::new(0),
             _dir: dir,
         })
     }
@@ -429,6 +439,16 @@ impl FileJob {
             operation: op,
         });
         Ok(record)
+    }
+
+    /// Host-controlled I/O after the document's existing verified open. These
+    /// counters exclude tool reads, mmap page faults and the initial document load.
+    pub fn input_io(&self) -> Option<serde_json::Value> {
+        self.artifacts.as_ref().map(|_| json!({
+            "source_identity_hash_bytes": 0, "persistent_original_copy_bytes": 0,
+            "execution_scratch_read_bytes": self.scratch_read_bytes.load(std::sync::atomic::Ordering::Relaxed),
+            "persistent_submitted_copy_bytes": self.submitted_copy_bytes.load(std::sync::atomic::Ordering::Relaxed),
+        }))
     }
 
     fn execution_budget(&self) -> usize {
@@ -575,6 +595,8 @@ impl FileJob {
         std::fs::create_dir_all(paths.state.join("jobs"))?;
         std::fs::create_dir(&run_dir)?;
         let input = std::fs::read(&self.input)?;
+        self.scratch_read_bytes
+            .fetch_add(input.len() as u64, std::sync::atomic::Ordering::Relaxed);
         if basecraft_io::hash_bytes(&input) != self.input_key.1 {
             return Err(Error::Protocol("job input changed before launch".into()));
         }
@@ -584,6 +606,8 @@ impl FileJob {
                     w.write_all(&input)
                 })
                 .map_err(basecraft_ops::Error::from)?;
+                self.submitted_copy_bytes
+                    .fetch_add(input.len() as u64, std::sync::atomic::Ordering::Relaxed);
             }
         } else {
             basecraft_io::write_atomic(&run_dir.join("input.snapshot"), |w| w.write_all(&input))
@@ -760,7 +784,7 @@ impl FileJob {
         let source_path =
             serde_json::to_value(&self.source_path).map_err(|e| Error::Protocol(e.to_string()))?;
         let value = json!({
-            "schema_version": 1, "id": self.run_id, "status": status,
+            "schema_version": 1, "id": self.run_id, "status": status, "input_io": self.input_io(),
             "owner_instance": basecraft_platform::process_instance(),
             "source_record": self.source_record,
             "started": started, "ended": outcome.map(|_| basecraft_platform::now_rfc3339()),
