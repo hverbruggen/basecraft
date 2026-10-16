@@ -6,6 +6,9 @@ import org.kde.kirigami as Kirigami
 
 Control {
     id: ribbon
+    property real ribbonSizeFactor: 1
+    property real baseFontPixelSize: Window.window && Window.window.font ? Window.window.font.pixelSize : 12
+    font.pixelSize: baseFontPixelSize * ribbonSizeFactor
     default property alias pages: stack.data
     property alias currentIndex: stack.currentIndex
     readonly property Item currentPage: stack.currentIndex >= 0 && stack.currentIndex < stack.children.length ? stack.children[stack.currentIndex] : null
@@ -14,7 +17,7 @@ Control {
     readonly property real scrollPosition: viewport.contentX
     readonly property bool overflowing: contentWidth > viewportWidth
     implicitHeight: (currentPage ? currentPage.implicitHeight : 0) + topPadding + bottomPadding + (overflowing ? bar.implicitHeight : 0)
-    padding: Kirigami.Units.smallSpacing
+    padding: Kirigami.Units.smallSpacing * ribbonSizeFactor
     clip: true
 
     function reveal(item) {

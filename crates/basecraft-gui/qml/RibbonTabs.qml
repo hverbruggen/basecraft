@@ -3,6 +3,9 @@ import QtQuick.Controls.Basic
 
 TabBar {
     id: tabs
+    property real ribbonSizeFactor: 1
+    property real baseFontPixelSize: Window.window && Window.window.font ? Window.window.font.pixelSize : 12
+    font.pixelSize: baseFontPixelSize * ribbonSizeFactor
     property var names: []
     property string selectedName
     signal selected(string name)
@@ -31,10 +34,10 @@ TabBar {
             width: implicitWidth
             text: modelData
             focusPolicy: Qt.TabFocus
-            topPadding: 3
-            bottomPadding: 3
-            leftPadding: 12
-            rightPadding: 12
+            topPadding: 3 * tabs.ribbonSizeFactor
+            bottomPadding: 3 * tabs.ribbonSizeFactor
+            leftPadding: 12 * tabs.ribbonSizeFactor
+            rightPadding: 12 * tabs.ribbonSizeFactor
             background: Rectangle {
                 color: Qt.alpha(tab.palette.windowText, tab.checked ? 0.07 : tab.hovered ? 0.04 : 0)
                 border.color: tab.visualFocus ? tab.palette.highlight : "transparent"

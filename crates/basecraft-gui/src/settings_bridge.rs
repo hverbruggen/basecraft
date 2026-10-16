@@ -83,6 +83,7 @@ fn change(key: &str, value: &serde_json::Value) -> Result<Change, String> {
         } else {
             Some(integer()?)
         }),
+        "ribbonSizePercent" => Change::RibbonSizePercent(integer()?),
         "localCpuThreads" => Change::CpuThreads(integer()?),
         "recovery" => Change::Recovery(boolean()?),
         "rememberWorkspace" => Change::RememberWorkspace(boolean()?),
@@ -511,6 +512,27 @@ mod tests {
     }
     #[test]
     fn qml_values_require_the_declared_type() {
+        let ribbon = change("ribbonSizePercent", &serde_json::json!(175)).unwrap();
+        assert_eq!(
+            Preferences::default()
+                .resolve_session(&[ribbon])
+                .unwrap()
+                .ui
+                .ribbon_size_percent,
+            175
+        );
+        for value in [
+            serde_json::json!("150"),
+            serde_json::json!(150.5),
+            serde_json::json!(-1),
+            serde_json::Value::Null,
+        ] {
+            assert!(change("ribbonSizePercent", &value).is_err());
+        }
+        for size in [99, 201] {
+            let ribbon = change("ribbonSizePercent", &serde_json::json!(size)).unwrap();
+            assert!(Preferences::default().resolve_session(&[ribbon]).is_err());
+        }
         assert!(change("showGc", &serde_json::json!(true)).is_ok());
         assert!(change("showGc", &serde_json::json!("true")).is_err());
         assert!(change("localCpuThreads", &serde_json::json!(-1)).is_err());

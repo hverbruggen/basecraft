@@ -4,6 +4,8 @@ revision = 1
 [ui]
 # Optional override in points (6–32); absent uses platform size minus 3, minimum 6.
 # font_size_points = 9
+# Independent ribbon icons, labels and layout (100–200 percent).
+ribbon_size_percent = 100
 show_gc = true
 sidebar_open = true
 orf_min_codons = 100

@@ -6,6 +6,7 @@ import org.kde.kirigami.layouts as KirigamiLayouts
 
 Control {
     id: group
+    RibbonMetrics { id: metrics; control: group }
     property string title
     property alias actions: toolbar.actions
     // Controls in this slot keep their natural size, including editable fields.
@@ -14,25 +15,25 @@ Control {
     readonly property real bodyCenterY: body.height / 2
     // Layouts assign whole pixels; round up so fractional font metrics fit.
     implicitWidth: Math.ceil(Math.max(row.implicitWidth, caption.implicitWidth))
-    implicitHeight: row.implicitHeight + caption.implicitHeight + Kirigami.Units.smallSpacing
+    implicitHeight: row.implicitHeight + caption.implicitHeight + Kirigami.Units.smallSpacing * metrics.factor
     Layout.fillHeight: true
     Layout.minimumWidth: implicitWidth
     padding: 0
     Item {
         id: body
         width: parent.width
-        height: Math.max(0, parent.height - caption.implicitHeight - Kirigami.Units.smallSpacing)
+        height: Math.max(0, parent.height - caption.implicitHeight - Kirigami.Units.smallSpacing * metrics.factor)
         RowLayout {
             id: row
             anchors.centerIn: parent
             width: parent.width
             height: implicitHeight
-            spacing: Kirigami.Units.smallSpacing
+            spacing: Kirigami.Units.smallSpacing * metrics.factor
             Kirigami.ActionToolBar {
                 id: toolbar
-                // The public height policy also constrains the toolbar's
-                // fallback delegates, whose Basic background requests 40 px.
-                implicitHeight: Math.max(24, toolbarMetrics.height + 6)
+                // Keep fallback style minimums compact while reserving the full
+                // shared tile, including its caption and clickable padding.
+                implicitHeight: Math.max(24 * metrics.factor, toolbarMetrics.height + 6 * metrics.factor, metrics.tileHeight)
                 heightMode: KirigamiLayouts.ToolBarLayout.AlwaysFill
                 FontMetrics { id: toolbarMetrics; font: toolbar.font }
                 visible: actions.length > 0
@@ -51,7 +52,7 @@ Control {
         height: implicitHeight
         text: group.title
         horizontalAlignment: Text.AlignHCenter
-        font.pixelSize: Math.max(9, group.font.pixelSize * 0.85)
+        font.pixelSize: Math.max(9, group.font.pixelSize / metrics.factor * 0.85) * metrics.factor
         opacity: 0.65
     }
 }

@@ -44,6 +44,8 @@ pub struct Ui {
     pub alignment_insert: bool,
     /// None uses the compact platform-relative default; explicit values are points.
     pub font_size_points: Option<u32>,
+    /// Independent ribbon icon, text and layout scale, in percent.
+    pub ribbon_size_percent: u32,
 }
 impl Default for Ui {
     fn default() -> Self {
@@ -53,6 +55,7 @@ impl Default for Ui {
             orf_min_codons: 100,
             alignment_insert: true,
             font_size_points: None,
+            ribbon_size_percent: 100,
         }
     }
 }
@@ -151,6 +154,11 @@ impl Preferences {
         {
             return Err(Error::Invalid(
                 "Interface font size must be between 6 and 32 points".into(),
+            ));
+        }
+        if !(100..=200).contains(&self.ui.ribbon_size_percent) {
+            return Err(Error::Invalid(
+                "Ribbon size must be between 100 and 200 percent".into(),
             ));
         }
         if !(1..=65536).contains(&self.compute.local_cpu_threads) {
@@ -331,6 +339,7 @@ pub enum Change {
     OrfMinCodons(u32),
     AlignmentInsert(bool),
     FontSizePoints(Option<u32>),
+    RibbonSizePercent(u32),
     CpuThreads(u32),
     Provenance(ProvenancePolicy),
     Recovery(bool),
@@ -357,6 +366,7 @@ impl Change {
             Self::OrfMinCodons(v) => prefs.ui.orf_min_codons = v,
             Self::AlignmentInsert(v) => prefs.ui.alignment_insert = v,
             Self::FontSizePoints(v) => prefs.ui.font_size_points = v,
+            Self::RibbonSizePercent(v) => prefs.ui.ribbon_size_percent = v,
             Self::CpuThreads(v) => prefs.compute.local_cpu_threads = v,
             Self::Provenance(v) => prefs.files.provenance = v,
             Self::Recovery(v) => prefs.files.recovery = v,
@@ -522,6 +532,47 @@ fn merge(destination: &mut toml::Value, source: toml::Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn ribbon_size_round_trips_defaults_and_preserves_invalid_or_future_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = store(&temp);
+        assert_eq!(store.load().unwrap().ui.ribbon_size_percent, 100);
+        assert!(!store.path.exists());
+        std::fs::create_dir_all(store.path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &store.path,
+            "schema_version = 1\n[ui]\nfont_size_points = 18\nfuture_ui = 'keep'\n[future]\nkeep = true\n",
+        )
+        .unwrap();
+        assert_eq!(store.load().unwrap().ui.ribbon_size_percent, 100);
+        for size in [125, 150, 175, 200, 100] {
+            store.update(Change::RibbonSizePercent(size)).unwrap();
+            // A new store instance reads the actual serialized preference.
+            let prefs = SettingsStore::new(store.path.clone()).load().unwrap();
+            assert_eq!(prefs.ui.ribbon_size_percent, size);
+            assert_eq!(prefs.ui.font_size_points, Some(18));
+            let raw: toml::Value =
+                toml::from_str(&std::fs::read_to_string(&store.path).unwrap()).unwrap();
+            assert_eq!(raw["ui"]["future_ui"].as_str(), Some("keep"));
+            assert_eq!(raw["future"]["keep"].as_bool(), Some(true));
+        }
+        let original = std::fs::read_to_string(&store.path).unwrap();
+        for size in [0, 99, 201, u32::MAX] {
+            assert!(store.update(Change::RibbonSizePercent(size)).is_err());
+            assert_eq!(std::fs::read_to_string(&store.path).unwrap(), original);
+        }
+        for invalid in [
+            "schema_version = 999\n[ui]\nribbon_size_percent = 150\n",
+            "[ui]\nribbon_size_percent = 201\n",
+            "[ui]\nribbon_size_percent = '150'\n",
+            "[ui]\nribbon_size_percent = 150.5\n",
+        ] {
+            std::fs::write(&store.path, invalid).unwrap();
+            assert!(store.load().is_err());
+            assert!(store.update(Change::RibbonSizePercent(100)).is_err());
+            assert_eq!(std::fs::read_to_string(&store.path).unwrap(), invalid);
+        }
+    }
     #[test]
     fn font_size_defaults_persist_validate_and_reset_without_losing_unknown_fields() {
         let temp = tempfile::tempdir().unwrap();

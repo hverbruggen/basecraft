@@ -14,8 +14,7 @@ RibbonGroup {
         customization: group.customization
         text: "Reroot"
         iconName: "left"
-        icon.width: 16
-        icon.height: 16
+        symbolSize: 16
         tip: "Root the tree on the branch above the selection"
         enabled: group.treeOpen && group.controller !== null && group.controller.has_selection === true
         onInvoked: group.controller.reroot()

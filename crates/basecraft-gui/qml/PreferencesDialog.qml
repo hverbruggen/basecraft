@@ -26,7 +26,7 @@ AppFormDialog {
     }
 
     Label { text: "Appearance"; font.bold: true }
-    Label { text: "Colours and the monospace font family follow the system theme. Font-size changes apply immediately."; wrapMode: Text.Wrap; Layout.fillWidth: true }
+    Label { text: "Colours and the monospace font family follow the system theme. Appearance changes apply immediately."; wrapMode: Text.Wrap; Layout.fillWidth: true }
     PreferenceSpinBox {
         objectName: "interfaceFontSize"
         Kirigami.FormData.label: "Interface font size (pt):"
@@ -37,6 +37,16 @@ AppFormDialog {
         onValueModified: dialog.change("fontSizePoints", value)
     }
     AppButton { objectName: "resetInterfaceFontSize"; text: "Use default size (" + dialog.defaultFontSizePoints + " pt)"; onClicked: dialog.change("fontSizePoints", null) }
+    PreferenceSpinBox {
+        objectName: "ribbonSize"
+        Kirigami.FormData.label: "Ribbon size (%):"
+        Accessible.name: "Ribbon size in percent"
+        from: 100; to: 200; stepSize: 25; editable: true
+        value: dialog.values.ui && dialog.values.ui.ribbon_size_percent !== undefined
+            ? dialog.values.ui.ribbon_size_percent : 100
+        onValueModified: dialog.change("ribbonSizePercent", value)
+    }
+    AppButton { objectName: "resetRibbonSize"; text: "Use default ribbon size (100%)"; onClicked: dialog.change("ribbonSizePercent", 100) }
     CheckBox { text: "Show GC content"; checked: dialog.values.ui ? dialog.values.ui.show_gc : true; onToggled: dialog.change("showGc", checked) }
     CheckBox { text: "Open files sidebar"; checked: dialog.values.ui ? dialog.values.ui.sidebar_open : true; onToggled: dialog.change("sidebarOpen", checked) }
     PreferenceSpinBox { objectName: "orfMinCodons"; Kirigami.FormData.label: "Minimum ORF (codons):"; from: 1; to: 1000000; editable: true; value: dialog.values.ui ? dialog.values.ui.orf_min_codons : 100; onValueModified: dialog.change("orfMinCodons", value) }

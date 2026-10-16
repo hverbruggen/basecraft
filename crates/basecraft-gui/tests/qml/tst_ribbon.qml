@@ -9,6 +9,7 @@ Item {
     width: 1600
     height: 600
     property int textSize: 12
+    property real sizeFactor: 1
     property bool busy: false
     property bool longLabels: false
     property bool rtl: false
@@ -25,7 +26,8 @@ Item {
         id: ribbon
         width: 1000
         height: implicitHeight
-        font.pixelSize: host.textSize
+        baseFontPixelSize: host.textSize
+        ribbonSizeFactor: host.sizeFactor
         palette.window: host.dark ? "#202020" : "#fafafa"
         palette.windowText: host.dark ? "#eeeeee" : "#202020"
         palette.buttonText: host.dark ? "#eeeeee" : "#202020"
@@ -49,6 +51,7 @@ Item {
                 id: progress
                 title: "Job"
                 AppRibbonButton { id: run; text: "Run"; tip: "Run analysis"; iconName: "accept" }
+                AppRibbonButton { id: arrow; text: "Next"; tip: "Next item"; iconName: "right"; badge: "42" }
                 ColumnLayout {
                     visible: host.busy
                     Label { text: "Calculating bootstrap support…" }
@@ -66,10 +69,15 @@ Item {
         RibbonPage {
             RibbonGroup { title: "Other page"; AppRibbonButton { text: "Open" } }
         }
+        RibbonPage {
+            RibbonGroup { id: onlyActions; title: "Actions only"; actions: [command] }
+        }
     }
     TextInput { id: editor; x: 300; y: 350; width: 180; height: 30 }
     RibbonTabs {
         id: tabs
+        baseFontPixelSize: host.textSize
+        ribbonSizeFactor: host.sizeFactor
         y: 350
         width: 240
         names: ["File", "View", "Annotations", "Settings", "Help"]
@@ -96,12 +104,16 @@ Item {
             ribbon.currentIndex = 0
             ribbon.width = 1000
             host.textSize = 12
+            host.sizeFactor = 1
             host.busy = false
             host.longLabels = false
             host.rtl = false
             host.dark = false
+            tabs.names = ["File", "View", "Annotations", "Settings", "Help"]
+            tabs.selectedName = "File"
             command.enabled = true
             failOnWarning(/Binding loop/)
+            failOnWarning(/TypeError|ReferenceError/)
             // The Control itself has no pending polish; its nested layouts do.
             // Wait for the whole window before inspecting their geometry.
             verify(waitForPolish(ribbon.Window.window))
@@ -113,11 +125,53 @@ Item {
                     for (const busy of [false, true])
                         for (const rtl of [false, true])
                             for (const dark of [false, true])
-                                rows.push({tag: `${width}-${font}-${busy}-${rtl}-${dark}`, width, font, busy, rtl, dark})
+                                for (const factor of [1, 1.25, 1.5, 1.75, 2])
+                                    rows.push({tag: `${width}-${font}-${busy}-${rtl}-${dark}-${factor}`, width, font, busy, rtl, dark, factor})
             return rows
         }
         function test_action_toolbar_is_compact() {
-            verify(actions.implicitHeight < 50, "style background must not force 40-pixel toolbar buttons")
+            verify(actions.implicitHeight < 60, "style background must not force 40-pixel toolbar buttons")
+        }
+        function test_action_only_page_fits_full_click_target_data() {
+            const rows = []
+            for (const factor of [1, 1.25, 1.5, 1.75, 2])
+                for (const font of [12, 24])
+                    rows.push({tag: `${factor}-${font}`, factor, font})
+            return rows
+        }
+        function test_action_only_page_fits_full_click_target(data) {
+            host.sizeFactor = data.factor
+            host.textSize = data.font
+            ribbon.currentIndex = 2
+            ribbon.width = 320
+            verify(waitForPolish(ribbon.Window.window))
+            const button = findActionButton(onlyActions, command)
+            verify(button)
+            verify(button.height >= button.implicitHeight, "full tile must be clickable")
+            const position = button.mapToItem(onlyActions, 0, 0)
+            verify(position.y >= 0)
+            verify(position.y + button.height <= onlyActions.captionY, "tile must fit above group caption")
+            editor.forceActiveFocus()
+            const before = host.invocations
+            mouseClick(button, button.width / 2, button.height - 1)
+            compare(host.invocations, before + 1, "caption/bottom padding belongs to the click target")
+            verify(editor.activeFocus)
+        }
+        function test_live_scale_preserves_editor_font_and_restores_geometry() {
+            const editorFont = editor.font
+            const before = [run.width, run.height, run.captionBaseline, ribbon.height, tabs.height]
+            help.forceActiveFocus(Qt.TabFocusReason)
+            ribbon.width = 320
+            host.sizeFactor = 2
+            verify(waitForPolish(ribbon.Window.window))
+            compare(run.icon.width, 32)
+            verify(help.activeFocus, "resizing retains the focused command")
+            tryVerify(() => help.mapToItem(ribbon, 0, 0).x + help.width <= ribbon.width)
+            compare(editor.font, editorFont, "ribbon size must not change unrelated editor text")
+            host.sizeFactor = 1
+            ribbon.width = 1000
+            verify(waitForPolish(ribbon.Window.window))
+            compare([run.width, run.height, run.captionBaseline, ribbon.height, tabs.height], before)
         }
         function test_fractional_caption_width_data() {
             // Exercise both sides of half a pixel independently of installed fonts.
@@ -139,6 +193,7 @@ Item {
         function test_geometry(data) {
             ribbon.width = data.width
             host.textSize = data.font
+            host.sizeFactor = data.factor
             host.busy = data.busy
             host.rtl = data.rtl
             host.dark = data.dark
@@ -155,9 +210,32 @@ Item {
                 verify(pos.y + group.height <= ribbon.height, "caption below clip edge")
             }
             verify(workers.height >= workers.implicitHeight)
+            compare(workers.font.pixelSize, Math.round(data.font * data.factor))
+            compare(run.icon.width, 16 * data.factor)
+            compare(arrow.icon.width, Math.round(10 * data.factor))
+            compare(run.symbolHeight, arrow.symbolHeight, "arrows and counts use one symbol band")
+            fuzzyCompare(run.captionBaseline, arrow.captionBaseline, 1)
+            compare(run.font.pixelSize, Math.round(Math.max(9, Math.round(data.font * 0.8)) * data.factor))
+            compare(tabs.itemAt(0).font.pixelSize, Math.round(data.font * data.factor))
+            const button = findActionButton(actions, command)
+            verify(button)
+            compare(button.icon.width, 16 * data.factor, "ActionToolBar delegates inherit scale")
+            fuzzyCompare(button.mapToItem(ribbon, 0, button.captionBaseline).y,
+                         run.mapToItem(ribbon, 0, run.captionBaseline).y, 1,
+                         "action delegates and direct buttons share the caption baseline")
+            verify(button.height >= button.contentItem.implicitHeight + button.topPadding + button.bottomPadding,
+                   "toolbar height=" + button.height + " natural=" + button.implicitHeight + " content=" + button.contentItem.implicitHeight + " group=" + actions.height)
+            for (const control of [run, arrow, button]) {
+                verify(control.width >= control.contentItem.implicitWidth + control.leftPadding + control.rightPadding)
+                verify(control.height >= control.contentItem.implicitHeight + control.topPadding + control.bottomPadding)
+            }
             verify(ribbon.contentWidth >= page.implicitWidth)
         }
-        function test_keyboard_reveals_overflow_fields() {
+        function test_keyboard_reveals_overflow_fields_data() {
+            return [1, 1.25, 1.5, 1.75, 2].map(factor => ({tag: String(factor), factor}))
+        }
+        function test_keyboard_reveals_overflow_fields(data) {
+            host.sizeFactor = data.factor
             ribbon.width = 180
             verify(waitForPolish(ribbon.Window.window))
             verify(ribbon.overflowing)
@@ -211,7 +289,11 @@ Item {
             compare(host.invocations, before + 1)
             verify(editor.activeFocus, "Kirigami actions must preserve mouse-driven editor focus too")
         }
-        function test_tab_keyboard_changes_page() {
+        function test_tab_keyboard_changes_page_data() {
+            return [1, 1.25, 1.5, 1.75, 2].map(factor => ({tag: String(factor), factor}))
+        }
+        function test_tab_keyboard_changes_page(data) {
+            host.sizeFactor = data.factor
             tabs.selectedName = "File"
             waitForPolish(tabs)
             tabs.itemAt(0).forceActiveFocus(Qt.TabFocusReason)

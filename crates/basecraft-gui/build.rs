@@ -81,6 +81,7 @@ fn main() {
         "qml/RibbonPage.qml",
         "qml/RibbonTabs.qml",
         "qml/Ribbon.qml",
+        "qml/RibbonMetrics.qml",
         "qml/AppCommand.qml",
         "qml/AppCommandButton.qml",
         "qml/TreeRootingGroup.qml",

@@ -3,7 +3,9 @@ import QtTest
 import "../../qml"
 
 Item {
+    id: host
     width: 600; height: 140
+    property real sizeFactor: 1
     QtObject {
         id: controller
         property bool has_selection: false
@@ -14,17 +16,28 @@ Item {
         function midpoint_root() { last = "midpoint" }
         function minimum_variance_root() { last = "variance" }
     }
-    TreeRootingGroup { id: group; controller: controller; treeOpen: true }
+    Ribbon {
+        width: host.width
+        height: implicitHeight
+        ribbonSizeFactor: host.sizeFactor
+        RibbonPage { TreeRootingGroup { id: group; controller: controller; treeOpen: true } }
+    }
     TestCase {
         name: "TreeRooting"
         when: windowShown
         function init() {
+            host.sizeFactor = 1
             group.controller = controller
             group.treeOpen = true
             controller.has_selection = false
             controller.can_auto_root = true
             controller.busy = false
             controller.last = ""
+        }
+        function test_full_size_reroot_arrow_scales() {
+            host.sizeFactor = 2
+            compare(findChild(group, "manualRoot").icon.width, 32)
+            compare(findChild(group, "midpointRoot").icon.width, 32)
         }
         function test_selection_and_routing() {
             const manual = findChild(group, "manualRoot")

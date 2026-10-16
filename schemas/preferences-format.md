@@ -12,6 +12,11 @@ immediately. When absent, the GUI uses the rounded platform point size minus thr
 with a minimum of six points. Resetting the size removes this override. The font
 family remains the desktop monospace family; scientific canvas zoom is separate.
 
+`ui.ribbon_size_percent` independently scales ribbon icons, labels, fields, group
+captions and tabs. It defaults to 100 and accepts integers from 100 to 200; the GUI
+steppers offer 25-percent increments and a reset to 100. It composes with interface
+font size and Qt display scaling without changing the window font or canvas zoom.
+
 `basecraft_platform::paths::AppPaths` discovers native config, data, state, cache
 and scratch locations without creating them. On Linux these use XDG locations
 with the application directory `basecraft`; macOS uses Library application support

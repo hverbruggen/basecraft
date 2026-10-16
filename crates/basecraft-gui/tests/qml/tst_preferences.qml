@@ -37,7 +37,7 @@ Item {
         name: "Preferences"
         when: windowShown
         function test_escape_does_not_commit_pending_number_data() {
-            return ["interfaceFontSize", "orfMinCodons", "localCpuThreads"].map(name => ({tag: name}))
+            return ["interfaceFontSize", "ribbonSize", "orfMinCodons", "localCpuThreads"].map(name => ({tag: name}))
         }
         function test_escape_does_not_commit_pending_number(data) {
             editor.forceActiveFocus()
@@ -129,6 +129,38 @@ Item {
             findChild(preferences, "resetInterfaceFontSize").forceActiveFocus(Qt.TabFocusReason)
             keyClick(Qt.Key_Space)
             compare(store.lastValue, null)
+        }
+        function test_ribbon_size_keyboard_commit_and_reset() {
+            preferences.open()
+            tryCompare(preferences, "opened", true)
+            wait(0)
+            const size = findChild(preferences, "ribbonSize")
+            compare(size.value, 100)
+            size.forceActiveFocus(Qt.TabFocusReason)
+            tryCompare(size.contentItem, "activeFocus", true)
+            keyClick(Qt.Key_Up)
+            compare(store.lastKey, "ribbonSizePercent")
+            compare(store.lastValue, 125)
+            keyClick(Qt.Key_A, Qt.ControlModifier)
+            keyClick("1"); keyClick("5"); keyClick("0")
+            keyClick(Qt.Key_Return)
+            compare(store.lastValue, 150)
+            keyClick(Qt.Key_A, Qt.ControlModifier)
+            keyClick("1"); keyClick("7"); keyClick("5")
+            store.lastKey = ""
+            keyClick(Qt.Key_Escape)
+            tryCompare(preferences, "opened", false)
+            compare(store.lastKey, "")
+            compare(store.lastValue, 150, "Escape keeps committed changes")
+            compare(size.value, 150)
+            preferences.open()
+            tryCompare(preferences, "opened", true)
+            wait(0)
+            findChild(preferences, "resetRibbonSize").forceActiveFocus(Qt.TabFocusReason)
+            keyClick(Qt.Key_Space)
+            compare(store.lastKey, "ribbonSizePercent")
+            compare(store.lastValue, 100)
+            size.value = 100
         }
         function test_contextual_ribbon_command_dispatch_and_focus() {
             const before = host.invocations

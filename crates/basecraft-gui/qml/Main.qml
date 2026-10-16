@@ -22,6 +22,9 @@ ApplicationWindow {
     font.pointSize: preferenceValues.ui && preferenceValues.ui.font_size_points !== null && preferenceValues.ui.font_size_points !== undefined
         ? preferenceValues.ui.font_size_points : defaultFontSizePoints
 
+    readonly property real ribbonSizeFactor: preferenceValues.ui && preferenceValues.ui.ribbon_size_percent !== undefined
+        ? preferenceValues.ui.ribbon_size_percent / 100 : 1
+
     // Closing the window (or Ctrl+Q) asks about unsaved changes first.
     property bool closeConfirmed: false
     property bool discardAuthoredOnQuit: false
@@ -748,6 +751,7 @@ ApplicationWindow {
                 spacing: 0
                 RibbonTabs {
                     id: ribbonTabBar
+                    ribbonSizeFactor: window.ribbonSizeFactor
                     Layout.fillWidth: true
                     names: window.ribbonTabs
                     selectedName: window.ribbonTab
@@ -798,13 +802,14 @@ ApplicationWindow {
 
         Ribbon {
             id: ribbon
+            ribbonSizeFactor: window.ribbonSizeFactor
             objectName: "applicationRibbon"
             Layout.fillWidth: true
             currentIndex: window.ribbonPanels[window.ribbonTab]
             background: Rectangle { color: Qt.alpha(shell.foreground, 0.025) }
 
                 RibbonPage {
-                    spacing: 6
+                    spacing: 6 * window.ribbonSizeFactor
                     RibbonGroup {
                         title: "Project"
                         AppRibbonButton { action: projectCommand; visible: projectCommand.visible; text: "Open/New"; iconName: "project"; tip: projectCommand.tooltip }
@@ -859,7 +864,7 @@ ApplicationWindow {
                 }
 
                 RibbonPage {
-                    spacing: 6
+                    spacing: 6 * window.ribbonSizeFactor
                     RibbonGroup {
                         title: "Zoom"
                         RibbonButton { commandId: "ribbon.zoom-out"; iconName: "zoom-out"; tip: "Zoom out"; keys: "Ctrl+−"; onInvoked: (window.delimitationOpen ? window.currentView.controller : window.current).zoom_out() }
@@ -917,7 +922,7 @@ ApplicationWindow {
                 }
 
                 RibbonPage {
-                    spacing: 6
+                    spacing: 6 * window.ribbonSizeFactor
                     RibbonGroup {
                         title: "Annotation"
                         RibbonButton { commandId: "ribbon.annotate-the-selection"; text: "Add…"; iconName: "annotation-add"; tip: "Annotate the selection"; keys: "Ctrl+N"; onInvoked: editor.openNew() }
@@ -974,7 +979,7 @@ ApplicationWindow {
                 }
 
                 RibbonPage {
-                    spacing: 6
+                    spacing: 6 * window.ribbonSizeFactor
                     RibbonGroup {
                         title: "Preferences"
                         actions: [preferencesCommand]
@@ -984,7 +989,7 @@ ApplicationWindow {
                 }
 
                 RibbonPage {
-                    spacing: 6
+                    spacing: 6 * window.ribbonSizeFactor
                     RibbonGroup {
                         title: "Learn"
                         actions: [shortcutsCommand, aboutCommand]
@@ -1001,7 +1006,7 @@ ApplicationWindow {
 
                 // Alignment: edits on the selected block, its columns and rows.
                 RibbonPage {
-                    spacing: 6
+                    spacing: 6 * window.ribbonSizeFactor
                     RibbonGroup {
                         title: "Editing mode"
                         ModeButton { commandId: "ribbon.insert-typing-inserts-bases-the-rest-of-the-row";
@@ -1073,7 +1078,7 @@ ApplicationWindow {
                 // Tree: the selected clade, the order of clades, support
                 // values and figures.
                 RibbonPage {
-                    spacing: 6
+                    spacing: 6 * window.ribbonSizeFactor
                     SpeciesMethodsGroup { commandSuffix: "tree" }
                     ToolSeparator { Layout.fillHeight: true }
                     TreeRootingGroup {
@@ -1121,7 +1126,7 @@ ApplicationWindow {
 
                 // Build phylogeny: tree inference from the open alignment.
                 RibbonPage {
-                    spacing: 6
+                    spacing: 6 * window.ribbonSizeFactor
                     RibbonGroup {
                         title: "Distance tree"
                         Repeater {
@@ -1141,7 +1146,7 @@ ApplicationWindow {
                         }
                         ColumnLayout {
                             visible: window.currentKind === "alignment" && window.current !== null && window.current.bootstrap_running
-                            Label { text: parent.visible ? window.current.bootstrap_status : ""; font.pixelSize: 11 }
+                            Label { text: parent.visible ? window.current.bootstrap_status : ""; font.pixelSize: 11 * window.ribbonSizeFactor }
                             ProgressBar { from: 0; to: 1; value: parent.visible ? window.current.bootstrap_progress : 0; Layout.fillWidth: true }
                             AppButton { text: "Cancel bootstrap"; enabled: parent.visible && !window.current.bootstrap_cancelling; onClicked: window.current.cancel_bootstrap() }
                         }
@@ -1180,7 +1185,7 @@ ApplicationWindow {
                 }
 
                 RibbonPage {
-                    spacing: 6
+                    spacing: 6 * window.ribbonSizeFactor
                     RibbonGroup {
                         title: "Issues"
                         RibbonButton { commandId: "ribbon.previous-unresolved-issue"; iconName: "previous"; tip: "Previous unresolved issue"; keys: "Alt+← or ["; visible: commandAction.visible && (window.traceOpen && window.current && window.current.review_mode); onInvoked: window.traceDocument.issue(false) }
