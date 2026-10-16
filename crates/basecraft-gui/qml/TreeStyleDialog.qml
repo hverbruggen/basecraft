@@ -25,10 +25,10 @@ AppContentDialog {
         const shown = style.support_shown.length ? style.support_shown : s.sets.map(x => x.name)
         for (const name of shown) {
             const x = s.sets.find(x => x.name === name)
-            if (x) sets.append({ name: x.name, source: x.source, shown: true, decimals: x.decimals, scale: scaleIndex(x.name), autoDecimals: !Object.hasOwn(style.support_decimals || {}, x.name) })
+            if (x) sets.append({ name: x.name, source: x.source, shown: true, decimals: x.decimals, scale: scaleIndex(x.name), autoDecimals: !Object.prototype.hasOwnProperty.call(style.support_decimals || {}, x.name) })
         }
         for (const x of s.sets)
-            if (!shown.includes(x.name)) sets.append({ name: x.name, source: x.source, shown: false, decimals: x.decimals, scale: scaleIndex(x.name), autoDecimals: !Object.hasOwn(style.support_decimals || {}, x.name) })
+            if (!shown.includes(x.name)) sets.append({ name: x.name, source: x.source, shown: false, decimals: x.decimals, scale: scaleIndex(x.name), autoDecimals: !Object.prototype.hasOwnProperty.call(style.support_decimals || {}, x.name) })
         minimum.value = style.support_min
         symbols.checked = style.symbols !== null
         symbolSet.model = s.sets.map(x => x.name)
@@ -46,7 +46,7 @@ AppContentDialog {
 
     function scaleIndex(name) {
         const overrides = style.support_proportions || {}
-        return Object.hasOwn(overrides, name) ? (overrides[name] ? 2 : 1) : 0
+        return Object.prototype.hasOwnProperty.call(overrides, name) ? (overrides[name] ? 2 : 1) : 0
     }
 
     function save() {
