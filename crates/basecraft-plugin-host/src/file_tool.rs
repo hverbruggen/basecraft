@@ -607,6 +607,40 @@ impl FileJob {
                     }
                 }
             }
+            // Known producer semantics must win over numeric-range guesses.
+            let support = match manifest.id.as_str() {
+                "basecraft.distance"
+                    if self
+                        .params
+                        .get("bootstrap")
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or(0)
+                        > 0 =>
+                {
+                    Some(("Bootstrap", basecraft_protocol::SupportKind::Bootstrap))
+                }
+                "basecraft.fasttree" => Some((
+                    "SH-like local support",
+                    basecraft_protocol::SupportKind::Probability,
+                )),
+                _ => None,
+            };
+            if let Some((name, kind)) = support {
+                for tree in &trees {
+                    let mut doc = basecraft_ops::files::load_tree(tree)?.doc;
+                    if doc.supports().len() == 1 {
+                        let old = doc.supports()[0].name.clone();
+                        doc.rename_support(&old, name);
+                        doc.set_support_kind(name, kind);
+                        let metadata = basecraft_ops::files::tree_sidecar(tree);
+                        basecraft_io::write_atomic(&metadata, |w| {
+                            basecraft_ops::files::write_tree_sidecar(&doc, w)
+                        })
+                        .map_err(basecraft_ops::Error::from)?;
+                        result.outputs.push(metadata.to_string_lossy().into_owned());
+                    }
+                }
+            }
             let artifacts = basecraft_ops::links::AlignmentLink::create(
                 &self.output,
                 &self.source_path,

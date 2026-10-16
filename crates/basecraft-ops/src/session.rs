@@ -1892,7 +1892,10 @@ fn execute_tree(doc: &mut TreeDoc, op: &Op) -> Result<Box<TreeDoc>> {
             name,
             source,
             values,
-        } => doc.add_support(name, source, values),
+            kind,
+        } => doc
+            .add_support(name, source, values)
+            .map(|()| doc.set_support_kind(name, *kind)),
         Op::TreeRemoveSupport { name } => doc.remove_support(name),
         Op::TreeStyle { style } => {
             doc.set_style(style.clone());

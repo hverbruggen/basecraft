@@ -41,6 +41,9 @@ pub mod qobject {
         #[qproperty(bool, has_selection)]
         #[qproperty(bool, can_auto_root)]
         #[qproperty(QString, linked_alignment)]
+        #[qproperty(QString, source_alignment)]
+        #[qproperty(QString, alignment_link_status)]
+        #[qproperty(bool, alignment_link_inferred)]
         #[qproperty(bool, tip_selected)]
         /// Where support values sit: "natural", "above" or "below".
         #[qproperty(QString, support_placement)]
@@ -237,6 +240,9 @@ pub struct TreeRust {
     can_auto_root: bool,
     tip_selected: bool,
     linked_alignment: QString,
+    source_alignment: QString,
+    alignment_link_status: QString,
+    alignment_link_inferred: bool,
     support_placement: QString,
 
     session: Option<Session>,
@@ -274,6 +280,9 @@ impl Default for TreeRust {
             can_auto_root: false,
             tip_selected: false,
             linked_alignment: QString::default(),
+            source_alignment: QString::default(),
+            alignment_link_status: QString::default(),
+            alignment_link_inferred: false,
             support_placement: QString::from("natural"),
             session: None,
             doc: None,
@@ -434,11 +443,35 @@ impl qobject::TreeController {
 
     fn refresh_link(mut self: Pin<&mut Self>) {
         let path = PathBuf::from(self.rust().file_path.to_string());
-        let source = basecraft_ops::links::AlignmentLink::read(&path)
+        let origin = basecraft_ops::links::AlignmentLink::read(&path)
             .ok()
-            .map(|link| link.source.to_string_lossy().into_owned())
+            .filter(|l| l.inferred);
+        let linked = basecraft_ops::links::AlignmentLink::read_view(&path);
+        let (source, status) = match linked {
+            Ok(link) => {
+                let status = self
+                    .with_doc(|tree| link.status(&path, tree))
+                    .unwrap_or_default();
+                (link.source.to_string_lossy().into_owned(), status)
+            }
+            Err(e)
+                if basecraft_ops::links::sidecar(&path).exists()
+                    || basecraft_ops::links::view_sidecar(&path).exists() =>
+            {
+                (String::new(), format!("Alignment link unavailable: {e}"))
+            }
+            Err(_) => (String::new(), "No linked alignment".into()),
+        };
+        let source_path = origin
+            .as_ref()
+            .map(|l| l.source.to_string_lossy().into_owned())
             .unwrap_or_default();
         self.as_mut().set_linked_alignment(QString::from(&source));
+        self.as_mut()
+            .set_source_alignment(QString::from(&source_path));
+        self.as_mut()
+            .set_alignment_link_status(QString::from(&status));
+        self.as_mut().set_alignment_link_inferred(origin.is_some());
     }
 
     pub fn link_alignment(mut self: Pin<&mut Self>, path: &QString) {
@@ -526,7 +559,7 @@ impl qobject::TreeController {
             let result =
                 (|| -> Result<CladeExtraction, Box<dyn std::error::Error + Send + Sync>> {
                     let (tree_path, tree, taxa, _, _) = &work;
-                    let link = basecraft_ops::links::AlignmentLink::read(tree_path)
+                    let link = basecraft_ops::links::AlignmentLink::read_view(tree_path)
                         .map_err(|e| format!("Link an alignment first: {e}"))?;
                     let input = link.checked_snapshot(tree_path, tree)?;
                     let output =
@@ -1189,6 +1222,9 @@ impl qobject::TreeController {
                     "sets": d.supports().iter().map(|s| json!({
                         "name": s.name,
                         "source": s.source,
+                        "decimals": s.decimals(d.style()),
+                        "proportions": s.uses_proportions(d.style()),
+                        "kind": s.kind,
                     })).collect::<Vec<_>>(),
                     "style": d.style(),
                 })
@@ -1262,6 +1298,7 @@ impl qobject::TreeController {
         }
         let mut added = Vec::new();
         for (set, values) in sets {
+            let kind = other.doc.support(&set).map_or_default(|s| s.kind);
             let name = match (base.is_empty(), many) {
                 (true, _) => set,
                 (false, false) => base.clone(),
@@ -1273,6 +1310,7 @@ impl qobject::TreeController {
                     name: name.clone(),
                     source: source.clone(),
                     values,
+                    kind,
                 })
                 .is_err()
             {

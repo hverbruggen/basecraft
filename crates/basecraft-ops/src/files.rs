@@ -204,6 +204,8 @@ struct SupportName {
     name: String,
     #[serde(default)]
     source: String,
+    #[serde(default)]
+    kind: basecraft_protocol::SupportKind,
 }
 
 /// Read the first tree of a Newick or NEXUS file, with its sidecar.
@@ -221,12 +223,47 @@ pub fn load_tree(path: &Path) -> Result<OpenedTree> {
     let sidecar = tree_sidecar(path);
     if sidecar.exists() {
         let side: TreeSidecar = serde_json::from_slice(&std::fs::read(&sidecar)?)?;
+        let kinds: Vec<_> = side
+            .supports
+            .iter()
+            .map(|s| (s.name.clone(), s.kind))
+            .collect();
         let names: Vec<(String, String)> = side
             .supports
             .into_iter()
             .map(|s| (s.name, s.source))
             .collect();
         doc.restore(&names, side.annotations, side.style);
+        for (name, kind) in kinds {
+            doc.set_support_kind(&name, kind);
+        }
+    }
+    // Legacy Basecraft distance runs carry explicit bootstrap metadata. Require
+    // an exact matching result, so stale adjacent reports cannot relabel imports.
+    let report_path = PathBuf::from(format!("{}.run.json", path.display()));
+    if let Ok(report) = std::fs::read(&report_path)
+        && let Ok(report) = serde_json::from_slice::<serde_json::Value>(&report)
+        && report["tool"] == "basecraft-distance"
+        && report["bootstrap"]["support_withheld"] == false
+        && report["bootstrap"]["completed"]
+            .as_u64()
+            .is_some_and(|n| n > 0)
+        && report["tree"]["trees"].as_array().is_some_and(|trees| {
+            trees.iter().any(|tree| {
+                tree.as_str()
+                    .and_then(|text| TreeDoc::from_newick("", text).ok())
+                    .is_some_and(|tree| tree.to_newick() == doc.to_newick())
+            })
+        })
+        && doc.supports().len() == 1
+        && doc.supports()[0].kind == basecraft_protocol::SupportKind::Unknown
+    {
+        let name = doc.supports()[0].name.clone();
+        if name == "Support" {
+            doc.rename_support(&name, "Bootstrap");
+        }
+        let name = doc.supports()[0].name.clone();
+        doc.set_support_kind(&name, basecraft_protocol::SupportKind::Bootstrap);
     }
     Ok(OpenedTree { doc, nexus })
 }
@@ -252,6 +289,7 @@ pub fn write_tree_sidecar(doc: &TreeDoc, w: &mut dyn Write) -> io::Result<()> {
             .map(|s| SupportName {
                 name: s.name.clone(),
                 source: s.source.clone(),
+                kind: s.kind,
             })
             .collect(),
         annotations: doc.annotations().clone(),

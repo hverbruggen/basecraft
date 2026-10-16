@@ -1,0 +1,191 @@
+//! Support formatting is presentation; scientific strings and inference input survive edits.
+use basecraft_ops::{Session, files, links::AlignmentLink};
+use basecraft_protocol::{Op, SupportKind};
+use serde_json::json;
+
+#[test]
+fn support_precision_scale_unknown_settings_save_undo_and_replay() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tree.nwk");
+    std::fs::write(&path, "((a,b)0.654321/0.987654321,c);").unwrap();
+    let mut session = Session::new(dir.path());
+    let doc = session.open(&path).unwrap();
+    let original = session.tree(doc).to_newick();
+    let mut style = session.tree(doc).style().clone();
+    style.support_decimals.insert("Support 1".into(), 0);
+    style.support_decimals.insert("Support 2".into(), 4);
+    style.support_proportions.insert("Support 1".into(), false);
+    style
+        .extra
+        .insert("future_option".into(), json!({"nested": [1,2,3]}));
+    session
+        .apply(
+            doc,
+            Op::TreeStyle {
+                style: style.clone(),
+            },
+        )
+        .unwrap();
+    let node = session
+        .tree(doc)
+        .resolve(&["a".into(), "b".into()])
+        .unwrap();
+    assert_eq!(
+        session.tree(doc).supports()[0]
+            .formatted(node, &style)
+            .unwrap(),
+        "1"
+    );
+    assert_eq!(
+        session.tree(doc).supports()[1]
+            .formatted(node, &style)
+            .unwrap(),
+        "0.9877"
+    );
+    assert_eq!(
+        session.tree(doc).supports()[0].display_percent(node, &style),
+        Some(0.654321)
+    );
+    assert_eq!(session.tree(doc).to_newick(), original);
+    session.undo(doc).unwrap();
+    assert!(session.tree(doc).style().support_decimals.is_empty());
+    session.redo(doc).unwrap();
+    assert_eq!(session.tree(doc).style(), &style);
+    session.save(doc, None).unwrap();
+    let reopened = files::load_tree(&path).unwrap().doc;
+    assert_eq!(reopened.style(), &style);
+    assert_eq!(reopened.to_newick(), original);
+    session.flush().unwrap();
+    assert!(basecraft_ops::replay::replay(dir.path()).unwrap().ok());
+}
+
+#[test]
+fn support_kind_survives_sidecar_and_legacy_bootstrap_requires_matching_evidence() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tree.nwk");
+    let text = "((a,b)0.5,c);";
+    std::fs::write(&path, text).unwrap();
+    let report = json!({"tool":"basecraft-distance", "bootstrap":{"completed":200,"support_withheld":false},"tree":{"trees":[text]}});
+    let report_path = dir.path().join("tree.nwk.run.json");
+    std::fs::write(&report_path, report.to_string()).unwrap();
+    let tree = files::load_tree(&path).unwrap().doc;
+    assert_eq!(tree.supports()[0].name, "Bootstrap");
+    assert_eq!(tree.supports()[0].kind, SupportKind::Bootstrap);
+    assert!(!tree.supports()[0].proportions);
+    assert_eq!(tree.supports()[0].decimals(tree.style()), 0);
+    let mut sidecar = Vec::new();
+    files::write_tree_sidecar(&tree, &mut sidecar).unwrap();
+    std::fs::write(files::tree_sidecar(&path), sidecar).unwrap();
+    std::fs::remove_file(&report_path).unwrap();
+    assert_eq!(
+        files::load_tree(&path).unwrap().doc.supports()[0].kind,
+        SupportKind::Bootstrap
+    );
+    std::fs::remove_file(files::tree_sidecar(&path)).unwrap();
+    std::fs::write(&report_path, report.to_string()).unwrap();
+    std::fs::write(&path, "((a,b)0.75,c);").unwrap();
+    let imported = files::load_tree(&path).unwrap().doc;
+    assert_eq!(imported.supports()[0].name, "Support");
+    assert_eq!(imported.supports()[0].kind, SupportKind::Unknown);
+    assert_eq!(imported.supports()[0].decimals(imported.style()), 2);
+}
+
+#[test]
+fn changing_view_link_preserves_origin_and_save_as_rebases_both_links() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let source = root.join("source.afa");
+    let other = root.join("other.afa");
+    let tree_path = root.join("tree.nwk");
+    std::fs::write(&source, ">a\nAC\n>b\nAT\n").unwrap();
+    std::fs::write(&other, ">a\nCC\n>b\nCT\n").unwrap();
+    std::fs::write(&tree_path, "(a,b);").unwrap();
+    let mut session = Session::new(root);
+    let doc = session.open(&tree_path).unwrap();
+    AlignmentLink::create(&tree_path, &source, &source, 7, true, None).unwrap();
+    let origin_bytes = std::fs::read(basecraft_ops::links::sidecar(&tree_path)).unwrap();
+    let origin = AlignmentLink::read(&tree_path).unwrap();
+    let snapshot = origin
+        .checked_snapshot(&tree_path, session.tree(doc))
+        .unwrap();
+    let snapshot_bytes = std::fs::read(&snapshot).unwrap();
+    AlignmentLink::associate(&tree_path, session.tree(doc), &other).unwrap();
+    let view = AlignmentLink::read_view(&tree_path).unwrap();
+    assert_eq!(view.source, other);
+    assert!(!view.inferred);
+    assert_eq!(
+        origin_bytes,
+        std::fs::read(basecraft_ops::links::sidecar(&tree_path)).unwrap()
+    );
+    assert_eq!(snapshot_bytes, std::fs::read(&snapshot).unwrap());
+    let invalid = root.join("invalid.afa");
+    std::fs::write(&invalid, ">a\nAC\n>x\nAT\n").unwrap();
+    assert!(AlignmentLink::associate(&tree_path, session.tree(doc), &invalid).is_err());
+    assert_eq!(AlignmentLink::read_view(&tree_path).unwrap().source, other);
+    std::fs::create_dir(root.join("copies")).unwrap();
+    let output = root.join("copies/copy.nwk");
+    session.save(doc, Some(&output)).unwrap();
+    let copied_origin = AlignmentLink::read(&output).unwrap();
+    let copied_view = AlignmentLink::read_view(&output).unwrap();
+    assert_eq!(copied_origin.source, source);
+    assert_eq!(copied_origin.snapshot_hash, origin.snapshot_hash);
+    assert_eq!(copied_origin.alignment_version, 7);
+    assert_eq!(copied_view.source, other);
+    assert!(
+        copied_origin
+            .checked_snapshot(&output, session.tree(doc))
+            .is_ok()
+    );
+    assert!(
+        copied_view
+            .checked_snapshot(&output, session.tree(doc))
+            .is_ok()
+    );
+    std::fs::remove_file(&other).unwrap();
+    assert!(
+        copied_view
+            .status(&output, session.tree(doc))
+            .contains("missing or moved")
+    );
+    assert!(
+        copied_view
+            .checked_snapshot(&output, session.tree(doc))
+            .is_ok()
+    );
+    std::fs::write(&source, ">a\nGG\n>b\nGT\n").unwrap();
+    assert!(
+        copied_origin
+            .status(&output, session.tree(doc))
+            .contains("source changed")
+    );
+    assert_eq!(std::fs::read(&snapshot).unwrap(), snapshot_bytes);
+    session.flush().unwrap();
+    assert!(basecraft_ops::replay::replay(root).unwrap().ok());
+}
+
+#[test]
+fn portable_links_and_corrupt_view_never_fall_back_to_scientific_input() {
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().join("project");
+    std::fs::create_dir(&folder).unwrap();
+    let source = folder.join("source.afa");
+    let tree_path = folder.join("tree.nwk");
+    std::fs::write(&source, ">a\nAC\n>b\nAT\n").unwrap();
+    std::fs::write(&tree_path, "(a,b);").unwrap();
+    let tree = files::load_tree(&tree_path).unwrap().doc;
+    AlignmentLink::create(&tree_path, &source, &source, 0, true, None).unwrap();
+    let value: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(basecraft_ops::links::sidecar(&tree_path)).unwrap())
+            .unwrap();
+    assert_eq!(value["source"], "source.afa");
+    let moved = dir.path().join("moved");
+    std::fs::rename(folder, &moved).unwrap();
+    let tree_path = moved.join("tree.nwk");
+    let link = AlignmentLink::read(&tree_path).unwrap();
+    assert_eq!(link.source, moved.join("source.afa"));
+    assert!(!link.source_changed());
+    assert!(link.checked_snapshot(&tree_path, &tree).is_ok());
+    std::fs::write(basecraft_ops::links::view_sidecar(&tree_path), "damaged").unwrap();
+    assert!(AlignmentLink::read_view(&tree_path).is_err());
+    assert!(AlignmentLink::read(&tree_path).is_ok());
+}

@@ -196,7 +196,24 @@ fn bootstrap_provenance_success_and_withheld_support_replay() {
             } else {
                 assert_eq!(report["bootstrap"]["completed"], 64);
                 let tree = session.open(&output).unwrap();
-                assert_ne!(session.tree(tree).supports(), []);
+                let generated = session.tree(tree);
+                assert_eq!(generated.supports()[0].name, "Bootstrap");
+                assert_eq!(
+                    generated.supports()[0].kind,
+                    basecraft_protocol::SupportKind::Bootstrap
+                );
+                assert_eq!(generated.supports()[0].decimals(generated.style()), 0);
+                let link = basecraft_ops::links::AlignmentLink::read(&output).unwrap();
+                assert!(link.inferred);
+                assert_eq!(link.source, input);
+                assert!(link.checked_snapshot(&output, generated).is_ok());
+                session.save(tree, None).unwrap();
+                let reopened = basecraft_ops::files::load_tree(&output).unwrap().doc;
+                assert_eq!(reopened.supports()[0].name, "Bootstrap");
+                assert_eq!(
+                    reopened.supports()[0].kind,
+                    basecraft_protocol::SupportKind::Bootstrap
+                );
             }
         }
         session.flush().unwrap();

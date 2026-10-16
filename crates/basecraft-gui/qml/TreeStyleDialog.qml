@@ -25,10 +25,10 @@ AppContentDialog {
         const shown = style.support_shown.length ? style.support_shown : s.sets.map(x => x.name)
         for (const name of shown) {
             const x = s.sets.find(x => x.name === name)
-            if (x) sets.append({ name: x.name, source: x.source, shown: true })
+            if (x) sets.append({ name: x.name, source: x.source, shown: true, decimals: x.decimals, scale: scaleIndex(x.name), autoDecimals: !Object.hasOwn(style.support_decimals || {}, x.name) })
         }
         for (const x of s.sets)
-            if (!shown.includes(x.name)) sets.append({ name: x.name, source: x.source, shown: false })
+            if (!shown.includes(x.name)) sets.append({ name: x.name, source: x.source, shown: false, decimals: x.decimals, scale: scaleIndex(x.name), autoDecimals: !Object.hasOwn(style.support_decimals || {}, x.name) })
         minimum.value = style.support_min
         symbols.checked = style.symbols !== null
         symbolSet.model = s.sets.map(x => x.name)
@@ -44,10 +44,26 @@ AppContentDialog {
         open()
     }
 
+    function scaleIndex(name) {
+        const overrides = style.support_proportions || {}
+        return Object.hasOwn(overrides, name) ? (overrides[name] ? 2 : 1) : 0
+    }
+
     function save() {
         const shown = []
         for (let i = 0; i < sets.count; i++) if (sets.get(i).shown) shown.push(sets.get(i).name)
+        const decimals = Object.assign({}, style.support_decimals || {})
+        const proportions = Object.assign({}, style.support_proportions || {})
+        for (let i = 0; i < sets.count; i++) {
+            const set = sets.get(i)
+            if (set.autoDecimals) delete decimals[set.name]
+            else decimals[set.name] = set.decimals
+            if (set.scale === 0) delete proportions[set.name]
+            else proportions[set.name] = set.scale === 2
+        }
         const s = Object.assign({}, style, {
+            support_decimals: decimals,
+            support_proportions: proportions,
             support_shown: shown,
             support_min: minimum.value,
             symbols: symbols.checked && symbolSet.currentText.length
@@ -71,24 +87,64 @@ AppContentDialog {
         Label { text: "This tree has no support values yet"; visible: sets.count === 0; opacity: 0.7 }
         Repeater {
             model: sets
-            RowLayout {
+            ColumnLayout {
+                id: supportRow
                 required property int index
                 required property string name
                 required property string source
                 required property bool shown
-                CheckBox {
-                    text: name + (source.length ? "  (" + source + ")" : "")
-                    checked: shown
-                    onToggled: sets.setProperty(index, "shown", checked)
+                required property int decimals
+                required property int scale
+                required property bool autoDecimals
+                Layout.fillWidth: true
+                RowLayout {
                     Layout.fillWidth: true
+                    CheckBox {
+                        text: supportRow.name + (supportRow.source.length ? "  (" + supportRow.source + ")" : "")
+                        checked: supportRow.shown
+                        onToggled: sets.setProperty(supportRow.index, "shown", checked)
+                        Layout.fillWidth: true
+                    }
+                    AppIconButton { iconName: "up"; description: "Move support set up"; enabled: supportRow.index > 0; onClicked: sets.move(supportRow.index, supportRow.index - 1, 1) }
+                    AppIconButton { iconName: "down"; description: "Move support set down"; enabled: supportRow.index < sets.count - 1; onClicked: sets.move(supportRow.index, supportRow.index + 1, 1) }
+                    ToolButton {
+                        text: "Remove"
+                        onClicked: { controller.remove_support(supportRow.name); dialog.openStyle() }
+                    }
                 }
-                AppIconButton { iconName: "up"; description: "Move colour set up"; enabled: index > 0; onClicked: sets.move(index, index - 1, 1) }
-                AppIconButton { iconName: "down"; description: "Move colour set down"; enabled: index < sets.count - 1; onClicked: sets.move(index, index + 1, 1) }
-                ToolButton {
-                    text: "Remove"
-                    onClicked: { controller.remove_support(name); dialog.openStyle() }
+                RowLayout {
+                    Layout.fillWidth: true
+                    CheckBox {
+                        objectName: "autoDecimals" + supportRow.index
+                        text: "Auto decimals"
+                        checked: supportRow.autoDecimals
+                        Accessible.name: supportRow.name + " automatic decimal places"
+                        onToggled: sets.setProperty(supportRow.index, "autoDecimals", checked)
+                    }
+                    SpinBox {
+                        objectName: "supportDecimals" + supportRow.index
+                        Accessible.name: supportRow.name + " decimal places"
+                        from: 0; to: 10; editable: true
+                        value: supportRow.decimals
+                        enabled: !supportRow.autoDecimals
+                        onValueModified: sets.setProperty(supportRow.index, "decimals", value)
+                    }
+                    AppComboBox {
+                        objectName: "supportScale" + supportRow.index
+                        Accessible.name: supportRow.name + " support scale"
+                        model: ["Auto scale", "Percent (0–100)", "Proportion (0–1)"]
+                        currentIndex: supportRow.scale
+                        onActivated: sets.setProperty(supportRow.index, "scale", currentIndex)
+                        Layout.fillWidth: true
+                    }
                 }
             }
+        }
+        Label {
+            text: "Auto: bootstrap uses 0 decimals; probabilities use 2. Unspecified values all in 0–1 use probability formatting. Scale changes display thresholds only."
+            wrapMode: Text.Wrap
+            Layout.fillWidth: true
+            opacity: 0.7
         }
         RowLayout {
             Label { id: minimumLabel; text: "Hide values below" }

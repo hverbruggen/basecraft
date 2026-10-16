@@ -577,7 +577,7 @@ fn describe_node(doc: &TreeDoc, n: usize) -> String {
         let values: Vec<String> = doc
             .supports()
             .iter()
-            .filter_map(|s| Some(format!("{} {}", s.name, s.values[n].as_ref()?)))
+            .filter_map(|s| Some(format!("{} {}", s.name, s.formatted(n, doc.style())?)))
             .collect();
         if !values.is_empty() {
             parts.push(values.join(", "));
@@ -597,9 +597,8 @@ pub fn display_name(name: &str) -> String {
 fn format_length(l: f64) -> String {
     if l == 0.0 {
         "0".into()
-    } else if l.abs() >= 0.01 {
-        let t = format!("{l:.4}");
-        t.trim_end_matches('0').trim_end_matches('.').to_string()
+    } else if l.abs() > 0.001 {
+        l.to_string()
     } else {
         format!("{l:.2e}")
     }
@@ -701,7 +700,7 @@ fn layout(doc: &TreeDoc, width: f32, height: f32, row_zoom: f32, width_zoom: f32
         .map(|i| {
             doc.supports()
                 .iter()
-                .map(|s| s.values[i].as_ref().map_or(1, String::len) + 1)
+                .map(|s| s.formatted(i, style).map_or(1, |v| v.len()) + 1)
                 .sum::<usize>()
         })
         .max()
@@ -887,7 +886,7 @@ fn shapes(
             continue;
         }
         if let Some((sym, set)) = symbols
-            && let Some(v) = set.percent(i)
+            && let Some(v) = set.display_percent(i, style)
         {
             out.push(Shape::Disc {
                 cx: l.x[i],
@@ -916,11 +915,13 @@ fn shapes(
         }
         let parts: Vec<String> = shown
             .iter()
-            .map(|s| match (&s.values[i], s.percent(i)) {
-                (Some(v), Some(pct)) if pct >= min => v.clone(),
-                (Some(v), None) if min == 0.0 => v.clone(),
-                _ => "-".into(),
-            })
+            .map(
+                |s| match (s.formatted(i, style), s.display_percent(i, style)) {
+                    (Some(v), Some(pct)) if pct >= min => v,
+                    (Some(v), None) if min == 0.0 => v,
+                    _ => "-".into(),
+                },
+            )
             .collect();
         if parts.iter().all(|p| p == "-") {
             continue;
@@ -1330,6 +1331,47 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn scale_labels_use_decimals_strictly_above_one_thousandth() {
+        assert_eq!(format_length(0.001), "1.00e-3");
+        assert_eq!(format_length(0.0009999999), "1.00e-3");
+        for value in [
+            0.00100000001,
+            0.0011,
+            0.002,
+            0.01,
+            1.0,
+            1000.0,
+            1234.56789,
+            1e20,
+            f64::MAX,
+        ] {
+            let label = format_length(value);
+            assert!(!label.contains(['e', 'E']), "{value}: {label}");
+            assert_eq!(label.parse::<f64>().unwrap(), value);
+        }
+        assert_eq!(format_length(0.0), "0");
+        assert_ne!(format_length(f64::MIN_POSITIVE), "0");
+    }
+
+    #[test]
+    fn support_canvas_svg_tooltip_and_accessible_text_share_precision() {
+        let mut t = tree("((A:1,B:1)78.654321/0.987654321:1,C:1);");
+        let mut style = t.style().clone();
+        style.support_decimals.insert("Support 1".into(), 1);
+        style.support_decimals.insert("Support 2".into(), 3);
+        t.set_style(style);
+        let l = layout(&t, 800.0, 600.0, 1.0, 1.0);
+        let labels = texts(&shapes(&t, &l, &Palette::print(), None, None));
+        assert!(labels.iter().any(|(text, _, _)| text == "78.7/0.988"));
+        let node = t.resolve(&names(&["A", "B"])).unwrap();
+        assert!(describe_node(&t, node).contains("Support 1 78.7, Support 2 0.988"));
+        assert!(crate::accessible::tree(&t, 0).text.contains("78.7\t0.988"));
+        let svg = to_svg(&t, 800.0, 20.0);
+        assert!(svg.contains("78.7/0.988"));
+        assert!(t.to_newick().contains("78.654321/0.987654321"));
     }
 
     #[test]
