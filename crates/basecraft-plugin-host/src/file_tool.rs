@@ -227,10 +227,12 @@ impl FileJob {
 
     pub fn species_workspace_target(&self, output: &Path) -> Option<PathBuf> {
         self.species.as_ref().filter(|s| s.standalone).map(|_| {
-            if output.extension().is_some_and(|e| e == "spart") {
+            if basecraft_ops::files::Format::from_path(output).ok()
+                == Some(basecraft_ops::files::Format::Delimitation)
+            {
                 output.to_path_buf()
             } else {
-                PathBuf::from(format!("{}.spart", output.display()))
+                output.with_extension("spart")
             }
         })
     }

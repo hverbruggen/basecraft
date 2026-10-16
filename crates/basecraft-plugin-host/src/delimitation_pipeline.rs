@@ -342,7 +342,10 @@ impl PipelineOutcome {
         outputs.sort();
         outputs.dedup();
         if let Some(primary) = self.primary {
-            if let Some(index) = outputs.iter().position(|p| PathBuf::from(p) == primary) {
+            if let Some(index) = outputs
+                .iter()
+                .position(|p| std::path::Path::new(p) == primary)
+            {
                 outputs.swap(0, index);
             }
         }

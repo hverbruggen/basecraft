@@ -1185,10 +1185,21 @@ impl qobject::DelimitationController {
                     if display_job { "nwk" } else { "json" }
                 ));
             let alignment_pipeline = method.starts_with("gmyc_alignment_") || method == "asap";
+            let requested_input = PathBuf::from(input.to_string());
+            let analysis_input = if !display_job
+                && (workspace.view.display_tree.as_deref() == Some(input.to_string().as_str())
+                    || r.display_path == *input)
+            {
+                basecraft_ops::delimitation::checked_display_tree(workspace)
+                    .map_err(|e| e.to_string())?
+                    .ok_or("No analysis tree available")?
+            } else {
+                requested_input
+            };
             let mut job = basecraft_plugin_host::FileJob::from_file(
                 session,
                 doc,
-                Path::new(&input.to_string()),
+                &analysis_input,
                 (
                     &crate::bridge::plugin_dir(if method == "display_iqtree" {
                         "iqtree"
