@@ -231,3 +231,38 @@ fn save_as_with_explicit_view_remains_portable_and_preserves_source_hashes() {
     assert!(origin.checked_snapshot(&path, &tree).is_ok());
     assert!(view.checked_snapshot(&path, &tree).is_ok());
 }
+
+#[cfg(unix)]
+#[test]
+fn save_as_over_symlink_to_original_replaces_alias_associations() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let source = root.join("source.afa");
+    let other = root.join("other.afa");
+    alignment(&source, "AA");
+    alignment(&other, "CC");
+    let input = inferred(root, "input", &source);
+    let output = root.join("alias.nwk");
+    std::os::unix::fs::symlink(&input, &output).unwrap();
+    AlignmentLink::create(&output, &other, &other, 3, true, None).unwrap();
+    let mut session = Session::new(root);
+    let doc = session.open(&input).unwrap();
+    AlignmentLink::associate(&output, session.tree(doc), &other).unwrap();
+    let previous_origin = std::fs::read(links::sidecar(&input)).unwrap();
+    session.save(doc, Some(&output)).unwrap();
+    assert!(
+        !std::fs::symlink_metadata(&output)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    let link = AlignmentLink::read_view(&output).unwrap();
+    assert_eq!(link.source, source);
+    assert!(link.checked_snapshot(&output, session.tree(doc)).is_ok());
+    assert_eq!(
+        std::fs::read(links::sidecar(&input)).unwrap(),
+        previous_origin
+    );
+    session.flush().unwrap();
+    assert!(basecraft_ops::replay::replay(root).unwrap().ok());
+}

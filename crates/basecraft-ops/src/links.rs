@@ -40,6 +40,18 @@ pub fn view_sidecar(tree: &Path) -> PathBuf {
     sidecar(&view_tree(tree))
 }
 
+/// Atomic saves replace the named directory entry, not a symlink's referent.
+pub(crate) fn document_entry(path: &Path) -> Result<PathBuf> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let filename = path
+        .file_name()
+        .ok_or_else(|| invalid("tree filename is missing"))?;
+    Ok(parent.canonicalize()?.join(filename))
+}
+
 /// A dangling symlink is an explicit entry, not an absent association.
 /// Errors inspecting an association must propagate rather than enable fallback.
 pub fn metadata_present(path: &Path) -> Result<bool> {
@@ -149,16 +161,16 @@ impl PreparedLinks {
         let origin = metadata_present(&sidecar(from))?
             .then(|| AlignmentLink::read(from))
             .transpose()?;
-        Self::with_origin(origin, from, to)
+        Self::with_origin(origin.as_ref(), from, to)
     }
 
-    fn with_origin(origin: Option<AlignmentLink>, from: &Path, to: &Path) -> Result<Self> {
+    fn with_origin(origin: Option<&AlignmentLink>, from: &Path, to: &Path) -> Result<Self> {
         let view_path = view_tree(from);
         let view = metadata_present(&sidecar(&view_path))?
             .then(|| AlignmentLink::read(&view_path))
             .transpose()?;
         // Check every source before creating destination evidence or touching its tree.
-        for link in origin.iter().chain(view.iter()) {
+        for link in origin.into_iter().chain(view.iter()) {
             link.verify_snapshot(from)?;
         }
         let previous_origin = PreviousMetadata::read(&sidecar(to))?;
@@ -166,7 +178,6 @@ impl PreparedLinks {
         Ok(Self {
             target: to.to_path_buf(),
             origin: origin
-                .as_ref()
                 .map(|link| StagedLink::copy(link, from, to))
                 .transpose()?,
             view: view
@@ -451,9 +462,9 @@ impl AlignmentLink {
 
     /// Preserve a link when a tree is saved under a new name or directory.
     pub fn copy_to(&self, from: &Path, to: &Path) -> Result<Vec<PathBuf>> {
-        PreparedLinks::with_origin(Some(self.clone()), from, to)?
+        PreparedLinks::with_origin(Some(self), from, to)?
             .publish(|| Ok(()))
-            .map(|(_, outputs)| outputs)
+            .map(|((), outputs)| outputs)
     }
 
     pub fn source_changed(&self) -> bool {

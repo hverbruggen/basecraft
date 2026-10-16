@@ -756,8 +756,8 @@ impl Session {
                     return Err(invalid("a tree can only be saved as a tree file"));
                 }
                 let original = self.resolve(&self.docs[id.0].key);
-                let save_as = original.canonicalize().unwrap_or_else(|_| original.clone())
-                    != target.canonicalize().unwrap_or_else(|_| target.clone());
+                let save_as = crate::links::document_entry(&original)?
+                    != crate::links::document_entry(&target)?;
                 let (hashes, outputs) = if save_as {
                     let links = crate::links::PreparedLinks::prepare(&original, &target)?;
                     links.publish(|| self.save_tree(t, &target))?
