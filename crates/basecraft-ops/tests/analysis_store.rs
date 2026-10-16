@@ -75,13 +75,13 @@ fn reference_run(root: &std::path::Path, source: &std::path::Path, id: &str) -> 
                 path: input_evidence::relative(run.directory(), source).unwrap(),
                 stamp: input_evidence::stamp(source).unwrap(),
                 hash: hash.clone(),
-                extra: Default::default(),
+                extra: std::collections::BTreeMap::default(),
             }),
             submitted_hash: hash,
             submitted_size: std::fs::metadata(source).unwrap().len(),
             transformation: "canonical-fasta-v1".into(),
             state: "referenced".into(),
-            extra: Default::default(),
+            extra: std::collections::BTreeMap::default(),
         },
     )
     .unwrap();
@@ -126,7 +126,7 @@ fn reference_lifecycle_multiple_analyses_preserve_break_trash_and_cancel() {
         input_evidence::verified_source(c.directory(), input.source.as_ref().unwrap()).is_err()
     );
     let d = reference_run(dir.path(), &source, "four");
-    let conflict = input_evidence::conflicts_in(&source, &[store.clone()]).unwrap();
+    let conflict = input_evidence::conflicts_in(&source, std::slice::from_ref(&store)).unwrap();
     input_evidence::resolve(&conflict, SavePolicy::RemoveAnalysis).unwrap();
     assert!(!d.directory().exists());
     assert_eq!(std::fs::read_dir(store.join("trash")).unwrap().count(), 1);

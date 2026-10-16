@@ -712,7 +712,7 @@ impl FileJob {
         Ok(run.destination(location, &name)?)
     }
 
-    fn diagnostic_artifact(&self, failure: Option<&Error>) -> Option<serde_json::Value> {
+    fn diagnostic_artifact(failure: Option<&Error>) -> Option<serde_json::Value> {
         let message = failure?.to_string();
         let (_, json) = message.split_once("; retained bootstrap artifacts: ")?;
         serde_json::Deserializer::from_str(json)
@@ -808,7 +808,7 @@ impl FileJob {
                 }
             }
         }
-        if let Some(collection) = self.diagnostic_artifact(failure) {
+        if let Some(collection) = Self::diagnostic_artifact(failure) {
             if self.valid_bootstrap_artifact(run, &collection)? {
                 if let Some(path) = collection["path"].as_str() {
                     paths.push(PathBuf::from(path));
@@ -857,14 +857,14 @@ impl FileJob {
         let value = json!({
             "schema_version": 1, "id": self.run_id, "status": status, "input_io": self.input_io(),
             "primary_output": if outcome.is_some_and(Result::is_ok) { Some(&self.output) } else { None },
-            "recovery_artifact": self.diagnostic_artifact(outcome.and_then(|o| o.as_ref().err())),
+            "recovery_artifact": Self::diagnostic_artifact(outcome.and_then(|o| o.as_ref().err())),
             "owner_instance": basecraft_platform::process_instance(),
             "source_record": self.source_record,
             "started": started, "ended": outcome.map(|_| basecraft_platform::now_rfc3339()),
             "plugin": { "id": manifest.id, "version": manifest.version },
             "operation": self.operation, "effective_parameters": parameters,
             "source": { "path": source_path, "generation": self.source_version, "disk_hash": self.source_hash },
-            "input": { "logical_name": self.input_key.0, "hash": self.input_key.1, "retained": if self.artifacts.is_none() { Some("input.snapshot") } else { None }, "artifact_run": self.artifacts.as_ref().map(|r| r.directory()), "bytes": std::fs::metadata(&self.input)?.len() },
+            "input": { "logical_name": self.input_key.0, "hash": self.input_key.1, "retained": if self.artifacts.is_none() { Some("input.snapshot") } else { None }, "artifact_run": self.artifacts.as_ref().map(basecraft_ops::analysis_store::ArtifactRun::directory), "bytes": std::fs::metadata(&self.input)?.len() },
             "outputs": outputs, "requested_cpu_budget": self.cpu_budget, "cpu_budget": self.execution_budget(),
             "diagnostics": outcome.and_then(|r| r.as_ref().err()).map(ToString::to_string),
             "tool": outcome.and_then(|r| r.as_ref().ok()).and_then(|r| r.tool.as_ref()),
