@@ -23,6 +23,21 @@ pub mod qobject {
         #[qinvokable]
         fn resolve_save(self: Pin<&mut AppProvenance>, path: &QString, policy: &QString) -> bool;
         #[qinvokable]
+        fn relink_run(self: Pin<&mut Self>, run: &QString, original: &QString) -> bool {
+            let result = basecraft_ops::input_evidence::relink(
+                Path::new(&run.to_string()),
+                Path::new(&original.to_string()),
+            );
+            let success = result.is_ok();
+            self.set_message(QString::from(
+                match result {
+                    Ok(()) => "done: Verified original relinked".into(),
+                    Err(e) => format!("fail: {e}"),
+                }
+                .as_str(),
+            ));
+            success
+        }
         fn relink_input(
             self: Pin<&mut AppProvenance>,
             result: &QString,

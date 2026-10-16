@@ -96,6 +96,11 @@ impl FileJob {
         kind: AlignmentInput,
         output: PathBuf,
     ) -> Result<Self> {
+        if !session.is_alignment(doc) {
+            return Err(Error::Protocol(
+                "file analysis requires an alignment document".into(),
+            ));
+        }
         let source_path = session.root().join(session.doc_key(doc));
         if output.exists() && output.canonicalize()? == source_path.canonicalize()? {
             return Err(Error::Protocol(

@@ -1367,6 +1367,20 @@ ApplicationWindow {
     AnalysisEvidenceDialog {
         id: evidenceSaveDialog
         onRejected: window.pendingEvidenceSave = null
+        onRelinkOriginal: function(path) {
+            for (const analysis of conflict.analyses || []) {
+                if (!provenance.relink_run(analysis.run, path)) { errorText = provenance.message; return }
+            }
+            const pending = window.pendingEvidenceSave
+            if (!pending) return
+            conflict = JSON.parse(provenance.save_conflicts(pending.target))
+            errorText = "Original input verified. Cancel to review it, or choose how to continue saving."
+            if (!(conflict.analyses || []).length) {
+                window.pendingEvidenceSave = null
+                close()
+                pending.perform()
+            }
+        }
         onChoice: function(policy) {
             const pending = window.pendingEvidenceSave
             if (!pending) return

@@ -59,9 +59,9 @@ fn synthetic_large_clean_source_has_metadata_only_evidence_and_relocates() {
     std::fs::create_dir(&folder).unwrap();
     let source = folder.join("input.fasta");
     // 16 MiB realistic FASTA, normalized the same way the submitted stream is.
-    let sequence = "ACGT".repeat(2_000_000);
+    let sequence = "ACGT".repeat(125_000);
     let mut text = String::new();
-    for name in ["a", "b"] {
+    for name in 0..32 {
         text.push_str(&format!(">{name}\n"));
         for line in sequence.as_bytes().chunks(60) {
             text.push_str(std::str::from_utf8(line).unwrap());

@@ -8,6 +8,7 @@ AppContentDialog {
     property var conflict: ({analyses: [], options: []})
     property string errorText: ""
     signal choice(string policy)
+    signal relinkOriginal(string path)
     standardButtons: Dialog.Cancel
     initialFocusItem: standardButton(Dialog.Cancel)
     body: ColumnLayout {
@@ -60,6 +61,23 @@ AppContentDialog {
             text: "Keeps results and records, marking the original input evidence explicitly unavailable."
             Layout.fillWidth: true
             wrapMode: Text.Wrap
+        }
+        Label {
+            text: "If the input changed elsewhere, relink a file containing the verified original bytes:"
+            Layout.fillWidth: true
+            wrapMode: Text.Wrap
+        }
+        TextField {
+            id: originalPath
+            objectName: "originalInputPath"
+            Layout.fillWidth: true
+            placeholderText: "Path to the original input"
+            Accessible.name: "Path to verified original input"
+        }
+        AppButton {
+            text: "Relink verified original"
+            enabled: originalPath.text.length > 0
+            onClicked: dialog.relinkOriginal(originalPath.text)
         }
         AppErrorLabel { text: dialog.errorText; visible: text.length > 0; Layout.fillWidth: true; wrapMode: Text.Wrap }
     }
