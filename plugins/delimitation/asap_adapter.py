@@ -35,9 +35,6 @@ def engine_problem():
 def invoke(params, native, run_native):
     if params.get("engine", "upstream") != "upstream":
         raise ValueError("Native ASAP has not passed the full scoring and performance gates; use upstream")
-    problem = engine_problem()
-    if problem:
-        raise RuntimeError(problem)
     source = Path(params["input"]).resolve()
     target = Path(params["output"]).resolve()
     directory = Path(str(target) + ".asap-" + params.get("job_id", str(uuid.uuid4())))
