@@ -1481,7 +1481,10 @@ impl qobject::DelimitationController {
         let generated = path
             .file_name()
             .and_then(|n| n.to_str())
-            .is_some_and(|n| n.starts_with("species-") && n.ends_with(".spart"));
+            .is_some_and(|n| n.starts_with("species-"))
+            && path
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("spart"));
         if !generated || std::fs::remove_file(&path).is_err() {
             return false;
         }
