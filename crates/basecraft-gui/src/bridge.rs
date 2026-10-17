@@ -55,6 +55,8 @@ pub mod qobject {
         #[qinvokable]
         fn local_file_path(self: &GenomeController, url: &QUrl) -> QString;
         #[qinvokable]
+        fn delimitation_engines(self: &GenomeController) -> QString;
+        #[qinvokable]
         fn parent_folder_url(self: &GenomeController, path: &QString) -> QUrl;
         #[qinvokable]
         fn export_svg(self: Pin<&mut GenomeController>, path: &QString);
@@ -285,6 +287,43 @@ pub(crate) fn took(started: Instant) -> String {
     }
 }
 
+/// One readable line for a status bar from a plugin or tool error. The plugin
+/// transport prefix and generic Python exception names are dropped; for a
+/// traceback only its final exception line is kept. The full text belongs in
+/// the run record or a details view, never in the bar.
+pub(crate) fn error_summary(text: &str) -> String {
+    const LIMIT: usize = 200;
+    let mut line = text.trim();
+    if let Some(rest) = line.strip_prefix("plugin error ") {
+        line = rest.split_once(": ").map_or(rest, |(_, m)| m);
+    }
+    if line.contains("Traceback (most recent call last):") {
+        line = line
+            .lines()
+            .rev()
+            .map(str::trim)
+            .find(|l| !l.is_empty() && !l.starts_with('^') && !l.starts_with('~'))
+            .unwrap_or(line);
+    } else {
+        line = line
+            .lines()
+            .map(str::trim)
+            .find(|l| !l.is_empty())
+            .unwrap_or("");
+    }
+    for generic in ["RuntimeError: ", "ValueError: ", "Exception: "] {
+        if let Some(rest) = line.strip_prefix(generic) {
+            line = rest;
+        }
+    }
+    if line.chars().count() > LIMIT {
+        let cut: String = line.chars().take(LIMIT - 1).collect();
+        format!("{}…", cut.trim_end())
+    } else {
+        line.to_owned()
+    }
+}
+
 pub(crate) fn file_name(path: &Path) -> String {
     path.file_name()
         .map_or_else(String::new, |f| f.to_string_lossy().into_owned())
@@ -486,6 +525,28 @@ impl qobject::GenomeController {
 
     fn local_file_path(&self, url: &QUrl) -> QString {
         url.to_local_file().unwrap_or_default()
+    }
+
+    /// JSON map from method to null (engine ready) or the reason it cannot
+    /// run, as reported by the delimitation plugin's own adapters.
+    fn delimitation_engines(&self) -> QString {
+        let report = (|| -> Result<String, String> {
+            let manifest = basecraft_plugin_host::Manifest::load(&plugin_dir("delimitation"))
+                .map_err(|e| e.to_string())?;
+            let mut plugin = basecraft_plugin_host::PluginProcess::spawn(&manifest)
+                .map_err(|e| e.to_string())?;
+            let result = plugin
+                .invoke("engines", json!({}), None)
+                .map_err(|e| e.to_string())?;
+            result.message.ok_or_else(|| "No engine report".into())
+        })();
+        QString::from(&report.unwrap_or_else(|error| {
+            let reason = format!(
+                "Cannot check delimitation engines: {}",
+                error_summary(&error)
+            );
+            json!({"asap": reason, "ptp": reason, "mptp": reason}).to_string()
+        }))
     }
 
     fn parent_folder_url(&self, path: &QString) -> QUrl {
@@ -1978,6 +2039,26 @@ fn feature_from_json(text: &str) -> Result<Feature, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn error_summary_keeps_one_readable_line() {
+        let asap = "plugin error -32000: RuntimeError: Traceback (most recent call last):\n  File \"asap_worker.py\", line 12, in <module>\n    asap = importlib.import_module(\"itaxotools.asapy.asap\")\n           ~~~~~~^^^^\nModuleNotFoundError: No module named 'itaxotools'\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"asap_worker.py\", line 14, in <module>\nModuleNotFoundError: No module named 'asap'\n";
+        assert_eq!(
+            error_summary(asap),
+            "ModuleNotFoundError: No module named 'asap'"
+        );
+        assert_eq!(
+            error_summary("plugin error -32000: RuntimeError: zero-length ancestral event"),
+            "zero-length ancestral event"
+        );
+        assert_eq!(
+            error_summary("Cannot attach tree: bad\nsecond"),
+            "Cannot attach tree: bad"
+        );
+        let long = "x".repeat(500);
+        assert_eq!(error_summary(&long).chars().count(), 200);
+        assert!(!error_summary(&"line\n".repeat(50)).contains('\n'));
+    }
 
     #[test]
     fn local_file_urls_round_trip_reserved_and_unicode_names() {

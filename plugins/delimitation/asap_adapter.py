@@ -10,10 +10,34 @@ import xml.etree.ElementTree as ET
 from datetime import UTC, datetime
 from pathlib import Path
 
+MISSING = "ASAP engine is not installed; build it with tools/install-asap.py or set BASECRAFT_ASAP_PYTHON"
+PROBE = """
+import importlib.util, sys
+def found(name):
+    try:
+        return importlib.util.find_spec(name) is not None
+    except ModuleNotFoundError:
+        return False
+sys.exit(0 if found("itaxotools.asapy.asap") or found("asap") else 1)
+"""
+
+
+def engine_problem():
+    """Why the upstream ASAP engine cannot run here, or None."""
+    python = os.environ.get("BASECRAFT_ASAP_PYTHON", sys.executable)
+    try:
+        found = subprocess.run([python, "-c", PROBE], check=False, capture_output=True, timeout=60).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        found = False
+    return None if found else MISSING
+
 
 def invoke(params, native, run_native):
     if params.get("engine", "upstream") != "upstream":
         raise ValueError("Native ASAP has not passed the full scoring and performance gates; use upstream")
+    problem = engine_problem()
+    if problem:
+        raise RuntimeError(problem)
     source = Path(params["input"]).resolve()
     target = Path(params["output"]).resolve()
     directory = Path(str(target) + ".asap-" + params.get("job_id", str(uuid.uuid4())))

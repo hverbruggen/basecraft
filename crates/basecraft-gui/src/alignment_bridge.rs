@@ -1767,10 +1767,11 @@ impl qobject::AlignmentController {
 /// A plugin error without the transport's wrapping: "MAFFT failed: …".
 fn short_error(e: &basecraft_plugin_host::Error) -> String {
     match e {
-        basecraft_plugin_host::Error::Remote { message, .. } => message
-            .split_once(": ")
-            .map_or(message.as_str(), |(_, m)| m)
-            .to_string(),
+        basecraft_plugin_host::Error::Remote { message, .. } => crate::bridge::error_summary(
+            message
+                .split_once(": ")
+                .map_or(message.as_str(), |(_, m)| m),
+        ),
         other => other.to_string(),
     }
 }

@@ -272,6 +272,7 @@ sha256sum {" ".join(BINARIES)} > SHA256SUMS
     else:
         print("Ribbon/dialog screenshot batch skipped; use --ribbon-screenshots for release preparation or requested checks", flush=True)
     run(["just", "qml-test"], cwd=source)
+    engines = engine_report(bundle)
     manifest = {
         "schema_version": 1,
         "source_sha256": source_hash,
@@ -289,7 +290,9 @@ sha256sum {" ".join(BINARIES)} > SHA256SUMS
             "local OpenGL startup",
             *(["local RHI canvas and ribbon checks"] if args.ribbon_screenshots else []),
             "local QML tests",
+            "local delimitation engine check",
         ],
+        "engines": engines,
         "logs": str(stage),
     }
     (bundle / "build.json").write_text(json.dumps(manifest, indent=2) + "\n")
@@ -308,6 +311,35 @@ sha256sum {" ".join(BINARIES)} > SHA256SUMS
         f"Published validated build {source_hash[:20]} from {args.host}: {release}",
         flush=True,
     )
+
+
+# Engines a build must be able to run. mPTP is reported but not yet provisioned.
+REQUIRED_ENGINES = ("asap",)
+
+
+def engine_report(bundle):
+    """Ask the bundled adapters, in the launcher's environment, which engines run."""
+    env = dict(os.environ)
+    asap = Path.home() / ".cache/basecraft/tools/asap/bin/python"
+    if asap.is_file():
+        env.setdefault("BASECRAFT_ASAP_PYTHON", str(asap))
+    probe = (
+        "import json, sys; sys.path.insert(0, sys.argv[1]);"
+        "import asap_adapter, mptp_adapter;"
+        "print(json.dumps({'asap': asap_adapter.engine_problem(), 'mptp': mptp_adapter.engine_problem()}))"
+    )
+    python = REPO / ".pixi/envs/default/bin/python"
+    output = subprocess.check_output(
+        [str(python), "-c", probe, str(bundle / "plugins/delimitation")], env=env, text=True
+    )
+    report = json.loads(output)
+    for problem in report.values():
+        if problem:
+            print(f"Delimitation engine unavailable: {problem}", flush=True)
+    missing = [name for name in REQUIRED_ENGINES if report.get(name)]
+    if missing:
+        raise RuntimeError("Required delimitation engines are unavailable: " + ", ".join(missing))
+    return report
 
 
 if __name__ == "__main__":

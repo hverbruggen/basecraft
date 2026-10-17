@@ -248,5 +248,16 @@ for _method in METHODS:
                 raise
     register(_method)
 
+
+
+@plugin.operation("engines")
+def engines(snapshot, params):
+    """External engines this installation can run: null when ready, else why not."""
+    from asap_adapter import engine_problem as asap_problem
+    from mptp_adapter import engine_problem as mptp_problem
+    mptp = mptp_problem()
+    return {"message": json.dumps({"asap": asap_problem(), "ptp": mptp, "mptp": mptp})}
+
+
 if __name__ == "__main__":
     plugin.run()

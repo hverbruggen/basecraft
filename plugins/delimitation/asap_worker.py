@@ -11,7 +11,12 @@ metadata = Path(request.pop("worker_metadata"))
 try:
     asap = importlib.import_module("itaxotools.asapy.asap")
 except ModuleNotFoundError:
-    asap = importlib.import_module("asap")
+    try:
+        asap = importlib.import_module("asap")
+    except ModuleNotFoundError:
+        # One readable line: the adapter reports stderr as the failure.
+        sys.stderr.write("ASAP engine is not installed; build it with tools/install-asap.py or set BASECRAFT_ASAP_PYTHON\n")
+        sys.exit(2)
 try:
     version = importlib.metadata.version("asapy")
 except importlib.metadata.PackageNotFoundError:

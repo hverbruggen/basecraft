@@ -593,7 +593,8 @@ impl qobject::SangerController {
             }
             Err(e) => {
                 self.as_mut().set_message_kind(QString::from("error"));
-                self.as_mut().set_message(QString::from(e));
+                self.as_mut()
+                    .set_message(QString::from(&crate::bridge::error_summary(&e)));
                 false
             }
         }
@@ -631,7 +632,8 @@ impl qobject::SangerController {
             }
             Err(e) => {
                 self.as_mut().set_message_kind(QString::from("error"));
-                self.as_mut().set_message(QString::from(e));
+                self.as_mut()
+                    .set_message(QString::from(&crate::bridge::error_summary(&e)));
                 false
             }
         }

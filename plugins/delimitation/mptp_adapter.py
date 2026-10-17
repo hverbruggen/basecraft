@@ -39,10 +39,19 @@ def parse_result(text, expected):
                 "null_log_likelihood": float(null[1]), "lrt_passed": lrt_passed, "diagnostics": warnings}
 
 
+MISSING = "mPTP is not installed; install originating-group mPTP or set BASECRAFT_MPTP"
+
+
+def engine_problem(params=None):
+    """Why mPTP cannot run here, or None."""
+    executable = (params or {}).get("mptp_executable") or os.environ.get("BASECRAFT_MPTP") or shutil.which("mptp")
+    return None if executable and Path(executable).is_file() else MISSING
+
+
 def invoke(method, params, native, run_native):
     executable = params.get("mptp_executable") or os.environ.get("BASECRAFT_MPTP") or shutil.which("mptp")
     if not executable:
-        raise FileNotFoundError("Install originating-group mPTP or set BASECRAFT_MPTP")
+        raise FileNotFoundError(MISSING)
     if not params.get("rooted", False):
         raise ValueError("PTP/mPTP requires an explicitly rooted substitution-length tree")
     minimum = params.get("min_branch", 0.0)

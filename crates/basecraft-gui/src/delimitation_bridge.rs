@@ -21,6 +21,7 @@ pub mod qobject {
         #[qproperty(QString, status)]
         #[qproperty(QString, message)]
         #[qproperty(QString, message_kind)]
+        #[qproperty(QString, message_details)]
         #[qproperty(QString, zoom_text)]
         #[qproperty(bool, dirty)]
         #[qproperty(bool, busy)]
@@ -113,6 +114,11 @@ pub mod qobject {
         #[qsignal]
         #[cxx_name = "displayTreeReady"]
         fn display_tree_ready(self: Pin<&mut DelimitationController>, success: bool);
+        #[qsignal]
+        #[cxx_name = "analysisFinished"]
+        fn analysis_finished(self: Pin<&mut DelimitationController>, success: bool);
+        #[qinvokable]
+        fn discard_empty_workspace(self: Pin<&mut DelimitationController>) -> bool;
         #[qinvokable]
         fn cancel_job(self: Pin<&mut DelimitationController>);
         #[qinvokable]
@@ -154,6 +160,7 @@ pub struct DelimitationRust {
     status: QString,
     message: QString,
     message_kind: QString,
+    message_details: QString,
     zoom_text: QString,
     dirty: bool,
     busy: bool,
@@ -183,6 +190,7 @@ impl Default for DelimitationRust {
             status: QString::default(),
             message: QString::default(),
             message_kind: QString::default(),
+            message_details: QString::default(),
             zoom_text: QString::default(),
             dirty: false,
             busy: false,
@@ -254,8 +262,15 @@ impl qobject::DelimitationController {
     }
 
     fn fail(mut self: Pin<&mut Self>, text: &str) {
+        let summary = crate::bridge::error_summary(text);
+        let details = if summary == text.trim() {
+            ""
+        } else {
+            text.trim()
+        };
+        self.as_mut().set_message_details(QString::from(details));
         self.as_mut().set_message_kind(QString::from("error"));
-        self.set_message(QString::from(text));
+        self.set_message(QString::from(&summary));
     }
     fn refresh(mut self: Pin<&mut Self>) {
         let Some((data, status)) = ({
@@ -1376,6 +1391,8 @@ impl qobject::DelimitationController {
                 self.as_mut().fail(&e);
                 if display_job {
                     self.display_tree_ready(false);
+                } else {
+                    self.analysis_finished(false);
                 }
                 return;
             }
@@ -1435,15 +1452,43 @@ impl qobject::DelimitationController {
                         }
                         ctl.as_mut().set_message_kind(QString::from("ok"));
                         ctl.as_mut().set_message(QString::from("Analysis completed"));
-                        ctl.refresh();
+                        ctl.as_mut().refresh();
+                        ctl.analysis_finished(true);
                     }
                     Err(error) => {
                         ctl.as_mut().fail(&error);
-                        if display_job { ctl.display_tree_ready(false); }
+                        if display_job { ctl.display_tree_ready(false); } else { ctl.analysis_finished(false); }
                     },
                 }
             });
         });
+    }
+    /// Remove a generated workspace whose first analysis produced nothing, so a
+    /// failed run does not leave an empty SPART beside the user's data. Run
+    /// evidence stays in the hidden store. Anything with hypotheses, unsaved
+    /// edits or a user-chosen name is kept.
+    pub fn discard_empty_workspace(mut self: Pin<&mut Self>) -> bool {
+        let path = {
+            let r = self.rust();
+            let Some((session, doc)) = r.session.as_ref().zip(r.doc) else {
+                return false;
+            };
+            if r.dirty || r.busy || !session.delimitation(doc).hypotheses.is_empty() {
+                return false;
+            }
+            session.root().join(session.doc_key(doc))
+        };
+        let generated = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.starts_with("species-") && n.ends_with(".spart"));
+        if !generated || std::fs::remove_file(&path).is_err() {
+            return false;
+        }
+        let mut r = self.as_mut().rust_mut();
+        r.session = None;
+        r.doc = None;
+        true
     }
     pub fn cancel_job(self: Pin<&mut Self>) {
         let result = self

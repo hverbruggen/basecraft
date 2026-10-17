@@ -10,6 +10,10 @@ AppContentDialog {
     property string treePath: ""
     property var pathResolver: null
     property int workers: 1
+    // Method → null when its external engine is installed, else the reason.
+    property var engineProblems: ({})
+    readonly property string engineProblem: method === "asap" ? (engineProblems.asap || "")
+        : method === "ptp" ? (engineProblems[rates.currentIndex === 0 ? "ptp" : "mptp"] || "") : ""
     signal requested(string method, string input, bool rooted, string settings, string displayMethod)
     readonly property bool viewSetup: method === "manual" || method === "view"
     readonly property bool alignmentInput: method === "asap" || (method === "gmyc" && source.currentIndex === 0)
@@ -46,7 +50,7 @@ AppContentDialog {
     }
     readonly property bool validInput: viewSetup
         ? (treeChoice.currentIndex === 0 || (buildsTree ? alignmentPath.length > 0 : input.text.trim().length > 0)) && (!iqtreeDisplay || iqtreeModel.text.trim().length > 0)
-        : !unsupportedDeduplication && input.text.trim().length > 0 && (alignmentInput || rooted.checked) && (!iqtreeDisplay || iqtreeModel.text.trim().length > 0)
+        : !engineProblem.length && !unsupportedDeduplication && input.text.trim().length > 0 && (alignmentInput || rooted.checked) && (!iqtreeDisplay || iqtreeModel.text.trim().length > 0)
     onOpened: {
         standardButton(Dialog.Ok).text = viewSetup ? "Open workspace" : "Run analysis"
         standardButton(Dialog.Ok).enabled = Qt.binding(() => validInput)
@@ -57,6 +61,14 @@ AppContentDialog {
 
     body: ColumnLayout {
         spacing: 10
+        AppErrorLabel {
+            objectName: "engineProblem"
+            Layout.preferredWidth: 1
+            Layout.fillWidth: true
+            wrapMode: Text.Wrap
+            visible: text.length > 0
+            text: dialog.engineProblem
+        }
         ColumnLayout {
             Layout.fillWidth: true
             Layout.minimumWidth: 0

@@ -26,7 +26,9 @@ FocusScope {
     property var mergeGroups: []
     property bool settingsOpen: false
     property bool detailsOpen: false
-    property var pendingAnalysis: null
+    property var pendingDisplay: null
+    // Created by an analysis request; discarded on close if nothing came of it.
+    property bool draft: false
     property bool showGroups: !ctl.display_path.length
     property alias treeController: tree
     function startAnalysis(method, input, rooted, settings, displayMethod) {
@@ -44,21 +46,23 @@ FocusScope {
             else showGroups = true
             return
         }
-        if (method === "asap" && (["upgma", "nj", "iqtree"].includes(displayMethod))) {
-            pendingAnalysis = {method: method, input: input, rooted: rooted, settings: settings}
-            ctl.run_analysis("display_" + displayMethod, input, false, settings)
-        } else {
+        // The display tree only illustrates ASAP's result, so build it after
+        // ASAP succeeds; a failed run then leaves no tree behind.
+        if (method === "asap" && (["upgma", "nj", "iqtree"].includes(displayMethod)))
+            pendingDisplay = {method: "display_" + displayMethod, input: input, settings: settings}
+        else
             showGroups = displayMethod === "none"
-            ctl.run_analysis(method, input, rooted, settings)
-        }
+        ctl.run_analysis(method, input, rooted, settings)
     }
     Connections {
         target: ctl
         function onDisplayTreeReady(success) {
             if (success) doc.showGroups = false
-            const pending = doc.pendingAnalysis
-            doc.pendingAnalysis = null
-            if (success && pending) ctl.run_analysis(pending.method, pending.input, pending.rooted, pending.settings)
+        }
+        function onAnalysisFinished(success) {
+            const pending = doc.pendingDisplay
+            doc.pendingDisplay = null
+            if (success && pending) ctl.run_analysis(pending.method, pending.input, false, pending.settings)
         }
     }
     component WorkspaceButton: AppButton {
@@ -102,13 +106,14 @@ FocusScope {
             WorkspaceButton { text: doc.showGroups ? "Tree view" : "Sequence groups"; enabled: ctl.display_path.length > 0; onClicked: doc.showGroups = !doc.showGroups }
             WorkspaceButton { text: doc.settingsOpen ? "Hide advanced tools" : "Advanced tools"; onClicked: doc.settingsOpen = !doc.settingsOpen }
         }
-        RowLayout {
+        AppMessageBar {
             Layout.fillWidth: true
-            visible: ctl.busy || ctl.message.length > 0
-            BusyIndicator { running: ctl.busy; visible: running; implicitWidth: 24; implicitHeight: 24 }
-            AppErrorLabel { Layout.fillWidth: true; wrapMode: Text.Wrap; visible: ctl.message_kind === "error"; text: ctl.message }
-            Label { Layout.fillWidth: true; wrapMode: Text.Wrap; visible: ctl.message_kind !== "error"; text: ctl.message }
-            WorkspaceButton { text: "Cancel analysis"; visible: ctl.busy; onClicked: ctl.cancel_job() }
+            message: ctl.message
+            kind: ctl.message_kind
+            details: ctl.message_details
+            busy: ctl.busy
+            onDetailsRequested: detailsDialog.open()
+            onCancelRequested: ctl.cancel_job()
         }
         ScrollView {
             visible: doc.settingsOpen
@@ -365,6 +370,24 @@ FocusScope {
                     }
                 }
             }
+        }
+    }
+    AppDialog {
+        id: detailsDialog
+        title: "Analysis error details"
+        implicitWidth: 760
+        implicitHeight: 480
+        standardButtons: Dialog.Close
+        initialFocusItem: detailsText
+        contentItem: ColumnLayout {
+            Label { text: ctl.message; wrapMode: Text.Wrap; Layout.fillWidth: true }
+            ScrollView {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                TextArea { id: detailsText; text: ctl.message_details; readOnly: true; selectByMouse: true; wrapMode: TextEdit.Wrap; font.family: "monospace"; Accessible.name: "Full error output" }
+            }
+            AppButton { text: "Copy"; onClicked: { detailsText.selectAll(); detailsText.copy(); detailsText.deselect() } }
         }
     }
     Shortcut { sequence: "Escape"; onActivated: { ctl.cancel_cut(); doc.tool = "select" } }

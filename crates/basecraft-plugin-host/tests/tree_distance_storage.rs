@@ -128,6 +128,8 @@ fn matrix_reference_generated_failure_move_and_export_use_the_common_store() {
         .find(|p| read(&p.join("execution.json"))["status"] == "failed")
         .unwrap();
     let execution = read(&failed_run.join("execution.json"));
+    // The run record agrees with execution instead of staying "prepared".
+    assert_eq!(read(&failed_run.join("run.json"))["status"], "failed");
     assert_eq!(execution["effective_parameters"]["model"], "unsupported");
     assert!(execution["diagnostics"].as_str().unwrap().contains("Model"));
     listing(&root, &failed_run, "matrix-failed");

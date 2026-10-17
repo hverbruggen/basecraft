@@ -96,6 +96,7 @@ fn main() {
         "qml/TextRepresentationDialog.qml",
         "qml/FocusScrollView.qml",
         "qml/AppErrorLabel.qml",
+        "qml/AppMessageBar.qml",
         "qml/AppDialog.qml",
         "qml/AppContentDialog.qml",
         "qml/AppFormDialog.qml",

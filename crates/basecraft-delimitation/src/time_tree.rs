@@ -45,9 +45,12 @@ pub fn validate(tree: &TreeDoc, rooted: bool, tolerance: f64, binary: bool) -> R
     let mut diagnostics = Vec::new();
     for &i in tree.preorder().iter().skip(1) {
         if tree.node(i).length == Some(0.0) && !tree.node(i).is_tip() {
-            return Err(Error("zero-length ancestral event is unresolved".into()));
-        }
-        if tree.node(i).length.unwrap_or(0.0) / height < 1e-8 {
+            // A binary encoding of a polytomy: nested events share one age and
+            // the waiting interval between them is empty, as for tied clades.
+            diagnostics.push(format!(
+                "zero-length internal branch at node {i}; its branching events are tied (polytomy)"
+            ));
+        } else if tree.node(i).length.unwrap_or(0.0) / height < 1e-8 {
             diagnostics.push(format!(
                 "very short branch at node {i}; recent-event rates may be weakly identified"
             ));
@@ -283,7 +286,6 @@ mod tests {
     fn invalid_time_trees_are_rejected() {
         for newick in [
             "(a:1,b:2);",
-            "((a:1,b:1):0,c:1);",
             "(a:-1,b:1);",
             "(a:0,b:0);",
             "(a:1,a:1);",
@@ -294,6 +296,20 @@ mod tests {
         }
         let tree = TreeDoc::from_newick("good", "(a:1,b:1);").unwrap();
         assert!(validate(&tree, false, 1e-8, true).is_err());
+    }
+    #[test]
+    fn zero_length_internal_branch_is_a_tied_nested_event() {
+        let tree = TreeDoc::from_newick("polytomy", "(((a:1,b:1):0,c:1):1,d:2);").unwrap();
+        let time = validate(&tree, true, 1e-8, true).unwrap();
+        let ages: Vec<_> = time.events.iter().map(|&i| time.ages[i]).collect();
+        assert_eq!(ages, [2.0, 1.0, 1.0]);
+        assert!(
+            time.diagnostics
+                .iter()
+                .any(|d| d.contains("tied (polytomy)"))
+        );
+        // Both tied nodes join one cut group; the order of resolution is irrelevant.
+        assert_eq!(cut(&tree, &time, 1.0).unwrap().len(), 2);
     }
     #[test]
     fn tied_separate_events_and_constrained_nonclocklike_tree() {

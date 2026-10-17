@@ -89,6 +89,29 @@ Item {
             dialog.reject()
             compare(requests.count, 1)
         }
+        function test_missing_engine_blocks_run() {
+            const dialog = createTemporaryObject(factory, parent)
+            requests.target = dialog
+            requests.clear()
+            dialog.engineProblems = {asap: "ASAP engine is not installed", ptp: null, mptp: "mPTP is not installed"}
+            dialog.show("asap", "/input.afa", "")
+            tryCompare(dialog, "opened", true)
+            const problem = findChild(dialog, "engineProblem")
+            verify(problem.visible)
+            compare(problem.text, "ASAP engine is not installed")
+            verify(!dialog.validInput)
+            verify(!dialog.standardButton(Dialog.Ok).enabled)
+            dialog.reject()
+            dialog.show("ptp", "", "/input.nwk")
+            tryCompare(dialog, "opened", true)
+            findChild(dialog, "rootedTree").checked = true
+            verify(dialog.validInput, "single-rate PTP engine is available")
+            findChild(dialog, "ptpRates").currentIndex = 1
+            verify(!dialog.validInput)
+            compare(findChild(dialog, "engineProblem").text, "mPTP is not installed")
+            dialog.reject()
+            compare(requests.count, 0)
+        }
         function test_sampling_and_iqtree_data() {
             return [{tag:"asap"}, {tag:"manual"}, {tag:"view"}]
         }

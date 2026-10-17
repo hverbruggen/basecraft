@@ -1225,6 +1225,18 @@ impl FileJob {
                 w.write_all(&bytes)
             })
             .map_err(basecraft_ops::Error::from)?;
+            // Success is recorded when the result is published; a terminal
+            // failure must not leave the run looking merely prepared.
+            if matches!(status, "failed" | "cancelled") {
+                let path = run.directory().join("run.json");
+                if let Some(mut record) = std::fs::read(&path)
+                    .ok()
+                    .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+                {
+                    record["status"] = json!(status);
+                    basecraft_ops::input_evidence::write_json(&path, &record)?;
+                }
+            }
         }
         basecraft_io::write_atomic(&directory.join("manifest.json"), |w| w.write_all(&bytes))
             .map_err(basecraft_ops::Error::from)?;

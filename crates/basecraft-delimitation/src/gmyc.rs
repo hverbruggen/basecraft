@@ -996,6 +996,29 @@ mod tests {
     }
 
     #[test]
+    fn upgma_tie_fits_independently_of_its_binary_resolution() {
+        // Deduplicated UPGMA tree from the compact example: 03, 04 and 05 are
+        // equidistant, so UPGMA emits a zero-length internal branch.
+        let fit = |newick: &str| {
+            let tree = TreeDoc::from_newick("tie", newick).unwrap();
+            let time = crate::time_tree::validate(&tree, true, 1e-8, true).unwrap();
+            let fit = single(&tree, &time, None).unwrap();
+            let best = &fit.profile[fit.best];
+            let groups: BTreeSet<_> = groups(&tree, &time, best).into_iter().collect();
+            (best.log_likelihood, groups)
+        };
+        let (left, left_groups) = fit(
+            "(('s01':0.051590136558,('s06':0.002840939663,'s07':0.002840939663):0.048749196896):0.002580294583,(('s03':0.005618213963,'s04':0.005618213963):0.000000000000,'s05':0.005618213963):0.048552217178);",
+        );
+        let (right, right_groups) = fit(
+            "(('s01':0.051590136558,('s06':0.002840939663,'s07':0.002840939663):0.048749196896):0.002580294583,('s03':0.005618213963,('s04':0.005618213963,'s05':0.005618213963):0.000000000000):0.048552217178);",
+        );
+        assert!(left.is_finite());
+        assert!((left - right).abs() < 1e-9);
+        assert_eq!(left_groups, right_groups);
+    }
+
+    #[test]
     fn analytic_plugin_rates_and_waiting_likelihood() {
         let tree =
             TreeDoc::from_newick("fixture", "((a:0.1,b:0.1):0.9,(c:0.2,d:0.2):0.8);").unwrap();

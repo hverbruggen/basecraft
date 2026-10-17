@@ -54,3 +54,7 @@ label = "Import validated upstream ASAP partitions"
 [[operations]]
 name = "group_statistics"
 label = "Summarize specimen groups with the shared cached-distance engine"
+
+[[operations]]
+name = "engines"
+label = "Report which external delimitation engines are installed"

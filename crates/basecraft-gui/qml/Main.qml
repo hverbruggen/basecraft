@@ -28,15 +28,18 @@ ApplicationWindow {
     // Closing the window (or Ctrl+Q) asks about unsaved changes first.
     property bool closeConfirmed: false
     property bool discardAuthoredOnQuit: false
+    function discardEmptyDrafts() {
+        for (let i = 0; i < openFiles.count; i++) discardEmptyDraft(docs.itemAt(i))
+    }
     onClosing: (close) => {
-        if (closeConfirmed) return
+        if (closeConfirmed) { discardEmptyDrafts(); return }
         if (!discardAuthoredOnQuit && documentRecord.unsavedDrafts().length) {
             close.accepted = false
             draftQuitDialog.open()
             return
         }
         const unsaved = window.unsavedTabs()
-        if (unsaved.length === 0) return
+        if (unsaved.length === 0) { discardEmptyDrafts(); return }
         close.accepted = false
         quitDialog.ask(unsaved)
     }
@@ -283,6 +286,7 @@ ApplicationWindow {
     function beginDelimitation(method) {
         if (!current || current.busy) return
         delimitationSource = current
+        speciesDialog.engineProblems = method === "asap" || method === "ptp" ? JSON.parse(shell.delimitation_engines()) : ({})
         speciesDialog.show(method, alignmentOpen ? current.file_path : current.linked_alignment || "",
             treeOpen ? current.file_path : delimitationOpen ? current.display_path : "")
     }
@@ -305,6 +309,7 @@ ApplicationWindow {
             Qt.callLater(() => {
                 const document = docs.itemAt(index)
                 if (document && document.kind === "delimitation") {
+                    document.draft = true
                     window.ribbonTabName = "Delimitation"
                     document.startAnalysis(method, usesOpenAlignment ? document.controller.linked_alignment : input, rooted, settings, displayMethod)
                 }
@@ -375,9 +380,15 @@ ApplicationWindow {
         }
     }
 
+    // A species workspace created for an analysis that produced nothing is
+    // removed rather than left as an empty file beside the data.
+    function discardEmptyDraft(d) {
+        if (d && d.kind === "delimitation" && d.draft) d.controller.discard_empty_workspace()
+    }
     function closeTab(i) {
         const d = docs.itemAt(i)
         if (d && d.controller.dirty) { confirmClose.index = i; confirmClose.open(); return }
+        discardEmptyDraft(d)
         openFiles.remove(i)
         Qt.callLater(refreshCurrent)
     }
@@ -764,7 +775,9 @@ ApplicationWindow {
                     horizontalAlignment: Text.AlignRight
                     rightPadding: 10
                     elide: Text.ElideLeft
-                    text: window.current ? window.current.message : ""
+                    // A multi-line error must never grow the top bar.
+                    maximumLineCount: 1
+                    text: window.current ? String(window.current.message || "").split("\n")[0] : ""
                     // Green for done, red for failed, plain for hints.
                     color: !window.current ? shell.foreground
                         : window.current.message_kind === "ok" ? window.current.ok_color
