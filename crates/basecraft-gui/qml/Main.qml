@@ -286,7 +286,7 @@ ApplicationWindow {
     function beginDelimitation(method) {
         if (!current || current.busy) return
         delimitationSource = current
-        speciesDialog.engineProblems = method === "asap" || method === "ptp" ? JSON.parse(shell.delimitation_engines()) : ({})
+        speciesDialog.engineProblems = method === "ptp" ? JSON.parse(shell.delimitation_engines()) : ({})
         speciesDialog.show(method, alignmentOpen ? current.file_path : current.linked_alignment || "",
             treeOpen ? current.file_path : delimitationOpen ? current.display_path : "")
     }

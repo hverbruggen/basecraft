@@ -8,6 +8,8 @@ publish.workspace = true
 repository.workspace = true
 license.workspace = true
 [dependencies]
+basecraft-asap = { path = "../basecraft-asap" }
+basecraft-distance = { path = "../basecraft-distance" }
 basecraft-protocol.workspace = true
 basecraft-io.workspace = true
 basecraft-docs.workspace = true
@@ -20,5 +22,4 @@ thiserror.workspace = true
 [lints]
 workspace = true
 [dev-dependencies]
-basecraft-distance = { path = "../basecraft-distance" }
 tempfile.workspace = true

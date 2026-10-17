@@ -46,10 +46,10 @@ label = "Open a species workspace from an alignment"
 
 [[operations]]
 name = "asap"
-label = "ASAP complete upstream scoring and coalescent simulations"
+label = "Native ASAP partitions with coalescent simulations"
 [[operations]]
 name = "asap_import"
-label = "Import validated upstream ASAP partitions"
+label = "Import ASAP partitions from SPART-XML"
 
 [[operations]]
 name = "group_statistics"

@@ -313,20 +313,18 @@ sha256sum {" ".join(BINARIES)} > SHA256SUMS
     )
 
 
-# Engines a build must be able to run. mPTP is reported but not yet provisioned.
-REQUIRED_ENGINES = ("asap",)
+# Engines a build must be able to run. ASAP is native to basecraft-delimitation;
+# mPTP is reported but not yet provisioned.
+REQUIRED_ENGINES = ()
 
 
 def engine_report(bundle):
     """Ask the bundled adapters, in the launcher's environment, which engines run."""
     env = dict(os.environ)
-    asap = Path.home() / ".cache/basecraft/tools/asap/bin/python"
-    if asap.is_file():
-        env.setdefault("BASECRAFT_ASAP_PYTHON", str(asap))
     probe = (
         "import json, sys; sys.path.insert(0, sys.argv[1]);"
-        "import asap_adapter, mptp_adapter;"
-        "print(json.dumps({'asap': asap_adapter.engine_problem(), 'mptp': mptp_adapter.engine_problem()}))"
+        "import mptp_adapter;"
+        "print(json.dumps({'asap': None, 'mptp': mptp_adapter.engine_problem()}))"
     )
     python = REPO / ".pixi/envs/default/bin/python"
     output = subprocess.check_output(

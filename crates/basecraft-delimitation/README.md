@@ -30,18 +30,7 @@ completed hypothesis. Convergence alone never implies statistical support.
 
 ## ASAP
 
-`asap::analyse` is a native port of the reference ASAP command-line core
-(Achaz and Brouillet). It takes a complete distance matrix in Basecraft's
-triangular order; the application supplies `basecraft-distance` p, JC69 or
-K2P distances. `Stream::Reference` reproduces the reference program exactly
-for a fixed seed on Linux/glibc (glibc `rand()`, glibc sort tie order and libm
-`log`/`exp`), single-threaded. `Stream::Parallel` keys one stream per
-simulation by seed, node and replicate and runs on the rayon pool; results do
-not depend on the thread count.
-
-`tests/asap_reference.rs` compares both distance sources with reference
-tables in `testdata/fixtures/asap/`. `examples/asap_bench.rs` drives the
-benchmark. Results, reference defects and timings:
-`methods_research/asap_native/README.md`. Integration with the delimitation
-plugin is separate.
-
+The `asap` method computes `basecraft-distance` p, JC69 or K2P distances from
+the immutable aligned FASTA and runs `basecraft-asap` with the reference random
+stream. Each described partition becomes one ranked hypothesis; the candidate
+table is written as `<output>.asap.tsv`. `asap_import` reads ASAP SPART-XML.

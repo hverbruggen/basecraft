@@ -24,9 +24,13 @@
     clippy::cast_sign_loss,
     clippy::float_cmp
 )]
-use crate::{Error, Result};
 use serde::Serialize;
 use std::fmt::Write as _;
+
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub struct Error(pub String);
+pub type Result<T> = std::result::Result<T, Error>;
 
 const RAND_MAX: i32 = 2_147_483_647;
 const EPSILON: f64 = 0.0001;

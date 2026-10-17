@@ -167,8 +167,8 @@ FocusScope {
             SpinBox { id: seed; from: 1; to: 2147483647; value: 1; editable: true }
             Label { text: "Workers" }
             SpinBox { id: workers; from: 1; to: 256; value: 1; editable: true }
-            Label { text: "ASAP simulations" }
-            SpinBox { id: replicates; from: 100; to: 10000000; value: 10000; editable: true }
+            Label { text: "ASAP simulations per node (maximum)" }
+            SpinBox { id: replicates; from: 100; to: 10000000; value: 100000; editable: true }
             Label { text: "Tree index (0 first)" }
             SpinBox { id: treeIndex; from: 0; to: 100000; value: 0; editable: true }
         }

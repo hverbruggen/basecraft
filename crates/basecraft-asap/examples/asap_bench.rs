@@ -5,7 +5,7 @@
 //! asap_bench --matrix in.phy --length 650 --seed 1 --out DIR
 //! ```
 //! Writes `exact.tsv`, `nodes.tsv`, `subsets.tsv`, `res.cvs` and `timing.json`.
-use basecraft_delimitation::asap;
+use basecraft_asap as asap;
 use clap::Parser;
 use std::{fmt::Write as _, path::PathBuf, time::Instant};
 

@@ -73,7 +73,7 @@ Item {
                 compare(dialog.operation(), "mptp")
             } else if (data.tag === "asap") {
                 compare(dialog.operation(), "asap")
-                compare(dialog.parameters().replicates, 10000)
+                compare(dialog.parameters().replicates, 100000)
                 compare(findChild(dialog, "asapView").currentIndex, 1)
             } else {
                 findChild(dialog, "manualTree").currentIndex = 2
@@ -93,14 +93,11 @@ Item {
             const dialog = createTemporaryObject(factory, parent)
             requests.target = dialog
             requests.clear()
-            dialog.engineProblems = {asap: "ASAP engine is not installed", ptp: null, mptp: "mPTP is not installed"}
+            dialog.engineProblems = {ptp: null, mptp: "mPTP is not installed"}
             dialog.show("asap", "/input.afa", "")
             tryCompare(dialog, "opened", true)
-            const problem = findChild(dialog, "engineProblem")
-            verify(problem.visible)
-            compare(problem.text, "ASAP engine is not installed")
-            verify(!dialog.validInput)
-            verify(!dialog.standardButton(Dialog.Ok).enabled)
+            verify(!findChild(dialog, "engineProblem").visible, "ASAP is native")
+            verify(dialog.validInput)
             dialog.reject()
             dialog.show("ptp", "", "/input.nwk")
             tryCompare(dialog, "opened", true)

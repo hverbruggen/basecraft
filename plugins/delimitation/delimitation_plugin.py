@@ -64,7 +64,7 @@ def invoke(method, params):
                    "method": method, "input": str(snapshot), "input_hash": input_hash, "output": str(target.parent / (".delimitation-job-" + job_id) / "result.json"),
                    "rooted": params.get("rooted", False), "tree_index": params.get("tree_index", 0),
                    "seed": params.get("seed", 1), "workers": workers,
-                   "parameters": {k: v for k, v in params.items() if k in ("threshold", "candidate_budget", "reference_version", "reference_age_clamp", "groups", "log_likelihood", "fitted_log_likelihood", "null_log_likelihood", "lrt_passed", "mptp_version", "command", "min_branch", "units", "diagnostics", "asap_model", "replicates", "upstream_version", "haplotypes", "haplotype_policy", "mapping_hash", "upstream", "tree_inference", "sequence_sampling", "alignment_input_hash", "alignment_snapshot", "deduplicate", "model", "min_overlap", "original_count", "retained_count", "progress_job_id")},
+                   "parameters": {k: v for k, v in params.items() if k in ("threshold", "candidate_budget", "reference_version", "reference_age_clamp", "groups", "log_likelihood", "fitted_log_likelihood", "null_log_likelihood", "lrt_passed", "mptp_version", "command", "min_branch", "units", "diagnostics", "replicates", "partitions", "haplotypes", "haplotype_policy", "mapping_hash", "upstream", "tree_inference", "sequence_sampling", "alignment_input_hash", "alignment_snapshot", "deduplicate", "model", "min_overlap", "original_count", "retained_count", "progress_job_id")},
                    "progress": params.get("progress"), "cancel_file": params.get("cancel_file")}
     mapping_snapshot = None
     if params.get("mapping"):
@@ -136,6 +136,10 @@ def invoke(method, params):
             if fields.get("basecraft_alignment_snapshot") == evidence.get("path"):
                 fields["basecraft_alignment_hash"] = evidence.get("source_hash") or input_hash
                 fields["basecraft_alignment_evidence_run"] = evidence["run_directory"]
+            elif alignment_evidence.get("run_directory") and fields.get("basecraft_alignment_snapshot") == alignment_evidence.get("path"):
+                # Representative-only runs link the full alignment's own evidence.
+                fields["basecraft_alignment_hash"] = alignment_evidence.get("source_hash") or alignment_evidence["submitted_hash"]
+                fields["basecraft_alignment_evidence_run"] = alignment_evidence["run_directory"]
             # Native validation consumed the frozen canonical alignment. Reopen
             # uses the accepted raw source identity, retaining both hashes.
             if alignment_evidence.get("path"):
@@ -229,9 +233,6 @@ for _method in METHODS:
                         cache=json.loads(Path(params["cache"]).read_text())
                         params=dict(params,model=cache["model"],min_overlap=cache["min_overlap"])
                     return invoke_distance("groups", params)
-                if method == "asap":
-                    from asap_adapter import invoke as invoke_asap
-                    return invoke_asap(params, executable(params), invoke)
                 if method in ("ptp", "mptp"):
                     from mptp_adapter import invoke as invoke_mptp
                     return invoke_mptp(method, params, executable(params), invoke)
@@ -243,7 +244,7 @@ for _method in METHODS:
                 except (OSError, ValueError):
                     current = {}
                 if current.get("job", {}).get("id") != params["job_id"]:
-                    artifacts = Path(str(params["output"]) + (".asap-" if method == "asap" else ".mptp-") + params["job_id"])
+                    artifacts = Path(str(params["output"]) + ".mptp-" + params["job_id"])
                     failure_report(method, params, error, artifacts.rglob("*") if artifacts.is_dir() else ())
                 raise
     register(_method)
@@ -252,11 +253,11 @@ for _method in METHODS:
 
 @plugin.operation("engines")
 def engines(snapshot, params):
-    """External engines this installation can run: null when ready, else why not."""
-    from asap_adapter import engine_problem as asap_problem
+    """External engines this installation can run: null when ready, else why not.
+    ASAP is native to basecraft-delimitation, so it needs no external engine."""
     from mptp_adapter import engine_problem as mptp_problem
     mptp = mptp_problem()
-    return {"message": json.dumps({"asap": asap_problem(), "ptp": mptp, "mptp": mptp})}
+    return {"message": json.dumps({"asap": None, "ptp": mptp, "mptp": mptp})}
 
 
 if __name__ == "__main__":

@@ -12,8 +12,7 @@ AppContentDialog {
     property int workers: 1
     // Method → null when its external engine is installed, else the reason.
     property var engineProblems: ({})
-    readonly property string engineProblem: method === "asap" ? (engineProblems.asap || "")
-        : method === "ptp" ? (engineProblems[rates.currentIndex === 0 ? "ptp" : "mptp"] || "") : ""
+    readonly property string engineProblem: method === "ptp" ? (engineProblems[rates.currentIndex === 0 ? "ptp" : "mptp"] || "") : ""
     signal requested(string method, string input, bool rooted, string settings, string displayMethod)
     readonly property bool viewSetup: method === "manual" || method === "view"
     readonly property bool alignmentInput: method === "asap" || (method === "gmyc" && source.currentIndex === 0)
@@ -327,7 +326,7 @@ AppContentDialog {
             visible: dialog.method === "asap"
             Label {
                 id: simulationsLabel
-                text: "ASAP simulations"
+                text: "ASAP simulations per node (maximum)"
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
             }
@@ -336,7 +335,7 @@ AppContentDialog {
                 objectName: "asapSimulations"
                 from: 100
                 to: 10000000
-                value: 10000
+                value: 100000
                 editable: true
                 Accessible.name: simulationsLabel.text
                 Accessible.labelledBy: simulationsLabel

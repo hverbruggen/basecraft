@@ -266,3 +266,58 @@ fn import_expands_unassigned_specimens_and_individual_scores() {
         serde_json::to_value(workspace).unwrap()
     );
 }
+
+#[test]
+fn native_asap_reproduces_the_reference_best_partition() {
+    let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/../../testdata/fixtures/asap");
+    let directory = tempfile::tempdir().unwrap();
+    let input = directory.path().join("mantidactylus.fasta");
+    std::fs::copy(format!("{fixture}/mantidactylus.fasta"), &input).unwrap();
+    let request = DelimitationRequest {
+        version: 1,
+        job_id: "asap".into(),
+        generation: 0,
+        method: "asap".into(),
+        input: input.display().to_string(),
+        input_hash: basecraft_io::hash_file(&input).unwrap(),
+        output: directory.path().join("result.json").display().to_string(),
+        rooted: false,
+        tree_index: 0,
+        seed: 1,
+        workers: 2,
+        progress: Some(directory.path().join("progress.json").display().to_string()),
+        cancel_file: None,
+        parameters: [("model".into(), serde_json::json!("jc69"))].into(),
+    };
+    let request_path = directory.path().join("request.json");
+    std::fs::write(&request_path, serde_json::to_vec(&request).unwrap()).unwrap();
+    let process = Command::new(env!("CARGO_BIN_EXE_basecraft-delimitation"))
+        .arg("--request")
+        .arg(&request_path)
+        .output()
+        .unwrap();
+    assert!(
+        process.status.success(),
+        "{}",
+        String::from_utf8_lossy(&process.stderr)
+    );
+    let result: DelimitationResult =
+        serde_json::from_slice(&std::fs::read(&request.output).unwrap()).unwrap();
+    assert_eq!(result.job.status, JobStatus::Completed);
+    let workspace = result.workspace.unwrap();
+    basecraft_docs::delimitation::validate(&workspace).unwrap();
+    assert_eq!(workspace.specimens.len(), 19);
+    // Reference ASAP lists 9 candidate partitions; its best has 4 subsets
+    // and score 1 (testdata/fixtures/asap/basecraft-distances.partitions.tsv).
+    assert_eq!(workspace.hypotheses.len(), 9);
+    let best = &workspace.hypotheses[0];
+    assert_eq!(best.groups.len(), 4);
+    assert_eq!(best.scores[0].value, 1.0);
+    assert_eq!(best.attributes["asap_rank"], "1");
+    assert_eq!(workspace.view.visible.len(), 9);
+    for hypothesis in &workspace.hypotheses {
+        let members: usize = hypothesis.groups.iter().map(|g| g.members.len()).sum();
+        assert_eq!(members, 19, "{}", hypothesis.name);
+    }
+    assert!(std::path::Path::new(&format!("{}.asap.tsv", request.output)).is_file());
+}

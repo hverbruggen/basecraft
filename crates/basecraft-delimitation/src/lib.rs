@@ -1,5 +1,4 @@
 //! Qt-independent species delimitation engines and preparation.
-pub mod asap;
 pub mod gmyc;
 pub mod haplotypes;
 pub mod time_tree;

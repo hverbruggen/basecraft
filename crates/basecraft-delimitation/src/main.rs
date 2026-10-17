@@ -321,6 +321,9 @@ fn run(
             .insert("haplotypes".into(), serde_json::to_value(haplotypes)?);
         return Ok(());
     }
+    if request.method == "asap" {
+        return run_asap(request, result);
+    }
     if request.method == "asap_import" {
         use basecraft_protocol::delimitation::{HypothesisOrigin, Provenance};
         let mut work = basecraft_io::spart::parse_xml(std::str::from_utf8(&input_bytes)?)?;
@@ -590,6 +593,232 @@ fn run(
         }
         other => return Err(format!("unknown native method {other}").into()),
     }
+    Ok(())
+}
+
+/// Native ASAP on Basecraft distances from the immutable aligned FASTA.
+fn run_asap(
+    request: &DelimitationRequest,
+    result: &mut DelimitationResult,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use basecraft_asap as asap;
+    use basecraft_protocol::delimitation::{
+        Group, Hypothesis, HypothesisOrigin, Provenance, Score,
+    };
+    let parameter = |name: &str| request.parameters.get(name);
+    let model = match parameter("model")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("p")
+    {
+        "p" => basecraft_distance::Model::P,
+        "jc69" => basecraft_distance::Model::Jc69,
+        "k2p" => basecraft_distance::Model::K2p,
+        _ => return Err("ASAP distance model must be p, jc69 or k2p".into()),
+    };
+    let min_overlap = parameter("min_overlap")
+        .map_or(Some(1), serde_json::Value::as_u64)
+        .filter(|&n| n >= 1)
+        .ok_or("ASAP minimum shared sites must be a positive integer")?;
+    let max_simulations = parameter("replicates")
+        .map_or(Some(100_000), serde_json::Value::as_u64)
+        .filter(|n| (100..=10_000_000).contains(n))
+        .ok_or("ASAP simulations per node must be between 100 and 10000000")?;
+    let reported = parameter("partitions")
+        .map_or(Some(10), serde_json::Value::as_u64)
+        .filter(|n| (1..=1000).contains(n))
+        .ok_or("ASAP reported partitions must be between 1 and 1000")?;
+    let seed = u32::try_from(request.seed)
+        .ok()
+        .filter(|s| (1..=2_147_483_647).contains(s))
+        .ok_or("ASAP seed must be between 1 and 2147483647")?;
+    let alignment = basecraft_distance::Alignment::read(Path::new(&request.input))
+        .map_err(|e| format!("ASAP requires an aligned DNA FASTA input: {e}"))?;
+    if alignment.names.len() < 2 {
+        return Err("ASAP requires at least two sequences".into());
+    }
+    let columns = alignment.sequences[0].len();
+    let started = Instant::now();
+    let matrix = basecraft_distance::DistanceMatrix::calculate(
+        &alignment,
+        model,
+        min_overlap,
+        request.workers,
+    )
+    .map_err(|e| e.to_string())?;
+    let distance_seconds = started.elapsed().as_secs_f64();
+    let mut matrix = matrix;
+    // JC69 of identical sequences is -0.0; ASAP compares it equal to 0.
+    for d in &mut matrix.distances {
+        *d += 0.0;
+    }
+    let missing = matrix.distances.iter().filter(|d| !d.is_finite()).count();
+    if missing > 0 {
+        let at = matrix
+            .distances
+            .iter()
+            .position(|d| !d.is_finite())
+            .unwrap_or(0);
+        let mut i = 1;
+        while i * (i + 1) / 2 <= at {
+            i += 1;
+        }
+        let j = at - i * (i - 1) / 2;
+        return Err(format!(
+            "ASAP needs a distance for every pair; {missing} pairs have fewer than {min_overlap} shared sites or a saturated {model:?} distance (first: {} and {})",
+            alignment.names[i], alignment.names[j]
+        )
+        .into());
+    }
+    let settings = asap::Settings {
+        sequence_length: u32::try_from(columns).map_err(|_| "alignment too long for ASAP")?,
+        seed,
+        max_simulations: usize::try_from(max_simulations)?,
+        reported: usize::try_from(reported)?,
+        ..asap::Settings::default()
+    };
+    let distances = asap::Distances {
+        n: alignment.names.len(),
+        values: &matrix.distances,
+    };
+    let cancel = request.cancel_file.as_deref().map(Path::new);
+    let mut last_report = Instant::now();
+    let mut progress_error = None;
+    let started = Instant::now();
+    let analysis = asap::analyse(&distances, &settings, |done, total| {
+        if last_report.elapsed().as_secs_f64() < 0.25 {
+            return true;
+        }
+        last_report = Instant::now();
+        if let Err(error) = progress(request, "ASAP partitions", done, total) {
+            progress_error.get_or_insert(error.to_string());
+        }
+        !cancel.is_some_and(Path::exists)
+    })?;
+    let analysis_seconds = started.elapsed().as_secs_f64();
+    artifact(
+        request,
+        result,
+        ".asap.tsv",
+        analysis.exact_table().as_bytes(),
+    )?;
+    let mut work = empty_workspace(request, alignment.names.clone(), false)?;
+    // Deduplicated runs fit representatives; link the full retained alignment.
+    if let (Some(path), Some(hash)) = (
+        parameter("alignment_snapshot").and_then(serde_json::Value::as_str),
+        parameter("alignment_input_hash").and_then(serde_json::Value::as_str),
+    ) {
+        work.exchange_fields = [
+            ("basecraft_alignment_snapshot".into(), path.into()),
+            ("basecraft_alignment_hash".into(), hash.into()),
+        ]
+        .into();
+    }
+    let mut parameters = request.parameters.clone();
+    for (key, value) in [
+        ("model", serde_json::to_value(model)?),
+        ("min_overlap", min_overlap.into()),
+        ("replicates", max_simulations.into()),
+        ("partitions", reported.into()),
+        ("sequence_length", columns.into()),
+        ("p_threshold", f64::from(settings.p_threshold).into()),
+        ("slope_weight", f64::from(settings.slope_weight).into()),
+        ("score_weight", f64::from(settings.score_weight).into()),
+        (
+            "distance_engine",
+            format!("basecraft-distance {}", env!("CARGO_PKG_VERSION")).into(),
+        ),
+        ("distance_gap_policy", matrix.gap_policy.clone().into()),
+    ] {
+        parameters.insert(key.into(), value);
+    }
+    let colors = ["#377eb8", "#e41a1c", "#4daf4a", "#984ea3", "#ff7f00"];
+    for (rank, partition) in analysis.partitions.iter().enumerate() {
+        let Some(subsets) = &partition.subsets_detail else {
+            break;
+        };
+        let groups = subsets
+            .iter()
+            .enumerate()
+            .map(|(j, subset)| Group {
+                id: format!("group-{}", j + 1),
+                label: (j + 1).to_string(),
+                color: colors[j % colors.len()].into(),
+                members: subset
+                    .members
+                    .iter()
+                    .map(|&m| alignment.names[m].clone())
+                    .collect(),
+                scores: (0.0..1.0)
+                    .contains(&subset.p_value)
+                    .then(|| Score {
+                        value: subset.p_value,
+                        method: "ASAP".into(),
+                        scale: "p-value".into(),
+                        interpretation: "Coalescent-simulation p-value of this subset's node; small values support splitting it".into(),
+                    })
+                    .into_iter()
+                    .collect(),
+                individual_scores: BTreeMap::new(),
+                attributes: BTreeMap::new(),
+            })
+            .collect();
+        let attributes = [
+            ("asap_rank", (rank + 1).to_string()),
+            ("threshold_distance", partition.threshold.to_string()),
+            ("merge_distance", partition.distance.to_string()),
+            ("p_value", partition.probability.to_string()),
+            ("p_value_rank", partition.probability_rank.to_string()),
+            ("barcode_gap_slope", partition.slope.to_string()),
+            ("slope_rank", partition.slope_rank.to_string()),
+            ("subsets", partition.subsets.to_string()),
+        ]
+        .map(|(k, v)| (k.to_string(), v))
+        .into();
+        work.hypotheses.push(Hypothesis {
+            id: format!("{}-{rank}", request.job_id),
+            name: format!("ASAP {}", rank + 1),
+            origin: HypothesisOrigin::Inferred,
+            parent: None,
+            groups,
+            unassigned: std::collections::BTreeSet::new(),
+            scores: vec![Score {
+                value: partition.score,
+                method: "ASAP".into(),
+                scale: "ASAP rank score".into(),
+                interpretation: "Weighted probability and barcode-gap rank; smaller ranks first"
+                    .into(),
+            }],
+            provenance: Provenance {
+                method: "ASAP".into(),
+                version: format!(
+                    "basecraft-asap {} (native port of reference ASAP)",
+                    env!("CARGO_PKG_VERSION")
+                ),
+                inputs: [(request.input.clone(), request.input_hash.clone())].into(),
+                parameters: parameters.clone(),
+                seed: Some(request.seed),
+                workers: Some(request.workers),
+                status: Some(JobStatus::Completed),
+                ..Provenance::default()
+            },
+            attributes,
+        });
+    }
+    work.view.visible = work.hypotheses.iter().map(|h| h.id.clone()).collect();
+    result.metrics.insert(
+        "asap".into(),
+        serde_json::json!({
+            "partitions": analysis.partitions.len(),
+            "reported": work.hypotheses.len(),
+            "distance_range": analysis.distance_range,
+            "settings": analysis.settings,
+            "distance_seconds": distance_seconds,
+            "analysis_seconds": analysis_seconds,
+        }),
+    );
+    result.job.diagnostics.extend(analysis.diagnostics);
+    result.job.diagnostics.extend(progress_error);
+    result.workspace = Some(work);
     Ok(())
 }
 

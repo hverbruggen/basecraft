@@ -1,6 +1,6 @@
 //! Native ASAP against the reference command-line program (fixture README).
 #![cfg(all(target_os = "linux", target_env = "gnu"))]
-use basecraft_delimitation::asap;
+use basecraft_asap as asap;
 use std::path::Path;
 
 const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../testdata/fixtures/asap");

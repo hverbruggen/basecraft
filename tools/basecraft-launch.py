@@ -64,10 +64,6 @@ def main():
     tracy = Path.home() / ".cache/basecraft/tools/tracy"
     if tracy.is_file():
         env.setdefault("BASECRAFT_TRACY", str(tracy))
-    # Built separately by tools/install-asap.py; ASAP is not on PyPI or conda.
-    asap = Path.home() / ".cache/basecraft/tools/asap/bin/python"
-    if asap.is_file():
-        env.setdefault("BASECRAFT_ASAP_PYTHON", str(asap))
     executable = bundle / "bin" / ("basecraft" if mode == "cli" else "basecraft-gui")
     # Keep the caller's working directory so relative input paths remain correct.
     os.execve(executable, [str(executable), *args], env)
