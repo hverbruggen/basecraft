@@ -16,3 +16,4 @@ workspace = true
 [dev-dependencies]
 basecraft-distance = { path = "../basecraft-distance" }
 clap.workspace = true
+serde_json.workspace = true
