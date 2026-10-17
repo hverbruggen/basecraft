@@ -27,3 +27,21 @@ reference split/fuse neighborhood is implemented, but search-start and exact tie
 behavior require that comparison before a normal GUI analysis action is enabled.
 An exhausted multi-threshold budget returns a failed/incomplete result, never a
 completed hypothesis. Convergence alone never implies statistical support.
+
+## ASAP
+
+`asap::analyse` is a native port of the reference ASAP command-line core
+(Achaz and Brouillet). It takes a complete distance matrix in Basecraft's
+triangular order; the application supplies `basecraft-distance` p, JC69 or
+K2P distances. `Stream::Reference` reproduces the reference program exactly
+for a fixed seed on Linux/glibc (glibc `rand()`, glibc sort tie order and libm
+`log`/`exp`), single-threaded. `Stream::Parallel` keys one stream per
+simulation by seed, node and replicate and runs on the rayon pool; results do
+not depend on the thread count.
+
+`tests/asap_reference.rs` compares both distance sources with reference
+tables in `testdata/fixtures/asap/`. `examples/asap_bench.rs` drives the
+benchmark. Results, reference defects and timings:
+`methods_research/asap_native/README.md`. Integration with the delimitation
+plugin is separate.
+

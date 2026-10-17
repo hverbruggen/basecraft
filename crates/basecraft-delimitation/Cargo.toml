@@ -20,4 +20,5 @@ thiserror.workspace = true
 [lints]
 workspace = true
 [dev-dependencies]
+basecraft-distance = { path = "../basecraft-distance" }
 tempfile.workspace = true

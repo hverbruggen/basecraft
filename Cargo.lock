@@ -201,6 +201,7 @@ dependencies = [
 name = "basecraft-delimitation"
 version = "0.0.0"
 dependencies = [
+ "basecraft-distance",
  "basecraft-docs",
  "basecraft-io",
  "basecraft-protocol",
