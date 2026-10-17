@@ -295,7 +295,7 @@ fn asap_sampling_restores_roster_and_replays() {
         let workspace = &result["workspace"];
         assert_eq!(workspace["specimens"].as_array().unwrap().len(), 5);
         let hypotheses = workspace["hypotheses"].as_array().unwrap();
-        assert!(!hypotheses.is_empty());
+        assert_ne!(hypotheses.len(), 0);
         for hypothesis in hypotheses {
             let mut members: Vec<String> = Vec::new();
             for group in hypothesis["groups"].as_array().unwrap() {
