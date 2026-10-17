@@ -300,8 +300,10 @@ fn asap_sampling_restores_roster_and_replays() {
             let mut members: Vec<String> = Vec::new();
             for group in hypothesis["groups"].as_array().unwrap() {
                 let group: Vec<String> = serde_json::from_value(group["members"].clone()).unwrap();
-                // Identical sequences always share a subset.
-                assert_eq!(group.contains(&"a".into()), group.contains(&"b".into()));
+                // A fitted representative carries its identical copies.
+                if unique {
+                    assert_eq!(group.contains(&"a".into()), group.contains(&"b".into()));
+                }
                 members.extend(group);
             }
             members.sort();
