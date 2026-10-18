@@ -36,6 +36,18 @@ def digest(path):
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
+def ci_receipt(commit):
+    """The workspace's passing remote CI receipt for a clean checkout of `commit`."""
+    if output("git", "-C", str(REPO), "status", "--porcelain"):
+        return None
+    path = REPO.parent / "records" / "validation" / f"{commit}.json"
+    try:
+        receipt = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    return path if receipt.get("success") and receipt.get("commit") == commit else None
+
+
 def snapshot(destination):
     names = (
         subprocess.check_output(
@@ -271,7 +283,13 @@ sha256sum {" ".join(BINARIES)} > SHA256SUMS
         )
     else:
         print("Ribbon/dialog screenshot batch skipped; use --ribbon-screenshots for release preparation or requested checks", flush=True)
-    run(["just", "qml-test"], cwd=source)
+    # Remote CI already ran the QML suite on this exact source; release
+    # preparation runs it again here.
+    receipt = None if args.ribbon_screenshots else ci_receipt(commit)
+    if receipt:
+        print(f"QML tests skipped; remote CI passed them for this commit: {receipt}", flush=True)
+    else:
+        run(["just", "qml-test"], cwd=source)
     engines = engine_report(bundle)
     manifest = {
         "schema_version": 1,
@@ -289,7 +307,7 @@ sha256sum {" ".join(BINARIES)} > SHA256SUMS
             "local software startup",
             "local OpenGL startup",
             *(["local RHI canvas and ribbon checks"] if args.ribbon_screenshots else []),
-            "local QML tests",
+            "QML tests in remote CI" if receipt else "local QML tests",
             "local delimitation engine check",
         ],
         "engines": engines,
