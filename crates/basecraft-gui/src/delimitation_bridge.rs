@@ -33,6 +33,9 @@ pub mod qobject {
         /// Counts attached display trees, so even one at the same path is
         /// drawn afresh.
         #[qproperty(i32, display_revision)]
+        /// The visible hypotheses, and a cut's preview, as bar columns for
+        /// the tree canvas, as JSON.
+        #[qproperty(QString, bar_columns)]
         type DelimitationController = super::DelimitationRust;
         #[qinvokable]
         fn accessible_page(self: &DelimitationController, page: i32) -> QString;
@@ -84,9 +87,6 @@ pub mod qobject {
         #[qsignal]
         #[cxx_name = "displayTaxaSelected"]
         fn display_taxa_selected(self: Pin<&mut DelimitationController>, names: QString);
-        #[qinvokable]
-        /// The visible hypotheses as bar columns for the tree canvas, as JSON.
-        fn tip_columns_json(self: &DelimitationController) -> QString;
         #[qinvokable]
         fn columns_json(self: &DelimitationController, left: f64) -> QString;
         #[qinvokable]
@@ -186,6 +186,7 @@ pub struct DelimitationRust {
     theme_revision: i32,
     tree_edits: QString,
     display_revision: i32,
+    bar_columns: QString,
     palette: Vec<String>,
     // Modification time of the theme file last applied; empty before the first read.
     theme_stamp: String,
@@ -221,6 +222,7 @@ impl Default for DelimitationRust {
             theme_revision: 0,
             tree_edits: QString::from("[]"),
             display_revision: 0,
+            bar_columns: QString::from("[]"),
             palette: delimitation::palette(&basecraft_viewmodel::Theme::default()),
             theme_stamp: String::new(),
             session: None,
@@ -318,7 +320,8 @@ impl qobject::DelimitationController {
         };
         self.as_mut().set_workspace_json(QString::from(&data));
         self.as_mut().set_status(QString::from(&status));
-        self.update_tree_edits();
+        self.as_mut().update_tree_edits();
+        self.update_bar_columns();
     }
     fn update_tree_edits(self: Pin<&mut Self>) {
         let edits = {
@@ -643,6 +646,7 @@ impl qobject::DelimitationController {
                 let revision = self.rust().display_revision + 1;
                 self.as_mut().set_display_revision(revision);
                 self.as_mut().update_tree_edits();
+                self.as_mut().update_bar_columns();
                 if rooted {
                     if let Some(warning) = warning {
                         self.fail(&warning);
@@ -1047,15 +1051,23 @@ impl qobject::DelimitationController {
             }
         }
     }
-    pub fn tip_columns_json(&self) -> QString {
-        let r = self.rust();
-        let (Some((s, d)), Some(tree)) = (r.session.as_ref().zip(r.doc), r.display_tree.as_ref())
-        else {
-            return QString::from("[]");
+    /// Recompute `bar_columns` after the workspace, display tree, preview
+    /// or palette changed.
+    fn update_bar_columns(mut self: Pin<&mut Self>) {
+        let json = {
+            let r = self.rust();
+            match (r.session.as_ref().zip(r.doc), r.display_tree.as_ref()) {
+                (Some((s, d)), Some(tree)) => {
+                    let work = with_preview(s.delimitation(d), tree, &r.preview);
+                    let columns = delimitation::tip_columns(&work, &tip_names(tree), &r.palette);
+                    serde_json::to_string(&columns).unwrap_or_else(|_| "[]".into())
+                }
+                _ => "[]".into(),
+            }
         };
-        let work = with_preview(s.delimitation(d), tree, &r.preview);
-        let columns = delimitation::tip_columns(&work, &tip_names(tree), &r.palette);
-        QString::from(&serde_json::to_string(&columns).unwrap_or_else(|_| "[]".into()))
+        if self.rust().bar_columns.to_string() != json {
+            self.as_mut().set_bar_columns(QString::from(&json));
+        }
     }
     /// Visible columns with their letter codes, plus a legend of the codes used.
     pub fn columns_json(&self, left: f64) -> QString {
@@ -1121,7 +1133,8 @@ impl qobject::DelimitationController {
                 let json = serde_json::to_string(&groups).unwrap();
                 self.as_mut().rust_mut().preview = groups;
                 self.as_mut().set_threshold(threshold);
-                self.set_preview_json(QString::from(&json));
+                self.as_mut().set_preview_json(QString::from(&json));
+                self.update_bar_columns();
             }
             Err(e) => self.fail(&e),
         }
@@ -1140,7 +1153,8 @@ impl qobject::DelimitationController {
     }
     pub fn cancel_cut(mut self: Pin<&mut Self>) {
         self.as_mut().rust_mut().preview.clear();
-        self.set_preview_json(QString::from("[]"));
+        self.as_mut().set_preview_json(QString::from("[]"));
+        self.update_bar_columns();
     }
     pub fn save_cut(mut self: Pin<&mut Self>, name: &QString) {
         let edit = {
@@ -1834,7 +1848,8 @@ impl qobject::DelimitationController {
         }
         if changed {
             let next = self.rust().theme_revision + 1;
-            self.set_theme_revision(next);
+            self.as_mut().set_theme_revision(next);
+            self.update_bar_columns();
         }
     }
     pub fn memory_report(&self) -> QString {

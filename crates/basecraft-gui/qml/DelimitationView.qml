@@ -137,9 +137,6 @@ FocusScope {
     // Ordering, flips and style are the tree editor's own edits, kept with
     // this workspace.
     TreeController { id: tree; display_only: true }
-    // The hypotheses as bar columns beside the tips.
-    readonly property string barColumns: { ctl.workspace_json; ctl.preview_json; ctl.theme_revision; ctl.display_revision; return ctl.tip_columns_json() }
-    onBarColumnsChanged: tree.set_columns(barColumns)
     readonly property var treeGeometry: JSON.parse(tree.canvas_geometry)
     Component.onCompleted: {
         tree.check_theme()
@@ -148,6 +145,8 @@ FocusScope {
     }
     Connections { target: ctl
         function onDisplay_revisionChanged() { doc.showTree(true) }
+        // The hypotheses as bar columns beside the tips.
+        function onBar_columnsChanged() { tree.set_columns(ctl.bar_columns) }
         function onTree_editsChanged() { doc.showTree(false) }
         function onDisplayTaxaSelected(names) { tree.highlight_taxa(names) }
     }
