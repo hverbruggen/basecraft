@@ -23,7 +23,10 @@ Control {
         let count = 0
         for (const child of page.children) {
             if (!child.visible) continue
-            total += Math.ceil(Math.max(child.implicitWidth, child.Layout.minimumWidth))
+            // A spacer that stretches needs only its minimum; in the app such
+            // spacers report a natural width of 200.
+            total += Math.ceil(child.Layout.fillWidth ? Math.max(0, child.Layout.minimumWidth)
+                : Math.max(child.implicitWidth, child.Layout.minimumWidth))
             count++
         }
         return total + Math.max(0, count - 1) * (page.spacing || 0)
