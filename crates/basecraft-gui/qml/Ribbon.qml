@@ -13,6 +13,21 @@ Control {
     property alias currentIndex: stack.currentIndex
     readonly property Item currentPage: stack.currentIndex >= 0 && stack.currentIndex < stack.children.length ? stack.children[stack.currentIndex] : null
     readonly property real contentWidth: viewport.contentWidth
+    // The width the current page needs: its visible groups at their natural
+    // widths, plus spacing. Summed here rather than read from the page's
+    // row layout, whose implicit width can stay larger than its groups need.
+    readonly property real pageWidth: {
+        const page = currentPage
+        if (!page) return 0
+        let total = 0
+        let count = 0
+        for (const child of page.children) {
+            if (!child.visible) continue
+            total += Math.ceil(Math.max(child.implicitWidth, child.Layout.minimumWidth))
+            count++
+        }
+        return total + Math.max(0, count - 1) * (page.spacing || 0)
+    }
     readonly property real viewportWidth: viewport.width
     readonly property real scrollPosition: viewport.contentX
     readonly property bool overflowing: contentWidth > viewportWidth
@@ -47,7 +62,7 @@ Control {
         width: ribbon.availableWidth
         height: Math.max(0, ribbon.availableHeight - (ribbon.overflowing ? bar.implicitHeight : 0))
         clip: true
-        contentWidth: Math.max(width, ribbon.currentPage ? ribbon.currentPage.implicitWidth : 0)
+        contentWidth: Math.max(width, ribbon.pageWidth)
         contentHeight: height
         onContentWidthChanged: Qt.callLater(ribbon.revealFocused)
         onWidthChanged: Qt.callLater(ribbon.revealFocused)

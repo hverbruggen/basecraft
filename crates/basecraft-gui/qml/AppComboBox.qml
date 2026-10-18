@@ -7,6 +7,16 @@ Controls.ComboBox {
     rightPadding: 30
     topPadding: 6
     bottomPadding: 6
+    // As wide as the longest choice, so picking another one never resizes
+    // the box or the dialog around it.
+    FontMetrics { id: textMetrics; font: combo.font }
+    readonly property real widestText: {
+        combo.model
+        let widest = 0
+        for (let i = 0; i < combo.count; i++) widest = Math.max(widest, textMetrics.advanceWidth(combo.textAt(i)))
+        return Math.ceil(widest)
+    }
+    implicitWidth: Math.max(implicitBackgroundWidth + leftInset + rightInset, widestText + leftPadding + rightPadding)
     background: AppControlBackground { control: combo }
     contentItem: Text {
         text: combo.displayText

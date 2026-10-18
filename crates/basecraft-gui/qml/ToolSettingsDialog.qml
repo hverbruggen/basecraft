@@ -121,7 +121,7 @@ AppContentDialog {
                     to: row.modelData.max === null || row.modelData.max === undefined ? 2147483647 : row.modelData.max
                     value: row.kind === "integer" ? dialog.value(row.modelData) : 0
                     editable: true
-                    Layout.fillWidth: true
+                    // As wide as its largest value, not the column.
                     Layout.minimumWidth: 0
                     onValueModified: dialog.set(row.modelData.name, value)
                     // A raised minimum raises the value with it.

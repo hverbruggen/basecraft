@@ -69,9 +69,11 @@ pub struct Field {
     #[serde(rename = "type")]
     pub kind: FieldKind,
     pub default: Value,
-    /// Value and label; an empty value sends nothing, for the tool's default.
+    /// `[value, label]`, or `[value, label, condition]` for a choice that
+    /// applies only in some contexts, such as `sequence == dna`. An empty
+    /// value sends nothing, for the tool's default.
     #[serde(default)]
-    pub choices: Vec<(String, String)>,
+    pub choices: Vec<Choice>,
     #[serde(default)]
     pub min: Option<i64>,
     #[serde(default)]
@@ -89,6 +91,35 @@ pub struct Field {
     /// Shapes the form only; never sent.
     #[serde(default)]
     pub local: bool,
+}
+
+/// One choice of a `choice` field.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(try_from = "Vec<String>", into = "Vec<String>")]
+pub struct Choice {
+    pub value: String,
+    pub label: String,
+    pub when: Option<String>,
+}
+
+impl TryFrom<Vec<String>> for Choice {
+    type Error = String;
+    fn try_from(parts: Vec<String>) -> std::result::Result<Self, String> {
+        let mut parts = parts.into_iter();
+        match (parts.next(), parts.next(), parts.next(), parts.next()) {
+            (Some(value), Some(label), when, None) => Ok(Self { value, label, when }),
+            _ => Err("a choice is [value, label] or [value, label, condition]".into()),
+        }
+    }
+}
+
+impl From<Choice> for Vec<String> {
+    fn from(choice: Choice) -> Self {
+        [choice.value, choice.label]
+            .into_iter()
+            .chain(choice.when)
+            .collect()
+    }
 }
 
 /// Whether `condition` holds for `values`. Values compare as text, so
@@ -126,6 +157,29 @@ impl Field {
 }
 
 impl Form {
+    /// The form as it applies in `context`, such as `{"sequence": "dna"}`:
+    /// choices for other contexts are left out, and a default that was left
+    /// out becomes the first remaining choice.
+    #[must_use]
+    pub fn for_context(&self, context: &Map<String, Value>) -> Self {
+        let mut form = self.clone();
+        for field in &mut form.fields {
+            field
+                .choices
+                .retain(|c| c.when.as_deref().is_none_or(|w| holds(w, context)));
+            let kept = field
+                .choices
+                .iter()
+                .any(|c| Some(c.value.as_str()) == field.default.as_str());
+            if field.kind == FieldKind::Choice && !kept {
+                if let Some(first) = field.choices.first() {
+                    field.default = Value::String(first.value.clone());
+                }
+            }
+        }
+        form
+    }
+
     /// The parameters for a run: `given` values for the fields that apply,
     /// defaults for those not given, and the fixed ones. Refuses values the
     /// form does not allow.
@@ -169,7 +223,7 @@ impl Form {
                 }
                 FieldKind::Choice => {
                     let text = value.as_str().unwrap_or_default();
-                    if !field.choices.iter().any(|(v, _)| v == text) {
+                    if !field.choices.iter().any(|c| c.value == text) {
                         return Err(format!("{text:?} is not a choice for {}", field.label));
                     }
                     if text.is_empty() {
@@ -278,16 +332,20 @@ mod tests {
         );
         assert!(form.parameters(&given(json!({"model": "XYZ"}))).is_err());
 
-        // The standard FastTree model sends nothing, for the tool's default.
+        // Only the models for the alignment's sequence type are offered.
         let fasttree = shipped("fasttree");
-        let p = fasttree
-            .form("tree")
-            .unwrap()
-            .parameters(&Map::new())
-            .unwrap();
+        let form = fasttree.form("tree").unwrap();
+        let dna = form.for_context(&given(json!({"sequence": "dna"})));
+        let p = dna.parameters(&Map::new()).unwrap();
         assert_eq!(
             p,
-            given(json!({"gamma": false, "support": true, "resamples": 1000}))
+            given(json!({"model": "GTR", "gamma": false, "support": true, "resamples": 1000}))
+        );
+        assert!(dna.parameters(&given(json!({"model": "LG"}))).is_err());
+        let protein = form.for_context(&given(json!({"sequence": "protein"})));
+        assert_eq!(
+            protein.parameters(&Map::new()).unwrap()["model"],
+            json!("LG")
         );
 
         // Bootstrap trees use the sorted method; the switch itself is not sent.

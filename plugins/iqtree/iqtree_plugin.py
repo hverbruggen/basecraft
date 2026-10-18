@@ -10,8 +10,11 @@ from pathlib import Path
 from basecraft.plugin import Plugin
 from basecraft.tools import (
     allocated_cpus,
+    bootstrap_collection_path,
     executable,
+    quote_newick,
     read_alignment,
+    write_atomic,
 )
 from output_contract import publish_artifacts, restore_tree
 
@@ -130,6 +133,20 @@ def tree(snapshot, params):
                 + "\n",
             )
         )
+        # Standard bootstrap replicate trees, saved where the run's
+        # bootstrap_destination says, with the original names restored.
+        boottrees = prefix.with_suffix(".boottrees")
+        replicate_trees = None
+        if support == "bootstrap" and boottrees.exists():
+            replicate_trees = bootstrap_collection_path(params)
+            lines = [line.strip() for line in boottrees.read_text().splitlines() if line.strip()]
+            # Replicates may leave out identical sequences, so names are
+            # restored label by label rather than checked as a full set.
+            label = re.compile(r"(?<=[(,])(t\d+)(?=[:,)])")
+            nexus = "#NEXUS\nbegin trees;\n" + "".join(
+                f"  tree replicate_{i} = {label.sub(lambda m: quote_newick(names.get(m.group(1), m.group(1))), line)}\n"
+                for i, line in enumerate(lines, 1)
+            ) + "end;\n"
         if any(path.resolve() == source for path, _ in artifacts):
             raise ValueError("An output would overwrite the input")
         version = subprocess.run(
@@ -139,6 +156,9 @@ def tree(snapshot, params):
             raise RuntimeError("IQ-TREE cancelled before publication")
         publish_artifacts(artifacts)
         outputs = [str(path) for path, payload in artifacts if payload is not None]
+        if replicate_trees is not None:
+            write_atomic(replicate_trees, nexus)
+            outputs.append(str(replicate_trees))
     return {
         "ops": [],
         "outputs": outputs,

@@ -10,9 +10,11 @@ SpinBox {
         Math.ceil(metrics.height) + 4)
     topPadding: 0
     bottomPadding: 0
-    // Reserve room for every valid value, including locale grouping separators.
+    // Reserve room for every valid value, including locale grouping
+    // separators, plus the text field's own margins, the steppers and one
+    // character, since measured and laid-out text differ at small sizes.
     implicitWidth: Math.ceil(Math.max(metrics.advanceWidth(textFromValue(from, locale)),
-        metrics.advanceWidth(textFromValue(to, locale)))) + 12 + 2 * stepperSize
+        metrics.advanceWidth(textFromValue(to, locale))) + metrics.averageCharacterWidth) + 12 + leftPadding + rightPadding
     implicitHeight: Math.max(stepperSize, implicitContentHeight)
     up.indicator: AppControlBackground {
         control: ({palette: spin.palette, enabled: spin.enabled && spin.up.enabled,

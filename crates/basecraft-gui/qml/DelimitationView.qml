@@ -33,6 +33,8 @@ FocusScope {
     // Edits change only manual hypotheses and edited copies.
     readonly property bool activeEditable: activeHypothesis !== null && !["imported", "inferred"].includes(activeHypothesis.origin)
     property var pendingDisplay: null
+    // PTP on an IQ-TREE tree built here: the fit waits for the tree.
+    property var pendingFit: null
     // Created by an analysis request; discarded on close if nothing came of it.
     property bool draft: false
     property bool ribbonInitialized: false
@@ -103,6 +105,19 @@ FocusScope {
             else showGroups = true
             return
         }
+        // PTP from the alignment: build the IQ-TREE tree as the display tree,
+        // root it, then fit PTP to that rooted tree.
+        if ((method === "ptp" || method === "mptp") && displayMethod === "iqtree") {
+            // The fit gets only its own settings; the tree's are kept with the tree.
+            const fitSettings = JSON.parse(settings)
+            const rooting = fitSettings.rooting || "midpoint"
+            delete fitSettings.rooting
+            delete fitSettings.iqtree_model
+            pendingFit = {method: method, settings: JSON.stringify(fitSettings), rooting: rooting}
+            showGroups = false
+            ctl.run_analysis("display_iqtree", input, false, settings)
+            return
+        }
         // The display tree only illustrates ASAP's result, so build it after
         // ASAP succeeds; a failed run then leaves no tree behind.
         if (method === "asap" && (["upgma", "nj", "iqtree"].includes(displayMethod)))
@@ -115,6 +130,10 @@ FocusScope {
         target: ctl
         function onDisplayTreeReady(success) {
             if (success) doc.showGroups = false
+            const fit = doc.pendingFit
+            doc.pendingFit = null
+            if (success && fit && ctl.root_display_tree(fit.rooting))
+                ctl.run_analysis(fit.method, ctl.display_path, true, fit.settings)
         }
         function onAnalysisFinished(success) {
             const pending = doc.pendingDisplay

@@ -58,6 +58,19 @@ class InputOptions(unittest.TestCase):
             result = iqtree_plugin.tree(None, dict(self.params, model="HKY", gamma=True, invariant=True))
         argv = result["execution"]["argv"]
         self.assertEqual(argv[argv.index("-m") + 1], "HKY+I+G")
+        # Standard bootstrap trees go where the run's destination says, named.
+        boot = tree + "prefix.with_suffix('.boottrees').write_text('((t0:1,t1:1):1,t2:1);\\n((t0:1,t2:1):1,(t1:1,t3:1):1);\\n')\n"
+        metadata = self.root / "metadata"
+        metadata.mkdir()
+        allocation = {"run_id": "run-1", "metadata_directory": str(metadata), "working_directory": str(self.output.parent)}
+        with self.executable(boot):
+            result = iqtree_plugin.tree(None, dict(self.params, support="bootstrap", replicates=2, analysis_artifacts=allocation))
+        trees = metadata / "bootstrap-run-1.nex"
+        self.assertIn(str(trees), result["outputs"])
+        text = trees.read_text()
+        # Quoted as in the main tree file.
+        self.assertIn("tree replicate_2 = (('a':1,'c':1):1,('b':1,'d':1):1);", text)
+        self.assertIn("tree replicate_1 = (('a':1,'b':1):1,'c':1);", text)
         with self.assertRaisesRegex(ValueError, "1000"):
             iqtree_plugin.tree(None, dict(self.params, support="ufboot", replicates=100))
 

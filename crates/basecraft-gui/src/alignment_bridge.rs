@@ -1309,13 +1309,25 @@ impl qobject::AlignmentController {
         });
     }
 
+    /// What a settings form may depend on: the alignment's sequence type.
+    fn form_context(&self) -> serde_json::Map<String, serde_json::Value> {
+        let protein = self.with_doc(AlignmentDoc::is_protein).unwrap_or(false);
+        [(
+            "sequence".to_string(),
+            serde_json::json!(if protein { "protein" } else { "dna" }),
+        )]
+        .into_iter()
+        .collect()
+    }
+
     pub fn tool_form(&self, plugin: &QString, form: &QString) -> QString {
+        let context = self.form_context();
         let value =
             basecraft_plugin_host::manifest::Manifest::load(&plugin_dir(&plugin.to_string()))
                 .map_err(|e| e.to_string())
                 .and_then(|m| {
                     m.form(&form.to_string())
-                        .map(|f| serde_json::to_value(f).unwrap_or_default())
+                        .map(|f| serde_json::to_value(f.for_context(&context)).unwrap_or_default())
                         .ok_or_else(|| format!("{plugin} has no {form} settings"))
                 });
         QString::from(
@@ -1335,7 +1347,7 @@ impl qobject::AlignmentController {
                 .ok_or_else(|| format!("{} has no {form} settings", manifest.name))?;
             let given: serde_json::Map<String, serde_json::Value> =
                 serde_json::from_str(&values.to_string()).map_err(|e| e.to_string())?;
-            let mut params = form.parameters(&given)?;
+            let mut params = form.for_context(&self.form_context()).parameters(&given)?;
             if form.threads {
                 params.insert(
                     "threads".into(),

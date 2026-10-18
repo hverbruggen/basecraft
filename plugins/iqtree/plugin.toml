@@ -26,7 +26,8 @@ name = "model"
 label = "Substitution model"
 type = "choice"
 default = "MFP"
-choices = [["MFP", "ModelFinder (best fit by BIC)"], ["JC", "JC (DNA)"], ["F81", "F81 (DNA)"], ["K2P", "K2P (DNA)"], ["HKY", "HKY (DNA)"], ["TN", "TN (DNA)"], ["TIM", "TIM (DNA)"], ["TVM", "TVM (DNA)"], ["GTR", "GTR (DNA)"], ["LG", "LG (protein)"], ["WAG", "WAG (protein)"], ["JTT", "JTT (protein)"], ["Dayhoff", "Dayhoff (protein)"], ["mtREV", "mtREV (protein)"], ["cpREV", "cpREV (protein)"], ["Blosum62", "Blosum62 (protein)"]]
+# Models for the alignment's sequence type only.
+choices = [["MFP", "ModelFinder (best fit by BIC)"], ["JC", "JC", "sequence == dna"], ["F81", "F81", "sequence == dna"], ["K2P", "K2P", "sequence == dna"], ["HKY", "HKY", "sequence == dna"], ["TN", "TN", "sequence == dna"], ["TIM", "TIM", "sequence == dna"], ["TVM", "TVM", "sequence == dna"], ["GTR", "GTR", "sequence == dna"], ["LG", "LG", "sequence == protein"], ["WAG", "WAG", "sequence == protein"], ["JTT", "JTT", "sequence == protein"], ["Dayhoff", "Dayhoff", "sequence == protein"], ["mtREV", "mtREV", "sequence == protein"], ["cpREV", "cpREV", "sequence == protein"], ["Blosum62", "Blosum62", "sequence == protein"]]
 
 [[forms.fields]]
 name = "gamma"
@@ -59,6 +60,14 @@ max = 100000
 when = "support != none"
 # UFBoot needs at least 1000 replicates.
 min_when = [["support == ufboot", 1000]]
+
+[[forms.fields]]
+name = "bootstrap_destination"
+label = "Save bootstrap trees in"
+type = "choice"
+default = "metadata"
+choices = [["metadata", "Metadata directory (.basecraft/)"], ["working", "Working directory"]]
+when = "support == bootstrap"
 
 [[forms.fields]]
 name = "seed"

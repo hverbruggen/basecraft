@@ -229,7 +229,8 @@ Item {
                 verify(control.width >= control.contentItem.implicitWidth + control.leftPadding + control.rightPadding)
                 verify(control.height >= control.contentItem.implicitHeight + control.topPadding + control.bottomPadding)
             }
-            verify(ribbon.contentWidth >= page.implicitWidth)
+            verify(ribbon.contentWidth >= ribbon.pageWidth)
+            fuzzyCompare(ribbon.pageWidth, page.implicitWidth, 1, "the summed width matches the page layout")
         }
         function test_keyboard_reveals_overflow_fields_data() {
             return [1, 1.25, 1.5, 1.75, 2].map(factor => ({tag: String(factor), factor}))

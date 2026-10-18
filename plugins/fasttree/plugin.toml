@@ -33,8 +33,10 @@ note = "SH-like local support is a fast test of each branch, written on the tree
 name = "model"
 label = "Substitution model"
 type = "choice"
-default = ""
-choices = [["", "GTR for DNA, LG for protein (standard)"], ["JC", "JC (DNA)"], ["GTR", "GTR (DNA)"], ["LG", "LG (protein)"], ["WAG", "WAG (protein)"], ["JTT", "JTT (protein)"]]
+# Only the models for the alignment's sequence type are offered; the first
+# is the default.
+default = "GTR"
+choices = [["GTR", "GTR", "sequence == dna"], ["JC", "JC", "sequence == dna"], ["LG", "LG", "sequence == protein"], ["WAG", "WAG", "sequence == protein"], ["JTT", "JTT", "sequence == protein"]]
 
 [[forms.fields]]
 name = "gamma"

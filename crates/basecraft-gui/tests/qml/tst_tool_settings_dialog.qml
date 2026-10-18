@@ -39,6 +39,11 @@ Item {
             dialog.set("support", "ufboot")
             tryCompare(replicates, "value", 1000)
             compare(dialog.values.replicates, 1000)
+            // Saving bootstrap trees applies to a standard bootstrap only.
+            verify(!field(dialog, "bootstrap_destination").enabled)
+            dialog.set("support", "bootstrap")
+            verify(field(dialog, "bootstrap_destination").enabled)
+            dialog.set("support", "ufboot")
             dialog.accept()
             compare(target.runs.length, 1)
             compare(target.runs[0].plugin, "iqtree")
@@ -57,6 +62,23 @@ Item {
             verify(field(dialog, "bootstrap").enabled)
             dialog.reject()
             compare(target.runs.length, 0)
+        }
+
+        function test_dna_alignments_get_dna_models_and_choices_keep_the_width() {
+            const [dialog] = open("fasttree", "tree")
+            const model = field(dialog, "model")
+            compare(model.currentText, "GTR")
+            compare(model.count, 2)
+            const iqtree = open("iqtree", "tree")[0]
+            const choice = field(iqtree, "model")
+            wait(100)
+            const width = iqtree.width
+            iqtree.set("model", "JC")
+            iqtree.set("support", "ufboot")
+            wait(50)
+            compare(iqtree.width, width, "picking a choice does not resize the dialog")
+            const seed = field(iqtree, "seed")
+            verify(seed.width < choice.width, "a number box is as wide as its numbers")
         }
 
         function test_unknown_forms_report_instead_of_opening() {

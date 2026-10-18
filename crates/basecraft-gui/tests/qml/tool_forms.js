@@ -1,6 +1,6 @@
 .pragma library
 // Settings forms as the alignment controller returns them, copied from the
-// plugin manifests (plugins/*/plugin.toml).
+// plugin manifests (plugins/*/plugin.toml), for a DNA alignment.
 var forms = {
  "iqtree/tree": {
   "id": "tree",
@@ -28,63 +28,43 @@ var forms = {
      ],
      [
       "JC",
-      "JC (DNA)"
+      "JC",
+      "sequence == dna"
      ],
      [
       "F81",
-      "F81 (DNA)"
+      "F81",
+      "sequence == dna"
      ],
      [
       "K2P",
-      "K2P (DNA)"
+      "K2P",
+      "sequence == dna"
      ],
      [
       "HKY",
-      "HKY (DNA)"
+      "HKY",
+      "sequence == dna"
      ],
      [
       "TN",
-      "TN (DNA)"
+      "TN",
+      "sequence == dna"
      ],
      [
       "TIM",
-      "TIM (DNA)"
+      "TIM",
+      "sequence == dna"
      ],
      [
       "TVM",
-      "TVM (DNA)"
+      "TVM",
+      "sequence == dna"
      ],
      [
       "GTR",
-      "GTR (DNA)"
-     ],
-     [
-      "LG",
-      "LG (protein)"
-     ],
-     [
-      "WAG",
-      "WAG (protein)"
-     ],
-     [
-      "JTT",
-      "JTT (protein)"
-     ],
-     [
-      "Dayhoff",
-      "Dayhoff (protein)"
-     ],
-     [
-      "mtREV",
-      "mtREV (protein)"
-     ],
-     [
-      "cpREV",
-      "cpREV (protein)"
-     ],
-     [
-      "Blosum62",
-      "Blosum62 (protein)"
+      "GTR",
+      "sequence == dna"
      ]
     ],
     "min": null,
@@ -165,6 +145,28 @@ var forms = {
     "local": false
    },
    {
+    "name": "bootstrap_destination",
+    "label": "Save bootstrap trees in",
+    "type": "choice",
+    "default": "metadata",
+    "choices": [
+     [
+      "metadata",
+      "Metadata directory (.basecraft/)"
+     ],
+     [
+      "working",
+      "Working directory"
+     ]
+    ],
+    "when": "support == bootstrap",
+    "min": null,
+    "max": null,
+    "min_when": [],
+    "value_when": [],
+    "local": false
+   },
+   {
     "name": "seed",
     "label": "Seed",
     "type": "integer",
@@ -197,31 +199,17 @@ var forms = {
     "name": "model",
     "label": "Substitution model",
     "type": "choice",
-    "default": "",
+    "default": "GTR",
     "choices": [
      [
-      "",
-      "GTR for DNA, LG for protein (standard)"
+      "GTR",
+      "GTR",
+      "sequence == dna"
      ],
      [
       "JC",
-      "JC (DNA)"
-     ],
-     [
-      "GTR",
-      "GTR (DNA)"
-     ],
-     [
-      "LG",
-      "LG (protein)"
-     ],
-     [
-      "WAG",
-      "WAG (protein)"
-     ],
-     [
-      "JTT",
-      "JTT (protein)"
+      "JC",
+      "sequence == dna"
      ]
     ],
     "min": null,

@@ -89,6 +89,32 @@ Item {
             dialog.reject()
             compare(requests.count, 1)
         }
+        function test_ptp_builds_and_roots_its_tree_from_the_alignment() {
+            const dialog = createTemporaryObject(factory, parent)
+            requests.target = dialog
+            requests.clear()
+            // With only an alignment, PTP offers to build its tree.
+            dialog.show("ptp", "/project/input.afa", "")
+            tryCompare(dialog, "opened", true)
+            verify(dialog.ptpFromAlignment)
+            verify(dialog.iqtreeDisplay, "the IQ-TREE model is asked for")
+            verify(!findChild(dialog, "rootedTree").visible)
+            verify(dialog.validInput)
+            findChild(dialog, "ptpRooting").currentIndex = 1
+            dialog.accept()
+            compare(requests.count, 1)
+            const args = requests.signalArguments[0]
+            compare(args[1], "/project/input.afa")
+            compare(args[2], true)
+            compare(JSON.parse(args[3]).rooting, "mrttv")
+            compare(JSON.parse(args[3]).iqtree_model, "MFP")
+            compare(args[4], "iqtree")
+            // An existing tree is the default when there is one.
+            dialog.show("ptp", "/project/input.afa", "/project/input.nwk")
+            tryCompare(dialog, "opened", true)
+            verify(!dialog.ptpFromAlignment)
+            dialog.reject()
+        }
         function test_missing_engine_blocks_run() {
             const dialog = createTemporaryObject(factory, parent)
             requests.target = dialog

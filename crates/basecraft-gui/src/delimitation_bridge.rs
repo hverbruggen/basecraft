@@ -56,6 +56,11 @@ pub mod qobject {
         fn combine_candidates(self: Pin<&mut DelimitationController>, paths: &QString) -> QString;
         #[qinvokable]
         fn combine_name(self: &DelimitationController, paths: &QString) -> QString;
+        /// Root the display tree at its midpoint ("midpoint") or by minimum
+        /// variance ("mrttv") into a new tree file beside it, and attach that.
+        /// For analyses such as PTP that need a rooted tree.
+        #[qinvokable]
+        fn root_display_tree(self: Pin<&mut DelimitationController>, method: &QString) -> bool;
         #[qinvokable]
         fn attach_tree(
             self: Pin<&mut DelimitationController>,
@@ -560,6 +565,36 @@ impl qobject::DelimitationController {
             Ok(()) => true,
             Err(error) => {
                 self.as_mut().fail(&error);
+                false
+            }
+        }
+    }
+    pub fn root_display_tree(mut self: Pin<&mut Self>, method: &QString) -> bool {
+        let result = (|| -> Result<PathBuf, String> {
+            let display = PathBuf::from(self.rust().display_path.to_string());
+            let (op, tag) = match method.to_string().as_str() {
+                "midpoint" => (Op::TreeMidpointRoot {}, "midpoint"),
+                "mrttv" => (Op::TreeMinimumVarianceRoot {}, "mrttv"),
+                other => return Err(format!("Unknown rooting {other:?}")),
+            };
+            // An ordinary tree edit and save, so the rooted file records how
+            // it was made.
+            let mut session = Session::recoverable(crate::bridge::project_root(&display))
+                .map_err(|e| e.to_string())?;
+            let doc = session.open(&display).map_err(|e| e.to_string())?;
+            session.apply(doc, op).map_err(|e| e.to_string())?;
+            let target = display.with_extension(format!("{tag}-rooted.nwk"));
+            session
+                .save(doc, Some(&target))
+                .map_err(|e| e.to_string())?;
+            Ok(target)
+        })();
+        match result {
+            Ok(path) => self
+                .as_mut()
+                .attach_tree(&QString::from(path.to_string_lossy().as_ref()), false),
+            Err(e) => {
+                self.fail(&format!("Rooting the tree: {e}"));
                 false
             }
         }

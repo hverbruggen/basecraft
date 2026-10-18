@@ -2476,9 +2476,16 @@ ApplicationWindow {
                         implicitHeight: group.implicitHeight,
                         caption: point.y + group.captionY, center: point.y + group.bodyCenterY})
                 }
+                // Every child, so a width that does not add up can be traced.
+                const children = []
+                for (const child of ribbon.currentPage.children)
+                    children.push({name: child.title || String(child).split("(")[0], visible: child.visible,
+                        x: child.x, width: child.width, implicitWidth: child.implicitWidth})
                 console.log("RIBBON_AUDIT", JSON.stringify({page: window.ribbonTab,
                     height: ribbon.height, contentWidth: ribbon.contentWidth,
-                    viewportWidth: ribbon.viewportWidth, groups: groups}))
+                    viewportWidth: ribbon.viewportWidth, pageWidth: ribbon.pageWidth,
+                    pageImplicitWidth: ribbon.currentPage.implicitWidth, spacing: ribbon.currentPage.spacing,
+                    groups: groups, children: children}))
             }
             if (arg("--render-audit") && window.currentView) {
                 const view = window.currentView
