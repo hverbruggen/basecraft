@@ -95,8 +95,11 @@ pub mod qobject {
         fn build_fasttree(self: Pin<&mut AlignmentController>);
         #[qinvokable]
         fn trim_alignment(self: Pin<&mut AlignmentController>);
+        /// Infer a maximum-likelihood tree with IQ-TREE. `options` is JSON:
+        /// `model` ("MFP" for ModelFinder), `support` ("none", "ufboot" or
+        /// "bootstrap"), `replicates` and `seed`.
         #[qinvokable]
-        fn build_iqtree(self: Pin<&mut AlignmentController>);
+        fn build_iqtree(self: Pin<&mut AlignmentController>, options: QString);
 
         /// Infer a DNA distance tree through the bundled public plugin.
         #[qinvokable]
@@ -1309,14 +1312,24 @@ impl qobject::AlignmentController {
         });
     }
 
-    pub fn build_iqtree(self: Pin<&mut Self>) {
-        let mut params = serde_json::Map::new();
-        params.insert("model".into(), serde_json::json!("MFP"));
+    // QString is passed by value across the QML invokable boundary.
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn build_iqtree(self: Pin<&mut Self>, options: QString) {
+        let mut params: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(&options.to_string()).unwrap_or_default();
+        params
+            .entry("model")
+            .or_insert_with(|| serde_json::json!("MFP"));
+        params.entry("seed").or_insert_with(|| serde_json::json!(1));
         params.insert(
             "threads".into(),
             serde_json::json!(basecraft_plugin_host::compute::allocation()),
         );
-        params.insert("seed".into(), serde_json::json!(1));
+        let finder = params["model"] == "MFP";
+        let support = params
+            .get("support")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|s| s != "none");
         self.run_tool(&Tool {
             name: "IQ-TREE",
             plugin: "iqtree",
@@ -1324,7 +1337,12 @@ impl qobject::AlignmentController {
             input: AlignmentInput::Aligned,
             output: ("iqtree", "nwk"),
             min_rows: 4,
-            working: "Selecting a model and building a tree with IQ-TREE…",
+            working: match (finder, support) {
+                (true, true) => "Selecting a model, building a tree and its support with IQ-TREE…",
+                (true, false) => "Selecting a model and building a tree with IQ-TREE…",
+                (false, true) => "Building a tree and its support with IQ-TREE…",
+                (false, false) => "Building a tree with IQ-TREE…",
+            },
             params,
         });
     }

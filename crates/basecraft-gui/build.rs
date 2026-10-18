@@ -104,6 +104,7 @@ fn main() {
         "qml/AppCheckBox.qml",
         "qml/AppSpinBox.qml",
         "qml/DistanceAnalysisDialog.qml",
+        "qml/IqTreeDialog.qml",
         "qml/AppIcon.qml",
         "qml/AppIconButton.qml",
         "qml/AppControlBackground.qml",

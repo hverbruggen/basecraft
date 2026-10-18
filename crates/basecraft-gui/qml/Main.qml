@@ -1153,7 +1153,7 @@ ApplicationWindow {
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
                         title: "Support"
-                        RibbonButton { commandId: "ribbon.add-support-values-from-another-analysis-of-the-same"; text: "Add from tree…"; tip: "Add support values from another analysis of the same taxa, matched branch by branch"; onInvoked: supportFile.open() }
+                        RibbonButton { commandId: "ribbon.add-support-values-from-another-analysis-of-the-same"; text: "Add…"; tip: "Add support values from another analysis of the same taxa, matched branch by branch"; onInvoked: supportFile.open() }
                         ModeButton { commandId: "ribbon.above-branches-going-up-below-branches-going-down"; text: "Natural"; tip: "Above branches going up, below branches going down"; active: window.current !== null && window.current.support_placement === "natural"; onInvoked: window.current.place_support("natural") }
                         ModeButton { commandId: "ribbon.all-support-values-above-their-branch"; text: "Above"; tip: "All support values above their branch"; active: window.current !== null && window.current.support_placement === "above"; onInvoked: window.current.place_support("above") }
                         ModeButton { commandId: "ribbon.all-support-values-below-their-branch"; text: "Below"; tip: "All support values below their branch"; active: window.current !== null && window.current.support_placement === "below"; onInvoked: window.current.place_support("below") }
@@ -1212,8 +1212,8 @@ ApplicationWindow {
                             iconName: "phylogram"
                             text: "IQ-TREE"
                             enabled: window.current !== null && !window.current.busy
-                            tip: "Select a model and infer a maximum-likelihood tree; allocated CPU threads, seed 1, no support resampling"
-                            onInvoked: window.current.build_iqtree()
+                            tip: "Infer a maximum-likelihood tree: choose the model, rate variation and branch support"
+                            onInvoked: { iqtreeDialog.target = window.current; iqtreeDialog.open() }
                         }
                     }
                     Item { Layout.fillWidth: true }
@@ -1281,6 +1281,7 @@ ApplicationWindow {
     DistanceAnalysisDialog { id: matrixDialog; kind: "matrix" }
     DistanceAnalysisDialog { id: njDialog; kind: "nj" }
     DistanceAnalysisDialog { id: upgmaDialog; kind: "upgma" }
+    IqTreeDialog { id: iqtreeDialog }
 
     ShortcutsDialog { id: shortcuts; commands: window.applicationCommands }
 
@@ -2291,7 +2292,7 @@ ApplicationWindow {
                     else if (cmd === "mafft") c.align_mafft()
                     else if (cmd === "fasttree") c.build_fasttree()
                     else if (cmd === "trimal") c.trim_alignment()
-                    else if (cmd === "iqtree") c.build_iqtree()
+                    else if (cmd === "iqtree") c.build_iqtree(a || "{}")
                     else if (cmd === "distance") c.build_distance_tree(a || "k2p")
                     console.log("aln", step, "|", c.message)
                 }

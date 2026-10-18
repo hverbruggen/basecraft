@@ -1,4 +1,4 @@
-"""IQ-TREE with explicit seed, model and worker count; no implicit support run."""
+"""IQ-TREE with explicit seed, model, worker count and branch support."""
 
 import json
 import re
@@ -35,6 +35,15 @@ def tree(snapshot, params):
     threads, seed = allocated_cpus(params.get("threads")), int(params.get("seed", 1))
     if threads < 1 or seed < 1:
         raise ValueError("Threads and seed must be positive")
+    support = params.get("support", "none")
+    if support not in ("none", "ufboot", "bootstrap"):
+        raise ValueError("Support must be none, ufboot or bootstrap")
+    replicates = int(params.get("replicates", 1000 if support == "ufboot" else 100))
+    if support == "ufboot" and replicates < 1000:
+        raise ValueError("Ultrafast bootstrap needs at least 1000 replicates")
+    if support == "bootstrap" and replicates < 1:
+        raise ValueError("Bootstrap needs at least one replicate")
+    support_text = {"none": "not requested", "ufboot": f"ultrafast bootstrap, {replicates} replicates", "bootstrap": f"standard bootstrap, {replicates} replicates"}[support]
     exe = executable(("iqtree3", "iqtree2", "iqtree"), "BASECRAFT_IQTREE")
     outputs = []
     selected_model = None
@@ -57,6 +66,9 @@ def tree(snapshot, params):
         ]
         if params.get("keep_identical", False):
             args.append("-keep-ident")
+        if support != "none":
+            # The tree file then carries the support values on its branches.
+            args += ["-B" if support == "ufboot" else "-b", str(replicates)]
         # Files avoid a pipe-buffer deadlock during long external runs.
         with (Path(work) / "stdout").open("w+") as stdout, (Path(work) / "stderr").open("w+") as stderr:
             run = subprocess.Popen(args, stdout=stdout, stderr=stderr)
@@ -103,7 +115,7 @@ def tree(snapshot, params):
                         "threads": threads,
                         "seed": seed,
                         "identifiers": names,
-                        "support": "not requested",
+                        "support": support_text,
                         "keep_identical": params.get("keep_identical", False),
                         "tree_role": params.get("tree_role", "phylogenetic inference"),
                         "units": "substitutions per site",
@@ -127,7 +139,7 @@ def tree(snapshot, params):
         "ops": [],
         "outputs": outputs,
         "message": f"Built an IQ-TREE tree of {len(records)} sequences ({model})",
-        "execution": {"argv": args, "resolved_parameters": {"requested_model": model, "selected_model": selected_model, "threads": threads, "seed": seed, "support": "not requested", "keep_identical": params.get("keep_identical", False), "tree_role": params.get("tree_role", "phylogenetic inference"), "units": "substitutions per site"}, "preprocessing": ["Sequence identifiers mapped to neutral t0..tN identifiers and restored in Newick"], "environment": {}, "methods_template": "iqtree.tree.v1", "methods": {"description": "A phylogenetic tree was inferred", "citations": ["IQ-TREE citations by software version and method: https://www.iqtree.org/doc/Home"]}},
+        "execution": {"argv": args, "resolved_parameters": {"requested_model": model, "selected_model": selected_model, "threads": threads, "seed": seed, "support": support_text, "keep_identical": params.get("keep_identical", False), "tree_role": params.get("tree_role", "phylogenetic inference"), "units": "substitutions per site"}, "preprocessing": ["Sequence identifiers mapped to neutral t0..tN identifiers and restored in Newick"], "environment": {}, "methods_template": "iqtree.tree.v1", "methods": {"description": "A phylogenetic tree was inferred", "citations": ["IQ-TREE citations by software version and method: https://www.iqtree.org/doc/Home"]}},
         "tool": {
             "name": "IQ-TREE",
             "version": (version.stdout or version.stderr).strip(),

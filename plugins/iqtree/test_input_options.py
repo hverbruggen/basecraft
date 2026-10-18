@@ -43,6 +43,19 @@ class InputOptions(unittest.TestCase):
         report = json.loads(Path(str(self.output) + ".run.json").read_text())
         self.assertEqual(set(report["identifiers"].values()), {"a", "b", "c", "d"})
 
+    def test_support_options_reach_iqtree(self):
+        tree = "prefix = pathlib.Path(sys.argv[sys.argv.index('-pre')+1])\nprefix.with_suffix('.treefile').write_text('((t0:1,t1:1)95:1,(t2:1,t3:1)88:1);')\n"
+        for support, replicates, flag in (("ufboot", 1000, "-B"), ("bootstrap", 100, "-b")):
+            with self.executable(tree):
+                result = iqtree_plugin.tree(None, dict(self.params, model="GTR+I+G", support=support, replicates=replicates))
+            argv = result["execution"]["argv"]
+            self.assertEqual(argv[argv.index(flag) + 1], str(replicates))
+            self.assertEqual(argv[argv.index("-m") + 1], "GTR+I+G")
+            self.assertIn(str(replicates), result["execution"]["resolved_parameters"]["support"])
+        self.assertIn(")95:1", self.output.read_text())
+        with self.assertRaisesRegex(ValueError, "1000"):
+            iqtree_plugin.tree(None, dict(self.params, support="ufboot", replicates=100))
+
     def test_missing_or_duplicate_labels_preserve_previous_output(self):
         for tree in ("(t0:1,t1:1,t2:1);", "(t0:1,t1:1,t2:1,t2:1);", "(t0:1,t1:1,t2:1,t3:1,rogue:1);"):
             self.output.write_text("previous tree")
