@@ -631,6 +631,16 @@ fn run_asap(
         .ok()
         .filter(|s| (1..=2_147_483_647).contains(s))
         .ok_or("ASAP seed must be between 1 and 2147483647")?;
+    // Parallel matches the reference's seed-to-seed spread (crate README);
+    // "reference" reproduces the reference program exactly, on one thread.
+    let stream = match parameter("stream")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("parallel")
+    {
+        "parallel" => asap::Stream::Parallel,
+        "reference" => asap::Stream::Reference,
+        _ => return Err("ASAP stream must be parallel or reference".into()),
+    };
     let alignment = basecraft_distance::Alignment::read(Path::new(&request.input))
         .map_err(|e| format!("ASAP requires an aligned DNA FASTA input: {e}"))?;
     if alignment.names.len() < 2 {
@@ -674,6 +684,7 @@ fn run_asap(
         seed,
         max_simulations: usize::try_from(max_simulations)?,
         reported: usize::try_from(reported)?,
+        stream,
         ..asap::Settings::default()
     };
     let distances = asap::Distances {
@@ -683,16 +694,21 @@ fn run_asap(
     let cancel = request.cancel_file.as_deref().map(Path::new);
     let mut last_report = Instant::now();
     let mut progress_error = None;
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(request.workers)
+        .build()?;
     let started = Instant::now();
-    let analysis = asap::analyse(&distances, &settings, |done, total| {
-        if last_report.elapsed().as_secs_f64() < 0.25 {
-            return true;
-        }
-        last_report = Instant::now();
-        if let Err(error) = progress(request, "ASAP partitions", done, total) {
-            progress_error.get_or_insert(error.to_string());
-        }
-        !cancel.is_some_and(Path::exists)
+    let analysis = pool.install(|| {
+        asap::analyse(&distances, &settings, |done, total| {
+            if last_report.elapsed().as_secs_f64() < 0.25 {
+                return true;
+            }
+            last_report = Instant::now();
+            if let Err(error) = progress(request, "ASAP partitions", done, total) {
+                progress_error.get_or_insert(error.to_string());
+            }
+            !cancel.is_some_and(Path::exists)
+        })
     })?;
     let analysis_seconds = started.elapsed().as_secs_f64();
     artifact(
@@ -719,6 +735,7 @@ fn run_asap(
         ("min_overlap", min_overlap.into()),
         ("replicates", max_simulations.into()),
         ("partitions", reported.into()),
+        ("stream", serde_json::to_value(stream)?),
         ("sequence_length", columns.into()),
         ("p_threshold", f64::from(settings.p_threshold).into()),
         ("slope_weight", f64::from(settings.slope_weight).into()),

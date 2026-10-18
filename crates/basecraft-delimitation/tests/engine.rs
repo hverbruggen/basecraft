@@ -287,7 +287,11 @@ fn native_asap_reproduces_the_reference_best_partition() {
         workers: 2,
         progress: Some(directory.path().join("progress.json").display().to_string()),
         cancel_file: None,
-        parameters: [("model".into(), serde_json::json!("jc69"))].into(),
+        parameters: [
+            ("model".into(), serde_json::json!("jc69")),
+            ("stream".into(), serde_json::json!("reference")),
+        ]
+        .into(),
     };
     let request_path = directory.path().join("request.json");
     std::fs::write(&request_path, serde_json::to_vec(&request).unwrap()).unwrap();
@@ -320,4 +324,6 @@ fn native_asap_reproduces_the_reference_best_partition() {
         assert_eq!(members, 19, "{}", hypothesis.name);
     }
     assert!(std::path::Path::new(&format!("{}.asap.tsv", request.output)).is_file());
+    assert_eq!(best.provenance.parameters["stream"], "reference");
+    assert_eq!(best.provenance.workers, Some(2));
 }

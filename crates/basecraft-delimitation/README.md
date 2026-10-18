@@ -31,6 +31,8 @@ completed hypothesis. Convergence alone never implies statistical support.
 ## ASAP
 
 The `asap` method computes `basecraft-distance` p, JC69 or K2P distances from
-the immutable aligned FASTA and runs `basecraft-asap` with the reference random
-stream. Each described partition becomes one ranked hypothesis; the candidate
-table is written as `<output>.asap.tsv`. `asap_import` reads ASAP SPART-XML.
+the immutable aligned FASTA and runs `basecraft-asap` with the parallel stream
+on `workers` threads. `"stream": "reference"` reproduces the reference program
+exactly, on one thread. Each described partition becomes one ranked
+hypothesis, and the candidate table goes to `<output>.asap.tsv`. `asap_import`
+reads ASAP SPART-XML.

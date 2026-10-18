@@ -316,6 +316,7 @@ fn asap_sampling_restores_roster_and_replays() {
         assert_eq!(params["deduplicate"], unique);
         assert_eq!(params["retained_count"], if unique { 4 } else { 5 });
         assert_eq!(params["replicates"], 1000);
+        assert_eq!(params["stream"], "parallel");
         let snapshot = params["alignment_snapshot"].as_str().unwrap();
         assert_eq!(
             basecraft_io::hash_file(Path::new(snapshot)).unwrap(),
