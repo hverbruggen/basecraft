@@ -146,7 +146,7 @@ FocusScope {
             }
             RowLayout {
                 Label { id: signalCutoffLabel; text: "Signal cutoff (%)" }
-                SpinBox { id: signalCutoff; objectName: "signalCutoff"; Accessible.labelledBy: signalCutoffLabel; Accessible.name: signalCutoffLabel.text; from: 1; to: 90; value: 20; editable: true }
+                AppSpinBox { id: signalCutoff; objectName: "signalCutoff"; Accessible.labelledBy: signalCutoffLabel; Accessible.name: signalCutoffLabel.text; from: 1; to: 90; value: 20; editable: true }
             }
             Label {
                 Layout.fillWidth: true
@@ -196,12 +196,12 @@ FocusScope {
             Label { text: "Keep the following consensus columns; masked ends stay visible and are excluded from every export."; wrapMode: Text.Wrap; Layout.fillWidth: true }
             RowLayout {
                 Label { id: keepStartLabel; text: "Keep from" }
-                SpinBox { id: keepStart; objectName: "keepStart"; Accessible.labelledBy: keepStartLabel; Accessible.name: keepStartLabel.text; from: 1; to: ctl.consensus_columns; editable: true }
+                AppSpinBox { id: keepStart; objectName: "keepStart"; Accessible.labelledBy: keepStartLabel; Accessible.name: keepStartLabel.text; from: 1; to: ctl.consensus_columns; editable: true }
                 AppButton { text: "Selected column"; onClicked: keepStart.value = ctl.selected_column }
             }
             RowLayout {
                 Label { id: keepEndLabel; text: "Keep through" }
-                SpinBox { id: keepEnd; objectName: "keepEnd"; Accessible.labelledBy: keepEndLabel; Accessible.name: keepEndLabel.text; from: 1; to: ctl.consensus_columns; editable: true }
+                AppSpinBox { id: keepEnd; objectName: "keepEnd"; Accessible.labelledBy: keepEndLabel; Accessible.name: keepEndLabel.text; from: 1; to: ctl.consensus_columns; editable: true }
                 AppButton { text: "Selected column"; onClicked: keepEnd.value = ctl.selected_column }
             }
             RowLayout {
@@ -231,9 +231,9 @@ FocusScope {
             TextField { id: reversePrimer; objectName: "reversePrimer"; Accessible.labelledBy: reversePrimerLabel; Accessible.name: reversePrimerLabel.text; Layout.fillWidth: true; placeholderText: "IUPAC DNA"; onTextEdited: primerDialog.proposal = "" }
             RowLayout {
                 Label { id: primerOverlapLabel; text: "Minimum overlap" }
-                SpinBox { id: primerOverlap; objectName: "primerOverlap"; Accessible.labelledBy: primerOverlapLabel; Accessible.name: primerOverlapLabel.text; from: 8; to: 100; value: 12; editable: true; onValueModified: primerDialog.proposal = "" }
+                AppSpinBox { id: primerOverlap; objectName: "primerOverlap"; Accessible.labelledBy: primerOverlapLabel; Accessible.name: primerOverlapLabel.text; from: 8; to: 100; value: 12; editable: true; onValueModified: primerDialog.proposal = "" }
                 Label { id: primerErrorsLabel; text: "Max errors (%)" }
-                SpinBox { id: primerErrors; objectName: "primerErrors"; Accessible.labelledBy: primerErrorsLabel; Accessible.name: primerErrorsLabel.text; from: 0; to: 40; value: 25; editable: true; onValueModified: primerDialog.proposal = "" }
+                AppSpinBox { id: primerErrors; objectName: "primerErrors"; Accessible.labelledBy: primerErrorsLabel; Accessible.name: primerErrorsLabel.text; from: 0; to: 40; value: 25; editable: true; onValueModified: primerDialog.proposal = "" }
             }
             AppButton { text: "Find primer candidates"; onClicked: primerDialog.proposal = ctl.find_primers(forwardPrimer.text, reversePrimer.text, primerOverlap.value, primerErrors.value) }
             Label {

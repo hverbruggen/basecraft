@@ -24,6 +24,9 @@ ApplicationWindow {
 
     readonly property real ribbonSizeFactor: preferenceValues.ui && preferenceValues.ui.ribbon_size_percent !== undefined
         ? preferenceValues.ui.ribbon_size_percent / 100 : 1
+    // Read by AppCheckBox and AppSpinBox everywhere in the window.
+    readonly property int tickBoxSize: preferenceValues.ui && preferenceValues.ui.tick_box_size ? preferenceValues.ui.tick_box_size : 14
+    readonly property int inputBoxHeight: preferenceValues.ui && preferenceValues.ui.input_box_height ? preferenceValues.ui.input_box_height : 20
 
     // Closing the window (or Ctrl+Q) asks about unsaved changes first.
     property bool closeConfirmed: false
@@ -951,7 +954,7 @@ ApplicationWindow {
                         title: "Show"
                         // Only sequences have a GC plot.
                         visible: window.currentKind === "sequence"
-                        CheckBox {
+                        AppCheckBox {
                             text: "GC content"
                             ToolTip.text: "Show the GC content plot"
                             ToolTip.visible: hovered
@@ -1145,19 +1148,54 @@ ApplicationWindow {
                         Component.onCompleted: commands.forEach(command => window.registerRibbonCommand(command))
                     }
                     ToolSeparator { Layout.fillHeight: true }
-                    TreeBranchOrderGroup {
-                        controller: window.current
+                    TreeStyleGroup {
+                        controller: window.treeOpen ? window.current : null
                         customization: window.customization
+                        onExtraRequested: treeStyle.openStyle("extra")
                         Component.onCompleted: commands.forEach(command => window.registerRibbonCommand(command))
                     }
                     ToolSeparator { Layout.fillHeight: true }
+                    // Support values: everything but Add is greyed while the tree has none.
                     RibbonGroup {
+                        id: supportGroup
                         title: "Support"
+                        readonly property bool hasSupport: window.treeOpen && window.current !== null && window.current.has_support === true
                         RibbonButton { commandId: "ribbon.add-support-values-from-another-analysis-of-the-same"; text: "Add…"; tip: "Add support values from another analysis of the same taxa, matched branch by branch"; onInvoked: supportFile.open() }
-                        ModeButton { commandId: "ribbon.above-branches-going-up-below-branches-going-down"; text: "Natural"; tip: "Above branches going up, below branches going down"; active: window.current !== null && window.current.support_placement === "natural"; onInvoked: window.current.place_support("natural") }
-                        ModeButton { commandId: "ribbon.all-support-values-above-their-branch"; text: "Above"; tip: "All support values above their branch"; active: window.current !== null && window.current.support_placement === "above"; onInvoked: window.current.place_support("above") }
-                        ModeButton { commandId: "ribbon.all-support-values-below-their-branch"; text: "Below"; tip: "All support values below their branch"; active: window.current !== null && window.current.support_placement === "below"; onInvoked: window.current.place_support("below") }
-                        RibbonButton { commandId: "ribbon.which-support-values-show-circles-at-nodes-sizes"; text: "Style…"; tip: "Which support values show, circles at nodes, sizes"; onInvoked: treeStyle.openStyle() }
+                        RibbonButton {
+                            id: placementButton
+                            objectName: "supportPlacement"
+                            commandId: "tree.support-position"
+                            text: "Position"
+                            iconName: "support-position"
+                            tip: "Where support values sit on their branch"
+                            enabled: supportGroup.hasSupport
+                            onInvoked: placementMenu.popup(placementButton, 0, placementButton.height)
+                            Menu {
+                                id: placementMenu
+                                Repeater {
+                                    model: [{value: "natural", text: "Natural", tip: "above branches going up, below branches going down"},
+                                        {value: "above", text: "Above", tip: "all above their branch"},
+                                        {value: "below", text: "Below", tip: "all below their branch"}]
+                                    delegate: MenuItem {
+                                        required property var modelData
+                                        text: modelData.text + ": " + modelData.tip
+                                        checkable: true
+                                        checked: window.current !== null && window.current.support_placement === modelData.value
+                                        onTriggered: window.current.place_support(modelData.value)
+                                    }
+                                }
+                            }
+                        }
+                        RibbonNumberField {
+                            objectName: "supportFont"
+                            label: "Size"
+                            tip: "Support value size in pixels"
+                            from: 6; to: 30
+                            value: window.treeOpen && window.current ? window.current.support_font : 10
+                            enabled: supportGroup.hasSupport
+                            onEdited: value => window.current.set_sizes(0, value, 0)
+                        }
+                        RibbonButton { commandId: "ribbon.which-support-values-show-circles-at-nodes-sizes"; text: "Style…"; iconName: "support-style"; tip: "Which support values show and how, and circles at nodes"; enabled: supportGroup.hasSupport; onInvoked: treeStyle.openStyle("support") }
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     TreeAlignmentGroup {
@@ -1227,6 +1265,21 @@ ApplicationWindow {
                         title: "Display"
                         ModeButton { commandId: "species.tree-view"; text: "Tree view"; tip: "The tree with a bar column per hypothesis"; iconName: "phylogram"; enabled: window.speciesView !== null && window.current.display_path.length > 0; active: window.speciesView !== null && !window.speciesView.showGroups; onInvoked: window.speciesView.showGroups = false }
                         ModeButton { commandId: "species.text-view"; text: "Text view"; tip: "Each hypothesis's species and their sequences, as text"; iconName: "text-representation"; enabled: window.speciesView !== null; active: window.speciesView !== null && window.speciesView.showGroups; onInvoked: window.speciesView.showGroups = true }
+                        RibbonButton {
+                            id: speciesOrder
+                            commandId: "species.order-branches"
+                            text: "Order"
+                            iconName: "tree-small-on-top"
+                            tip: "Order every clade's branches by size; the tree file is not changed"
+                            enabled: window.speciesView !== null && window.current.display_path.length > 0
+                            onInvoked: speciesOrderMenu.popup(speciesOrder, 0, speciesOrder.height)
+                            Menu {
+                                id: speciesOrderMenu
+                                MenuItem { text: "Small on top"; onTriggered: window.speciesView.orderBranches(true) }
+                                MenuItem { text: "Large on top"; onTriggered: window.speciesView.orderBranches(false) }
+                            }
+                        }
+                        RibbonButton { commandId: "species.tree-style"; text: "Tree style…"; iconName: "tree-style"; tip: "Tip name and support value sizes and branch width"; enabled: window.speciesView !== null && window.current.display_path.length > 0; onInvoked: window.speciesView.treeSizes() }
                         RibbonButton { commandId: "species.layout"; text: "Layout…"; tip: "Bar width, the gap between columns and the space between species, for every column"; iconName: "bar-layout"; enabled: window.speciesView !== null && window.speciesView.columnInfo.columns.length > 0; onInvoked: window.speciesView.layoutBars() }
                     }
                     ToolSeparator { Layout.fillHeight: true }
@@ -1304,7 +1357,7 @@ ApplicationWindow {
             spacing: 8
             RowLayout {
                 Label { id: codonsLabel; text: "At least" }
-                SpinBox {
+                AppSpinBox {
                     id: codons
                     Accessible.labelledBy: codonsLabel
                     Accessible.name: codonsLabel.text + " (codons, start to stop)"
@@ -1755,6 +1808,15 @@ ApplicationWindow {
                         elide: Text.ElideRight
                         text: window.current ? window.current.status : ""
                     }
+                    // A tree's linked alignment, such as "No linked alignment".
+                    Label {
+                        objectName: "treeAlignmentStatus"
+                        readonly property string linkStatus: window.treeOpen && window.current ? (window.current.alignment_link_status || "") : ""
+                        visible: linkStatus.length > 0
+                        text: linkStatus
+                        Layout.maximumWidth: 360
+                        elide: Text.ElideMiddle
+                    }
                     Label {
                         readonly property string hoverText: window.alignmentDocument ? window.alignmentDocument.hoverStatus
                             : window.traceDocument ? window.traceDocument.hoverStatus : ""
@@ -1860,7 +1922,7 @@ ApplicationWindow {
         onRenameTipRequested: (target, name, revision) => tipDialog.openCaptured(target, name, revision)
         onRootPositionRequested: rootDialog.ask()
         onSupportRequested: supportFile.open()
-        onStyleRequested: treeStyle.openStyle()
+        onStyleRequested: treeStyle.openStyle("extra")
     }
 
     // Where the root sits along its branch: a share of the branch on each
@@ -1998,7 +2060,7 @@ ApplicationWindow {
         body: ColumnLayout {
             Label { id: svgScopeLabel; text: "Region" }
             AppComboBox { id: svgScope; objectName: "svgScope"; Accessible.labelledBy: svgScopeLabel; Accessible.name: svgScopeLabel.text; model: ["Visible view", "Selection", "Complete figure"] }
-            CheckBox { id: svgPublication; text: "Publication colours (white background)" }
+            AppCheckBox { id: svgPublication; text: "Publication colours (white background)" }
         }
         onAccepted: {
             svgDialog.selectedFile = shell.local_file_url(window.currentPath.replace(/\.[^./]*$/, "") + ".svg")

@@ -471,12 +471,38 @@ fn run(
         "gmyc_single" | "gmyc_multiple" | "gmyc_exhaustive" => {
             let mut time =
                 basecraft_delimitation::time_tree::validate(&tree, request.rooted, 1e-8, true)?;
-            if request
+            let clamp = request
                 .parameters
                 .get("reference_age_clamp")
                 .and_then(serde_json::Value::as_bool)
-                == Some(true)
-            {
+                == Some(true);
+            // Tips at zero distance from each other are fitted as one tip and
+            // restored afterwards; the published workspace keeps every tip.
+            let full = &tree;
+            let mut merged = BTreeMap::new();
+            let tree = match basecraft_delimitation::gmyc::collapse_zero_age(full, &time)? {
+                Some((collapsed, groups)) if !clamp => {
+                    time = basecraft_delimitation::time_tree::validate(
+                        &collapsed,
+                        request.rooted,
+                        1e-8,
+                        true,
+                    )?;
+                    let tips: usize = groups.values().map(std::collections::BTreeSet::len).sum();
+                    time.diagnostics.push(format!(
+                        "{tips} sequences in {} groups are at zero distance from the others in their group (they differ only at gaps or ambiguous sites); each group was fitted as one tip and its members restored",
+                        groups.len()
+                    ));
+                    result.metrics.insert(
+                        "zero_distance_groups".into(),
+                        serde_json::to_value(&groups)?,
+                    );
+                    merged = groups;
+                    collapsed
+                }
+                _ => full.clone(),
+            };
+            if clamp {
                 let mut changed = 0;
                 for &node in &time.events {
                     if time.ages[node] < 1e-6 {
@@ -589,7 +615,18 @@ fn run(
                     break;
                 }
                 let candidate = &fit.profile[index];
-                let groups = basecraft_delimitation::gmyc::groups(&tree, &time, candidate);
+                let groups: Vec<std::collections::BTreeSet<String>> =
+                    basecraft_delimitation::gmyc::groups(&tree, &time, candidate)
+                        .into_iter()
+                        .map(|group| {
+                            group
+                                .into_iter()
+                                .flat_map(|tip| {
+                                    merged.get(&tip).cloned().unwrap_or_else(|| [tip].into())
+                                })
+                                .collect()
+                        })
+                        .collect();
                 if !seen.insert(
                     groups
                         .iter()
@@ -604,7 +641,7 @@ fn run(
                     groups.len(),
                     candidate.log_likelihood
                 );
-                let mut work = workspace(request, &tree, groups, candidate.log_likelihood, name);
+                let mut work = workspace(request, full, groups, candidate.log_likelihood, name);
                 let hypothesis = &mut work.hypotheses[0];
                 hypothesis
                     .attributes

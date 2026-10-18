@@ -1433,7 +1433,7 @@
           }
         },
         "gap": {
-          "description": "Pixels between this column and the next. Unset: 1.5 bar widths.",
+          "description": "Pixels between the previous column and this one; the first column\nhas none. Unset: 1.5 bar widths.",
           "type": [
             "integer",
             "null"
@@ -1775,6 +1775,17 @@
             "type": "string"
           },
           "uniqueItems": true
+        },
+        "small_on_top": {
+          "description": "Order every clade's branches by size before any flips: `true` puts\nthe smallest on top.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "tree_sizes": {
+          "description": "How the display tree is drawn here; unset sizes keep its own style.",
+          "$ref": "#/$defs/TreeSizes"
         },
         "visible": {
           "type": "array",
@@ -2290,6 +2301,36 @@
         "high",
         "low"
       ]
+    },
+    "TreeSizes": {
+      "description": "Sizes in pixels for drawing a display tree.",
+      "type": "object",
+      "properties": {
+        "branch_width": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "support_font": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "tip_font": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        }
+      }
     },
     "TreeStyle": {
       "description": "How a tree is drawn. Sizes are pixels at 100 % zoom.",

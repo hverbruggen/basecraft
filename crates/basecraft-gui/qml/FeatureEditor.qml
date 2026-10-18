@@ -118,14 +118,14 @@ AppContentDialog {
             Label { text: "Incomplete" }
             RowLayout {
                 spacing: 12
-                CheckBox {
+                AppCheckBox {
                     id: partial5
                     text: "5′ end"
                     ToolTip.text: "The annotation continues beyond its 5′ end (GenBank < or >)"
                     ToolTip.visible: hovered
                     onToggled: dialog.applyControls()
                 }
-                CheckBox {
+                AppCheckBox {
                     id: partial3
                     text: "3′ end"
                     ToolTip.text: "The annotation continues beyond its 3′ end"

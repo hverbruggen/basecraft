@@ -4,7 +4,12 @@ import QtQuick.Controls.Basic
 SpinBox {
     id: spin
     FontMetrics { id: metrics; font: spin.font }
-    readonly property real stepperSize: Math.max(24, Math.ceil(metrics.height) + 8)
+    // The height set in Preferences, read from the main window, grown to fit
+    // the font; the steppers are square.
+    readonly property real stepperSize: Math.max(Window.window && Window.window.inputBoxHeight ? Window.window.inputBoxHeight : 20,
+        Math.ceil(metrics.height) + 4)
+    topPadding: 0
+    bottomPadding: 0
     // Reserve room for every valid value, including locale grouping separators.
     implicitWidth: Math.ceil(Math.max(metrics.advanceWidth(textFromValue(from, locale)),
         metrics.advanceWidth(textFromValue(to, locale)))) + 12 + 2 * stepperSize
@@ -16,7 +21,7 @@ SpinBox {
         implicitWidth: spin.stepperSize
         implicitHeight: spin.stepperSize
         height: spin.height
-        AppIcon { anchors.centerIn: parent; name: "add"; size: Math.max(12, Math.ceil(metrics.height)); color: spin.palette.buttonText }
+        AppIcon { anchors.centerIn: parent; name: "add"; size: Math.max(8, Math.min(Math.ceil(metrics.height), spin.stepperSize - 6)); color: spin.palette.buttonText }
     }
     down.indicator: AppControlBackground {
         control: ({palette: spin.palette, enabled: spin.enabled && spin.down.enabled,
@@ -25,6 +30,6 @@ SpinBox {
         implicitWidth: spin.stepperSize
         implicitHeight: spin.stepperSize
         height: spin.height
-        AppIcon { anchors.centerIn: parent; name: "minus"; size: Math.max(12, Math.ceil(metrics.height)); color: spin.palette.buttonText }
+        AppIcon { anchors.centerIn: parent; name: "minus"; size: Math.max(8, Math.min(Math.ceil(metrics.height), spin.stepperSize - 6)); color: spin.palette.buttonText }
     }
 }

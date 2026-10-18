@@ -71,7 +71,7 @@ RowLayout {
         from: 1; to: 100; value: root.settings.ambiguity_percent
         onEdited: root.apply("ambiguity_percent", value)
     }
-    CheckBox { text: "Allow weak\ndisagreements"; checked: root.settings.allow_weak_disagreement; onClicked: root.apply("allow_weak_disagreement", checked) }
+    AppCheckBox { text: "Allow weak\ndisagreements"; checked: root.settings.allow_weak_disagreement; onClicked: root.apply("allow_weak_disagreement", checked) }
     Threshold {
         label: "Candidate peak ≥ %"
         tip: "In a weak read, the candidate channel must reach this percentage of the strongest channel at that call position."
@@ -80,7 +80,7 @@ RowLayout {
         onEdited: root.apply("weak_support_percent", value)
     }
     ToolSeparator { Layout.fillHeight: true }
-    CheckBox { text: "Check\nreference"; checked: root.settings.check_reference; onClicked: root.apply("check_reference", checked) }
+    AppCheckBox { text: "Check\nreference"; checked: root.settings.check_reference; onClicked: root.apply("check_reference", checked) }
     Threshold {
         label: "Reference ≥ %"
         tip: "Minimum candidate frequency among all A/C/G/T reference rows. At 0%, any observed occurrence qualifies."

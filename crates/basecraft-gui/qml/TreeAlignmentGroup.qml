@@ -12,25 +12,13 @@ RibbonGroup {
     readonly property string sourcePath: controller ? (controller.source_alignment || "") : ""
     readonly property var commands: [link.commandAction, extract.commandAction]
     signal linkRequested(var target)
-    FontMetrics { id: statusMetrics; font: group.font }
-    Label {
-        objectName: "treeAlignmentStatus"
-        text: group.linkStatus
-        visible: text.length > 0
-        Layout.maximumWidth: statusMetrics.averageCharacterWidth * 26
-        elide: Text.ElideMiddle
-        Accessible.name: text
-        ToolTip.text: text
-        ToolTip.visible: statusHover.hovered
-        HoverHandler { id: statusHover }
-    }
     AppCommandButton {
         id: link
         objectName: "linkTreeAlignment"
         commandId: "ribbon.associate-an-imported-tree-with-an-alignment-after-validating"
         customization: group.customization
-        text: group.linkedPath.length ? "Change linked alignment…" : "Link alignment…"
-        iconName: "link"
+        text: group.linkedPath.length ? "Change alignment" : "Link alignment"
+        iconName: "align"
         tip: (group.linkStatus.length ? group.linkStatus + "\n" : "")
             + (group.linkedPath.length ? "Linked alignment: " + group.linkedPath + "\n" : "")
             + (group.sourcePath.length ? "Original analysis source: " + group.sourcePath + "\n" : "")

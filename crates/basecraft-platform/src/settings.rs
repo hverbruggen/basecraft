@@ -46,6 +46,10 @@ pub struct Ui {
     pub font_size_points: Option<u32>,
     /// Independent ribbon icon, text and layout scale, in percent.
     pub ribbon_size_percent: u32,
+    /// Side of a tick box, in pixels.
+    pub tick_box_size: u32,
+    /// Height of number and text boxes, in pixels.
+    pub input_box_height: u32,
 }
 impl Default for Ui {
     fn default() -> Self {
@@ -56,6 +60,8 @@ impl Default for Ui {
             alignment_insert: true,
             font_size_points: None,
             ribbon_size_percent: 100,
+            tick_box_size: 14,
+            input_box_height: 20,
         }
     }
 }
@@ -159,6 +165,16 @@ impl Preferences {
         if !(100..=200).contains(&self.ui.ribbon_size_percent) {
             return Err(Error::Invalid(
                 "Ribbon size must be between 100 and 200 percent".into(),
+            ));
+        }
+        if !(8..=40).contains(&self.ui.tick_box_size) {
+            return Err(Error::Invalid(
+                "Tick box size must be between 8 and 40 pixels".into(),
+            ));
+        }
+        if !(14..=60).contains(&self.ui.input_box_height) {
+            return Err(Error::Invalid(
+                "Input box height must be between 14 and 60 pixels".into(),
             ));
         }
         if !(1..=65536).contains(&self.compute.local_cpu_threads) {
@@ -340,6 +356,8 @@ pub enum Change {
     AlignmentInsert(bool),
     FontSizePoints(Option<u32>),
     RibbonSizePercent(u32),
+    TickBoxSize(u32),
+    InputBoxHeight(u32),
     CpuThreads(u32),
     Provenance(ProvenancePolicy),
     Recovery(bool),
@@ -367,6 +385,8 @@ impl Change {
             Self::AlignmentInsert(v) => prefs.ui.alignment_insert = v,
             Self::FontSizePoints(v) => prefs.ui.font_size_points = v,
             Self::RibbonSizePercent(v) => prefs.ui.ribbon_size_percent = v,
+            Self::TickBoxSize(v) => prefs.ui.tick_box_size = v,
+            Self::InputBoxHeight(v) => prefs.ui.input_box_height = v,
             Self::CpuThreads(v) => prefs.compute.local_cpu_threads = v,
             Self::Provenance(v) => prefs.files.provenance = v,
             Self::Recovery(v) => prefs.files.recovery = v,
@@ -561,6 +581,18 @@ mod tests {
             assert!(store.update(Change::RibbonSizePercent(size)).is_err());
             assert_eq!(std::fs::read_to_string(&store.path).unwrap(), original);
         }
+        // Control sizes round-trip and refuse sizes too small to use.
+        store.update(Change::TickBoxSize(20)).unwrap();
+        store.update(Change::InputBoxHeight(30)).unwrap();
+        let prefs = SettingsStore::new(store.path.clone()).load().unwrap();
+        assert_eq!(
+            (prefs.ui.tick_box_size, prefs.ui.input_box_height),
+            (20, 30)
+        );
+        assert!(store.update(Change::TickBoxSize(4)).is_err());
+        assert!(store.update(Change::InputBoxHeight(100)).is_err());
+        store.update(Change::TickBoxSize(14)).unwrap();
+        store.update(Change::InputBoxHeight(20)).unwrap();
         for invalid in [
             "schema_version = 999\n[ui]\nribbon_size_percent = 150\n",
             "[ui]\nribbon_size_percent = 201\n",

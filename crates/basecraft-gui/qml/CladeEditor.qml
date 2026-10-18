@@ -100,14 +100,14 @@ AppContentDialog {
             }
         }
 
-        CheckBox { id: onBranch; objectName: "onBranch"; text: "Name on the stem branch" }
+        AppCheckBox { id: onBranch; objectName: "onBranch"; text: "Name on the stem branch" }
         RowLayout {
-            CheckBox { id: bar; objectName: "bar"; text: "Bar along the tips, named beside it" }
+            AppCheckBox { id: bar; objectName: "bar"; text: "Bar along the tips, named beside it" }
             Item { Layout.fillWidth: true }
             Label { id: barWidthLabel; text: "Thickness"; enabled: bar.checked }
-            SpinBox { id: barWidth; objectName: "barWidth"; Accessible.labelledBy: barWidthLabel; Accessible.name: barWidthLabel.text; from: 1; to: 30; enabled: bar.checked; editable: true }
+            AppSpinBox { id: barWidth; objectName: "barWidth"; Accessible.labelledBy: barWidthLabel; Accessible.name: barWidthLabel.text; from: 1; to: 30; enabled: bar.checked; editable: true }
         }
-        CheckBox { id: field; text: "Coloured field behind the clade" }
+        AppCheckBox { id: field; text: "Coloured field behind the clade" }
 
         RowLayout {
             Label { id: colourLabel; text: "Colour"; Layout.preferredWidth: 70 }

@@ -898,6 +898,66 @@ pub fn exhaustive(
     ))
 }
 
+/// Each tip of a collapsed tree to the original tips it stands for.
+pub type Merged = BTreeMap<String, BTreeSet<String>>;
+
+/// Tips at zero distance from each other meet at an event of age zero,
+/// which GMYC cannot fit: with missing data or ambiguities, sequences that
+/// differ only there are separate haplotypes but have no distance between
+/// them. Each largest such clade becomes one tip, named after its first tip
+/// by name. Returns that tree and each new tip's original tips, or `None`
+/// when every event is older than zero.
+pub fn collapse_zero_age(tree: &TreeDoc, time: &TimeTree) -> Result<Option<(TreeDoc, Merged)>> {
+    let zero = |i: usize| !tree.node(i).is_tip() && time.ages[i] <= 0.0;
+    if !time.events.iter().any(|&i| time.ages[i] <= 0.0) {
+        return Ok(None);
+    }
+    if zero(tree.root()) {
+        return Err(Error(
+            "GMYC unavailable: every retained sequence is at zero distance from the others".into(),
+        ));
+    }
+    let mut text = vec![String::new(); tree.nodes().len()];
+    let mut first = vec![String::new(); tree.nodes().len()];
+    let mut merged = BTreeMap::new();
+    for &i in tree.preorder().iter().rev() {
+        let node = tree.node(i);
+        let length = node.length.map(|l| format!(":{l}")).unwrap_or_default();
+        if node.is_tip() {
+            first[i].clone_from(&node.name);
+            text[i] = basecraft_io::newick::quote_name(&node.name) + &length;
+            continue;
+        }
+        first[i] = node
+            .children
+            .iter()
+            .map(|&c| first[c].clone())
+            .min()
+            .unwrap_or_default();
+        if zero(i) {
+            if node.parent.is_some_and(|p| !zero(p)) {
+                let mut members = BTreeSet::new();
+                let mut stack = vec![i];
+                while let Some(d) = stack.pop() {
+                    if tree.node(d).is_tip() {
+                        members.insert(tree.node(d).name.clone());
+                    } else {
+                        stack.extend(&tree.node(d).children);
+                    }
+                }
+                merged.insert(first[i].clone(), members);
+            }
+            text[i] = basecraft_io::newick::quote_name(&first[i]) + &length;
+        } else {
+            let children: Vec<&str> = node.children.iter().map(|&c| text[c].as_str()).collect();
+            text[i] = format!("({}){length}", children.join(","));
+        }
+    }
+    let collapsed = TreeDoc::from_newick(tree.name.clone(), &format!("{};", text[tree.root()]))
+        .map_err(|e| Error(e.to_string()))?;
+    Ok(Some((collapsed, merged)))
+}
+
 pub fn groups(tree: &TreeDoc, time: &TimeTree, fit: &Fit) -> Vec<BTreeSet<String>> {
     if fit.roots.is_empty() {
         return vec![time.tips.keys().cloned().collect()];
@@ -948,6 +1008,31 @@ fn reduce_thresholds(tree: &TreeDoc, time: &TimeTree, roots: &[usize]) -> Vec<f6
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn zero_distance_clades_become_one_tip_each() {
+        let tree = TreeDoc::from_newick(
+            "t",
+            "(((b:0,a:0):0,'c d':0):2,((e:1,f:1):0.5,(g:0,h:0):1.5):0.5);",
+        )
+        .unwrap();
+        let time = crate::time_tree::validate(&tree, true, 1e-8, true).unwrap();
+        assert!(validate_events(&time).is_err());
+        let (collapsed, merged) = collapse_zero_age(&tree, &time).unwrap().unwrap();
+        let tips: Vec<_> = collapsed
+            .tips_in_order()
+            .iter()
+            .map(|&i| collapsed.node(i).name.clone())
+            .collect();
+        assert_eq!(tips, ["a", "e", "f", "g"]);
+        assert_eq!(merged["a"], ["a", "b", "c d"].map(String::from).into());
+        assert_eq!(merged["g"], ["g", "h"].map(String::from).into());
+        let time = crate::time_tree::validate(&collapsed, true, 1e-8, true).unwrap();
+        validate_events(&time).unwrap();
+        assert!((time.root_height - 2.0).abs() < 1e-12);
+        let tidy = TreeDoc::from_newick("t", "((a:1,b:1):1,(c:2,d:2):0);").unwrap();
+        let time = crate::time_tree::validate(&tidy, true, 1e-8, true).unwrap();
+        assert!(collapse_zero_age(&tidy, &time).unwrap().is_none());
+    }
     #[test]
     fn reference_summary_chi_square_convention_has_known_tails() {
         assert!((chi_square_tail(2.0, 2) - (-1.0f64).exp()).abs() < 1e-14);

@@ -47,6 +47,12 @@ pub mod qobject {
         #[qproperty(bool, tip_selected)]
         /// Where support values sit: "natural", "above" or "below".
         #[qproperty(QString, support_placement)]
+        /// Style sizes in pixels, for the ribbon's size fields.
+        #[qproperty(i32, tip_font)]
+        #[qproperty(i32, support_font)]
+        #[qproperty(i32, branch_width)]
+        /// The tree has at least one set of support values.
+        #[qproperty(bool, has_support)]
         type TreeController = super::TreeRust;
 
         #[qinvokable]
@@ -175,6 +181,15 @@ pub mod qobject {
         ) -> QString;
         #[qinvokable]
         fn place_support(self: Pin<&mut TreeController>, placement: &QString);
+        /// Set tip and support font sizes and branch width in pixels, as one
+        /// edit; a value of 0 or less leaves that size unchanged.
+        #[qinvokable]
+        fn set_sizes(
+            self: Pin<&mut TreeController>,
+            tip_font: i32,
+            support_font: i32,
+            branch_width: i32,
+        );
         /// Add the support values of the tree in `path`, matched branch by
         /// branch, named `name`.
         #[qinvokable]
@@ -250,6 +265,10 @@ pub struct TreeRust {
     alignment_link_status: QString,
     alignment_link_inferred: bool,
     support_placement: QString,
+    tip_font: i32,
+    support_font: i32,
+    branch_width: i32,
+    has_support: bool,
 
     session: Option<Session>,
     doc: Option<DocId>,
@@ -290,6 +309,10 @@ impl Default for TreeRust {
             alignment_link_status: QString::default(),
             alignment_link_inferred: false,
             support_placement: QString::from("natural"),
+            tip_font: 0,
+            support_font: 0,
+            branch_width: 0,
+            has_support: false,
             session: None,
             doc: None,
             view: TreeView::new(800.0, 600.0),
@@ -450,7 +473,7 @@ impl qobject::TreeController {
 
     /// Rebuild the frame, status line and scroll bars.
     fn refresh(mut self: Pin<&mut Self>) {
-        let (bytes, status, zoom, h, v, sel, tip, placement) = {
+        let (bytes, status, zoom, h, v, sel, tip, placement, sizes) = {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
             let (Some(session), Some(doc)) = (&r.session, r.doc) else {
@@ -467,6 +490,12 @@ impl qobject::TreeController {
                 r.view.selected.is_some(),
                 r.view.selected.is_some_and(|s| d.node(s).is_tip()),
                 placement_name(d.style().support_placement),
+                (
+                    i32::try_from(d.style().tip_font).unwrap_or(i32::MAX),
+                    i32::try_from(d.style().support_font).unwrap_or(i32::MAX),
+                    i32::try_from(d.style().branch_width).unwrap_or(i32::MAX),
+                    !d.supports().is_empty(),
+                ),
             )
         };
         let geometry = {
@@ -489,6 +518,10 @@ impl qobject::TreeController {
         self.as_mut().set_tip_selected(tip);
         self.as_mut()
             .set_support_placement(QString::from(placement));
+        self.as_mut().set_tip_font(sizes.0);
+        self.as_mut().set_support_font(sizes.1);
+        self.as_mut().set_branch_width(sizes.2);
+        self.as_mut().set_has_support(sizes.3);
         self.emit_taxa();
     }
 
@@ -1384,6 +1417,35 @@ impl qobject::TreeController {
             style,
             remove_supports: Vec::new(),
         });
+    }
+
+    pub fn set_sizes(
+        mut self: Pin<&mut Self>,
+        tip_font: i32,
+        support_font: i32,
+        branch_width: i32,
+    ) {
+        let Some(mut style) = self.with_doc(|d| d.style().clone()) else {
+            return;
+        };
+        let before = style.clone();
+        for (value, field) in [
+            (tip_font, &mut style.tip_font),
+            (support_font, &mut style.support_font),
+            (branch_width, &mut style.branch_width),
+        ] {
+            if let Ok(value) = u32::try_from(value)
+                && value > 0
+            {
+                *field = value;
+            }
+        }
+        if style != before {
+            let _ = self.as_mut().edit(Op::TreeStyle {
+                style,
+                remove_supports: Vec::new(),
+            });
+        }
     }
 
     pub fn add_support_from(mut self: Pin<&mut Self>, path: &QString, name: &QString) {

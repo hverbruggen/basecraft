@@ -6,6 +6,9 @@ revision = 1
 # font_size_points = 9
 # Independent ribbon icons, labels and layout (100–200 percent).
 ribbon_size_percent = 100
+# Tick boxes (8–40 pixels) and number or text boxes (14–60 pixels high).
+tick_box_size = 14
+input_box_height = 20
 show_gc = true
 sidebar_open = true
 orf_min_codons = 100

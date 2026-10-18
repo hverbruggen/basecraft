@@ -84,6 +84,8 @@ fn change(key: &str, value: &serde_json::Value) -> Result<Change, String> {
             Some(integer()?)
         }),
         "ribbonSizePercent" => Change::RibbonSizePercent(integer()?),
+        "tickBoxSize" => Change::TickBoxSize(integer()?),
+        "inputBoxHeight" => Change::InputBoxHeight(integer()?),
         "localCpuThreads" => Change::CpuThreads(integer()?),
         "recovery" => Change::Recovery(boolean()?),
         "rememberWorkspace" => Change::RememberWorkspace(boolean()?),

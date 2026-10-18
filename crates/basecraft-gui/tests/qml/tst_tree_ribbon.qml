@@ -21,7 +21,9 @@ Item {
         property string source_alignment: ""
         property string last: ""
         function rotate() { last = "flip" }
+        property int tip_font: 13
         function ladderize(small) { last = small ? "small" : "large" }
+        function set_sizes(tip, support, width) { last = "sizes " + tip + " " + support + " " + width }
         function extract_clade_alignment() { last = "extract" }
     }
     Ribbon {
@@ -31,7 +33,7 @@ Item {
         RibbonPage {
             TreeRootingGroup { id: root; controller: controller; treeOpen: true }
             TreeCladeGroup { id: clade; controller: controller; onAnnotateRequested: host.annotations++ }
-            TreeBranchOrderGroup { id: order; controller: controller }
+            TreeStyleGroup { id: order; controller: controller }
             TreeAlignmentGroup { id: alignment; controller: controller; onLinkRequested: target => host.linkTarget = target }
         }
     }
@@ -39,7 +41,7 @@ Item {
         name: "TreeRibbon"
         when: windowShown
         function buttons() {
-            return ["manualRoot", "midpointRoot", "minimumVarianceRoot", "annotateClade", "flipSubtree", "smallBranchesOnTop", "largeBranchesOnTop", "linkTreeAlignment", "openCladeAlignment"]
+            return ["manualRoot", "midpointRoot", "minimumVarianceRoot", "annotateClade", "flipSubtree", "orderBranches", "treeStyleExtra", "linkTreeAlignment", "openCladeAlignment"]
                 .map(name => findChild(ribbon, name))
         }
         function init() {
@@ -60,7 +62,7 @@ Item {
         }
         function test_actions_and_icons() {
             compare(clade.commands.length, 2, "Root position and Rename are absent from the clade ribbon")
-            compare(order.title, "Branch order")
+            compare(order.title, "Tree style")
             const flip = findChild(clade, "flipSubtree")
             compare(flip.iconName, "tree-flip")
             compare(flip.Accessible.name, "Flip")
@@ -68,14 +70,19 @@ Item {
             compare(controller.last, "flip")
             findChild(clade, "annotateClade").commandAction.trigger()
             compare(host.annotations, 1)
-            const small = findChild(order, "smallBranchesOnTop")
-            const large = findChild(order, "largeBranchesOnTop")
+            // Order is one button with a menu; its two commands stay available.
+            compare(findChild(order, "orderBranches").iconName, "tree-small-on-top")
+            const small = order.commands[1]
+            const large = order.commands[2]
             compare(small.iconName, "tree-small-on-top")
             compare(large.iconName, "tree-large-on-top")
-            small.commandAction.trigger()
+            small.trigger()
             compare(controller.last, "small")
-            large.commandAction.trigger()
+            large.trigger()
             compare(controller.last, "large")
+            findChild(order, "tipFont").edited(15)
+            compare(controller.last, "sizes 15 0 0")
+            controller.last = "large"
             controller.has_selection = false
             verify(!flip.enabled)
             flip.commandAction.trigger()
@@ -94,14 +101,14 @@ Item {
         function test_link_status_change_and_routing() {
             const link = findChild(alignment, "linkTreeAlignment")
             const extract = findChild(alignment, "openCladeAlignment")
-            compare(link.text, "Link alignment…")
+            compare(link.text, "Link alignment")
+            compare(link.iconName, "align")
             link.commandAction.trigger()
             compare(host.linkTarget, controller)
             controller.linked_alignment = "/view.afa"
             controller.source_alignment = "/original.afa"
             controller.alignment_link_status = "Linked to retained input snapshot"
-            compare(findChild(alignment, "treeAlignmentStatus").text, controller.alignment_link_status)
-            compare(link.text, "Change linked alignment…")
+            compare(link.text, "Change alignment")
             verify(link.tip.includes("/view.afa"))
             verify(link.tip.includes("Original analysis source: /original.afa"))
             verify(link.tip.includes("retained input snapshot"))

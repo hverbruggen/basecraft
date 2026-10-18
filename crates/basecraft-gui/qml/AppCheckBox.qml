@@ -1,14 +1,16 @@
 import QtQuick
 import QtQuick.Controls.Basic
+import QtQuick.Window
 
 CheckBox {
     id: control
     Accessible.name: text
     padding: 4
     spacing: 6
-    FontMetrics { id: metrics; font: control.font }
+    // The side set in Preferences, read from the main window.
+    readonly property real boxSize: Window.window && Window.window.tickBoxSize ? Window.window.tickBoxSize : 14
     indicator: Rectangle {
-        implicitWidth: Math.max(16, Math.ceil(metrics.height))
+        implicitWidth: control.boxSize
         implicitHeight: implicitWidth
         x: control.mirrored ? control.width - width - control.rightPadding : control.leftPadding
         y: control.topPadding + (control.availableHeight - height) / 2
@@ -19,13 +21,13 @@ CheckBox {
         AppIcon {
             anchors.centerIn: parent
             name: "accept"
-            size: Math.max(12, parent.width - 4)
+            size: Math.max(6, parent.width - 4)
             color: control.palette.text
             visible: control.checkState === Qt.Checked
         }
         Rectangle {
             anchors.centerIn: parent
-            width: parent.width - 6; height: 2
+            width: parent.width - 4; height: 2
             color: control.palette.text
             visible: control.checkState === Qt.PartiallyChecked
         }

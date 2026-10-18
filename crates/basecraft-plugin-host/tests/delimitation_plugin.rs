@@ -193,17 +193,31 @@ fn exact_identity_precedes_public_tree_inference_and_restores_specimens() {
                     .any(|members| members.contains(&json!("a")) && members.contains(&json!("b")))
             );
         } else {
-            assert!(outcome.is_err());
-            assert!(!output.exists());
-            let report: Value = serde_json::from_slice(
-                &std::fs::read(format!("{}.run.json", output.display())).unwrap(),
-            )
-            .unwrap();
-            assert_eq!(report["job"]["status"], "failed");
+            // Every specimen is a tip, so identical a and b meet at age zero;
+            // they are fitted as one tip and both come back in one species.
+            outcome.unwrap();
+            let result: Value = serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
+            assert_eq!(
+                result["workspace"]["specimens"].as_array().unwrap().len(),
+                5
+            );
+            assert_eq!(
+                result["metrics"]["zero_distance_groups"]["a"],
+                json!(["a", "b"])
+            );
             assert!(
-                report["job"]["diagnostics"]
+                result["job"]["diagnostics"]
                     .to_string()
-                    .contains("zero-time")
+                    .contains("zero distance")
+            );
+            assert!(
+                result["workspace"]["hypotheses"][0]["groups"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|g| g["members"] == json!(["a", "b"])
+                        || (g["members"].as_array().unwrap().contains(&json!("a"))
+                            && g["members"].as_array().unwrap().contains(&json!("b"))))
             );
         }
     }

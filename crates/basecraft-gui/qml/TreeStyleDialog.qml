@@ -2,23 +2,26 @@ import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
-// How a tree is drawn: which support values show and in what order,
-// circles at nodes, sizes. Saving is one operation.
+// How a tree is drawn, in two parts: "support" (which support values show
+// and how, circles at nodes) and "extra" (tip names, branches, labels, scale
+// bar). Saving is one operation.
 AppContentDialog {
     id: dialog
-    initialFocusItem: minimum
+    initialFocusItem: section === "support" ? minimum : tipFont
     property var controller
     property var style: ({})
     property var removedSets: []
+    property string section: "extra"
 
-    title: "Tree style"
+    title: section === "support" ? "Support style" : "Tree style"
     modal: true
     padding: 16
 
     ListModel { id: sets }
     FontMetrics { id: styleMetrics; font: dialog.font }
 
-    function openStyle() {
+    function openStyle(part) {
+        section = part || "extra"
         const s = JSON.parse(controller.style_json())
         if (!s) return
         style = s.style
@@ -90,6 +93,10 @@ AppContentDialog {
     body: ColumnLayout {
         spacing: 8
 
+        ColumnLayout {
+        visible: dialog.section === "support"
+        spacing: 8
+        Layout.fillWidth: true
         Label { text: "Support values, shown in this order and joined with /"; font.bold: true }
         Label { text: "This tree has no support values yet"; visible: sets.count === 0; opacity: 0.7 }
         Repeater {
@@ -107,7 +114,7 @@ AppContentDialog {
                 Layout.fillWidth: true
                 RowLayout {
                     Layout.fillWidth: true
-                    CheckBox {
+                    AppCheckBox {
                         text: supportRow.name + (supportRow.source.length ? "  (" + supportRow.source + ")" : "")
                         checked: supportRow.shown
                         onToggled: sets.setProperty(supportRow.index, "shown", checked)
@@ -128,7 +135,7 @@ AppContentDialog {
                     id: precisionSettings
                     columns: width < styleMetrics.averageCharacterWidth * 50 ? 2 : 3
                     Layout.fillWidth: true
-                    CheckBox {
+                    AppCheckBox {
                         objectName: "autoDecimals" + supportRow.index
                         text: "Auto decimals"
                         checked: supportRow.autoDecimals
@@ -138,7 +145,7 @@ AppContentDialog {
                             sets.setProperty(supportRow.index, "autoDecimals", checked)
                         }
                     }
-                    SpinBox {
+                    AppSpinBox {
                         id: precision
                         objectName: "supportDecimals" + supportRow.index
                         Accessible.name: supportRow.name + " decimal places"
@@ -169,35 +176,41 @@ AppContentDialog {
         }
         RowLayout {
             Label { id: minimumLabel; text: "Hide values below" }
-            SpinBox { id: minimum; objectName: "minimum"; Accessible.labelledBy: minimumLabel; Accessible.name: minimumLabel.text + " (%)"; from: 0; to: 100; editable: true }
+            AppSpinBox { id: minimum; objectName: "minimum"; Accessible.labelledBy: minimumLabel; Accessible.name: minimumLabel.text + " (%)"; from: 0; to: 100; editable: true }
             Label { text: "% (posteriors count as %)"; opacity: 0.7 }
         }
 
         RowLayout {
-            CheckBox { id: symbols; text: "Circles at nodes for" }
+            AppCheckBox { id: symbols; text: "Circles at nodes for" }
             AppComboBox { id: symbolSet; objectName: "symbolSet"; Accessible.labelledBy: symbols; Accessible.name: symbols.text; enabled: symbols.checked; Layout.preferredWidth: 150 }
         }
         RowLayout {
             enabled: symbols.checked
             Label { id: highLabel; text: "Dark at"; leftPadding: 28 }
-            SpinBox { id: high; objectName: "high"; Accessible.labelledBy: highLabel; Accessible.name: highLabel.text; from: 0; to: 100; editable: true }
+            AppSpinBox { id: high; objectName: "high"; Accessible.labelledBy: highLabel; Accessible.name: highLabel.text; from: 0; to: 100; editable: true }
             Label { id: lowLabel; text: "grey at" }
-            SpinBox { id: low; objectName: "low"; Accessible.labelledBy: lowLabel; Accessible.name: lowLabel.text; from: 0; to: 100; editable: true }
+            AppSpinBox { id: low; objectName: "low"; Accessible.labelledBy: lowLabel; Accessible.name: lowLabel.text; from: 0; to: 100; editable: true }
             Label { text: "white below" }
         }
-
-        Label { text: "Sizes"; font.bold: true; topPadding: 6 }
-        GridLayout {
-            columns: 4
-            Label { id: tipFontLabel; text: "Tip names" }
-            SpinBox { id: tipFont; objectName: "tipFont"; Accessible.labelledBy: tipFontLabel; Accessible.name: tipFontLabel.text; from: 6; to: 40; editable: true }
-            Label { id: supportFontLabel; text: "Support values" }
-            SpinBox { id: supportFont; objectName: "supportFont"; Accessible.labelledBy: supportFontLabel; Accessible.name: supportFontLabel.text; from: 6; to: 30; editable: true }
-            Label { id: branchWidthLabel; text: "Branches" }
-            SpinBox { id: branchWidth; objectName: "branchWidth"; Accessible.labelledBy: branchWidthLabel; Accessible.name: branchWidthLabel.text; from: 1; to: 10; editable: true }
+        RowLayout {
+            Label { id: supportFontLabel; text: "Value size (px)" }
+            AppSpinBox { id: supportFont; objectName: "supportFont"; Accessible.labelledBy: supportFontLabel; Accessible.name: supportFontLabel.text; from: 6; to: 30; editable: true }
         }
-        CheckBox { id: verticalLabels; text: "Clade names beside bars run top to bottom" }
-        CheckBox { id: scaleBar; text: "Scale bar" }
+        }
+
+        ColumnLayout {
+        visible: dialog.section === "extra"
+        spacing: 8
+        GridLayout {
+            columns: 2
+            Label { id: tipFontLabel; text: "Tip names (px)" }
+            AppSpinBox { id: tipFont; objectName: "tipFont"; Accessible.labelledBy: tipFontLabel; Accessible.name: tipFontLabel.text; from: 6; to: 40; editable: true }
+            Label { id: branchWidthLabel; text: "Branch width (px)" }
+            AppSpinBox { id: branchWidth; objectName: "branchWidth"; Accessible.labelledBy: branchWidthLabel; Accessible.name: branchWidthLabel.text; from: 1; to: 10; editable: true }
+        }
+        AppCheckBox { id: verticalLabels; text: "Clade names beside bars run top to bottom" }
+        AppCheckBox { id: scaleBar; text: "Scale bar" }
+        }
 
         AppErrorLabel { id: error; visible: text.length > 0; color: palette.highlight; wrapMode: Text.Wrap; Layout.fillWidth: true }
 

@@ -60,8 +60,8 @@ AppContentDialog {
         }
         Label { id: additionModeLabel; text: "Addition method" }
         AppComboBox { id: additionMode; objectName: "additionMode"; Accessible.labelledBy: additionModeLabel; Accessible.name: additionModeLabel.text; enabled: !dialog.controller.busy; model: ["Add unaligned", "Add with MAFFT"]; currentIndex: 1; Layout.fillWidth: true }
-        CheckBox { visible: additionMode.currentIndex === 1; id: checkOrientation; text: "Check orientation of new sequences"; checked: true; enabled: !dialog.controller.busy && additionMode.currentIndex === 1 }
-        CheckBox { visible: additionMode.currentIndex === 1; id: keepReference; text: "Forbid new gaps in the reference alignment"; checked: true; enabled: !dialog.controller.busy && additionMode.currentIndex === 1 }
+        AppCheckBox { visible: additionMode.currentIndex === 1; id: checkOrientation; text: "Check orientation of new sequences"; checked: true; enabled: !dialog.controller.busy && additionMode.currentIndex === 1 }
+        AppCheckBox { visible: additionMode.currentIndex === 1; id: keepReference; text: "Forbid new gaps in the reference alignment"; checked: true; enabled: !dialog.controller.busy && additionMode.currentIndex === 1 }
         AppErrorLabel { text: dialog.validationMessage; visible: text.length > 0; wrapMode: Text.Wrap; Layout.fillWidth: true; color: palette.highlight }
         RowLayout {
             Item { Layout.fillWidth: true }

@@ -79,7 +79,7 @@ AppDialog {
             Accessible.role: dialog.report.error ? Accessible.AlertMessage : Accessible.StaticText
         }
         Label { Layout.fillWidth: true; text: "Revision: " + (dialog.report.revision || "Unavailable"); elide: Text.ElideMiddle }
-        CheckBox {
+        AppCheckBox {
             text: "Show last saved revision"
             checked: dialog.savedRevision
             enabled: !!dialog.service
@@ -106,7 +106,7 @@ AppDialog {
             Layout.fillWidth: true
             Layout.fillHeight: true
             ColumnLayout {
-                CheckBox { id: allEvents; text: "All recorded events (including undo and related attempts)" }
+                AppCheckBox { id: allEvents; text: "All recorded events (including undo and related attempts)" }
                 Label { text: (dialog.report.warnings || []).join("\n"); wrapMode: Text.Wrap; Layout.fillWidth: true; visible: text.length > 0 }
                 SplitView {
                     Layout.fillWidth: true; Layout.fillHeight: true

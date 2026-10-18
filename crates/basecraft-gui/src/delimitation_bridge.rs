@@ -193,6 +193,8 @@ pub struct DelimitationRust {
     doc: Option<DocId>,
     selection: Selection,
     display_tree: Option<TreeDoc>,
+    /// What `shown_tree` was last drawn for, so a refresh redraws only on change.
+    shown_key: String,
     time_tree: Option<(TreeDoc, basecraft_delimitation::time_tree::TimeTree, String)>,
     preview: Vec<BTreeSet<String>>,
     job_paths: Option<(PathBuf, PathBuf, String)>,
@@ -227,6 +229,7 @@ impl Default for DelimitationRust {
             doc: None,
             selection: Selection::default(),
             display_tree: None,
+            shown_key: String::new(),
             time_tree: None,
             preview: vec![],
             job_paths: None,
@@ -320,46 +323,42 @@ impl qobject::DelimitationController {
         self.as_mut().set_status(QString::from(&status));
         self.update_shown_tree();
     }
-    /// Draw the display tree, or a flipped copy of it kept in the cache, so the
-    /// display tree file and its recorded hash never change.
-    fn update_shown_tree(self: Pin<&mut Self>) {
-        let shown = {
+    /// Draw the display tree, or a copy of it in the cache with this view's
+    /// branch order, flips and sizes, so the display tree file and its
+    /// recorded hash never change.
+    fn update_shown_tree(mut self: Pin<&mut Self>) {
+        let (view, display) = {
             let r = self.rust();
-            let flipped = r
+            let Some(view) = r
                 .session
                 .as_ref()
                 .zip(r.doc)
-                .map(|(s, d)| s.delimitation(d).view.flipped.clone())
-                .unwrap_or_default();
-            match &r.display_tree {
-                Some(tree) if !flipped.is_empty() => {
-                    let mut tree = tree.clone();
-                    delimitation::apply_flips(&mut tree, &flipped);
-                    let text = tree.to_newick();
-                    let digest = basecraft_io::hash_bytes(text.as_bytes());
-                    let directory = basecraft_platform::paths::AppPaths::discover().map_or_else(
-                        |_| std::env::temp_dir().join("basecraft-display-trees"),
-                        |paths| paths.cache.join("display-trees"),
-                    );
-                    let path = directory.join(format!(
-                        "{}.nwk",
-                        digest.trim_start_matches("b3:").get(..24).unwrap_or("tree")
-                    ));
-                    let written = path.exists()
-                        || std::fs::create_dir_all(&directory)
-                            .and_then(|()| std::fs::write(&path, text))
-                            .is_ok();
-                    if written {
-                        QString::from(path.to_string_lossy().as_ref())
-                    } else {
-                        r.display_path.clone()
-                    }
-                }
-                _ => r.display_path.clone(),
-            }
+                .map(|(s, d)| s.delimitation(d).view.clone())
+            else {
+                return;
+            };
+            (view, r.display_path.to_string())
         };
-        if self.rust().shown_tree != shown {
-            self.set_shown_tree(shown);
+        let plain = display.is_empty()
+            || (view.flipped.is_empty()
+                && view.small_on_top.is_none()
+                && view.tree_sizes.is_empty());
+        let key = if plain {
+            display.clone()
+        } else {
+            json!([display, view.flipped, view.small_on_top, view.tree_sizes]).to_string()
+        };
+        if self.rust().shown_key == key {
+            return;
+        }
+        let shown = if plain {
+            display
+        } else {
+            drawn_copy(&display, &view).unwrap_or(display)
+        };
+        self.as_mut().rust_mut().shown_key = key;
+        if self.rust().shown_tree.to_string() != shown {
+            self.set_shown_tree(QString::from(&shown));
         }
     }
     fn edit(mut self: Pin<&mut Self>, edit: DelimitationEdit) -> Result<(), String> {
@@ -664,6 +663,8 @@ impl qobject::DelimitationController {
                         return false;
                     }
                 }
+                // A newly attached tree is drawn afresh even at the same path.
+                self.as_mut().rust_mut().shown_key.clear();
                 self.as_mut().update_shown_tree();
                 if rooted {
                     if let Some(warning) = warning {
@@ -823,6 +824,30 @@ impl qobject::DelimitationController {
                     let mut view = w.view.clone();
                     if !view.flipped.remove(&key) {
                         view.flipped.insert(key);
+                    }
+                    DelimitationEdit::SetView { view }
+                }
+                // Order every clade's branches by size; earlier flips are dropped.
+                "order" => {
+                    let mut view = w.view.clone();
+                    view.small_on_top = Some(args["small_on_top"].as_bool().unwrap_or(true));
+                    view.flipped.clear();
+                    DelimitationEdit::SetView { view }
+                }
+                // Display tree sizes in pixels; null returns one to the tree's own.
+                "tree_sizes" => {
+                    let mut view = w.view.clone();
+                    let sizes = &mut view.tree_sizes;
+                    for (key, field) in [
+                        ("tip_font", &mut sizes.tip_font),
+                        ("support_font", &mut sizes.support_font),
+                        ("branch_width", &mut sizes.branch_width),
+                    ] {
+                        if let Some(value) = args.get(key) {
+                            *field = value
+                                .as_u64()
+                                .map(|v| u32::try_from(v).unwrap_or(u32::MAX).clamp(1, 60));
+                        }
                     }
                     DelimitationEdit::SetView { view }
                 }
@@ -1339,11 +1364,18 @@ impl qobject::DelimitationController {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
             let (s, d) = r.session.as_mut().zip(r.doc).ok_or("No workspace open")?;
-            let mut tree = r
-                .display_tree
-                .clone()
-                .ok_or("Attach a display tree first")?;
-            delimitation::apply_flips(&mut tree, &s.delimitation(d).view.flipped);
+            // The tree as drawn on screen: ordered, flipped and sized.
+            let shown = r.shown_tree.to_string();
+            let tree = if shown.is_empty() {
+                let mut tree = r
+                    .display_tree
+                    .clone()
+                    .ok_or("Attach a display tree first")?;
+                delimitation::apply_flips(&mut tree, &s.delimitation(d).view.flipped);
+                tree
+            } else {
+                basecraft_ops::files::load_tree(Path::new(&shown))?.doc
+            };
             let tree = &tree;
             let tree_svg = basecraft_viewmodel::tree::to_svg_with_style(
                 tree,
@@ -2010,6 +2042,53 @@ pub(crate) fn create_workspace(
                 .is_some_and(|ext| ext.eq_ignore_ascii_case("spart"))
         })
         .ok_or_else(|| "No workspace artifact returned".into())
+}
+
+/// The display tree as this view draws it, written with its style to the
+/// cache: ordered, flipped and sized. Returns the copy's path.
+fn drawn_copy(
+    display: &str,
+    view: &basecraft_protocol::delimitation::DelimitationView,
+) -> Option<String> {
+    let mut tree = basecraft_ops::files::load_tree(Path::new(display))
+        .ok()?
+        .doc;
+    if let Some(small) = view.small_on_top {
+        tree.ladderize(small);
+    }
+    delimitation::apply_flips(&mut tree, &view.flipped);
+    let mut style = tree.style().clone();
+    let sizes = &view.tree_sizes;
+    for (value, field) in [
+        (sizes.tip_font, &mut style.tip_font),
+        (sizes.support_font, &mut style.support_font),
+        (sizes.branch_width, &mut style.branch_width),
+    ] {
+        if let Some(value) = value {
+            *field = value;
+        }
+    }
+    tree.set_style(style);
+    let text = tree.to_newick();
+    let mut sidecar = Vec::new();
+    basecraft_ops::files::write_tree_sidecar(&tree, &mut sidecar).ok()?;
+    let mut both = text.clone().into_bytes();
+    both.extend_from_slice(&sidecar);
+    let digest = basecraft_io::hash_bytes(&both);
+    let directory = basecraft_platform::paths::AppPaths::discover().map_or_else(
+        |_| std::env::temp_dir().join("basecraft-display-trees"),
+        |paths| paths.cache.join("display-trees"),
+    );
+    let path = directory.join(format!(
+        "{}.nwk",
+        digest.trim_start_matches("b3:").get(..24).unwrap_or("tree")
+    ));
+    if !path.exists() {
+        std::fs::create_dir_all(&directory).ok()?;
+        std::fs::write(basecraft_ops::files::tree_sidecar(&path), &sidecar).ok()?;
+        std::fs::write(&path, text).ok()?;
+    }
+    Some(path.to_string_lossy().into_owned())
 }
 
 #[cfg(test)]

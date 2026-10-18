@@ -81,7 +81,7 @@ pub struct Column {
     pub hypothesis: String,
     pub x: f32,
     pub width: f32,
-    /// Pixels to the next column.
+    /// Pixels from the previous column; the first column has none.
     pub gap: f32,
     /// Pixels between successive species bars.
     pub spacing: f32,
@@ -106,6 +106,9 @@ pub fn columns(work: &DelimitationWorkspace, left: f32) -> Vec<Column> {
         };
         let gap = set(style.and_then(|s| s.gap), GAP_PER_WIDTH);
         let spacing = set(style.and_then(|s| s.spacing), SPACING_PER_WIDTH);
+        if !out.is_empty() {
+            x += gap;
+        }
         out.push(Column {
             hypothesis: id.clone(),
             x,
@@ -113,7 +116,7 @@ pub fn columns(work: &DelimitationWorkspace, left: f32) -> Vec<Column> {
             gap,
             spacing,
         });
-        x += width + gap;
+        x += width;
     }
     out
 }
@@ -588,11 +591,26 @@ mod tests {
         let laid = columns(&work, 10.0);
         // Widths below the minimum are raised to it.
         assert_eq!(laid[0].width, MIN_BAR_WIDTH as f32);
-        // Unset gaps scale with the bar width; set ones are pixels.
-        assert_eq!(laid[1].x, 10.0 + 2.5 * MIN_BAR_WIDTH as f32);
+        // A gap is the space before a column. Unset, it scales with the
+        // column's own bar width; set, it is pixels.
+        assert_eq!(
+            laid[1].x,
+            10.0 + MIN_BAR_WIDTH as f32 + 1.5 * BAR_WIDTH as f32
+        );
         assert!((laid[1].spacing - 0.65 * BAR_WIDTH as f32).abs() < 1e-4);
         let mut spaced = work.clone();
-        spaced.view.columns.get_mut(&first).unwrap().gap = Some(3);
+        spaced.view.columns.get_mut(&first).unwrap().gap = Some(30);
+        assert_eq!(
+            columns(&spaced, 10.0)[0].x,
+            10.0,
+            "The first column has no gap"
+        );
+        spaced
+            .view
+            .columns
+            .entry(work.view.visible[1].clone())
+            .or_default()
+            .gap = Some(3);
         assert_eq!(
             columns(&spaced, 10.0)[1].x,
             10.0 + MIN_BAR_WIDTH as f32 + 3.0

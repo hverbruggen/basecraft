@@ -16,7 +16,7 @@ AppFormDialog {
             .filter((id, index, ids) => ids.indexOf(id) === index && !commands.some(command => command.commandId === id)) : []
     function change(key, value) { settings.update(key, JSON.stringify(value)) }
 
-    component PreferenceSpinBox: SpinBox {
+    component PreferenceSpinBox: AppSpinBox {
         // Focus loss normally commits typed numbers. Escape discards the text
         // first; values already applied with Enter or the steppers stay applied.
         Keys.onEscapePressed: {
@@ -47,10 +47,27 @@ AppFormDialog {
         onValueModified: dialog.change("ribbonSizePercent", value)
     }
     AppButton { objectName: "resetRibbonSize"; text: "Use default ribbon size (100%)"; onClicked: dialog.change("ribbonSizePercent", 100) }
-    CheckBox { text: "Show GC content"; checked: dialog.values.ui ? dialog.values.ui.show_gc : true; onToggled: dialog.change("showGc", checked) }
-    CheckBox { text: "Open files sidebar"; checked: dialog.values.ui ? dialog.values.ui.sidebar_open : true; onToggled: dialog.change("sidebarOpen", checked) }
+    PreferenceSpinBox {
+        objectName: "tickBoxSize"
+        Kirigami.FormData.label: "Tick box size (px):"
+        Accessible.name: "Tick box size in pixels"
+        from: 8; to: 40; editable: true
+        value: dialog.values.ui && dialog.values.ui.tick_box_size ? dialog.values.ui.tick_box_size : 14
+        onValueModified: dialog.change("tickBoxSize", value)
+    }
+    PreferenceSpinBox {
+        objectName: "inputBoxHeight"
+        Kirigami.FormData.label: "Number box height (px):"
+        Accessible.name: "Number box height in pixels"
+        from: 14; to: 60; editable: true
+        value: dialog.values.ui && dialog.values.ui.input_box_height ? dialog.values.ui.input_box_height : 20
+        onValueModified: dialog.change("inputBoxHeight", value)
+    }
+    AppButton { objectName: "resetControlSizes"; text: "Use default control sizes (14 and 20 px)"; onClicked: { dialog.change("tickBoxSize", 14); dialog.change("inputBoxHeight", 20) } }
+    AppCheckBox { text: "Show GC content"; checked: dialog.values.ui ? dialog.values.ui.show_gc : true; onToggled: dialog.change("showGc", checked) }
+    AppCheckBox { text: "Open files sidebar"; checked: dialog.values.ui ? dialog.values.ui.sidebar_open : true; onToggled: dialog.change("sidebarOpen", checked) }
     PreferenceSpinBox { objectName: "orfMinCodons"; Kirigami.FormData.label: "Minimum ORF (codons):"; from: 1; to: 1000000; editable: true; value: dialog.values.ui ? dialog.values.ui.orf_min_codons : 100; onValueModified: dialog.change("orfMinCodons", value) }
-    CheckBox { text: "Insert alignment bases (rather than overwrite)"; checked: dialog.values.ui ? dialog.values.ui.alignment_insert : true; onToggled: dialog.change("alignmentInsert", checked) }
+    AppCheckBox { text: "Insert alignment bases (rather than overwrite)"; checked: dialog.values.ui ? dialog.values.ui.alignment_insert : true; onToggled: dialog.change("alignmentInsert", checked) }
     Label { text: "Files, provenance and recovery"; font.bold: true }
     Label { text: "These policy defaults are reserved for recovery and provenance workflows. They do not create history for existing files."; wrapMode: Text.Wrap; Layout.fillWidth: true }
     AppComboBox {
@@ -60,7 +77,7 @@ AppFormDialog {
         currentIndex: dialog.values.files ? policies.indexOf(dialog.values.files.provenance) : 0
         onActivated: dialog.change("provenance", policies[currentIndex])
     }
-    CheckBox { text: "Enable unsaved-work recovery"; checked: dialog.values.files ? dialog.values.files.recovery : true; onToggled: dialog.change("recovery", checked) }
+    AppCheckBox { text: "Enable unsaved-work recovery"; checked: dialog.values.files ? dialog.values.files.recovery : true; onToggled: dialog.change("recovery", checked) }
     Label { text: "Compute"; font.bold: true }
     PreferenceSpinBox { objectName: "localCpuThreads"; Kirigami.FormData.label: "CPU threads per task:"; from: 1; to: 65536; editable: true; value: dialog.values.compute ? dialog.values.compute.local_cpu_threads : 4; onValueModified: dialog.change("localCpuThreads", value) }
     Label { text: "New tasks use this allocation, capped by available CPUs. Running tasks retain their allocation."; wrapMode: Text.Wrap; Layout.fillWidth: true }
@@ -97,7 +114,7 @@ AppFormDialog {
                     dialog.change("shortcut", { id: row.modelData.commandId, value: text })
                 }
             }
-            CheckBox {
+            AppCheckBox {
                 text: "Show"
                 checked: row.modelData.visible
                 onToggled: dialog.change("ribbonCommandHidden", { id: row.modelData.commandId, hidden: !checked })

@@ -102,6 +102,31 @@ pub struct DelimitationView {
     /// most recent common ancestor is the clade, whatever the drawing order.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub flipped: BTreeSet<Vec<String>>,
+    /// Order every clade's branches by size before any flips: `true` puts
+    /// the smallest on top.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub small_on_top: Option<bool>,
+    /// How the display tree is drawn here; unset sizes keep its own style.
+    #[serde(default, skip_serializing_if = "TreeSizes::is_empty")]
+    pub tree_sizes: TreeSizes,
+}
+
+/// Sizes in pixels for drawing a display tree.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TreeSizes {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tip_font: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub support_font: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch_width: Option<u32>,
+}
+
+impl TreeSizes {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 /// How one hypothesis column is drawn. Unset fields follow the theme.
@@ -110,7 +135,8 @@ pub struct ColumnStyle {
     /// Bar width in pixels.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub width: Option<u32>,
-    /// Pixels between this column and the next. Unset: 1.5 bar widths.
+    /// Pixels between the previous column and this one; the first column
+    /// has none. Unset: 1.5 bar widths.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gap: Option<u32>,
     /// Pixels between one species' bar and the next down the column.

@@ -33,9 +33,9 @@ Item {
             tryCompare(style, "opened", true)
             checkField(style, "minimum", "Hide values below", "Hide values below (%)")
             checkField(style, "symbolSet", "Circles at nodes for")
-            checkField(style, "tipFont", "Tip names")
-            checkField(style, "supportFont", "Support values")
-            checkField(style, "branchWidth", "Branches")
+            checkField(style, "tipFont", "Tip names (px)")
+            checkField(style, "supportFont", "Value size (px)")
+            checkField(style, "branchWidth", "Branch width (px)")
             style.close()
         }
         function test_errors_expose_role_and_current_message() {

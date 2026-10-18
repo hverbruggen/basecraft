@@ -80,6 +80,10 @@ FocusScope {
     }
     function chooseColumns() { columnsDialog.show() }
     function layoutBars() { layoutDialog.show(columnInfo.columns) }
+    // The display tree's branch order and sizes are kept with this view; the
+    // tree file is not changed.
+    function orderBranches(smallOnTop) { act("order", {small_on_top: smallOnTop}) }
+    function treeSizes() { sizesDialog.show() }
 
     function startAnalysis(method, input, rooted, settings, displayMethod) {
         if (ctl.busy) return
@@ -128,7 +132,11 @@ FocusScope {
     signal openFile(string path)
     DelimitationController { id: ctl }
     TreeController { id: tree }
+    // Lines snap to whole screen pixels, as in the tree viewer.
+    readonly property real pixelRatio: treeCanvas.Window.window ? treeCanvas.Window.window.devicePixelRatio : 1
+    onPixelRatioChanged: tree.set_pixel_ratio(pixelRatio)
     Component.onCompleted: {
+        tree.set_pixel_ratio(pixelRatio)
         tree.check_theme()
         ctl.check_theme()
         ctl.open_file(path)
@@ -384,7 +392,7 @@ FocusScope {
                         }
                         Repeater {
                             model: doc.workspace.specimens || []
-                            delegate: CheckBox {
+                            delegate: AppCheckBox {
                                 required property var modelData
                                 text: modelData.label
                                 checked: doc.selection.includes(modelData.id)
@@ -458,7 +466,7 @@ FocusScope {
                     }
                     Label { text: "Specimens"; font.bold: true }
                     Repeater { model: doc.workspace.specimens || []
-                        delegate: CheckBox {
+                        delegate: AppCheckBox {
                             required property var modelData
                             text: modelData.label; checked: doc.selection.includes(modelData.id)
                             onClicked: ctl.highlight_taxa(JSON.stringify(checked ? doc.selection.concat([modelData.id]) : doc.selection.filter(id => id !== modelData.id)))
@@ -604,6 +612,7 @@ FocusScope {
         objectName: "barLayoutDialog"
         property var targets: []
         property var initial: ({})
+        readonly property bool hasGap: targets.length > 1 || (targets.length === 1 && doc.columnInfo.columns.length > 0 && targets[0].id !== doc.columnInfo.columns[0].id)
         title: targets.length === 1 ? "Bar layout: " + targets[0].name : "Bar layout: all columns"
         standardButtons: Dialog.Ok | Dialog.Cancel
         initialFocusItem: widthValue
@@ -642,12 +651,49 @@ FocusScope {
                 }
             }
             Label { text: "pixels" }
-            Label { id: gapLabel; text: "Gap to the next column" }
-            AppSpinBox { id: gapValue; objectName: "barGap"; from: 0; to: 400; editable: true; enabled: !gapScales.checked; Accessible.name: gapLabel.text + " in pixels" }
-            AppCheckBox { id: gapScales; objectName: "gapScales"; text: "1.5 × bar width"; onToggled: if (checked) gapValue.value = Math.round(widthValue.value * 1.5) }
+            // The first column has no previous column to keep a gap from.
+            Label { id: gapLabel; text: "Gap to the previous column"; enabled: layoutDialog.hasGap }
+            AppSpinBox { id: gapValue; objectName: "barGap"; from: 0; to: 400; editable: true; enabled: layoutDialog.hasGap && !gapScales.checked; Accessible.name: gapLabel.text + " in pixels" }
+            AppCheckBox { id: gapScales; objectName: "gapScales"; text: "1.5 × bar width"; enabled: layoutDialog.hasGap; onToggled: if (checked) gapValue.value = Math.round(widthValue.value * 1.5) }
             Label { id: spacingLabel; text: "Space between species" }
             AppSpinBox { id: spacingValue; objectName: "barSpacing"; from: 0; to: 400; editable: true; enabled: !spacingScales.checked; Accessible.name: spacingLabel.text + " in pixels" }
             AppCheckBox { id: spacingScales; objectName: "spacingScales"; text: "0.65 × bar width"; onToggled: if (checked) spacingValue.value = Math.round(widthValue.value * 0.65) }
+        }
+    }
+    AppContentDialog {
+        id: sizesDialog
+        objectName: "treeSizesDialog"
+        title: "Tree style"
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        initialFocusItem: tipSize
+        property var initial: ({})
+        function show() {
+            initial = {tip_font: tree.tip_font, support_font: tree.support_font, branch_width: tree.branch_width}
+            tipSize.value = initial.tip_font
+            supportSize.value = initial.support_font
+            branchSize.value = initial.branch_width
+            open()
+        }
+        onAccepted: {
+            const next = {tip_font: tipSize.value, support_font: supportSize.value, branch_width: branchSize.value}
+            const args = {}
+            for (const key in next) if (next[key] !== initial[key]) args[key] = next[key]
+            if (Object.keys(args).length) doc.act("tree_sizes", args)
+        }
+        body: ColumnLayout {
+            GridLayout {
+                columns: 2
+                Label { id: tipSizeLabel; text: "Tip names (px)" }
+                AppSpinBox { id: tipSize; objectName: "treeTipFont"; from: 6; to: 40; editable: true; Accessible.name: tipSizeLabel.text }
+                Label { id: supportSizeLabel; text: "Support values (px)" }
+                AppSpinBox { id: supportSize; objectName: "treeSupportFont"; from: 6; to: 30; editable: true; Accessible.name: supportSizeLabel.text }
+                Label { id: branchSizeLabel; text: "Branch width (px)" }
+                AppSpinBox { id: branchSize; objectName: "treeBranchWidth"; from: 1; to: 10; editable: true; Accessible.name: branchSizeLabel.text }
+            }
+            AppButton {
+                text: "Use the tree's own sizes"
+                onClicked: { doc.act("tree_sizes", {tip_font: null, support_font: null, branch_width: null}); sizesDialog.reject() }
+            }
         }
     }
     SpeciesColorDialog {
@@ -679,7 +725,7 @@ FocusScope {
             Label { text: "Each checked hypothesis gets a bar column. Right-click a column letter to move it."; wrapMode: Text.Wrap; Layout.fillWidth: true }
             Repeater {
                 model: doc.hypotheses
-                delegate: CheckBox {
+                delegate: AppCheckBox {
                     required property var modelData
                     text: modelData.name
                     checked: columnsDialog.checked.includes(modelData.id)
