@@ -1097,7 +1097,7 @@ ApplicationWindow {
                         title: "Rows"
                         RibbonButton { commandId: "ribbon.move-the-selected-rows-up"; text: "Up"; iconName: "up"; tip: "Move the selected rows up"; keys: "Alt+↑"; onInvoked: window.current.move_rows(true) }
                         RibbonButton { commandId: "ribbon.move-the-selected-rows-down"; text: "Down"; iconName: "down"; tip: "Move the selected rows down"; keys: "Alt+↓"; onInvoked: window.current.move_rows(false) }
-                        RibbonButton { commandId: "ribbon.rename-the-cursor-s-row"; text: "Name"; tip: "Rename the cursor's row"; keys: "F2"; onInvoked: renameDialog.ask() }
+                        RibbonButton { commandId: "ribbon.rename-the-cursor-s-row"; text: "Name"; tip: "Rename the cursor's row"; keys: "F2"; onInvoked: renameDialog.askRow() }
                         RibbonButton { commandId: "ribbon.delete-the-selected-rows"; text: "Delete"; iconName: "delete"; tip: "Delete the selected rows"; onInvoked: window.current.remove_rows() }
                     }
                     ToolSeparator { Layout.fillHeight: true }
@@ -1731,7 +1731,7 @@ ApplicationWindow {
                                 onContextMenu: (info) => { alnMenu.info = info; alnMenu.popup() }
                                 onCopyText: (text) => clipboard.put(text)
                                 onToggleSidebar: window.sidebarOpen = !window.sidebarOpen
-                                onRenameRow: renameDialog.ask()
+                                onRenameRow: renameDialog.askRow()
                             }
                         }
                         DelegateChoice {
@@ -1865,7 +1865,7 @@ ApplicationWindow {
         AlnItem { text: "Insert gap"; visible: alnMenu.cells; onTriggered: window.current.insert_gap() }
         AlnItem { text: "Remove gap to the left"; visible: alnMenu.cells; onTriggered: window.current.remove_gap() }
         AlnItem { text: "Delete " + alnMenu.info.rows + " × " + alnMenu.info.columns + " bases"; visible: alnMenu.cells; onTriggered: window.current.delete_selection() }
-        AlnItem { text: "Rename “" + alnMenu.info.rowName + "”…"; visible: alnMenu.info.rows === 1 && !alnMenu.columns; onTriggered: renameDialog.ask() }
+        AlnItem { text: "Rename “" + alnMenu.info.rowName + "”…"; visible: alnMenu.info.rows === 1 && !alnMenu.columns; onTriggered: renameDialog.askRow() }
         AlnItem { text: "Move to top"; visible: alnMenu.rows; onTriggered: window.current.rows_to_top() }
         AlnItem { text: alnMenu.info.rows === 1 ? "Delete row" : "Delete " + alnMenu.info.rows + " rows"; visible: alnMenu.rows; onTriggered: window.current.remove_rows() }
         AlnItem { text: "Insert gap column"; visible: alnMenu.columns; onTriggered: window.current.insert_column() }
@@ -1874,35 +1874,11 @@ ApplicationWindow {
         AlnItem { text: "Copy as FASTA"; onTriggered: clipboard.put(window.current.selection_text()) }
     }
 
-    AppContentDialog {
+    TextPromptDialog {
         id: renameDialog
-        initialFocusItem: rowName
-        title: "Rename row"
-        modal: true
-        standardButtons: Dialog.Ok | Dialog.Cancel
-        function ask() {
-            if (!window.alignmentOpen) return
-            rowName.text = window.current.row_name()
-            renameError.text = ""
-            open()
-        }
-        onOpened: { rowName.forceActiveFocus(); rowName.selectAll() }
-        onAccepted: {
-            const err = window.current.rename_row(rowName.text)
-            if (err.length > 0) { renameError.text = err; open() }
-        }
-        body: ColumnLayout {
-            spacing: 6
-            Label { id: rowNameLabel; text: "Row name" }
-            TextField {
-                Accessible.labelledBy: rowNameLabel
-                Accessible.name: rowNameLabel.text
-                id: rowName
-                Layout.preferredWidth: 320
-                Keys.onReturnPressed: renameDialog.accept()
-                Keys.onEnterPressed: renameDialog.accept()
-            }
-            AppErrorLabel { id: renameError; visible: text.length > 0; color: shell.accent; wrapMode: Text.Wrap; Layout.fillWidth: true }
+        function askRow() {
+            if (window.alignmentOpen)
+                ask("Rename row", "Row name", window.current.row_name(), value => window.current.rename_row(value))
         }
     }
 

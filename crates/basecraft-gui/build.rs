@@ -105,6 +105,7 @@ fn main() {
         "qml/AppCheckBox.qml",
         "qml/AppSpinBox.qml",
         "qml/ToolSettingsDialog.qml",
+        "qml/TextPromptDialog.qml",
         "qml/AppIcon.qml",
         "qml/AppIconButton.qml",
         "qml/AppControlBackground.qml",

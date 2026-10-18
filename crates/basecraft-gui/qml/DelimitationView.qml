@@ -529,25 +529,7 @@ FocusScope {
             }
         }
     }
-    AppContentDialog {
-        id: textDialog
-        property var done: null
-        standardButtons: Dialog.Ok | Dialog.Cancel
-        initialFocusItem: textValue
-        function ask(heading, label, value, callback) {
-            title = heading
-            textLabel.text = label
-            textValue.text = value
-            done = callback
-            open()
-        }
-        onOpened: { standardButton(Dialog.Ok).enabled = Qt.binding(() => textValue.text.trim().length > 0); textValue.selectAll() }
-        onAccepted: if (done) done(textValue.text.trim())
-        body: ColumnLayout {
-            Label { id: textLabel }
-            TextField { id: textValue; objectName: "renameValue"; Layout.fillWidth: true; Accessible.name: textLabel.text }
-        }
-    }
+    TextPromptDialog { id: textDialog }
     // Bar width, the gap to the next column and the spacing between species
     // bars, for one hypothesis or for every column at once. Each hypothesis
     // keeps one value of each.

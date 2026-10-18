@@ -246,7 +246,10 @@ mod tests {
     }
 
     fn given(value: Value) -> Map<String, Value> {
-        value.as_object().cloned().unwrap()
+        match value {
+            Value::Object(map) => map,
+            other => panic!("not an object: {other}"),
+        }
     }
 
     #[test]
