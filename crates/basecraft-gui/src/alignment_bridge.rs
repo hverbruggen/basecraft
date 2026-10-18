@@ -88,26 +88,21 @@ pub mod qobject {
         #[qinvokable]
         fn align_mafft(self: Pin<&mut AlignmentController>);
 
-        /// Infer a maximum-likelihood tree with FastTree's standard settings
-        /// (GTR for DNA, LG for protein), in the background, into a new
-        /// Newick file beside this one.
-        /// `options` is JSON: `model`, `gamma`, `support` and `resamples`;
-        /// unset ones keep these standard settings.
-        #[qinvokable]
-        fn build_fasttree(self: Pin<&mut AlignmentController>, options: QString);
         #[qinvokable]
         fn trim_alignment(self: Pin<&mut AlignmentController>);
-        /// Infer a maximum-likelihood tree with IQ-TREE. `options` is JSON:
-        /// `model` ("MFP" for ModelFinder), `support` ("none", "ufboot" or
-        /// "bootstrap"), `replicates` and `seed`.
+        /// A plugin's settings form, as JSON, or `{"error": …}`.
         #[qinvokable]
-        fn build_iqtree(self: Pin<&mut AlignmentController>, options: QString);
-
-        /// Infer a DNA distance tree through the bundled public plugin.
+        fn tool_form(self: &AlignmentController, plugin: &QString, form: &QString) -> QString;
+        /// Run a plugin with the values of its settings form (JSON) in the
+        /// background, into a new file beside this one. Missing values take
+        /// the form's defaults.
         #[qinvokable]
-        fn build_distance_tree(self: Pin<&mut AlignmentController>, model: QString);
-        #[qinvokable]
-        fn distance_action(self: Pin<&mut AlignmentController>, kind: QString, options: QString);
+        fn run_form(
+            self: Pin<&mut AlignmentController>,
+            plugin: &QString,
+            form: &QString,
+            values: &QString,
+        );
         #[qinvokable]
         fn cancel_bootstrap(self: Pin<&mut AlignmentController>);
 
@@ -277,14 +272,14 @@ const KEY_A: i32 = 0x41;
 
 /// A plugin that reads this alignment and writes a new file beside it.
 struct Tool {
-    name: &'static str,
-    plugin: &'static str,
-    operation: &'static str,
+    name: String,
+    plugin: String,
+    operation: String,
     input: AlignmentInput,
     /// The new file's suffix and extension: `NAME.<suffix>.<ext>`.
-    output: (&'static str, &'static str),
+    output: (String, String),
     min_rows: usize,
-    working: &'static str,
+    working: String,
     params: serde_json::Map<String, serde_json::Value>,
 }
 const KEY_SPACE: i32 = 0x20;
@@ -1288,13 +1283,13 @@ impl qobject::AlignmentController {
 
     pub fn align_mafft(self: Pin<&mut Self>) {
         self.run_tool(&Tool {
-            name: "MAFFT",
-            plugin: "mafft",
-            operation: "align",
+            name: "MAFFT".into(),
+            plugin: "mafft".into(),
+            operation: "align".into(),
             input: AlignmentInput::Ungapped,
-            output: ("mafft", "fasta"),
+            output: ("mafft".into(), "fasta".into()),
             min_rows: 2,
-            working: "Aligning with MAFFT…",
+            working: "Aligning with MAFFT…".into(),
             params: serde_json::Map::new(),
         });
     }
@@ -1303,122 +1298,65 @@ impl qobject::AlignmentController {
         let mut params = serde_json::Map::new();
         params.insert("method".into(), serde_json::json!("automated1"));
         self.run_tool(&Tool {
-            name: "trimAl",
-            plugin: "trimal",
-            operation: "trim",
+            name: "trimAl".into(),
+            plugin: "trimal".into(),
+            operation: "trim".into(),
             input: AlignmentInput::Aligned,
-            output: ("trimmed", "fasta"),
+            output: ("trimmed".into(), "fasta".into()),
             min_rows: 2,
-            working: "Trimming with trimAl…",
+            working: "Trimming with trimAl…".into(),
             params,
         });
     }
 
-    // QString is passed by value across the QML invokable boundary.
-    #[allow(clippy::needless_pass_by_value)]
-    pub fn build_iqtree(self: Pin<&mut Self>, options: QString) {
-        let mut params: serde_json::Map<String, serde_json::Value> =
-            serde_json::from_str(&options.to_string()).unwrap_or_default();
-        params
-            .entry("model")
-            .or_insert_with(|| serde_json::json!("MFP"));
-        params.entry("seed").or_insert_with(|| serde_json::json!(1));
-        params.insert(
-            "threads".into(),
-            serde_json::json!(basecraft_plugin_host::compute::allocation()),
-        );
-        let finder = params["model"] == "MFP";
-        let support = params
-            .get("support")
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|s| s != "none");
-        self.run_tool(&Tool {
-            name: "IQ-TREE",
-            plugin: "iqtree",
-            operation: "tree",
-            input: AlignmentInput::Aligned,
-            output: ("iqtree", "nwk"),
-            min_rows: 4,
-            working: match (finder, support) {
-                (true, true) => "Selecting a model, building a tree and its support with IQ-TREE…",
-                (true, false) => "Selecting a model and building a tree with IQ-TREE…",
-                (false, true) => "Building a tree and its support with IQ-TREE…",
-                (false, false) => "Building a tree with IQ-TREE…",
-            },
-            params,
-        });
+    pub fn tool_form(&self, plugin: &QString, form: &QString) -> QString {
+        let value =
+            basecraft_plugin_host::manifest::Manifest::load(&plugin_dir(&plugin.to_string()))
+                .map_err(|e| e.to_string())
+                .and_then(|m| {
+                    m.form(&form.to_string())
+                        .map(|f| serde_json::to_value(f).unwrap_or_default())
+                        .ok_or_else(|| format!("{plugin} has no {form} settings"))
+                });
+        QString::from(
+            &value
+                .unwrap_or_else(|error| serde_json::json!({"error": error}))
+                .to_string(),
+        )
     }
 
-    // QString is passed by value across the QML invokable boundary.
-    #[allow(clippy::needless_pass_by_value)]
-    pub fn build_fasttree(self: Pin<&mut Self>, options: QString) {
-        self.run_tool(&Tool {
-            name: "FastTree",
-            plugin: "fasttree",
-            operation: "tree",
-            input: AlignmentInput::Aligned,
-            output: ("fasttree", "nwk"),
-            min_rows: 3,
-            working: "Building a tree with FastTree…",
-            params: serde_json::from_str(&options.to_string()).unwrap_or_default(),
-        });
-    }
-
-    // QString is passed by value across the QML invokable boundary.
-    #[allow(clippy::needless_pass_by_value)]
-    pub fn build_distance_tree(self: Pin<&mut Self>, model: QString) {
-        self.distance_action(
-            QString::from("nj"),
-            QString::from(serde_json::json!({"model":model.to_string()}).to_string()),
-        );
-    }
-
-    #[allow(clippy::needless_pass_by_value)]
-    pub fn distance_action(self: Pin<&mut Self>, kind: QString, options: QString) {
-        let Ok(mut params) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(
-            &options.to_string(),
-        ) else {
-            self.fail("Invalid distance settings");
-            return;
-        };
-        params.entry("model").or_insert_with(|| {
-            serde_json::json!(if kind.to_string() == "matrix" {
-                "p"
-            } else {
-                "k2p"
+    pub fn run_form(self: Pin<&mut Self>, plugin: &QString, form: &QString, values: &QString) {
+        let tool = (|| -> Result<Tool, String> {
+            let plugin = plugin.to_string();
+            let manifest = basecraft_plugin_host::manifest::Manifest::load(&plugin_dir(&plugin))
+                .map_err(|e| e.to_string())?;
+            let form = manifest
+                .form(&form.to_string())
+                .ok_or_else(|| format!("{} has no {form} settings", manifest.name))?;
+            let given: serde_json::Map<String, serde_json::Value> =
+                serde_json::from_str(&values.to_string()).map_err(|e| e.to_string())?;
+            let mut params = form.parameters(&given)?;
+            if form.threads {
+                params.insert(
+                    "threads".into(),
+                    serde_json::json!(basecraft_plugin_host::compute::allocation()),
+                );
+            }
+            Ok(Tool {
+                name: form.title.clone(),
+                plugin,
+                operation: form.operation.clone(),
+                input: AlignmentInput::Aligned,
+                output: form.output.clone(),
+                min_rows: form.min_rows,
+                working: form.working.clone(),
+                params,
             })
-        });
-        params
-            .entry("method")
-            .or_insert(serde_json::json!("njstar"));
-        params.entry("min_overlap").or_insert(serde_json::json!(1));
-        let (name, operation, suffix, extension) = match kind.to_string().as_str() {
-            "matrix" => {
-                params.remove("bootstrap");
-                params.remove("seed");
-                params.remove("bootstrap_destination");
-                ("Distance matrix", "matrix", "distances", "tsv")
-            }
-            "nj" => ("Neighbor joining", "tree", "nj", "nwk"),
-            "upgma" => {
-                params.insert("method".into(), serde_json::json!("upgma"));
-                ("UPGMA", "tree", "upgma", "nwk")
-            }
-            _ => {
-                self.fail("Unknown distance action");
-                return;
-            }
-        };
-        self.run_tool(&Tool {
-            name,
-            plugin: "distance",
-            operation,
-            input: AlignmentInput::Aligned,
-            output: (suffix, extension),
-            min_rows: 2,
-            working: "Calculating distances…",
-            params,
-        });
+        })();
+        match tool {
+            Ok(tool) => self.run_tool(&tool),
+            Err(error) => self.fail(&error),
+        }
     }
 
     pub fn cancel_bootstrap(mut self: Pin<&mut Self>) {
@@ -1451,7 +1389,7 @@ impl qobject::AlignmentController {
         if self.rust().busy {
             return;
         }
-        let name = tool.name;
+        let name = tool.name.clone();
         if self.with_doc(AlignmentDoc::row_count).unwrap_or(0) < tool.min_rows {
             self.fail(&format!(
                 "{name} needs at least {} sequences",
@@ -1464,12 +1402,12 @@ impl qobject::AlignmentController {
             let (Some(session), Some(doc)) = (&r.session, r.doc) else {
                 return;
             };
-            let (suffix, ext) = tool.output;
+            let (suffix, ext) = (&tool.output.0, &tool.output.1);
             let output = output_beside(&PathBuf::from(r.file_path.to_string()), suffix, ext);
             FileJob::from_alignment(
                 session,
                 doc,
-                (&plugin_dir(tool.plugin), tool.operation),
+                (&plugin_dir(&tool.plugin), &tool.operation),
                 tool.input,
                 output,
             )
@@ -1562,7 +1500,7 @@ impl qobject::AlignmentController {
             None
         };
         self.as_mut().set_busy(true);
-        self.as_mut().notify(tool.working);
+        self.as_mut().notify(&tool.working);
         let started = Instant::now();
         let qt_thread = self.qt_thread();
         std::thread::spawn(move || {

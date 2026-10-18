@@ -1,6 +1,5 @@
 import QtQuick
 import QtQuick.Controls.Basic
-import QtQuick.Dialogs
 import QtQuick.Layouts
 
 // Annotate the selected clade: a name on its stem branch, a bar along its
@@ -16,9 +15,6 @@ AppContentDialog {
     title: annotation.exists ? "Edit clade annotation" : "Annotate clade"
     modal: true
     padding: 16
-
-    // Colours offered as swatches; any other can be typed or picked.
-    readonly property var swatches: ["#000000", "#808080", "#c0392b", "#e67e22", "#d4ac0d", "#27ae60", "#2980b9", "#8e44ad"]
 
     function openSelected() {
         if (!controller) return
@@ -76,12 +72,6 @@ AppContentDialog {
 
     onOpened: { label.forceActiveFocus(); label.selectAll() }
 
-    ColorDialog {
-        id: picker
-        selectedColor: colour.text
-        onAccepted: colour.text = selectedColor.toString()
-    }
-
     // The dialog takes its size from its contents.
     body: ColumnLayout {
         spacing: 10
@@ -109,22 +99,7 @@ AppContentDialog {
         }
         AppCheckBox { id: field; text: "Coloured field behind the clade" }
 
-        RowLayout {
-            Label { id: colourLabel; text: "Colour"; Layout.preferredWidth: 70 }
-            Repeater {
-                model: dialog.swatches
-                Rectangle {
-                    required property string modelData
-                    width: 20; height: 20; radius: 3
-                    color: modelData
-                    border.width: colour.text.toLowerCase() === modelData ? 2 : 1
-                    border.color: colour.text.toLowerCase() === modelData ? palette.highlight : Qt.alpha(palette.text, 0.3)
-                    MouseArea { anchors.fill: parent; onClicked: colour.text = parent.modelData }
-                }
-            }
-            TextField { id: colour; objectName: "colour"; Accessible.labelledBy: colourLabel; Accessible.name: colourLabel.text; Layout.preferredWidth: 90 }
-            AppButton { text: "Pick…"; onClicked: picker.open() }
-        }
+        ColorPicker { id: colour }
 
         GridLayout {
             columns: 3

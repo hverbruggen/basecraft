@@ -16,3 +16,43 @@ conda = ["bioconda::fasttree"]
 [[operations]]
 name = "tree"
 label = "Infer a maximum-likelihood tree with FastTree (GTR for DNA, LG for protein)"
+
+# The settings the app asks for before a run. The app draws the form from
+# these fields and sends their values as parameters.
+[[forms]]
+id = "tree"
+title = "FastTree"
+operation = "tree"
+button = "Build tree"
+output = ["fasttree", "nwk"]
+min_rows = 3
+working = "Building a tree with FastTree…"
+note = "SH-like local support is a fast test of each branch, written on the tree as a value from 0 to 1. It is not a bootstrap proportion. Identical sequences are joined without a support value."
+
+[[forms.fields]]
+name = "model"
+label = "Substitution model"
+type = "choice"
+default = ""
+choices = [["", "GTR for DNA, LG for protein (standard)"], ["JC", "JC (DNA)"], ["GTR", "GTR (DNA)"], ["LG", "LG (protein)"], ["WAG", "WAG (protein)"], ["JTT", "JTT (protein)"]]
+
+[[forms.fields]]
+name = "gamma"
+label = "Gamma rate variation (rescales lengths; default: CAT categories)"
+type = "boolean"
+default = false
+
+[[forms.fields]]
+name = "support"
+label = "SH-like local support"
+type = "boolean"
+default = true
+
+[[forms.fields]]
+name = "resamples"
+label = "Resamples"
+type = "integer"
+default = 1000
+min = 1
+max = 100000
+when = "support == true"

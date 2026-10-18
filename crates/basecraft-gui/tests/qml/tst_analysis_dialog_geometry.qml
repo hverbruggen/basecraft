@@ -3,6 +3,7 @@ import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import QtTest
 import "../../qml"
+import "tool_forms.js" as Forms
 
 Item {
     id: host
@@ -19,7 +20,7 @@ Item {
             property alias delimitation: delimitation
             property alias confirmation: confirmation
             TextField { id: editor; objectName: "editor"; text: "Document" }
-            DistanceAnalysisDialog { id: distance; kind: "upgma" }
+            ToolSettingsDialog { id: distance }
             DelimitationAnalysisDialog { id: delimitation }
             AppDialog {
                 id: confirmation
@@ -82,7 +83,7 @@ Item {
         function checkField(dialog, name, fontSize) {
             wait(0)
             waitForPolish(dialog.contentItem)
-            const field = findChild(dialog, name)
+            const field = findChild(dialog.contentItem, name)
             verify(field, name)
             compare(field.font.pixelSize, fontSize)
             verify(field.Accessible.name.length > 0, name + " has an accessible name")
@@ -97,42 +98,39 @@ Item {
                 return p.y >= -1 && p.y + field.height <= dialog.contentItem.height + 1
             }, 1000, field.objectName + " is revealed by keyboard focus")
         }
+        function field(dialog, name) { return findChild(dialog.contentItem, name) }
         function test_distance_data() { return cases(["matrix", "nj", "upgma"]) }
         function test_distance(data) {
             const window = makeWindow(data)
             const dialog = window.distance
-            dialog.kind = data.kind
             const editor = findChild(window.contentItem, "editor")
             editor.forceActiveFocus()
             tryCompare(editor, "activeFocus", true)
-            dialog.open()
+            dialog.show(Forms.target(), "distance", data.kind)
             tryCompare(dialog, "opened", true)
-            const model = checkField(dialog, "distanceModel", data.size)
+            const model = checkField(dialog, "model", data.size)
             tryCompare(model, "activeFocus", true)
-            checkField(dialog, "distanceOverlap", data.size)
-            tryCompare(findChild(dialog, "distanceSettings"), "columns",
-                data.width === 360 && data.size === 24 ? 1 : 2)
+            checkField(dialog, "min_overlap", data.size)
+            tryCompare(field(dialog, "field-model"), "columns", data.width === 360 && data.size === 24 ? 1 : 2)
             checkFrame(dialog, window)
             if (data.kind !== "matrix") {
-                const row = findChild(dialog, "bootstrapSettings")
-                const bootstrap = checkField(dialog, "distanceBootstrap", data.size)
-                tryCompare(row, "columns", data.width === 360 ? 1 : 3)
+                const bootstrap = checkField(dialog, "bootstrap_on", data.size)
                 verify(bootstrap.indicator.width <= Math.max(16, bootstrap.font.pixelSize * 1.5))
                 reveal(dialog, bootstrap)
                 keyClick(Qt.Key_Space)
                 verify(bootstrap.checked)
-                const replicates = checkField(dialog, "bootstrapReplicates", data.size)
-                const seed = checkField(dialog, "bootstrapSeed", data.size)
+                const replicates = checkField(dialog, "bootstrap", data.size)
+                const seed = checkField(dialog, "seed", data.size)
                 reveal(dialog, replicates)
                 keyClick(Qt.Key_Up)
-                compare(dialog.parameters().bootstrap, 1001)
+                compare(dialog.values.bootstrap, 1001)
                 reveal(dialog, seed)
                 keyClick(Qt.Key_Up)
-                compare(dialog.parameters().seed, 2)
-                const destination = checkField(dialog, "bootstrapDestination", data.size)
+                compare(dialog.values.seed, 2)
+                const destination = checkField(dialog, "bootstrap_destination", data.size)
                 reveal(dialog, destination)
                 keyClick(Qt.Key_Down)
-                compare(dialog.parameters().bootstrap_destination, "working")
+                compare(dialog.values.bootstrap_destination, "working")
                 seed.value = seed.to
                 waitForPolish(dialog.contentItem)
                 tryVerify(() => seed.contentItem.width >= seed.contentItem.contentWidth,
@@ -187,23 +185,23 @@ Item {
         function test_live_font_and_width_changes() {
             const window = makeWindow({width: 1000, size: 12})
             const dialog = window.distance
-            dialog.open()
+            dialog.show(Forms.target(), "distance", "nj")
             tryCompare(dialog, "opened", true)
-            const row = findChild(dialog, "bootstrapSettings")
-            tryCompare(row, "columns", 3)
-            findChild(dialog, "distanceBootstrap").checked = true
-            findChild(dialog, "bootstrapSeed").value = 12345
-            const before = dialog.parameters()
+            const row = field(dialog, "field-bootstrap_destination")
+            tryCompare(row, "columns", 2)
+            dialog.set("bootstrap_on", true)
+            dialog.set("seed", 12345)
+            const before = JSON.stringify(dialog.values)
             window.width = 360
             window.font.pixelSize = 24
             tryCompare(row, "columns", 1)
-            checkField(dialog, "bootstrapSeed", 24)
-            compare(dialog.parameters(), before)
-            reveal(dialog, findChild(dialog, "bootstrapSeed"))
+            checkField(dialog, "seed", 24)
+            compare(JSON.stringify(dialog.values), before)
+            reveal(dialog, field(dialog, "seed"))
             window.width = 1000
-            tryCompare(row, "columns", 3)
+            tryCompare(row, "columns", 2)
             checkFrame(dialog, window)
-            compare(dialog.parameters(), before)
+            compare(JSON.stringify(dialog.values), before)
             dialog.reject()
         }
         function test_narrow_confirmation_buttons() {

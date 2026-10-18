@@ -14,3 +14,157 @@ label = "Calculate an observed DNA distance matrix"
 [[operations]]
 name = "groups"
 label = "Summarize specimen groups using cached distances"
+
+# The settings the app asks for before a run (see plugins/fasttree).
+[[forms]]
+id = "matrix"
+title = "Distance matrix"
+operation = "matrix"
+button = "Calculate"
+output = ["distances", "tsv"]
+min_rows = 2
+working = "Calculating distances…"
+note = "Gaps and ambiguous residues are excluded pairwise."
+
+[[forms.fields]]
+name = "model"
+label = "DNA model"
+type = "choice"
+default = "p"
+choices = [["p", "p"], ["jc69", "jc69"], ["k2p", "k2p"]]
+
+[[forms.fields]]
+name = "min_overlap"
+label = "Minimum shared sites"
+type = "integer"
+default = 1
+min = 1
+max = 100000000
+
+[[forms]]
+id = "nj"
+title = "Neighbor joining"
+operation = "tree"
+button = "Build tree"
+output = ["nj", "nwk"]
+min_rows = 2
+working = "Calculating distances…"
+note = "Bootstrap uses complete distances; any failed replicate withholds support. Gaps and ambiguous residues are excluded pairwise."
+
+[[forms.fields]]
+name = "model"
+label = "DNA model"
+type = "choice"
+default = "k2p"
+choices = [["p", "p"], ["jc69", "jc69"], ["k2p", "k2p"]]
+
+[[forms.fields]]
+name = "min_overlap"
+label = "Minimum shared sites"
+type = "integer"
+default = 1
+min = 1
+max = 100000000
+
+[[forms.fields]]
+name = "method"
+label = "Missing-distance method"
+type = "choice"
+default = "njstar"
+choices = [["njstar", "njstar"], ["sorted", "sorted"], ["fourpoint", "fourpoint"], ["mvrstar", "mvrstar"]]
+# Bootstrap replicates use the sorted method.
+value_when = [["bootstrap_on == true", "sorted"]]
+
+[[forms.fields]]
+name = "bootstrap_on"
+label = "Bootstrap"
+type = "boolean"
+default = false
+# Shapes the form only; the replicates below are what the plugin gets.
+local = true
+
+[[forms.fields]]
+name = "bootstrap"
+label = "Replicates"
+type = "integer"
+default = 1000
+min = 1
+max = 1000000
+when = "bootstrap_on == true"
+
+[[forms.fields]]
+name = "seed"
+label = "Seed"
+type = "integer"
+default = 1
+min = 0
+max = 2147483647
+when = "bootstrap_on == true"
+
+[[forms.fields]]
+name = "bootstrap_destination"
+label = "Save bootstrap trees in"
+type = "choice"
+default = "metadata"
+choices = [["metadata", "Metadata directory (.basecraft/)"], ["working", "Working directory"]]
+when = "bootstrap_on == true"
+
+[[forms]]
+id = "upgma"
+title = "UPGMA"
+operation = "tree"
+button = "Build tree"
+output = ["upgma", "nwk"]
+min_rows = 2
+working = "Calculating distances…"
+note = "UPGMA requires complete distances within each connected group. Bootstrap uses complete distances; any failed replicate withholds support. Gaps and ambiguous residues are excluded pairwise."
+fixed = { method = "upgma" }
+
+[[forms.fields]]
+name = "model"
+label = "DNA model"
+type = "choice"
+default = "k2p"
+choices = [["p", "p"], ["jc69", "jc69"], ["k2p", "k2p"]]
+
+[[forms.fields]]
+name = "min_overlap"
+label = "Minimum shared sites"
+type = "integer"
+default = 1
+min = 1
+max = 100000000
+
+[[forms.fields]]
+name = "bootstrap_on"
+label = "Bootstrap"
+type = "boolean"
+default = false
+# Shapes the form only; the replicates below are what the plugin gets.
+local = true
+
+[[forms.fields]]
+name = "bootstrap"
+label = "Replicates"
+type = "integer"
+default = 1000
+min = 1
+max = 1000000
+when = "bootstrap_on == true"
+
+[[forms.fields]]
+name = "seed"
+label = "Seed"
+type = "integer"
+default = 1
+min = 0
+max = 2147483647
+when = "bootstrap_on == true"
+
+[[forms.fields]]
+name = "bootstrap_destination"
+label = "Save bootstrap trees in"
+type = "choice"
+default = "metadata"
+choices = [["metadata", "Metadata directory (.basecraft/)"], ["working", "Working directory"]]
+when = "bootstrap_on == true"

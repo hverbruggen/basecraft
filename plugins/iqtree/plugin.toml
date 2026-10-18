@@ -8,3 +8,62 @@ operation = "python:iqtree_plugin.py"
 [[operations]]
 name = "tree"
 label = "Infer a tree with IQ-TREE and retain the analysis report"
+
+# The settings the app asks for before a run (see plugins/fasttree).
+[[forms]]
+id = "tree"
+title = "IQ-TREE"
+operation = "tree"
+button = "Build tree"
+output = ["iqtree", "nwk"]
+min_rows = 4
+working = "Building a tree with IQ-TREE…"
+threads = true
+note = "ModelFinder tests models with and without rate variation and uses the best by BIC. Uses the allocated CPU threads. Support values are written on the branches of the tree."
+
+[[forms.fields]]
+name = "model"
+label = "Substitution model"
+type = "choice"
+default = "MFP"
+choices = [["MFP", "ModelFinder (best fit by BIC)"], ["JC", "JC (DNA)"], ["F81", "F81 (DNA)"], ["K2P", "K2P (DNA)"], ["HKY", "HKY (DNA)"], ["TN", "TN (DNA)"], ["TIM", "TIM (DNA)"], ["TVM", "TVM (DNA)"], ["GTR", "GTR (DNA)"], ["LG", "LG (protein)"], ["WAG", "WAG (protein)"], ["JTT", "JTT (protein)"], ["Dayhoff", "Dayhoff (protein)"], ["mtREV", "mtREV (protein)"], ["cpREV", "cpREV (protein)"], ["Blosum62", "Blosum62 (protein)"]]
+
+[[forms.fields]]
+name = "gamma"
+label = "Gamma rate variation (+G)"
+type = "boolean"
+default = true
+when = "model != MFP"
+
+[[forms.fields]]
+name = "invariant"
+label = "Invariant sites (+I)"
+type = "boolean"
+default = false
+when = "model != MFP"
+
+[[forms.fields]]
+name = "support"
+label = "Branch support"
+type = "choice"
+default = "none"
+choices = [["none", "None"], ["ufboot", "Ultrafast bootstrap (UFBoot)"], ["bootstrap", "Standard bootstrap"]]
+
+[[forms.fields]]
+name = "replicates"
+label = "Replicates"
+type = "integer"
+default = 1000
+min = 1
+max = 100000
+when = "support != none"
+# UFBoot needs at least 1000 replicates.
+min_when = [["support == ufboot", 1000]]
+
+[[forms.fields]]
+name = "seed"
+label = "Seed"
+type = "integer"
+default = 1
+min = 1
+max = 100000

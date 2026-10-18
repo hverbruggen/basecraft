@@ -1224,11 +1224,7 @@ ApplicationWindow {
                                 text: modelData.label
                                 enabled: window.current !== null && !window.current.busy
                                 tip: modelData.value === "matrix" ? "Save observed distances as TSV and a reusable cache" : modelData.value === "upgma" ? "Build a rooted, equal-rate UPGMA tree" : "Build a neighbor-joining tree"
-                                onInvoked: {
-                                    const dialog = modelData.value === "matrix" ? matrixDialog : modelData.value === "nj" ? njDialog : upgmaDialog
-                                    dialog.target = window.current
-                                    dialog.open()
-                                }
+                                onInvoked: toolSettings.show(window.current, "distance", modelData.value)
                             }
                         }
                         ColumnLayout {
@@ -1246,14 +1242,14 @@ ApplicationWindow {
                             text: window.current && window.current.busy ? "Running…" : "FastTree"
                             enabled: window.current !== null && !window.current.busy
                             tip: "Infer a tree with FastTree: choose the model, rate variation and support values"
-                            onInvoked: { fasttreeDialog.target = window.current; fasttreeDialog.open() }
+                            onInvoked: toolSettings.show(window.current, "fasttree", "tree")
                         }
                         RibbonButton { commandId: "ribbon.select-a-model-and-infer-a-maximum-likelihood-tree";
                             iconName: "phylogram"
                             text: "IQ-TREE"
                             enabled: window.current !== null && !window.current.busy
                             tip: "Infer a maximum-likelihood tree: choose the model, rate variation and branch support"
-                            onInvoked: { iqtreeDialog.target = window.current; iqtreeDialog.open() }
+                            onInvoked: toolSettings.show(window.current, "iqtree", "tree")
                         }
                     }
                     Item { Layout.fillWidth: true }
@@ -1330,11 +1326,8 @@ ApplicationWindow {
         }
     }
 
-    DistanceAnalysisDialog { id: matrixDialog; kind: "matrix" }
-    DistanceAnalysisDialog { id: njDialog; kind: "nj" }
-    DistanceAnalysisDialog { id: upgmaDialog; kind: "upgma" }
-    IqTreeDialog { id: iqtreeDialog }
-    FastTreeDialog { id: fasttreeDialog }
+    // Settings for every plugin run, drawn from the plugin's manifest.
+    ToolSettingsDialog { id: toolSettings }
 
     ShortcutsDialog { id: shortcuts; commands: window.applicationCommands }
 
@@ -2356,10 +2349,10 @@ ApplicationWindow {
                     else if (cmd === "insert") window.alignmentInsert = true
                     else if (cmd === "overwrite") window.alignmentInsert = false
                     else if (cmd === "mafft") c.align_mafft()
-                    else if (cmd === "fasttree") c.build_fasttree(a || "{}")
+                    else if (cmd === "fasttree") c.run_form("fasttree", "tree", a || "{}")
                     else if (cmd === "trimal") c.trim_alignment()
-                    else if (cmd === "iqtree") c.build_iqtree(a || "{}")
-                    else if (cmd === "distance") c.build_distance_tree(a || "k2p")
+                    else if (cmd === "iqtree") c.run_form("iqtree", "tree", a || "{}")
+                    else if (cmd === "distance") c.run_form("distance", "nj", JSON.stringify({model: a || "k2p"}))
                     console.log("aln", step, "|", c.message)
                 }
             }
@@ -2422,13 +2415,9 @@ ApplicationWindow {
                 for (let i = 0; i < openFiles.count; i++) files.push(openFiles.get(i).path)
                 console.log("activity:", shell.activity_log(files.join("\n"), -new Date().getTimezoneOffset()))
             }
-            if (arg("--distance-action")) c.distance_action(arg("--distance-action"), arg("--distance-options") || "{}")
+            if (arg("--distance-action")) c.run_form("distance", arg("--distance-action"), arg("--distance-options") || "{}")
             if (arg("--species-dialog")) window.beginDelimitation(arg("--species-dialog"))
-            if (arg("--distance-dialog")) {
-                const dialog = arg("--distance-dialog") === "matrix" ? matrixDialog : arg("--distance-dialog") === "upgma" ? upgmaDialog : njDialog
-                dialog.target = c
-                dialog.open()
-            }
+            if (arg("--distance-dialog")) toolSettings.show(c, "distance", arg("--distance-dialog"))
             if (arg("--link-alignment")) c.link_alignment(arg("--link-alignment"))
             if (arg("--clade")) c.select_clade(JSON.stringify(arg("--clade").split(",")))
             if (arg("--export-svg")) c.export_figure(arg("--export-svg"), Number(arg("--export-scope") || 0), arg("--publication") === "1")

@@ -32,6 +32,10 @@ def tree(snapshot, params):
     model = params.get("model", "MFP")
     if not isinstance(model, str) or not re.fullmatch(r"[A-Za-z0-9+{},._/-]+", model):
         raise ValueError("Invalid IQ-TREE model")
+    # A base model takes rate variation from the settings form's switches;
+    # a full model string such as GTR+I+G is used as given.
+    if model != "MFP" and "+" not in model:
+        model += ("+I" if params.get("invariant", False) else "") + ("+G" if params.get("gamma", False) else "")
     threads, seed = allocated_cpus(params.get("threads")), int(params.get("seed", 1))
     if threads < 1 or seed < 1:
         raise ValueError("Threads and seed must be positive")

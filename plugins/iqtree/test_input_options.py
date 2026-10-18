@@ -53,6 +53,11 @@ class InputOptions(unittest.TestCase):
             self.assertEqual(argv[argv.index("-m") + 1], "GTR+I+G")
             self.assertIn(str(replicates), result["execution"]["resolved_parameters"]["support"])
         self.assertIn(")95:1", self.output.read_text())
+        # A base model takes its rate options from the form's switches.
+        with self.executable(tree):
+            result = iqtree_plugin.tree(None, dict(self.params, model="HKY", gamma=True, invariant=True))
+        argv = result["execution"]["argv"]
+        self.assertEqual(argv[argv.index("-m") + 1], "HKY+I+G")
         with self.assertRaisesRegex(ValueError, "1000"):
             iqtree_plugin.tree(None, dict(self.params, support="ufboot", replicates=100))
 

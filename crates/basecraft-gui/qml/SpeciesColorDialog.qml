@@ -21,7 +21,7 @@ AppDialog {
         groups = items
         edits = ({})
         current = 0
-        hexField.text = colorOf(0)
+        picker.text = colorOf(0)
         open()
     }
     function colorOf(index) {
@@ -35,7 +35,7 @@ AppDialog {
         next[groups[index].id] = value
         edits = next
     }
-    readonly property bool validHex: /^#[0-9a-fA-F]{6}$/.test(hexField.text)
+    readonly property bool validHex: picker.valid
     onAccepted: colorsChosen(edits)
     onOpened: standardButton(Dialog.Ok).enabled = Qt.binding(() => dialog.validHex || dialog.groups.length === 0)
     initialFocusItem: list
@@ -76,36 +76,9 @@ AppDialog {
             }
         }
         ColumnLayout {
-            ColorWheel {
-                id: wheel
-                objectName: "colorWheel"
-                color: dialog.colorOf(dialog.current)
-                onEdited: value => {
-                    dialog.setColor(dialog.current, value.toString())
-                    hexField.text = value.toString()
-                }
-            }
-            RowLayout {
-                Label { id: hexLabel; text: "Hex" }
-                TextField {
-                    id: hexField
-                    objectName: "colorHex"
-                    Layout.preferredWidth: 100
-                    maximumLength: 7
-                    font.family: "monospace"
-                    Accessible.name: hexLabel.text
-                    onTextEdited: if (/^#[0-9a-fA-F]{6}$/.test(text)) dialog.setColor(dialog.current, text.toLowerCase())
-                }
-                Rectangle {
-                    width: 28; height: 20; radius: 3
-                    color: dialog.colorOf(dialog.current)
-                    border.color: dialog.palette.mid
-                }
-            }
-            Label {
-                visible: !dialog.validHex
-                text: "Use #rrggbb"
-                color: dialog.palette.highlight
+            ColorPicker {
+                id: picker
+                onEdited: value => dialog.setColor(dialog.current, value)
             }
             AppButton {
                 text: "Use theme colours"
@@ -114,10 +87,10 @@ AppDialog {
                     for (const g of dialog.groups) next[g.id] = ""
                     dialog.edits = next
                     // Show the theme colour that applies after OK.
-                    hexField.text = dialog.colorOf(dialog.current)
+                    picker.text = dialog.colorOf(dialog.current)
                 }
             }
         }
     }
-    onCurrentChanged: hexField.text = colorOf(current)
+    onCurrentChanged: picker.text = colorOf(current)
 }

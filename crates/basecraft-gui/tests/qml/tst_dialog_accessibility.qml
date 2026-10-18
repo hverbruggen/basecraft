@@ -23,7 +23,7 @@ Item {
             tryCompare(clade, "opened", true)
             checkField(clade, "label", "Name")
             checkField(clade, "barWidth", "Thickness")
-            checkField(clade, "colour", "Colour")
+            checkField(clade, "colorHex", "Colour")
             checkField(clade, "left", "Field opacity at left", "Field opacity at left (%)")
             checkField(clade, "right", "Field opacity at right", "Field opacity at right (%)")
             clade.close()
