@@ -53,7 +53,26 @@ pub mod qobject {
         #[qproperty(i32, branch_width)]
         /// The tree has at least one set of support values.
         #[qproperty(bool, has_support)]
+        /// The tree is drawn for another document, such as a species
+        /// workspace: drawing edits go out as `drawingEdited` for that
+        /// document to keep, and other edits are refused.
+        #[qproperty(bool, display_only)]
         type TreeController = super::TreeRust;
+
+        /// Show the tree in `path` with `edits`, a JSON list of drawing
+        /// edits, replayed on it. Nothing is written.
+        #[qinvokable]
+        fn show_tree(self: Pin<&mut TreeController>, path: &QString, edits: &QString) -> bool;
+        #[qsignal]
+        #[cxx_name = "drawingEdited"]
+        fn drawing_edited(self: Pin<&mut TreeController>, edit: QString);
+        /// Bar columns to draw after any clade annotation bars, as JSON.
+        #[qinvokable]
+        fn set_columns(self: Pin<&mut TreeController>, json: &QString);
+        /// The owned bar under the pointer as JSON (`column`, `id`, `label`),
+        /// or an empty string.
+        #[qinvokable]
+        fn bar_at(self: &TreeController, x: f64, y: f64) -> QString;
 
         #[qinvokable]
         fn document_record(self: &TreeController) -> QString;
@@ -215,7 +234,9 @@ use std::time::{Instant, SystemTime};
 
 use basecraft_docs::TreeDoc;
 use basecraft_ops::{DocId, Session};
+use basecraft_protocol::delimitation::TreeDrawingEdit;
 use basecraft_protocol::{CladeAnnotation, Op, SupportPlacement, TreeStyle};
+use basecraft_viewmodel::tree::TipColumn;
 use basecraft_viewmodel::tree::to_svg_with_style;
 use basecraft_viewmodel::{Frame, Theme, TreeView};
 use cxx_qt::{CxxQtType, Threading};
@@ -269,6 +290,7 @@ pub struct TreeRust {
     support_font: i32,
     branch_width: i32,
     has_support: bool,
+    display_only: bool,
 
     session: Option<Session>,
     doc: Option<DocId>,
@@ -313,6 +335,7 @@ impl Default for TreeRust {
             support_font: 0,
             branch_width: 0,
             has_support: false,
+            display_only: false,
             session: None,
             doc: None,
             view: TreeView::new(800.0, 600.0),
@@ -501,7 +524,8 @@ impl qobject::TreeController {
         let geometry = {
             let r = self.rust();
             let d = r.session.as_ref().unwrap().tree(r.doc.unwrap());
-            serde_json::json!({"rows": r.view.tip_rows(d).iter().map(|(name,y,height)| serde_json::json!({"name":name,"y":y,"height":height})).collect::<Vec<_>>(),"root":r.view.node_position(d.root()),"tips_x":d.tips_in_order().iter().filter_map(|&i| r.view.node_position(i).map(|(x,_)|x)).fold(f32::NEG_INFINITY,f32::max)})
+            serde_json::json!({"rows": r.view.tip_rows(d).iter().map(|(name,y,height)| serde_json::json!({"name":name,"y":y,"height":height})).collect::<Vec<_>>(),"root":r.view.node_position(d.root()),"tips_x":d.tips_in_order().iter().filter_map(|&i| r.view.node_position(i).map(|(x,_)|x)).fold(f32::NEG_INFINITY,f32::max),
+                "columns": r.view.column_positions().iter().map(|(id, x, width)| serde_json::json!({"id": id, "x": x, "width": width})).collect::<Vec<_>>()})
         };
         self.as_mut()
             .set_canvas_geometry(QString::from(&geometry.to_string()));
@@ -544,6 +568,21 @@ impl qobject::TreeController {
     /// Apply an edit through the session; on failure, say why and return
     /// the message.
     fn edit(mut self: Pin<&mut Self>, op: Op) -> Result<(), String> {
+        if self.rust().display_only {
+            let Some(edit) = TreeDrawingEdit::from_op(&op) else {
+                let msg =
+                    "This tree is drawn for another document. Open its file to edit it".to_string();
+                self.as_mut().fail(&msg);
+                return Err(msg);
+            };
+            // Sent after this call returns: the owner replays it with
+            // `show_tree`, which must not run inside this edit.
+            let text = serde_json::to_string(&edit).map_err(|e| e.to_string())?;
+            let _ = self
+                .qt_thread()
+                .queue(move |this| this.drawing_edited(QString::from(&text)));
+            return Ok(());
+        }
         let clears_selection =
             matches!(op, Op::TreeMidpointRoot {} | Op::TreeMinimumVarianceRoot {});
         let result = {
@@ -930,6 +969,78 @@ impl qobject::TreeController {
         QString::from(&info.to_string())
     }
 
+    pub fn show_tree(mut self: Pin<&mut Self>, path: &QString, edits: &QString) -> bool {
+        let edits: Vec<TreeDrawingEdit> = match serde_json::from_str(&edits.to_string()) {
+            Ok(edits) => edits,
+            Err(e) => {
+                self.fail(&format!("Bad drawing edits: {e}"));
+                return false;
+            }
+        };
+        let path = PathBuf::from(path.to_string());
+        // Replaying on a display tree leaves no records.
+        let mut session = Session::unlogged(project_root(&path));
+        let doc = match session.open(&path) {
+            Ok(doc) if session.is_tree(doc) => doc,
+            Ok(_) => {
+                self.fail(&format!("{} is not a tree", path.display()));
+                return false;
+            }
+            Err(e) => {
+                self.fail(&format!("Can't open {}: {e}", path.display()));
+                return false;
+            }
+        };
+        for edit in &edits {
+            let _ = session.apply(doc, edit.to_op());
+        }
+        let abs = std::fs::canonicalize(&path).unwrap_or(path);
+        let abs = QString::from(&abs.to_string_lossy().into_owned());
+        // Redrawing the same tree keeps the zoom, scroll and selection:
+        // drawing edits do not renumber nodes.
+        let same = self.rust().file_path == abs;
+        {
+            let mut r = self.as_mut().rust_mut();
+            let r = &mut *r;
+            if !same {
+                r.view.selected = None;
+                r.view.multi_taxa = None;
+                r.view.fit();
+            }
+            r.view.forget_layout();
+            r.view.sync(session.tree(doc));
+            r.session = Some(session);
+            r.doc = Some(doc);
+        }
+        self.as_mut().set_file_path(abs);
+        self.as_mut().set_dirty(false);
+        self.as_mut().notify("");
+        self.refresh();
+        true
+    }
+
+    pub fn set_columns(mut self: Pin<&mut Self>, json: &QString) {
+        match serde_json::from_str::<Vec<TipColumn>>(&json.to_string()) {
+            Ok(columns) => {
+                self.as_mut().rust_mut().view.set_columns(columns);
+                self.refresh();
+            }
+            Err(e) => self.fail(&format!("Bad bar columns: {e}")),
+        }
+    }
+
+    pub fn bar_at(&self, x: f64, y: f64) -> QString {
+        let bar = self
+            .rust()
+            .view
+            .bar_at(f(x), f(y))
+            .filter(|b| !b.column.is_empty());
+        QString::from(
+            &bar.map(|b| json!({"column": b.column, "id": b.id, "label": b.label}).to_string())
+                .unwrap_or_default(),
+        )
+    }
+
     pub fn hover(&self, x: f64, y: f64) -> QString {
         let text = self
             .with_doc(|d| self.rust().view.hover_text(d, f(x), f(y)))
@@ -941,6 +1052,10 @@ impl qobject::TreeController {
     pub fn key(mut self: Pin<&mut Self>, key: i32, modifiers: i32) -> bool {
         let ctrl = modifiers & CTRL != 0;
         let shift = modifiers & SHIFT != 0;
+        // Undo belongs to the document a display tree is drawn for.
+        if self.rust().display_only && ctrl && matches!(key, KEY_Z | KEY_Y) {
+            return false;
+        }
         let handled = match key {
             KEY_Z if ctrl && shift => {
                 self.as_mut().history(true);
@@ -1051,6 +1166,10 @@ impl qobject::TreeController {
     }
 
     fn history(mut self: Pin<&mut Self>, redo: bool) {
+        // A display tree's history belongs to the document it is drawn for.
+        if self.rust().display_only {
+            return;
+        }
         let result = {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;

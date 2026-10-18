@@ -11,6 +11,8 @@ AppCanvas {
     readonly property var treeController: controller
     property bool annotationEnabled: true
     signal contextMenu(var info)
+    // A click on a bar of an owned column, such as a species hypothesis.
+    signal barPressed(var bar, int button, int modifiers)
     signal toggleSidebar
     signal renameTip
     signal annotate
@@ -20,6 +22,11 @@ AppCanvas {
         focus: true
         onWidthChanged: treeController.resize(width, height)
         onHeightChanged: treeController.resize(width, height)
+        // Lines snap to whole screen pixels, so every branch of a width
+        // draws equally thick at any zoom.
+        readonly property real pixelRatio: Window.window ? Window.window.devicePixelRatio : 1
+        onPixelRatioChanged: treeController.set_pixel_ratio(pixelRatio)
+        Component.onCompleted: treeController.set_pixel_ratio(pixelRatio)
 
         MouseArea {
             id: mouse
@@ -32,6 +39,11 @@ AppCanvas {
             onPressed: (mouse) => {
                 view.forceActiveFocus()
                 hoverText = ""
+                const bar = treeController.bar_at(mouse.x, mouse.y)
+                if (bar.length) {
+                    view.barPressed(JSON.parse(bar), mouse.button, mouse.modifiers)
+                    return
+                }
                 if (mouse.button === Qt.RightButton)
                     view.contextMenu(JSON.parse(treeController.context_press(mouse.x, mouse.y)))
                 else

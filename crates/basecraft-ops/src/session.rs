@@ -2214,6 +2214,18 @@ impl Drop for Session {
     }
 }
 
+/// Draw a tree as another view keeps it: replay its drawing edits in order.
+/// An edit that no longer applies, such as rotating a clade the tree lacks,
+/// is skipped.
+pub fn apply_drawing_edits(
+    doc: &mut TreeDoc,
+    edits: &[basecraft_protocol::delimitation::TreeDrawingEdit],
+) {
+    for edit in edits {
+        let _ = execute_tree(doc, &edit.to_op());
+    }
+}
+
 /// Carry out a tree edit; returns the tree as it was.
 fn execute_tree(doc: &mut TreeDoc, op: &Op) -> Result<Box<TreeDoc>> {
     let before = Box::new(doc.clone());

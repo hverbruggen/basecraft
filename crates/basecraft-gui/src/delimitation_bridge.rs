@@ -29,8 +29,11 @@ pub mod qobject {
         #[qproperty(f64, root_height)]
         #[qproperty(f64, threshold)]
         #[qproperty(i32, theme_revision)]
-        /// The tree file the canvas draws: the display tree, or a flipped copy.
-        #[qproperty(QString, shown_tree)]
+        /// How the display tree is drawn: its drawing edits, as JSON.
+        #[qproperty(QString, tree_edits)]
+        /// Counts attached display trees, so even one at the same path is
+        /// drawn afresh.
+        #[qproperty(i32, display_revision)]
         type DelimitationController = super::DelimitationRust;
         #[qinvokable]
         fn accessible_page(self: &DelimitationController, page: i32) -> QString;
@@ -83,12 +86,8 @@ pub mod qobject {
         #[cxx_name = "displayTaxaSelected"]
         fn display_taxa_selected(self: Pin<&mut DelimitationController>, names: QString);
         #[qinvokable]
-        fn bars_json(
-            self: &DelimitationController,
-            geometry: &QString,
-            left: f64,
-            height: f64,
-        ) -> QString;
+        /// The visible hypotheses as bar columns for the tree canvas, as JSON.
+        fn tip_columns_json(self: &DelimitationController) -> QString;
         #[qinvokable]
         fn columns_json(self: &DelimitationController, left: f64) -> QString;
         #[qinvokable]
@@ -152,7 +151,9 @@ use basecraft_docs::TreeDoc;
 use basecraft_ops::{DocId, Session};
 use basecraft_protocol::{
     Op,
-    delimitation::{DelimitationEdit, Group, Hypothesis, HypothesisOrigin, Provenance},
+    delimitation::{
+        DelimitationEdit, Group, Hypothesis, HypothesisOrigin, Provenance, TreeDrawingEdit,
+    },
 };
 use basecraft_viewmodel::delimitation::{self, Selection};
 use cxx_qt::{CxxQtType, Threading};
@@ -185,7 +186,8 @@ pub struct DelimitationRust {
     root_height: f64,
     threshold: f64,
     theme_revision: i32,
-    shown_tree: QString,
+    tree_edits: QString,
+    display_revision: i32,
     palette: Vec<String>,
     // Modification time of the theme file last applied; empty before the first read.
     theme_stamp: String,
@@ -193,8 +195,6 @@ pub struct DelimitationRust {
     doc: Option<DocId>,
     selection: Selection,
     display_tree: Option<TreeDoc>,
-    /// What `shown_tree` was last drawn for, so a refresh redraws only on change.
-    shown_key: String,
     time_tree: Option<(TreeDoc, basecraft_delimitation::time_tree::TimeTree, String)>,
     preview: Vec<BTreeSet<String>>,
     job_paths: Option<(PathBuf, PathBuf, String)>,
@@ -222,14 +222,14 @@ impl Default for DelimitationRust {
             root_height: 0.0,
             threshold: 0.0,
             theme_revision: 0,
-            shown_tree: QString::default(),
+            tree_edits: QString::from("[]"),
+            display_revision: 0,
             palette: delimitation::palette(&basecraft_viewmodel::Theme::default()),
             theme_stamp: String::new(),
             session: None,
             doc: None,
             selection: Selection::default(),
             display_tree: None,
-            shown_key: String::new(),
             time_tree: None,
             preview: vec![],
             job_paths: None,
@@ -321,44 +321,23 @@ impl qobject::DelimitationController {
         };
         self.as_mut().set_workspace_json(QString::from(&data));
         self.as_mut().set_status(QString::from(&status));
-        self.update_shown_tree();
+        self.update_tree_edits();
     }
-    /// Draw the display tree, or a copy of it in the cache with this view's
-    /// branch order, flips and sizes, so the display tree file and its
-    /// recorded hash never change.
-    fn update_shown_tree(mut self: Pin<&mut Self>) {
-        let (view, display) = {
+    fn update_tree_edits(mut self: Pin<&mut Self>) {
+        let edits = {
             let r = self.rust();
-            let Some(view) = r
+            let Some(edits) = r
                 .session
                 .as_ref()
                 .zip(r.doc)
-                .map(|(s, d)| s.delimitation(d).view.clone())
+                .map(|(s, d)| serde_json::to_string(&s.delimitation(d).view.tree_edits))
             else {
                 return;
             };
-            (view, r.display_path.to_string())
+            edits.unwrap_or_else(|_| "[]".into())
         };
-        let plain = display.is_empty()
-            || (view.flipped.is_empty()
-                && view.small_on_top.is_none()
-                && view.tree_sizes.is_empty());
-        let key = if plain {
-            display.clone()
-        } else {
-            json!([display, view.flipped, view.small_on_top, view.tree_sizes]).to_string()
-        };
-        if self.rust().shown_key == key {
-            return;
-        }
-        let shown = if plain {
-            display
-        } else {
-            drawn_copy(&display, &view).unwrap_or(display)
-        };
-        self.as_mut().rust_mut().shown_key = key;
-        if self.rust().shown_tree.to_string() != shown {
-            self.set_shown_tree(QString::from(&shown));
+        if self.rust().tree_edits.to_string() != edits {
+            self.set_tree_edits(QString::from(&edits));
         }
     }
     fn edit(mut self: Pin<&mut Self>, edit: DelimitationEdit) -> Result<(), String> {
@@ -664,8 +643,9 @@ impl qobject::DelimitationController {
                     }
                 }
                 // A newly attached tree is drawn afresh even at the same path.
-                self.as_mut().rust_mut().shown_key.clear();
-                self.as_mut().update_shown_tree();
+                let revision = self.rust().display_revision + 1;
+                self.as_mut().set_display_revision(revision);
+                self.as_mut().update_tree_edits();
                 if rooted {
                     if let Some(warning) = warning {
                         self.fail(&warning);
@@ -811,42 +791,46 @@ impl qobject::DelimitationController {
                     view.visible.swap(index, next);
                     DelimitationEdit::SetView { view }
                 }
-                "flip" => {
-                    let tips: Vec<String> =
-                        serde_json::from_value(args.get("tips").cloned().unwrap_or(json!([])))
-                            .map_err(|e| e.to_string())?;
-                    let tree = r
-                        .display_tree
-                        .as_ref()
-                        .ok_or("Attach a display tree first")?;
-                    let key =
-                        delimitation::flip_key(tree, &tips).ok_or("Select a clade to flip")?;
+                // A drawing edit from the tree canvas, kept with this view. A
+                // style replaces the last; an order replaces earlier orders and
+                // flips; flipping a clade again undoes its flip.
+                "tree_edit" => {
+                    let edit: TreeDrawingEdit =
+                        serde_json::from_value(args.clone()).map_err(|e| e.to_string())?;
                     let mut view = w.view.clone();
-                    if !view.flipped.remove(&key) {
-                        view.flipped.insert(key);
-                    }
-                    DelimitationEdit::SetView { view }
-                }
-                // Order every clade's branches by size; earlier flips are dropped.
-                "order" => {
-                    let mut view = w.view.clone();
-                    view.small_on_top = Some(args["small_on_top"].as_bool().unwrap_or(true));
-                    view.flipped.clear();
-                    DelimitationEdit::SetView { view }
-                }
-                // Display tree sizes in pixels; null returns one to the tree's own.
-                "tree_sizes" => {
-                    let mut view = w.view.clone();
-                    let sizes = &mut view.tree_sizes;
-                    for (key, field) in [
-                        ("tip_font", &mut sizes.tip_font),
-                        ("support_font", &mut sizes.support_font),
-                        ("branch_width", &mut sizes.branch_width),
-                    ] {
-                        if let Some(value) = args.get(key) {
-                            *field = value
-                                .as_u64()
-                                .map(|v| u32::try_from(v).unwrap_or(u32::MAX).clamp(1, 60));
+                    let edits = &mut view.tree_edits;
+                    match &edit {
+                        TreeDrawingEdit::Style { .. } => {
+                            edits.retain(|e| !matches!(e, TreeDrawingEdit::Style { .. }));
+                            edits.push(edit);
+                        }
+                        TreeDrawingEdit::Ladderize { .. } => {
+                            edits.retain(|e| matches!(e, TreeDrawingEdit::Style { .. }));
+                            edits.push(edit);
+                        }
+                        TreeDrawingEdit::Rotate { clade } => {
+                            let tree = r
+                                .display_tree
+                                .as_ref()
+                                .ok_or("Attach a display tree first")?;
+                            let node = tree.resolve(clade).ok();
+                            // Flips commute, so look back over the flips only.
+                            let earlier = edits
+                                .iter()
+                                .rposition(|e| match e {
+                                    TreeDrawingEdit::Rotate { clade } => {
+                                        node.is_some() && tree.resolve(clade).ok() == node
+                                    }
+                                    TreeDrawingEdit::Style { .. } => false,
+                                    TreeDrawingEdit::Ladderize { .. } => true,
+                                })
+                                .filter(|&k| matches!(edits[k], TreeDrawingEdit::Rotate { .. }));
+                            match earlier {
+                                Some(k) => {
+                                    edits.remove(k);
+                                }
+                                None => edits.push(edit),
+                            }
                         }
                     }
                     DelimitationEdit::SetView { view }
@@ -1066,53 +1050,15 @@ impl qobject::DelimitationController {
             }
         }
     }
-    #[allow(clippy::many_single_char_names)]
-    pub fn bars_json(&self, geometry: &QString, left: f64, height: f64) -> QString {
+    pub fn tip_columns_json(&self) -> QString {
         let r = self.rust();
-        let Some((s, d)) = r.session.as_ref().zip(r.doc) else {
+        let (Some((s, d)), Some(tree)) = (r.session.as_ref().zip(r.doc), r.display_tree.as_ref())
+        else {
             return QString::from("[]");
         };
-        let mut work = s.delimitation(d).clone();
-        let mapping = delimitation::tree_mapping(
-            &work,
-            &rows(&geometry.to_string())
-                .into_iter()
-                .map(|(name, _, _)| name)
-                .collect(),
-        );
-        if !r.preview.is_empty() {
-            let mut h = Hypothesis {
-                id: "cut-preview".into(),
-                name: "Cut preview".into(),
-                origin: HypothesisOrigin::ManualCut,
-                parent: None,
-                groups: vec![],
-                unassigned: BTreeSet::new(),
-                scores: vec![],
-                provenance: Provenance::default(),
-                attributes: BTreeMap::new(),
-            };
-            for (i, members) in r.preview.iter().enumerate() {
-                let g = group(
-                    members
-                        .iter()
-                        .flat_map(|id| mapping.get(id).into_iter().flatten().cloned())
-                        .collect(),
-                    format!("Preview {}", i + 1),
-                );
-                h.groups.push(g);
-            }
-            work.hypotheses.push(h);
-            work.view.visible.push("cut-preview".into());
-        }
-        let (bars, _) = delimitation::bars(
-            &work,
-            &rows(&geometry.to_string()),
-            number(left),
-            &r.palette,
-            Some((0.0, number(height))),
-        );
-        QString::from(&serde_json::to_string(&bars.iter().map(|b|json!({"hypothesis":b.hypothesis,"group":b.group,"x":b.x,"y":b.y,"width":b.width,"height":b.height,"color":b.color,"label":b.label})).collect::<Vec<_>>()).unwrap())
+        let work = with_preview(s.delimitation(d), tree, &r.preview);
+        let columns = delimitation::tip_columns(&work, &tip_names(tree), &r.palette);
+        QString::from(&serde_json::to_string(&columns).unwrap_or_else(|_| "[]".into()))
     }
     /// Visible columns with their letter codes, plus a legend of the codes used.
     pub fn columns_json(&self, left: f64) -> QString {
@@ -1364,36 +1310,20 @@ impl qobject::DelimitationController {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
             let (s, d) = r.session.as_mut().zip(r.doc).ok_or("No workspace open")?;
-            // The tree as drawn on screen: ordered, flipped and sized.
-            let shown = r.shown_tree.to_string();
-            let tree = if shown.is_empty() {
-                let mut tree = r
-                    .display_tree
-                    .clone()
-                    .ok_or("Attach a display tree first")?;
-                delimitation::apply_flips(&mut tree, &s.delimitation(d).view.flipped);
-                tree
-            } else {
-                basecraft_ops::files::load_tree(Path::new(&shown))?.doc
-            };
-            let tree = &tree;
-            let tree_svg = basecraft_viewmodel::tree::to_svg_with_style(
-                tree,
-                900.0,
-                20.0,
-                theme,
-                &crate::bridge::monospace_font(),
+            // The tree as drawn on screen, with its bar columns.
+            let mut tree = r
+                .display_tree
+                .clone()
+                .ok_or("Attach a display tree first")?;
+            let work = s.delimitation(d);
+            basecraft_ops::session::apply_drawing_edits(&mut tree, &work.view.tree_edits);
+            let font = crate::bridge::monospace_font();
+            let columns =
+                delimitation::tip_columns(work, &tip_names(&tree), &delimitation::palette(theme));
+            let figure = basecraft_viewmodel::tree::figure_with_columns(
+                &tree, &columns, 900.0, 20.0, theme, &font,
             );
-            let (rows, width, height) = basecraft_viewmodel::tree::figure_rows(tree, 900.0, 20.0);
-            let svg = delimitation::comparison_svg(
-                &tree_svg,
-                s.delimitation(d),
-                &rows,
-                width,
-                height,
-                &crate::bridge::monospace_font(),
-                &delimitation::palette(theme),
-            );
+            let svg = delimitation::comparison_svg(work, &figure, &font);
             s.export(d, Path::new(&path.to_string()), "svg", |w| {
                 w.write_all(svg.as_bytes())
             })?;
@@ -2044,51 +1974,47 @@ pub(crate) fn create_workspace(
         .ok_or_else(|| "No workspace artifact returned".into())
 }
 
-/// The display tree as this view draws it, written with its style to the
-/// cache: ordered, flipped and sized. Returns the copy's path.
-fn drawn_copy(
-    display: &str,
-    view: &basecraft_protocol::delimitation::DelimitationView,
-) -> Option<String> {
-    let mut tree = basecraft_ops::files::load_tree(Path::new(display))
-        .ok()?
-        .doc;
-    if let Some(small) = view.small_on_top {
-        tree.ladderize(small);
+fn tip_names(tree: &TreeDoc) -> BTreeSet<String> {
+    tree.tips_in_order()
+        .iter()
+        .map(|&i| tree.node(i).name.clone())
+        .collect()
+}
+
+/// The workspace with a manual cut's preview as an extra, last column.
+fn with_preview(
+    work: &basecraft_protocol::delimitation::DelimitationWorkspace,
+    tree: &TreeDoc,
+    preview: &[BTreeSet<String>],
+) -> basecraft_protocol::delimitation::DelimitationWorkspace {
+    let mut work = work.clone();
+    if preview.is_empty() {
+        return work;
     }
-    delimitation::apply_flips(&mut tree, &view.flipped);
-    let mut style = tree.style().clone();
-    let sizes = &view.tree_sizes;
-    for (value, field) in [
-        (sizes.tip_font, &mut style.tip_font),
-        (sizes.support_font, &mut style.support_font),
-        (sizes.branch_width, &mut style.branch_width),
-    ] {
-        if let Some(value) = value {
-            *field = value;
-        }
+    let mapping = delimitation::tree_mapping(&work, &tip_names(tree));
+    let mut h = Hypothesis {
+        id: "cut-preview".into(),
+        name: "Cut preview".into(),
+        origin: HypothesisOrigin::ManualCut,
+        parent: None,
+        groups: vec![],
+        unassigned: BTreeSet::new(),
+        scores: vec![],
+        provenance: Provenance::default(),
+        attributes: BTreeMap::new(),
+    };
+    for (i, members) in preview.iter().enumerate() {
+        h.groups.push(group(
+            members
+                .iter()
+                .flat_map(|id| mapping.get(id).into_iter().flatten().cloned())
+                .collect(),
+            format!("Preview {}", i + 1),
+        ));
     }
-    tree.set_style(style);
-    let text = tree.to_newick();
-    let mut sidecar = Vec::new();
-    basecraft_ops::files::write_tree_sidecar(&tree, &mut sidecar).ok()?;
-    let mut both = text.clone().into_bytes();
-    both.extend_from_slice(&sidecar);
-    let digest = basecraft_io::hash_bytes(&both);
-    let directory = basecraft_platform::paths::AppPaths::discover().map_or_else(
-        |_| std::env::temp_dir().join("basecraft-display-trees"),
-        |paths| paths.cache.join("display-trees"),
-    );
-    let path = directory.join(format!(
-        "{}.nwk",
-        digest.trim_start_matches("b3:").get(..24).unwrap_or("tree")
-    ));
-    if !path.exists() {
-        std::fs::create_dir_all(&directory).ok()?;
-        std::fs::write(basecraft_ops::files::tree_sidecar(&path), &sidecar).ok()?;
-        std::fs::write(&path, text).ok()?;
-    }
-    Some(path.to_string_lossy().into_owned())
+    work.hypotheses.push(h);
+    work.view.visible.push("cut-preview".into());
+    work
 }
 
 #[cfg(test)]

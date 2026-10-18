@@ -369,6 +369,7 @@ dependencies = [
  "basecraft-docs",
  "basecraft-io",
  "basecraft-protocol",
+ "serde",
  "serde_json",
 ]
 

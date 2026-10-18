@@ -28,7 +28,7 @@ FocusScope {
     readonly property var activeHypothesis: hypotheses.find(h => h.id === ctl.active_hypothesis) || null
     property string tool: "select"
     property bool detailsOpen: false
-    // Tip names of the clade last selected on the tree, for Flip subtree.
+    // Tip names of the clade last selected on the tree.
     property var treeTaxa: []
     // Edits change only manual hypotheses and edited copies.
     readonly property bool activeEditable: activeHypothesis !== null && !["imported", "inferred"].includes(activeHypothesis.origin)
@@ -71,7 +71,7 @@ FocusScope {
         const existing = selectedSpecies()
         textDialog.ask("Name species", "Species name", existing ? existing.label : nextSpeciesLabel(), value => doc.nameSpecies(value))
     }
-    function flipSubtree() { if (treeTaxa.length) act("flip", {tips: treeTaxa}) }
+    function flipSubtree() { tree.rotate() }
     function setTool(name) {
         if (name !== "cut") ctl.cancel_cut()
         // Start the cut halfway down the tree so the line and its species show at once.
@@ -80,10 +80,13 @@ FocusScope {
     }
     function chooseColumns() { columnsDialog.show() }
     function layoutBars() { layoutDialog.show(columnInfo.columns) }
-    // The display tree's branch order and sizes are kept with this view; the
-    // tree file is not changed.
-    function orderBranches(smallOnTop) { act("order", {small_on_top: smallOnTop}) }
-    function treeSizes() { sizesDialog.show() }
+    // The display tree is drawn with this view's drawing edits; its file is
+    // not changed.
+    function showTree(fresh) {
+        if (!ctl.display_path.length) return
+        tree.show_tree(ctl.display_path, ctl.tree_edits)
+        if (fresh) tree.fit()
+    }
 
     function startAnalysis(method, input, rooted, settings, displayMethod) {
         if (ctl.busy) return
@@ -131,21 +134,25 @@ FocusScope {
     Timer { interval: 250; running: ctl.busy; repeat: true; onTriggered: ctl.poll_job() }
     signal openFile(string path)
     DelimitationController { id: ctl }
-    TreeController { id: tree }
-    // Lines snap to whole screen pixels, as in the tree viewer.
-    readonly property real pixelRatio: treeCanvas.Window.window ? treeCanvas.Window.window.devicePixelRatio : 1
-    onPixelRatioChanged: tree.set_pixel_ratio(pixelRatio)
+    // Ordering, flips and style are the tree editor's own edits, kept with
+    // this workspace.
+    TreeController { id: tree; display_only: true }
+    // The hypotheses as bar columns beside the tips.
+    readonly property string barColumns: { ctl.workspace_json; ctl.preview_json; ctl.theme_revision; ctl.display_revision; return ctl.tip_columns_json() }
+    onBarColumnsChanged: tree.set_columns(barColumns)
+    readonly property var treeGeometry: JSON.parse(tree.canvas_geometry)
     Component.onCompleted: {
-        tree.set_pixel_ratio(pixelRatio)
         tree.check_theme()
         ctl.check_theme()
         ctl.open_file(path)
     }
     Connections { target: ctl
-        function onShown_treeChanged() { if (ctl.shown_tree.length) tree.open_file(ctl.shown_tree) }
+        function onDisplay_revisionChanged() { doc.showTree(true) }
+        function onTree_editsChanged() { doc.showTree(false) }
         function onDisplayTaxaSelected(names) { tree.highlight_taxa(names) }
     }
     Connections { target: tree
+        function onDrawingEdited(edit) { ctl.action("tree_edit", edit) }
         function onTaxaSelected(names) {
             doc.treeTaxa = JSON.parse(names)
             ctl.tree_taxa(names)
@@ -223,8 +230,10 @@ FocusScope {
                             required property int index
                             objectName: "columnHeader-" + modelData.id
                             readonly property bool active: modelData.id === ctl.active_hypothesis
-                            x: barArea.x + modelData.x + modelData.width / 2 - width / 2
-                            width: Math.max(14, modelData.width)
+                            // Where the tree canvas drew this column.
+                            readonly property var place: (doc.treeGeometry.columns || []).find(c => c.id === modelData.id) || ({x: -1000, width: 0})
+                            x: treeCanvas.x + place.x + place.width / 2 - width / 2
+                            width: Math.max(14, place.width)
                             height: header.height
                             Label {
                                 anchors.centerIn: parent
@@ -257,10 +266,15 @@ FocusScope {
                 }
                 TreeCanvas {
                     id: treeCanvas
-                    anchors { left: parent.left; top: header.bottom; bottom: legend.top; right: barArea.left }
+                    anchors { left: parent.left; top: header.bottom; bottom: legend.top; right: parent.right }
                     controller: tree
                     annotationEnabled: false
                     visible: center.treeShown
+                    onBarPressed: (bar, button, modifiers) => {
+                        const segment = {hypothesis: bar.column, group: bar.id, label: bar.label}
+                        if (button === Qt.RightButton) speciesMenu.openFor(segment)
+                        else ctl.select_group(segment.hypothesis, segment.group, !!(modifiers & Qt.ControlModifier))
+                    }
                     onContextMenu: info => {
                         // The tree reports a clade only when it changes, so a
                         // species picked from the bars since would stay selected.
@@ -282,76 +296,6 @@ FocusScope {
                         onPressed: event => ctl.preview_position(tree.canvas_geometry,mapToItem(treeCanvas,event.x,event.y).x)
                         onPositionChanged: event => { if (pressed) ctl.preview_position(tree.canvas_geometry,mapToItem(treeCanvas,event.x,event.y).x) }
                     }
-                }
-                Item {
-                    id: barArea
-                    visible: center.treeShown
-                    anchors { right: nameArea.left; top: header.bottom; bottom: legend.top }
-                    readonly property var lastColumn: doc.columnInfo.columns.length ? doc.columnInfo.columns[doc.columnInfo.columns.length - 1] : null
-                    width: (lastColumn ? lastColumn.x + lastColumn.width : 0) + 12
-                    clip: true
-                    readonly property var segments: {
-                        ctl.workspace_json; ctl.preview_json; ctl.theme_revision
-                        return JSON.parse(ctl.bars_json(tree.canvas_geometry,0,height))
-                    }
-                    Repeater { model: barArea.segments
-                        delegate: Rectangle {
-                            required property var modelData
-                            x: modelData.x; y: modelData.y; width: modelData.width; height: modelData.height
-                            color: modelData.color
-                            // Rounded ends; one bar spans each run of a species.
-                            radius: Math.min(width, height) / 2
-                            ToolTip.visible: segmentMouse.containsMouse; ToolTip.text: modelData.label
-                            MouseArea {
-                                id: segmentMouse
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                acceptedButtons: Qt.LeftButton | Qt.RightButton
-                                onClicked: event => {
-                                    if (event.button === Qt.RightButton) speciesMenu.openFor(parent.modelData)
-                                    else ctl.select_group(parent.modelData.hypothesis, parent.modelData.group, !!(event.modifiers & Qt.ControlModifier))
-                                }
-                            }
-                        }
-                    }
-                }
-                // Species names for the columns that show them, after the bars.
-                Row {
-                    id: nameArea
-                    objectName: "speciesNames"
-                    visible: center.treeShown
-                    anchors { right: parent.right; top: header.bottom; bottom: legend.top }
-                    spacing: 8
-                    Repeater {
-                        model: doc.columnInfo.columns.filter(c => c.names)
-                        delegate: Item {
-                            id: nameColumn
-                            required property var modelData
-                            // One name per run of touching segments, as in the SVG export.
-                            readonly property var runs: {
-                                const column = barArea.segments.filter(s => s.hypothesis === nameColumn.modelData.id).sort((a, b) => a.y - b.y)
-                                const out = []
-                                for (const s of column) {
-                                    const last = out[out.length - 1]
-                                    if (last && last.group === s.group && s.y <= last.bottom + 1) last.bottom = s.y + s.height
-                                    else out.push({group: s.group, label: s.label, top: s.y, bottom: s.y + s.height})
-                                }
-                                return out
-                            }
-                            height: nameArea.height
-                            width: Math.max(0, ...nameColumn.modelData.groups.map(g => nameMetrics.advanceWidth(g.label))) + 4
-                            Repeater {
-                                model: nameColumn.runs
-                                delegate: Label {
-                                    required property var modelData
-                                    y: (modelData.top + modelData.bottom) / 2 - height / 2
-                                    text: modelData.label
-                                    color: doc.foreground
-                                }
-                            }
-                        }
-                    }
-                    FontMetrics { id: nameMetrics }
                 }
                 Label {
                     id: legend
@@ -658,42 +602,6 @@ FocusScope {
             Label { id: spacingLabel; text: "Space between species" }
             AppSpinBox { id: spacingValue; objectName: "barSpacing"; from: 0; to: 400; editable: true; enabled: !spacingScales.checked; Accessible.name: spacingLabel.text + " in pixels" }
             AppCheckBox { id: spacingScales; objectName: "spacingScales"; text: "0.65 × bar width"; onToggled: if (checked) spacingValue.value = Math.round(widthValue.value * 0.65) }
-        }
-    }
-    AppContentDialog {
-        id: sizesDialog
-        objectName: "treeSizesDialog"
-        title: "Tree style"
-        standardButtons: Dialog.Ok | Dialog.Cancel
-        initialFocusItem: tipSize
-        property var initial: ({})
-        function show() {
-            initial = {tip_font: tree.tip_font, support_font: tree.support_font, branch_width: tree.branch_width}
-            tipSize.value = initial.tip_font
-            supportSize.value = initial.support_font
-            branchSize.value = initial.branch_width
-            open()
-        }
-        onAccepted: {
-            const next = {tip_font: tipSize.value, support_font: supportSize.value, branch_width: branchSize.value}
-            const args = {}
-            for (const key in next) if (next[key] !== initial[key]) args[key] = next[key]
-            if (Object.keys(args).length) doc.act("tree_sizes", args)
-        }
-        body: ColumnLayout {
-            GridLayout {
-                columns: 2
-                Label { id: tipSizeLabel; text: "Tip names (px)" }
-                AppSpinBox { id: tipSize; objectName: "treeTipFont"; from: 6; to: 40; editable: true; Accessible.name: tipSizeLabel.text }
-                Label { id: supportSizeLabel; text: "Support values (px)" }
-                AppSpinBox { id: supportSize; objectName: "treeSupportFont"; from: 6; to: 30; editable: true; Accessible.name: supportSizeLabel.text }
-                Label { id: branchSizeLabel; text: "Branch width (px)" }
-                AppSpinBox { id: branchSize; objectName: "treeBranchWidth"; from: 1; to: 10; editable: true; Accessible.name: branchSizeLabel.text }
-            }
-            AppButton {
-                text: "Use the tree's own sizes"
-                onClicked: { doc.act("tree_sizes", {tip_font: null, support_font: null, branch_width: null}); sizesDialog.reject() }
-            }
         }
     }
     SpeciesColorDialog {

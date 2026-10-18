@@ -4,6 +4,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::{CladeRef, Op, TreeStyle};
+
 /// IDs refer to source records, never current tree row positions.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Specimen {
@@ -98,34 +100,60 @@ pub struct DelimitationView {
     /// Hypothesis ID to its bar column style.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub columns: BTreeMap<String, ColumnStyle>,
-    /// Display-tree clades drawn flipped. Each is named by two tips whose
-    /// most recent common ancestor is the clade, whatever the drawing order.
-    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
-    pub flipped: BTreeSet<Vec<String>>,
-    /// Order every clade's branches by size before any flips: `true` puts
-    /// the smallest on top.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub small_on_top: Option<bool>,
-    /// How the display tree is drawn here; unset sizes keep its own style.
-    #[serde(default, skip_serializing_if = "TreeSizes::is_empty")]
-    pub tree_sizes: TreeSizes,
+    /// How the display tree is drawn here: the tree editor's own drawing
+    /// edits, replayed in order on the display tree. Its file is not changed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tree_edits: Vec<TreeDrawingEdit>,
 }
 
-/// Sizes in pixels for drawing a display tree.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct TreeSizes {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tip_font: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub support_font: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub branch_width: Option<u32>,
+/// A tree editor edit that changes only how a tree is drawn. Written as the
+/// matching operation (`tree.rotate`, `tree.ladderize`, `tree.style`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "op", content = "params")]
+pub enum TreeDrawingEdit {
+    #[serde(rename = "tree.rotate")]
+    Rotate { clade: CladeRef },
+    #[serde(rename = "tree.ladderize")]
+    Ladderize { small_first: bool },
+    #[serde(rename = "tree.style")]
+    Style { style: TreeStyle },
 }
 
-impl TreeSizes {
+impl TreeDrawingEdit {
+    /// The drawing edit an operation makes, if it is one.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
-        *self == Self::default()
+    pub fn from_op(op: &Op) -> Option<Self> {
+        match op {
+            Op::TreeRotate { clade } => Some(Self::Rotate {
+                clade: clade.clone(),
+            }),
+            Op::TreeLadderize { small_first } => Some(Self::Ladderize {
+                small_first: *small_first,
+            }),
+            Op::TreeStyle {
+                style,
+                remove_supports,
+            } if remove_supports.is_empty() => Some(Self::Style {
+                style: style.clone(),
+            }),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn to_op(&self) -> Op {
+        match self {
+            Self::Rotate { clade } => Op::TreeRotate {
+                clade: clade.clone(),
+            },
+            Self::Ladderize { small_first } => Op::TreeLadderize {
+                small_first: *small_first,
+            },
+            Self::Style { style } => Op::TreeStyle {
+                style: style.clone(),
+                remove_supports: Vec::new(),
+            },
+        }
     }
 }
 
@@ -260,4 +288,29 @@ pub struct DelimitationResult {
     pub job: JobRecord,
     pub workspace: Option<DelimitationWorkspace>,
     pub metrics: BTreeMap<String, serde_json::Value>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn drawing_edits_are_written_as_their_operations() {
+        let op = Op::TreeRotate {
+            clade: vec!["a".into(), "b".into()],
+        };
+        let edit = TreeDrawingEdit::from_op(&op).unwrap();
+        assert_eq!(
+            serde_json::to_value(&edit).unwrap(),
+            serde_json::to_value(&op).unwrap()
+        );
+        assert_eq!(edit.to_op(), op);
+        // Removing support sets changes the tree, not only its drawing.
+        let removal = Op::TreeStyle {
+            style: TreeStyle::default(),
+            remove_supports: vec!["bootstrap".into()],
+        };
+        assert_eq!(TreeDrawingEdit::from_op(&removal), None);
+        assert_eq!(TreeDrawingEdit::from_op(&Op::TreeMidpointRoot {}), None);
+    }
 }

@@ -47,6 +47,14 @@ pub enum Shape {
         h: f32,
         color: Rgba,
     },
+    /// A rectangle with fully rounded ends.
+    Pill {
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        color: Rgba,
+    },
     /// A rectangle whose opacity runs from `from` at its left edge to `to`
     /// at its right.
     Gradient {
@@ -74,6 +82,59 @@ pub enum Shape {
         italic: bool,
         down: bool,
     },
+}
+
+/// A column of bars beside the tips. Clade annotations make one column per
+/// nesting level; other views add their own, such as one per species
+/// hypothesis.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct TipColumn {
+    /// The owner's id, reported by hit tests; empty for clade annotations.
+    pub id: String,
+    /// Pixels before the column.
+    pub gap: f32,
+    /// Pixels between one bar and the next down the column. Unset: a share
+    /// of the row height, as for clade bars.
+    pub spacing: Option<f32>,
+    /// Rounded ends.
+    pub round: bool,
+    /// Write each bar's label beside it.
+    pub labels: bool,
+    /// Labels run top to bottom.
+    pub vertical_labels: bool,
+    /// Tip name to its bands, top to bottom. Bands sharing a row split it by
+    /// `share`.
+    pub tips: std::collections::HashMap<String, Vec<TipBand>>,
+}
+
+/// One tip's part in a bar.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct TipBand {
+    /// Touching rows with the same id draw as one bar.
+    pub id: String,
+    pub share: f32,
+    pub width: f32,
+    /// `#rrggbb`.
+    pub color: String,
+    pub label: String,
+}
+
+/// A bar as drawn: one run of touching rows of one band.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlacedBar {
+    /// The column's owner id and the band id.
+    pub column: String,
+    pub id: String,
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    pub color: String,
+    pub label: String,
+    pub round: bool,
+    /// Where the label goes, if it shows: x, and whether it runs down.
+    pub label_at: Option<(f32, bool)>,
 }
 
 /// Colours for drawing.
@@ -118,8 +179,10 @@ struct Layout {
     show_tips: bool,
     /// Where tip labels end: bars start beyond.
     label_end: f32,
-    /// Bar annotations: id and the x of their bar.
-    bars: Vec<(u32, f32)>,
+    /// Every bar beside the tips, clade annotations' and other columns'.
+    bars: Vec<PlacedBar>,
+    /// Columns with an owner: its id, x and bar width.
+    columns: Vec<(String, f32, f32)>,
     width: f32,
     height: f32,
     tips_bottom: f32,
@@ -142,8 +205,11 @@ pub struct TreeView {
     /// Screen pixels per layout pixel; lines snap to screen pixels.
     pixel_ratio: f32,
     layout: Layout,
-    /// What the layout was computed for: document version, size, zooms.
-    layout_key: Option<(u64, u32, u32, u32, u32)>,
+    /// Bar columns after the clade annotations' own.
+    columns: Vec<TipColumn>,
+    columns_revision: u64,
+    /// What the layout was computed for: document version, columns, size, zooms.
+    layout_key: Option<(u64, u64, u32, u32, u32, u32)>,
 }
 
 impl TreeView {
@@ -160,8 +226,41 @@ impl TreeView {
             selected: None,
             pixel_ratio: 1.0,
             layout: Layout::default(),
+            columns: Vec::new(),
+            columns_revision: 0,
             layout_key: None,
         }
+    }
+
+    /// Show these bar columns after any clade annotation bars.
+    pub fn set_columns(&mut self, columns: Vec<TipColumn>) {
+        if self.columns != columns {
+            self.columns = columns;
+            self.columns_revision += 1;
+        }
+    }
+
+    /// Every bar beside the tips, in content coordinates.
+    pub fn bars(&self) -> &[PlacedBar] {
+        &self.layout.bars
+    }
+
+    /// The bar under a point, if any.
+    pub fn bar_at(&self, x: f32, y: f32) -> Option<&PlacedBar> {
+        let (x, y) = (x + self.scroll_x, y + self.scroll_y);
+        self.layout
+            .bars
+            .iter()
+            .find(|b| x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h)
+    }
+
+    /// Columns with an owner, on screen: id, x and bar width.
+    pub fn column_positions(&self) -> Vec<(String, f32, f32)> {
+        self.layout
+            .columns
+            .iter()
+            .map(|(id, x, w)| (id.clone(), x - self.scroll_x, *w))
+            .collect()
     }
 
     pub fn set_pixel_ratio(&mut self, ratio: f32) {
@@ -205,13 +304,21 @@ impl TreeView {
         }
         let key = (
             doc.version(),
+            self.columns_revision,
             self.width.to_bits(),
             self.height.to_bits(),
             self.row_zoom.to_bits(),
             self.width_zoom.to_bits(),
         );
         if self.layout_key != Some(key) {
-            self.layout = layout(doc, self.width, self.height, self.row_zoom, self.width_zoom);
+            self.layout = layout_with(
+                doc,
+                &self.columns,
+                self.width,
+                self.height,
+                self.row_zoom,
+                self.width_zoom,
+            );
             self.layout_key = Some(key);
             self.clamp_scroll();
         }
@@ -510,6 +617,9 @@ impl TreeView {
     // Text.
 
     pub fn hover_text(&self, doc: &TreeDoc, x: f32, y: f32) -> Option<String> {
+        if let Some(bar) = self.bar_at(x, y) {
+            return Some(bar.label.clone());
+        }
         let n = self.node_at(doc, x, y)?;
         Some(describe_node(doc, n))
     }
@@ -616,7 +726,170 @@ fn text_w(text: &str, size: f32) -> f32 {
     text.chars().count() as f32 * size * GLYPH_ADVANCE
 }
 
+#[cfg(test)]
 fn layout(doc: &TreeDoc, width: f32, height: f32, row_zoom: f32, width_zoom: f32) -> Layout {
+    layout_with(doc, &[], width, height, row_zoom, width_zoom)
+}
+
+/// One column per nesting level of the clade annotations with bars: a bar
+/// that contains others goes outside them.
+fn annotation_columns(doc: &TreeDoc, tips: &[usize]) -> Vec<TipColumn> {
+    let ranges: Vec<(u32, &CladeAnnotation, usize, usize)> = doc
+        .annotations()
+        .iter()
+        .filter(|(_, a)| a.bar)
+        .filter_map(|(&id, a)| {
+            let node = doc.resolve(&a.clade).ok()?;
+            let (f, l) = doc.tip_range(node);
+            let pos = |t| tips.iter().position(|&x| x == t).unwrap_or(0);
+            Some((id, a, pos(f), pos(l)))
+        })
+        .collect();
+    let mut level = vec![0usize; ranges.len()];
+    let mut by_size: Vec<usize> = (0..ranges.len()).collect();
+    by_size.sort_by_key(|&k| ranges[k].3 - ranges[k].2);
+    for &k in &by_size {
+        let (_, _, a0, a1) = ranges[k];
+        level[k] = by_size
+            .iter()
+            .filter(|&&j| j != k)
+            .filter(|&&j| {
+                let (_, _, b0, b1) = ranges[j];
+                b0 >= a0 && b1 <= a1 && (b1 - b0) < (a1 - a0)
+            })
+            .map(|&j| level[j] + 1)
+            .max()
+            .unwrap_or(0);
+    }
+    let levels = level.iter().copied().max().map_or(0, |c| c + 1);
+    let mut columns = vec![
+        TipColumn {
+            gap: BAR_GAP,
+            labels: true,
+            vertical_labels: doc.style().vertical_bar_labels,
+            ..TipColumn::default()
+        };
+        levels
+    ];
+    for (k, &(id, a, first, last)) in ranges.iter().enumerate() {
+        for &t in &tips[first..=last.max(first)] {
+            columns[level[k]]
+                .tips
+                .entry(doc.node(t).name.clone())
+                .or_default()
+                .push(TipBand {
+                    id: id.to_string(),
+                    share: 1.0,
+                    width: a.bar_width as f32,
+                    color: a.colour.clone(),
+                    label: a.label.clone(),
+                });
+        }
+    }
+    columns
+}
+
+/// A column's width: its widest bar and, when labelled, room for the labels.
+fn column_width(column: &TipColumn, font: f32) -> f32 {
+    let bands = || column.tips.values().flatten();
+    let bar = bands().map(|b| b.width).fold(0.0, f32::max);
+    if !column.labels {
+        return bar;
+    }
+    let label = if column.vertical_labels {
+        font + 4.0
+    } else {
+        bands().map(|b| text_w(&b.label, font)).fold(0.0, f32::max) + 6.0
+    };
+    bar + 4.0 + label
+}
+
+/// Lay the columns out from `start`: one bar per run of touching rows of a
+/// band, less the column's spacing. Returns the bars and the owned columns.
+fn place_bars(
+    doc: &TreeDoc,
+    tips: &[usize],
+    columns: &[&TipColumn],
+    y: &[f32],
+    row: f32,
+    start: f32,
+) -> (Vec<PlacedBar>, Vec<(String, f32, f32)>) {
+    let font = doc.style().tip_font as f32;
+    let mut bars = Vec::new();
+    let mut owned = Vec::new();
+    let mut x = start;
+    for column in columns {
+        x += column.gap;
+        let first = bars.len();
+        for &t in tips {
+            let Some(bands) = column.tips.get(&doc.node(t).name) else {
+                continue;
+            };
+            let total: f32 = bands.iter().map(|b| b.share.max(0.0)).sum();
+            let mut top = y[t] - row / 2.0;
+            for band in bands {
+                let h = if total > 0.0 {
+                    row * band.share.max(0.0) / total
+                } else {
+                    0.0
+                };
+                let in_column = bars.len() > first;
+                match bars.last_mut() {
+                    Some(last)
+                        if in_column && last.id == band.id && top <= last.y + last.h + 0.5 =>
+                    {
+                        last.h = top + h - last.y;
+                    }
+                    _ => bars.push(PlacedBar {
+                        column: column.id.clone(),
+                        id: band.id.clone(),
+                        x,
+                        y: top,
+                        w: band.width,
+                        h,
+                        color: band.color.clone(),
+                        label: band.label.clone(),
+                        round: column.round,
+                        label_at: column
+                            .labels
+                            .then_some((x + band.width + 4.0, column.vertical_labels)),
+                    }),
+                }
+                top += h;
+            }
+        }
+        // Space between successive bars; clade bars keep a share of a row.
+        for bar in &mut bars[first..] {
+            let inset = match column.spacing {
+                Some(spacing) => (spacing / 2.0).min((bar.h - 2.0).max(0.0) / 2.0),
+                None => (row * 0.2).min(4.0),
+            };
+            bar.y += inset;
+            bar.h = (bar.h - 2.0 * inset).max(1.0);
+        }
+        let width = column_width(column, font);
+        if !column.id.is_empty() {
+            let bar = column
+                .tips
+                .values()
+                .flatten()
+                .map(|b| b.width)
+                .fold(0.0, f32::max);
+            owned.push((column.id.clone(), x, bar));
+        }
+        x += width;
+    }
+    (bars, owned)
+}
+
+fn layout_with(
+    doc: &TreeDoc,
+    extra: &[TipColumn],
+    width: f32,
+    height: f32,
+    row_zoom: f32,
+    width_zoom: f32,
+) -> Layout {
     let style = doc.style();
     let n = doc.nodes().len();
     let order = doc.preorder();
@@ -663,45 +936,10 @@ fn layout(doc: &TreeDoc, width: f32, height: f32, row_zoom: f32, width_zoom: f32
     } else {
         0.0
     };
-    // Bar columns: a bar that contains others goes outside them.
-    let ranges: Vec<(u32, &CladeAnnotation, usize, usize)> = doc
-        .annotations()
-        .iter()
-        .filter(|(_, a)| a.bar)
-        .filter_map(|(&id, a)| {
-            let node = doc.resolve(&a.clade).ok()?;
-            let (f, l) = doc.tip_range(node);
-            let pos = |t| tips.iter().position(|&x| x == t).unwrap_or(0);
-            Some((id, a, pos(f), pos(l)))
-        })
-        .collect();
-    let mut column = vec![0usize; ranges.len()];
-    let mut by_size: Vec<usize> = (0..ranges.len()).collect();
-    by_size.sort_by_key(|&k| ranges[k].3 - ranges[k].2);
-    for &k in &by_size {
-        let (_, _, a0, a1) = ranges[k];
-        column[k] = by_size
-            .iter()
-            .filter(|&&j| j != k)
-            .filter(|&&j| {
-                let (_, _, b0, b1) = ranges[j];
-                b0 >= a0 && b1 <= a1 && (b1 - b0) < (a1 - a0)
-            })
-            .map(|&j| column[j] + 1)
-            .max()
-            .unwrap_or(0);
-    }
-    let columns = column.iter().copied().max().map_or(0, |c| c + 1);
-    let mut col_w = vec![0.0f32; columns];
-    for (k, &(_, a, _, _)) in ranges.iter().enumerate() {
-        let label = if style.vertical_bar_labels {
-            tip_font + 4.0
-        } else {
-            text_w(&a.label, tip_font) + 6.0
-        };
-        col_w[column[k]] = col_w[column[k]].max(BAR_GAP + a.bar_width as f32 + 4.0 + label);
-    }
-    let bars_w: f32 = col_w.iter().sum();
+    let columns = annotation_columns(doc, &tips);
+    let columns: Vec<&TipColumn> = columns.iter().chain(extra).collect();
+    let column_w: Vec<f32> = columns.iter().map(|c| column_width(c, tip_font)).collect();
+    let bars_w: f32 = columns.iter().zip(&column_w).map(|(c, w)| c.gap + w).sum();
     // Room at the left for support values beside branches near the root.
     let support_chars = (0..n)
         .filter(|&i| i != doc.root())
@@ -736,15 +974,7 @@ fn layout(doc: &TreeDoc, width: f32, height: f32, row_zoom: f32, width_zoom: f32
     }
     let tree_right = left + max_depth as f32 * unit;
     let label_end = tree_right + label_w;
-    let mut starts = vec![label_end];
-    for w in &col_w {
-        starts.push(starts.last().copied().unwrap_or(label_end) + w);
-    }
-    let bars = ranges
-        .iter()
-        .enumerate()
-        .map(|(k, &(id, ..))| (id, starts[column[k]] + BAR_GAP))
-        .collect();
+    let (bars, placed_columns) = place_bars(doc, &tips, &columns, &y, row, label_end);
     let tips_bottom = MARGIN + row * tips.len() as f32;
     Layout {
         x,
@@ -755,6 +985,7 @@ fn layout(doc: &TreeDoc, width: f32, height: f32, row_zoom: f32, width_zoom: f32
         show_tips,
         label_end,
         bars,
+        columns: placed_columns,
         width: label_end + bars_w + MARGIN,
         height: tips_bottom + scale + MARGIN,
         tips_bottom,
@@ -788,7 +1019,7 @@ fn shapes(
     }
 
     // Fields behind everything.
-    for a in doc.annotations().values().filter(|a| a.field) {
+    for (id, a) in doc.annotations().iter().filter(|(_, a)| a.field) {
         let Ok(node) = doc.resolve(&a.clade) else {
             continue;
         };
@@ -798,12 +1029,13 @@ fn shapes(
             continue;
         }
         let x0 = l.x[node] - 6.0;
+        let id = id.to_string();
         let right = l
             .bars
             .iter()
-            .find(|(id, _)| doc.annotations().get(id) == Some(a))
-            .map_or(l.label_end + 4.0, |&(_, bx)| {
-                bx + a.bar_width as f32
+            .find(|b| b.column.is_empty() && b.id == id)
+            .map_or(l.label_end + 4.0, |b| {
+                b.x + b.w
                     + 6.0
                     + if style.vertical_bar_labels {
                         tip_font
@@ -979,53 +1211,39 @@ fn shapes(
         }
     }
 
-    // Clade bars and names.
-    for (id, a) in doc.annotations() {
+    // Bars beside the tips, with their labels.
+    for b in &l.bars {
+        if !visible(b.y, b.y + b.h) {
+            continue;
+        }
+        let color = hex(&b.color).unwrap_or(pal.foreground);
+        let (x, y, w, h) = (b.x, b.y, b.w, b.h);
+        out.push(if b.round {
+            Shape::Pill { x, y, w, h, color }
+        } else {
+            Shape::Rect { x, y, w, h, color }
+        });
+        if let Some((tx, down)) = b.label_at {
+            let mid = y + h / 2.0;
+            out.push(Shape::Text {
+                x: tx,
+                y: if down { mid } else { mid - tip_font / 2.0 },
+                size: tip_font,
+                text: b.label.clone(),
+                color: pal.foreground,
+                align: if down { Align::Center } else { Align::Left },
+                italic: false,
+                down,
+            });
+        }
+    }
+
+    // Names on stem branches.
+    for a in doc.annotations().values() {
         let Ok(node) = doc.resolve(&a.clade) else {
             continue;
         };
-        let (f, t) = doc.tip_range(node);
         let colour = hex(&a.colour).unwrap_or(pal.foreground);
-        if a.bar
-            && let Some(&(_, bx)) = l.bars.iter().find(|(b, _)| b == id)
-        {
-            let inset = (l.row * 0.2).min(4.0);
-            let (y0, y1) = (l.y[f] - half_row + inset, l.y[t] + half_row - inset);
-            if visible(y0, y1) {
-                out.push(Shape::Rect {
-                    x: bx,
-                    y: y0,
-                    w: a.bar_width as f32,
-                    h: (y1 - y0).max(1.0),
-                    color: colour,
-                });
-                let tx = bx + a.bar_width as f32 + 4.0;
-                let mid = f32::midpoint(y0, y1);
-                out.push(if style.vertical_bar_labels {
-                    Shape::Text {
-                        x: tx,
-                        y: mid,
-                        size: tip_font,
-                        text: a.label.clone(),
-                        color: pal.foreground,
-                        align: Align::Center,
-                        italic: false,
-                        down: true,
-                    }
-                } else {
-                    Shape::Text {
-                        x: tx,
-                        y: mid - tip_font / 2.0,
-                        size: tip_font,
-                        text: a.label.clone(),
-                        color: pal.foreground,
-                        align: Align::Left,
-                        italic: false,
-                        down: false,
-                    }
-                });
-            }
-        }
         if a.on_branch && !a.label.is_empty() && visible(l.y[node] - 20.0, l.y[node] + 20.0) {
             let px = doc.node(node).parent.map_or(l.x[node] - 40.0, |p| l.x[p]);
             out.push(Shape::Text {
@@ -1105,6 +1323,20 @@ fn draw(frame: &mut Frame, s: &Shape, dx: f32, dy: f32, ratio: f32) {
             frame.gradient(x + dx, y + dy, *w, *h, *color, (*from, *to));
         }
         Shape::Disc { cx, cy, r, color } => frame.disc(cx + dx, cy + dy, *r, *color),
+        // A rectangle between two discs, along its longer side.
+        Shape::Pill { x, y, w, h, color } => {
+            let r = w.min(*h) / 2.0;
+            let (x, y) = (x + dx, y + dy);
+            if h >= w {
+                frame.rect(x, y + r, *w, h - 2.0 * r, *color);
+                frame.disc(x + r, y + r, r, *color);
+                frame.disc(x + r, y + h - r, r, *color);
+            } else {
+                frame.rect(x + r, y, w - 2.0 * r, *h, *color);
+                frame.disc(x + r, y + r, r, *color);
+                frame.disc(x + w - r, y + r, r, *color);
+            }
+        }
         Shape::Text {
             x,
             y,
@@ -1133,37 +1365,42 @@ fn draw(frame: &mut Frame, s: &Shape, dx: f32, dy: f32, ratio: f32) {
 /// The whole tree as an SVG figure, black on white, `width` pixels wide
 /// and rows `row` pixels apart.
 pub fn to_svg(doc: &TreeDoc, width: f32, row: f32) -> String {
-    svg_with_palette(
+    figure(
         doc,
+        &[],
         width,
         row,
         Palette::print(),
         "Helvetica, Arial, sans-serif",
     )
+    .svg
 }
 
 /// Full-tree figure preserving screen colours and typography.
 pub fn to_svg_with_style(doc: &TreeDoc, width: f32, row: f32, theme: &Theme, font: &str) -> String {
-    svg_with_palette(doc, width, row, Palette::from_theme(theme), font)
+    figure(doc, &[], width, row, Palette::from_theme(theme), font).svg
 }
 
-/// Geometry for overlays on the full SVG, from the identical layout invocation.
-pub fn figure_rows(doc: &TreeDoc, width: f32, row: f32) -> (Vec<(String, f32, f32)>, f32, f32) {
-    let scale = if doc.has_lengths() && doc.style().scale_bar {
-        SCALE_SPACE
-    } else {
-        0.0
-    };
-    let height = doc.tip_count().max(1) as f32 * row + 2.0 * MARGIN + scale;
-    let geometry = layout(doc, width, height, 1.0, 1.0);
-    (
-        doc.tips_in_order()
-            .iter()
-            .map(|&i| (doc.node(i).name.clone(), geometry.y[i], geometry.row))
-            .collect(),
-        geometry.width.max(width),
-        geometry.height,
-    )
+/// A tree figure with bar columns, and where its owned columns and rows are.
+pub struct Figure {
+    pub svg: String,
+    /// Owned columns: id, x and bar width.
+    pub columns: Vec<(String, f32, f32)>,
+    pub width: f32,
+    pub height: f32,
+}
+
+/// Full-tree figure in screen colours with `columns` beside the tips, as the
+/// canvas draws them.
+pub fn figure_with_columns(
+    doc: &TreeDoc,
+    columns: &[TipColumn],
+    width: f32,
+    row: f32,
+    theme: &Theme,
+    font: &str,
+) -> Figure {
+    figure(doc, columns, width, row, Palette::from_theme(theme), font)
 }
 
 /// Independent selected clades arranged vertically without inventing connecting edges.
@@ -1193,7 +1430,14 @@ pub fn forest_svg(trees: &[TreeDoc], width: f32, row: f32, theme: &Theme, font: 
     )
 }
 
-fn svg_with_palette(doc: &TreeDoc, width: f32, row: f32, pal: Palette, font: &str) -> String {
+fn figure(
+    doc: &TreeDoc,
+    columns: &[TipColumn],
+    width: f32,
+    row: f32,
+    pal: Palette,
+    font: &str,
+) -> Figure {
     let tips = doc.tip_count().max(1) as f32;
     let scale = if doc.has_lengths() && doc.style().scale_bar {
         SCALE_SPACE
@@ -1201,7 +1445,7 @@ fn svg_with_palette(doc: &TreeDoc, width: f32, row: f32, pal: Palette, font: &st
         0.0
     };
     let height = tips * row + 2.0 * MARGIN + scale;
-    let l = layout(doc, width, height, 1.0, 1.0);
+    let l = layout_with(doc, columns, width, height, 1.0, 1.0);
     let shapes = shapes(doc, &l, &pal, None, None);
     let (w, h) = (l.width.max(width), l.height);
     let mut svg = format!(
@@ -1214,6 +1458,14 @@ fn svg_with_palette(doc: &TreeDoc, width: f32, row: f32, pal: Palette, font: &st
     let mut gradients = 0;
     for s in &shapes {
         match s {
+            Shape::Pill { x, y, w, h, color } => {
+                let _ = writeln!(
+                    svg,
+                    "<rect x=\"{x:.2}\" y=\"{y:.2}\" width=\"{w:.2}\" height=\"{h:.2}\" rx=\"{:.2}\" {}/>",
+                    w.min(*h) / 2.0,
+                    fill(*color)
+                );
+            }
             Shape::Rect { x, y, w, h, color } => {
                 let _ = writeln!(
                     svg,
@@ -1294,7 +1546,12 @@ fn svg_with_palette(doc: &TreeDoc, width: f32, row: f32, pal: Palette, font: &st
         }
     }
     svg.push_str("</svg>\n");
-    svg
+    Figure {
+        svg,
+        columns: l.columns,
+        width: w,
+        height: h,
+    }
 }
 
 fn css(c: Rgba) -> String {
@@ -1466,7 +1723,7 @@ mod tests {
         t.annotate(2, Some(CladeAnnotation::new(names(&["A", "C"]), "Outer")))
             .unwrap();
         let l = layout(&t, 600.0, 300.0, 1.0, 1.0);
-        let x = |id| l.bars.iter().find(|(b, _)| *b == id).unwrap().1;
+        let x = |id: u32| l.bars.iter().find(|b| b.id == id.to_string()).unwrap().x;
         assert!(x(2) > x(1), "the containing clade's bar sits outside");
         let shapes = shapes(&t, &l, &Palette::print(), None, None);
         assert!(

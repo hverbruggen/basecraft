@@ -76,6 +76,8 @@ ApplicationWindow {
     readonly property var traceDocument: traceOpen ? docs.itemAt(tabs.currentIndex) : null
     readonly property var alignmentDocument: alignmentOpen ? docs.itemAt(tabs.currentIndex) : null
     readonly property var speciesView: delimitationOpen ? docs.itemAt(tabs.currentIndex) : null
+    // The species view's display tree, while it shows one.
+    readonly property var speciesTree: speciesView !== null && current.display_path.length > 0 ? speciesView.treeController : null
     property string currentPath: ""
     // "sequence" or "alignment", for the active tab.
     property string currentKind: ""
@@ -1265,22 +1267,18 @@ ApplicationWindow {
                         title: "Display"
                         ModeButton { commandId: "species.tree-view"; text: "Tree view"; tip: "The tree with a bar column per hypothesis"; iconName: "phylogram"; enabled: window.speciesView !== null && window.current.display_path.length > 0; active: window.speciesView !== null && !window.speciesView.showGroups; onInvoked: window.speciesView.showGroups = false }
                         ModeButton { commandId: "species.text-view"; text: "Text view"; tip: "Each hypothesis's species and their sequences, as text"; iconName: "text-representation"; enabled: window.speciesView !== null; active: window.speciesView !== null && window.speciesView.showGroups; onInvoked: window.speciesView.showGroups = true }
-                        RibbonButton {
-                            id: speciesOrder
-                            commandId: "species.order-branches"
-                            text: "Order"
-                            iconName: "tree-small-on-top"
-                            tip: "Order every clade's branches by size; the tree file is not changed"
-                            enabled: window.speciesView !== null && window.current.display_path.length > 0
-                            onInvoked: speciesOrderMenu.popup(speciesOrder, 0, speciesOrder.height)
-                            Menu {
-                                id: speciesOrderMenu
-                                MenuItem { text: "Small on top"; onTriggered: window.speciesView.orderBranches(true) }
-                                MenuItem { text: "Large on top"; onTriggered: window.speciesView.orderBranches(false) }
-                            }
-                        }
-                        RibbonButton { commandId: "species.tree-style"; text: "Tree style…"; iconName: "tree-style"; tip: "Tip name and support value sizes and branch width"; enabled: window.speciesView !== null && window.current.display_path.length > 0; onInvoked: window.speciesView.treeSizes() }
                         RibbonButton { commandId: "species.layout"; text: "Layout…"; tip: "Bar width, the gap between columns and the space between species, for every column"; iconName: "bar-layout"; enabled: window.speciesView !== null && window.speciesView.columnInfo.columns.length > 0; onInvoked: window.speciesView.layoutBars() }
+                    }
+                    ToolSeparator { Layout.fillHeight: true }
+                    // The same tree style controls as the tree page, for the
+                    // display tree; they change only how it is drawn here.
+                    TreeStyleGroup {
+                        scope: "species"
+                        controller: window.speciesTree
+                        customization: window.customization
+                        onExtraRequested: treeStyle.openStyle("extra")
+                        Component.onCompleted: commands.forEach(command => window.registerRibbonCommand(command))
+                        RibbonButton { commandId: "species.support-style"; text: "Support…"; iconName: "support-style"; tip: "Which support values show and how, and their size"; enabled: window.speciesTree !== null && window.speciesTree.has_support; onInvoked: treeStyle.openStyle("support") }
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
@@ -2017,7 +2015,7 @@ ApplicationWindow {
     }
     TreeStyleDialog {
         id: treeStyle
-        controller: window.treeOpen ? window.current : null
+        controller: window.treeOpen ? window.current : window.speciesTree
     }
 
     FileDialog {

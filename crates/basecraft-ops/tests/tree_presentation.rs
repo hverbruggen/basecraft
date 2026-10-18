@@ -269,3 +269,32 @@ fn invalid_style_and_removal_do_not_mutate_or_start_recovery_tracking() {
     let old: Op = serde_json::from_value(json!({"op":"tree.style","params":{"style":{}}})).unwrap();
     assert!(matches!(old, Op::TreeStyle { remove_supports, .. } if remove_supports.is_empty()));
 }
+
+#[test]
+fn drawing_edits_replay_in_order_and_skip_stale_clades() {
+    use basecraft_protocol::delimitation::TreeDrawingEdit;
+    let mut tree = basecraft_docs::TreeDoc::from_newick("t", "((a,b),(c,(d,e)));").unwrap();
+    let mut style = tree.style().clone();
+    style.tip_font = 21;
+    basecraft_ops::session::apply_drawing_edits(
+        &mut tree,
+        &[
+            TreeDrawingEdit::Ladderize { small_first: false },
+            TreeDrawingEdit::Rotate {
+                clade: vec!["d".into(), "e".into()],
+            },
+            // Not in this tree: skipped, the rest still apply.
+            TreeDrawingEdit::Rotate {
+                clade: vec!["x".into()],
+            },
+            TreeDrawingEdit::Style { style },
+        ],
+    );
+    let order: Vec<_> = tree
+        .tips_in_order()
+        .iter()
+        .map(|&i| tree.node(i).name.clone())
+        .collect();
+    assert_eq!(order, ["e", "d", "c", "a", "b"]);
+    assert_eq!(tree.style().tip_font, 21);
+}

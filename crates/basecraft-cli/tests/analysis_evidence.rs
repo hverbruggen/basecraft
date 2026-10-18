@@ -142,10 +142,12 @@ fn species_cli_and_public_sdk_add_to_one_canonical_workspace() {
             "delimitation",
             canonical.to_str().unwrap(),
             "--output",
-            root.join("fit.json").to_str().unwrap(),
+            // Relative: tools run in their own folder, so this must resolve here.
+            "fit.json",
             "--params",
             &params,
         ])
+        .current_dir(&root)
         .env("BASECRAFT_PROFILE_DIR", &profile)
         .output()
         .unwrap();

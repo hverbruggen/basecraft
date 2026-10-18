@@ -1,7 +1,11 @@
-//! Partition bars use the tree canvas's exact row geometry and stable IDs.
+//! Species hypotheses as bar columns on the tree canvas, with stable IDs.
 #![allow(clippy::cast_precision_loss)]
-use crate::{Rgba, svg::escape, theme::Theme};
-use basecraft_docs::TreeDoc;
+use crate::{
+    Rgba,
+    svg::escape,
+    theme::Theme,
+    tree::{Figure, TipBand, TipColumn},
+};
 use basecraft_protocol::delimitation::{
     DelimitationWorkspace, Group, Hypothesis, HypothesisOrigin,
 };
@@ -20,6 +24,8 @@ pub const GAP_PER_WIDTH: f32 = 1.5;
 pub const SPACING_PER_WIDTH: f32 = 0.65;
 /// The largest gap or spacing a column can be given, in pixels.
 pub const MAX_GAP: u32 = 400;
+/// Pixels between the tip names and the first column.
+const FIRST_GAP: f32 = 10.0;
 
 /// Theme colours in the order groups receive them.
 #[must_use]
@@ -121,94 +127,6 @@ pub fn columns(work: &DelimitationWorkspace, left: f32) -> Vec<Column> {
     out
 }
 
-/// The key `DelimitationView::flipped` stores for the clade spanning `tips`
-/// (for one tip, its parent): the first tip, by name, of two of its child
-/// subtrees. Flipping anything leaves the key pointing at the same clade.
-#[must_use]
-pub fn flip_key(tree: &TreeDoc, tips: &[String]) -> Option<Vec<String>> {
-    let chain = |mut node: usize| {
-        let mut out = vec![node];
-        while let Some(parent) = tree.node(node).parent {
-            out.push(parent);
-            node = parent;
-        }
-        out
-    };
-    let mut ancestors = chain(tree.find_tip(tips.first()?)?);
-    for name in &tips[1..] {
-        let other: BTreeSet<_> = chain(tree.find_tip(name)?).into_iter().collect();
-        let keep = ancestors.iter().position(|n| other.contains(n))?;
-        ancestors.drain(..keep);
-    }
-    let mut node = *ancestors.first()?;
-    if tree.node(node).is_tip() {
-        node = tree.node(node).parent?;
-    }
-    let first_tip = |start: usize| {
-        let mut stack = vec![start];
-        let mut best: Option<&str> = None;
-        while let Some(n) = stack.pop() {
-            let current = tree.node(n);
-            if current.is_tip() {
-                best = Some(best.map_or(current.name.as_str(), |b| b.min(current.name.as_str())));
-            }
-            stack.extend(&current.children);
-        }
-        best.map(str::to_string)
-    };
-    let mut firsts: Vec<String> = tree
-        .node(node)
-        .children
-        .iter()
-        .filter_map(|&c| first_tip(c))
-        .collect();
-    firsts.sort();
-    firsts.truncate(2);
-    (firsts.len() == 2).then_some(firsts)
-}
-
-/// Draw the stored clades flipped. Flips are independent of one another, so
-/// their order does not matter; keys that no longer resolve are skipped.
-pub fn apply_flips(tree: &mut TreeDoc, flipped: &BTreeSet<Vec<String>>) {
-    for clade in flipped {
-        let _ = tree.rotate(clade);
-    }
-}
-
-/// One species name per run of touching bar segments of a column, centred on
-/// the run: a species split by other tips gets a name beside each part.
-#[must_use]
-pub fn name_positions(segments: &[BarSegment], hypothesis: &str) -> Vec<(String, f32)> {
-    let mut column: Vec<_> = segments
-        .iter()
-        .filter(|s| s.hypothesis == hypothesis)
-        .collect();
-    column.sort_by(|a, b| a.y.total_cmp(&b.y));
-    let mut runs: Vec<(&BarSegment, f32, f32)> = Vec::new();
-    for s in column {
-        match runs.last_mut() {
-            Some((first, _, bottom)) if first.group == s.group && s.y <= *bottom + 1.0 => {
-                *bottom = s.y + s.height;
-            }
-            _ => runs.push((s, s.y, s.y + s.height)),
-        }
-    }
-    runs.into_iter()
-        .map(|(s, top, bottom)| (s.label.clone(), f32::midpoint(top, bottom)))
-        .collect()
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct BarSegment {
-    pub hypothesis: String,
-    pub group: String,
-    pub x: f32,
-    pub y: f32,
-    pub width: f32,
-    pub height: f32,
-    pub color: String,
-    pub label: String,
-}
 #[derive(Default)]
 pub struct Selection {
     pub specimens: BTreeSet<String>,
@@ -281,176 +199,93 @@ pub fn tree_mapping(
         .collect()
 }
 
-pub fn bars(
+/// The visible hypotheses as bar columns for the tree canvas: each tip gets
+/// its species, split in proportion when the specimens of one unique tip
+/// belong to several.
+#[must_use]
+pub fn tip_columns(
     work: &DelimitationWorkspace,
-    rows: &[(String, f32, f32)],
-    left: f32,
+    tips: &BTreeSet<String>,
     palette: &[String],
-    viewport: Option<(f32, f32)>,
-) -> (Vec<BarSegment>, BTreeSet<String>) {
-    let mapping = tree_mapping(
-        work,
-        &rows.iter().map(|(name, _, _)| name.clone()).collect(),
-    );
-    let mut segments = Vec::new();
-    let mut unmatched = BTreeSet::new();
-    for column in columns(work, left) {
-        let Some(h) = work.hypotheses.iter().find(|h| h.id == column.hypothesis) else {
-            continue;
-        };
-        let membership: BTreeMap<_, _> = h
-            .groups
-            .iter()
-            .enumerate()
-            .flat_map(|(i, g)| g.members.iter().map(move |m| (m, (g, i))))
-            .collect();
-        let start = segments.len();
-        for (name, y, height) in rows {
-            let Some(ids) = mapping.get(name) else {
-                unmatched.insert(name.clone());
-                continue;
-            };
-            let mut row_groups = BTreeMap::<usize, (&Group, usize)>::new();
-            for id in ids {
-                if let Some(&(group, index)) = membership.get(id) {
-                    row_groups.entry(index).or_insert((group, 0)).1 += 1;
-                }
-            }
-            let mut cursor = y - height / 2.0;
-            for (index, (group, count)) in row_groups {
-                // If manually separated specimens share a unique tip, show
-                // distinct proportional stripes instead of hiding their groups.
-                let stripe_height = height * count as f32 / ids.len() as f32;
-                let mut top = cursor;
-                let mut bottom = cursor + stripe_height;
-                cursor = bottom;
-                if let Some((start, end)) = viewport {
-                    if bottom <= start || top >= end {
-                        continue;
+) -> Vec<TipColumn> {
+    let mapping = tree_mapping(work, tips);
+    columns(work, 0.0)
+        .into_iter()
+        .enumerate()
+        .filter_map(|(k, column)| {
+            let h = work.hypotheses.iter().find(|h| h.id == column.hypothesis)?;
+            let membership: BTreeMap<_, _> = h
+                .groups
+                .iter()
+                .enumerate()
+                .flat_map(|(i, g)| g.members.iter().map(move |m| (m, (g, i))))
+                .collect();
+            let mut bands = std::collections::HashMap::new();
+            for (tip, ids) in &mapping {
+                let mut counts = BTreeMap::<usize, (&Group, usize)>::new();
+                for id in ids {
+                    if let Some(&(group, index)) = membership.get(id) {
+                        counts.entry(index).or_insert((group, 0)).1 += 1;
                     }
-                    top = top.max(start);
-                    bottom = bottom.min(end);
                 }
-                segments.push(BarSegment {
-                    hypothesis: h.id.clone(),
-                    group: group.id.clone(),
-                    x: column.x,
-                    y: top,
-                    width: column.width,
-                    height: bottom - top,
-                    color: color(work, h, group, index, palette),
-                    label: group.label.clone(),
-                });
-            }
-        }
-        // One bar per run of touching rows in the same species.
-        let mut merged: Vec<BarSegment> = Vec::new();
-        for s in segments.drain(start..) {
-            match merged.last_mut() {
-                Some(last) if last.group == s.group && s.y <= last.y + last.height + 0.5 => {
-                    last.height = s.y + s.height - last.y;
+                let row: Vec<TipBand> = counts
+                    .into_iter()
+                    .map(|(index, (group, count))| TipBand {
+                        id: group.id.clone(),
+                        share: count as f32,
+                        width: column.width,
+                        color: color(work, h, group, index, palette),
+                        label: group.label.clone(),
+                    })
+                    .collect();
+                if !row.is_empty() {
+                    bands.insert(tip.clone(), row);
                 }
-                _ => merged.push(s),
             }
-        }
-        // Leave the column's spacing between successive bars, keeping at
-        // least two pixels of each.
-        for bar in &mut merged {
-            let inset = (column.spacing / 2.0).min((bar.height - 2.0).max(0.0) / 2.0);
-            bar.y += inset;
-            bar.height -= 2.0 * inset;
-        }
-        segments.append(&mut merged);
-    }
-    (segments, unmatched)
+            Some(TipColumn {
+                id: h.id.clone(),
+                // The first column keeps clear of the tip names.
+                gap: if k == 0 { FIRST_GAP } else { column.gap },
+                spacing: Some(column.spacing),
+                round: true,
+                labels: work.view.columns.get(&h.id).is_some_and(|s| s.names),
+                vertical_labels: false,
+                tips: bands,
+            })
+        })
+        .collect()
 }
 
-pub fn hit(segments: &[BarSegment], x: f32, y: f32) -> Option<(&str, &str)> {
-    segments
-        .iter()
-        .find(|s| x >= s.x && x < s.x + s.width && y >= s.y && y < s.y + s.height)
-        .map(|s| (s.hypothesis.as_str(), s.group.as_str()))
-}
-
-/// Build editable overlays from the same segments as the screen. A nested tree
-/// SVG preserves its own typography, clipping and branch geometry.
-pub fn comparison_svg(
-    tree_svg: &str,
-    work: &DelimitationWorkspace,
-    rows: &[(String, f32, f32)],
-    tree_width: f32,
-    height: f32,
-    font: &str,
-    palette: &[String],
-) -> String {
+/// The comparison figure: the tree with its bar columns, a letter above each
+/// column and a legend of the letters below.
+#[must_use]
+pub fn comparison_svg(work: &DelimitationWorkspace, figure: &Figure, font: &str) -> String {
     // Column letters sit above the bars; the legend explains them below.
     const TOP: f32 = 20.0;
-    let left = tree_width + 8.0;
-    let columns = columns(work, left);
-    let shown: Vec<_> = columns
+    let shown: Vec<(&Hypothesis, f32)> = figure
+        .columns
         .iter()
-        .filter_map(|c| work.hypotheses.iter().find(|h| h.id == c.hypothesis))
+        .filter_map(|(id, x, w)| Some((work.hypotheses.iter().find(|h| &h.id == id)?, x + w / 2.0)))
         .collect();
-    let mut methods: Vec<(&str, &str)> = shown.iter().map(|h| origin(h)).collect();
-    methods.dedup();
+    let mut methods: Vec<(&str, &str)> = shown.iter().map(|(h, _)| origin(h)).collect();
     methods.sort_unstable();
     methods.dedup();
-    let bars_right = columns.last().map_or(left, |c| c.x + c.width);
-    // Species names, for the columns that show them, in name columns after the bars.
-    let mut names = Vec::new();
-    let mut right = bars_right;
-    for h in &shown {
-        if !work
-            .view
-            .columns
-            .get(&h.id)
-            .is_some_and(|style| style.names)
-        {
-            continue;
-        }
-        let longest = h
-            .groups
-            .iter()
-            .map(|g| g.label.chars().count())
-            .max()
-            .unwrap_or(0);
-        names.push((h.id.clone(), right + 6.0));
-        right += 6.0 + longest as f32 * 6.6;
-    }
     let longest = shown
         .iter()
-        .map(|h| h.name.chars().count())
+        .map(|(h, _)| h.name.chars().count())
         .max()
         .unwrap_or(0);
-    let width = (right + 24.0).max(longest as f32 * 7.0 + 40.0);
-    let total = TOP + height + 30.0 + (shown.len() + 1) as f32 * 14.0;
+    let width = figure.width.max(longest as f32 * 7.0 + 40.0);
+    let total = TOP + figure.height + 30.0 + (shown.len() + 1) as f32 * 14.0;
     let mut svg = format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width}\" height=\"{total}\" font-family=\"{}\">\n<g id=\"tree\" transform=\"translate(0,{TOP})\">{tree_svg}</g>\n",
-        escape(font)
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width}\" height=\"{total}\" font-family=\"{}\">\n<g id=\"tree\" transform=\"translate(0,{TOP})\">{}</g>\n",
+        escape(font),
+        figure.svg
     );
-    let (segments, _) = bars(work, rows, left, palette, None);
-    svg.push_str("<g id=\"partitions\">\n");
-    for s in &segments {
-        // Rounded ends, as on screen.
-        let radius = s.width.min(s.height) / 2.0;
-        writeln!(svg,"<rect data-hypothesis=\"{}\" data-group=\"{}\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" rx=\"{radius}\" fill=\"{}\"><title>{}</title></rect>",escape(&s.hypothesis),escape(&s.group),s.x,s.y+TOP,s.width,s.height,escape(&s.color),escape(&s.label)).unwrap();
-    }
-    for (hypothesis, x) in &names {
-        for (label, y) in name_positions(&segments, hypothesis) {
-            writeln!(
-                svg,
-                "<text x=\"{x}\" y=\"{}\" font-size=\"11\" dominant-baseline=\"middle\">{}</text>",
-                y + TOP,
-                escape(&label)
-            )
-            .unwrap();
-        }
-    }
-    for (column, h) in columns.iter().zip(&shown) {
+    for (h, x) in &shown {
         writeln!(
             svg,
-            "<text x=\"{}\" y=\"{}\" font-size=\"11\" text-anchor=\"middle\"><title>{}</title>{}</text>",
-            column.x + column.width / 2.0,
+            "<text x=\"{x}\" y=\"{}\" font-size=\"11\" text-anchor=\"middle\"><title>{}</title>{}</text>",
             TOP - 6.0,
             escape(&h.name),
             origin(h).0
@@ -462,14 +297,14 @@ pub fn comparison_svg(
         .map(|(code, name)| format!("{code} {name}"))
         .collect::<Vec<_>>()
         .join(", ");
-    let mut y = TOP + height + 24.0;
+    let mut y = TOP + figure.height + 24.0;
     writeln!(
         svg,
         "<text x=\"8\" y=\"{y}\" font-size=\"11\">{}</text>",
         escape(&legend)
     )
     .unwrap();
-    for h in &shown {
+    for (h, _) in &shown {
         y += 14.0;
         writeln!(
             svg,
@@ -479,104 +314,56 @@ pub fn comparison_svg(
         )
         .unwrap();
     }
-    svg.push_str("</g>\n</svg>\n");
+    svg.push_str("</svg>\n");
     svg
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn representatives_expand_only_on_the_unique_tip_display() {
-        let mut work = basecraft_io::spart::parse_text(include_str!(
+    use crate::tree::{TreeView, figure_with_columns};
+    use basecraft_docs::TreeDoc;
+
+    fn workspace() -> DelimitationWorkspace {
+        basecraft_io::spart::parse_text(include_str!(
             "../../../testdata/fixtures/delimitation/manual.spart"
         ))
-        .unwrap();
+        .unwrap()
+    }
+
+    fn tips(names: &[&str]) -> BTreeSet<String> {
+        names.iter().map(|n| (*n).to_string()).collect()
+    }
+
+    #[test]
+    fn representatives_expand_only_on_the_unique_tip_display() {
+        let mut work = workspace();
         work.hypotheses[0].provenance.haplotypes = [
             ("a".into(), ["a".into(), "b".into()].into()),
             ("c".into(), ["c".into(), "d".into()].into()),
         ]
         .into();
-        let unique = tree_mapping(&work, &["a".into(), "c".into()].into());
+        let unique = tree_mapping(&work, &tips(&["a", "c"]));
         assert_eq!(unique["a"], ["a".into(), "b".into()].into());
-        let full = tree_mapping(
-            &work,
-            &["a".into(), "b".into(), "c".into(), "d".into()].into(),
-        );
+        let full = tree_mapping(&work, &tips(&["a", "b", "c", "d"]));
         assert_eq!(full["a"], ["a".into()].into());
         work.view.visible = vec!["partition-1".into()];
-        // Without spacing, the two stripes split the row exactly.
-        work.view
-            .columns
-            .entry("partition-1".into())
-            .or_default()
-            .spacing = Some(0);
-        let (segments, _) = bars(
-            &work,
-            &[("a".into(), 20.0, 20.0), ("c".into(), 40.0, 20.0)],
-            0.0,
-            &palette(&Theme::default()),
-            None,
-        );
-        let row: Vec<_> = segments.iter().filter(|s| s.y < 30.0).collect();
+        // A unique tip whose specimens are in two species shows both, in
+        // equal shares.
+        let columns = tip_columns(&work, &tips(&["a", "c"]), &palette(&Theme::default()));
+        let row = &columns[0].tips["a"];
         assert_eq!(row.len(), 2);
         assert!(
             row.iter()
-                .all(|segment| (segment.height - 10.0).abs() < f32::EPSILON)
+                .all(|band| (band.share - 1.0).abs() < f32::EPSILON)
         );
-        assert_ne!(row[0].group, row[1].group);
+        assert_ne!(row[0].id, row[1].id);
     }
-    #[test]
-    fn noncontiguous_groups_share_identity_and_select_all_segments() {
-        let mut work = basecraft_io::spart::parse_text(include_str!(
-            "../../../testdata/fixtures/delimitation/manual.spart"
-        ))
-        .unwrap();
-        work.view.visible = vec![
-            "partition-1".into(),
-            "partition-2".into(),
-            "partition-3".into(),
-        ];
-        let rows: Vec<_> = ["a", "b", "c", "d"]
-            .iter()
-            .enumerate()
-            .map(|(i, &id)| (id.into(), 20.0 + i as f32 * 20.0, 20.0))
-            .collect();
-        let colors = palette(&Theme::default());
-        let (segments, missing) = bars(&work, &rows, 500.0, &colors, Some((0.0, 100.0)));
-        assert_eq!(missing, BTreeSet::new());
-        // Partition 2 has a/b and c/d as touching pairs: one bar each.
-        assert_eq!(segments.len(), 8);
-        let (hypothesis, group) = hit(&segments, 504.0, 20.0).unwrap();
-        let mut selection = Selection::default();
-        selection
-            .group(
-                work.hypotheses.iter().find(|h| h.id == hypothesis).unwrap(),
-                group,
-                false,
-            )
-            .unwrap();
-        assert_eq!(selection.specimens, ["a".into(), "c".into()].into());
-        let svg = comparison_svg(
-            "<svg><text>a &amp; b</text></svg>",
-            &work,
-            &rows,
-            500.0,
-            100.0,
-            "A&B",
-            &colors,
-        );
-        assert!(svg.contains("A&amp;B"));
-        assert_eq!(svg.matches("data-hypothesis").count(), 8);
-        assert!(!svg.contains("<image"));
-    }
+
     #[test]
     fn columns_follow_saved_widths_and_colours() {
         use basecraft_protocol::delimitation::ColumnStyle;
-        let mut work = basecraft_io::spart::parse_text(include_str!(
-            "../../../testdata/fixtures/delimitation/manual.spart"
-        ))
-        .unwrap();
+        let mut work = workspace();
         work.view.visible = vec!["partition-1".into(), "partition-2".into()];
         let first = work.hypotheses[0].id.clone();
         let group = work.hypotheses[0].groups[0].id.clone();
@@ -615,84 +402,79 @@ mod tests {
             columns(&spaced, 10.0)[1].x,
             10.0 + MIN_BAR_WIDTH as f32 + 3.0
         );
-        assert_eq!(laid[1].width, BAR_WIDTH as f32);
         let colors = palette(&Theme::default());
-        let rows = [("a".to_string(), 20.0, 20.0)];
-        let (segments, _) = bars(&work, &rows, 10.0, &colors, None);
-        let custom = segments
-            .iter()
-            .find(|s| s.hypothesis == first && s.group == group);
-        assert_eq!(custom.unwrap().color, "#123456");
+        let columns = tip_columns(&work, &tips(&["a", "b", "c", "d"]), &colors);
+        assert_eq!(columns[0].tips["a"][0].color, "#123456");
         assert!(
-            segments
-                .iter()
-                .filter(|s| s.hypothesis != first)
-                .all(|s| colors.contains(&s.color))
+            columns[1]
+                .tips
+                .values()
+                .flatten()
+                .all(|band| colors.contains(&band.color))
         );
     }
 
     #[test]
-    fn flips_keep_their_clade_and_names_follow_the_bars() {
-        let original = TreeDoc::from_newick("t", "((a:1,b:1):1,(c:1,d:1):1);").unwrap();
-        let order = |tree: &TreeDoc| {
-            tree.tips_in_order()
-                .iter()
-                .map(|&i| tree.node(i).name.clone())
-                .collect::<Vec<_>>()
-        };
-        let pair = flip_key(&original, &["c".into(), "d".into()]).unwrap();
-        assert_eq!(pair, ["c", "d"]);
-        // A tip names its parent's clade; the whole tree is keyed by both halves.
-        assert_eq!(flip_key(&original, &["d".into()]).unwrap(), pair);
-        let root = flip_key(&original, &["a".into(), "d".into()]).unwrap();
-        assert_eq!(root, ["a", "c"]);
-        let mut tree = original.clone();
-        apply_flips(&mut tree, &[pair.clone(), root.clone()].into());
-        assert_eq!(order(&tree), ["d", "c", "a", "b"]);
-        // The keys still name the same clades once flipped.
-        assert_eq!(flip_key(&tree, &["d".into()]).unwrap(), pair);
-        assert_eq!(flip_key(&tree, &["b".into(), "c".into()]).unwrap(), root);
-
-        let mut work = basecraft_io::spart::parse_text(include_str!(
-            "../../../testdata/fixtures/delimitation/manual.spart"
-        ))
-        .unwrap();
+    fn species_bars_and_names_follow_the_drawn_tree() {
+        let mut work = workspace();
         work.view.visible = vec!["partition-1".into()];
         work.hypotheses[0].groups[0].label = "Species alpha".into();
-        let rows_in = |order: [&str; 4]| -> Vec<_> {
-            order
-                .iter()
-                .enumerate()
-                .map(|(i, n)| ((*n).to_string(), i as f32 * 20.0 + 10.0, 20.0))
-                .collect()
-        };
-        let rows = rows_in(["a", "b", "c", "d"]);
         let colors = palette(&Theme::default());
-        let plain = comparison_svg("", &work, &rows, 100.0, 80.0, "mono", &colors);
-        assert!(!plain.contains(">Species alpha</text>"));
+        let all = tips(&["a", "b", "c", "d"]);
+        // Drawn a, c, b, d: each species of partition 1 is one block.
+        let tree = TreeDoc::from_newick("t", "((a:1,c:1):1,(b:1,d:1):1);").unwrap();
+        let mut view = TreeView::new(600.0, 200.0);
+        view.set_columns(tip_columns(&work, &all, &colors));
+        view.sync(&tree);
+        let bars = view.bars();
+        assert_eq!(bars.len(), 2, "{bars:?}");
+        // Touching rows of a species are one bar, less the spacing between bars.
+        let spacing = 0.65 * BAR_WIDTH as f32;
+        assert!((bars[1].y - bars[0].y - bars[0].h - spacing).abs() < 1e-3);
+        let (x, y) = (bars[0].x + 1.0, bars[0].y + 1.0);
+        let hit = view.bar_at(x, y).unwrap();
+        assert_eq!(hit.column, "partition-1");
+        assert_eq!(hit.id, work.hypotheses[0].groups[0].id);
+        assert_eq!(view.column_positions()[0].0, "partition-1");
+
+        // Group 1 is a and c: adjacent here, so one name; drawn a, b, c, d
+        // it is split, with a name beside each part.
+        let svg = |tree: &TreeDoc, work: &DelimitationWorkspace| {
+            let figure = figure_with_columns(
+                tree,
+                &tip_columns(work, &all, &colors),
+                600.0,
+                20.0,
+                &Theme::default(),
+                "A&B",
+            );
+            comparison_svg(work, &figure, "A&B")
+        };
+        assert!(!svg(&tree, &work).contains(">Species alpha</text>"));
         work.view
             .columns
             .entry("partition-1".into())
             .or_default()
             .names = true;
-        let named = comparison_svg("", &work, &rows, 100.0, 80.0, "mono", &colors);
-        // Group 1 is a and c, which are not adjacent rows: one name per part.
-        assert_eq!(named.matches(">Species alpha</text>").count(), 2);
-        // Drawn a, c, b, d, each species is one block with one name.
-        let (segments, _) = bars(&work, &rows_in(["a", "c", "b", "d"]), 0.0, &colors, None);
-        // Touching rows of a species are drawn as one bar, less the spacing
-        // between bars.
-        assert_eq!(segments.len(), 2);
-        let spacing = 0.65 * BAR_WIDTH as f32;
-        assert!(
-            segments
-                .iter()
-                .all(|s| (s.height - (40.0 - spacing)).abs() < 1e-4),
-            "{segments:?}"
+        assert_eq!(
+            svg(&tree, &work).matches(">Species alpha</text>").count(),
+            1
         );
-        assert!((segments[1].y - segments[0].y - segments[0].height - spacing).abs() < 1e-4);
-        let positions = name_positions(&segments, "partition-1");
-        assert_eq!(positions.len(), 2);
-        assert_eq!(positions[0].0, "Species alpha");
+        let split = TreeDoc::from_newick("t", "((a:1,b:1):1,(c:1,d:1):1);").unwrap();
+        let figure = svg(&split, &work);
+        assert_eq!(figure.matches(">Species alpha</text>").count(), 2);
+        assert!(figure.contains("A&amp;B"));
+        // Rounded bars, and the column's letter above it.
+        assert!(figure.contains(" rx=\""));
+        assert!(figure.contains("<title>first</title>"));
+    }
+
+    #[test]
+    fn noncontiguous_groups_select_all_their_members() {
+        let work = workspace();
+        let mut selection = Selection::default();
+        let h = &work.hypotheses[0];
+        selection.group(h, &h.groups[0].id, false).unwrap();
+        assert_eq!(selection.specimens, ["a".into(), "c".into()].into());
     }
 }

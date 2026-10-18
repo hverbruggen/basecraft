@@ -7,6 +7,10 @@ RibbonGroup {
     id: group
     title: "Tree style"
     property var controller: null
+    // Command IDs are "<scope>.…", so the tree and species pages each keep
+    // their own shortcuts. The tree page keeps its original IDs.
+    property string scope: "tree"
+    readonly property bool treePage: scope === "tree"
     property var customization: ({shortcuts: {}, ribbon_hidden: []})
     readonly property var commands: [order.commandAction, smallFirst, largeFirst, extra.commandAction]
     signal extraRequested()
@@ -21,7 +25,7 @@ RibbonGroup {
     }
     AppCommand {
         id: smallFirst
-        commandId: "ribbon.order-every-clade-s-branches-by-size-smallest-first"
+        commandId: group.treePage ? "ribbon.order-every-clade-s-branches-by-size-smallest-first" : group.scope + ".small-on-top"
         customization: group.customization
         text: "Small on top"
         iconName: "tree-small-on-top"
@@ -31,7 +35,7 @@ RibbonGroup {
     }
     AppCommand {
         id: largeFirst
-        commandId: "ribbon.order-every-clade-s-branches-by-size-largest-first"
+        commandId: group.treePage ? "ribbon.order-every-clade-s-branches-by-size-largest-first" : group.scope + ".large-on-top"
         customization: group.customization
         text: "Large on top"
         iconName: "tree-large-on-top"
@@ -42,7 +46,7 @@ RibbonGroup {
     AppCommandButton {
         id: order
         objectName: "orderBranches"
-        commandId: "tree.order-branches"
+        commandId: group.scope + ".order-branches"
         customization: group.customization
         text: "Order"
         iconName: "tree-small-on-top"
@@ -58,7 +62,7 @@ RibbonGroup {
     AppCommandButton {
         id: extra
         objectName: "treeStyleExtra"
-        commandId: "tree.style-extra"
+        commandId: group.scope + ".style-extra"
         customization: group.customization
         text: "Extra…"
         iconName: "tree-style"

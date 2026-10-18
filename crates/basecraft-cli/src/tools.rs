@@ -11,6 +11,8 @@ pub fn run(
     output: PathBuf,
     mut params: Map<String, Value>,
 ) -> Result<Value, Box<dyn std::error::Error>> {
+    // Tools run inside their run folder, so a relative output would resolve there.
+    let output = std::path::absolute(&output)?;
     if name != "delimitation" && !session.is_alignment(doc) {
         return Err("This tool requires an alignment".into());
     }

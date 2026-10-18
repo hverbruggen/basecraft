@@ -35,13 +35,8 @@ FocusScope {
         function onFileCreated(path) { doc.openFile(path) }
     }
 
-    // Lines snap to whole screen pixels.
-    readonly property real pixelRatio: view.Window.window ? view.Window.window.devicePixelRatio : 1
-    onPixelRatioChanged: ctl.set_pixel_ratio(pixelRatio)
-
     // Open once the view has its real size.
     Component.onCompleted: Qt.callLater(() => {
-        ctl.set_pixel_ratio(doc.pixelRatio)
         ctl.resize(view.width, view.height)
         ctl.open_file(doc.path)
     })
