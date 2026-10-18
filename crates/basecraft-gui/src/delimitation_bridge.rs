@@ -320,7 +320,7 @@ impl qobject::DelimitationController {
         self.as_mut().set_status(QString::from(&status));
         self.update_tree_edits();
     }
-    fn update_tree_edits(mut self: Pin<&mut Self>) {
+    fn update_tree_edits(self: Pin<&mut Self>) {
         let edits = {
             let r = self.rust();
             let Some(edits) = r

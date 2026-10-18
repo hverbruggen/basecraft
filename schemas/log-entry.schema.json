@@ -1758,17 +1758,6 @@
             "null"
           ]
         },
-        "flipped": {
-          "description": "Display-tree clades drawn flipped. Each is named by two tips whose\nmost recent common ancestor is the clade, whatever the drawing order.",
-          "type": "array",
-          "items": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "uniqueItems": true
-        },
         "selected": {
           "type": "array",
           "items": {
@@ -1776,16 +1765,12 @@
           },
           "uniqueItems": true
         },
-        "small_on_top": {
-          "description": "Order every clade's branches by size before any flips: `true` puts\nthe smallest on top.",
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "tree_sizes": {
-          "description": "How the display tree is drawn here; unset sizes keep its own style.",
-          "$ref": "#/$defs/TreeSizes"
+        "tree_edits": {
+          "description": "How the display tree is drawn here: the tree editor's own drawing\nedits, replayed in order on the display tree. Its file is not changed.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TreeDrawingEdit"
+          }
         },
         "visible": {
           "type": "array",
@@ -2302,35 +2287,85 @@
         "low"
       ]
     },
-    "TreeSizes": {
-      "description": "Sizes in pixels for drawing a display tree.",
-      "type": "object",
-      "properties": {
-        "branch_width": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint32",
-          "minimum": 0
+    "TreeDrawingEdit": {
+      "description": "A tree editor edit that changes only how a tree is drawn. Written as the\nmatching operation (`tree.rotate`, `tree.ladderize`, `tree.style`).",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "tree.rotate"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "clade": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "clade"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
         },
-        "support_font": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint32",
-          "minimum": 0
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "tree.ladderize"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "small_first": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "small_first"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
         },
-        "tip_font": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint32",
-          "minimum": 0
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "tree.style"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "style": {
+                  "$ref": "#/$defs/TreeStyle"
+                }
+              },
+              "required": [
+                "style"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
         }
-      }
+      ]
     },
     "TreeStyle": {
       "description": "How a tree is drawn. Sizes are pixels at 100 % zoom.",

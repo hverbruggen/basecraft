@@ -107,17 +107,6 @@
             "null"
           ]
         },
-        "flipped": {
-          "description": "Display-tree clades drawn flipped. Each is named by two tips whose\nmost recent common ancestor is the clade, whatever the drawing order.",
-          "type": "array",
-          "items": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "uniqueItems": true
-        },
         "selected": {
           "type": "array",
           "items": {
@@ -125,16 +114,12 @@
           },
           "uniqueItems": true
         },
-        "small_on_top": {
-          "description": "Order every clade's branches by size before any flips: `true` puts\nthe smallest on top.",
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "tree_sizes": {
-          "description": "How the display tree is drawn here; unset sizes keep its own style.",
-          "$ref": "#/$defs/TreeSizes"
+        "tree_edits": {
+          "description": "How the display tree is drawn here: the tree editor's own drawing\nedits, replayed in order on the display tree. Its file is not changed.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TreeDrawingEdit"
+          }
         },
         "visible": {
           "type": "array",
@@ -408,35 +393,210 @@
         "label"
       ]
     },
-    "TreeSizes": {
-      "description": "Sizes in pixels for drawing a display tree.",
+    "SupportPlacement": {
+      "description": "Where support values sit relative to their branch.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "above",
+            "below"
+          ]
+        },
+        {
+          "description": "Above branches that go up from their parent, below those that go\ndown.",
+          "type": "string",
+          "const": "natural"
+        }
+      ]
+    },
+    "SupportSymbols": {
+      "description": "Support shown as filled circles at nodes: dark at or above `high`\npercent, grey at or above `low`, white below, as in many published\ntrees. Proportions count as percentages, as for `support_min`.",
+      "type": "object",
+      "properties": {
+        "high": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "low": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "set": {
+          "description": "The support set the circles show.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "set",
+        "high",
+        "low"
+      ]
+    },
+    "TreeDrawingEdit": {
+      "description": "A tree editor edit that changes only how a tree is drawn. Written as the\nmatching operation (`tree.rotate`, `tree.ladderize`, `tree.style`).",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "tree.rotate"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "clade": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "clade"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "tree.ladderize"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "small_first": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "small_first"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "tree.style"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "style": {
+                  "$ref": "#/$defs/TreeStyle"
+                }
+              },
+              "required": [
+                "style"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        }
+      ]
+    },
+    "TreeStyle": {
+      "description": "How a tree is drawn. Sizes are pixels at 100 % zoom.",
       "type": "object",
       "properties": {
         "branch_width": {
-          "type": [
-            "integer",
-            "null"
-          ],
+          "type": "integer",
           "format": "uint32",
+          "default": 1,
           "minimum": 0
+        },
+        "scale_bar": {
+          "type": "boolean",
+          "default": true
+        },
+        "support_decimals": {
+          "description": "Decimal places per set; missing entries use the support semantics. Maximum 10.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0
+          },
+          "default": {}
         },
         "support_font": {
-          "type": [
-            "integer",
-            "null"
-          ],
+          "type": "integer",
           "format": "uint32",
+          "default": 10,
           "minimum": 0
         },
-        "tip_font": {
-          "type": [
-            "integer",
-            "null"
-          ],
+        "support_min": {
+          "description": "Hide support values below this percentage. Known producer metadata sets\nthe scale; ambiguous imported sets with all finite values in 0–1 use\nproportions. `support_proportions` overrides this fallback. 0 shows all.",
+          "type": "integer",
           "format": "uint32",
+          "default": 0,
           "minimum": 0
+        },
+        "support_placement": {
+          "$ref": "#/$defs/SupportPlacement",
+          "default": "natural"
+        },
+        "support_proportions": {
+          "description": "Optional display-scale overrides for ambiguous imports (true means 0–1).",
+          "type": "object",
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "default": {}
+        },
+        "support_shown": {
+          "description": "Support sets shown at nodes, in order, joined with \"/\". Empty shows\nevery set.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "symbols": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SupportSymbols"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "tip_font": {
+          "type": "integer",
+          "format": "uint32",
+          "default": 13,
+          "minimum": 0
+        },
+        "vertical_bar_labels": {
+          "description": "Write clade labels beside bars top to bottom, rather than across.",
+          "type": "boolean",
+          "default": true
         }
-      }
+      },
+      "additionalProperties": true
     }
   }
 }
