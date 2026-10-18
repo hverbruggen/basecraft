@@ -47,9 +47,38 @@
     "hypotheses"
   ],
   "$defs": {
+    "ColumnStyle": {
+      "description": "How one hypothesis column is drawn. Unset fields follow the theme.",
+      "type": "object",
+      "properties": {
+        "colors": {
+          "description": "Group ID to `#rrggbb`.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "width": {
+          "description": "Bar width in pixels.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        }
+      }
+    },
     "DelimitationView": {
       "type": "object",
       "properties": {
+        "columns": {
+          "description": "Hypothesis ID to its bar column style.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/ColumnStyle"
+          }
+        },
         "display_tree": {
           "type": [
             "string",

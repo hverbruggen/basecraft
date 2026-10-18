@@ -12,12 +12,16 @@ InstanceView {
     Accessible.description: accessibleSummary + ". Press Ctrl+Alt+T for a text representation. Press F6 to move to another region."
     Accessible.focusable: true
     Accessible.focused: activeFocus
+    // Set when keyboard region navigation (F6) focuses the canvas, so the
+    // focus frame shows for keyboard users but not after a click or on open.
+    property bool keyboardFocus: false
+    onActiveFocusChanged: if (!activeFocus) keyboardFocus = false
 
     Rectangle {
         anchors.fill: parent
         z: 100
         color: "transparent"
-        border.width: canvas.activeFocus ? 2 : 0
+        border.width: canvas.activeFocus && canvas.keyboardFocus ? 2 : 0
         border.color: palette.highlight
         SystemPalette { id: palette }
         Accessible.ignored: true

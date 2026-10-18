@@ -95,6 +95,20 @@ pub struct DelimitationView {
     pub display_tree: Option<String>,
     pub visible: Vec<String>,
     pub selected: BTreeSet<String>,
+    /// Hypothesis ID to its bar column style.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub columns: BTreeMap<String, ColumnStyle>,
+}
+
+/// How one hypothesis column is drawn. Unset fields follow the theme.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ColumnStyle {
+    /// Bar width in pixels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    /// Group ID to `#rrggbb`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub colors: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -120,6 +134,10 @@ pub enum DelimitationEdit {
     },
     Add {
         hypothesis: Hypothesis,
+    },
+    /// Drop hypotheses. Refused while a kept hypothesis was copied from one.
+    Remove {
+        hypotheses: BTreeSet<String>,
     },
     Derive {
         source: String,

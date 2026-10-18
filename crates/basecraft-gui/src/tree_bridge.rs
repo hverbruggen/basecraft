@@ -56,7 +56,7 @@ pub mod qobject {
         #[qinvokable]
         fn accessible_page(self: &TreeController, page: i32) -> QString;
         #[qinvokable]
-        fn create_delimitation(self: Pin<&mut TreeController>) -> QString;
+        fn create_delimitation(self: Pin<&mut TreeController>, method: &QString) -> QString;
         #[qinvokable]
         fn open_file(self: Pin<&mut TreeController>, path: &QString) -> bool;
         #[qinvokable]
@@ -742,7 +742,7 @@ impl qobject::TreeController {
         }
     }
 
-    pub fn create_delimitation(mut self: Pin<&mut Self>) -> QString {
+    pub fn create_delimitation(mut self: Pin<&mut Self>, method: &QString) -> QString {
         let result = {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
@@ -750,7 +750,9 @@ impl qobject::TreeController {
                 .as_mut()
                 .zip(r.doc)
                 .ok_or_else(|| "No source open".to_string())
-                .and_then(|(s, d)| crate::delimitation_bridge::create_workspace(s, d))
+                .and_then(|(s, d)| {
+                    crate::delimitation_bridge::create_workspace(s, d, &method.to_string())
+                })
         };
         match result {
             Ok(path) => QString::from(path),

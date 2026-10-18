@@ -389,7 +389,7 @@ fn run(
         }
         "ptp" | "mptp" => {
             basecraft_delimitation::time_tree::substitution_tips(&tree, request.rooted)?;
-            let groups = serde_json::from_value(
+            let groups: Vec<std::collections::BTreeSet<String>> = serde_json::from_value(
                 request
                     .parameters
                     .get("groups")
@@ -401,7 +401,12 @@ fn run(
                 .get("log_likelihood")
                 .and_then(serde_json::Value::as_f64)
                 .ok_or("import requires finite log likelihood")?;
-            result.workspace = Some(workspace(request, &tree, groups, likelihood));
+            let name = format!(
+                "{} species hypothesis ({} species, lnL {likelihood:.2})",
+                method_label(&request.method),
+                groups.len()
+            );
+            result.workspace = Some(workspace(request, &tree, groups, likelihood, name));
             if let Some(diagnostics) = request.parameters.get("diagnostics") {
                 result
                     .job
@@ -423,7 +428,8 @@ fn run(
                 result
                     .metrics
                     .insert("groups".into(), serde_json::to_value(&groups)?);
-                let mut work = workspace(request, &tree, groups, 0.0);
+                let name = format!("Manual threshold cut at {threshold}");
+                let mut work = workspace(request, &tree, groups, 0.0, name);
                 for hypothesis in &mut work.hypotheses {
                     hypothesis.origin =
                         basecraft_protocol::delimitation::HypothesisOrigin::ManualCut;
@@ -565,9 +571,63 @@ fn run(
                 );
             }
             let best = &fit.profile[fit.best];
-            let groups = basecraft_delimitation::gmyc::groups(&tree, &time, best);
-            result.workspace = Some(workspace(request, &tree, groups, best.log_likelihood));
             result.job.diagnostics.extend(best.diagnostics.clone());
+            // Publish every distinct partition in the support set (best first),
+            // so the alternatives GMYC cannot rule out are visible.
+            let mut ranked = fit.support_candidates.clone();
+            ranked.retain(|&i| i != fit.best);
+            ranked.sort_by(|&a, &b| {
+                fit.profile[b]
+                    .log_likelihood
+                    .total_cmp(&fit.profile[a].log_likelihood)
+                    .then(a.cmp(&b))
+            });
+            ranked.insert(0, fit.best);
+            let mut seen = std::collections::BTreeSet::new();
+            for index in ranked {
+                if seen.len() == 10 {
+                    break;
+                }
+                let candidate = &fit.profile[index];
+                let groups = basecraft_delimitation::gmyc::groups(&tree, &time, candidate);
+                if !seen.insert(
+                    groups
+                        .iter()
+                        .cloned()
+                        .collect::<std::collections::BTreeSet<_>>(),
+                ) {
+                    continue;
+                }
+                let rank = seen.len();
+                let name = format!(
+                    "GMYC species hypothesis {rank} ({} species, lnL {:.2})",
+                    groups.len(),
+                    candidate.log_likelihood
+                );
+                let mut work = workspace(request, &tree, groups, candidate.log_likelihood, name);
+                let hypothesis = &mut work.hypotheses[0];
+                hypothesis
+                    .attributes
+                    .insert("gmyc_rank".into(), rank.to_string());
+                hypothesis.attributes.insert(
+                    "gmyc_thresholds".into(),
+                    candidate
+                        .thresholds
+                        .iter()
+                        .map(f64::to_string)
+                        .collect::<Vec<_>>()
+                        .join(","),
+                );
+                match &mut result.workspace {
+                    None => result.workspace = Some(work),
+                    Some(published) => {
+                        let mut hypothesis = work.hypotheses.remove(0);
+                        hypothesis.id = format!("{}-{rank}", request.job_id);
+                        published.view.visible.push(hypothesis.id.clone());
+                        published.hypotheses.push(hypothesis);
+                    }
+                }
+            }
             if let Some(work) = &mut result.workspace {
                 for hypothesis in &mut work.hypotheses {
                     hypothesis
@@ -793,7 +853,12 @@ fn run_asap(
         .into();
         work.hypotheses.push(Hypothesis {
             id: format!("{}-{rank}", request.job_id),
-            name: format!("ASAP {}", rank + 1),
+            name: format!(
+                "ASAP species hypothesis {} ({} species, score {})",
+                rank + 1,
+                partition.subsets,
+                partition.score
+            ),
             origin: HypothesisOrigin::Inferred,
             parent: None,
             groups,
@@ -839,18 +904,30 @@ fn run_asap(
     Ok(())
 }
 
+/// Method name shown to the user, shared by every species hypothesis.
+fn method_label(method: &str) -> &str {
+    match method {
+        "gmyc_single" | "gmyc_multiple" | "gmyc_exhaustive" => "GMYC",
+        "ptp" => "PTP",
+        "mptp" => "mPTP",
+        "manual_cut" => "Manual threshold cut",
+        other => other,
+    }
+}
+
 fn workspace(
     request: &DelimitationRequest,
     tree: &basecraft_docs::TreeDoc,
     groups: Vec<std::collections::BTreeSet<String>>,
     likelihood: f64,
+    name: String,
 ) -> basecraft_protocol::delimitation::DelimitationWorkspace {
     use basecraft_protocol::delimitation::{
         DelimitationView, DelimitationWorkspace, Group, Hypothesis, HypothesisOrigin, Provenance,
         Score, Specimen,
     };
     let id = request.job_id.clone();
-    DelimitationWorkspace { version:1,name:tree.name.clone(),specimens:tree.tips_in_order().iter().map(|&i| Specimen { id:tree.node(i).name.clone(),label:tree.node(i).name.clone(),sources: [(request.input.clone(),tree.node(i).name.clone())].into(),attributes:BTreeMap::new() }).collect(),hypotheses:vec![Hypothesis { id:id.clone(),name:request.method.clone(),origin:HypothesisOrigin::Inferred,parent:None,groups:groups.into_iter().enumerate().map(|(i,members)| Group { id:format!("group-{}",i+1),label:(i+1).to_string(),color:["#377eb8","#e41a1c","#4daf4a","#984ea3","#ff7f00"][i%5].into(),members,scores:vec![],individual_scores:BTreeMap::new(),attributes:BTreeMap::new() }).collect(),unassigned:std::collections::BTreeSet::new(),scores:vec![Score {value:likelihood,method:request.method.clone(),scale:"logLikelihood".into(),interpretation:"Maximized mixed waiting-time log likelihood; convergence is not evidence of biological support".into()}],provenance:Provenance {method:request.method.clone(),version:env!("CARGO_PKG_VERSION").into(),inputs:[(request.input.clone(),request.input_hash.clone())].into(),analysis_tree:Some(request.input_hash.clone()),parameters:request.parameters.clone(),seed:Some(request.seed),workers:Some(request.workers),status:Some(JobStatus::Completed),..Provenance::default()},attributes:BTreeMap::new() }],view:DelimitationView {display_tree:Some(request.input.clone()),visible:vec![id],selected:std::collections::BTreeSet::new()},exchange_fields:BTreeMap::new() }
+    DelimitationWorkspace { version:1,name:tree.name.clone(),specimens:tree.tips_in_order().iter().map(|&i| Specimen { id:tree.node(i).name.clone(),label:tree.node(i).name.clone(),sources: [(request.input.clone(),tree.node(i).name.clone())].into(),attributes:BTreeMap::new() }).collect(),hypotheses:vec![Hypothesis { id:id.clone(),name,origin:HypothesisOrigin::Inferred,parent:None,groups:groups.into_iter().enumerate().map(|(i,members)| Group { id:format!("group-{}",i+1),label:(i+1).to_string(),color:["#377eb8","#e41a1c","#4daf4a","#984ea3","#ff7f00"][i%5].into(),members,scores:vec![],individual_scores:BTreeMap::new(),attributes:BTreeMap::new() }).collect(),unassigned:std::collections::BTreeSet::new(),scores:vec![Score {value:likelihood,method:request.method.clone(),scale:"logLikelihood".into(),interpretation:"Maximized mixed waiting-time log likelihood; convergence is not evidence of biological support".into()}],provenance:Provenance {method:request.method.clone(),version:env!("CARGO_PKG_VERSION").into(),inputs:[(request.input.clone(),request.input_hash.clone())].into(),analysis_tree:Some(request.input_hash.clone()),parameters:request.parameters.clone(),seed:Some(request.seed),workers:Some(request.workers),status:Some(JobStatus::Completed),..Provenance::default()},attributes:BTreeMap::new() }],view:DelimitationView {display_tree:Some(request.input.clone()),visible:vec![id],..DelimitationView::default()},exchange_fields:BTreeMap::new() }
 }
 
 fn progress(

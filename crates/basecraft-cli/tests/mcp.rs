@@ -214,12 +214,15 @@ fn species_mcp_uses_the_canonical_workspace_contract() {
         root.join("species.spart").to_str().unwrap()
     );
     assert!(!root.join("fit.json").exists());
-    assert_eq!(
-        basecraft_ops::files::load_delimitation(&root.join("species.spart"))
-            .unwrap()
-            .hypotheses
-            .len(),
-        1
+    // GMYC publishes each distinct partition in its support set, best first.
+    let hypotheses = basecraft_ops::files::load_delimitation(&root.join("species.spart"))
+        .unwrap()
+        .hypotheses;
+    assert_ne!(hypotheses.len(), 0);
+    assert!(
+        hypotheses
+            .iter()
+            .all(|h| h.name.starts_with("GMYC species hypothesis "))
     );
     assert_eq!(
         basecraft_ops::provenance::verify(&root.join("species.spart")).unwrap(),

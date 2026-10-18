@@ -560,12 +560,15 @@ fn dirty_tree_submission_retains_generated_bytes_without_stale_original_claim() 
     basecraft_ops::delimitation::add_analysis_result(&mut session, workspace, &reused.output)
         .unwrap();
     session.save(workspace, None).unwrap();
-    assert_eq!(
-        basecraft_ops::files::load_delimitation(&root.path().join("species.spart"))
-            .unwrap()
-            .hypotheses
-            .len(),
-        1
+    // GMYC publishes each distinct partition in its support set, best first.
+    let hypotheses = basecraft_ops::files::load_delimitation(&root.path().join("species.spart"))
+        .unwrap()
+        .hypotheses;
+    assert_ne!(hypotheses.len(), 0);
+    assert!(
+        hypotheses
+            .iter()
+            .all(|h| h.name.starts_with("GMYC species hypothesis "))
     );
 
     assert!(std::fs::read_to_string(source).unwrap().contains("a:"));

@@ -107,7 +107,7 @@ pub mod qobject {
         fn cancel_bootstrap(self: Pin<&mut AlignmentController>);
 
         #[qinvokable]
-        fn create_delimitation(self: Pin<&mut AlignmentController>) -> QString;
+        fn create_delimitation(self: Pin<&mut AlignmentController>, method: &QString) -> QString;
         #[qinvokable]
         fn open_file(self: Pin<&mut AlignmentController>, path: &QString) -> bool;
         #[qinvokable]
@@ -629,7 +629,7 @@ impl qobject::AlignmentController {
         }
     }
 
-    pub fn create_delimitation(mut self: Pin<&mut Self>) -> QString {
+    pub fn create_delimitation(mut self: Pin<&mut Self>, method: &QString) -> QString {
         let result = {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
@@ -637,7 +637,9 @@ impl qobject::AlignmentController {
                 .as_mut()
                 .zip(r.doc)
                 .ok_or_else(|| "No source open".to_string())
-                .and_then(|(s, d)| crate::delimitation_bridge::create_workspace(s, d))
+                .and_then(|(s, d)| {
+                    crate::delimitation_bridge::create_workspace(s, d, &method.to_string())
+                })
         };
         match result {
             Ok(path) => QString::from(path),

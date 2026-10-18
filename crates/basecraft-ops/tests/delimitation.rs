@@ -45,6 +45,17 @@ fn edits_undo_save_reopen_and_replay_preserve_lineage() {
     );
     apply(
         &mut session,
+        Edit::Rename {
+            hypothesis: "partition-1".into(),
+            name: "Imported, renamed".into(),
+        },
+    );
+    assert_eq!(
+        session.delimitation(doc).hypotheses[0].name,
+        "Imported, renamed"
+    );
+    apply(
+        &mut session,
         Edit::RenameGroup {
             hypothesis: "edited".into(),
             group: "group-1".into(),
@@ -106,11 +117,11 @@ fn edits_undo_save_reopen_and_replay_preserve_lineage() {
     view.selected = ["a".into(), "d".into()].into();
     apply(&mut session, Edit::SetView { view });
     let expected = session.delimitation(doc).clone();
-    for _ in 0..10 {
+    for _ in 0..11 {
         session.undo(doc).unwrap();
     }
     assert_eq!(session.delimitation(doc), &initial);
-    for _ in 0..10 {
+    for _ in 0..11 {
         session.redo(doc).unwrap();
     }
     assert_eq!(session.delimitation(doc), &expected);
@@ -215,6 +226,83 @@ fn save_as_xml_replays_the_selected_exchange_format() {
     let mut reopened = Session::unlogged(dir.path());
     let copy = reopened.open(&xml).unwrap();
     assert_eq!(reopened.delimitation(copy), session.delimitation(doc));
+    drop(session);
+    let report = replay::replay(dir.path()).unwrap();
+    assert!(report.ok(), "{:?}", report.problems);
+}
+
+#[test]
+fn combine_keeps_only_selected_hypotheses_and_remove_guards_lineage() {
+    use std::collections::{BTreeMap, BTreeSet};
+    let dir = tempfile::tempdir().unwrap();
+    let first = dir.path().join("first.spart");
+    let second = dir.path().join("second.spart");
+    std::fs::write(&first, SPART).unwrap();
+    std::fs::write(&second, SPART).unwrap();
+    let mut session = Session::new(dir.path());
+    let doc = session.open(&first).unwrap();
+    let ids: Vec<String> = session
+        .delimitation(doc)
+        .hypotheses
+        .iter()
+        .map(|h| h.id.clone())
+        .collect();
+    let apply = |session: &mut Session, edit| {
+        session
+            .apply(
+                doc,
+                Op::DelimitationEdit {
+                    edit: Box::new(edit),
+                },
+            )
+            .unwrap()
+    };
+    let keep: BTreeMap<_, BTreeSet<_>> = [(second.clone(), [ids[1].clone()].into())].into();
+    basecraft_ops::delimitation::combine_selected(
+        &mut session,
+        doc,
+        std::slice::from_ref(&second),
+        Some(&keep),
+    )
+    .unwrap();
+    let combined = session.delimitation(doc).clone();
+    assert_eq!(combined.hypotheses.len(), ids.len() + 1);
+    let added = combined.hypotheses.last().unwrap();
+    assert_eq!(
+        added.provenance.parameters["combined_source"]["hypothesis"],
+        ids[1].as_str()
+    );
+    apply(
+        &mut session,
+        Edit::Derive {
+            source: ids[0].clone(),
+            id: "copy".into(),
+            name: "Copy".into(),
+        },
+    );
+    let refused = session.apply(
+        doc,
+        Op::DelimitationEdit {
+            edit: Box::new(Edit::Remove {
+                hypotheses: [ids[0].clone()].into(),
+            }),
+        },
+    );
+    assert!(refused.is_err());
+    apply(
+        &mut session,
+        Edit::Remove {
+            hypotheses: ["copy".to_string(), ids[0].clone()].into(),
+        },
+    );
+    let work = session.delimitation(doc);
+    assert!(
+        !work
+            .hypotheses
+            .iter()
+            .any(|h| h.id == ids[0] || h.id == "copy")
+    );
+    assert!(!work.view.visible.contains(&ids[0]));
     drop(session);
     let report = replay::replay(dir.path()).unwrap();
     assert!(report.ok(), "{:?}", report.problems);

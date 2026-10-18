@@ -331,6 +331,16 @@ pub fn add_analysis_result(
 }
 
 pub fn combine(session: &mut Session, doc: DocId, paths: &[PathBuf]) -> Result<()> {
+    combine_selected(session, doc, paths, None)
+}
+
+/// Combine only the listed hypothesis IDs of each file; `None` keeps all.
+pub fn combine_selected(
+    session: &mut Session,
+    doc: DocId,
+    paths: &[PathBuf],
+    keep: Option<&BTreeMap<PathBuf, BTreeSet<String>>>,
+) -> Result<()> {
     if !session.is_delimitation(doc) {
         return Err(invalid("Choose a species workspace"));
     }
@@ -391,8 +401,23 @@ pub fn combine(session: &mut Session, doc: DocId, paths: &[PathBuf]) -> Result<(
             .iter()
             .map(|h| (h.id.clone(), ulid::Ulid::generate().to_string()))
             .collect();
+        let wanted = keep.map(|keep| keep.get(path).cloned().unwrap_or_default());
         for mut hypothesis in work.hypotheses {
             let original = hypothesis.id.clone();
+            if wanted
+                .as_ref()
+                .is_some_and(|wanted| !wanted.contains(&original))
+            {
+                continue;
+            }
+            // An edited copy keeps its lineage only if its source came along.
+            if hypothesis.parent.as_ref().is_some_and(|parent| {
+                wanted
+                    .as_ref()
+                    .is_some_and(|wanted| !wanted.contains(parent))
+            }) {
+                hypothesis.parent = None;
+            }
             hypothesis.id.clone_from(
                 ids.get(&original)
                     .ok_or_else(|| invalid("Missing hypothesis identity"))?,

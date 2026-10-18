@@ -72,6 +72,7 @@ ApplicationWindow {
     property var currentView: null
     readonly property var traceDocument: traceOpen ? docs.itemAt(tabs.currentIndex) : null
     readonly property var alignmentDocument: alignmentOpen ? docs.itemAt(tabs.currentIndex) : null
+    readonly property var speciesView: delimitationOpen ? docs.itemAt(tabs.currentIndex) : null
     property string currentPath: ""
     // "sequence" or "alignment", for the active tab.
     property string currentKind: ""
@@ -124,7 +125,7 @@ ApplicationWindow {
             Qt.callLater(publishRibbonCommands)
         }
     }
-    readonly property var applicationCommands: [openCommand, saveCommand, saveAsCommand, projectCommand, shortcutsCommand, aboutCommand, preferencesCommand, textRepresentationCommand, contextShortcutsCommand, historyCommand, methodsCommand, showProvenanceCommand, verifyProvenanceCommand, packageCommand, recoverCommand].concat(ribbonCommands)
+    readonly property var applicationCommands: [openCommand, saveCommand, saveAsCommand, projectCommand, shortcutsCommand, aboutCommand, preferencesCommand, textRepresentationCommand, contextShortcutsCommand, exportSvgCommand, historyCommand, methodsCommand, showProvenanceCommand, verifyProvenanceCommand, packageCommand, recoverCommand].concat(ribbonCommands)
     property var recentProjects: []
     property string recentProjectsError: ""
     function updateRecentProjects(reply) {
@@ -267,6 +268,8 @@ ApplicationWindow {
         const region = regions[(active + (backward ? regions.length - 1 : 1)) % regions.length]
         const target = region === ribbonTabBar || region === tabs ? region.currentItem : region
         if (target) target.forceActiveFocus(Qt.TabFocusReason)
+        const focused = window.activeFocusItem
+        if (focused && focused.keyboardFocus !== undefined) focused.keyboardFocus = true
     }
     Shortcut { sequence: "F6"; onActivated: window.focusRegion(false) }
     Shortcut { sequence: "Shift+F6"; onActivated: window.focusRegion(true) }
@@ -302,7 +305,7 @@ ApplicationWindow {
                 return
             }
             const usesOpenAlignment = window.alignmentOpen && input === source.file_path
-            const path = source.create_delimitation()
+            const path = source.create_delimitation(method)
             if (!path.length) return
             window.openPath(path)
             const index = tabs.currentIndex
@@ -322,8 +325,24 @@ ApplicationWindow {
         title: "Combine saved species hypotheses"
         fileMode: FileDialog.OpenFiles
         nameFilters: ["Species hypotheses (*.spart *.spartxml *.spart-xml *.xml)"]
+        currentFolder: window.activeFolder()
+        onVisibleChanged: if (visible) currentFolder = window.activeFolder()
+        readonly property var paths: Array.from(selectedFiles, url => window.localPath(url))
         onAccepted: {
             if (selectedFiles.length < 2) { combineError.message = "Choose at least two species hypothesis files."; combineError.open(); return }
+            const candidates = JSON.parse(combineController.combine_candidates(JSON.stringify(paths)))
+            if (!candidates.length) { combineError.message = combineController.message; combineError.open(); return }
+            combineChoice.show(candidates)
+        }
+    }
+    CombineHypothesesDialog {
+        id: combineChoice
+        property string selection: ""
+        onChosenHypotheses: chosen => {
+            selection = chosen
+            // Save beside the species files just chosen.
+            const paths = combinePicker.paths
+            combinedDestination.currentFolder = shell.parent_folder_url(paths[paths.length - 1])
             combinedDestination.open()
         }
     }
@@ -334,9 +353,8 @@ ApplicationWindow {
         defaultSuffix: "spart"
         nameFilters: ["Species hypotheses (*.spart)"]
         onAccepted: {
-            const paths = Array.from(combinePicker.selectedFiles, url => window.localPath(url))
             const output = window.localPath(selectedFile)
-            if (combineController.combine_files(JSON.stringify(paths), output)) window.openPath(output)
+            if (combineController.combine_files(JSON.stringify(combinePicker.paths), output, combineChoice.selection)) window.openPath(output)
             else { combineError.message = combineController.message; combineError.open() }
         }
     }
@@ -488,6 +506,16 @@ ApplicationWindow {
         iconName: "keyboard"
         tooltip: "Keyboard shortcuts for this tab"
         onTriggered: shortcuts.show(window.ribbonTab)
+    }
+    AppCommand {
+        id: exportSvgCommand
+        customization: window.customization
+        commandId: "ribbon.export-an-editable-svg-of-this-view"
+        text: "Export SVG…"
+        iconName: "save-as"
+        tooltip: "Export an editable SVG of this view"
+        enabled: window.current !== null
+        onTriggered: window.exportSvg()
     }
     AppProvenance {
         id: provenance
@@ -725,6 +753,11 @@ ApplicationWindow {
         RibbonButton { commandId: "species.manual-" + speciesMethods.commandSuffix; text: "Manual"; iconName: "tree-gmyc"; enabled: window.current !== null && !window.current.busy; onInvoked: window.beginDelimitation("manual") }
         RibbonButton { commandId: "species.combine-" + speciesMethods.commandSuffix; text: "Combine"; iconName: "align"; onInvoked: combinePicker.open() }
     }
+    // On every ribbon page, so a figure can be exported from any tab.
+    component ExportGroup: RibbonGroup {
+        title: "Figure"
+        actions: [exportSvgCommand]
+    }
     component ShortcutsGroup: RibbonGroup {
         title: "Keys"
         actions: [contextShortcutsCommand]
@@ -860,11 +893,6 @@ ApplicationWindow {
                         title: "Recovery"
                         AppRibbonButton { action: recoverCommand; visible: recoverCommand.visible; iconName: "history"; tip: recoverCommand.tooltip }
                     }
-                    ToolSeparator { Layout.fillHeight: true }
-                    RibbonGroup {
-                        title: "Export"
-                        RibbonButton { commandId: "ribbon.export-an-editable-svg-of-this-view"; text: "Export SVG…"; tip: "Export an editable SVG of this view"; enabled: window.current !== null; onInvoked: window.exportSvg() }
-                    }
                     Item { Layout.fillWidth: true }
                     RibbonGroup {
                         title: "Review files"
@@ -873,6 +901,7 @@ ApplicationWindow {
                         RibbonButton { commandId: "ribbon.resume-saved-review-decisions"; text: "Open review…"; tip: "Resume saved review decisions"; keys: "Ctrl+Alt+O"; enabled: window.current && !window.current.dirty; onInvoked: window.traceDocument.openReview() }
                     }
                     RibbonGroup { title: "Document record"; actions: [historyCommand, methodsCommand] }
+                    ExportGroup {}
                     ShortcutsGroup {}
                 }
 
@@ -931,6 +960,7 @@ ApplicationWindow {
                     }
                     Item { Layout.fillWidth: true }
                     RibbonGroup { title: "Text"; actions: [textRepresentationCommand] }
+                    ExportGroup {}
                     ShortcutsGroup {}
                 }
 
@@ -988,6 +1018,7 @@ ApplicationWindow {
                         }
                     }
                     Item { Layout.fillWidth: true }
+                    ExportGroup {}
                     ShortcutsGroup {}
                 }
 
@@ -998,6 +1029,7 @@ ApplicationWindow {
                         actions: [preferencesCommand]
                     }
                     Item { Layout.fillWidth: true }
+                    ExportGroup {}
                     ShortcutsGroup {}
                 }
 
@@ -1014,6 +1046,7 @@ ApplicationWindow {
                         RibbonButton { commandId: "ribbon.open-a-new-github-issue"; text: "Report a problem"; iconName: "bug"; tip: "Open a new GitHub issue"; enabled: true; onInvoked: Qt.openUrlExternally("https://github.com/hverbruggen/basecraft/issues/new") }
                     }
                     Item { Layout.fillWidth: true }
+                    ExportGroup {}
                     ShortcutsGroup {}
                 }
 
@@ -1085,6 +1118,7 @@ ApplicationWindow {
                         RibbonButton { commandId: "ribbon.review-chromatograms-and-add-their-consensus"; text: "Chromatogram"; iconName: "waveform"; tip: "Review chromatograms and add their consensus"; enabled: window.current !== null && !window.current.busy; onInvoked: docs.itemAt(tabs.currentIndex).addTraces() }
                     }
                     Item { Layout.fillWidth: true }
+                    ExportGroup {}
                     ShortcutsGroup {}
                 }
 
@@ -1129,11 +1163,8 @@ ApplicationWindow {
                         onLinkRequested: (target) => linkAlignmentFile.ask(target)
                         Component.onCompleted: commands.forEach(command => window.registerRibbonCommand(command))
                     }
-                    RibbonGroup {
-                        title: "Figure"
-                        RibbonButton { commandId: "ribbon.save-the-complete-tree-as-an-editable-svg-with"; text: "Export SVG…"; tip: "Save the complete tree as an editable SVG with the current colours and font"; onInvoked: window.exportSvg() }
-                    }
                     Item { Layout.fillWidth: true }
+                    ExportGroup {}
                     ShortcutsGroup {}
                 }
 
@@ -1185,15 +1216,40 @@ ApplicationWindow {
                         }
                     }
                     Item { Layout.fillWidth: true }
+                    ExportGroup {}
                     ShortcutsGroup {}
                 }
                 RibbonPage {
                     SpeciesMethodsGroup { commandSuffix: "workspace" }
+                    ToolSeparator { Layout.fillHeight: true }
+                    RibbonGroup {
+                        title: "Hypotheses"
+                        RibbonButton { commandId: "species.new"; text: "New…"; tip: "New species hypothesis, empty or copied from another"; iconName: "add"; enabled: window.speciesView !== null && !window.current.busy; onInvoked: window.speciesView.newHypothesis() }
+                        RibbonButton { commandId: "species.columns"; text: "Columns…"; tip: "Choose which hypotheses get a bar column"; iconName: "columns"; enabled: window.speciesView !== null; onInvoked: window.speciesView.chooseColumns() }
+                        ModeButton { commandId: "species.details"; text: "Details"; tip: "Species of the hypothesis being edited, fit report and distances"; iconName: "info"; enabled: window.speciesView !== null; active: window.speciesView !== null && window.speciesView.detailsOpen; onInvoked: window.speciesView.detailsOpen = !window.speciesView.detailsOpen }
+                    }
+                    ToolSeparator { Layout.fillHeight: true }
+                    RibbonGroup {
+                        title: "Edit species"
+                        RibbonButton { commandId: "species.group"; text: "Group selection"; tip: "Make the selected specimens one species in the hypothesis being edited (Ctrl+G)"; iconName: "selection"; enabled: window.speciesView !== null && window.speciesView.selection.length > 0 && !window.current.busy; onInvoked: window.speciesView.groupSelection() }
+                        RibbonButton { commandId: "species.merge"; text: "Merge checked"; tip: "Merge the species ticked in Details"; iconName: "align"; enabled: window.speciesView !== null && window.speciesView.mergeGroups.length > 1; onInvoked: window.speciesView.mergeChecked() }
+                        RibbonButton { commandId: "species.unassign"; text: "Unassign"; tip: "Take the selected specimens out of their species"; iconName: "minus"; enabled: window.speciesView !== null && window.speciesView.selection.length > 0; onInvoked: window.speciesView.unassign() }
+                    }
+                    ToolSeparator { Layout.fillHeight: true }
+                    RibbonGroup {
+                        title: "Tools"
+                        ModeButton { commandId: "species.select-tool"; text: "Select"; tip: "Click a node to select its clade, or a bar to select a species"; iconName: "selection"; enabled: window.speciesView !== null; active: window.speciesView !== null && window.speciesView.tool === "select"; onInvoked: window.speciesView.setTool("select") }
+                        ModeButton { commandId: "species.threshold-cut"; text: "Threshold cut"; tip: "Drag a threshold across an ultrametric tree and save the species it defines"; iconName: "trim"; enabled: window.speciesView !== null && window.current.can_cut; active: window.speciesView !== null && window.speciesView.tool === "cut"; onInvoked: window.speciesView.setTool("cut") }
+                    }
+                    ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
                         title: "Display"
-                        RibbonButton { commandId: "species.display"; text: "Tree / groups…"; iconName: "tree"; enabled: window.current !== null && !window.current.busy; onInvoked: window.beginDelimitation("view") }
+                        RibbonButton { commandId: "species.display"; text: "Tree / groups…"; tip: "Attach or build a display tree"; iconName: "tree"; enabled: window.current !== null && !window.current.busy; onInvoked: window.beginDelimitation("view") }
+                        RibbonButton { commandId: "species.toggle-view"; text: window.speciesView !== null && window.speciesView.showGroups ? "Tree view" : "Sequence groups"; tip: "Switch between the tree with bars and a list of species"; iconName: "phylogram"; enabled: window.speciesView !== null && window.current.display_path.length > 0; onInvoked: window.speciesView.showGroups = !window.speciesView.showGroups }
+                        ModeButton { commandId: "species.advanced"; text: "Advanced"; tip: "Run analyses with every engine option"; iconName: "more"; enabled: window.speciesView !== null; active: window.speciesView !== null && window.speciesView.settingsOpen; onInvoked: window.speciesView.settingsOpen = !window.speciesView.settingsOpen }
                     }
                     Item { Layout.fillWidth: true }
+                    ExportGroup {}
                     ShortcutsGroup {}
                 }
 
@@ -1222,6 +1278,7 @@ ApplicationWindow {
                         ExportConsensusButton { commandId: "ribbon.copy-the-edited-consensus-as-fasta"; text: "to clipboard"; tip: "Copy the edited consensus as FASTA"; keys: "Ctrl+Shift+C"; enabled: window.current && window.current.unresolved === 0; onInvoked: window.traceDocument.copyConsensus() }
                     }
                     Item { Layout.fillWidth: true }
+                    ExportGroup {}
                     ShortcutsGroup {}
                 }
         }
@@ -2069,6 +2126,8 @@ ApplicationWindow {
                 const d = docs.itemAt(i)
                 if (d) {
                     d.controller.check_theme()
+                    // The species view draws its tree with its own controller.
+                    if (d.kind === "delimitation") d.treeController.check_theme()
                     if (d.kind !== "trace") d.controller.flush()
                 }
             }

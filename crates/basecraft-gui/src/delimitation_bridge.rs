@@ -28,6 +28,7 @@ pub mod qobject {
         #[qproperty(bool, can_cut)]
         #[qproperty(f64, root_height)]
         #[qproperty(f64, threshold)]
+        #[qproperty(i32, theme_revision)]
         type DelimitationController = super::DelimitationRust;
         #[qinvokable]
         fn accessible_page(self: &DelimitationController, page: i32) -> QString;
@@ -42,7 +43,10 @@ pub mod qobject {
             self: Pin<&mut DelimitationController>,
             paths: &QString,
             output: &QString,
+            selection: &QString,
         ) -> bool;
+        #[qinvokable]
+        fn combine_candidates(self: Pin<&mut DelimitationController>, paths: &QString) -> QString;
         #[qinvokable]
         fn attach_tree(
             self: Pin<&mut DelimitationController>,
@@ -81,6 +85,15 @@ pub mod qobject {
             left: f64,
             height: f64,
         ) -> QString;
+        #[qinvokable]
+        fn columns_json(self: &DelimitationController, left: f64) -> QString;
+        #[qinvokable]
+        fn export_figure(
+            self: Pin<&mut DelimitationController>,
+            path: &QString,
+            scope: i32,
+            publication: bool,
+        );
         #[qinvokable]
         fn preview_cut(self: Pin<&mut DelimitationController>, threshold: f64);
         #[qinvokable]
@@ -167,6 +180,10 @@ pub struct DelimitationRust {
     can_cut: bool,
     root_height: f64,
     threshold: f64,
+    theme_revision: i32,
+    palette: Vec<String>,
+    // Modification time of the theme file last applied; empty before the first read.
+    theme_stamp: String,
     session: Option<Session>,
     doc: Option<DocId>,
     selection: Selection,
@@ -197,6 +214,9 @@ impl Default for DelimitationRust {
             can_cut: false,
             root_height: 0.0,
             threshold: 0.0,
+            theme_revision: 0,
+            palette: delimitation::palette(&basecraft_viewmodel::Theme::default()),
+            theme_stamp: String::new(),
             session: None,
             doc: None,
             selection: Selection::default(),
@@ -382,7 +402,61 @@ impl qobject::DelimitationController {
             }
         }
     }
-    pub fn combine_files(mut self: Pin<&mut Self>, paths: &QString, output: &QString) -> bool {
+    /// Hypotheses in each file, best analysis results first, for the combine dialog.
+    pub fn combine_candidates(mut self: Pin<&mut Self>, paths: &QString) -> QString {
+        let result = (|| -> Result<Vec<Value>, String> {
+            let paths: Vec<PathBuf> =
+                serde_json::from_str(&paths.to_string()).map_err(|e| e.to_string())?;
+            paths
+                .iter()
+                .map(|path| {
+                    let work = basecraft_ops::files::load_delimitation(path)
+                        .map_err(|e| format!("{}: {e}", path.display()))?;
+                    let mut entries: Vec<(usize, &Hypothesis)> =
+                        work.hypotheses.iter().enumerate().collect();
+                    // Each analysis run lists its best partition first and
+                    // marks it rank 1; manual work follows the analyses.
+                    let best = |h: &Hypothesis| {
+                        ["asap_rank", "gmyc_rank"]
+                            .iter()
+                            .any(|key| h.attributes.get(*key).is_some_and(|r| r == "1"))
+                            || (h.origin == HypothesisOrigin::Inferred
+                                && !h.attributes.contains_key("asap_rank")
+                                && !h.attributes.contains_key("gmyc_rank"))
+                    };
+                    let inferred = |h: &Hypothesis| {
+                        matches!(h.origin, HypothesisOrigin::Inferred | HypothesisOrigin::Imported)
+                    };
+                    entries.sort_by_key(|(i, h)| (!best(h), !inferred(h), *i));
+                    let hypotheses: Vec<Value> = entries
+                        .into_iter()
+                        .map(|(_, h)| {
+                            let (code, method) = delimitation::origin(h);
+                            json!({"id": h.id, "name": h.name, "code": code, "method": method,
+                                "species": h.groups.len(), "unassigned": h.unassigned.len(),
+                                "best": best(h), "parent": h.parent,
+                                "scores": h.scores.iter().map(|s| json!({"value": s.value, "scale": s.scale})).collect::<Vec<_>>()})
+                        })
+                        .collect();
+                    Ok(json!({"path": path, "file": path.file_name().map(|n| n.to_string_lossy().into_owned()),
+                        "specimens": work.specimens.len(), "hypotheses": hypotheses}))
+                })
+                .collect()
+        })();
+        match result {
+            Ok(files) => QString::from(&Value::Array(files).to_string()),
+            Err(error) => {
+                self.as_mut().fail(&error);
+                QString::from("[]")
+            }
+        }
+    }
+    pub fn combine_files(
+        mut self: Pin<&mut Self>,
+        paths: &QString,
+        output: &QString,
+        selection: &QString,
+    ) -> bool {
         let result = (|| -> Result<_, String> {
             let paths: Vec<PathBuf> =
                 serde_json::from_str(&paths.to_string()).map_err(|e| e.to_string())?;
@@ -395,9 +469,48 @@ impl qobject::DelimitationController {
             }
             let mut session = Session::recoverable(crate::bridge::project_root(&output))
                 .map_err(|e| e.to_string())?;
-            let doc = session.open(&paths[0]).map_err(|e| e.to_string())?;
-            basecraft_ops::delimitation::combine(&mut session, doc, &paths[1..])
+            // Path to the hypothesis IDs to keep; empty keeps everything.
+            let keep: Option<BTreeMap<PathBuf, BTreeSet<String>>> = Some(selection.to_string())
+                .filter(|s| !s.trim().is_empty())
+                .map(|s| serde_json::from_str(&s))
+                .transpose()
                 .map_err(|e| e.to_string())?;
+            if keep
+                .as_ref()
+                .is_some_and(|keep| keep.values().all(BTreeSet::is_empty))
+            {
+                return Err("Choose at least one hypothesis to combine".into());
+            }
+            let doc = session.open(&paths[0]).map_err(|e| e.to_string())?;
+            if let Some(keep) = &keep {
+                let wanted = keep.get(&paths[0]).cloned().unwrap_or_default();
+                let dropped: BTreeSet<String> = session
+                    .delimitation(doc)
+                    .hypotheses
+                    .iter()
+                    .map(|h| h.id.clone())
+                    .filter(|id| !wanted.contains(id))
+                    .collect();
+                if !dropped.is_empty() {
+                    session
+                        .apply(
+                            doc,
+                            Op::DelimitationEdit {
+                                edit: Box::new(DelimitationEdit::Remove {
+                                    hypotheses: dropped,
+                                }),
+                            },
+                        )
+                        .map_err(|e| e.to_string())?;
+                }
+            }
+            basecraft_ops::delimitation::combine_selected(
+                &mut session,
+                doc,
+                &paths[1..],
+                keep.as_ref(),
+            )
+            .map_err(|e| e.to_string())?;
             session
                 .save(doc, Some(&output))
                 .map_err(|e| e.to_string())?;
@@ -547,9 +660,20 @@ impl qobject::DelimitationController {
                     .unwrap_or("")
                     .to_string()
             };
-            let id = r.active_hypothesis.to_string();
+            // Context menus name their hypothesis; toolbar actions use the active one.
+            let id = args
+                .get("hypothesis")
+                .and_then(Value::as_str)
+                .map_or_else(|| r.active_hypothesis.to_string(), str::to_string);
             let members = r.selection.specimens.clone();
             Ok(match name.to_string().as_str() {
+                "create" if args.get("source").and_then(Value::as_str).is_some() => {
+                    DelimitationEdit::Derive {
+                        source: text("source"),
+                        id: ulid::Ulid::generate().to_string(),
+                        name: text("name"),
+                    }
+                }
                 "create" => DelimitationEdit::Add {
                     hypothesis: Hypothesis {
                         id: ulid::Ulid::generate().to_string(),
@@ -618,6 +742,43 @@ impl qobject::DelimitationController {
                         (index + 1).min(view.visible.len() - 1)
                     };
                     view.visible.swap(index, next);
+                    DelimitationEdit::SetView { view }
+                }
+                "hide" => {
+                    let mut view = w.view.clone();
+                    view.visible.retain(|h| h != &id);
+                    DelimitationEdit::SetView { view }
+                }
+                "style" => {
+                    let mut view = w.view.clone();
+                    let style = view.columns.entry(id.clone()).or_default();
+                    if let Some(width) = args.get("width").and_then(Value::as_u64) {
+                        style.width = Some(
+                            u32::try_from(width)
+                                .unwrap_or(u32::MAX)
+                                .clamp(delimitation::MIN_BAR_WIDTH, delimitation::MAX_BAR_WIDTH),
+                        );
+                    }
+                    if let Some(colors) = args.get("colors").and_then(Value::as_object) {
+                        for (group, color) in colors {
+                            let color = color.as_str().unwrap_or("");
+                            if color.is_empty() {
+                                style.colors.remove(group);
+                            } else if color.len() == 7
+                                && color.starts_with('#')
+                                && color[1..].bytes().all(|b| b.is_ascii_hexdigit())
+                            {
+                                style
+                                    .colors
+                                    .insert(group.clone(), color.to_ascii_lowercase());
+                            } else {
+                                return Err(format!("{color} is not a #rrggbb colour"));
+                            }
+                        }
+                    }
+                    if *style == basecraft_protocol::delimitation::ColumnStyle::default() {
+                        view.columns.remove(&id);
+                    }
                     DelimitationEdit::SetView { view }
                 }
                 "visible" => {
@@ -797,14 +958,13 @@ impl qobject::DelimitationController {
                 attributes: BTreeMap::new(),
             };
             for (i, members) in r.preview.iter().enumerate() {
-                let mut g = group(
+                let g = group(
                     members
                         .iter()
                         .flat_map(|id| mapping.get(id).into_iter().flatten().cloned())
                         .collect(),
                     format!("Preview {}", i + 1),
                 );
-                g.color = ["#377eb8", "#e41a1c", "#4daf4a", "#984ea3"][i % 4].into();
                 h.groups.push(g);
             }
             work.hypotheses.push(h);
@@ -814,10 +974,53 @@ impl qobject::DelimitationController {
             &work,
             &rows(&geometry.to_string()),
             number(left),
-            36.0,
+            &r.palette,
             Some((0.0, number(height))),
         );
         QString::from(&serde_json::to_string(&bars.iter().map(|b|json!({"hypothesis":b.hypothesis,"group":b.group,"x":b.x,"y":b.y,"width":b.width,"height":b.height,"color":b.color,"label":b.label})).collect::<Vec<_>>()).unwrap())
+    }
+    /// Visible columns with their letter codes, plus a legend of the codes used.
+    pub fn columns_json(&self, left: f64) -> QString {
+        let r = self.rust();
+        let Some((s, d)) = r.session.as_ref().zip(r.doc) else {
+            return QString::from("{\"columns\":[],\"legend\":[]}");
+        };
+        let work = s.delimitation(d);
+        let mut legend = Vec::new();
+        let columns: Vec<Value> = delimitation::columns(work, number(left))
+            .into_iter()
+            .filter_map(|c| {
+                let h = work.hypotheses.iter().find(|h| h.id == c.hypothesis)?;
+                let (code, method) = delimitation::origin(h);
+                if !legend.contains(&(code, method)) {
+                    legend.push((code, method));
+                }
+                Some(json!({"id": h.id, "x": c.x, "width": c.width, "code": code,
+                    "method": method, "name": h.name, "editable": !matches!(h.origin,
+                    HypothesisOrigin::Imported | HypothesisOrigin::Inferred),
+                    "groups": h.groups.iter().enumerate().map(|(i, g)| json!({"id": g.id,
+                        "label": g.label, "members": g.members.len(),
+                        "color": work.view.columns.get(&h.id).and_then(|s| s.colors.get(&g.id)).cloned()
+                            .unwrap_or_else(|| r.palette[i % r.palette.len()].clone()),
+                        "theme": r.palette[i % r.palette.len()]})).collect::<Vec<_>>()}))
+            })
+            .collect();
+        legend.sort_unstable();
+        QString::from(
+            &json!({"columns": columns, "legend": legend.iter().map(|(c, m)| json!({"code": c, "method": m})).collect::<Vec<_>>()})
+                .to_string(),
+        )
+    }
+    pub fn export_figure(self: Pin<&mut Self>, path: &QString, _scope: i32, publication: bool) {
+        // The comparison figure is always complete: every visible column and tip.
+        let theme = if publication {
+            basecraft_viewmodel::Theme::publication()
+        } else {
+            crate::bridge::load_theme()
+                .map(|(theme, _)| theme)
+                .unwrap_or_default()
+        };
+        self.export_with(path, &theme);
     }
     pub fn preview_cut(mut self: Pin<&mut Self>, threshold: f64) {
         let result = {
@@ -1010,7 +1213,13 @@ impl qobject::DelimitationController {
             None => false,
         }
     }
-    pub fn export_svg(mut self: Pin<&mut Self>, path: &QString) {
+    pub fn export_svg(self: Pin<&mut Self>, path: &QString) {
+        let theme = crate::bridge::load_theme()
+            .map(|(theme, _)| theme)
+            .unwrap_or_default();
+        self.export_with(path, &theme);
+    }
+    fn export_with(mut self: Pin<&mut Self>, path: &QString, theme: &basecraft_viewmodel::Theme) {
         let result = (|| -> Result<(), Box<dyn std::error::Error>> {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
@@ -1019,14 +1228,11 @@ impl qobject::DelimitationController {
                 .display_tree
                 .as_ref()
                 .ok_or("Attach a display tree first")?;
-            let theme = crate::bridge::load_theme()
-                .map(|(theme, _)| theme)
-                .unwrap_or_default();
             let tree_svg = basecraft_viewmodel::tree::to_svg_with_style(
                 tree,
                 900.0,
                 20.0,
-                &theme,
+                theme,
                 &crate::bridge::monospace_font(),
             );
             let (rows, width, height) = basecraft_viewmodel::tree::figure_rows(tree, 900.0, 20.0);
@@ -1037,6 +1243,7 @@ impl qobject::DelimitationController {
                 width,
                 height,
                 &crate::bridge::monospace_font(),
+                &delimitation::palette(theme),
             );
             s.export(d, Path::new(&path.to_string()), "svg", |w| {
                 w.write_all(svg.as_bytes())
@@ -1481,10 +1688,7 @@ impl qobject::DelimitationController {
         let generated = path
             .file_name()
             .and_then(|n| n.to_str())
-            .is_some_and(|n| n.starts_with("species-"))
-            && path
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("spart"));
+            .is_some_and(generated_workspace);
         if !generated || std::fs::remove_file(&path).is_err() {
             return false;
         }
@@ -1533,20 +1737,92 @@ impl qobject::DelimitationController {
             self.fail(&e.to_string());
         }
     }
-    pub fn check_theme(self: Pin<&mut Self>) {}
+    pub fn check_theme(mut self: Pin<&mut Self>) {
+        let stamp = format!(
+            "{:?}",
+            crate::bridge::omarchy_theme_path()
+                .and_then(|path| std::fs::metadata(path).and_then(|m| m.modified()).ok())
+        );
+        if self.rust().theme_stamp == stamp {
+            return;
+        }
+        let theme = crate::bridge::load_theme()
+            .map(|(theme, _)| theme)
+            .unwrap_or_default();
+        let palette = delimitation::palette(&theme);
+        let changed = palette != self.rust().palette;
+        {
+            let mut r = self.as_mut().rust_mut();
+            r.theme_stamp = stamp;
+            r.palette = palette;
+        }
+        if changed {
+            let next = self.rust().theme_revision + 1;
+            self.set_theme_revision(next);
+        }
+    }
     pub fn memory_report(&self) -> QString {
         QString::from(&crate::bridge::memory_text())
     }
 }
 
+const WORKSPACE_TAGS: [&str; 5] = ["gmyc", "asap", "ptp", "manual", "species"];
+
+fn workspace_tag(method: &str) -> &'static str {
+    match method {
+        m if m.starts_with("gmyc") => "gmyc",
+        "asap" => "asap",
+        "ptp" | "mptp" => "ptp",
+        "manual" => "manual",
+        _ => "species",
+    }
+}
+
+/// `specimens.afa` and ASAP give `specimens.afa.asap01.spart`, numbered past
+/// any existing file.
+fn workspace_path(source: &Path, method: &str) -> PathBuf {
+    let directory = source.parent().unwrap_or(Path::new("."));
+    let base = source
+        .file_name()
+        .map_or_else(|| "species".into(), |n| n.to_string_lossy().into_owned());
+    let tag = workspace_tag(method);
+    (1..=u32::MAX)
+        .map(|n| directory.join(format!("{base}.{tag}{n:02}.spart")))
+        .find(|path| !path.exists())
+        .unwrap_or_default()
+}
+
+/// Names `create_workspace` gives, including the earlier `species-<id>.spart`.
+fn generated_workspace(name: &str) -> bool {
+    let Some(stem) = name
+        .len()
+        .checked_sub(6)
+        .filter(|&i| name.is_char_boundary(i) && name[i..].eq_ignore_ascii_case(".spart"))
+        .map(|i| &name[..i])
+    else {
+        return false;
+    };
+    if stem.starts_with("species-") {
+        return true;
+    }
+    stem.rsplit_once('.').is_some_and(|(_, last)| {
+        let digits = last.trim_start_matches(|c: char| c.is_ascii_lowercase());
+        let tag = &last[..last.len() - digits.len()];
+        digits.len() >= 2
+            && digits.bytes().all(|b| b.is_ascii_digit())
+            && WORKSPACE_TAGS.contains(&tag)
+    })
+}
+
 /// Entry actions use the same public snapshot/plugin/artifact boundary as CLI.
-pub(crate) fn create_workspace(session: &mut Session, doc: DocId) -> Result<String, String> {
+pub(crate) fn create_workspace(
+    session: &mut Session,
+    doc: DocId,
+    method: &str,
+) -> Result<String, String> {
     use basecraft_plugin_host::{FileJob, file_tool::AlignmentInput};
     let source_path = session.root().join(session.doc_key(doc));
-    let output = source_path
-        .parent()
-        .unwrap_or(session.root())
-        .join(format!("species-{}.spart", ulid::Ulid::generate()));
+    let output = workspace_path(&source_path, method);
     let plugin = crate::bridge::plugin_dir("delimitation");
     let job = if session.is_tree(doc) {
         FileJob::from_tree(session, doc, (&plugin, "workspace_tree"), output)
@@ -1576,4 +1852,38 @@ pub(crate) fn create_workspace(session: &mut Session, doc: DocId) -> Result<Stri
                 .is_some_and(|ext| ext.eq_ignore_ascii_case("spart"))
         })
         .ok_or_else(|| "No workspace artifact returned".into())
+}
+
+#[cfg(test)]
+mod naming_tests {
+    use super::*;
+    #[test]
+    fn workspaces_are_named_after_source_and_method() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("specimens.afa");
+        let first = workspace_path(&source, "gmyc_alignment_single");
+        assert_eq!(first.file_name().unwrap(), "specimens.afa.gmyc01.spart");
+        std::fs::write(&first, "").unwrap();
+        let second = workspace_path(&source, "gmyc_single");
+        assert_eq!(second.file_name().unwrap(), "specimens.afa.gmyc02.spart");
+        assert_eq!(
+            workspace_path(&source, "mptp").file_name().unwrap(),
+            "specimens.afa.ptp01.spart"
+        );
+        for name in [
+            "specimens.afa.gmyc01.spart",
+            "x.asap12.SPART",
+            "species-01ABC.spart",
+        ] {
+            assert!(generated_workspace(name), "{name}");
+        }
+        for name in [
+            "hypotheses.spart",
+            "x.gmyc1.spart",
+            "x.trees01.spart",
+            "x.asap01.txt",
+        ] {
+            assert!(!generated_workspace(name), "{name}");
+        }
+    }
 }

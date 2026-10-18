@@ -1421,6 +1421,28 @@
         "clade"
       ]
     },
+    "ColumnStyle": {
+      "description": "How one hypothesis column is drawn. Unset fields follow the theme.",
+      "type": "object",
+      "properties": {
+        "colors": {
+          "description": "Group ID to `#rrggbb`.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "width": {
+          "description": "Bar width in pixels.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        }
+      }
+    },
     "DelimitationEdit": {
       "description": "One atomic edit. Inferred and imported results must first be derived.",
       "oneOf": [
@@ -1458,6 +1480,27 @@
           "required": [
             "action",
             "hypothesis"
+          ]
+        },
+        {
+          "description": "Drop hypotheses. Refused while a kept hypothesis was copied from one.",
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "remove"
+            },
+            "hypotheses": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "uniqueItems": true
+            }
+          },
+          "required": [
+            "action",
+            "hypotheses"
           ]
         },
         {
@@ -1680,6 +1723,13 @@
     "DelimitationView": {
       "type": "object",
       "properties": {
+        "columns": {
+          "description": "Hypothesis ID to its bar column style.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/ColumnStyle"
+          }
+        },
         "display_tree": {
           "type": [
             "string",

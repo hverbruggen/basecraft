@@ -154,13 +154,12 @@ fn species_cli_and_public_sdk_add_to_one_canonical_workspace() {
         "{}",
         String::from_utf8_lossy(&fitted.stderr)
     );
-    assert_eq!(
-        basecraft_ops::files::load_delimitation(&canonical)
-            .unwrap()
-            .hypotheses
-            .len(),
-        1
-    );
+    // GMYC adds every distinct partition in its support set, best first.
+    let fitted = basecraft_ops::files::load_delimitation(&canonical)
+        .unwrap()
+        .hypotheses;
+    assert_ne!(fitted.len(), 0);
+    assert!(fitted[0].name.starts_with("GMYC species hypothesis 1 ("));
     let sdk = Command::new("python3").args(["-c",r"
 import json, sys
 from basecraft.delimitation import run
@@ -173,13 +172,11 @@ print(json.dumps(run(sys.argv[1],sys.argv[2],method='gmyc_multiple',analysis_inp
     );
     let result: serde_json::Value = serde_json::from_slice(&sdk.stdout).unwrap();
     assert_eq!(result["outputs"][0], canonical.to_str().unwrap());
-    assert_eq!(
-        basecraft_ops::files::load_delimitation(&canonical)
-            .unwrap()
-            .hypotheses
-            .len(),
-        2
-    );
+    let combined = basecraft_ops::files::load_delimitation(&canonical)
+        .unwrap()
+        .hypotheses;
+    assert!(combined.len() > fitted.len());
+    assert_eq!(combined[..fitted.len()], fitted[..]);
     let mut visible: Vec<_> = std::fs::read_dir(&root)
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())

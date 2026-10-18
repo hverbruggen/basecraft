@@ -116,6 +116,24 @@ pub fn apply(work: &mut DelimitationWorkspace, edit: &DelimitationEdit) -> Resul
             next.view.visible = next.hypotheses.iter().map(|h| h.id.clone()).collect();
         }
         DelimitationEdit::Add { hypothesis } => next.hypotheses.push(hypothesis.clone()),
+        DelimitationEdit::Remove { hypotheses } => {
+            if hypotheses
+                .iter()
+                .any(|id| !next.hypotheses.iter().any(|h| &h.id == id))
+            {
+                return fail("unknown hypothesis");
+            }
+            next.hypotheses.retain(|h| !hypotheses.contains(&h.id));
+            if next
+                .hypotheses
+                .iter()
+                .any(|h| h.parent.as_ref().is_some_and(|p| hypotheses.contains(p)))
+            {
+                return fail("keep the hypotheses that edited copies were made from");
+            }
+            next.view.visible.retain(|id| !hypotheses.contains(id));
+            next.view.columns.retain(|id, _| !hypotheses.contains(id));
+        }
         DelimitationEdit::SaveCut {
             hypothesis,
             threshold,
@@ -152,10 +170,9 @@ pub fn apply(work: &mut DelimitationWorkspace, edit: &DelimitationEdit) -> Resul
             h.provenance.status = None;
             next.hypotheses.push(h);
         }
+        // A name is a label, not part of an inferred or imported result.
         DelimitationEdit::Rename { hypothesis, name } => {
-            editable(find(&mut next, hypothesis)?)?
-                .name
-                .clone_from(name);
+            find(&mut next, hypothesis)?.name.clone_from(name);
         }
         DelimitationEdit::RenameGroup {
             hypothesis,

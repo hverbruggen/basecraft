@@ -19,6 +19,7 @@ mod application_test_bridge;
 #[allow(unused_imports)] // harness=false omits the included module's #[test] bodies.
 mod bridge;
 #[path = "../src/delimitation_bridge.rs"]
+#[allow(unused_imports)] // harness=false omits the included module's #[test] bodies.
 mod delimitation_bridge;
 #[path = "../src/provenance_bridge.rs"]
 #[allow(unused_imports)] // harness=false omits the included module's #[test] bodies.

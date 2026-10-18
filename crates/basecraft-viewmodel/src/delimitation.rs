@@ -1,21 +1,106 @@
 //! Partition bars use the tree canvas's exact row geometry and stable IDs.
 #![allow(clippy::cast_precision_loss)]
-use crate::svg::escape;
-use basecraft_protocol::delimitation::{DelimitationWorkspace, Group, Hypothesis};
+use crate::{Rgba, svg::escape, theme::Theme};
+use basecraft_protocol::delimitation::{
+    DelimitationWorkspace, Group, Hypothesis, HypothesisOrigin,
+};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Write as _,
 };
 
-const GROUP_COLORS: [&str; 6] = [
-    "#377eb8", "#e41a1c", "#4daf4a", "#984ea3", "#ff7f00", "#a65628",
-];
-fn color(group: &Group, index: usize) -> &str {
-    if group.color.is_empty() {
-        GROUP_COLORS[index % GROUP_COLORS.len()]
-    } else {
-        &group.color
+/// Default bar width in pixels; each column can be set wider or narrower.
+pub const BAR_WIDTH: u32 = 9;
+pub const MIN_BAR_WIDTH: u32 = 5;
+pub const MAX_BAR_WIDTH: u32 = 200;
+const COLUMN_GAP: f32 = 4.0;
+
+/// Theme colours in the order groups receive them.
+#[must_use]
+pub fn palette(theme: &Theme) -> Vec<String> {
+    [
+        theme.blue,
+        theme.red,
+        theme.green,
+        theme.orange,
+        theme.magenta,
+        theme.cyan,
+        theme.yellow,
+        theme.brown,
+    ]
+    .map(hex)
+    .to_vec()
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn hex(c: Rgba) -> String {
+    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    format!("#{:02x}{:02x}{:02x}", byte(c[0]), byte(c[1]), byte(c[2]))
+}
+
+/// A user colour from the view, else the theme palette by group position.
+fn color(
+    work: &DelimitationWorkspace,
+    h: &Hypothesis,
+    group: &Group,
+    index: usize,
+    palette: &[String],
+) -> String {
+    work.view
+        .columns
+        .get(&h.id)
+        .and_then(|style| style.colors.get(&group.id))
+        .cloned()
+        .or_else(|| palette.get(index % palette.len().max(1)).cloned())
+        .unwrap_or_else(|| "#808080".into())
+}
+
+/// One-letter column code and the method it stands for.
+#[must_use]
+pub fn origin(h: &Hypothesis) -> (&'static str, &'static str) {
+    let method = h.provenance.method.to_ascii_lowercase();
+    match h.origin {
+        HypothesisOrigin::Manual => ("M", "Manual"),
+        HypothesisOrigin::ManualCut => ("T", "Manual threshold cut"),
+        HypothesisOrigin::Derived => ("E", "Edited copy"),
+        _ if method == "asap" => ("A", "ASAP"),
+        _ if method.starts_with("gmyc") => ("G", "GMYC"),
+        _ if method == "ptp" || method == "mptp" => ("P", "PTP"),
+        _ => ("I", "Imported"),
     }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Column {
+    pub hypothesis: String,
+    pub x: f32,
+    pub width: f32,
+}
+
+/// Visible hypothesis columns, left to right, starting at `left`.
+#[must_use]
+pub fn columns(work: &DelimitationWorkspace, left: f32) -> Vec<Column> {
+    let mut x = left;
+    let mut out = Vec::new();
+    for id in &work.view.visible {
+        if !work.hypotheses.iter().any(|h| &h.id == id) {
+            continue;
+        }
+        let width = work
+            .view
+            .columns
+            .get(id)
+            .and_then(|style| style.width)
+            .unwrap_or(BAR_WIDTH)
+            .clamp(MIN_BAR_WIDTH, MAX_BAR_WIDTH) as f32;
+        out.push(Column {
+            hypothesis: id.clone(),
+            x,
+            width,
+        });
+        x += width + COLUMN_GAP;
+    }
+    out
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -105,7 +190,7 @@ pub fn bars(
     work: &DelimitationWorkspace,
     rows: &[(String, f32, f32)],
     left: f32,
-    column_width: f32,
+    palette: &[String],
     viewport: Option<(f32, f32)>,
 ) -> (Vec<BarSegment>, BTreeSet<String>) {
     let mapping = tree_mapping(
@@ -114,8 +199,8 @@ pub fn bars(
     );
     let mut segments = Vec::new();
     let mut unmatched = BTreeSet::new();
-    for (column, id) in work.view.visible.iter().enumerate() {
-        let Some(h) = work.hypotheses.iter().find(|h| &h.id == id) else {
+    for column in columns(work, left) {
+        let Some(h) = work.hypotheses.iter().find(|h| h.id == column.hypothesis) else {
             continue;
         };
         let membership: BTreeMap<_, _> = h
@@ -153,11 +238,11 @@ pub fn bars(
                 segments.push(BarSegment {
                     hypothesis: h.id.clone(),
                     group: group.id.clone(),
-                    x: left + column as f32 * column_width,
+                    x: column.x,
                     y: top,
-                    width: column_width - 6.0,
+                    width: column.width,
                     height: bottom - top,
-                    color: color(group, index).into(),
+                    color: color(work, h, group, index, palette),
                     label: group.label.clone(),
                 });
             }
@@ -182,41 +267,69 @@ pub fn comparison_svg(
     tree_width: f32,
     height: f32,
     font: &str,
+    palette: &[String],
 ) -> String {
-    let width = tree_width + work.view.visible.len() as f32 * 90.0 + 24.0;
+    // Column letters sit above the bars; the legend explains them below.
+    const TOP: f32 = 20.0;
+    let left = tree_width + 8.0;
+    let columns = columns(work, left);
+    let shown: Vec<_> = columns
+        .iter()
+        .filter_map(|c| work.hypotheses.iter().find(|h| h.id == c.hypothesis))
+        .collect();
+    let mut methods: Vec<(&str, &str)> = shown.iter().map(|h| origin(h)).collect();
+    methods.dedup();
+    methods.sort_unstable();
+    methods.dedup();
+    let right = columns.last().map_or(left, |c| c.x + c.width);
+    let longest = shown
+        .iter()
+        .map(|h| h.name.chars().count())
+        .max()
+        .unwrap_or(0);
+    let width = (right + 24.0).max(longest as f32 * 7.0 + 40.0);
+    let total = TOP + height + 30.0 + (shown.len() + 1) as f32 * 14.0;
     let mut svg = format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width}\" height=\"{}\" font-family=\"{}\">\n<g id=\"tree\">{tree_svg}</g>\n",
-        height
-            + 50.0
-            + work
-                .hypotheses
-                .iter()
-                .filter(|h| work.view.visible.contains(&h.id))
-                .map(|h| h.groups.len())
-                .max()
-                .unwrap_or(0) as f32
-                * 14.0,
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width}\" height=\"{total}\" font-family=\"{}\">\n<g id=\"tree\" transform=\"translate(0,{TOP})\">{tree_svg}</g>\n",
         escape(font)
     );
-    let (segments, _) = bars(work, rows, tree_width + 8.0, 90.0, None);
+    let (segments, _) = bars(work, rows, left, palette, None);
     svg.push_str("<g id=\"partitions\">\n");
     for s in segments {
-        writeln!(svg,"<rect data-hypothesis=\"{}\" data-group=\"{}\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"{}\"><title>{}</title></rect>",escape(&s.hypothesis),escape(&s.group),s.x,s.y,s.width,s.height,escape(&s.color),escape(&s.label)).unwrap();
+        writeln!(svg,"<rect data-hypothesis=\"{}\" data-group=\"{}\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"{}\"><title>{}</title></rect>",escape(&s.hypothesis),escape(&s.group),s.x,s.y+TOP,s.width,s.height,escape(&s.color),escape(&s.label)).unwrap();
     }
-    for (i, id) in work.view.visible.iter().enumerate() {
-        if let Some(h) = work.hypotheses.iter().find(|h| &h.id == id) {
-            let x = tree_width + 8.0 + i as f32 * 90.0;
-            writeln!(
-                svg,
-                "<text x=\"{x}\" y=\"{}\" font-size=\"12\">{}</text>",
-                height + 20.0,
-                escape(&h.name)
-            )
-            .unwrap();
-            for (j, g) in h.groups.iter().enumerate() {
-                writeln!(svg,"<text data-group=\"{}\" x=\"{x}\" y=\"{}\" font-size=\"11\" fill=\"{}\">{}</text>",escape(&g.id),height+36.0+j as f32*14.0,escape(color(g,j)),escape(&g.label)).unwrap();
-            }
-        }
+    for (column, h) in columns.iter().zip(&shown) {
+        writeln!(
+            svg,
+            "<text x=\"{}\" y=\"{}\" font-size=\"11\" text-anchor=\"middle\"><title>{}</title>{}</text>",
+            column.x + column.width / 2.0,
+            TOP - 6.0,
+            escape(&h.name),
+            origin(h).0
+        )
+        .unwrap();
+    }
+    let legend = methods
+        .iter()
+        .map(|(code, name)| format!("{code} {name}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut y = TOP + height + 24.0;
+    writeln!(
+        svg,
+        "<text x=\"8\" y=\"{y}\" font-size=\"11\">{}</text>",
+        escape(&legend)
+    )
+    .unwrap();
+    for h in &shown {
+        y += 14.0;
+        writeln!(
+            svg,
+            "<text x=\"8\" y=\"{y}\" font-size=\"11\">{}: {}</text>",
+            origin(h).0,
+            escape(&h.name)
+        )
+        .unwrap();
     }
     svg.push_str("</g>\n</svg>\n");
     svg
@@ -248,7 +361,7 @@ mod tests {
             &work,
             &[("a".into(), 20.0, 20.0), ("c".into(), 40.0, 20.0)],
             0.0,
-            36.0,
+            &palette(&Theme::default()),
             None,
         );
         let row: Vec<_> = segments.iter().filter(|s| s.y < 30.0).collect();
@@ -275,10 +388,11 @@ mod tests {
             .enumerate()
             .map(|(i, &id)| (id.into(), 20.0 + i as f32 * 20.0, 20.0))
             .collect();
-        let (segments, missing) = bars(&work, &rows, 500.0, 90.0, Some((0.0, 100.0)));
+        let colors = palette(&Theme::default());
+        let (segments, missing) = bars(&work, &rows, 500.0, &colors, Some((0.0, 100.0)));
         assert_eq!(missing, BTreeSet::new());
         assert_eq!(segments.len(), 10);
-        let (hypothesis, group) = hit(&segments, 510.0, 20.0).unwrap();
+        let (hypothesis, group) = hit(&segments, 504.0, 20.0).unwrap();
         let mut selection = Selection::default();
         selection
             .group(
@@ -295,9 +409,46 @@ mod tests {
             500.0,
             100.0,
             "A&B",
+            &colors,
         );
         assert!(svg.contains("A&amp;B"));
         assert_eq!(svg.matches("data-hypothesis").count(), 10);
         assert!(!svg.contains("<image"));
+    }
+    #[test]
+    fn columns_follow_saved_widths_and_colours() {
+        use basecraft_protocol::delimitation::ColumnStyle;
+        let mut work = basecraft_io::spart::parse_text(include_str!(
+            "../../../testdata/fixtures/delimitation/manual.spart"
+        ))
+        .unwrap();
+        work.view.visible = vec!["partition-1".into(), "partition-2".into()];
+        let first = work.hypotheses[0].id.clone();
+        let group = work.hypotheses[0].groups[0].id.clone();
+        work.view.columns.insert(
+            first.clone(),
+            ColumnStyle {
+                width: Some(2),
+                colors: [(group.clone(), "#123456".into())].into(),
+            },
+        );
+        let laid = columns(&work, 10.0);
+        // Widths below the minimum are raised to it.
+        assert_eq!(laid[0].width, MIN_BAR_WIDTH as f32);
+        assert_eq!(laid[1].x, 10.0 + MIN_BAR_WIDTH as f32 + COLUMN_GAP);
+        assert_eq!(laid[1].width, BAR_WIDTH as f32);
+        let colors = palette(&Theme::default());
+        let rows = [("a".to_string(), 20.0, 20.0)];
+        let (segments, _) = bars(&work, &rows, 10.0, &colors, None);
+        let custom = segments
+            .iter()
+            .find(|s| s.hypothesis == first && s.group == group);
+        assert_eq!(custom.unwrap().color, "#123456");
+        assert!(
+            segments
+                .iter()
+                .filter(|s| s.hypothesis != first)
+                .all(|s| colors.contains(&s.color))
+        );
     }
 }
