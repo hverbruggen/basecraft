@@ -152,11 +152,11 @@ var forms = {
     "choices": [
      [
       "metadata",
-      "Metadata directory (.basecraft/)"
+      "Metadata folder (.basecraft)"
      ],
      [
       "working",
-      "Working directory"
+      "Working folder"
      ]
     ],
     "when": "support == bootstrap",
@@ -452,11 +452,11 @@ var forms = {
     "choices": [
      [
       "metadata",
-      "Metadata directory (.basecraft/)"
+      "Metadata folder (.basecraft)"
      ],
      [
       "working",
-      "Working directory"
+      "Working folder"
      ]
     ],
     "when": "bootstrap_on == true",
@@ -572,11 +572,11 @@ var forms = {
     "choices": [
      [
       "metadata",
-      "Metadata directory (.basecraft/)"
+      "Metadata folder (.basecraft)"
      ],
      [
       "working",
-      "Working directory"
+      "Working folder"
      ]
     ],
     "when": "bootstrap_on == true",

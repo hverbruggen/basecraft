@@ -106,7 +106,7 @@ name = "bootstrap_destination"
 label = "Save bootstrap trees in"
 type = "choice"
 default = "metadata"
-choices = [["metadata", "Metadata directory (.basecraft/)"], ["working", "Working directory"]]
+choices = [["metadata", "Metadata folder (.basecraft)"], ["working", "Working folder"]]
 when = "bootstrap_on == true"
 
 [[forms]]
@@ -166,5 +166,5 @@ name = "bootstrap_destination"
 label = "Save bootstrap trees in"
 type = "choice"
 default = "metadata"
-choices = [["metadata", "Metadata directory (.basecraft/)"], ["working", "Working directory"]]
+choices = [["metadata", "Metadata folder (.basecraft)"], ["working", "Working folder"]]
 when = "bootstrap_on == true"
