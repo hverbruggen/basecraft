@@ -30,8 +30,15 @@ Item {
             compare(dialog.parameters().support, "none")
             verify(dialog.parameters().replicates === undefined)
             const support = findChild(dialog.body, "iqtreeSupportMethod")
+            const replicates = findChild(dialog.body, "iqtreeReplicates")
+            const seed = findChild(dialog.body, "iqtreeSeed")
+            waitForPolish(replicates.parent)
+            const before = [replicates.x, replicates.y, seed.x, seed.y]
+            compare(replicates.width, seed.width, "The two number boxes match")
             support.currentIndex = 1
             support.activated(1)
+            waitForPolish(replicates.parent)
+            compare([replicates.x, replicates.y, seed.x, seed.y], before, "Choosing UFBoot keeps the fields in place")
             dialog.accept()
             const sent = JSON.parse(target.options)
             compare(sent.model, "GTR+I")

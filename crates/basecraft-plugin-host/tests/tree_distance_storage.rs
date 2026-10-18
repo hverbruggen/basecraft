@@ -191,10 +191,12 @@ fn ordinary_tree_and_forest_routes_keep_only_scientific_results_visible() {
         let output = root.join("result.nwk");
         let mut job = job(&session, doc, plugin, "tree", &output);
         job.params.insert("threads".into(), json!(1));
-        job.params.insert(
-            "model".into(),
-            json!(if plugin == "iqtree" { "JC" } else { "p" }),
-        );
+        // Each tool's own model name; FastTree keeps its standard model.
+        match plugin {
+            "iqtree" => drop(job.params.insert("model".into(), json!("JC"))),
+            "fasttree" => {}
+            _ => drop(job.params.insert("model".into(), json!("p"))),
+        }
         job.params.insert("seed".into(), json!(71));
         if !method.is_empty() {
             job.params.insert("method".into(), json!(method));

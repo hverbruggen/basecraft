@@ -1,8 +1,10 @@
-"""Infer a maximum-likelihood tree with FastTree's standard settings.
+"""Infer a maximum-likelihood tree with FastTree.
 
 The host passes an aligned FASTA file and the path to write the tree to.
-DNA and RNA get the GTR model (`-nt -gtr`), proteins LG (`-lg`), both with
-FastTree's default CAT rate categories and SH-like local support values.
+Without settings, DNA and RNA get the GTR model (`-nt -gtr`), proteins LG
+(`-lg`), both with FastTree's default CAT rate categories and SH-like local
+support values from 1000 resamples. `model`, `gamma`, `support` and
+`resamples` change these.
 Sequences go to FastTree under neutral ids and get their names back in the
 tree, so names with spaces or Newick's reserved characters survive.
 """
@@ -20,6 +22,9 @@ from basecraft.plugin import Plugin
 plugin = Plugin("basecraft.fasttree", "0.1.0")
 
 NUCLEOTIDES = set("ACGTUNRYKMSWBDHV")
+# Model name to FastTree's flag; JC and JTT are its defaults, so they need none.
+DNA_MODELS = {"GTR": ["-gtr"], "JC": []}
+PROTEIN_MODELS = {"LG": ["-lg"], "WAG": ["-wag"], "JTT": []}
 
 
 def fasttree_executable() -> str:
@@ -80,6 +85,18 @@ def tree(snapshot, params):
     if len(records) < 3:
         raise ValueError("FastTree needs at least three sequences")
     nucleotide = is_nucleotide(records)
+    models = DNA_MODELS if nucleotide else PROTEIN_MODELS
+    model = params.get("model") or ("GTR" if nucleotide else "LG")
+    if model not in models:
+        kind = "DNA" if nucleotide else "protein"
+        raise ValueError(f"{model} is not a {kind} model in FastTree; this alignment is {kind}: use {', '.join(models)}")
+    gamma = bool(params.get("gamma", False))
+    support = bool(params.get("support", True))
+    resamples = int(params.get("resamples", 1000))
+    if support and resamples < 1:
+        raise ValueError("Support needs at least one resample")
+    options = (["-nt"] if nucleotide else []) + models[model] + (["-gamma"] if gamma else [])
+    options += ["-boot", str(resamples)] if support else ["-nosupport"]
     exe = fasttree_executable()
     ids = [f"t{i}" for i in range(len(records))]
     with tempfile.TemporaryDirectory(prefix="basecraft-fasttree") as work:
@@ -87,7 +104,7 @@ def tree(snapshot, params):
         with renamed.open("w") as f:
             for id_, (_, seq) in zip(ids, records):
                 f.write(f">{id_}\n{seq}\n")
-        args = [exe, "-quiet"] + (["-nt", "-gtr"] if nucleotide else ["-lg"]) + [str(renamed)]
+        args = [exe, "-quiet"] + options + [str(renamed)]
         run = subprocess.run(args, capture_output=True, text=True, check=False)
     newick = run.stdout.strip()
     if run.returncode != 0 or not newick.endswith(";"):
@@ -98,13 +115,19 @@ def tree(snapshot, params):
     partial = target.with_name(target.name + ".part")
     partial.write_text(newick + "\n")
     os.replace(partial, target)
-    model = "GTR" if nucleotide else "LG"
+    rates = "Gamma (20 categories)" if gamma else "CAT (tool default)"
+    support_text = f"SH-like local support, {resamples} resamples" if support else "not requested"
+    explained = (
+        f". Branch labels are SH-like local support values (0 to 1, from {resamples} resamples)"
+        if support
+        else ""
+    )
     return {
         "ops": [],
-        "message": f"Built a {model} tree of {len(records)} sequences",
+        "message": f"Built a {model}{'+G' if gamma else ''} tree of {len(records)} sequences{explained}",
         "outputs": [str(target)],
         "tool": {"name": "fasttree", "version": fasttree_version(exe)},
-        "execution": {"argv": args, "resolved_parameters": {"model": model, "sequence_type": "nucleotide" if nucleotide else "protein", "support": "SH-like local support", "rate_categories": "CAT (tool default)"}, "preprocessing": ["FASTA headers replaced with neutral t0..tN identifiers before execution; original names restored in Newick"], "environment": {}, "methods_template": "fasttree.tree.v1", "methods": {"description": "A phylogenetic tree was inferred", "citations": ["Price et al. (2010), FastTree 2. https://doi.org/10.1371/journal.pone.0009490"]}},
+        "execution": {"argv": args, "resolved_parameters": {"model": model, "sequence_type": "nucleotide" if nucleotide else "protein", "support": support_text, "rate_categories": rates}, "preprocessing": ["FASTA headers replaced with neutral t0..tN identifiers before execution; original names restored in Newick"], "environment": {}, "methods_template": "fasttree.tree.v1", "methods": {"description": "A phylogenetic tree was inferred", "citations": ["Price et al. (2010), FastTree 2. https://doi.org/10.1371/journal.pone.0009490"]}},
     }
 
 

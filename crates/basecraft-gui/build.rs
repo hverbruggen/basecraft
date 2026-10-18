@@ -105,6 +105,7 @@ fn main() {
         "qml/AppSpinBox.qml",
         "qml/DistanceAnalysisDialog.qml",
         "qml/IqTreeDialog.qml",
+        "qml/FastTreeDialog.qml",
         "qml/AppIcon.qml",
         "qml/AppIconButton.qml",
         "qml/AppControlBackground.qml",

@@ -91,8 +91,10 @@ pub mod qobject {
         /// Infer a maximum-likelihood tree with FastTree's standard settings
         /// (GTR for DNA, LG for protein), in the background, into a new
         /// Newick file beside this one.
+        /// `options` is JSON: `model`, `gamma`, `support` and `resamples`;
+        /// unset ones keep these standard settings.
         #[qinvokable]
-        fn build_fasttree(self: Pin<&mut AlignmentController>);
+        fn build_fasttree(self: Pin<&mut AlignmentController>, options: QString);
         #[qinvokable]
         fn trim_alignment(self: Pin<&mut AlignmentController>);
         /// Infer a maximum-likelihood tree with IQ-TREE. `options` is JSON:
@@ -1347,7 +1349,9 @@ impl qobject::AlignmentController {
         });
     }
 
-    pub fn build_fasttree(self: Pin<&mut Self>) {
+    // QString is passed by value across the QML invokable boundary.
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn build_fasttree(self: Pin<&mut Self>, options: QString) {
         self.run_tool(&Tool {
             name: "FastTree",
             plugin: "fasttree",
@@ -1356,7 +1360,7 @@ impl qobject::AlignmentController {
             output: ("fasttree", "nwk"),
             min_rows: 3,
             working: "Building a tree with FastTree…",
-            params: serde_json::Map::new(),
+            params: serde_json::from_str(&options.to_string()).unwrap_or_default(),
         });
     }
 

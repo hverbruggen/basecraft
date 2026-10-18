@@ -290,9 +290,27 @@
             "type": "string"
           }
         },
+        "gap": {
+          "description": "Pixels between this column and the next. Unset: 1.5 bar widths.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
         "names": {
           "description": "Write the species names to the right of the bars.",
           "type": "boolean"
+        },
+        "spacing": {
+          "description": "Pixels between one species' bar and the next down the column.\nUnset: 0.65 bar widths.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
         },
         "width": {
           "description": "Bar width in pixels.",
@@ -610,15 +628,6 @@
     "DelimitationView": {
       "type": "object",
       "properties": {
-        "bar_gap": {
-          "description": "Pixels between bar columns. Unset, each column is followed by a gap\nas wide as its bars.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint32",
-          "minimum": 0
-        },
         "columns": {
           "description": "Hypothesis ID to its bar column style.",
           "type": "object",

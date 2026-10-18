@@ -14,6 +14,12 @@ use std::{
 pub const BAR_WIDTH: u32 = 9;
 pub const MIN_BAR_WIDTH: u32 = 5;
 pub const MAX_BAR_WIDTH: u32 = 200;
+/// Unset gaps scale with the bar width: across to the next column, and
+/// down between one species' bar and the next.
+pub const GAP_PER_WIDTH: f32 = 1.5;
+pub const SPACING_PER_WIDTH: f32 = 0.65;
+/// The largest gap or spacing a column can be given, in pixels.
+pub const MAX_GAP: u32 = 400;
 
 /// Theme colours in the order groups receive them.
 #[must_use]
@@ -75,6 +81,10 @@ pub struct Column {
     pub hypothesis: String,
     pub x: f32,
     pub width: f32,
+    /// Pixels to the next column.
+    pub gap: f32,
+    /// Pixels between successive species bars.
+    pub spacing: f32,
 }
 
 /// Visible hypothesis columns, left to right, starting at `left`.
@@ -86,22 +96,23 @@ pub fn columns(work: &DelimitationWorkspace, left: f32) -> Vec<Column> {
         if !work.hypotheses.iter().any(|h| &h.id == id) {
             continue;
         }
-        let width = work
-            .view
-            .columns
-            .get(id)
+        let style = work.view.columns.get(id);
+        let width = style
             .and_then(|style| style.width)
             .unwrap_or(BAR_WIDTH)
             .clamp(MIN_BAR_WIDTH, MAX_BAR_WIDTH) as f32;
+        let set = |value: Option<u32>, per_width: f32| {
+            value.map_or(width * per_width, |v| v.min(MAX_GAP) as f32)
+        };
+        let gap = set(style.and_then(|s| s.gap), GAP_PER_WIDTH);
+        let spacing = set(style.and_then(|s| s.spacing), SPACING_PER_WIDTH);
         out.push(Column {
             hypothesis: id.clone(),
             x,
             width,
+            gap,
+            spacing,
         });
-        let gap = work
-            .view
-            .bar_gap
-            .map_or(width, |gap| gap.min(MAX_BAR_WIDTH) as f32);
         x += width + gap;
     }
     out
@@ -339,6 +350,13 @@ pub fn bars(
                 _ => merged.push(s),
             }
         }
+        // Leave the column's spacing between successive bars, keeping at
+        // least two pixels of each.
+        for bar in &mut merged {
+            let inset = (column.spacing / 2.0).min((bar.height - 2.0).max(0.0) / 2.0);
+            bar.y += inset;
+            bar.height -= 2.0 * inset;
+        }
         segments.append(&mut merged);
     }
     (segments, unmatched)
@@ -484,6 +502,12 @@ mod tests {
         );
         assert_eq!(full["a"], ["a".into()].into());
         work.view.visible = vec!["partition-1".into()];
+        // Without spacing, the two stripes split the row exactly.
+        work.view
+            .columns
+            .entry("partition-1".into())
+            .or_default()
+            .spacing = Some(0);
         let (segments, _) = bars(
             &work,
             &[("a".into(), 20.0, 20.0), ("c".into(), 40.0, 20.0)],
@@ -558,16 +582,17 @@ mod tests {
             ColumnStyle {
                 width: Some(2),
                 colors: [(group.clone(), "#123456".into())].into(),
-                names: false,
+                ..ColumnStyle::default()
             },
         );
         let laid = columns(&work, 10.0);
         // Widths below the minimum are raised to it.
         assert_eq!(laid[0].width, MIN_BAR_WIDTH as f32);
-        // Each column is followed by a gap as wide as its bars, unless set.
-        assert_eq!(laid[1].x, 10.0 + 2.0 * MIN_BAR_WIDTH as f32);
+        // Unset gaps scale with the bar width; set ones are pixels.
+        assert_eq!(laid[1].x, 10.0 + 2.5 * MIN_BAR_WIDTH as f32);
+        assert!((laid[1].spacing - 0.65 * BAR_WIDTH as f32).abs() < 1e-4);
         let mut spaced = work.clone();
-        spaced.view.bar_gap = Some(3);
+        spaced.view.columns.get_mut(&first).unwrap().gap = Some(3);
         assert_eq!(
             columns(&spaced, 10.0)[1].x,
             10.0 + MIN_BAR_WIDTH as f32 + 3.0
@@ -637,12 +662,17 @@ mod tests {
         assert_eq!(named.matches(">Species alpha</text>").count(), 2);
         // Drawn a, c, b, d, each species is one block with one name.
         let (segments, _) = bars(&work, &rows_in(["a", "c", "b", "d"]), 0.0, &colors, None);
-        // Touching rows of a species are drawn as one bar.
+        // Touching rows of a species are drawn as one bar, less the spacing
+        // between bars.
         assert_eq!(segments.len(), 2);
+        let spacing = 0.65 * BAR_WIDTH as f32;
         assert!(
-            segments.iter().all(|s| (s.height - 40.0).abs() < 1e-4),
+            segments
+                .iter()
+                .all(|s| (s.height - (40.0 - spacing)).abs() < 1e-4),
             "{segments:?}"
         );
+        assert!((segments[1].y - segments[0].y - segments[0].height - spacing).abs() < 1e-4);
         let positions = name_positions(&segments, "partition-1");
         assert_eq!(positions.len(), 2);
         assert_eq!(positions[0].0, "Species alpha");

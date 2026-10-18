@@ -12,7 +12,7 @@ See LICENSE-CODICONS (CC BY 4.0). Modifications: extracted outlines, inverted th
 font's Y axis, centred and scaled into a 16×16 viewBox with a one-unit margin.
 The ordinary Unicode outlines come from JetBrains Mono; see LICENSE-JETBRAINS.
 `history.svg`, `edit.svg`, `waveform.svg`, `provenance.svg`, `text-representation.svg`, and the
-three `annotation-*.svg` icons and `delimitation.svg`, `tree.svg`, `matrix.svg`, `align.svg`, and `trim.svg` are original Basecraft artwork under the repository
+three `annotation-*.svg` icons and `delimitation.svg`, `bar-layout.svg`, `tree.svg`, `matrix.svg`, `align.svg`, and `trim.svg` are original Basecraft artwork under the repository
 licence.
 
 To regenerate the extracted assets, install FontTools in a temporary environment

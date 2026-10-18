@@ -515,12 +515,14 @@ impl TreeView {
     }
 
     pub fn status(&self, doc: &TreeDoc) -> String {
-        let mut parts = vec![format!(
-            "{} tips · {} support set{}",
-            doc.tip_count(),
-            doc.supports().len(),
-            if doc.supports().len() == 1 { "" } else { "s" }
-        )];
+        // Name the support sets, so the numbers on the branches say what they are.
+        let support = if doc.supports().is_empty() {
+            "no support values".to_string()
+        } else {
+            let names: Vec<&str> = doc.supports().iter().map(|s| s.name.as_str()).collect();
+            format!("support: {}", names.join(", "))
+        };
+        let mut parts = vec![format!("{} tips · {support}", doc.tip_count())];
         if let Some(s) = self.selected {
             parts.push(describe_node(doc, s));
         }

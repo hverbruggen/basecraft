@@ -831,49 +831,64 @@ impl qobject::DelimitationController {
                     view.visible.retain(|h| h != &id);
                     DelimitationEdit::SetView { view }
                 }
+                // Style one hypothesis's column, or with `hypotheses` several
+                // at once as one edit. A null gap or spacing scales with the
+                // bar width again.
                 "style" => {
                     let mut view = w.view.clone();
-                    let style = view.columns.entry(id.clone()).or_default();
-                    if let Some(width) = args.get("width").and_then(Value::as_u64) {
-                        style.width = Some(
-                            u32::try_from(width)
+                    let ids: Vec<String> = match args.get("hypotheses") {
+                        Some(list) => {
+                            serde_json::from_value(list.clone()).map_err(|e| e.to_string())?
+                        }
+                        None => vec![id.clone()],
+                    };
+                    let pixels = |key: &str| -> Option<Option<u32>> {
+                        let value = args.get(key)?;
+                        Some(value.as_u64().map(|v| {
+                            u32::try_from(v)
                                 .unwrap_or(u32::MAX)
-                                .clamp(delimitation::MIN_BAR_WIDTH, delimitation::MAX_BAR_WIDTH),
-                        );
-                    }
-                    if let Some(names) = args.get("names").and_then(Value::as_bool) {
-                        style.names = names;
-                    }
-                    if let Some(colors) = args.get("colors").and_then(Value::as_object) {
-                        for (group, color) in colors {
-                            let color = color.as_str().unwrap_or("");
-                            if color.is_empty() {
-                                style.colors.remove(group);
-                            } else if color.len() == 7
-                                && color.starts_with('#')
-                                && color[1..].bytes().all(|b| b.is_ascii_hexdigit())
-                            {
-                                style
-                                    .colors
-                                    .insert(group.clone(), color.to_ascii_lowercase());
-                            } else {
-                                return Err(format!("{color} is not a #rrggbb colour"));
+                                .min(delimitation::MAX_GAP)
+                        }))
+                    };
+                    for id in ids {
+                        let style = view.columns.entry(id.clone()).or_default();
+                        if let Some(width) = args.get("width").and_then(Value::as_u64) {
+                            style.width =
+                                Some(u32::try_from(width).unwrap_or(u32::MAX).clamp(
+                                    delimitation::MIN_BAR_WIDTH,
+                                    delimitation::MAX_BAR_WIDTH,
+                                ));
+                        }
+                        if let Some(gap) = pixels("gap") {
+                            style.gap = gap;
+                        }
+                        if let Some(spacing) = pixels("spacing") {
+                            style.spacing = spacing;
+                        }
+                        if let Some(names) = args.get("names").and_then(Value::as_bool) {
+                            style.names = names;
+                        }
+                        if let Some(colors) = args.get("colors").and_then(Value::as_object) {
+                            for (group, color) in colors {
+                                let color = color.as_str().unwrap_or("");
+                                if color.is_empty() {
+                                    style.colors.remove(group);
+                                } else if color.len() == 7
+                                    && color.starts_with('#')
+                                    && color[1..].bytes().all(|b| b.is_ascii_hexdigit())
+                                {
+                                    style
+                                        .colors
+                                        .insert(group.clone(), color.to_ascii_lowercase());
+                                } else {
+                                    return Err(format!("{color} is not a #rrggbb colour"));
+                                }
                             }
                         }
+                        if *style == basecraft_protocol::delimitation::ColumnStyle::default() {
+                            view.columns.remove(&id);
+                        }
                     }
-                    if *style == basecraft_protocol::delimitation::ColumnStyle::default() {
-                        view.columns.remove(&id);
-                    }
-                    DelimitationEdit::SetView { view }
-                }
-                // Space between bar columns; null makes it follow the bar width.
-                "gap" => {
-                    let mut view = w.view.clone();
-                    view.bar_gap = args.get("gap").and_then(Value::as_u64).map(|gap| {
-                        u32::try_from(gap)
-                            .unwrap_or(u32::MAX)
-                            .min(delimitation::MAX_BAR_WIDTH)
-                    });
                     DelimitationEdit::SetView { view }
                 }
                 "visible" => {
@@ -1090,7 +1105,11 @@ impl qobject::DelimitationController {
                 if !legend.contains(&(code, method)) {
                     legend.push((code, method));
                 }
+                let style = work.view.columns.get(&h.id);
                 Some(json!({"id": h.id, "x": c.x, "width": c.width, "code": code,
+                    "gap": c.gap, "spacing": c.spacing,
+                    "gap_set": style.is_some_and(|s| s.gap.is_some()),
+                    "spacing_set": style.is_some_and(|s| s.spacing.is_some()),
                     "names": work.view.columns.get(&h.id).is_some_and(|s| s.names),
                     "method": method, "name": h.name, "editable": !matches!(h.origin,
                     HypothesisOrigin::Imported | HypothesisOrigin::Inferred),

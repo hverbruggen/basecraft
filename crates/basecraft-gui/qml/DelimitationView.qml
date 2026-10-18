@@ -79,6 +79,7 @@ FocusScope {
         tool = name
     }
     function chooseColumns() { columnsDialog.show() }
+    function layoutBars() { layoutDialog.show(columnInfo.columns) }
 
     function startAnalysis(method, input, rooted, settings, displayMethod) {
         if (ctl.busy) return
@@ -485,7 +486,7 @@ FocusScope {
         MenuItem { text: "Move right"; enabled: columnMenu.position < doc.columnInfo.columns.length - 1; onTriggered: doc.act("move_visible", {id: columnMenu.column.id, direction: 1}) }
         MenuSeparator {}
         MenuItem { text: "Rename…"; onTriggered: textDialog.ask("Rename hypothesis", "Name", columnMenu.column.name, value => doc.act("rename", {hypothesis: columnMenu.column.id, name: value})) }
-        MenuItem { text: "Bar width and spacing…"; onTriggered: widthDialog.show(columnMenu.column) }
+        MenuItem { text: "Bar layout…"; onTriggered: layoutDialog.show([columnMenu.column]) }
         MenuItem { text: "Colours…"; onTriggered: colorDialog.showFor(columnMenu.column, "") }
         MenuItem { text: "Show species names"; checkable: true; checked: columnMenu.column.names === true; onTriggered: doc.act("style", {hypothesis: columnMenu.column.id, names: checked}) }
         MenuItem { text: "Edit a copy…"; onTriggered: doc.newHypothesis(columnMenu.column.id) }
@@ -509,6 +510,7 @@ FocusScope {
             onTriggered: textDialog.ask("Rename species", "Name", speciesMenu.segment.label, value => doc.act("rename_group", {hypothesis: speciesMenu.segment.hypothesis, group: speciesMenu.segment.group, label: value}))
         }
         MenuItem { text: "Colour…"; enabled: speciesMenu.column.id !== undefined; onTriggered: colorDialog.showFor(speciesMenu.column, speciesMenu.segment.group) }
+        MenuItem { text: "Bar layout…"; enabled: speciesMenu.column.id !== undefined; onTriggered: layoutDialog.show([speciesMenu.column]) }
     }
 
     // Right-click on the tree, or in the text view: edit the hypothesis being
@@ -594,32 +596,58 @@ FocusScope {
             TextField { id: textValue; objectName: "renameValue"; Layout.fillWidth: true; Accessible.name: textLabel.text }
         }
     }
+    // Bar width, the gap to the next column and the spacing between species
+    // bars, for one hypothesis or for every column at once. Each hypothesis
+    // keeps one value of each.
     AppContentDialog {
-        id: widthDialog
-        property string target: ""
-        title: "Bar width and spacing"
+        id: layoutDialog
+        objectName: "barLayoutDialog"
+        property var targets: []
+        property var initial: ({})
+        title: targets.length === 1 ? "Bar layout: " + targets[0].name : "Bar layout: all columns"
         standardButtons: Dialog.Ok | Dialog.Cancel
         initialFocusItem: widthValue
-        function show(column) {
-            target = column.id
-            widthValue.value = Math.round(column.width)
-            const gap = doc.workspace.view.bar_gap
-            gapFollows.checked = gap === undefined || gap === null
-            gapValue.value = gapFollows.checked ? Math.round(column.width) : gap
+        function show(columns) {
+            if (!columns.length) return
+            targets = columns
+            const first = columns[0]
+            initial = {width: Math.round(first.width), gap: first.gap_set ? Math.round(first.gap) : null,
+                spacing: first.spacing_set ? Math.round(first.spacing) : null}
+            widthValue.value = initial.width
+            gapScales.checked = initial.gap === null
+            spacingScales.checked = initial.spacing === null
+            gapValue.value = Math.round(first.gap)
+            spacingValue.value = Math.round(first.spacing)
             open()
         }
+        // Several columns all get every value, so they end up uniform; one
+        // column gets only what changed.
         onAccepted: {
-            doc.act("style", {hypothesis: target, width: widthValue.value})
-            const gap = gapFollows.checked ? null : gapValue.value
-            if (gap !== (doc.workspace.view.bar_gap ?? null)) doc.act("gap", {gap: gap})
+            const next = {width: widthValue.value, gap: gapScales.checked ? null : gapValue.value,
+                spacing: spacingScales.checked ? null : spacingValue.value}
+            const args = {hypotheses: targets.map(c => c.id)}
+            for (const key of ["width", "gap", "spacing"])
+                if (targets.length > 1 || next[key] !== initial[key]) args[key] = next[key]
+            if (Object.keys(args).length > 1) doc.act("style", args)
         }
         body: GridLayout {
-            columns: 2
-            Label { id: widthLabel; text: "Bar width in pixels (5 to 200)" }
-            AppSpinBox { id: widthValue; objectName: "barWidth"; from: 5; to: 200; editable: true; Accessible.name: widthLabel.text }
-            AppCheckBox { id: gapFollows; objectName: "gapFollowsWidth"; text: "Space between columns as wide as the bars"; Layout.columnSpan: 2 }
-            Label { id: gapLabel; text: "Space between columns in pixels, all columns"; enabled: !gapFollows.checked }
-            AppSpinBox { id: gapValue; objectName: "barGap"; from: 0; to: 200; editable: true; enabled: !gapFollows.checked; Accessible.name: gapLabel.text }
+            columns: 3
+            columnSpacing: 12
+            Label { id: widthLabel; text: "Bar width" }
+            AppSpinBox {
+                id: widthValue; objectName: "barWidth"; from: 5; to: 200; editable: true; Accessible.name: widthLabel.text + " in pixels"
+                onValueChanged: {
+                    if (gapScales.checked) gapValue.value = Math.round(value * 1.5)
+                    if (spacingScales.checked) spacingValue.value = Math.round(value * 0.65)
+                }
+            }
+            Label { text: "pixels" }
+            Label { id: gapLabel; text: "Gap to the next column" }
+            AppSpinBox { id: gapValue; objectName: "barGap"; from: 0; to: 400; editable: true; enabled: !gapScales.checked; Accessible.name: gapLabel.text + " in pixels" }
+            AppCheckBox { id: gapScales; objectName: "gapScales"; text: "1.5 × bar width"; onToggled: if (checked) gapValue.value = Math.round(widthValue.value * 1.5) }
+            Label { id: spacingLabel; text: "Space between species" }
+            AppSpinBox { id: spacingValue; objectName: "barSpacing"; from: 0; to: 400; editable: true; enabled: !spacingScales.checked; Accessible.name: spacingLabel.text + " in pixels" }
+            AppCheckBox { id: spacingScales; objectName: "spacingScales"; text: "0.65 × bar width"; onToggled: if (checked) spacingValue.value = Math.round(widthValue.value * 0.65) }
         }
     }
     SpeciesColorDialog {

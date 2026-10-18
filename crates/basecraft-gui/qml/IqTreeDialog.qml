@@ -48,39 +48,36 @@ AppContentDialog {
             text: dialog.modelFinder ? "ModelFinder tests models with and without rate variation and uses the best by BIC."
                 : "Model: " + dialog.model()
         }
-        AppFormRow {
+        // A fixed grid: the fields keep their places whichever support is chosen.
+        GridLayout {
             objectName: "iqtreeSupport"
-            ColumnLayout {
-                Layout.minimumWidth: 0
-                Label { id: supportLabel; text: "Branch support"; Layout.fillWidth: true; wrapMode: Text.Wrap }
-                AppComboBox {
-                    id: supportChoice
-                    objectName: "iqtreeSupportMethod"
-                    model: ["None", "Ultrafast bootstrap (UFBoot)", "Standard bootstrap"]
-                    Accessible.name: supportLabel.text
-                    // UFBoot needs at least 1000 replicates; a standard bootstrap is slow, so start at 100.
-                    onActivated: replicates.value = currentIndex === 1 ? Math.max(1000, replicates.value) : currentIndex === 2 ? 100 : replicates.value
-                }
+            columns: 3
+            columnSpacing: 12
+            rowSpacing: 4
+            Label { id: supportLabel; text: "Branch support" }
+            Label { id: replicatesLabel; text: "Replicates"; enabled: supportChoice.currentIndex > 0 }
+            Label { id: seedLabel; text: "Seed" }
+            AppComboBox {
+                id: supportChoice
+                objectName: "iqtreeSupportMethod"
+                model: ["None", "Ultrafast bootstrap (UFBoot)", "Standard bootstrap"]
+                Accessible.name: supportLabel.text
+                // UFBoot needs at least 1000 replicates; a standard bootstrap is slow, so start at 100.
+                onActivated: replicates.value = currentIndex === 1 ? Math.max(1000, replicates.value) : currentIndex === 2 ? 100 : replicates.value
             }
-            ColumnLayout {
+            AppSpinBox {
+                id: replicates
+                objectName: "iqtreeReplicates"
                 enabled: supportChoice.currentIndex > 0
-                Layout.minimumWidth: 0
-                Label { id: replicatesLabel; text: "Replicates"; Layout.fillWidth: true; wrapMode: Text.Wrap }
-                AppSpinBox {
-                    id: replicates
-                    objectName: "iqtreeReplicates"
-                    from: supportChoice.currentIndex === 1 ? 1000 : 1
-                    to: 1000000
-                    value: 1000
-                    editable: true
-                    Accessible.name: replicatesLabel.text
-                }
+                from: supportChoice.currentIndex === 1 ? 1000 : 1
+                to: 100000
+                value: 1000
+                editable: true
+                Layout.preferredWidth: seed.implicitWidth
+                Accessible.name: replicatesLabel.text
             }
-            ColumnLayout {
-                Layout.minimumWidth: 0
-                Label { id: seedLabel; text: "Seed"; Layout.fillWidth: true; wrapMode: Text.Wrap }
-                AppSpinBox { id: seed; objectName: "iqtreeSeed"; from: 1; to: 2147483647; value: 1; editable: true; Accessible.name: seedLabel.text }
-            }
+            // The same range as the replicates, so the two boxes match.
+            AppSpinBox { id: seed; objectName: "iqtreeSeed"; from: 1; to: 100000; value: 1; editable: true; Accessible.name: seedLabel.text }
         }
         Label {
             Layout.preferredWidth: 1

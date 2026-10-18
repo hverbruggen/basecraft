@@ -1205,8 +1205,8 @@ ApplicationWindow {
                             iconName: "phylogram"
                             text: window.current && window.current.busy ? "Running…" : "FastTree"
                             enabled: window.current !== null && !window.current.busy
-                            tip: "Infer a tree with FastTree, standard settings (GTR for DNA, LG for protein), into a new file"
-                            onInvoked: window.current.build_fasttree()
+                            tip: "Infer a tree with FastTree: choose the model, rate variation and support values"
+                            onInvoked: { fasttreeDialog.target = window.current; fasttreeDialog.open() }
                         }
                         RibbonButton { commandId: "ribbon.select-a-model-and-infer-a-maximum-likelihood-tree";
                             iconName: "phylogram"
@@ -1227,6 +1227,7 @@ ApplicationWindow {
                         title: "Display"
                         ModeButton { commandId: "species.tree-view"; text: "Tree view"; tip: "The tree with a bar column per hypothesis"; iconName: "phylogram"; enabled: window.speciesView !== null && window.current.display_path.length > 0; active: window.speciesView !== null && !window.speciesView.showGroups; onInvoked: window.speciesView.showGroups = false }
                         ModeButton { commandId: "species.text-view"; text: "Text view"; tip: "Each hypothesis's species and their sequences, as text"; iconName: "text-representation"; enabled: window.speciesView !== null; active: window.speciesView !== null && window.speciesView.showGroups; onInvoked: window.speciesView.showGroups = true }
+                        RibbonButton { commandId: "species.layout"; text: "Layout…"; tip: "Bar width, the gap between columns and the space between species, for every column"; iconName: "bar-layout"; enabled: window.speciesView !== null && window.speciesView.columnInfo.columns.length > 0; onInvoked: window.speciesView.layoutBars() }
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
@@ -1282,6 +1283,7 @@ ApplicationWindow {
     DistanceAnalysisDialog { id: njDialog; kind: "nj" }
     DistanceAnalysisDialog { id: upgmaDialog; kind: "upgma" }
     IqTreeDialog { id: iqtreeDialog }
+    FastTreeDialog { id: fasttreeDialog }
 
     ShortcutsDialog { id: shortcuts; commands: window.applicationCommands }
 
@@ -1491,6 +1493,10 @@ ApplicationWindow {
     Shortcut { sequence: "Ctrl+Q"; onActivated: window.close() }
     // Close the active tab, asking first if it has unsaved changes.
     Shortcut { sequence: "Ctrl+W"; onActivated: if (openFiles.count > 0) window.closeTab(tabs.currentIndex) }
+    // Undo and redo reach the open document wherever the focus is; a text
+    // field being edited keeps its own. Trace review has its own undo.
+    Shortcut { sequence: "Ctrl+Z"; enabled: window.current !== null && !window.traceOpen; onActivated: window.current.undo() }
+    Shortcut { sequences: ["Ctrl+Shift+Z", "Ctrl+Y"]; enabled: window.current !== null && !window.traceOpen; onActivated: window.current.redo() }
     FileDialog {
         id: saveDialog
         property int index: -1
@@ -2290,7 +2296,7 @@ ApplicationWindow {
                     else if (cmd === "insert") window.alignmentInsert = true
                     else if (cmd === "overwrite") window.alignmentInsert = false
                     else if (cmd === "mafft") c.align_mafft()
-                    else if (cmd === "fasttree") c.build_fasttree()
+                    else if (cmd === "fasttree") c.build_fasttree(a || "{}")
                     else if (cmd === "trimal") c.trim_alignment()
                     else if (cmd === "iqtree") c.build_iqtree(a || "{}")
                     else if (cmd === "distance") c.build_distance_tree(a || "k2p")

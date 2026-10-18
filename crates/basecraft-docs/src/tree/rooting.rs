@@ -224,9 +224,10 @@ impl TreeDoc {
             for set in &mut result.supports {
                 set.values.push(None);
             }
-            // Store split-edge metadata once, preferentially on an internal
-            // side (Newick cannot store support on a labelled leaf).
-            let carrier = if self.nodes[a].is_tip() { b } else { a };
+            // Store split-edge metadata once, on the clade that carried it
+            // (`b`, the child end) unless that is a tip: Newick cannot store
+            // support on a labelled leaf.
+            let carrier = if self.nodes[b].is_tip() { a } else { b };
             stack.push((
                 b,
                 a,
@@ -766,6 +767,22 @@ mod tests {
         annotated.minimum_variance_root().unwrap();
         let node = annotated.resolve(&annotated.annotations[&1].clade).unwrap();
         assert_eq!(annotated.supports[0].values[node].as_deref(), Some("90"));
+    }
+
+    #[test]
+    fn a_split_root_branch_keeps_support_on_its_clade() {
+        // FastTree's output for the species fixture: MRTTV roots on the
+        // branch above the 0.953 clade.
+        let mut rooted = tree(
+            "(((s1:0.0,s2:0.0):0.050722931,(s6:0.005702214,(s7:0.0,s8:0.0):0.000000005)0.972:0.050910109)0.953:0.050356391,s5:0.005650287,(s4:0.005650305,s3:0.005660900)0.092:0.000000005);",
+        );
+        rooted.minimum_variance_root().unwrap();
+        let clade = |a: &str, b: &str| rooted.resolve(&[a.into(), b.into()]).unwrap();
+        let node = clade("s1", "s8");
+        assert_eq!(rooted.nodes[node].parent, Some(rooted.root));
+        assert_eq!(rooted.supports[0].values[node].as_deref(), Some("0.953"));
+        let other = clade("s3", "s5");
+        assert_eq!(rooted.supports[0].values[other], None);
     }
 
     #[test]
