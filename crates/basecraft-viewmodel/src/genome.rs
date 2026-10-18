@@ -22,6 +22,7 @@ use basecraft_protocol::{Feature, Strand};
 
 use crate::frame::{Frame, Rgba, text_width};
 use crate::theme::{Theme, alpha, mix};
+use crate::zoom::{Axis, percent_text};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
@@ -373,10 +374,18 @@ impl GenomeView {
             self.clamp(len);
             return;
         }
-        let anchor = self.bp_at(x);
-        self.bp_per_px /= factor;
-        self.clamp(len);
-        self.start = anchor - f64::from(x) * self.bp_per_px;
+        let mut axis = Axis {
+            start: self.start,
+            per_px: self.bp_per_px,
+        };
+        let finest = 1.0 / MAX_PX_PER_BP;
+        axis.zoom_at(
+            f64::from(x),
+            factor,
+            finest,
+            (len as f64 / f64::from(self.width)).max(finest),
+        );
+        (self.start, self.bp_per_px) = (axis.start, axis.per_px);
         self.clamp(len);
     }
 
@@ -490,14 +499,7 @@ impl GenomeView {
 
     /// Zoom percentage plus how much sequence is shown.
     pub fn zoom_text(&self, len: u64) -> String {
-        let percent = self.px_per_bp() / PX_PER_BP_AT_100 * 100.0;
-        let level = if percent >= 10.0 {
-            format!("{percent:.0}%")
-        } else {
-            // Two significant digits: 2.5%, 0.16%, 0.0016%.
-            let digits = (1.0 - percent.log10().floor()).max(1.0) as usize;
-            format!("{percent:.digits$}%")
-        };
+        let level = percent_text(self.zoom_percent());
         let shown = match (self.mode, &self.wrap) {
             (Mode::Wrapped, Some(w)) => {
                 let lines = self.visible_lines().len() as u64;
@@ -2117,16 +2119,16 @@ mod tests {
     fn zoom_percentages() {
         let mut v = GenomeView::new(1000.0, 600.0);
         v.bp_per_px = 1.0 / 6.1;
-        assert!(v.zoom_text(10_000).starts_with("100%"));
+        assert!(v.zoom_text(10_000).starts_with("100 %"));
         v.bp_per_px = 100.0;
         assert!(
-            v.zoom_text(1_000_000).starts_with("0.16%"),
+            v.zoom_text(1_000_000).starts_with("0.16 %"),
             "{}",
             v.zoom_text(1_000_000)
         );
         v.bp_per_px = 10_000.0;
         assert!(
-            v.zoom_text(100_000_000).starts_with("0.0016%"),
+            v.zoom_text(100_000_000).starts_with("0.0016 %"),
             "{}",
             v.zoom_text(100_000_000)
         );

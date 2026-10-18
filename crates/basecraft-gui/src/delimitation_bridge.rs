@@ -22,7 +22,6 @@ pub mod qobject {
         #[qproperty(QString, message)]
         #[qproperty(QString, message_kind)]
         #[qproperty(QString, message_details)]
-        #[qproperty(QString, zoom_text)]
         #[qproperty(bool, dirty)]
         #[qproperty(bool, busy)]
         #[qproperty(bool, can_cut)]
@@ -179,7 +178,6 @@ pub struct DelimitationRust {
     message: QString,
     message_kind: QString,
     message_details: QString,
-    zoom_text: QString,
     dirty: bool,
     busy: bool,
     can_cut: bool,
@@ -215,7 +213,6 @@ impl Default for DelimitationRust {
             message: QString::default(),
             message_kind: QString::default(),
             message_details: QString::default(),
-            zoom_text: QString::default(),
             dirty: false,
             busy: false,
             can_cut: false,

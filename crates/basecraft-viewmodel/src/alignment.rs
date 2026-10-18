@@ -375,7 +375,7 @@ impl AlignmentView {
     }
 
     pub fn zoom_text(&self) -> String {
-        format!("{:.0} %", self.px_per_col / PX_PER_COL_AT_100 * 100.0)
+        crate::zoom::percent_text(self.zoom_percent())
     }
 
     pub fn scroll_by(&mut self, dy: f32) {

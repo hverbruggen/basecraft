@@ -421,7 +421,7 @@ impl TreeView {
     }
 
     pub fn zoom_text(&self) -> String {
-        format!("{:.0} %", self.row_zoom * 100.0)
+        crate::zoom::percent_text(self.zoom_percent())
     }
 
     /// Scroll so `node` is in view.
@@ -815,7 +815,7 @@ fn place_bars(
     start: f32,
 ) -> (Vec<PlacedBar>, Vec<(String, f32, f32)>) {
     let font = doc.style().tip_font as f32;
-    let mut bars = Vec::new();
+    let mut bars: Vec<PlacedBar> = Vec::new();
     let mut owned = Vec::new();
     let mut x = start;
     for column in columns {
@@ -1415,7 +1415,7 @@ pub fn forest_svg(trees: &[TreeDoc], width: f32, row: f32, theme: &Theme, font: 
             0.0
         };
         let height = tree.tip_count().max(1) as f32 * row + 2.0 * MARGIN + scale;
-        let geometry = layout(tree, width, height, 1.0, 1.0);
+        let geometry = layout_with(tree, &[], width, height, 1.0, 1.0);
         widest = widest.max(geometry.width);
         let figure = to_svg_with_style(tree, width, row, theme, font)
             .replacen("<svg ", &format!("<svg y=\"{total}\" "), 1)

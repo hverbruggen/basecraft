@@ -249,10 +249,14 @@ impl SangerReviewView {
         }
     }
     pub fn zoom(&mut self, x: f32, factor: f64) {
-        let pixel = f64::from((x - NAMES).max(0.0));
-        let anchor = self.left + pixel / f64::from(self.column_width);
-        self.column_width = (f64::from(self.column_width) * factor).clamp(1.0, 100.0) as f32;
-        self.left = anchor - pixel / f64::from(self.column_width);
+        // Columns per pixel, so 1 to 100 pixels a column.
+        let mut axis = crate::zoom::Axis {
+            start: self.left,
+            per_px: 1.0 / f64::from(self.column_width),
+        };
+        axis.zoom_at(f64::from((x - NAMES).max(0.0)), factor, 0.01, 1.0);
+        self.left = axis.start;
+        self.column_width = (1.0 / axis.per_px) as f32;
         self.clamp();
         self.hovered = None;
     }

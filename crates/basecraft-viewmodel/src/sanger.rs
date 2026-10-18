@@ -63,9 +63,12 @@ impl SangerView {
     }
 
     pub fn zoom(&mut self, trace: &Trace, x: f32, factor: f64) {
-        let anchor = self.start + f64::from(x) * self.samples_per_pixel;
-        self.samples_per_pixel = (self.samples_per_pixel / factor).clamp(0.25, 512.0);
-        self.start = anchor - f64::from(x) * self.samples_per_pixel;
+        let mut axis = crate::zoom::Axis {
+            start: self.start,
+            per_px: self.samples_per_pixel,
+        };
+        axis.zoom_at(f64::from(x), factor, 0.25, 512.0);
+        (self.start, self.samples_per_pixel) = (axis.start, axis.per_px);
         self.clamp(trace);
     }
 

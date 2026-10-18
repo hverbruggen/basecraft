@@ -394,7 +394,9 @@ impl qobject::SangerController {
                     }
                 }
                 review.build(&r.theme, &mut r.scratch);
-                let zoom = format!("{:.0} %", f64::from(review.column_width) / 12.0 * 100.0);
+                let zoom = basecraft_viewmodel::zoom::percent_text(
+                    f64::from(review.column_width) / 12.0 * 100.0,
+                );
                 let decision = r
                     .review_session
                     .as_ref()
@@ -428,7 +430,8 @@ impl qobject::SangerController {
                 r.view.build_wrapped(trace, &r.theme, &mut r.scratch);
                 let calls = trace.display_calls();
                 let status = format!("Instrument calls · {} bases", calls.bases.len());
-                let zoom = format!("{:.2} %", 100.0 / r.view.samples_per_pixel);
+                let zoom =
+                    basecraft_viewmodel::zoom::percent_text(100.0 / r.view.samples_per_pixel);
                 (
                     r.scratch.to_bytes(),
                     status,

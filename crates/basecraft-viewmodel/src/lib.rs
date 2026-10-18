@@ -13,6 +13,7 @@ pub mod sanger_map;
 pub mod sanger_review;
 pub mod theme;
 pub mod tree;
+pub mod zoom;
 
 pub use alignment::AlignmentView;
 pub use frame::{Frame, Rgba};
