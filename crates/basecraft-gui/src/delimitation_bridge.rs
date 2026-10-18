@@ -29,6 +29,8 @@ pub mod qobject {
         #[qproperty(f64, root_height)]
         #[qproperty(f64, threshold)]
         #[qproperty(i32, theme_revision)]
+        /// The tree file the canvas draws: the display tree, or a flipped copy.
+        #[qproperty(QString, shown_tree)]
         type DelimitationController = super::DelimitationRust;
         #[qinvokable]
         fn accessible_page(self: &DelimitationController, page: i32) -> QString;
@@ -183,6 +185,7 @@ pub struct DelimitationRust {
     root_height: f64,
     threshold: f64,
     theme_revision: i32,
+    shown_tree: QString,
     palette: Vec<String>,
     // Modification time of the theme file last applied; empty before the first read.
     theme_stamp: String,
@@ -217,6 +220,7 @@ impl Default for DelimitationRust {
             root_height: 0.0,
             threshold: 0.0,
             theme_revision: 0,
+            shown_tree: QString::default(),
             palette: delimitation::palette(&basecraft_viewmodel::Theme::default()),
             theme_stamp: String::new(),
             session: None,
@@ -313,7 +317,50 @@ impl qobject::DelimitationController {
             return;
         };
         self.as_mut().set_workspace_json(QString::from(&data));
-        self.set_status(QString::from(&status));
+        self.as_mut().set_status(QString::from(&status));
+        self.update_shown_tree();
+    }
+    /// Draw the display tree, or a flipped copy of it kept in the cache, so the
+    /// display tree file and its recorded hash never change.
+    fn update_shown_tree(self: Pin<&mut Self>) {
+        let shown = {
+            let r = self.rust();
+            let flipped = r
+                .session
+                .as_ref()
+                .zip(r.doc)
+                .map(|(s, d)| s.delimitation(d).view.flipped.clone())
+                .unwrap_or_default();
+            match &r.display_tree {
+                Some(tree) if !flipped.is_empty() => {
+                    let mut tree = tree.clone();
+                    delimitation::apply_flips(&mut tree, &flipped);
+                    let text = tree.to_newick();
+                    let digest = basecraft_io::hash_bytes(text.as_bytes());
+                    let directory = basecraft_platform::paths::AppPaths::discover().map_or_else(
+                        |_| std::env::temp_dir().join("basecraft-display-trees"),
+                        |paths| paths.cache.join("display-trees"),
+                    );
+                    let path = directory.join(format!(
+                        "{}.nwk",
+                        digest.trim_start_matches("b3:").get(..24).unwrap_or("tree")
+                    ));
+                    let written = path.exists()
+                        || std::fs::create_dir_all(&directory)
+                            .and_then(|()| std::fs::write(&path, text))
+                            .is_ok();
+                    if written {
+                        QString::from(path.to_string_lossy().as_ref())
+                    } else {
+                        r.display_path.clone()
+                    }
+                }
+                _ => r.display_path.clone(),
+            }
+        };
+        if self.rust().shown_tree != shown {
+            self.set_shown_tree(shown);
+        }
     }
     fn edit(mut self: Pin<&mut Self>, edit: DelimitationEdit) -> Result<(), String> {
         let result = {
@@ -609,6 +656,7 @@ impl qobject::DelimitationController {
                         return false;
                     }
                 }
+                self.as_mut().update_shown_tree();
                 if rooted {
                     if let Some(warning) = warning {
                         self.fail(&warning);
@@ -754,6 +802,22 @@ impl qobject::DelimitationController {
                     view.visible.swap(index, next);
                     DelimitationEdit::SetView { view }
                 }
+                "flip" => {
+                    let tips: Vec<String> =
+                        serde_json::from_value(args.get("tips").cloned().unwrap_or(json!([])))
+                            .map_err(|e| e.to_string())?;
+                    let tree = r
+                        .display_tree
+                        .as_ref()
+                        .ok_or("Attach a display tree first")?;
+                    let key =
+                        delimitation::flip_key(tree, &tips).ok_or("Select a clade to flip")?;
+                    let mut view = w.view.clone();
+                    if !view.flipped.remove(&key) {
+                        view.flipped.insert(key);
+                    }
+                    DelimitationEdit::SetView { view }
+                }
                 "hide" => {
                     let mut view = w.view.clone();
                     view.visible.retain(|h| h != &id);
@@ -768,6 +832,9 @@ impl qobject::DelimitationController {
                                 .unwrap_or(u32::MAX)
                                 .clamp(delimitation::MIN_BAR_WIDTH, delimitation::MAX_BAR_WIDTH),
                         );
+                    }
+                    if let Some(names) = args.get("names").and_then(Value::as_bool) {
+                        style.names = names;
                     }
                     if let Some(colors) = args.get("colors").and_then(Value::as_object) {
                         for (group, color) in colors {
@@ -1006,6 +1073,7 @@ impl qobject::DelimitationController {
                     legend.push((code, method));
                 }
                 Some(json!({"id": h.id, "x": c.x, "width": c.width, "code": code,
+                    "names": work.view.columns.get(&h.id).is_some_and(|s| s.names),
                     "method": method, "name": h.name, "editable": !matches!(h.origin,
                     HypothesisOrigin::Imported | HypothesisOrigin::Inferred),
                     "groups": h.groups.iter().enumerate().map(|(i, g)| json!({"id": g.id,
@@ -1234,10 +1302,12 @@ impl qobject::DelimitationController {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
             let (s, d) = r.session.as_mut().zip(r.doc).ok_or("No workspace open")?;
-            let tree = r
+            let mut tree = r
                 .display_tree
-                .as_ref()
+                .clone()
                 .ok_or("Attach a display tree first")?;
+            delimitation::apply_flips(&mut tree, &s.delimitation(d).view.flipped);
+            let tree = &tree;
             let tree_svg = basecraft_viewmodel::tree::to_svg_with_style(
                 tree,
                 900.0,

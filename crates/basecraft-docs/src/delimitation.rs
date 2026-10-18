@@ -258,6 +258,9 @@ pub fn apply(work: &mut DelimitationWorkspace, edit: &DelimitationEdit) -> Resul
             hash,
             evidence_run,
         } => {
+            if next.view.display_tree.as_ref() != Some(path) {
+                next.view.flipped.clear();
+            }
             next.view.display_tree = Some(path.clone());
             next.exchange_fields
                 .insert("basecraft_display_hash".into(), hash.clone());

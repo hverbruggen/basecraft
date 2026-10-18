@@ -82,7 +82,7 @@ Item {
             menu.showFor(first, {node: true, tip: false, annotated: false})
             tryCompare(menu, "opened", true)
             const name = findChild(menu, "nameAnnotation")
-            compare(name.text, "Name branch / node…")
+            compare(name.text, "Annotate clade…")
             verify(!findChild(menu, "renameTipIdentity").visible)
             // Simulate selection and active-document changes after the popup.
             first.current = Object.assign({}, first.current, {clade: ["C", "D"], label: "other"})
@@ -144,7 +144,7 @@ Item {
             first.current = Object.assign({}, first.current, {clade: ["A"], tips: 1})
             menu.showFor(first, {node: true, tip: true, annotated: false})
             tryCompare(menu, "opened", true)
-            compare(findChild(menu, "nameAnnotation").text, "Name tip annotation…")
+            compare(findChild(menu, "nameAnnotation").text, "Annotate tip…")
             const rename = findChild(menu, "renameTipIdentity")
             compare(rename.text, "Rename tip identity…")
             verify(rename.visible)

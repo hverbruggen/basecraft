@@ -98,6 +98,10 @@ pub struct DelimitationView {
     /// Hypothesis ID to its bar column style.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub columns: BTreeMap<String, ColumnStyle>,
+    /// Display-tree clades drawn flipped. Each is named by two tips whose
+    /// most recent common ancestor is the clade, whatever the drawing order.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub flipped: BTreeSet<Vec<String>>,
 }
 
 /// How one hypothesis column is drawn. Unset fields follow the theme.
@@ -109,6 +113,9 @@ pub struct ColumnStyle {
     /// Group ID to `#rrggbb`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub colors: BTreeMap<String, String>,
+    /// Write the species names to the right of the bars.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub names: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]

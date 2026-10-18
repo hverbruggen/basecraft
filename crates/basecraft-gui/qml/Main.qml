@@ -1232,13 +1232,6 @@ ApplicationWindow {
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
-                        title: "Edit species"
-                        RibbonButton { commandId: "species.group"; text: "Group selection"; tip: "Make the selected specimens one species in the hypothesis being edited (Ctrl+G)"; iconName: "selection"; enabled: window.speciesView !== null && window.speciesView.selection.length > 0 && !window.current.busy; onInvoked: window.speciesView.groupSelection() }
-                        RibbonButton { commandId: "species.merge"; text: "Merge checked"; tip: "Merge the species ticked in Details"; iconName: "align"; enabled: window.speciesView !== null && window.speciesView.mergeGroups.length > 1; onInvoked: window.speciesView.mergeChecked() }
-                        RibbonButton { commandId: "species.unassign"; text: "Unassign"; tip: "Take the selected specimens out of their species"; iconName: "minus"; enabled: window.speciesView !== null && window.speciesView.selection.length > 0; onInvoked: window.speciesView.unassign() }
-                    }
-                    ToolSeparator { Layout.fillHeight: true }
-                    RibbonGroup {
                         title: "Tools"
                         ModeButton { commandId: "species.select-tool"; text: "Select"; tip: "Click a node to select its clade, or a bar to select a species"; iconName: "selection"; enabled: window.speciesView !== null; active: window.speciesView !== null && window.speciesView.tool === "select"; onInvoked: window.speciesView.setTool("select") }
                         ModeButton { commandId: "species.threshold-cut"; text: "Threshold cut"; tip: window.speciesView !== null && !window.current.can_cut ? "Needs an ultrametric display tree (all tips the same distance from the root)" : "Drag a threshold across the tree and save the species it defines"; iconName: "trim"; enabled: window.speciesView !== null && window.current.can_cut; active: window.speciesView !== null && window.speciesView.tool === "cut"; onInvoked: window.speciesView.setTool("cut") }
@@ -1247,8 +1240,8 @@ ApplicationWindow {
                     RibbonGroup {
                         title: "Display"
                         RibbonButton { commandId: "species.display"; text: "Tree / groups…"; tip: "Attach or build a display tree"; iconName: "tree"; enabled: window.current !== null && !window.current.busy; onInvoked: window.beginDelimitation("view") }
-                        RibbonButton { commandId: "species.toggle-view"; text: window.speciesView !== null && window.speciesView.showGroups ? "Tree view" : "Sequence groups"; tip: "Switch between the tree with bars and a list of species"; iconName: "phylogram"; enabled: window.speciesView !== null && window.current.display_path.length > 0; onInvoked: window.speciesView.showGroups = !window.speciesView.showGroups }
-                        ModeButton { commandId: "species.advanced"; text: "Advanced"; tip: "Run analyses with every engine option"; iconName: "more"; enabled: window.speciesView !== null; active: window.speciesView !== null && window.speciesView.settingsOpen; onInvoked: window.speciesView.settingsOpen = !window.speciesView.settingsOpen }
+                        ModeButton { commandId: "species.tree-view"; text: "Tree view"; tip: "The tree with a bar column per hypothesis"; iconName: "phylogram"; enabled: window.speciesView !== null && window.current.display_path.length > 0; active: window.speciesView !== null && !window.speciesView.showGroups; onInvoked: window.speciesView.showGroups = false }
+                        ModeButton { commandId: "species.text-view"; text: "Text view"; tip: "Each hypothesis's species and their sequences, as text"; iconName: "text-representation"; enabled: window.speciesView !== null; active: window.speciesView !== null && window.speciesView.showGroups; onInvoked: window.speciesView.showGroups = true }
                     }
                     Item { Layout.fillWidth: true }
                     ExportGroup {}

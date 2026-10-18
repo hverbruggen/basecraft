@@ -27,9 +27,11 @@ FocusScope {
     readonly property var columnInfo: { ctl.workspace_json; ctl.theme_revision; return JSON.parse(ctl.columns_json(0)) }
     readonly property var activeHypothesis: hypotheses.find(h => h.id === ctl.active_hypothesis) || null
     property string tool: "select"
-    property var mergeGroups: []
-    property bool settingsOpen: false
     property bool detailsOpen: false
+    // Tip names of the clade last selected on the tree, for Flip subtree.
+    property var treeTaxa: []
+    // Edits change only manual hypotheses and edited copies.
+    readonly property bool activeEditable: activeHypothesis !== null && !["imported", "inferred"].includes(activeHypothesis.origin)
     property var pendingDisplay: null
     // Created by an analysis request; discarded on close if nothing came of it.
     property bool draft: false
@@ -49,13 +51,27 @@ FocusScope {
     // Ribbon commands.
     function newHypothesis(source) { newDialog.show(source || "") }
     function groupSelection() { if (selection.length) act("group", {label: nextSpeciesLabel()}) }
-    function mergeChecked() {
-        if (mergeGroups.length < 2) return
-        const first = ((activeHypothesis || {}).groups || []).find(g => g.id === mergeGroups[0])
-        act("merge", {groups: mergeGroups, label: first ? first.label : nextSpeciesLabel()})
-        mergeGroups = []
-    }
     function unassign() { if (selection.length) act("unassign") }
+    // The species of the edited hypothesis that is exactly the selection, if any.
+    function selectedSpecies() {
+        const chosen = new Set(selection)
+        return ((activeHypothesis || {}).groups || []).find(g => g.members.length === chosen.size && g.members.every(m => chosen.has(m))) || null
+    }
+    // Rename the selected species, or make the selection a species with this
+    // name; either way the names show beside the bars.
+    function nameSpecies(label) {
+        if (!activeHypothesis || !selection.length) return
+        const existing = selectedSpecies()
+        if (existing) act("rename_group", {group: existing.id, label: label})
+        else act("group", {label: label})
+        const style = (workspace.view.columns || {})[activeHypothesis.id] || {}
+        if (!style.names) act("style", {hypothesis: activeHypothesis.id, names: true})
+    }
+    function askSpeciesName() {
+        const existing = selectedSpecies()
+        textDialog.ask("Name species", "Species name", existing ? existing.label : nextSpeciesLabel(), value => doc.nameSpecies(value))
+    }
+    function flipSubtree() { if (treeTaxa.length) act("flip", {tips: treeTaxa}) }
     function setTool(name) {
         if (name !== "cut") ctl.cancel_cut()
         // Start the cut halfway down the tree so the line and its species show at once.
@@ -98,6 +114,8 @@ FocusScope {
             if (success && pending) ctl.run_analysis(pending.method, pending.input, false, pending.settings)
         }
     }
+    // Hidden menu items take no space.
+    component TreeMenuItem: MenuItem { height: visible ? implicitHeight : 0 }
     component WorkspaceButton: AppButton {
         id: workspaceButton
         FontMetrics { id: buttonMetrics; font: workspaceButton.font }
@@ -115,11 +133,14 @@ FocusScope {
         ctl.open_file(path)
     }
     Connections { target: ctl
-        function onDisplay_pathChanged() { if (ctl.display_path.length) tree.open_file(ctl.display_path) }
+        function onShown_treeChanged() { if (ctl.shown_tree.length) tree.open_file(ctl.shown_tree) }
         function onDisplayTaxaSelected(names) { tree.highlight_taxa(names) }
     }
     Connections { target: tree
-        function onTaxaSelected(names) { ctl.tree_taxa(names) }
+        function onTaxaSelected(names) {
+            doc.treeTaxa = JSON.parse(names)
+            ctl.tree_taxa(names)
+        }
     }
     Rectangle { anchors.fill: parent; color: doc.background }
     ColumnLayout {
@@ -133,54 +154,6 @@ FocusScope {
             busy: ctl.busy
             onDetailsRequested: detailsDialog.open()
             onCancelRequested: ctl.cancel_job()
-        }
-        ScrollView {
-            visible: doc.settingsOpen
-            Layout.fillWidth: true
-            Layout.minimumWidth: 0
-            Layout.preferredHeight: 270
-            contentWidth: Math.max(doc.width, 1200)
-            ColumnLayout {
-                width: Math.max(doc.width, 1200)
-                RowLayout {
-                    Layout.minimumWidth: 0
-                    TextField { id: treePath; placeholderText: "Display tree path"; Layout.fillWidth: true; text: ctl.display_path }
-                    CheckBox { id: rooted; text: "Explicitly rooted" }
-                    WorkspaceButton { text: "Attach tree"; onClicked: ctl.attach_tree(treePath.text,rooted.checked) }
-                }
-                RowLayout {
-                    Layout.minimumWidth: 0
-                    TextField { id: analysisInput; placeholderText: "Immutable analysis input (tree or aligned FASTA)"; Layout.fillWidth: true; text: ["asap","haplotypes","group_statistics","gmyc_alignment_single","gmyc_alignment_multiple"].includes(method.currentText) ? ctl.linked_alignment : ctl.display_path }
-                    AppComboBox { id: method; model: ["gmyc_single", "gmyc_multiple", "gmyc_alignment_single", "gmyc_alignment_multiple", "ptp", "mptp", "asap", "relative_time", "haplotypes", "group_statistics"] }
-                    WorkspaceButton { text: "Run"; enabled: !ctl.busy; onClicked: ctl.run_analysis(method.currentText,analysisInput.text,rooted.checked,JSON.stringify({cache:cachePath.text,mapping:mappingPath.text,deduplicate:sampling.currentIndex === 0,model:distanceModel.currentText,seed:seed.value,workers:workers.value,replicates:replicates.value,tree_index:treeIndex.value})) }
-                    WorkspaceButton { text: "Cancel job"; enabled: ctl.busy; onClicked: ctl.cancel_job() }
-                }
-                RowLayout {
-                    Layout.minimumWidth: 0
-                    AppComboBox { id: sampling; model: ["Deduplicate exact aligned DNA", "All specimens"]; currentIndex: 1 }
-                    Label { text: "GMYC/ASAP alignment only; tree deduplication needs verified alignment preparation" }
-                    WorkspaceButton { text: "Count haplotypes"; enabled: !ctl.busy; onClicked: ctl.run_analysis("haplotypes",analysisInput.text,false,"{}") }
-                    Label { text: ctl.sampling_summary }
-                }
-                RowLayout {
-                    Layout.minimumWidth: 0
-                    Label { text: "Distance model" }
-                    AppComboBox { id: distanceModel; model: ["p", "jc69", "k2p"] }
-                    Label { text: "Seed" }
-                    SpinBox { id: seed; from: 1; to: 2147483647; value: 1; editable: true }
-                    Label { text: "Workers" }
-                    SpinBox { id: workers; from: 1; to: 256; value: 1; editable: true }
-                    Label { text: "ASAP simulations per node (maximum)" }
-                    SpinBox { id: replicates; from: 100; to: 10000000; value: 100000; editable: true }
-                    Label { text: "Tree index (0 first)" }
-                    SpinBox { id: treeIndex; from: 0; to: 100000; value: 0; editable: true }
-                }
-                RowLayout {
-                    Layout.minimumWidth: 0
-                    TextField { id: cachePath; placeholderText: "Observed distance cache (optional)"; Layout.fillWidth: true }
-                    TextField { id: mappingPath; placeholderText: "Exact haplotype mapping (optional)"; Layout.fillWidth: true }
-                }
-            }
         }
         RowLayout {
             objectName: "thresholdCut"
@@ -201,7 +174,11 @@ FocusScope {
             WorkspaceButton {
                 text: "Save cut"
                 enabled: JSON.parse(ctl.preview_json).length > 0
-                onClicked: ctl.save_cut("Manual threshold cut at " + Number(ctl.threshold.toPrecision(4)))
+                onClicked: {
+                    ctl.save_cut("Manual threshold cut at " + Number(ctl.threshold.toPrecision(4)))
+                    // Saving clears the preview; a failed save keeps the cut open.
+                    if (JSON.parse(ctl.preview_json).length === 0) doc.setTool("select")
+                }
             }
             WorkspaceButton { text: "Cancel"; onClicked: doc.setTool("select") }
         }
@@ -275,6 +252,7 @@ FocusScope {
                     controller: tree
                     annotationEnabled: false
                     visible: center.treeShown
+                    onContextMenu: info => treeMenu.openFor(info)
                 }
                 Item {
                     id: cutHandle
@@ -294,7 +272,7 @@ FocusScope {
                 Item {
                     id: barArea
                     visible: center.treeShown
-                    anchors { right: parent.right; top: header.bottom; bottom: legend.top }
+                    anchors { right: nameArea.left; top: header.bottom; bottom: legend.top }
                     readonly property var lastColumn: doc.columnInfo.columns.length ? doc.columnInfo.columns[doc.columnInfo.columns.length - 1] : null
                     width: (lastColumn ? lastColumn.x + lastColumn.width : 0) + 12
                     clip: true
@@ -322,6 +300,34 @@ FocusScope {
                         }
                     }
                 }
+                // Species names for the columns that show them, after the bars.
+                Row {
+                    id: nameArea
+                    objectName: "speciesNames"
+                    visible: center.treeShown
+                    anchors { right: parent.right; top: header.bottom; bottom: legend.top }
+                    spacing: 8
+                    Repeater {
+                        model: doc.columnInfo.columns.filter(c => c.names)
+                        delegate: Item {
+                            id: nameColumn
+                            required property var modelData
+                            readonly property var segments: barArea.segments.filter(s => s.hypothesis === nameColumn.modelData.id)
+                            height: nameArea.height
+                            width: Math.max(0, ...nameColumn.modelData.groups.map(g => nameMetrics.advanceWidth(g.label))) + 4
+                            Repeater {
+                                model: nameColumn.segments
+                                delegate: Label {
+                                    required property var modelData
+                                    y: modelData.y + modelData.height / 2 - height / 2
+                                    text: modelData.label
+                                    color: doc.foreground
+                                }
+                            }
+                        }
+                    }
+                    FontMetrics { id: nameMetrics }
+                }
                 Label {
                     id: legend
                     objectName: "methodLegend"
@@ -338,8 +344,9 @@ FocusScope {
                     contentWidth: availableWidth
                     ColumnLayout {
                         width: parent.width
+                        TapHandler { acceptedButtons: Qt.RightButton; onTapped: treeMenu.openFor({}) }
                         Label { text: "Species hypotheses"; font.bold: true; color: doc.foreground }
-                        Label { text: "Select sequences, then use Group selection in the Delimitation ribbon to define a species."; wrapMode: Text.Wrap; Layout.fillWidth: true; color: doc.foreground }
+                        Label { text: "Tick sequences, then right-click to group or name them as a species."; wrapMode: Text.Wrap; Layout.fillWidth: true; color: doc.foreground }
                         Repeater {
                             model: doc.hypotheses.filter(h => (doc.workspace.view.visible || []).includes(h.id) || h.id === ctl.active_hypothesis)
                             delegate: ColumnLayout {
@@ -388,7 +395,6 @@ FocusScope {
                                     id: groupBlock
                                     required property var modelData
                                     Layout.fillWidth: true
-                                    CheckBox { text: "Include in merge"; checked: doc.mergeGroups.includes(groupBlock.modelData.id); onClicked: doc.mergeGroups = checked ? doc.mergeGroups.concat([groupBlock.modelData.id]) : doc.mergeGroups.filter(id => id !== groupBlock.modelData.id) }
                                     WorkspaceButton {
                                         text: groupBlock.modelData.label + " (" + groupBlock.modelData.members.length + ")"
                                         onClicked: ctl.select_group(ctl.active_hypothesis, groupBlock.modelData.id, false)
@@ -465,6 +471,7 @@ FocusScope {
         MenuItem { text: "Rename…"; onTriggered: textDialog.ask("Rename hypothesis", "Name", columnMenu.column.name, value => doc.act("rename", {hypothesis: columnMenu.column.id, name: value})) }
         MenuItem { text: "Bar width…"; onTriggered: widthDialog.show(columnMenu.column) }
         MenuItem { text: "Colours…"; onTriggered: colorDialog.showFor(columnMenu.column, "") }
+        MenuItem { text: "Show species names"; checkable: true; checked: columnMenu.column.names === true; onTriggered: doc.act("style", {hypothesis: columnMenu.column.id, names: checked}) }
         MenuItem { text: "Edit a copy…"; onTriggered: doc.newHypothesis(columnMenu.column.id) }
         MenuSeparator {}
         MenuItem { text: "Hide column"; onTriggered: doc.act("hide", {hypothesis: columnMenu.column.id}) }
@@ -488,6 +495,28 @@ FocusScope {
         MenuItem { text: "Colour…"; enabled: speciesMenu.column.id !== undefined; onTriggered: colorDialog.showFor(speciesMenu.column, speciesMenu.segment.group) }
     }
 
+    // Right-click on the tree, or in the text view: edit the hypothesis being
+    // edited with the selected sequences.
+    Menu {
+        id: treeMenu
+        objectName: "speciesTreeMenu"
+        property var info: ({})
+        function openFor(info) {
+            treeMenu.info = info || {}
+            popup()
+        }
+        readonly property bool canEdit: doc.activeEditable && doc.selection.length > 0 && !ctl.busy
+        TreeMenuItem {
+            text: doc.activeHypothesis ? (doc.activeEditable ? "Editing " + doc.activeHypothesis.name : doc.activeHypothesis.name + ": make an edited copy to change it") : "Click a column letter to choose a hypothesis"
+            enabled: false
+        }
+        MenuSeparator {}
+        TreeMenuItem { text: "Group selection"; objectName: "groupSelection"; enabled: treeMenu.canEdit; onTriggered: doc.groupSelection() }
+        TreeMenuItem { text: doc.selectedSpecies() ? "Rename species…" : "Name species…"; objectName: "nameSpecies"; enabled: treeMenu.canEdit; onTriggered: doc.askSpeciesName() }
+        TreeMenuItem { text: "Unassign"; objectName: "unassign"; enabled: treeMenu.canEdit; onTriggered: doc.unassign() }
+        MenuSeparator { visible: treeMenu.info.node === true; height: visible ? implicitHeight : 0 }
+        TreeMenuItem { text: "Flip subtree"; objectName: "flipSubtree"; visible: treeMenu.info.node === true; enabled: !ctl.busy; onTriggered: doc.flipSubtree() }
+    }
     AppContentDialog {
         id: newDialog
         objectName: "newHypothesisDialog"
@@ -618,5 +647,5 @@ FocusScope {
         }
     }
     Shortcut { sequence: "Escape"; onActivated: doc.setTool("select") }
-    Shortcut { sequence: "Ctrl+G"; onActivated: doc.groupSelection() }
+    Shortcut { sequence: "Ctrl+G"; onActivated: if (doc.activeEditable) doc.groupSelection() }
 }

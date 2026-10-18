@@ -104,7 +104,7 @@ AppContentDialog {
                 objectName: "manualTree"
                 Layout.fillWidth: true
                 Layout.minimumWidth: 0
-                model: ["Sequence groups (no tree)", "Existing tree", "Build UPGMA tree", "Build neighbor-joining tree", "Build IQ-TREE tree (substitutions)"]
+                model: ["Text view (no tree)", "Existing tree", "Build UPGMA tree", "Build neighbor-joining tree", "Build IQ-TREE tree (substitutions)"]
                 Accessible.labelledBy: treeLabel
                 Accessible.name: treeLabel.text
                 onCurrentIndexChanged: input.text = dialog.treePath
@@ -354,7 +354,7 @@ AppContentDialog {
             AppComboBox {
                 id: asapView
                 objectName: "asapView"
-                model: ["Sequence groups (no tree)", "UPGMA tree", "Neighbor-joining tree", "IQ-TREE tree (display only)"]
+                model: ["Text view (no tree)", "UPGMA tree", "Neighbor-joining tree", "IQ-TREE tree (display only)"]
                 currentIndex: 1
                 Accessible.name: viewLabel.text
                 Accessible.labelledBy: viewLabel

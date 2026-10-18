@@ -1,6 +1,7 @@
 //! Partition bars use the tree canvas's exact row geometry and stable IDs.
 #![allow(clippy::cast_precision_loss)]
 use crate::{Rgba, svg::escape, theme::Theme};
+use basecraft_docs::TreeDoc;
 use basecraft_protocol::delimitation::{
     DelimitationWorkspace, Group, Hypothesis, HypothesisOrigin,
 };
@@ -101,6 +102,60 @@ pub fn columns(work: &DelimitationWorkspace, left: f32) -> Vec<Column> {
         x += width + COLUMN_GAP;
     }
     out
+}
+
+/// The key `DelimitationView::flipped` stores for the clade spanning `tips`
+/// (for one tip, its parent): the first tip, by name, of two of its child
+/// subtrees. Flipping anything leaves the key pointing at the same clade.
+#[must_use]
+pub fn flip_key(tree: &TreeDoc, tips: &[String]) -> Option<Vec<String>> {
+    let chain = |mut node: usize| {
+        let mut out = vec![node];
+        while let Some(parent) = tree.node(node).parent {
+            out.push(parent);
+            node = parent;
+        }
+        out
+    };
+    let mut ancestors = chain(tree.find_tip(tips.first()?)?);
+    for name in &tips[1..] {
+        let other: BTreeSet<_> = chain(tree.find_tip(name)?).into_iter().collect();
+        let keep = ancestors.iter().position(|n| other.contains(n))?;
+        ancestors.drain(..keep);
+    }
+    let mut node = *ancestors.first()?;
+    if tree.node(node).is_tip() {
+        node = tree.node(node).parent?;
+    }
+    let first_tip = |start: usize| {
+        let mut stack = vec![start];
+        let mut best: Option<&str> = None;
+        while let Some(n) = stack.pop() {
+            let current = tree.node(n);
+            if current.is_tip() {
+                best = Some(best.map_or(current.name.as_str(), |b| b.min(current.name.as_str())));
+            }
+            stack.extend(&current.children);
+        }
+        best.map(str::to_string)
+    };
+    let mut firsts: Vec<String> = tree
+        .node(node)
+        .children
+        .iter()
+        .filter_map(|&c| first_tip(c))
+        .collect();
+    firsts.sort();
+    firsts.truncate(2);
+    (firsts.len() == 2).then_some(firsts)
+}
+
+/// Draw the stored clades flipped. Flips are independent of one another, so
+/// their order does not matter; keys that no longer resolve are skipped.
+pub fn apply_flips(tree: &mut TreeDoc, flipped: &BTreeSet<Vec<String>>) {
+    for clade in flipped {
+        let _ = tree.rotate(clade);
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -281,7 +336,28 @@ pub fn comparison_svg(
     methods.dedup();
     methods.sort_unstable();
     methods.dedup();
-    let right = columns.last().map_or(left, |c| c.x + c.width);
+    let bars_right = columns.last().map_or(left, |c| c.x + c.width);
+    // Species names, for the columns that show them, in name columns after the bars.
+    let mut names = Vec::new();
+    let mut right = bars_right;
+    for h in &shown {
+        if !work
+            .view
+            .columns
+            .get(&h.id)
+            .is_some_and(|style| style.names)
+        {
+            continue;
+        }
+        let longest = h
+            .groups
+            .iter()
+            .map(|g| g.label.chars().count())
+            .max()
+            .unwrap_or(0);
+        names.push((h.id.clone(), right + 6.0));
+        right += 6.0 + longest as f32 * 6.6;
+    }
     let longest = shown
         .iter()
         .map(|h| h.name.chars().count())
@@ -295,8 +371,19 @@ pub fn comparison_svg(
     );
     let (segments, _) = bars(work, rows, left, palette, None);
     svg.push_str("<g id=\"partitions\">\n");
-    for s in segments {
+    for s in &segments {
         writeln!(svg,"<rect data-hypothesis=\"{}\" data-group=\"{}\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"{}\"><title>{}</title></rect>",escape(&s.hypothesis),escape(&s.group),s.x,s.y+TOP,s.width,s.height,escape(&s.color),escape(&s.label)).unwrap();
+    }
+    for (hypothesis, x) in &names {
+        for s in segments.iter().filter(|s| &s.hypothesis == hypothesis) {
+            writeln!(
+                svg,
+                "<text x=\"{x}\" y=\"{}\" font-size=\"11\" dominant-baseline=\"middle\">{}</text>",
+                s.y + TOP + s.height / 2.0,
+                escape(&s.label)
+            )
+            .unwrap();
+        }
     }
     for (column, h) in columns.iter().zip(&shown) {
         writeln!(
@@ -430,6 +517,7 @@ mod tests {
             ColumnStyle {
                 width: Some(2),
                 colors: [(group.clone(), "#123456".into())].into(),
+                names: false,
             },
         );
         let laid = columns(&work, 10.0);
@@ -450,5 +538,50 @@ mod tests {
                 .filter(|s| s.hypothesis != first)
                 .all(|s| colors.contains(&s.color))
         );
+    }
+
+    #[test]
+    fn flips_keep_their_clade_and_names_follow_the_bars() {
+        let original = TreeDoc::from_newick("t", "((a:1,b:1):1,(c:1,d:1):1);").unwrap();
+        let order = |tree: &TreeDoc| {
+            tree.tips_in_order()
+                .iter()
+                .map(|&i| tree.node(i).name.clone())
+                .collect::<Vec<_>>()
+        };
+        let pair = flip_key(&original, &["c".into(), "d".into()]).unwrap();
+        assert_eq!(pair, ["c", "d"]);
+        // A tip names its parent's clade; the whole tree is keyed by both halves.
+        assert_eq!(flip_key(&original, &["d".into()]).unwrap(), pair);
+        let root = flip_key(&original, &["a".into(), "d".into()]).unwrap();
+        assert_eq!(root, ["a", "c"]);
+        let mut tree = original.clone();
+        apply_flips(&mut tree, &[pair.clone(), root.clone()].into());
+        assert_eq!(order(&tree), ["d", "c", "a", "b"]);
+        // The keys still name the same clades once flipped.
+        assert_eq!(flip_key(&tree, &["d".into()]).unwrap(), pair);
+        assert_eq!(flip_key(&tree, &["b".into(), "c".into()]).unwrap(), root);
+
+        let mut work = basecraft_io::spart::parse_text(include_str!(
+            "../../../testdata/fixtures/delimitation/manual.spart"
+        ))
+        .unwrap();
+        work.view.visible = vec!["partition-1".into()];
+        work.hypotheses[0].groups[0].label = "Species alpha".into();
+        let rows: Vec<_> = ["a", "b", "c", "d"]
+            .iter()
+            .enumerate()
+            .map(|(i, n)| ((*n).to_string(), i as f32 * 20.0 + 10.0, 20.0))
+            .collect();
+        let colors = palette(&Theme::default());
+        let plain = comparison_svg("", &work, &rows, 100.0, 80.0, "mono", &colors);
+        assert!(!plain.contains(">Species alpha</text>"));
+        work.view
+            .columns
+            .entry("partition-1".into())
+            .or_default()
+            .names = true;
+        let named = comparison_svg("", &work, &rows, 100.0, 80.0, "mono", &colors);
+        assert!(named.contains(">Species alpha</text>"));
     }
 }

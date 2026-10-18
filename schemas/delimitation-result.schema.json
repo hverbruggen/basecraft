@@ -43,6 +43,10 @@
             "type": "string"
           }
         },
+        "names": {
+          "description": "Write the species names to the right of the bars.",
+          "type": "boolean"
+        },
         "width": {
           "description": "Bar width in pixels.",
           "type": [
@@ -69,6 +73,17 @@
             "string",
             "null"
           ]
+        },
+        "flipped": {
+          "description": "Display-tree clades drawn flipped. Each is named by two tips whose\nmost recent common ancestor is the clade, whatever the drawing order.",
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "uniqueItems": true
         },
         "selected": {
           "type": "array",

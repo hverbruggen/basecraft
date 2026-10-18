@@ -40,8 +40,8 @@ Menu {
     component TreeItem: MenuItem { height: visible ? implicitHeight : 0 }
     TreeItem {
         objectName: "nameAnnotation"
-        text: menu.info.annotated ? "Edit name / annotation…"
-            : menu.info.tip ? "Name tip annotation…" : "Name branch / node…"
+        text: menu.info.annotated ? (menu.info.tip ? "Edit tip annotation…" : "Edit clade annotation…")
+            : menu.info.tip ? "Annotate tip…" : "Annotate clade…"
         visible: menu.info.node === true
         enabled: menu.annotation !== null
         onTriggered: if (menu.validTarget()) menu.nameRequested(menu.controller, menu.annotation, menu.revision)
