@@ -81,35 +81,42 @@ AppContentDialog {
                 }
                 Repeater {
                     model: fileBlock.modelData.hypotheses
-                    delegate: CheckBox {
-                        id: option
+                    delegate: RowLayout {
+                        id: row
                         required property var modelData
-                        objectName: "combine-" + modelData.id
                         Layout.fillWidth: true
-                        checked: dialog.isChosen(fileBlock.modelData.path, modelData.id)
-                        onToggled: dialog.toggle(fileBlock.modelData, modelData, checked)
-                        Accessible.name: modelData.name + ", " + modelData.method + ", " + dialog.describe(modelData) + (modelData.best ? ", best" : "")
-                        contentItem: Item {
-                            implicitWidth: lines.implicitWidth + lines.x
-                            implicitHeight: lines.implicitHeight
+                        spacing: 6
+                        AppCheckBox {
+                            id: option
+                            objectName: "combine-" + row.modelData.id
+                            padding: 0
+                            Layout.alignment: Qt.AlignTop
+                            Layout.topMargin: 1
+                            checked: dialog.isChosen(fileBlock.modelData.path, row.modelData.id)
+                            onToggled: {
+                                dialog.toggle(fileBlock.modelData, row.modelData, checked)
+                                // A click replaces the binding; restore it so linked copies stay in step.
+                                checked = Qt.binding(() => dialog.isChosen(fileBlock.modelData.path, row.modelData.id))
+                            }
+                            Accessible.name: row.modelData.name + ", " + row.modelData.method + ", " + dialog.describe(row.modelData) + (row.modelData.best ? ", best" : "")
+                        }
                         ColumnLayout {
-                            id: lines
-                            x: option.indicator.width + option.spacing
-                            width: parent.width - x
+                            Layout.fillWidth: true
                             spacing: 0
                             Label {
-                                text: modelData.code + "  " + modelData.name + (modelData.best ? "  (best)" : "")
-                                font.bold: modelData.best
+                                text: row.modelData.code + "  " + row.modelData.name + (row.modelData.best ? "  (best)" : "")
+                                font.bold: row.modelData.best
                                 elide: Text.ElideRight
                                 Layout.fillWidth: true
                             }
                             Label {
-                                text: modelData.method + " · " + dialog.describe(modelData)
+                                text: row.modelData.method + " · " + dialog.describe(row.modelData)
                                 opacity: 0.75
                                 elide: Text.ElideRight
                                 Layout.fillWidth: true
                             }
-                        }
+                            // Clicking the text toggles the box, as on a labelled checkbox.
+                            TapHandler { onTapped: { option.toggle(); option.toggled() } }
                         }
                     }
                 }

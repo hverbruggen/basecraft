@@ -33,6 +33,7 @@ FocusScope {
     property var pendingDisplay: null
     // Created by an analysis request; discarded on close if nothing came of it.
     property bool draft: false
+    property bool ribbonInitialized: false
     property bool showGroups: !ctl.display_path.length
     property alias treeController: tree
     readonly property color background: tree.background
@@ -57,6 +58,8 @@ FocusScope {
     function unassign() { if (selection.length) act("unassign") }
     function setTool(name) {
         if (name !== "cut") ctl.cancel_cut()
+        // Start the cut halfway down the tree so the line and its species show at once.
+        else if (ctl.can_cut && tool !== "cut") ctl.preview_cut(ctl.threshold > 0 ? ctl.threshold : ctl.root_height / 2)
         tool = name
     }
     function chooseColumns() { columnsDialog.show() }

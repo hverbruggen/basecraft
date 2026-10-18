@@ -82,6 +82,26 @@ Item {
             compare(selection["/b.spart"], ["manual"])
         }
 
+        function test_combine_boxes_sit_left_of_their_text() {
+            const dialog = createTemporaryObject(combineFactory, parent)
+            dialog.show(files)
+            tryCompare(dialog, "opened", true)
+            const box = findChild(dialog.body, "combine-second")
+            const text = box.parent.children[1]
+            // Checked because the edited copy of it is.
+            verify(box.checked)
+            // Wait for the rows to be laid out before clicking them.
+            tryVerify(() => dialog.contentItem.height > box.height * 3)
+            verify(box.x + box.width <= text.x, "The checkbox does not overlap its text")
+            verify(box.width < 30)
+            mouseClick(text)
+            verify(!dialog.isChosen("/a.spart", "second"), "Clicking the text toggles the box")
+            tryCompare(box, "checked", false)
+            verify(!findChild(dialog.body, "combine-copy").checked, "Its copy follows")
+            mouseClick(findChild(dialog.body, "combine-copy"))
+            tryCompare(box, "checked", true)
+        }
+
         function test_combine_needs_one_choice() {
             const dialog = createTemporaryObject(combineFactory, parent)
             dialog.show(files)

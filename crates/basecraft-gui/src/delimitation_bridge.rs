@@ -48,6 +48,8 @@ pub mod qobject {
         #[qinvokable]
         fn combine_candidates(self: Pin<&mut DelimitationController>, paths: &QString) -> QString;
         #[qinvokable]
+        fn combine_name(self: &DelimitationController, paths: &QString) -> QString;
+        #[qinvokable]
         fn attach_tree(
             self: Pin<&mut DelimitationController>,
             path: &QString,
@@ -402,6 +404,11 @@ impl qobject::DelimitationController {
             }
         }
     }
+    /// A free `<common root>.combinedNN.spart` beside the last file.
+    pub fn combine_name(&self, paths: &QString) -> QString {
+        let paths: Vec<PathBuf> = serde_json::from_str(&paths.to_string()).unwrap_or_default();
+        QString::from(combined_path(&paths).to_string_lossy().as_ref())
+    }
     /// Hypotheses in each file, best analysis results first, for the combine dialog.
     pub fn combine_candidates(mut self: Pin<&mut Self>, paths: &QString) -> QString {
         let result = (|| -> Result<Vec<Value>, String> {
@@ -540,7 +547,10 @@ impl qobject::DelimitationController {
                 return Err("Choose a file containing exactly one display tree".into());
             }
             let tree = TreeDoc::from_parsed(&trees[0].name, &trees[0]);
-            let time = basecraft_delimitation::time_tree::validate(&tree, rooted, 1e-8, true);
+            // A manual cut works on the tree as drawn, so it needs ultrametric
+            // ages but not a rooting assertion or a bifurcating tree. The
+            // tolerance allows Newick lengths printed to six decimals.
+            let time = basecraft_delimitation::time_tree::validate(&tree, true, 1e-4, false);
             let hash = basecraft_io::hash_bytes(&bytes);
             Ok((p, tree, time, hash, bytes))
         })();
@@ -1792,6 +1802,47 @@ fn workspace_path(source: &Path, method: &str) -> PathBuf {
         .unwrap_or_default()
 }
 
+/// `specimens.afa.asap01.spart` and `specimens.afa.gmyc01.spart` give
+/// `specimens.afa.combined01.spart`; files without a shared root give
+/// `combined01.spart`.
+fn combined_path(paths: &[PathBuf]) -> PathBuf {
+    let Some(last) = paths.last() else {
+        return PathBuf::new();
+    };
+    let directory = last.parent().unwrap_or(Path::new("."));
+    let names: Vec<String> = paths
+        .iter()
+        .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .collect();
+    let first = names.first().map_or("", String::as_str);
+    let mut shared = first.len();
+    for name in names.iter().skip(1) {
+        shared = first
+            .char_indices()
+            .zip(name.chars())
+            .find(|((_, a), b)| a != b)
+            .map_or(shared.min(name.len()), |((i, _), _)| i.min(shared));
+    }
+    // Keep whole name parts: "specimens.afa.asap0" becomes "specimens.afa".
+    let root = if shared == first.len() && names.iter().all(|n| n == first) {
+        first.rsplit_once('.').map_or(first, |(stem, _)| stem)
+    } else {
+        first[..shared]
+            .rsplit_once('.')
+            .map_or("", |(stem, _)| stem)
+    };
+    (1..=u32::MAX)
+        .map(|n| {
+            directory.join(if root.is_empty() {
+                format!("combined{n:02}.spart")
+            } else {
+                format!("{root}.combined{n:02}.spart")
+            })
+        })
+        .find(|path| !path.exists())
+        .unwrap_or_default()
+}
+
 /// Names `create_workspace` gives, including the earlier `species-<id>.spart`.
 fn generated_workspace(name: &str) -> bool {
     let Some(stem) = name
@@ -1877,6 +1928,32 @@ mod naming_tests {
         ] {
             assert!(generated_workspace(name), "{name}");
         }
+        let combined = |names: &[&str]| {
+            combined_path(
+                &names
+                    .iter()
+                    .map(|n| directory.path().join(n))
+                    .collect::<Vec<_>>(),
+            )
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned()
+        };
+        assert_eq!(
+            combined(&["specimens.afa.asap01.spart", "specimens.afa.gmyc01.spart"]),
+            "specimens.afa.combined01.spart"
+        );
+        assert_eq!(
+            combined(&["x.asap01.spart", "x.asap02.spart", "x.spart"]),
+            "x.combined01.spart"
+        );
+        assert_eq!(
+            combined(&["hypotheses.spart", "specimens.afa.gmyc01.spart"]),
+            "combined01.spart"
+        );
+        std::fs::write(directory.path().join("combined01.spart"), "").unwrap();
+        assert_eq!(combined(&["a.spart", "b.spart"]), "combined02.spart");
         for name in [
             "hypotheses.spart",
             "x.gmyc1.spart",

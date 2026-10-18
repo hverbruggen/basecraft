@@ -235,9 +235,9 @@ ApplicationWindow {
         current = d ? d.controller : null
         currentView = d ? d.view : null
         currentPath = d ? d.path : ""
-        const firstOpen = d && d.kind === "alignment" && !d.ribbonInitialized
+        const firstOpen = d && (d.kind === "alignment" || d.kind === "delimitation") && !d.ribbonInitialized
         currentKind = d ? d.kind : ""
-        if (firstOpen) { d.ribbonInitialized = true; if (currentKind === "alignment") ribbonTabName = "Alignment" }
+        if (firstOpen) { d.ribbonInitialized = true; ribbonTabName = currentKind === "alignment" ? "Alignment" : "Delimitation" }
         if (currentView && (focusOpenedDocument || !tabs.activeFocus)) {
             // Background model updates must not steal focus from controls/dialogs.
             if (focusOpenedDocument || !window.activeFocusItem || !window.activeFocusItem.visible)
@@ -340,9 +340,11 @@ ApplicationWindow {
         property string selection: ""
         onChosenHypotheses: chosen => {
             selection = chosen
-            // Save beside the species files just chosen.
+            // Suggest <shared root>.combinedNN.spart beside the files just chosen.
             const paths = combinePicker.paths
-            combinedDestination.currentFolder = shell.parent_folder_url(paths[paths.length - 1])
+            const suggested = combineController.combine_name(JSON.stringify(paths))
+            combinedDestination.currentFolder = shell.parent_folder_url(suggested.length ? suggested : paths[paths.length - 1])
+            if (suggested.length) combinedDestination.selectedFile = shell.local_file_url(suggested)
             combinedDestination.open()
         }
     }
@@ -1239,7 +1241,7 @@ ApplicationWindow {
                     RibbonGroup {
                         title: "Tools"
                         ModeButton { commandId: "species.select-tool"; text: "Select"; tip: "Click a node to select its clade, or a bar to select a species"; iconName: "selection"; enabled: window.speciesView !== null; active: window.speciesView !== null && window.speciesView.tool === "select"; onInvoked: window.speciesView.setTool("select") }
-                        ModeButton { commandId: "species.threshold-cut"; text: "Threshold cut"; tip: "Drag a threshold across an ultrametric tree and save the species it defines"; iconName: "trim"; enabled: window.speciesView !== null && window.current.can_cut; active: window.speciesView !== null && window.speciesView.tool === "cut"; onInvoked: window.speciesView.setTool("cut") }
+                        ModeButton { commandId: "species.threshold-cut"; text: "Threshold cut"; tip: window.speciesView !== null && !window.current.can_cut ? "Needs an ultrametric display tree (all tips the same distance from the root)" : "Drag a threshold across the tree and save the species it defines"; iconName: "trim"; enabled: window.speciesView !== null && window.current.can_cut; active: window.speciesView !== null && window.speciesView.tool === "cut"; onInvoked: window.speciesView.setTool("cut") }
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
