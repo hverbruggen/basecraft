@@ -427,9 +427,17 @@ impl qobject::DelimitationController {
                     .cloned()
                     .unwrap_or(linked);
                 self.as_mut().set_linked_alignment(QString::from(linked));
+                // Edit a hypothesis that can be edited, if there is one.
                 let active = w
                     .hypotheses
-                    .first()
+                    .iter()
+                    .find(|h| {
+                        !matches!(
+                            h.origin,
+                            HypothesisOrigin::Imported | HypothesisOrigin::Inferred
+                        )
+                    })
+                    .or_else(|| w.hypotheses.first())
                     .map(|h| h.id.clone())
                     .unwrap_or_default();
                 {
@@ -856,6 +864,16 @@ impl qobject::DelimitationController {
                     if *style == basecraft_protocol::delimitation::ColumnStyle::default() {
                         view.columns.remove(&id);
                     }
+                    DelimitationEdit::SetView { view }
+                }
+                // Space between bar columns; null makes it follow the bar width.
+                "gap" => {
+                    let mut view = w.view.clone();
+                    view.bar_gap = args.get("gap").and_then(Value::as_u64).map(|gap| {
+                        u32::try_from(gap)
+                            .unwrap_or(u32::MAX)
+                            .min(delimitation::MAX_BAR_WIDTH)
+                    });
                     DelimitationEdit::SetView { view }
                 }
                 "visible" => {

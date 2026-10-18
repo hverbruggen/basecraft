@@ -14,7 +14,6 @@ use std::{
 pub const BAR_WIDTH: u32 = 9;
 pub const MIN_BAR_WIDTH: u32 = 5;
 pub const MAX_BAR_WIDTH: u32 = 200;
-const COLUMN_GAP: f32 = 4.0;
 
 /// Theme colours in the order groups receive them.
 #[must_use]
@@ -99,7 +98,11 @@ pub fn columns(work: &DelimitationWorkspace, left: f32) -> Vec<Column> {
             x,
             width,
         });
-        x += width + COLUMN_GAP;
+        let gap = work
+            .view
+            .bar_gap
+            .map_or(width, |gap| gap.min(MAX_BAR_WIDTH) as f32);
+        x += width + gap;
     }
     out
 }
@@ -287,6 +290,7 @@ pub fn bars(
             .enumerate()
             .flat_map(|(i, g)| g.members.iter().map(move |m| (m, (g, i))))
             .collect();
+        let start = segments.len();
         for (name, y, height) in rows {
             let Some(ids) = mapping.get(name) else {
                 unmatched.insert(name.clone());
@@ -325,6 +329,17 @@ pub fn bars(
                 });
             }
         }
+        // One bar per run of touching rows in the same species.
+        let mut merged: Vec<BarSegment> = Vec::new();
+        for s in segments.drain(start..) {
+            match merged.last_mut() {
+                Some(last) if last.group == s.group && s.y <= last.y + last.height + 0.5 => {
+                    last.height = s.y + s.height - last.y;
+                }
+                _ => merged.push(s),
+            }
+        }
+        segments.append(&mut merged);
     }
     (segments, unmatched)
 }
@@ -395,7 +410,9 @@ pub fn comparison_svg(
     let (segments, _) = bars(work, rows, left, palette, None);
     svg.push_str("<g id=\"partitions\">\n");
     for s in &segments {
-        writeln!(svg,"<rect data-hypothesis=\"{}\" data-group=\"{}\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"{}\"><title>{}</title></rect>",escape(&s.hypothesis),escape(&s.group),s.x,s.y+TOP,s.width,s.height,escape(&s.color),escape(&s.label)).unwrap();
+        // Rounded ends, as on screen.
+        let radius = s.width.min(s.height) / 2.0;
+        writeln!(svg,"<rect data-hypothesis=\"{}\" data-group=\"{}\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" rx=\"{radius}\" fill=\"{}\"><title>{}</title></rect>",escape(&s.hypothesis),escape(&s.group),s.x,s.y+TOP,s.width,s.height,escape(&s.color),escape(&s.label)).unwrap();
     }
     for (hypothesis, x) in &names {
         for (label, y) in name_positions(&segments, hypothesis) {
@@ -501,7 +518,8 @@ mod tests {
         let colors = palette(&Theme::default());
         let (segments, missing) = bars(&work, &rows, 500.0, &colors, Some((0.0, 100.0)));
         assert_eq!(missing, BTreeSet::new());
-        assert_eq!(segments.len(), 10);
+        // Partition 2 has a/b and c/d as touching pairs: one bar each.
+        assert_eq!(segments.len(), 8);
         let (hypothesis, group) = hit(&segments, 504.0, 20.0).unwrap();
         let mut selection = Selection::default();
         selection
@@ -522,7 +540,7 @@ mod tests {
             &colors,
         );
         assert!(svg.contains("A&amp;B"));
-        assert_eq!(svg.matches("data-hypothesis").count(), 10);
+        assert_eq!(svg.matches("data-hypothesis").count(), 8);
         assert!(!svg.contains("<image"));
     }
     #[test]
@@ -546,7 +564,14 @@ mod tests {
         let laid = columns(&work, 10.0);
         // Widths below the minimum are raised to it.
         assert_eq!(laid[0].width, MIN_BAR_WIDTH as f32);
-        assert_eq!(laid[1].x, 10.0 + MIN_BAR_WIDTH as f32 + COLUMN_GAP);
+        // Each column is followed by a gap as wide as its bars, unless set.
+        assert_eq!(laid[1].x, 10.0 + 2.0 * MIN_BAR_WIDTH as f32);
+        let mut spaced = work.clone();
+        spaced.view.bar_gap = Some(3);
+        assert_eq!(
+            columns(&spaced, 10.0)[1].x,
+            10.0 + MIN_BAR_WIDTH as f32 + 3.0
+        );
         assert_eq!(laid[1].width, BAR_WIDTH as f32);
         let colors = palette(&Theme::default());
         let rows = [("a".to_string(), 20.0, 20.0)];
@@ -612,6 +637,12 @@ mod tests {
         assert_eq!(named.matches(">Species alpha</text>").count(), 2);
         // Drawn a, c, b, d, each species is one block with one name.
         let (segments, _) = bars(&work, &rows_in(["a", "c", "b", "d"]), 0.0, &colors, None);
+        // Touching rows of a species are drawn as one bar.
+        assert_eq!(segments.len(), 2);
+        assert!(
+            segments.iter().all(|s| (s.height - 40.0).abs() < 1e-4),
+            "{segments:?}"
+        );
         let positions = name_positions(&segments, "partition-1");
         assert_eq!(positions.len(), 2);
         assert_eq!(positions[0].0, "Species alpha");

@@ -778,6 +778,7 @@ impl qobject::TreeController {
                     let r = &mut *r;
                     r.view.selected = None;
                     r.view.multi_taxa = None;
+                    r.view.forget_layout();
                     r.view.fit();
                     r.view.sync(session.tree(doc));
                     r.session = Some(session);

@@ -102,6 +102,10 @@ pub struct DelimitationView {
     /// most recent common ancestor is the clade, whatever the drawing order.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub flipped: BTreeSet<Vec<String>>,
+    /// Pixels between bar columns. Unset, each column is followed by a gap
+    /// as wide as its bars.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bar_gap: Option<u32>,
 }
 
 /// How one hypothesis column is drawn. Unset fields follow the theme.

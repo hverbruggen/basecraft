@@ -610,6 +610,15 @@
     "DelimitationView": {
       "type": "object",
       "properties": {
+        "bar_gap": {
+          "description": "Pixels between bar columns. Unset, each column is followed by a gap\nas wide as its bars.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
         "columns": {
           "description": "Hypothesis ID to its bar column style.",
           "type": "object",

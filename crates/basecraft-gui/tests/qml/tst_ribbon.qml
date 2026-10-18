@@ -304,7 +304,7 @@ Item {
             tabs.itemAt(4).forceActiveFocus(Qt.TabFocusReason)
             keyClick(Qt.Key_Space)
             tryCompare(tabs, "selectedName", "Help")
-            tabs.names = ["File", "View", "Alignment", "Build phylogeny", "Settings", "Help"]
+            tabs.names = ["File", "View", "Alignment", "Phylogeny", "Settings", "Help"]
             tryCompare(tabs, "currentIndex", 5)
         }
         function test_action_identity_and_disabled_state() {

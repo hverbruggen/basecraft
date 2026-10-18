@@ -252,7 +252,12 @@ FocusScope {
                     controller: tree
                     annotationEnabled: false
                     visible: center.treeShown
-                    onContextMenu: info => treeMenu.openFor(info)
+                    onContextMenu: info => {
+                        // The tree reports a clade only when it changes, so a
+                        // species picked from the bars since would stay selected.
+                        if (info.node) ctl.tree_taxa(JSON.stringify(doc.treeTaxa))
+                        treeMenu.openFor(info)
+                    }
                 }
                 Item {
                     id: cutHandle
@@ -285,7 +290,8 @@ FocusScope {
                             required property var modelData
                             x: modelData.x; y: modelData.y; width: modelData.width; height: modelData.height
                             color: modelData.color
-                            border.color: doc.background; border.width: 0.5
+                            // Rounded ends; one bar spans each run of a species.
+                            radius: Math.min(width, height) / 2
                             ToolTip.visible: segmentMouse.containsMouse; ToolTip.text: modelData.label
                             MouseArea {
                                 id: segmentMouse
@@ -479,7 +485,7 @@ FocusScope {
         MenuItem { text: "Move right"; enabled: columnMenu.position < doc.columnInfo.columns.length - 1; onTriggered: doc.act("move_visible", {id: columnMenu.column.id, direction: 1}) }
         MenuSeparator {}
         MenuItem { text: "Rename…"; onTriggered: textDialog.ask("Rename hypothesis", "Name", columnMenu.column.name, value => doc.act("rename", {hypothesis: columnMenu.column.id, name: value})) }
-        MenuItem { text: "Bar width…"; onTriggered: widthDialog.show(columnMenu.column) }
+        MenuItem { text: "Bar width and spacing…"; onTriggered: widthDialog.show(columnMenu.column) }
         MenuItem { text: "Colours…"; onTriggered: colorDialog.showFor(columnMenu.column, "") }
         MenuItem { text: "Show species names"; checkable: true; checked: columnMenu.column.names === true; onTriggered: doc.act("style", {hypothesis: columnMenu.column.id, names: checked}) }
         MenuItem { text: "Edit a copy…"; onTriggered: doc.newHypothesis(columnMenu.column.id) }
@@ -524,6 +530,7 @@ FocusScope {
         TreeMenuItem { text: "Group selection"; objectName: "groupSelection"; enabled: treeMenu.canEdit; onTriggered: doc.groupSelection() }
         TreeMenuItem { text: doc.selectedSpecies() ? "Rename species…" : "Name species…"; objectName: "nameSpecies"; enabled: treeMenu.canEdit; onTriggered: doc.askSpeciesName() }
         TreeMenuItem { text: "Unassign"; objectName: "unassign"; enabled: treeMenu.canEdit; onTriggered: doc.unassign() }
+        TreeMenuItem { text: "Edit a copy…"; visible: doc.activeHypothesis !== null && !doc.activeEditable; onTriggered: doc.newHypothesis(doc.activeHypothesis.id) }
         MenuSeparator { visible: treeMenu.info.node === true; height: visible ? implicitHeight : 0 }
         TreeMenuItem { text: "Flip subtree"; objectName: "flipSubtree"; visible: treeMenu.info.node === true; enabled: !ctl.busy; onTriggered: doc.flipSubtree() }
     }
@@ -543,7 +550,11 @@ FocusScope {
         onAccepted: {
             const args = {name: newName.text.trim()}
             if (startFrom.currentIndex > 0) args.source = doc.hypotheses[startFrom.currentIndex - 1].id
+            const before = doc.hypotheses.length
             doc.act("create", args)
+            // Edit the new hypothesis straight away.
+            const created = JSON.parse(ctl.workspace_json).hypotheses || []
+            if (created.length > before) ctl.activate(created[created.length - 1].id)
         }
         body: ColumnLayout {
             Label { id: newNameLabel; text: "Name" }
@@ -586,18 +597,29 @@ FocusScope {
     AppContentDialog {
         id: widthDialog
         property string target: ""
-        title: "Bar width"
+        title: "Bar width and spacing"
         standardButtons: Dialog.Ok | Dialog.Cancel
         initialFocusItem: widthValue
         function show(column) {
             target = column.id
             widthValue.value = Math.round(column.width)
+            const gap = doc.workspace.view.bar_gap
+            gapFollows.checked = gap === undefined || gap === null
+            gapValue.value = gapFollows.checked ? Math.round(column.width) : gap
             open()
         }
-        onAccepted: doc.act("style", {hypothesis: target, width: widthValue.value})
-        body: RowLayout {
-            Label { id: widthLabel; text: "Width in pixels (5 to 200)" }
+        onAccepted: {
+            doc.act("style", {hypothesis: target, width: widthValue.value})
+            const gap = gapFollows.checked ? null : gapValue.value
+            if (gap !== (doc.workspace.view.bar_gap ?? null)) doc.act("gap", {gap: gap})
+        }
+        body: GridLayout {
+            columns: 2
+            Label { id: widthLabel; text: "Bar width in pixels (5 to 200)" }
             AppSpinBox { id: widthValue; objectName: "barWidth"; from: 5; to: 200; editable: true; Accessible.name: widthLabel.text }
+            AppCheckBox { id: gapFollows; objectName: "gapFollowsWidth"; text: "Space between columns as wide as the bars"; Layout.columnSpan: 2 }
+            Label { id: gapLabel; text: "Space between columns in pixels, all columns"; enabled: !gapFollows.checked }
+            AppSpinBox { id: gapValue; objectName: "barGap"; from: 0; to: 200; editable: true; enabled: !gapFollows.checked; Accessible.name: gapLabel.text }
         }
     }
     SpeciesColorDialog {

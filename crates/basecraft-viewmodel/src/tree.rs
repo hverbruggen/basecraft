@@ -217,6 +217,12 @@ impl TreeView {
         }
     }
 
+    /// Lay out afresh on the next sync. Needed when a different tree replaces
+    /// the document: its version can equal the old one's.
+    pub fn forget_layout(&mut self) {
+        self.layout_key = None;
+    }
+
     fn clamp_scroll(&mut self) {
         self.scroll_y = self
             .scroll_y
@@ -1331,6 +1337,20 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn a_replacement_tree_is_laid_out_afresh() {
+        let mut view = TreeView::new(400.0, 300.0);
+        let first = tree("((a,b),(c,d));");
+        view.sync(&first);
+        let flipped = tree("((c,d),(a,b));");
+        view.forget_layout();
+        view.sync(&flipped);
+        let rows = view.tip_rows(&flipped);
+        let order: Vec<_> = rows.iter().map(|(name, _, _)| name.as_str()).collect();
+        assert_eq!(order, ["c", "d", "a", "b"]);
+        assert!(rows.windows(2).all(|w| w[0].1 < w[1].1), "{rows:?}");
     }
 
     #[test]

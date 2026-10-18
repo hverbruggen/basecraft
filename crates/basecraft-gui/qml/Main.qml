@@ -90,15 +90,16 @@ ApplicationWindow {
     readonly property bool delimitationOpen: currentKind === "delimitation"
     readonly property bool traceOpen: currentKind === "trace"
     // The third tab is Annotations for a sequence, Alignment for an
-    // alignment, Tree for a tree; an alignment also gets Build phylogeny.
+    // alignment, Tree for a tree; an alignment also gets Phylogeny and
+    // Delimitation, where the analyses start.
     readonly property var ribbonTabs: ["File", "View", alignmentOpen ? "Alignment" : treeOpen ? "Tree" : delimitationOpen ? "Delimitation" : traceOpen ? "Trace" : "Annotations"]
-        .concat(alignmentOpen ? ["Build phylogeny"] : [], ["Settings", "Help"])
+        .concat(alignmentOpen ? ["Phylogeny", "Delimitation"] : [], ["Settings", "Help"])
     // The chosen tab if this document has it, else its third tab (a tab
     // for another kind of document), else File.
     readonly property string ribbonTab: ribbonTabs.includes(ribbonTabName) ? ribbonTabName
-        : ["Annotations", "Alignment", "Tree", "Build phylogeny", "Delimitation", "Trace"].includes(ribbonTabName) ? ribbonTabs[2] : "File"
+        : ["Annotations", "Alignment", "Tree", "Phylogeny", "Delimitation", "Trace"].includes(ribbonTabName) ? ribbonTabs[2] : "File"
     // Each tab's panel in the ribbon's stack.
-    readonly property var ribbonPanels: ({ "File": 0, "View": 1, "Annotations": 2, "Settings": 3, "Help": 4, "Alignment": 5, "Tree": 6, "Build phylogeny": 7, "Delimitation": 8, "Trace": 9 })
+    readonly property var ribbonPanels: ({ "File": 0, "View": 1, "Annotations": 2, "Settings": 3, "Help": 4, "Alignment": 5, "Tree": 6, "Phylogeny": 7, "Delimitation": 8, "Trace": 9 })
     // Only the wrapped layout is offered for now; files always open in it.
 
     readonly property int availableCpuThreads: shell.available_cpu_threads()
@@ -1170,7 +1171,7 @@ ApplicationWindow {
                     ShortcutsGroup {}
                 }
 
-                // Build phylogeny: tree inference from the open alignment.
+                // Phylogeny: tree inference from the open alignment.
                 RibbonPage {
                     spacing: 6 * window.ribbonSizeFactor
                     RibbonGroup {
@@ -1198,8 +1199,6 @@ ApplicationWindow {
                         }
                     }
                     ToolSeparator { Layout.fillHeight: true }
-                    SpeciesMethodsGroup { commandSuffix: "alignment" }
-                    ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
                         title: "Maximum likelihood"
                         RibbonButton { commandId: "ribbon.infer-a-tree-with-fasttree-standard-settings-gtr-for";
@@ -1225,6 +1224,12 @@ ApplicationWindow {
                     SpeciesMethodsGroup { commandSuffix: "workspace" }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
+                        title: "Display"
+                        ModeButton { commandId: "species.tree-view"; text: "Tree view"; tip: "The tree with a bar column per hypothesis"; iconName: "phylogram"; enabled: window.speciesView !== null && window.current.display_path.length > 0; active: window.speciesView !== null && !window.speciesView.showGroups; onInvoked: window.speciesView.showGroups = false }
+                        ModeButton { commandId: "species.text-view"; text: "Text view"; tip: "Each hypothesis's species and their sequences, as text"; iconName: "text-representation"; enabled: window.speciesView !== null; active: window.speciesView !== null && window.speciesView.showGroups; onInvoked: window.speciesView.showGroups = true }
+                    }
+                    ToolSeparator { Layout.fillHeight: true }
+                    RibbonGroup {
                         title: "Hypotheses"
                         RibbonButton { commandId: "species.new"; text: "New…"; tip: "New species hypothesis, empty or copied from another"; iconName: "add"; enabled: window.speciesView !== null && !window.current.busy; onInvoked: window.speciesView.newHypothesis() }
                         RibbonButton { commandId: "species.columns"; text: "Columns…"; tip: "Choose which hypotheses get a bar column"; iconName: "columns"; enabled: window.speciesView !== null; onInvoked: window.speciesView.chooseColumns() }
@@ -1235,13 +1240,7 @@ ApplicationWindow {
                         title: "Tools"
                         ModeButton { commandId: "species.select-tool"; text: "Select"; tip: "Click a node to select its clade, or a bar to select a species"; iconName: "selection"; enabled: window.speciesView !== null; active: window.speciesView !== null && window.speciesView.tool === "select"; onInvoked: window.speciesView.setTool("select") }
                         ModeButton { commandId: "species.threshold-cut"; text: "Threshold cut"; tip: window.speciesView !== null && !window.current.can_cut ? "Needs an ultrametric display tree (all tips the same distance from the root)" : "Drag a threshold across the tree and save the species it defines"; iconName: "trim"; enabled: window.speciesView !== null && window.current.can_cut; active: window.speciesView !== null && window.speciesView.tool === "cut"; onInvoked: window.speciesView.setTool("cut") }
-                    }
-                    ToolSeparator { Layout.fillHeight: true }
-                    RibbonGroup {
-                        title: "Display"
-                        RibbonButton { commandId: "species.display"; text: "Tree / groups…"; tip: "Attach or build a display tree"; iconName: "tree"; enabled: window.current !== null && !window.current.busy; onInvoked: window.beginDelimitation("view") }
-                        ModeButton { commandId: "species.tree-view"; text: "Tree view"; tip: "The tree with a bar column per hypothesis"; iconName: "phylogram"; enabled: window.speciesView !== null && window.current.display_path.length > 0; active: window.speciesView !== null && !window.speciesView.showGroups; onInvoked: window.speciesView.showGroups = false }
-                        ModeButton { commandId: "species.text-view"; text: "Text view"; tip: "Each hypothesis's species and their sequences, as text"; iconName: "text-representation"; enabled: window.speciesView !== null; active: window.speciesView !== null && window.speciesView.showGroups; onInvoked: window.speciesView.showGroups = true }
+                        RibbonButton { commandId: "species.display"; text: "Attach"; tip: window.speciesView !== null && window.current.display_path.length ? "A display tree is attached" : "Attach or build a display tree"; iconName: "tree"; enabled: window.speciesView !== null && !window.current.busy && !window.current.display_path.length; onInvoked: window.beginDelimitation("view") }
                     }
                     Item { Layout.fillWidth: true }
                     ExportGroup {}
