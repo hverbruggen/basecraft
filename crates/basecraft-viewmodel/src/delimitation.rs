@@ -158,6 +158,29 @@ pub fn apply_flips(tree: &mut TreeDoc, flipped: &BTreeSet<Vec<String>>) {
     }
 }
 
+/// One species name per run of touching bar segments of a column, centred on
+/// the run: a species split by other tips gets a name beside each part.
+#[must_use]
+pub fn name_positions(segments: &[BarSegment], hypothesis: &str) -> Vec<(String, f32)> {
+    let mut column: Vec<_> = segments
+        .iter()
+        .filter(|s| s.hypothesis == hypothesis)
+        .collect();
+    column.sort_by(|a, b| a.y.total_cmp(&b.y));
+    let mut runs: Vec<(&BarSegment, f32, f32)> = Vec::new();
+    for s in column {
+        match runs.last_mut() {
+            Some((first, _, bottom)) if first.group == s.group && s.y <= *bottom + 1.0 => {
+                *bottom = s.y + s.height;
+            }
+            _ => runs.push((s, s.y, s.y + s.height)),
+        }
+    }
+    runs.into_iter()
+        .map(|(s, top, bottom)| (s.label.clone(), f32::midpoint(top, bottom)))
+        .collect()
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct BarSegment {
     pub hypothesis: String,
@@ -375,12 +398,12 @@ pub fn comparison_svg(
         writeln!(svg,"<rect data-hypothesis=\"{}\" data-group=\"{}\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"{}\"><title>{}</title></rect>",escape(&s.hypothesis),escape(&s.group),s.x,s.y+TOP,s.width,s.height,escape(&s.color),escape(&s.label)).unwrap();
     }
     for (hypothesis, x) in &names {
-        for s in segments.iter().filter(|s| &s.hypothesis == hypothesis) {
+        for (label, y) in name_positions(&segments, hypothesis) {
             writeln!(
                 svg,
                 "<text x=\"{x}\" y=\"{}\" font-size=\"11\" dominant-baseline=\"middle\">{}</text>",
-                s.y + TOP + s.height / 2.0,
-                escape(&s.label)
+                y + TOP,
+                escape(&label)
             )
             .unwrap();
         }
@@ -568,11 +591,14 @@ mod tests {
         .unwrap();
         work.view.visible = vec!["partition-1".into()];
         work.hypotheses[0].groups[0].label = "Species alpha".into();
-        let rows: Vec<_> = ["a", "b", "c", "d"]
-            .iter()
-            .enumerate()
-            .map(|(i, n)| ((*n).to_string(), i as f32 * 20.0 + 10.0, 20.0))
-            .collect();
+        let rows_in = |order: [&str; 4]| -> Vec<_> {
+            order
+                .iter()
+                .enumerate()
+                .map(|(i, n)| ((*n).to_string(), i as f32 * 20.0 + 10.0, 20.0))
+                .collect()
+        };
+        let rows = rows_in(["a", "b", "c", "d"]);
         let colors = palette(&Theme::default());
         let plain = comparison_svg("", &work, &rows, 100.0, 80.0, "mono", &colors);
         assert!(!plain.contains(">Species alpha</text>"));
@@ -582,6 +608,12 @@ mod tests {
             .or_default()
             .names = true;
         let named = comparison_svg("", &work, &rows, 100.0, 80.0, "mono", &colors);
-        assert!(named.contains(">Species alpha</text>"));
+        // Group 1 is a and c, which are not adjacent rows: one name per part.
+        assert_eq!(named.matches(">Species alpha</text>").count(), 2);
+        // Drawn a, c, b, d, each species is one block with one name.
+        let (segments, _) = bars(&work, &rows_in(["a", "c", "b", "d"]), 0.0, &colors, None);
+        let positions = name_positions(&segments, "partition-1");
+        assert_eq!(positions.len(), 2);
+        assert_eq!(positions[0].0, "Species alpha");
     }
 }

@@ -312,14 +312,24 @@ FocusScope {
                         delegate: Item {
                             id: nameColumn
                             required property var modelData
-                            readonly property var segments: barArea.segments.filter(s => s.hypothesis === nameColumn.modelData.id)
+                            // One name per run of touching segments, as in the SVG export.
+                            readonly property var runs: {
+                                const column = barArea.segments.filter(s => s.hypothesis === nameColumn.modelData.id).sort((a, b) => a.y - b.y)
+                                const out = []
+                                for (const s of column) {
+                                    const last = out[out.length - 1]
+                                    if (last && last.group === s.group && s.y <= last.bottom + 1) last.bottom = s.y + s.height
+                                    else out.push({group: s.group, label: s.label, top: s.y, bottom: s.y + s.height})
+                                }
+                                return out
+                            }
                             height: nameArea.height
                             width: Math.max(0, ...nameColumn.modelData.groups.map(g => nameMetrics.advanceWidth(g.label))) + 4
                             Repeater {
-                                model: nameColumn.segments
+                                model: nameColumn.runs
                                 delegate: Label {
                                     required property var modelData
-                                    y: modelData.y + modelData.height / 2 - height / 2
+                                    y: (modelData.top + modelData.bottom) / 2 - height / 2
                                     text: modelData.label
                                     color: doc.foreground
                                 }
