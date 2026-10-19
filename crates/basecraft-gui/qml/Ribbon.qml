@@ -23,10 +23,11 @@ Control {
         let count = 0
         for (const child of page.children) {
             if (!child.visible) continue
-            // A spacer that stretches needs only its minimum; in the app such
-            // spacers report a natural width of 200.
-            total += Math.ceil(child.Layout.fillWidth ? Math.max(0, child.Layout.minimumWidth)
-                : Math.max(child.implicitWidth, child.Layout.minimumWidth))
+            // A stretching spacer needs no width; in the app such spacers report
+            // a natural width of 200. Never read Layout.minimumWidth here: when
+            // unset it queries the layout engine, which crashes while a popup
+            // reparents its items. RibbonGroup sets its minimum to implicitWidth.
+            total += child.Layout.fillWidth ? 0 : Math.ceil(child.implicitWidth)
             count++
         }
         return total + Math.max(0, count - 1) * (page.spacing || 0)
