@@ -8,6 +8,97 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Result, analysis_store::ArtifactRun, error::invalid};
 
+/// Register one clean original using the shared reference/preserve/export lifecycle.
+/// This is an explicit analysis action, never a passive-open writer. Dependencies
+/// name immutable upstream runs; no source input is copied here.
+pub fn reference_input_with_dependencies(
+    anchor: &Path,
+    source: &Path,
+    hash: &str,
+    dependencies: &[PathBuf],
+    origin: &str,
+) -> Result<ArtifactRun> {
+    use basecraft_protocol::provenance::{
+        ArtifactRevision, Completeness, InputReference, Publication,
+    };
+    let _lock = crate::input_evidence::lock()?;
+    let run =
+        crate::analysis_store::ArtifactRun::create(anchor, &ulid::Ulid::generate().to_string())?;
+    let source = source.canonicalize()?;
+    if basecraft_io::hash_file(&source)? != hash {
+        return Err(invalid("Input changed while registering its evidence"));
+    }
+    let reference = InputReference {
+        path: crate::input_evidence::relative(run.directory(), &source)?,
+        stamp: crate::input_evidence::stamp(&source)?,
+        hash: hash.into(),
+        extra: BTreeMap::new(),
+    };
+    let mut input = crate::input_evidence::SubmittedInput {
+        schema_version: 1,
+        source: Some(reference.clone()),
+        submitted_hash: hash.into(),
+        submitted_size: reference.stamp.size,
+        transformation: "identity-v1".into(),
+        state: "referenced".into(),
+        extra: BTreeMap::new(),
+    };
+    let source_bundle = crate::provenance::bundle_for_result(&source);
+    let mut upstream = Vec::new();
+    for dependency in dependencies.iter().chain(std::iter::once(&source_bundle)) {
+        let manifest = dependency.join("manifest.json");
+        if manifest.is_file() {
+            let bytes = crate::provenance::read_record(&manifest)?;
+            let record: Publication = serde_json::from_slice(&bytes)?;
+            upstream.push(serde_json::json!({"bundle":crate::input_evidence::relative(run.directory(), dependency)?,"id":record.id,"hash":basecraft_io::hash_bytes(&bytes)}));
+        }
+    }
+    if !upstream.is_empty() {
+        input
+            .extra
+            .insert("upstream".into(), serde_json::json!(upstream));
+    }
+    crate::input_evidence::write_json(&run.artifact("input.json")?, &input)?;
+    crate::input_evidence::write_json(
+        &run.artifact("run.json")?,
+        &serde_json::json!({"schema_version":1,"id":run.id(),"result":anchor.file_name().and_then(|n| n.to_str()),"status":"referenced"}),
+    )?;
+    crate::input_evidence::register(&run)?;
+    let publication = Publication {
+        schema_version: 1,
+        id: run.id().into(),
+        session: run.id().into(),
+        parents: vec![],
+        parent_hashes: BTreeMap::new(),
+        created: basecraft_platform::now_rfc3339(),
+        origin: origin.into(),
+        inputs: vec![ArtifactRevision {
+            id: format!("{}:source", run.id()),
+            logical_name: source
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned(),
+            hash: hash.into(),
+            size: reference.stamp.size,
+            retained: None,
+            reference: Some(reference),
+        }],
+        outputs: vec![],
+        events: vec![],
+        effective_edits: vec![],
+        completeness: Completeness {
+            ancestry_known: false,
+            input_bytes_available: true,
+            execution_specification_available: false,
+            replay_verified: false,
+        },
+        report_template_version: 2,
+    };
+    crate::provenance::publish(run.directory(), &publication)?;
+    Ok(run)
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SubmittedInput {
     pub schema_version: u32,
@@ -198,6 +289,40 @@ fn stores() -> Result<Vec<PathBuf>> {
         return Err(invalid("known-store paths must be absolute and bounded"));
     }
     Ok(paths)
+}
+
+/// Resolve an immutable run by identity only in registered stores. This avoids
+/// exposing machine paths in public `ToolRun` parameters and never scans trees.
+pub(crate) fn registered_run(id: &str, expected: &str) -> Result<PathBuf> {
+    if id.is_empty() || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
+        return Err(invalid("Unsafe input run identity"));
+    }
+    let mut found = None;
+    for store in stores()? {
+        let run = store.join("runs").join(id);
+        let record = run.join("records").join(format!("{id}.json"));
+        if !record.try_exists()? {
+            continue;
+        }
+        ArtifactRun::validate_store(&store)?;
+        for directory in [store.join("runs"), run.clone()] {
+            let metadata = std::fs::symlink_metadata(directory)?;
+            if !metadata.is_dir() || metadata.file_type().is_symlink() {
+                return Err(invalid("Unsafe registered input run"));
+            }
+        }
+        if basecraft_io::hash_file(&record)? != expected {
+            return Err(invalid("Registered input run checksum differs"));
+        }
+        let canonical = run.canonicalize()?;
+        if found.as_ref().is_some_and(|prior| prior != &canonical) {
+            return Err(invalid(
+                "Input run has multiple registered copies; explicit reassociation required",
+            ));
+        }
+        found = Some(canonical);
+    }
+    found.ok_or_else(|| invalid("Selected input run unavailable in known stores"))
 }
 
 /// Caller holds `lock`. Only explicit analysis execution registers a store.
@@ -715,8 +840,20 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
     roots.extend(upstream);
     let species =
         crate::files::Format::from_path(result).ok() == Some(crate::files::Format::Delimitation);
+    let sanger = if crate::sanger_review::is_review(result) {
+        Some(result.to_path_buf())
+    } else if publication.origin.starts_with("Sanger accepted consensus;") {
+        publication
+            .inputs
+            .iter()
+            .find(|a| a.logical_name == "review.sanger-review.json")
+            .and_then(|a| a.retained.as_ref())
+            .map(|name| bundle.join(name))
+    } else {
+        None
+    };
     let mut species_paths = BTreeMap::new();
-    if species {
+    if species || sanger.is_some() {
         for (directory, record) in &roots {
             for artifact in record.inputs.iter().chain(&record.outputs) {
                 let original = if let Some(reference) = &artifact.reference {
@@ -858,6 +995,36 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
                     .into_owned(),
                 hash: side_hash,
                 size: std::fs::metadata(&sidecar)?.len(),
+                retained: None,
+                reference: None,
+            });
+        }
+    }
+    if let Some(original) = &sanger {
+        let review = if original == result {
+            copied.clone()
+        } else {
+            copied.with_extension("sanger-review.json")
+        };
+        if original != result {
+            copy(original, &review)?;
+        }
+        crate::sanger_review::relocate_package(original, &review, &target_bundle, &species_paths)?;
+        let hash = basecraft_io::hash_file(&review)?;
+        let size = std::fs::metadata(&review)?.len();
+        if original == result {
+            publication.outputs[0].hash = hash;
+            publication.outputs[0].size = size;
+        } else {
+            publication.outputs.push(ArtifactRevision {
+                id: format!("{}:sanger-review", publication.id),
+                logical_name: review
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned(),
+                hash,
+                size,
                 retained: None,
                 reference: None,
             });

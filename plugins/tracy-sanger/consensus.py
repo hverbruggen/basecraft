@@ -220,7 +220,9 @@ def merge(
     for path in resolved:
         with path.open("rb") as source:
             signature = source.read(4)
-        if path.suffix.lower() not in (".ab1", ".abi") or signature != b"ABIF":
+        # Preserved/exported originals may have content-addressed names. ABIF
+        # identity comes from the bytes; a filename suffix is not evidence.
+        if signature != b"ABIF":
             raise ValueError(f"Not an ABIF Sanger trace: {path}")
         hashes.append(file_hash(path))
     if len(set(hashes)) != len(hashes):

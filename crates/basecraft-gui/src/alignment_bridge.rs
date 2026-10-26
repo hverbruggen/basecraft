@@ -70,6 +70,16 @@ pub mod qobject {
             keep: bool,
         );
         #[qinvokable]
+        fn add_reviewed_sequences(
+            self: Pin<&mut AlignmentController>,
+            text: &QString,
+            name: &QString,
+            mafft: bool,
+            orientation: bool,
+            keep: bool,
+            evidence: &QString,
+        );
+        #[qinvokable]
         fn read_sequence_file(self: Pin<&mut AlignmentController>, path: &QString) -> QString;
         #[qinvokable]
         fn review_snapshot(self: Pin<&mut AlignmentController>) -> QString;
@@ -1123,13 +1133,44 @@ impl qobject::AlignmentController {
         }
     }
 
+    pub fn add_reviewed_sequences(
+        self: Pin<&mut Self>,
+        text: &QString,
+        name: &QString,
+        mafft: bool,
+        orientation: bool,
+        keep: bool,
+        evidence: &QString,
+    ) {
+        self.add_sequences_impl(
+            text,
+            name,
+            mafft,
+            orientation,
+            keep,
+            Some(evidence.to_string()),
+        );
+    }
+
     pub fn add_sequences(
+        self: Pin<&mut Self>,
+        text: &QString,
+        name: &QString,
+        mafft: bool,
+        orientation: bool,
+        keep: bool,
+    ) {
+        self.add_sequences_impl(text, name, mafft, orientation, keep, None);
+    }
+
+    fn add_sequences_impl(
         mut self: Pin<&mut Self>,
         text: &QString,
         name: &QString,
         mafft: bool,
         orientation: bool,
         keep: bool,
+        evidence: Option<String>,
     ) {
         if self.rust().busy {
             return;
@@ -1168,6 +1209,24 @@ impl qobject::AlignmentController {
                     .join("\n")
             ));
             return;
+        }
+        if let Some(evidence) = evidence {
+            let result = (|| -> Result<(), String> {
+                if rows.len() != 1 {
+                    return Err("Select one reviewed specimen at a time".into());
+                }
+                let mut r = self.as_mut().rust_mut();
+                let r = &mut *r;
+                let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
+                    return Err("No alignment is open".into());
+                };
+                basecraft_ops::sanger_review::record_addition(session, doc, &evidence, &rows[0].1)
+                    .map_err(|e| e.to_string())
+            })();
+            if let Err(error) = result {
+                self.fail_addition(&error);
+                return;
+            }
         }
         if !mafft {
             if self.as_mut().edit(Op::AlnAddSequences {
