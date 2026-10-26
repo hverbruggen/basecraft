@@ -127,6 +127,18 @@ fn run_cases(root: &Path) {
         check_tree(&exported, label, multi);
         let retained = Path::new(completed.evidence.as_ref().unwrap()).join("artifacts/tree.nwk");
         check_tree(&retained, label, multi);
+        let moved = root.join(format!("copied-{suffix}"));
+        std::fs::create_dir(&moved).unwrap();
+        let moved_tree = moved.join("tree.nwk");
+        std::fs::copy(&exported, &moved_tree).unwrap();
+        if !multi {
+            std::fs::copy(
+                exported.with_file_name("tree.nwk.basecraft.json"),
+                moved.join("tree.nwk.basecraft.json"),
+            )
+            .unwrap();
+        }
+        check_tree(&moved_tree, label, multi);
         assert!(
             basecraft_ops::provenance::verify(&retained)
                 .unwrap()
