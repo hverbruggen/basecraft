@@ -726,7 +726,6 @@ fn text_w(text: &str, size: f32) -> f32 {
     text.chars().count() as f32 * size * GLYPH_ADVANCE
 }
 
-#[cfg(test)]
 fn shown_supports(doc: &TreeDoc) -> Vec<&basecraft_docs::SupportSet> {
     if doc.style().support_shown.is_empty() {
         doc.supports().iter().collect()
@@ -758,6 +757,7 @@ fn footer_space(doc: &TreeDoc) -> f32 {
     }
 }
 
+#[cfg(test)]
 fn layout(doc: &TreeDoc, width: f32, height: f32, row_zoom: f32, width_zoom: f32) -> Layout {
     layout_with(doc, &[], width, height, row_zoom, width_zoom)
 }
