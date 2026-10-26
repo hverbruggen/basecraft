@@ -1,0 +1,8 @@
+schema = 2
+id = "basecraft.sanderson"
+name = "Sanderson penalized likelihood"
+version = "0.1.0"
+contract = "operations.json"
+
+[entry]
+operation = "python:plugin.py"
