@@ -8,7 +8,7 @@
 )]
 
 // The QML module's retained registration object links every controller, even
-// though this test loads only a windowless QtQml Timer.
+// though this test loads only a windowless item and unopened operation dialog.
 #[path = "../src/alignment_bridge.rs"]
 mod alignment_bridge;
 #[path = "../src/application.rs"]
@@ -90,7 +90,9 @@ fn main() {
         .release();
     engine.pin_mut().load_data(
         &QByteArray::from(
-            "import QtQml; Timer { interval: 1; running: true; onTriggered: Qt.quit() }",
+            "import QtQuick; import Basecraft; Item { width: 800; height: 600; \
+             OperationPickerDialog {} \
+             Timer { interval: 1; running: true; onTriggered: Qt.quit() } }",
         ),
         &QUrl::default(),
     );

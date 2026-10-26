@@ -13,7 +13,7 @@ AppContentDialog {
     property bool unsavedInput: false
     property var catalog: ({operations: []})
     readonly property var selected: operationChoice.currentIndex >= 0 ? catalog.operations[operationChoice.currentIndex] : null
-    readonly property var result: JSON.parse(backend.outcome || "{}")
+    readonly property var operationOutcome: JSON.parse(backend.outcome || "{}")
     signal openResult(string path)
     AppOperations { id: backend }
     Timer { interval: 200; repeat: true; running: backend.busy; onTriggered: backend.poll() }
@@ -110,9 +110,9 @@ AppContentDialog {
             Button { text: "Refresh installed operations"; enabled: !backend.busy; onClicked: dialog.catalog = JSON.parse(backend.catalog()) }
         }
         Label { text: backend.message; wrapMode: Text.Wrap; Layout.fillWidth: true; Accessible.name: "Operation status" }
-        TextArea { visible: dialog.result.data !== undefined && dialog.result.data !== null; text: JSON.stringify(dialog.result.data, null, 2) || ""; readOnly: true; selectByMouse: true; wrapMode: TextEdit.Wrap; Layout.fillWidth: true; Accessible.name: "Structured operation result" }
+        TextArea { visible: dialog.operationOutcome.data !== undefined && dialog.operationOutcome.data !== null; text: JSON.stringify(dialog.operationOutcome.data, null, 2) || ""; readOnly: true; selectByMouse: true; wrapMode: TextEdit.Wrap; Layout.fillWidth: true; Accessible.name: "Structured operation result" }
         Repeater {
-            model: dialog.result.artifacts || []
+            model: dialog.operationOutcome.artifacts || []
             delegate: RowLayout {
                 required property var modelData
                 Label { text: modelData.role + ": " + modelData.path; elide: Text.ElideMiddle; Layout.fillWidth: true }
