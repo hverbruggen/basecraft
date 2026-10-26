@@ -1775,7 +1775,7 @@ mod tests {
             .unwrap();
         assert!(legend.0 > l.left + 24.0);
         assert!(legend.1 > l.tips_bottom);
-        assert!(legend.1 + t.style().support_font as f32 < l.height);
+        assert!(legend.1 + (t.style().support_font as f32) < l.height);
         let svg = to_svg(&t, 600.0, 20.0);
         assert!(svg.contains("–/95"));
         assert!(svg.contains("Support 2 / Support 1"));

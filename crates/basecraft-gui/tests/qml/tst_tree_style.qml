@@ -112,6 +112,27 @@ Item {
             const precision = findChild(dialog.contentItem, "supportDecimals0")
             verify(precision.width >= precision.implicitWidth - 1)
         }
+        function test_scale_threshold_placement_and_legend_save() {
+            const scale = findChild(dialog.contentItem, "supportScale1")
+            compare(scale.currentIndex, 1)
+            scale.currentIndex = 0
+            scale.activated(0)
+            const minimum = findChild(dialog.contentItem, "supportMinimum1")
+            minimum.value = 90
+            minimum.valueModified()
+            const placement = findChild(dialog.contentItem, "supportPlacement")
+            placement.currentIndex = 2
+            const legend = findChild(dialog.contentItem, "supportLegend")
+            legend.checked = false
+            dialog.save()
+            compare(controller.saved.support_fraction.BPP, false)
+            compare(controller.saved.support_minimums.BPP, 90)
+            compare(controller.saved.support_minimums.Bootstrap, 0)
+            compare(controller.saved.support_placement, "below")
+            compare(controller.saved.support_legend, false)
+            compare(controller.saved.tip_font, 13)
+            compare(controller.saved.support_font, 10)
+        }
         function test_auto_preserves_semantic_defaults() {
             dialog.save()
             compare(Object.keys(controller.saved.support_decimals).length, 0)
