@@ -1,6 +1,12 @@
 <RCC>
   <qresource prefix="/qt/qml/Basecraft">
     <file>icons/accept.svg</file>
+    <file>icons/clade-annotate.svg</file>
+    <file>icons/book.svg</file>
+    <file>icons/settings.svg</file>
+    <file>icons/figure-export.svg</file>
+    <file>icons/basecraft-monochrome.svg</file>
+
     <file>icons/add-file.svg</file>
     <file>icons/add.svg</file>
     <file>icons/annotation-add.svg</file>

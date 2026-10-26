@@ -15,6 +15,9 @@ fn support_precision_scale_unknown_settings_save_undo_and_replay() {
     style.support_decimals.insert("Support 1".into(), 0);
     style.support_decimals.insert("Support 2".into(), 4);
     style.support_proportions.insert("Support 1".into(), false);
+    style.support_fraction.insert("Support 2".into(), true);
+    style.support_minimums.insert("Support 1".into(), 80);
+    style.support_legend = false;
     style
         .extra
         .insert("future_option".into(), json!({"nested": [1,2,3]}));
@@ -297,4 +300,33 @@ fn drawing_edits_replay_in_order_and_skip_stale_clades() {
         .collect();
     assert_eq!(order, ["e", "d", "c", "a", "b"]);
     assert_eq!(tree.style().tip_font, 21);
+}
+
+#[test]
+fn imported_supports_retain_recorded_names_kinds_and_evidence() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("inferred.nwk");
+    let text = "((a,b)95/0.9,c);";
+    std::fs::write(&path, text).unwrap();
+    let mut source = files::load_tree(&path).unwrap().doc;
+    source.rename_support("Support 1", "Standard bootstrap");
+    source.rename_support("Support 2", "Posterior probability");
+    source.set_support_kind("Standard bootstrap", SupportKind::Bootstrap);
+    source.set_support_kind("Posterior probability", SupportKind::Probability);
+    let mut sidecar = Vec::new();
+    files::write_tree_sidecar(&source, &mut sidecar).unwrap();
+    std::fs::write(files::tree_sidecar(&path), sidecar).unwrap();
+    let known = files::load_tree(&path).unwrap().doc;
+    assert_eq!(known.supports()[0].name, "Standard bootstrap");
+    assert_eq!(known.supports()[1].name, "Posterior probability");
+    assert_eq!(known.supports()[0].kind, SupportKind::Bootstrap);
+    assert_eq!(known.supports()[1].kind, SupportKind::Probability);
+    let target = basecraft_docs::TreeDoc::from_newick("target", "(c,(b,a));").unwrap();
+    let matched = target.support_from(&known).unwrap();
+    assert_eq!(matched[0].0, "Standard bootstrap");
+    assert_eq!(matched[1].0, "Posterior probability");
+    std::fs::remove_file(files::tree_sidecar(&path)).unwrap();
+    let unknown = files::load_tree(&path).unwrap().doc;
+    assert_eq!(unknown.supports()[0].name, "Support 1");
+    assert_eq!(unknown.supports()[0].kind, SupportKind::Unknown);
 }

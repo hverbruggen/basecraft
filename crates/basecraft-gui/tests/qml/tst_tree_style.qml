@@ -12,7 +12,7 @@ Item {
         property var removed: []
         function style_json() {
             return JSON.stringify({
-                sets: [{name: "Bootstrap", source: "", decimals: 0, automatic_decimals: 0}, {name: "BPP", source: "", decimals: 2, automatic_decimals: 2}],
+                sets: [{name: "Bootstrap", source: "", decimals: 0, automatic_decimals: 0, proportions: false}, {name: "BPP", source: "", decimals: 2, automatic_decimals: 2, proportions: true}],
                 style: {support_shown: [], support_min: 0, support_decimals: {}, support_proportions: {},
                     symbols: null, tip_font: 13, support_font: 10, branch_width: 1,
                     vertical_bar_labels: true, scale_bar: true, future_option: {value: 42}}
@@ -27,7 +27,7 @@ Item {
     TestCase {
         name: "TreeStyle"
         when: windowShown
-        function init() { controller.saved = null; controller.removed = []; invoker.forceActiveFocus(); rejected.clear(); accepted.clear(); dialog.openStyle(); tryCompare(dialog, "opened", true); wait(20) }
+        function init() { controller.saved = null; controller.removed = []; invoker.forceActiveFocus(); rejected.clear(); accepted.clear(); dialog.openStyle("support"); tryCompare(dialog, "opened", true); wait(20) }
         function cleanup() { dialog.close(); tryCompare(dialog, "opened", false); root.width = 800; dialog.font.pixelSize = 13 }
         function test_independent_precision_keyboard_and_unknown_settings() {
             const auto = findChild(dialog.contentItem, "autoDecimals0")
@@ -65,7 +65,7 @@ Item {
             compare(accepted.count, 0)
             compare(controller.saved, null)
             tryCompare(invoker, "activeFocus", true)
-            dialog.openStyle()
+            dialog.openStyle("support")
             tryCompare(dialog, "opened", true)
             compare(findChild(dialog.contentItem, "supportDecimals0").value, 0)
         }
@@ -81,7 +81,7 @@ Item {
             compare(accepted.count, 0)
             compare(controller.removed.length, 0)
             tryCompare(invoker, "activeFocus", true)
-            dialog.openStyle()
+            dialog.openStyle("support")
             tryCompare(dialog, "opened", true)
             compare(dialog.removedSets.length, 0)
             compare(findChild(dialog.contentItem, "supportDecimals0").value, 0)
@@ -116,6 +116,10 @@ Item {
             dialog.save()
             compare(Object.keys(controller.saved.support_decimals).length, 0)
             compare(Object.keys(controller.saved.support_proportions).length, 0)
+            compare(controller.saved.support_fraction.Bootstrap, false)
+            compare(controller.saved.support_fraction.BPP, true)
+            compare(controller.saved.support_minimums.Bootstrap, 0)
+            verify(controller.saved.support_legend)
         }
     }
 }

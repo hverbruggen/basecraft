@@ -113,11 +113,17 @@ pub struct TreeStyle {
     pub support_shown: Vec<String>,
     /// Hide support values below this percentage. Known producer metadata sets
     /// the scale; ambiguous imported sets with all finite values in 0–1 use
-    /// proportions. `support_proportions` overrides this fallback. 0 shows all.
+    /// proportions. Legacy `support_proportions` overrides only Unknown imports. 0 shows all.
     pub support_min: u32,
+    /// Per-set thresholds in percent, falling back to support_min.
+    pub support_minimums: BTreeMap<String, u32>,
+    /// Display conversion only: true renders fractions, false percentages.
+    pub support_fraction: BTreeMap<String, bool>,
+    /// Show an ordered legend when more than one support set is displayed.
+    pub support_legend: bool,
     /// Decimal places per set; missing entries use the support semantics. Maximum 10.
     pub support_decimals: BTreeMap<String, u8>,
-    /// Optional display-scale overrides for ambiguous imports (true means 0–1).
+    /// Legacy source-unit interpretation for Unknown imports only (true means 0–1).
     pub support_proportions: BTreeMap<String, bool>,
     /// Preserve settings written by newer versions.
     #[serde(flatten)]
@@ -137,6 +143,9 @@ impl Default for TreeStyle {
             support_placement: SupportPlacement::Natural,
             support_shown: Vec::new(),
             support_min: 0,
+            support_minimums: BTreeMap::new(),
+            support_fraction: BTreeMap::new(),
+            support_legend: true,
             support_decimals: BTreeMap::new(),
             support_proportions: BTreeMap::new(),
             extra: BTreeMap::new(),

@@ -727,6 +727,37 @@ fn text_w(text: &str, size: f32) -> f32 {
 }
 
 #[cfg(test)]
+fn shown_supports(doc: &TreeDoc) -> Vec<&basecraft_docs::SupportSet> {
+    if doc.style().support_shown.is_empty() {
+        doc.supports().iter().collect()
+    } else {
+        doc.style()
+            .support_shown
+            .iter()
+            .filter_map(|name| doc.support(name))
+            .collect()
+    }
+}
+
+fn support_legend(doc: &TreeDoc) -> Option<String> {
+    let shown = shown_supports(doc);
+    (doc.style().support_legend && shown.len() > 1).then(|| {
+        shown
+            .iter()
+            .map(|set| set.name.as_str())
+            .collect::<Vec<_>>()
+            .join(" / ")
+    })
+}
+
+fn footer_space(doc: &TreeDoc) -> f32 {
+    if (doc.has_lengths() && doc.style().scale_bar) || support_legend(doc).is_some() {
+        SCALE_SPACE.max(doc.style().support_font as f32 + 28.0)
+    } else {
+        0.0
+    }
+}
+
 fn layout(doc: &TreeDoc, width: f32, height: f32, row_zoom: f32, width_zoom: f32) -> Layout {
     layout_with(doc, &[], width, height, row_zoom, width_zoom)
 }
@@ -919,11 +950,7 @@ fn layout_with(
         }
     }
     let max_depth = depth.iter().copied().fold(0.0, f64::max);
-    let scale = if lengths && style.scale_bar {
-        SCALE_SPACE
-    } else {
-        0.0
-    };
+    let scale = footer_space(doc);
     let avail_h = height - 2.0 * MARGIN - scale;
     let row = (avail_h / tips.len().max(1) as f32).max(0.5) * row_zoom;
     let tip_font = style.tip_font as f32;
@@ -986,7 +1013,14 @@ fn layout_with(
         label_end,
         bars,
         columns: placed_columns,
-        width: label_end + bars_w + MARGIN,
+        width: (label_end + bars_w + MARGIN).max(support_legend(doc).map_or(0.0, |text| {
+            let scale_width = if lengths && style.scale_bar {
+                144.0
+            } else {
+                0.0
+            };
+            left + scale_width + text_w(&text, style.support_font as f32) + MARGIN
+        })),
         height: tips_bottom + scale + MARGIN,
         tips_bottom,
         left,
@@ -1103,20 +1137,11 @@ fn shapes(
     }
 
     // Support: circles at nodes, then values beside branches.
-    let shown: Vec<&basecraft_docs::SupportSet> = if style.support_shown.is_empty() {
-        doc.supports().iter().collect()
-    } else {
-        style
-            .support_shown
-            .iter()
-            .filter_map(|name| doc.support(name))
-            .collect()
-    };
+    let shown = shown_supports(doc);
     let symbols = style
         .symbols
         .as_ref()
         .and_then(|s| Some((s, doc.support(&s.set)?)));
-    let min = f64::from(style.support_min);
     let r = (l.row * 0.32).clamp(2.5, 7.0);
     // Values clear the circles when there are any.
     let gap = if symbols.is_some() { r + 2.0 } else { 3.0 };
@@ -1155,15 +1180,22 @@ fn shapes(
         }
         let parts: Vec<String> = shown
             .iter()
-            .map(
-                |s| match (s.formatted(i, style), s.display_percent(i, style)) {
+            .map(|s| {
+                let min = f64::from(
+                    style
+                        .support_minimums
+                        .get(&s.name)
+                        .copied()
+                        .unwrap_or(style.support_min),
+                );
+                match (s.formatted(i, style), s.display_percent(i, style)) {
                     (Some(v), Some(pct)) if pct >= min => v,
                     (Some(v), None) if min == 0.0 => v,
-                    _ => "-".into(),
-                },
-            )
+                    _ => "–".into(),
+                }
+            })
             .collect();
-        if parts.iter().all(|p| p == "-") {
+        if parts.len() == 1 && parts[0] == "–" {
             continue;
         }
         let up = match style.support_placement {
@@ -1263,6 +1295,8 @@ fn shapes(
         }
     }
 
+    // Shared footer: support legend follows the scalebar without overlap.
+    let mut legend_x = l.left;
     // Scale bar.
     if l.lengths && style.scale_bar && l.unit > 0.0 {
         let target = f64::from(120.0 / l.unit);
@@ -1273,6 +1307,7 @@ fn shapes(
             .rfind(|&v| v <= target)
             .unwrap_or(mag);
         let w = nice as f32 * l.unit;
+        legend_x += w.max(text_w(&format_length(nice), small)) + 24.0;
         let y = l.tips_bottom + 14.0;
         if visible(y - 4.0, y + 20.0) {
             out.push(Shape::Rect {
@@ -1289,6 +1324,21 @@ fn shapes(
                 text: format_length(nice),
                 color: pal.foreground,
                 align: Align::Center,
+                italic: false,
+                down: false,
+            });
+        }
+    }
+    if let Some(text) = support_legend(doc) {
+        let y = l.tips_bottom + 18.0;
+        if visible(y, y + small) {
+            out.push(Shape::Text {
+                x: legend_x,
+                y,
+                size: small,
+                text,
+                color: pal.foreground,
+                align: Align::Left,
                 italic: false,
                 down: false,
             });
@@ -1409,11 +1459,7 @@ pub fn forest_svg(trees: &[TreeDoc], width: f32, row: f32, theme: &Theme, font: 
     let mut total = 0.0;
     let mut widest = width;
     for (i, tree) in trees.iter().enumerate() {
-        let scale = if tree.has_lengths() && tree.style().scale_bar {
-            SCALE_SPACE
-        } else {
-            0.0
-        };
+        let scale = footer_space(tree);
         let height = tree.tip_count().max(1) as f32 * row + 2.0 * MARGIN + scale;
         let geometry = layout_with(tree, &[], width, height, 1.0, 1.0);
         widest = widest.max(geometry.width);
@@ -1439,11 +1485,7 @@ fn figure(
     font: &str,
 ) -> Figure {
     let tips = doc.tip_count().max(1) as f32;
-    let scale = if doc.has_lengths() && doc.style().scale_bar {
-        SCALE_SPACE
-    } else {
-        0.0
-    };
+    let scale = footer_space(doc);
     let height = tips * row + 2.0 * MARGIN + scale;
     let l = layout_with(doc, columns, width, height, 1.0, 1.0);
     let shapes = shapes(doc, &l, &pal, None, None);
@@ -1710,6 +1752,43 @@ mod tests {
             !texts(&shapes).iter().any(|(t, ..)| t == "80"),
             "below the minimum"
         );
+    }
+
+    #[test]
+    fn ordered_support_thresholds_and_legend_share_figure_geometry() {
+        let mut t = tree("((A:1,B:1)95/0.8:1,C:1);");
+        let mut style = t.style().clone();
+        style.support_shown = names(&["Support 2", "Support 1"]);
+        style.support_minimums.insert("Support 2".into(), 90);
+        style.support_minimums.insert("Support 1".into(), 90);
+        t.set_style(style);
+        let l = layout(&t, 600.0, 300.0, 1.0, 1.0);
+        let rendered = shapes(&t, &l, &Palette::print(), None, None);
+        let text = texts(&rendered);
+        assert!(text.iter().any(|(s, ..)| s == "–/95"));
+        let legend = rendered
+            .iter()
+            .find_map(|shape| match shape {
+                Shape::Text { x, y, text, .. } if text == "Support 2 / Support 1" => Some((*x, *y)),
+                _ => None,
+            })
+            .unwrap();
+        assert!(legend.0 > l.left + 24.0);
+        assert!(legend.1 > l.tips_bottom);
+        assert!(legend.1 + t.style().support_font as f32 < l.height);
+        let svg = to_svg(&t, 600.0, 20.0);
+        assert!(svg.contains("–/95"));
+        assert!(svg.contains("Support 2 / Support 1"));
+        let mut style = t.style().clone();
+        style.scale_bar = false;
+        t.set_style(style);
+        let l = layout(&t, 600.0, 300.0, 1.0, 1.0);
+        let rendered = shapes(&t, &l, &Palette::print(), None, None);
+        assert!(rendered.iter().any(|s| matches!(s, Shape::Text {x, text, ..} if text == "Support 2 / Support 1" && *x == l.left)));
+        let mut style = t.style().clone();
+        style.support_legend = false;
+        t.set_style(style);
+        assert!(!to_svg(&t, 600.0, 20.0).contains("Support 2 / Support 1"));
     }
 
     #[test]

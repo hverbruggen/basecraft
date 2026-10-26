@@ -7,6 +7,9 @@ Control {
     id: root
     required property Action shortcutsAction
     required property Action aboutAction
+    property Action preferencesAction
+    property Action exportSvgAction
+    property Action exportPngAction
     property color backgroundColor: "white"
     readonly property bool darkBackground: 0.2126 * backgroundColor.r
         + 0.7152 * backgroundColor.g + 0.0722 * backgroundColor.b < 0.5
@@ -38,7 +41,7 @@ Control {
             Layout.fillHeight: true
         }
         GridLayout {
-            columns: 2
+            columns: 3
             rowSpacing: 2 * metrics.factor
             columnSpacing: 2 * metrics.factor
             UtilityButton {
@@ -50,24 +53,34 @@ Control {
             UtilityButton {
                 objectName: "ribbonHelpAbout"
                 action: root.aboutAction
-                icon.source: Qt.resolvedUrl("../branding/icon-" + (root.darkBackground ? "dark" : "light") + ".svg")
-                icon.color: "transparent"
+                iconName: "basecraft-monochrome"
                 description: "About Basecraft"
             }
-            Item {
-                implicitWidth: root.buttonSide
-                implicitHeight: root.buttonSide
-                UtilityButton {
-                    objectName: "ribbonHelpDocumentation"
-                    anchors.fill: parent
-                    iconName: "text-representation"
-                    description: "Documentation coming soon"
-                    enabled: false
+            UtilityButton {
+                objectName: "ribbonHelpPreferences"
+                action: root.preferencesAction
+                iconName: "settings"
+                description: "Preferences"
+            }
+            UtilityButton {
+                objectName: "ribbonHelpDocumentation"
+                iconName: "book"
+                description: "Learn: documentation coming soon"
+                enabled: false
+            }
+            UtilityButton {
+                id: exportButton
+                objectName: "ribbonFigureExport"
+                iconName: "figure-export"
+                description: "Export figure"
+                enabled: !!root.exportSvgAction && root.exportSvgAction.enabled
+                Accessible.role: Accessible.ButtonMenu
+                onClicked: exportMenu.popup(exportButton, 0, height)
+                Menu {
+                    id: exportMenu
+                    MenuItem { action: root.exportSvgAction; text: "Export SVG" }
+                    MenuItem { action: root.exportPngAction; text: "Export PNG" }
                 }
-                HoverHandler { id: documentationHover }
-                ToolTip.text: "Documentation coming soon"
-                ToolTip.visible: documentationHover.hovered
-                ToolTip.delay: 400
             }
             Item {
                 objectName: "ribbonHelpReserved"

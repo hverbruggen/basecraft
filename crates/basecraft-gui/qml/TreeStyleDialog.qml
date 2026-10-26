@@ -7,7 +7,7 @@ import QtQuick.Layouts
 // bar). Saving is one operation.
 AppContentDialog {
     id: dialog
-    initialFocusItem: section === "support" ? minimum : tipFont
+    initialFocusItem: section === "support" ? placement : branchWidth
     property var controller
     property var style: ({})
     property var removedSets: []
@@ -31,18 +31,17 @@ AppContentDialog {
         const shown = style.support_shown.length ? style.support_shown : s.sets.map(x => x.name)
         for (const name of shown) {
             const x = s.sets.find(x => x.name === name)
-            if (x) sets.append({ name: x.name, source: x.source, shown: true, decimals: x.decimals, autoDefault: x.automatic_decimals, scale: scaleIndex(x.name), autoDecimals: !Object.prototype.hasOwnProperty.call(style.support_decimals || {}, x.name) })
+            if (x) sets.append({ name: x.name, source: x.source, shown: true, decimals: x.decimals, autoDefault: x.automatic_decimals, scale: scaleIndex(x), minimum: (style.support_minimums || {})[x.name] === undefined ? style.support_min : style.support_minimums[x.name], autoDecimals: !Object.prototype.hasOwnProperty.call(style.support_decimals || {}, x.name) })
         }
         for (const x of s.sets)
-            if (!shown.includes(x.name)) sets.append({ name: x.name, source: x.source, shown: false, decimals: x.decimals, autoDefault: x.automatic_decimals, scale: scaleIndex(x.name), autoDecimals: !Object.prototype.hasOwnProperty.call(style.support_decimals || {}, x.name) })
-        minimum.value = style.support_min
+            if (!shown.includes(x.name)) sets.append({ name: x.name, source: x.source, shown: false, decimals: x.decimals, autoDefault: x.automatic_decimals, scale: scaleIndex(x), minimum: (style.support_minimums || {})[x.name] === undefined ? style.support_min : style.support_minimums[x.name], autoDecimals: !Object.prototype.hasOwnProperty.call(style.support_decimals || {}, x.name) })
+        placement.currentIndex = ["natural", "above", "below"].indexOf(style.support_placement || "natural")
+        legend.checked = style.support_legend !== false
         symbols.checked = style.symbols !== null
         symbolSet.model = s.sets.map(x => x.name)
         symbolSet.currentIndex = style.symbols ? Math.max(0, symbolSet.model.indexOf(style.symbols.set)) : 0
         high.value = style.symbols ? style.symbols.high : 90
         low.value = style.symbols ? style.symbols.low : 70
-        tipFont.value = style.tip_font
-        supportFont.value = style.support_font
         branchWidth.value = style.branch_width
         verticalLabels.checked = style.vertical_bar_labels
         scaleBar.checked = style.scale_bar
@@ -50,9 +49,9 @@ AppContentDialog {
         open()
     }
 
-    function scaleIndex(name) {
-        const overrides = style.support_proportions || {}
-        return Object.prototype.hasOwnProperty.call(overrides, name) ? (overrides[name] ? 2 : 1) : 0
+    function scaleIndex(set) {
+        const overrides = style.support_fraction || {}
+        return (Object.prototype.hasOwnProperty.call(overrides, set.name) ? overrides[set.name] : set.proportions) ? 1 : 0
     }
 
     function save() {
@@ -60,26 +59,31 @@ AppContentDialog {
         for (let i = 0; i < sets.count; i++) if (sets.get(i).shown) shown.push(sets.get(i).name)
         const decimals = Object.assign({}, style.support_decimals || {})
         const proportions = Object.assign({}, style.support_proportions || {})
+        const fractions = Object.assign({}, style.support_fraction || {})
+        const minimums = Object.assign({}, style.support_minimums || {})
         for (let i = 0; i < sets.count; i++) {
             const set = sets.get(i)
             if (set.autoDecimals) delete decimals[set.name]
             else decimals[set.name] = set.decimals
-            if (set.scale === 0) delete proportions[set.name]
-            else proportions[set.name] = set.scale === 2
+            fractions[set.name] = set.scale === 1
+            minimums[set.name] = set.minimum
         }
         for (const name of removedSets) {
             delete decimals[name]
             delete proportions[name]
+            delete fractions[name]
+            delete minimums[name]
         }
         const s = Object.assign({}, style, {
             support_decimals: decimals,
             support_proportions: proportions,
+            support_fraction: fractions,
+            support_minimums: minimums,
+            support_placement: ["natural", "above", "below"][placement.currentIndex],
+            support_legend: legend.checked,
             support_shown: shown,
-            support_min: minimum.value,
             symbols: symbols.checked && symbolSet.currentText.length && !removedSets.includes(symbolSet.currentText)
                 ? { set: symbolSet.currentText, high: high.value, low: low.value } : null,
-            tip_font: tipFont.value,
-            support_font: supportFont.value,
             branch_width: branchWidth.value,
             vertical_bar_labels: verticalLabels.checked,
             scale_bar: scaleBar.checked,
@@ -109,6 +113,7 @@ AppContentDialog {
                 required property bool shown
                 required property int decimals
                 required property int autoDefault
+                required property int minimum
                 required property int scale
                 required property bool autoDecimals
                 Layout.fillWidth: true
@@ -116,6 +121,7 @@ AppContentDialog {
                     Layout.fillWidth: true
                     AppCheckBox {
                         text: supportRow.name + (supportRow.source.length ? "  (" + supportRow.source + ")" : "")
+                        font.bold: true
                         checked: supportRow.shown
                         onToggled: sets.setProperty(supportRow.index, "shown", checked)
                         Layout.fillWidth: true
@@ -133,7 +139,8 @@ AppContentDialog {
                 }
                 GridLayout {
                     id: precisionSettings
-                    columns: width < styleMetrics.averageCharacterWidth * 50 ? 2 : 3
+                    columns: width < styleMetrics.averageCharacterWidth * 60 ? 2 : 4
+                    Layout.leftMargin: 24
                     Layout.fillWidth: true
                     AppCheckBox {
                         objectName: "autoDecimals" + supportRow.index
@@ -151,35 +158,40 @@ AppContentDialog {
                         Accessible.name: supportRow.name + " decimal places"
                         from: 0; to: 10; editable: true
                         value: supportRow.autoDecimals
-                            ? (supportRow.scale === 0 ? supportRow.autoDefault : supportRow.scale === 2 ? 2 : 0)
+                            ? (supportRow.scale === 1 ? 2 : 0)
                             : supportRow.decimals
                         enabled: !supportRow.autoDecimals
                         onValueModified: sets.setProperty(supportRow.index, "decimals", value)
                     }
+                    Label { text: "Scale" }
                     AppComboBox {
                         objectName: "supportScale" + supportRow.index
-                        Layout.columnSpan: precisionSettings.columns === 2 ? 2 : 1
                         Accessible.name: supportRow.name + " support scale"
-                        model: ["Auto scale", "Percent (0–100)", "Proportion (0–1)"]
+                        model: ["Percentage", "Fraction"]
                         currentIndex: supportRow.scale
                         onActivated: sets.setProperty(supportRow.index, "scale", currentIndex)
                         Layout.fillWidth: true
                     }
                 }
+                RowLayout {
+                    Layout.leftMargin: 24
+                    Label { text: "Hide below (%)" }
+                    AppSpinBox {
+                        objectName: "supportMinimum" + supportRow.index
+                        Accessible.name: supportRow.name + " hide below (percent)"
+                        from: 0; to: 100; editable: true
+                        value: supportRow.minimum
+                        onValueModified: sets.setProperty(supportRow.index, "minimum", value)
+                    }
+                }
             }
         }
-        Label {
-            text: "Auto: bootstrap uses 0 decimals; probabilities use 2. Unspecified values all in 0–1 use probability formatting. Scale changes display thresholds only."
-            wrapMode: Text.Wrap
-            Layout.fillWidth: true
-            opacity: 0.7
-        }
         RowLayout {
-            Label { id: minimumLabel; text: "Hide values below" }
-            AppSpinBox { id: minimum; objectName: "minimum"; Accessible.labelledBy: minimumLabel; Accessible.name: minimumLabel.text + " (%)"; from: 0; to: 100; editable: true }
-            Label { text: "% (posteriors count as %)"; opacity: 0.7 }
+            Label { id: placementLabel; text: "Position" }
+            AppComboBox { id: placement; objectName: "supportPlacement"; Accessible.name: "Support position"; model: ["Natural", "Above", "Below"] }
         }
-
+        AppCheckBox { id: legend; objectName: "supportLegend"; text: "Support legend (multiple shown types)" }
+        Label { text: "Circles at nodes"; font.bold: true; Layout.topMargin: 12 }
         RowLayout {
             AppCheckBox { id: symbols; text: "Circles at nodes for" }
             AppComboBox { id: symbolSet; objectName: "symbolSet"; Accessible.labelledBy: symbols; Accessible.name: symbols.text; enabled: symbols.checked; Layout.preferredWidth: 150 }
@@ -192,10 +204,6 @@ AppContentDialog {
             AppSpinBox { id: low; objectName: "low"; Accessible.labelledBy: lowLabel; Accessible.name: lowLabel.text; from: 0; to: 100; editable: true }
             Label { text: "white below" }
         }
-        RowLayout {
-            Label { id: supportFontLabel; text: "Value size (px)" }
-            AppSpinBox { id: supportFont; objectName: "supportFont"; Accessible.labelledBy: supportFontLabel; Accessible.name: supportFontLabel.text; from: 6; to: 30; editable: true }
-        }
         }
 
         ColumnLayout {
@@ -203,8 +211,6 @@ AppContentDialog {
         spacing: 8
         GridLayout {
             columns: 2
-            Label { id: tipFontLabel; text: "Tip names (px)" }
-            AppSpinBox { id: tipFont; objectName: "tipFont"; Accessible.labelledBy: tipFontLabel; Accessible.name: tipFontLabel.text; from: 6; to: 40; editable: true }
             Label { id: branchWidthLabel; text: "Branch width (px)" }
             AppSpinBox { id: branchWidth; objectName: "branchWidth"; Accessible.labelledBy: branchWidthLabel; Accessible.name: branchWidthLabel.text; from: 1; to: 10; editable: true }
         }

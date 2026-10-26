@@ -98,13 +98,13 @@ ApplicationWindow {
     // alignment, Tree for a tree; an alignment also gets Phylogeny and
     // Delimitation, where the analyses start.
     readonly property var ribbonTabs: ["File", "View", alignmentOpen ? "Alignment" : treeOpen ? "Tree" : delimitationOpen ? "Delimitation" : traceOpen ? "Trace" : "Annotations"]
-        .concat(alignmentOpen ? ["Phylogeny", "Delimitation"] : [], ["Settings", "Help"])
+        .concat(alignmentOpen ? ["Phylogeny", "Delimitation"] : [], ["Help"])
     // The chosen tab if this document has it, else its third tab (a tab
     // for another kind of document), else File.
     readonly property string ribbonTab: ribbonTabs.includes(ribbonTabName) ? ribbonTabName
         : ["Annotations", "Alignment", "Tree", "Phylogeny", "Delimitation", "Trace"].includes(ribbonTabName) ? ribbonTabs[2] : "File"
     // Each tab's panel in the ribbon's stack.
-    readonly property var ribbonPanels: ({ "File": 0, "View": 1, "Annotations": 2, "Settings": 3, "Help": 4, "Alignment": 5, "Tree": 6, "Phylogeny": 7, "Delimitation": 8, "Trace": 9 })
+    readonly property var ribbonPanels: ({ "File": 0, "View": 1, "Annotations": 2, "Help": 3, "Alignment": 4, "Tree": 5, "Phylogeny": 6, "Delimitation": 7, "Trace": 8 })
     // Only the wrapped layout is offered for now; files always open in it.
 
     readonly property int availableCpuThreads: shell.available_cpu_threads()
@@ -131,7 +131,7 @@ ApplicationWindow {
             Qt.callLater(publishRibbonCommands)
         }
     }
-    readonly property var applicationCommands: [openCommand, saveCommand, saveAsCommand, projectCommand, shortcutsCommand, aboutCommand, preferencesCommand, textRepresentationCommand, contextShortcutsCommand, exportSvgCommand, historyCommand, methodsCommand, showProvenanceCommand, verifyProvenanceCommand, packageCommand, recoverCommand, installedOperationsCommand].concat(ribbonCommands)
+    readonly property var applicationCommands: [openCommand, saveCommand, saveAsCommand, projectCommand, shortcutsCommand, aboutCommand, preferencesCommand, textRepresentationCommand, contextShortcutsCommand, exportSvgCommand, exportPngCommand, historyCommand, methodsCommand, showProvenanceCommand, verifyProvenanceCommand, packageCommand, recoverCommand, installedOperationsCommand].concat(ribbonCommands)
     property var recentProjects: []
     property string recentProjectsError: ""
     function updateRecentProjects(reply) {
@@ -501,7 +501,7 @@ ApplicationWindow {
         customization: window.customization
         commandId: "application.preferences"
         text: "Preferences…"
-        iconName: "info"
+        iconName: "settings"
         tooltip: "Appearance, files, compute, ribbon and shortcuts"
         onTriggered: preferencesDialog.open()
     }
@@ -534,6 +534,16 @@ ApplicationWindow {
         tooltip: "Export an editable SVG of this view"
         enabled: window.current !== null
         onTriggered: window.exportSvg()
+    }
+    AppCommand {
+        id: exportPngCommand
+        customization: window.customization
+        commandId: "figure.export-png"
+        text: "Export PNG"
+        iconName: "figure-export"
+        tooltip: "Export a PNG image of this view"
+        enabled: window.current !== null
+        onTriggered: window.exportSvg("png")
     }
     AppProvenance {
         id: provenance
@@ -772,14 +782,12 @@ ApplicationWindow {
         RibbonButton { commandId: "species.manual-" + speciesMethods.commandSuffix; text: "Manual"; iconName: "tree-gmyc"; enabled: window.current !== null && !window.current.busy; onInvoked: window.beginDelimitation("manual") }
         RibbonButton { commandId: "species.combine-" + speciesMethods.commandSuffix; text: "Combine"; iconName: "align"; onInvoked: combinePicker.open() }
     }
-    // On every ribbon page, so a figure can be exported from any tab.
-    component ExportGroup: RibbonGroup {
-        title: "Figure"
-        actions: [exportSvgCommand]
-    }
     component HelpGroup: RibbonHelpGroup {
         shortcutsAction: contextShortcutsCommand
         aboutAction: aboutCommand
+        preferencesAction: preferencesCommand
+        exportSvgAction: exportSvgCommand
+        exportPngAction: exportPngCommand
         backgroundColor: shell.background
     }
     header: ColumnLayout {
@@ -907,8 +915,6 @@ ApplicationWindow {
                         RibbonButton { commandId: "ribbon.resume-saved-review-decisions"; text: "Open review…"; tip: "Resume saved review decisions"; keys: "Ctrl+Alt+O"; enabled: window.current && !window.current.dirty; onInvoked: window.traceDocument.openReview() }
                     }
                     RibbonGroup { title: "Document record"; actions: [historyCommand, methodsCommand] }
-                    RibbonGroup { title: "Plugins"; actions: [installedOperationsCommand] }
-                    ExportGroup {}
                     HelpGroup {}
                 }
 
@@ -967,7 +973,6 @@ ApplicationWindow {
                     }
                     Item { Layout.fillWidth: true }
                     RibbonGroup { title: "Text"; actions: [textRepresentationCommand] }
-                    ExportGroup {}
                     HelpGroup {}
                 }
 
@@ -1025,18 +1030,6 @@ ApplicationWindow {
                         }
                     }
                     Item { Layout.fillWidth: true }
-                    ExportGroup {}
-                    HelpGroup {}
-                }
-
-                RibbonPage {
-                    spacing: 6 * window.ribbonSizeFactor
-                    RibbonGroup {
-                        title: "Preferences"
-                        actions: [preferencesCommand]
-                    }
-                    Item { Layout.fillWidth: true }
-                    ExportGroup {}
                     HelpGroup {}
                 }
 
@@ -1053,7 +1046,6 @@ ApplicationWindow {
                         RibbonButton { commandId: "ribbon.open-a-new-github-issue"; text: "Report a problem"; iconName: "bug"; tip: "Open a new GitHub issue"; enabled: true; onInvoked: Qt.openUrlExternally("https://github.com/hverbruggen/basecraft/issues/new") }
                     }
                     Item { Layout.fillWidth: true }
-                    ExportGroup {}
                     HelpGroup {}
                 }
 
@@ -1125,7 +1117,6 @@ ApplicationWindow {
                         RibbonButton { commandId: "ribbon.review-chromatograms-and-add-their-consensus"; text: "Chromatogram"; iconName: "waveform"; tip: "Review chromatograms and add their consensus"; enabled: window.current !== null && !window.current.busy; onInvoked: docs.itemAt(tabs.currentIndex).addTraces() }
                     }
                     Item { Layout.fillWidth: true }
-                    ExportGroup {}
                     HelpGroup {}
                 }
 
@@ -1140,6 +1131,18 @@ ApplicationWindow {
                         treeOpen: window.treeOpen
                         customization: window.customization
                         Component.onCompleted: commands.forEach(command => window.registerRibbonCommand(command))
+                    }
+                    ToolSeparator { Layout.fillHeight: true }
+                    RibbonGroup {
+                        title: "Rate smoothing"
+                        RibbonButton {
+                            commandId: "tree.rate-smoothing"
+                            text: "Sanderson"
+                            iconName: "tree"
+                            tip: "Smooth rates on the current rooted tree with Sanderson penalized likelihood"
+                            enabled: window.treeOpen && window.current !== null && window.currentPath.length > 0
+                            onInvoked: operationPicker.showOperation(shell.project_dir.length ? shell.project_dir : shell.local_file_path(shell.parent_folder_url(window.currentPath)), window.currentPath, !!window.current.dirty, "basecraft.sanderson/date_tree@1")
+                        }
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     TreeCladeGroup {
@@ -1162,31 +1165,6 @@ ApplicationWindow {
                         title: "Support"
                         readonly property bool hasSupport: window.treeOpen && window.current !== null && window.current.has_support === true
                         RibbonButton { commandId: "ribbon.add-support-values-from-another-analysis-of-the-same"; text: "Add…"; tip: "Add support values from another analysis of the same taxa, matched branch by branch"; onInvoked: supportFile.open() }
-                        RibbonButton {
-                            id: placementButton
-                            objectName: "supportPlacement"
-                            commandId: "tree.support-position"
-                            text: "Position"
-                            iconName: "support-position"
-                            tip: "Where support values sit on their branch"
-                            enabled: supportGroup.hasSupport
-                            onInvoked: placementMenu.popup(placementButton, 0, placementButton.height)
-                            Menu {
-                                id: placementMenu
-                                Repeater {
-                                    model: [{value: "natural", text: "Natural", tip: "above branches going up, below branches going down"},
-                                        {value: "above", text: "Above", tip: "all above their branch"},
-                                        {value: "below", text: "Below", tip: "all below their branch"}]
-                                    delegate: MenuItem {
-                                        required property var modelData
-                                        text: modelData.text + ": " + modelData.tip
-                                        checkable: true
-                                        checked: window.current !== null && window.current.support_placement === modelData.value
-                                        onTriggered: window.current.place_support(modelData.value)
-                                    }
-                                }
-                            }
-                        }
                         RibbonNumberField {
                             objectName: "supportFont"
                             label: "Size"
@@ -1206,7 +1184,6 @@ ApplicationWindow {
                         Component.onCompleted: commands.forEach(command => window.registerRibbonCommand(command))
                     }
                     Item { Layout.fillWidth: true }
-                    ExportGroup {}
                     HelpGroup {}
                 }
 
@@ -1252,7 +1229,6 @@ ApplicationWindow {
                         }
                     }
                     Item { Layout.fillWidth: true }
-                    ExportGroup {}
                     HelpGroup {}
                 }
                 RibbonPage {
@@ -1290,7 +1266,6 @@ ApplicationWindow {
                         RibbonButton { commandId: "species.display"; text: "Attach"; tip: window.speciesView !== null && window.current.display_path.length ? "A display tree is attached" : "Attach or build a display tree"; iconName: "tree"; enabled: window.speciesView !== null && !window.current.busy && !window.current.display_path.length; onInvoked: window.beginDelimitation("view") }
                     }
                     Item { Layout.fillWidth: true }
-                    ExportGroup {}
                     HelpGroup {}
                 }
 
@@ -1319,7 +1294,6 @@ ApplicationWindow {
                         ExportConsensusButton { commandId: "ribbon.copy-the-edited-consensus-as-fasta"; text: "to clipboard"; tip: "Copy the edited consensus as FASTA"; keys: "Ctrl+Shift+C"; enabled: window.current && window.current.unresolved === 0; onInvoked: window.traceDocument.copyConsensus() }
                     }
                     Item { Layout.fillWidth: true }
-                    ExportGroup {}
                     HelpGroup {}
                 }
         }
@@ -1953,21 +1927,29 @@ ApplicationWindow {
         currentFolder: window.activeFolder()
         onVisibleChanged: if (visible) currentFolder = window.activeFolder()
         nameFilters: ["Trees (*.nwk *.newick *.tre *.tree *.trees *.treefile *.contree *.nex *.nexus *.nxs)", "All files (*)"]
-        onAccepted: { supportName.path = window.localPath(selectedFile); supportName.open() }
+        onAccepted: {
+            supportName.controller = window.current
+            supportName.path = window.localPath(selectedFile)
+            supportName.metadata = JSON.parse(supportName.controller.support_import_json(supportName.path))
+            supportName.open()
+        }
     }
     AppContentDialog {
         id: supportName
         initialFocusItem: supportNameField
         property string path
+        property var controller: null
+        property var metadata: ({sets: []})
         title: "Name the support values"
         modal: true
         standardButtons: Dialog.Ok | Dialog.Cancel
-        onOpened: { supportNameField.text = ""; supportNameField.forceActiveFocus() }
-        onAccepted: window.current.add_support_from(path, supportNameField.text)
+        onOpened: { supportNameField.text = metadata.sets.length === 1 ? metadata.sets[0].name : ""; supportNameField.forceActiveFocus() }
+        onAccepted: if (controller && !metadata.error) controller.add_support_from(path, supportNameField.text)
         body: ColumnLayout {
             spacing: 6
             Label { text: window.fileName(supportName.path) }
-            Label { id: supportNameFieldLabel; text: "Support values name" }
+            Label { text: supportName.metadata.error || supportName.metadata.sets.map(set => set.name).join(" / "); wrapMode: Text.Wrap; Layout.fillWidth: true }
+            Label { id: supportNameFieldLabel; text: supportName.metadata.sets.length > 1 ? "Optional prefix (individual names are retained)" : "Support values name" }
             TextField {
                 Accessible.labelledBy: supportNameFieldLabel
                 Accessible.name: supportNameFieldLabel.text
@@ -2013,7 +1995,8 @@ ApplicationWindow {
         }
     }
 
-    function exportSvg() {
+    function exportSvg(format) {
+        svgOptions.format = format || "svg"
         if (!window.current) return
         svgDialog.controller = window.current
         svgScope.currentIndex = window.treeOpen ? 2 : 0
@@ -2023,7 +2006,8 @@ ApplicationWindow {
     AppContentDialog {
         id: svgOptions
         initialFocusItem: svgScope
-        title: "Export editable SVG"
+        property string format: "svg"
+        title: format === "png" ? "Export PNG" : "Export editable SVG"
         modal: true
         standardButtons: Dialog.Ok | Dialog.Cancel
         body: ColumnLayout {
@@ -2032,7 +2016,7 @@ ApplicationWindow {
             AppCheckBox { id: svgPublication; text: "Publication colours (white background)" }
         }
         onAccepted: {
-            svgDialog.selectedFile = shell.local_file_url(window.currentPath.replace(/\.[^./]*$/, "") + ".svg")
+            svgDialog.selectedFile = shell.local_file_url(window.currentPath.replace(/\.[^./]*$/, "") + "." + svgOptions.format)
             svgDialog.open()
         }
     }
@@ -2041,10 +2025,14 @@ ApplicationWindow {
         currentFolder: window.activeFolder()
         onVisibleChanged: if (visible) currentFolder = window.activeFolder()
         property var controller: null
-        title: "Export SVG"
+        title: svgOptions.format === "png" ? "Export PNG" : "Export SVG"
         fileMode: FileDialog.SaveFile
-        nameFilters: ["SVG figures (*.svg)"]
-        onAccepted: if (controller) controller.export_figure(window.localPath(selectedFile), svgScope.currentIndex, svgPublication.checked)
+        nameFilters: svgOptions.format === "png" ? ["PNG images (*.png)"] : ["SVG figures (*.svg)"]
+        onAccepted: {
+            if (!controller) return
+            if (svgOptions.format === "png") controller.export_figure_png(window.localPath(selectedFile), svgScope.currentIndex, svgPublication.checked)
+            else controller.export_figure(window.localPath(selectedFile), svgScope.currentIndex, svgPublication.checked)
+        }
     }
 
     AppContentDialog {

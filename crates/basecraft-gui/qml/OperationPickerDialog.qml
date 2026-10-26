@@ -5,9 +5,11 @@ import Basecraft
 
 AppContentDialog {
     id: dialog
-    title: "Installed operations"
+    title: operationId.length ? "Rate smoothing" : "Installed operations"
+    property string operationId: ""
+    property var allOperations: []
     standardButtons: Dialog.Close
-    initialFocusItem: operationChoice
+    initialFocusItem: operationId.length ? runButton : operationChoice
     property string project: ""
     property string inputPath: ""
     property bool unsavedInput: false
@@ -21,7 +23,26 @@ AppContentDialog {
         dialog.project = project
         inputPath = path
         unsavedInput = dirty
-        catalog = JSON.parse(backend.catalog())
+        operationId = ""
+        refreshCatalog()
+        open()
+    }
+    function refreshCatalog() {
+        const data = JSON.parse(backend.catalog())
+        allOperations = data.operations || []
+        if (operationId.length) {
+            data.operations = allOperations.filter(op => op.operation === operationId)
+            if (!data.operations.length && !data.error) data.error = "The Sanderson operation is not installed."
+        }
+        catalog = data
+        operationChoice.currentIndex = data.operations.length ? 0 : -1
+    }
+    function showOperation(project, path, dirty, id) {
+        dialog.project = project
+        inputPath = path
+        unsavedInput = dirty
+        operationId = id
+        refreshCatalog()
         open()
     }
     property string formError: ""
@@ -48,6 +69,7 @@ AppContentDialog {
         Label { text: "Project: " + dialog.project; Layout.fillWidth: true; elide: Text.ElideMiddle }
         ComboBox {
             id: operationChoice
+            visible: !dialog.operationId.length
             Accessible.name: "Installed operation"
             Layout.fillWidth: true
             model: dialog.catalog.operations
@@ -57,7 +79,7 @@ AppContentDialog {
         Label { visible: dialog.catalog.error !== undefined; text: dialog.catalog.error || ""; wrapMode: Text.Wrap; Layout.fillWidth: true }
         Label { text: dialog.selected ? dialog.selected.description : "No typed operations are installed."; wrapMode: Text.Wrap; Layout.fillWidth: true }
         Label { visible: dialog.selected && !dialog.selected.supported; text: dialog.selected ? dialog.selected.limitation || "" : ""; wrapMode: Text.Wrap; Layout.fillWidth: true }
-        Label { visible: dialog.unsavedInput; text: "Save the current file before using the generic file-operation picker. Existing document tools can use unsaved snapshots."; wrapMode: Text.Wrap; Layout.fillWidth: true }
+        Label { visible: dialog.unsavedInput; text: "Save the current tree before running this file operation."; wrapMode: Text.Wrap; Layout.fillWidth: true }
         Repeater {
             id: inputFields
             model: dialog.selected ? Object.keys(dialog.selected.inputs) : []
@@ -96,9 +118,9 @@ AppContentDialog {
             }
         }
         RowLayout {
-            Button { text: "Run"; enabled: !backend.busy && dialog.selected && dialog.selected.supported && !dialog.unsavedInput; onClicked: dialog.start() }
+            Button { id: runButton; text: "Run"; enabled: !backend.busy && dialog.selected && dialog.selected.supported && !dialog.unsavedInput; onClicked: dialog.start() }
             Button { text: "Cancel operation"; enabled: backend.busy; onClicked: backend.cancel() }
-            Button { text: "Refresh installed operations"; enabled: !backend.busy; onClicked: dialog.catalog = JSON.parse(backend.catalog()) }
+            Button { text: "Refresh installed operations"; enabled: !backend.busy; onClicked: dialog.refreshCatalog() }
         }
         Label { text: backend.message; wrapMode: Text.Wrap; Layout.fillWidth: true; Accessible.name: "Operation status" }
         TextArea { visible: dialog.operationOutcome.data !== undefined && dialog.operationOutcome.data !== null; text: JSON.stringify(dialog.operationOutcome.data, null, 2) || ""; readOnly: true; selectByMouse: true; wrapMode: TextEdit.Wrap; Layout.fillWidth: true; Accessible.name: "Structured operation result" }

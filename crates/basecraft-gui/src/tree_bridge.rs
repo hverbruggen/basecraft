@@ -212,6 +212,8 @@ pub mod qobject {
         /// Add the support values of the tree in `path`, matched branch by
         /// branch, named `name`.
         #[qinvokable]
+        fn support_import_json(self: &TreeController, path: &QString) -> QString;
+        #[qinvokable]
         fn add_support_from(self: Pin<&mut TreeController>, path: &QString, name: &QString);
         #[qinvokable]
         fn remove_support(self: Pin<&mut TreeController>, name: &QString);
@@ -1479,7 +1481,7 @@ impl qobject::TreeController {
                         "name": s.name,
                         "source": s.source,
                         "decimals": s.decimals(d.style()),
-                        "automatic_decimals": if s.proportions { 2 } else { 0 },
+                        "automatic_decimals": if s.uses_proportions(d.style()) { 2 } else { 0 },
                         "proportions": s.uses_proportions(d.style()),
                         "kind": s.kind,
                     })).collect::<Vec<_>>(),
@@ -1567,6 +1569,16 @@ impl qobject::TreeController {
         }
     }
 
+    pub fn support_import_json(&self, path: &QString) -> QString {
+        let result = match basecraft_ops::files::load_tree(Path::new(&path.to_string())) {
+            Ok(tree) => json!({"sets": tree.doc.supports().iter().map(|set| json!({
+                "name": set.name, "kind": set.kind, "source": set.source
+            })).collect::<Vec<_>>()}),
+            Err(error) => json!({"error": error.to_string(), "sets": []}),
+        };
+        QString::from(&result.to_string())
+    }
+
     pub fn add_support_from(mut self: Pin<&mut Self>, path: &QString, name: &QString) {
         let started = Instant::now();
         let path = PathBuf::from(path.to_string());
@@ -1606,6 +1618,11 @@ impl qobject::TreeController {
                 .doc
                 .support(&set)
                 .map_or(basecraft_protocol::SupportKind::Unknown, |s| s.kind);
+            let source = other
+                .doc
+                .support(&set)
+                .filter(|s| !s.source.is_empty())
+                .map_or_else(|| source.clone(), |s| s.source.clone());
             let name = match (base.is_empty(), many) {
                 (true, _) => set,
                 (false, false) => base.clone(),

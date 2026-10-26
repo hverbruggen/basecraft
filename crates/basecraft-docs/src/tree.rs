@@ -75,12 +75,26 @@ impl SupportSet {
         }
     }
 
+    /// Source units are fixed by producer semantics. Legacy overrides remain
+    /// evidence of interpretation only for ambiguous external imports.
+    pub fn source_proportions(&self, style: &TreeStyle) -> bool {
+        if self.kind == SupportKind::Unknown {
+            style
+                .support_proportions
+                .get(&self.name)
+                .copied()
+                .unwrap_or(self.proportions)
+        } else {
+            self.proportions
+        }
+    }
+
     pub fn uses_proportions(&self, style: &TreeStyle) -> bool {
         style
-            .support_proportions
+            .support_fraction
             .get(&self.name)
             .copied()
-            .unwrap_or(self.proportions)
+            .unwrap_or_else(|| self.source_proportions(style))
     }
 
     pub fn decimals(&self, style: &TreeStyle) -> u8 {
@@ -101,13 +115,27 @@ impl SupportSet {
         if !value.is_finite() {
             return Some(raw.clone());
         }
-        Some(format!("{:.*}", usize::from(self.decimals(style)), value))
+        let percent = if self.source_proportions(style) {
+            value * 100.0
+        } else {
+            value
+        };
+        let displayed = if self.uses_proportions(style) {
+            percent / 100.0
+        } else {
+            percent
+        };
+        Some(format!(
+            "{:.*}",
+            usize::from(self.decimals(style)),
+            displayed
+        ))
     }
 
     pub fn display_percent(&self, node: usize, style: &TreeStyle) -> Option<f64> {
         let value: f64 = self.values.get(node)?.as_ref()?.parse().ok()?;
         value.is_finite().then(|| {
-            if self.uses_proportions(style) {
+            if self.source_proportions(style) {
                 value * 100.0
             } else {
                 value
@@ -536,6 +564,8 @@ impl TreeDoc {
         self.style.support_shown.retain(|s| s != name);
         self.style.support_decimals.remove(name);
         self.style.support_proportions.remove(name);
+        self.style.support_fraction.remove(name);
+        self.style.support_minimums.remove(name);
         if self.style.symbols.as_ref().is_some_and(|s| s.set == name) {
             self.style.symbols = None;
         }
@@ -979,6 +1009,44 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&legacy).unwrap()["future_setting"]["x"],
             1
+        );
+    }
+
+    #[test]
+    fn display_conversion_preserves_source_units_and_corrects_known_legacy_overrides() {
+        let mut t = tree("((a,b)0.95/95,c);");
+        t.set_support_kind("Support 1", SupportKind::Probability);
+        t.set_support_kind("Support 2", SupportKind::Bootstrap);
+        let node = t.resolve(&names(&["a", "b"])).unwrap();
+        let original = t.to_newick();
+        let mut style = t.style().clone();
+        // Older versions allowed these to reinterpret producer values.
+        style.support_proportions.insert("Support 1".into(), false);
+        style.support_proportions.insert("Support 2".into(), true);
+        style.support_fraction.insert("Support 1".into(), false);
+        style.support_fraction.insert("Support 2".into(), true);
+        assert_eq!(
+            t.supports()[0].formatted(node, &style).as_deref(),
+            Some("95")
+        );
+        assert_eq!(
+            t.supports()[1].formatted(node, &style).as_deref(),
+            Some("0.95")
+        );
+        for set in t.supports() {
+            assert_eq!(set.display_percent(node, &style), Some(95.0));
+        }
+        t.set_style(style);
+        assert_eq!(t.to_newick(), original);
+        t.remove_support("Support 1").unwrap();
+        assert!(!t.style().support_fraction.contains_key("Support 1"));
+        assert!(!t.style().support_proportions.contains_key("Support 1"));
+        let unknown = tree("((a,b)0.95,c);");
+        let mut legacy = unknown.style().clone();
+        legacy.support_proportions.insert("Support".into(), false);
+        assert_eq!(
+            unknown.supports()[0].display_percent(node, &legacy),
+            Some(0.95)
         );
     }
 
