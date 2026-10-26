@@ -10,10 +10,10 @@ import csv
 import hashlib
 import json
 import math
-from pathlib import Path
 import statistics
 import subprocess
 import time
+from pathlib import Path
 
 from generate_fixture import make
 

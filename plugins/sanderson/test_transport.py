@@ -1,16 +1,16 @@
 """Noncompiler checks of schema-2 transport and artifact failure behavior."""
 
 import json
-from pathlib import Path
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "python" / "src"))
 
-from plugin import _parameters, date_tree  # noqa: E402
-from tree import labeled_newick, parse  # noqa: E402
+from plugin import _parameters, date_tree
+from tree import labeled_newick, parse
 
 
 class TransportTests(unittest.TestCase):

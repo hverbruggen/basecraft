@@ -4,9 +4,9 @@ The parser accepts one explicitly bifurcating rooted tree. It never changes a
 branch length, label, or topology to accommodate an engine limitation.
 """
 
-from dataclasses import dataclass, field
 import math
 import re
+from dataclasses import dataclass, field
 
 NUMBER = re.compile(r"(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
 MAX_BYTES = 1_000_000

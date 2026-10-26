@@ -3,10 +3,10 @@
 import hashlib
 import json
 import math
-from pathlib import Path
 import subprocess
 import tempfile
 import time
+from pathlib import Path
 
 from basecraft.plugin import Plugin
 from tree import labeled_newick, parse

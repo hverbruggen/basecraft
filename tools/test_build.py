@@ -263,6 +263,12 @@ sha256sum {" ".join(BINARIES)} > SHA256SUMS
     shutil.copytree(source / "python", bundle / "python")
     shutil.copy2(source / "tools/basecraft-launch.py", bundle / "launcher.py")
     bundled_tools = stage_tools(bundle, root / "downloads")
+    sanderson = bundle / "plugins/sanderson"
+    engine_identity = json.loads((sanderson / "native/validated-engine.json").read_text())
+    native = Path(os.environ.get("BASECRAFT_SANDERSON_BINARY", root / "validated-engines" / engine_identity["binary_sha256"]))
+    if not native.is_file():
+        raise RuntimeError("Validated Sanderson executable unavailable: set BASECRAFT_SANDERSON_BINARY to the executable from the matching method validation receipt")
+    run(["python3", sanderson / "native/tools/stage_package.py", "--package", sanderson, "--binary", native])
     checks = stage / "checks"
     for backend in ("software", "opengl"):
         run(
@@ -295,6 +301,10 @@ sha256sum {" ".join(BINARIES)} > SHA256SUMS
         run(["just", "qml-test"], cwd=source)
     engines = engine_report(bundle)
     ptp_receipt = check_ptp(bundle, checks / "ptp", REPO / ".pixi/envs/default/bin/python")
+    run([REPO / ".pixi/envs/default/bin/python", source / "plugins/sanderson/test_host_integration.py",
+         "--binary", bundle / "bin/basecraft", "--native-binary", sanderson / "bin/basecraft-sanderson-native",
+         "--bundle", bundle, "--root", checks / "sanderson"],
+        env=dict(os.environ, PYTHONPATH=str(bundle / "python/src")))
     manifest = {
         "schema_version": 1,
         "source_sha256": source_hash,
@@ -314,10 +324,13 @@ sha256sum {" ".join(BINARIES)} > SHA256SUMS
             "QML tests in remote CI" if receipt else "local QML tests",
             "local delimitation engine check",
             "real PTP/mPTP fits and provenance through public operations",
+            "native Sanderson CLI/Python/MCP fits, bounds, CV and provenance",
         ],
         "engines": engines,
         "bundled_tools": bundled_tools,
         "ptp_receipt": ptp_receipt,
+        "sanderson_receipt": str(checks / "sanderson/receipt.json"),
+        "sanderson_engine": engine_identity,
         "logs": str(stage),
     }
     (bundle / "build.json").write_text(json.dumps(manifest, indent=2) + "\n")

@@ -9,11 +9,11 @@ import argparse
 import hashlib
 import json
 import os
-from pathlib import Path
 import platform
 import shutil
 import tempfile
 import tomllib
+from pathlib import Path
 
 
 def sha256(path):

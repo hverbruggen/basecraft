@@ -107,6 +107,8 @@ fn main() {
         "qml/AppSpinBox.qml",
         "qml/ToolSettingsDialog.qml",
         "qml/OperationPickerDialog.qml",
+        "qml/OperationParameters.qml",
+        "qml/OperationParameterValue.qml",
         "qml/TextPromptDialog.qml",
         "qml/AppIcon.qml",
         "qml/EmptyWorkspaceBrand.qml",

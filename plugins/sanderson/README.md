@@ -119,3 +119,7 @@ material, so literal paper-equation parity has not been established.
 The native release's dependency notice corpus is pinned to the isolated
 lockfile and retained Cargo metadata. Argmin 0.11 is dual MIT/Apache-2.0
 licensed. Final bundle review should confirm staged notices before publication.
+
+Published bundles include the validated native engine and dependency notices. The Installed operations form supports decimal ages, age-constraint rows and an explicit fixed-lambda or cross-validation choice. Analyses use the same operation contract through GUI, CLI, Python and MCP.
+
+For developer packaging, place the exact release executable matching `native/validated-engine.json` in the build cache's `validated-engines/<binary_sha256>` directory, or set `BASECRAFT_SANDERSON_BINARY` to it. `just test-build` verifies the binary/source/license identities and runs real fits before publication; it never substitutes an unvalidated native executable.

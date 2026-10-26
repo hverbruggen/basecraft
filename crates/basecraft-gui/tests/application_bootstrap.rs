@@ -92,6 +92,7 @@ fn main() {
         &QByteArray::from(
             "import QtQuick; import Basecraft; Item { width: 800; height: 600; \
              OperationPickerDialog {} \
+             OperationParameters { schema: ({type: 'object', properties: {age: {type: 'number'}}, required: ['age']}) } \
              Timer { interval: 1; running: true; onTriggered: Qt.quit() } }",
         ),
         &QUrl::default(),

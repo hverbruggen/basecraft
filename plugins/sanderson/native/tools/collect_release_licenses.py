@@ -10,10 +10,9 @@ LICENSE-MIT and LICENSE-APACHE fetched from their exact upstream release tags.
 import argparse
 import hashlib
 import json
-from pathlib import Path
 import shutil
 import tomllib
-
+from pathlib import Path
 
 ARGMIN_UPSTREAM = {
     "argmin-0.11.0": "argmin-v0.11.0",

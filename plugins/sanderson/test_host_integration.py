@@ -11,10 +11,10 @@ import argparse
 import hashlib
 import json
 import os
-from pathlib import Path
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 from native.tools.stage_package import stage
 
@@ -24,21 +24,28 @@ def main():
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--native-binary", type=Path, required=True)
     parser.add_argument("--root", type=Path, required=True)
+    parser.add_argument("--bundle", type=Path, help="Validate an already staged complete bundle")
     args = parser.parse_args()
     host = args.binary.resolve(strict=True)
     native = args.native_binary.resolve(strict=True)
     root = args.root.absolute()
     root.mkdir()
-    package = root / "bundled" / "sanderson"
-    shutil.copytree(Path(__file__).resolve().parent, package,
-                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "bin"))
-    staged = stage(package, native)
+    bundled = args.bundle.resolve(strict=True) / "plugins" if args.bundle else root / "bundled"
+    package = bundled / "sanderson"
+    if args.bundle:
+        staged = {"binary_sha256": hashlib.sha256(native.read_bytes()).hexdigest()}
+        expected = json.loads((package / "bin/engine.json").read_text())
+        assert staged["binary_sha256"] == expected["binary_sha256"]
+    else:
+        shutil.copytree(Path(__file__).resolve().parent, package,
+                       ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "bin"))
+        staged = stage(package, native)
     project = root / "project"
     project.mkdir()
     source = "(((t1:0.075,t2:0.075):0.05,(t3:0.075,t4:0.075):0.05):0.05,((t5:0.075,t6:0.075):0.05,(t7:0.075,t8:0.075):0.05):0.05);\n"
     (project / "tree.nwk").write_text(source)
     source_hash = hashlib.sha256(source.encode()).hexdigest()
-    env = dict(os.environ, BASECRAFT=str(host), BASECRAFT_PLUGINS=str(root / "bundled"),
+    env = dict(os.environ, BASECRAFT=str(host), BASECRAFT_PLUGINS=str(bundled),
                BASECRAFT_PROFILE_DIR=str(root / "profile"), BASECRAFT_PYTHON=sys.executable,
                BASECRAFT_PYTHONPATH=str(Path(__file__).resolve().parents[2] / "python/src"))
     os.environ.update(env)
@@ -61,7 +68,7 @@ def main():
 
     def cli(*arguments):
         result = subprocess.run([str(host), *arguments], cwd=root, env=env,
-                                capture_output=True, text=True, timeout=90)
+                                capture_output=True, text=True, timeout=90, check=False)
         if result.returncode:
             raise AssertionError((arguments, result.returncode, result.stdout, result.stderr))
         return json.loads(result.stdout)
@@ -81,6 +88,10 @@ def main():
         assert report["native_engine"]["binary_sha256"] == staged["binary_sha256"], report
         assert len(report["nodes"]) == 15, report
         assert (project / (prefix + ".nwk")).read_text().endswith(";\n")
+        for name in (prefix + ".nwk", prefix + ".json"):
+            verified = subprocess.run([str(host), "provenance", "verify", str(project / name)],
+                                      env=env, capture_output=True, text=True, timeout=30, check=False)
+            assert verified.returncode == 0, verified.stdout + verified.stderr
         return outcome["data"], report["result"]
 
     try:

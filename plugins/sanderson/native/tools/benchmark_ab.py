@@ -8,10 +8,10 @@ output must be byte-identical, so timing cannot mask a numerical difference.
 import argparse
 import hashlib
 import json
-from pathlib import Path
 import statistics
 import subprocess
 import time
+from pathlib import Path
 
 
 def run(binary, request, timeout):

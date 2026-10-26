@@ -41,6 +41,46 @@ pub struct OperationsRust {
     jobs: JobManager,
     active: Option<String>,
 }
+// Keep recursion bounded and reject forms we cannot represent faithfully.
+fn supported_parameters(schema: &Value, depth: usize) -> bool {
+    if depth > 8 {
+        return false;
+    }
+    if schema["enum"].is_array() {
+        return true;
+    }
+    match schema["type"].as_str() {
+        Some("boolean" | "integer" | "number" | "string") => true,
+        Some("array") => supported_parameters(&schema["items"], depth + 1),
+        Some("object") => schema["properties"].as_object().is_some_and(|properties| {
+            properties
+                .values()
+                .all(|field| supported_parameters(field, depth + 1))
+                && schema.get("oneOf").is_none_or(|choices| {
+                    choices.as_array().is_some_and(|choices| {
+                        let mut names = std::collections::BTreeSet::new();
+                        choices.iter().all(|choice| {
+                            choice.as_object().is_some_and(|fields| {
+                                fields
+                                    .keys()
+                                    .all(|name| matches!(name.as_str(), "required" | "title"))
+                                    && choice["required"].as_array().is_some_and(|required| {
+                                        !required.is_empty()
+                                            && required.iter().all(|name| {
+                                                name.as_str().is_some_and(|name| {
+                                                    properties.contains_key(name)
+                                                        && names.insert(name.to_owned())
+                                                })
+                                            })
+                                    })
+                            })
+                        })
+                    })
+                })
+        }),
+        _ => false,
+    }
+}
 fn catalog() -> basecraft_plugin_host::Result<Value> {
     use basecraft_protocol::operation::ExecutionFamily;
     let registry = Registry::load(&RegistryConfig::discover()?)?;
@@ -64,19 +104,14 @@ fn catalog() -> basecraft_plugin_host::Result<Value> {
             .any(|binding| binding.min != 1 || binding.max != 1)
         {
             Some("File lists and optional inputs are available through CLI/Python/MCP")
-        } else if properties.values().any(|field| {
-            !matches!(
-                field["type"].as_str(),
-                Some("boolean" | "integer" | "string")
-            ) && !field["enum"].is_array()
-        }) {
+        } else if !supported_parameters(&descriptor.parameters, 0) {
             Some("This settings schema is available through CLI/Python/MCP")
         } else {
             None
         };
         let fields: Vec<_> = properties.iter().map(|(name,schema)| json!({"name":name,"schema":schema,"required":descriptor.parameters["required"].as_array().is_some_and(|required| required.iter().any(|value| value == name))})).collect();
         rows.push(json!({"operation":operation.id,"title":descriptor.title,"description":descriptor.description,
-            "supported":reason.is_none(),"limitation":reason,"fields":fields,"inputs":descriptor.inputs,"outputs":descriptor.outputs,"pins":operation.pins(&registry.generation)}));
+            "parameters":descriptor.parameters,"supported":reason.is_none(),"limitation":reason,"fields":fields,"inputs":descriptor.inputs,"outputs":descriptor.outputs,"pins":operation.pins(&registry.generation)}));
     }
     Ok(json!({"operations":rows,"diagnostics":registry.diagnostics}))
 }
@@ -162,5 +197,26 @@ impl qobject::AppOperations {
             }
         }
         self.poll();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn supports_nested_calibrations_and_exclusive_smoothing() {
+        let contract: Value =
+            serde_json::from_str(include_str!("../../../plugins/sanderson/operations.json"))
+                .unwrap();
+        assert!(supported_parameters(
+            &contract["operations"][0]["parameters"],
+            0
+        ));
+        assert!(!supported_parameters(&json!({"type":"null"}), 0));
+        assert!(!supported_parameters(
+            &json!({"type":"object","properties":{"x":{"type":"number"}},"oneOf":[{"required":["x"]},{"required":["x"]}]}),
+            0
+        ));
     }
 }

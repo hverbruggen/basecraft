@@ -24,18 +24,18 @@ AppContentDialog {
         catalog = JSON.parse(backend.catalog())
         open()
     }
+    property string formError: ""
     function start() {
+        formError = ""
         if (!selected || !selected.supported || unsavedInput) return
         const inputs = {}
         for (let i = 0; i < inputFields.count; ++i) {
             const row = inputFields.itemAt(i)
             inputs[row.role] = [{kind: "file", path: row.path}]
         }
-        const parameters = {}
-        for (let i = 0; i < parameterFields.count; ++i) {
-            const row = parameterFields.itemAt(i)
-            if (row.overridden || row.modelData.required) parameters[row.modelData.name] = row.value()
-        }
+        let parameters
+        try { parameters = parameterForm.item.value() }
+        catch (error) { formError = error.message; return }
         const destinations = {}
         for (let i = 0; i < outputFields.count; ++i) {
             const row = outputFields.itemAt(i)
@@ -70,28 +70,19 @@ AppContentDialog {
                 TextField { id: input; text: inputFields.count === 1 ? dialog.inputPath : ""; placeholderText: "File inside the project"; Accessible.name: inputRow.role + " input file"; enabled: !backend.busy; Layout.fillWidth: true }
             }
         }
-        Repeater {
-            id: parameterFields
-            model: dialog.selected && dialog.selected.supported ? dialog.selected.fields : []
-            delegate: ColumnLayout {
-                id: fieldRow
-                required property var modelData
-                readonly property var schema: modelData.schema
-                readonly property bool overridden: overrideValue.checked
-                function value() {
-                    if (schema.enum) return schema.enum[choice.currentIndex]
-                    if (schema.type === "boolean") return flag.checked
-                    if (schema.type === "integer") return number.value
-                    return textValue.text
-                }
-                CheckBox { id: overrideValue; text: (fieldRow.modelData.required ? "Set " : "Override ") + fieldRow.modelData.name; checked: fieldRow.modelData.required; enabled: !backend.busy; Accessible.name: text }
-                Label { visible: !fieldRow.overridden; text: fieldRow.schema.default !== undefined ? "Default: " + String(fieldRow.schema.default) : "Host or tool default"; Layout.fillWidth: true }
-                ComboBox { id: choice; visible: !!fieldRow.schema.enum && fieldRow.overridden; model: fieldRow.schema.enum || []; enabled: !backend.busy; Layout.fillWidth: true; Accessible.name: fieldRow.modelData.name }
-                CheckBox { id: flag; visible: !fieldRow.schema.enum && fieldRow.schema.type === "boolean" && fieldRow.overridden; checked: fieldRow.schema.default === true; enabled: !backend.busy; text: fieldRow.modelData.name; Accessible.name: text }
-                SpinBox { id: number; visible: !fieldRow.schema.enum && fieldRow.schema.type === "integer" && fieldRow.overridden; from: fieldRow.schema.minimum === undefined ? 0 : fieldRow.schema.minimum; to: fieldRow.schema.maximum === undefined ? 2147483647 : Math.min(2147483647, fieldRow.schema.maximum); value: fieldRow.schema.default === undefined ? from : fieldRow.schema.default; editable: true; enabled: !backend.busy; Accessible.name: fieldRow.modelData.name }
-                TextField { id: textValue; visible: !fieldRow.schema.enum && fieldRow.schema.type === "string" && fieldRow.overridden; text: fieldRow.schema.default || ""; enabled: !backend.busy; Layout.fillWidth: true; Accessible.name: fieldRow.modelData.name }
+        Loader {
+            id: parameterForm
+            Layout.fillWidth: true
+            active: dialog.selected && dialog.selected.supported
+            function reload() {
+                source = ""
+                dialog.formError = ""
+                if (active) setSource("OperationParameters.qml", {schema: dialog.selected.parameters})
             }
+            onActiveChanged: reload()
+            Connections { target: dialog; function onSelectedChanged() { parameterForm.reload() } }
         }
+        Label { visible: dialog.formError.length > 0; text: dialog.formError; wrapMode: Text.Wrap; Layout.fillWidth: true; Accessible.name: "Invalid settings" }
         Repeater {
             id: outputFields
             model: dialog.selected ? Object.keys(dialog.selected.outputs) : []
