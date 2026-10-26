@@ -470,6 +470,23 @@ fn validate_events(time: &TimeTree) -> Result<()> {
     Ok(())
 }
 
+/// Split/fuse and exhaustive antichains can cut inside a zero-duration
+/// ancestral interval. A lineage-count maximum confined to that interval can
+/// give event density without exposure, making the likelihood unbounded.
+/// Single-threshold cuts keep the entire tied event together instead.
+fn validate_multithreshold_events(tree: &TreeDoc, time: &TimeTree) -> Result<()> {
+    if time.events.iter().any(|&i| {
+        tree.node(i)
+            .parent
+            .is_some_and(|p| time.ages[p].total_cmp(&time.ages[i]).is_eq())
+    }) {
+        return Err(Error(
+            "multi-threshold GMYC does not support nested tied branching events: partitions through zero-duration ancestral intervals can have unbounded likelihood; use single-threshold GMYC".into(),
+        ));
+    }
+    Ok(())
+}
+
 pub fn single(tree: &TreeDoc, time: &TimeTree, cancel: Option<&Path>) -> Result<GmycResult> {
     single_with_progress(tree, time, cancel, &|_, _| {})
 }
@@ -706,6 +723,7 @@ pub fn multiple_with_progress(
     progress: &(dyn Fn(usize, usize) + Sync),
 ) -> Result<GmycResult> {
     validate_events(time)?;
+    validate_multithreshold_events(tree, time)?;
     if budget == 0 {
         return Err(Error(
             "multi-threshold search requires a positive candidate budget".into(),
@@ -856,6 +874,7 @@ pub fn exhaustive(
     cancel: Option<&Path>,
 ) -> Result<GmycResult> {
     validate_events(time)?;
+    validate_multithreshold_events(tree, time)?;
     let mut todo = vec![vec![tree.root()]];
     let mut seen = BTreeSet::new();
     let mut profile = vec![null(time)];
@@ -1134,10 +1153,10 @@ mod tests {
     }
 
     #[test]
-    fn multiple_nested_ties_are_reproducible_and_bounded_by_oracle() {
+    fn multiple_positive_intervals_are_reproducible_and_bounded_by_oracle() {
         let tree = TreeDoc::from_newick(
             "nested ties",
-            "(((a:0.2,b:0.2):0,c:0.2):0.8,(d:0.1,e:0.1):0.9);",
+            "(((a:0.15,b:0.15):0.05,c:0.2):0.8,(d:0.1,e:0.1):0.9);",
         )
         .unwrap();
         let time = crate::time_tree::validate(&tree, true, 1e-8, true).unwrap();
@@ -1170,6 +1189,59 @@ mod tests {
         let partial = multiple(&tree, &time, 1, None).unwrap();
         assert!(partial.stopping_condition.contains("partial search"));
         assert!(partial.warnings.iter().any(|w| w.contains("unavailable")));
+    }
+
+    #[test]
+    fn splitting_a_nested_tie_has_unbounded_event_density() {
+        let tree = TreeDoc::from_newick(
+            "unbounded split",
+            "(((a:0.2,b:0.2):0,c:0.2):0.8,(d:0.1,e:0.1):0.9);",
+        )
+        .unwrap();
+        let time = crate::time_tree::validate(&tree, true, 1e-8, true).unwrap();
+        let roots = [
+            tree.node(time.tips["a"]).parent.unwrap(),
+            tree.node(time.tips["d"]).parent.unwrap(),
+        ];
+        let prepared = prepare(&tree, &time, &roots).unwrap();
+        assert_eq!(prepared.div, [2.0, 3.0, 2.0, 1.0]);
+        assert_eq!(prepared.dt[1], 0.0);
+        // Only the empty interval has diversification base 3. All positive
+        // exposure uses bases <= 2: density grows as p_div * ln(3/2).
+        let low = prepared.likelihood([1.0, 10.0]).unwrap().value;
+        let high = prepared.likelihood([1.0, 100.0]).unwrap().value;
+        assert!((high - low - 90.0 * (1.5_f64).ln()).abs() < 0.1);
+    }
+
+    #[test]
+    fn multithreshold_rejects_nested_ties_but_preserves_separate_equal_ages() {
+        for newick in [
+            "(((a:0.2,b:0.2):0,c:0.2):0.8,(d:0.1,e:0.1):0.9);",
+            "((a:0.2,(b:0.2,c:0.2):0):0.8,(d:0.1,e:0.1):0.9);",
+            "((a:1,b:1):0,c:1);",
+            "(a:1,(b:1,c:1):0);",
+            "(((a:0.2,b:0.2):0.8,c:1):0,d:1);",
+        ] {
+            let tree = TreeDoc::from_newick("nested", newick).unwrap();
+            let time = crate::time_tree::validate(&tree, true, 1e-8, true).unwrap();
+            assert!(single(&tree, &time, None).is_ok());
+            for error in [
+                multiple(&tree, &time, 100, None).unwrap_err(),
+                exhaustive(&tree, &time, 100, None).unwrap_err(),
+            ] {
+                assert!(error.0.contains("nested tied branching events"));
+                assert!(error.0.contains("unbounded likelihood"));
+            }
+        }
+        for newick in [
+            "((a:0.2,b:0.2):0.8,(c:0.2,d:0.2):0.8);",
+            "(((a:0.199999999,b:0.199999999):0.000000001,c:0.2):0.8,(d:0.1,e:0.1):0.9);",
+        ] {
+            let tree = TreeDoc::from_newick("supported", newick).unwrap();
+            let time = crate::time_tree::validate(&tree, true, 1e-8, true).unwrap();
+            assert!(multiple(&tree, &time, 100, None).is_ok());
+            assert!(exhaustive(&tree, &time, 100, None).is_ok());
+        }
     }
 
     #[test]
