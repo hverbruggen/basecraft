@@ -1,10 +1,11 @@
 # Basecraft wordmark
 
-Accepted full logo: the soft-gradient lowercase wordmark, made fully opaque
-for reuse in study 20 (2026-10-26).
-The folded b is emphasised; the compressed JetBrainsMono lettering has an opaque
-face and gentle edge shading. Only the opening-window presentation applies
-70% overall opacity.
+Accepted full logo: the soft-gradient lowercase wordmark, with its internal transparency gradient retained
+for reuse in study 21 (2026-10-26).
+The folded b is emphasised; the compressed JetBrainsMono lettering retains an 18%
+interior opacity and gentle 20% edge shading. The b and subtitle have no global
+fade. Only the opening-window presentation applies an additional 70% overall
+opacity to the complete composition.
 
 `wordmark-dark.svg` is transparent artwork for dark surfaces;
 `wordmark-light.svg` is transparent artwork for light surfaces. Both are editable
