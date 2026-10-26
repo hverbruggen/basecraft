@@ -160,7 +160,9 @@ use std::sync::Arc;
 use basecraft_docs::AlignmentDoc;
 use basecraft_docs::sanger::{SangerDraft, SangerPlacement};
 use basecraft_io::abif::{self, Trace};
-use basecraft_ops::sanger_review::{MaskSettings, ReviewChoice, ReviewOp, SangerReviewSession};
+use basecraft_ops::sanger_review::{
+    MaskSettings, ReviewChoice, ReviewOp, SangerReviewSession, SangerRun,
+};
 use basecraft_plugin_host::{Manifest, PluginProcess};
 use basecraft_viewmodel::sanger::SangerView;
 use basecraft_viewmodel::sanger_review::SangerReviewView;
@@ -206,10 +208,8 @@ pub struct SangerRust {
     review_settings: QString,
     trace: Option<Trace>,
     review: Option<SangerReviewView>,
-    draft_dir: Option<tempfile::TempDir>,
     review_session: Option<SangerReviewSession>,
     review_path: Option<PathBuf>,
-    placement_dir: Option<tempfile::TempDir>,
     view: SangerView,
     theme: Theme,
     theme_stamp: Option<std::time::SystemTime>,
@@ -257,10 +257,8 @@ impl Default for SangerRust {
             ),
             trace: None,
             review: None,
-            draft_dir: None,
             review_session: None,
             review_path: None,
-            placement_dir: None,
             view: SangerView::default(),
             theme,
             theme_stamp,
@@ -290,6 +288,60 @@ fn review_view(draft: &SangerDraft) -> Result<SangerReviewView, String> {
     // calls cannot silently substitute for the recorded Tracy call mapping.
     let traces = verified_traces(draft)?;
     SangerReviewView::new(draft.clone(), traces)
+}
+
+// All explicit Sanger tool invocations share the same durable reservation and
+// failure record. Returned paths must stay inside that owned run.
+fn sanger_tool(
+    anchor: &Path,
+    plugin: &str,
+    operation: &str,
+    sources: &[PathBuf],
+    dependencies: &[PathBuf],
+    output_name: &str,
+    mut parameters: serde_json::Value,
+) -> Result<(SangerRun, PathBuf, Vec<PathBuf>), String> {
+    let run = SangerRun::prepare_with_dependencies(anchor, operation, sources, dependencies)
+        .map_err(|e| e.to_string())?;
+    let output = run.artifact(output_name).map_err(|e| e.to_string())?;
+    parameters["output"] = serde_json::json!(output);
+    run.parameters(&parameters).map_err(|e| e.to_string())?;
+    let outcome = (|| {
+        let manifest = Manifest::load(&plugin_dir(plugin)).map_err(|e| e.to_string())?;
+        let mut process = PluginProcess::spawn(&manifest).map_err(|e| e.to_string())?;
+        process
+            .invoke(operation, parameters, None)
+            .map_err(|e| e.to_string())
+    })();
+    match outcome {
+        Ok(result) => Ok((
+            run,
+            output,
+            result.outputs.into_iter().map(PathBuf::from).collect(),
+        )),
+        Err(error) => {
+            if let Err(record) = run.failed(&error) {
+                return Err(format!(
+                    "{error}; failure record could not be saved: {record}"
+                ));
+            }
+            Err(error)
+        }
+    }
+}
+
+fn session_view(session: &SangerReviewSession) -> Result<SangerReviewView, String> {
+    let draft = session.working_draft()?;
+    let mut view = review_view(&draft)?;
+    if let Some(placement) = session.placement()? {
+        let indexed = Arc::new(
+            basecraft_io::cache::open_fasta(&placement.source_path).map_err(|e| e.to_string())?,
+        );
+        let alignment =
+            AlignmentDoc::from_fasta(placement.source_path.display().to_string(), &indexed);
+        view.attach_alignment(placement, alignment)?;
+    }
+    Ok(view)
 }
 
 impl qobject::SangerController {
@@ -513,101 +565,125 @@ impl qobject::SangerController {
         self.as_mut().set_alignment_context(QString::from(&context));
     }
 
+    fn install_draft_run(mut self: std::pin::Pin<&mut Self>, run: &SangerRun, path: &Path) -> bool {
+        if !self
+            .as_mut()
+            .open_draft(&QString::from(path.to_string_lossy().as_ref()))
+        {
+            return false;
+        }
+        self.as_mut().set_dirty(true);
+        let result = self
+            .as_mut()
+            .rust_mut()
+            .review_session
+            .as_mut()
+            .ok_or_else(|| "No review is open".to_string())
+            .and_then(|session| session.attach_run(run));
+        if let Err(error) = result {
+            self.as_mut().set_message_kind(QString::from("fail"));
+            self.as_mut().set_message(QString::from(error));
+            return false;
+        }
+        true
+    }
+
     pub fn orient_review(mut self: std::pin::Pin<&mut Self>, alignment: &QString) -> bool {
-        let result = (|| -> Result<Option<(tempfile::TempDir, PathBuf)>, String> {
+        let result = (|| -> Result<(SangerRun, Option<PathBuf>), String> {
             let session = self
                 .rust()
                 .review_session
                 .as_ref()
                 .ok_or("Open a draft first")?;
-            if self.rust().dirty {
-                return Err("Orient the draft before reviewing calls".into());
-            }
-            let draft = &session.draft;
-            let dir = tempfile::Builder::new()
-                .prefix("basecraft-review-orientation-")
-                .tempdir()
-                .map_err(|e| e.to_string())?;
-            let output = dir.path().join("orientation.json");
-            let manifest = Manifest::load(&plugin_dir("mafft")).map_err(|e| e.to_string())?;
-            let mut plugin = PluginProcess::spawn(&manifest).map_err(|e| e.to_string())?;
-            plugin.invoke("add_sequences", serde_json::json!({"input": alignment.to_string(), "output": output,
-                "rows": [["probe", draft.consensus.replace('-', "")]], "orientation": true, "keep": true}), None).map_err(|e| e.to_string())?;
-            let value: serde_json::Value =
-                serde_json::from_slice(&std::fs::read(&output).map_err(|e| e.to_string())?)
-                    .map_err(|e| e.to_string())?;
-            if value["reversed"].as_array().is_none_or(Vec::is_empty) {
-                return Ok(None);
-            }
             if !session.automatic_only() {
                 return Err(
                     "This review already has decisions; open a fresh draft to change orientation"
                         .into(),
                 );
             }
-            let mut reversed = draft.reverse_complemented();
-            reversed.limitations.push(format!(
-                "Draft reverse-complemented for alignment context; source draft SHA-256 {}",
-                session.draft_sha256
-            ));
-            let evidence = dir.path().join("evidence.json");
-            std::fs::write(
-                &evidence,
-                serde_json::to_vec(&reversed).map_err(|e| e.to_string())?,
-            )
-            .map_err(|e| e.to_string())?;
-            Ok(Some((dir, evidence)))
+            let draft = session.working_draft()?;
+            let mut sources: Vec<_> = draft.inputs.iter().map(|r| r.path.clone()).collect();
+            sources.push(PathBuf::from(alignment.to_string()));
+            let (run, output, mut outputs) = sanger_tool(
+                session.storage_anchor(),
+                "mafft",
+                "add_sequences",
+                &sources,
+                session.evidence_runs(),
+                "orientation.json",
+                serde_json::json!({"input":alignment.to_string(),"rows":[["probe",draft.consensus.replace('-',"")]],"orientation":true,"keep":true}),
+            )?;
+            outputs.push(run.review_snapshot(session).map_err(|e| e.to_string())?);
+            let value: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&output).map_err(|e| e.to_string())?)
+                    .map_err(|e| e.to_string())?;
+            let evidence = if value["reversed"].as_array().is_none_or(Vec::is_empty) {
+                None
+            } else {
+                // Reverse the immutable original, not its transient resolved paths.
+                let mut reversed = session.draft.reverse_complemented();
+                reversed.limitations.push(format!(
+                    "Draft reverse-complemented for alignment context; source draft SHA-256 {}",
+                    session.draft_sha256
+                ));
+                let evidence = run.artifact("evidence.json").map_err(|e| e.to_string())?;
+                basecraft_ops::input_evidence::write_json(&evidence, &reversed)
+                    .map_err(|e| e.to_string())?;
+                outputs.push(evidence.clone());
+                Some(evidence)
+            };
+            Ok((run.finish(&outputs).map_err(|e| e.to_string())?, evidence))
         })();
         match result {
-            Ok(None) => true,
-            Ok(Some((dir, path))) => {
-                let loaded = self
+            Ok((run, Some(path))) => self.install_draft_run(&run, &path),
+            Ok((run, None)) => {
+                let result = self
                     .as_mut()
-                    .open_draft(&QString::from(path.to_string_lossy().as_ref()));
-                if loaded {
-                    self.as_mut().rust_mut().draft_dir = Some(dir);
+                    .rust_mut()
+                    .review_session
+                    .as_mut()
+                    .ok_or_else(|| "No review is open".to_string())
+                    .and_then(|session| session.include_run(&run));
+                if let Err(error) = result {
+                    self.as_mut().set_message(QString::from(error));
+                    self.as_mut().set_message_kind(QString::from("fail"));
+                    return false;
                 }
-                loaded
+                self.as_mut().set_dirty(true);
+                true
             }
-            Err(e) => {
-                self.as_mut().set_message_kind(QString::from("error"));
+            Err(error) => {
+                self.as_mut().set_message_kind(QString::from("fail"));
                 self.as_mut()
-                    .set_message(QString::from(&crate::bridge::error_summary(&e)));
+                    .set_message(QString::from(crate::bridge::error_summary(&error)));
                 false
             }
         }
     }
 
     pub fn single_review(mut self: std::pin::Pin<&mut Self>, signal_threshold: i32) -> bool {
-        let result = (|| -> Result<(tempfile::TempDir, PathBuf), String> {
+        let result = (|| -> Result<(SangerRun, PathBuf), String> {
             if !(1..=90).contains(&signal_threshold) {
                 return Err("Signal cutoff must be between 1 and 90 percent".into());
             }
             if self.rust().trace.is_none() {
                 return Err("Open an AB1 trace first".into());
             }
-            let dir = tempfile::Builder::new()
-                .prefix("basecraft-single-review-")
-                .tempdir()
-                .map_err(|e| e.to_string())?;
-            let output = dir.path().join("draft");
-            let manifest =
-                Manifest::load(&plugin_dir("tracy-sanger")).map_err(|e| e.to_string())?;
-            let mut plugin = PluginProcess::spawn(&manifest).map_err(|e| e.to_string())?;
-            plugin.invoke("consensus", serde_json::json!({"reads": [self.rust().file_path.to_string()], "output": output, "signal_threshold": signal_threshold}), None).map_err(|e| e.to_string())?;
+            let path = PathBuf::from(self.rust().file_path.to_string());
+            let (run, output, outputs) = sanger_tool(
+                &path,
+                "tracy-sanger",
+                "consensus",
+                std::slice::from_ref(&path),
+                &[],
+                "draft",
+                serde_json::json!({"reads":[path],"signal_threshold":signal_threshold}),
+            )?;
             let evidence = output.join("evidence.json");
-            Ok((dir, evidence))
+            Ok((run.finish(&outputs).map_err(|e| e.to_string())?, evidence))
         })();
         match result {
-            Ok((dir, path)) => {
-                let loaded = self
-                    .as_mut()
-                    .open_draft(&QString::from(path.to_string_lossy().as_ref()));
-                if loaded {
-                    self.as_mut().rust_mut().draft_dir = Some(dir);
-                }
-                loaded
-            }
+            Ok((run, path)) => self.install_draft_run(&run, &path),
             Err(e) => {
                 self.as_mut().set_message_kind(QString::from("error"));
                 self.as_mut()
@@ -660,6 +736,9 @@ impl qobject::SangerController {
     }
 
     pub fn open_file(mut self: std::pin::Pin<&mut Self>, path: &QString) -> bool {
+        if path.to_string().ends_with(".sanger-review.json") {
+            return self.open_review(path);
+        }
         let path = PathBuf::from(path.to_string());
         // Viewing an AB1 uses its recorded instrument calls. Recalling with
         // Tracy is an explicit analysis and may create execution evidence.
@@ -681,10 +760,9 @@ impl qobject::SangerController {
                     }
                     r.trace = Some(trace);
                     r.review = None;
-                    r.draft_dir = None;
+
                     r.review_session = None;
                     r.review_path = None;
-                    r.placement_dir = None;
                 }
                 self.as_mut()
                     .set_file_path(QString::from(path.to_string_lossy().as_ref()));
@@ -703,30 +781,34 @@ impl qobject::SangerController {
 
     pub fn open_draft(mut self: std::pin::Pin<&mut Self>, path: &QString) -> bool {
         let path = PathBuf::from(path.to_string());
-        let result = (|| -> Result<(SangerReviewView, SangerReviewSession, Option<tempfile::TempDir>), String> {
+        let result = (|| -> Result<(SangerReviewView, SangerReviewSession), String> {
             let mut session = SangerReviewSession::new(&path)?;
             // Opening evidence is inspection. Re-running Tracy to enrich older
             // evidence must be an explicit analysis, never a passive-open write.
-            let expanded = None;
-            let mut view = review_view(&session.draft)?;
-            let calls = (0..view.draft.columns.len()).map(|i| view.assessment(i).call).collect();
-            session.apply(ReviewOp::Evaluate { version: 2, settings: view.review_settings.clone(), calls, reference: None })?;
+            let mut view = session_view(&session)?;
+            let calls = (0..view.draft.columns.len())
+                .map(|i| view.assessment(i).call)
+                .collect();
+            session.apply(ReviewOp::Evaluate {
+                version: 2,
+                settings: view.review_settings.clone(),
+                calls,
+                reference: None,
+            })?;
             if let Some(i) = (0..view.draft.columns.len()).find(|&i| view.requires_review(i)) {
                 view.select_column(i);
             }
-            Ok((view, session, expanded))
+            Ok((view, session))
         })();
         match result {
-            Ok((mut review, session, expanded)) => {
+            Ok((mut review, session)) => {
                 {
                     let mut r = self.as_mut().rust_mut();
                     review.resize(r.view.width, r.view.height);
                     r.review = Some(review);
                     r.review_session = Some(session);
                     r.review_path = None;
-                    r.placement_dir = None;
-                    r.draft_dir = expanded;
-                    r.placement_dir = None;
+
                     r.trace = None;
                 }
                 self.as_mut().set_dirty(false);
@@ -749,7 +831,7 @@ impl qobject::SangerController {
         let path = PathBuf::from(path.to_string());
         let result = (|| -> Result<(SangerReviewView, SangerReviewSession), String> {
             let session = SangerReviewSession::load(&path)?;
-            let view = review_view(&session.draft)?;
+            let view = session_view(&session)?;
             Ok((view, session))
         })();
         match result {
@@ -760,8 +842,7 @@ impl qobject::SangerController {
                     r.review = Some(review);
                     r.review_session = Some(session);
                     r.review_path = Some(path.clone());
-                    r.draft_dir = None;
-                    r.placement_dir = None;
+
                     r.trace = None;
                 }
                 self.as_mut().set_dirty(false);
@@ -785,7 +866,7 @@ impl qobject::SangerController {
         additional_paths_json: &QString,
         signal_threshold: i32,
     ) -> bool {
-        let result = (|| -> Result<(tempfile::TempDir, PathBuf), String> {
+        let result = (|| -> Result<(SangerRun, PathBuf), String> {
             if !(1..=90).contains(&signal_threshold) {
                 return Err("Signal cutoff must be between 1 and 90 percent".into());
             }
@@ -799,32 +880,27 @@ impl qobject::SangerController {
             if !(2..=3).contains(&paths.len()) {
                 return Err("Exactly two or three AB1 reads are required".into());
             }
-            let dir = tempfile::Builder::new()
-                .prefix("basecraft-sanger-")
-                .tempdir()
-                .map_err(|e| e.to_string())?;
-            let output = dir.path().join("draft");
-            let manifest =
-                Manifest::load(&plugin_dir("tracy-sanger")).map_err(|e| e.to_string())?;
-            let mut plugin = PluginProcess::spawn(&manifest).map_err(|e| e.to_string())?;
-            plugin
-                .invoke(
-                    "consensus",
-                    serde_json::json!({"reads": paths, "output": output, "signal_threshold": signal_threshold}),
-                    None,
-                )
-                .map_err(|e| e.to_string())?;
-            Ok((dir, output.join("evidence.json")))
+            let sources: Vec<_> = paths.iter().map(PathBuf::from).collect();
+            let (run, output, outputs) = sanger_tool(
+                &sources[0],
+                "tracy-sanger",
+                "consensus",
+                &sources,
+                &[],
+                "draft",
+                serde_json::json!({"reads":paths,"signal_threshold":signal_threshold}),
+            )?;
+            Ok((
+                run.finish(&outputs).map_err(|e| e.to_string())?,
+                output.join("evidence.json"),
+            ))
         })();
         match result {
-            Ok((dir, evidence)) => {
-                let loaded = self
-                    .as_mut()
-                    .open_draft(&QString::from(evidence.to_string_lossy().as_ref()));
+            Ok((run, evidence)) => {
+                let loaded = self.as_mut().install_draft_run(&run, &evidence);
                 if loaded {
-                    self.as_mut().rust_mut().draft_dir = Some(dir);
                     self.as_mut()
-                        .set_message(QString::from("Draft consensus loaded"));
+                        .set_message(QString::from("Draft review retained; resume from Tasks"));
                     self.as_mut().set_message_kind(QString::from("done"));
                 }
                 loaded
@@ -840,14 +916,17 @@ impl qobject::SangerController {
     pub fn save_review(mut self: std::pin::Pin<&mut Self>, path: &QString) -> bool {
         let path = PathBuf::from(path.to_string());
         let result = self
-            .rust()
+            .as_mut()
+            .rust_mut()
             .review_session
-            .as_ref()
+            .as_mut()
             .ok_or_else(|| "No Sanger review is open".to_string())
             .and_then(|session| session.save(&path));
         match result {
             Ok(()) => {
-                self.as_mut().rust_mut().review_path = Some(path);
+                self.as_mut().rust_mut().review_path = Some(path.clone());
+                self.as_mut()
+                    .set_file_path(QString::from(path.to_string_lossy().as_ref()));
                 self.as_mut().set_dirty(false);
                 self.as_mut().set_message_kind(QString::from("done"));
                 self.as_mut().set_message(QString::from("Review saved"));
@@ -897,9 +976,11 @@ impl qobject::SangerController {
         };
         let column = self.rust().review.as_ref().map(|review| review.selected);
         let result = match (self.as_mut().rust_mut().review_session.as_mut(), column) {
-            (Some(session), Some(column)) => session.apply(ReviewOp::Set {
-                columns: vec![column],
-                choice,
+            (Some(session), Some(column)) => session.start_recovery().and_then(|()| {
+                session.apply(ReviewOp::Set {
+                    columns: vec![column],
+                    choice,
+                })
             }),
             _ => Err("No Sanger review is open".into()),
         };
@@ -926,7 +1007,7 @@ impl qobject::SangerController {
             .review_session
             .as_mut()
             .ok_or_else(|| "No Sanger review is open".to_string())
-            .and_then(|session| session.apply(op));
+            .and_then(|session| session.start_recovery().and_then(|()| session.apply(op)));
         match result {
             Ok(()) => {
                 self.as_mut().set_dirty(true);
@@ -1036,7 +1117,7 @@ impl qobject::SangerController {
         overlap: i32,
         errors: i32,
     ) -> QString {
-        let result = (|| -> Result<String, String> {
+        let result = (|| -> Result<(String, SangerRun), String> {
             let review = self.rust().review.as_ref().ok_or("No review open")?;
             let sequence: String = review
                 .consensus
@@ -1044,19 +1125,44 @@ impl qobject::SangerController {
                 .filter(|&&b| b != b'-')
                 .map(|&b| char::from(b))
                 .collect();
-            let dir = tempfile::Builder::new()
-                .prefix("basecraft-primer-search-")
-                .tempdir()
-                .map_err(|e| e.to_string())?;
-            let output = dir.path().join("primers.json");
-            let manifest =
-                Manifest::load(&plugin_dir("tracy-sanger")).map_err(|e| e.to_string())?;
-            let mut plugin = PluginProcess::spawn(&manifest).map_err(|e| e.to_string())?;
-            plugin.invoke("primers", serde_json::json!({"sequence": sequence, "forward": forward.to_string(), "reverse": reverse.to_string(), "minimum_overlap": overlap, "error_percent": errors, "output": output}),None).map_err(|e| e.to_string())?;
-            std::fs::read_to_string(output).map_err(|e| e.to_string())
+            let session = self
+                .rust()
+                .review_session
+                .as_ref()
+                .ok_or("No review open")?;
+            let sources: Vec<_> = session
+                .working_draft()?
+                .inputs
+                .iter()
+                .map(|r| r.path.clone())
+                .collect();
+            let (run, output, mut outputs) = sanger_tool(
+                session.storage_anchor(),
+                "tracy-sanger",
+                "primers",
+                &sources,
+                session.evidence_runs(),
+                "primers.json",
+                serde_json::json!({"sequence":sequence,"forward":forward.to_string(),"reverse":reverse.to_string(),"minimum_overlap":overlap,"error_percent":errors}),
+            )?;
+            outputs.push(run.review_snapshot(session).map_err(|e| e.to_string())?);
+            let text = std::fs::read_to_string(&output).map_err(|e| e.to_string())?;
+            Ok((text, run.finish(&outputs).map_err(|e| e.to_string())?))
         })();
         match result {
-            Ok(text) => {
+            Ok((text, run)) => {
+                let result = self
+                    .as_mut()
+                    .rust_mut()
+                    .review_session
+                    .as_mut()
+                    .ok_or_else(|| "No review open".to_string())
+                    .and_then(|session| session.include_run(&run));
+                if let Err(error) = result {
+                    self.as_mut().set_message(QString::from(error));
+                    return QString::default();
+                }
+                self.as_mut().set_dirty(true);
                 self.as_mut().set_message(QString::default());
                 QString::from(text)
             }
@@ -1218,7 +1324,7 @@ impl qobject::SangerController {
 
     pub fn place_alignment(mut self: std::pin::Pin<&mut Self>, path: &QString) -> bool {
         let source = PathBuf::from(path.to_string());
-        let result = (|| -> Result<(tempfile::TempDir, SangerPlacement, AlignmentDoc), String> {
+        let result = (|| -> Result<(SangerRun, PathBuf, SangerPlacement, AlignmentDoc), String> {
             let fragment = self
                 .rust()
                 .review
@@ -1227,22 +1333,21 @@ impl qobject::SangerController {
                 .draft
                 .consensus
                 .replace('-', "");
-            let dir = tempfile::Builder::new()
-                .prefix("basecraft-sanger-placement-")
-                .tempdir()
-                .map_err(|e| e.to_string())?;
-            let output = dir.path().join("placement.json");
-            let manifest = Manifest::load(&plugin_dir("mafft")).map_err(|e| e.to_string())?;
-            let mut plugin = PluginProcess::spawn(&manifest).map_err(|e| e.to_string())?;
-            plugin
-                .invoke(
-                    "place_sanger",
-                    serde_json::json!({
-                        "input": source, "fragment": fragment, "output": output,
-                    }),
-                    None,
-                )
-                .map_err(|e| e.to_string())?;
+            let session = self
+                .rust()
+                .review_session
+                .as_ref()
+                .ok_or("No review open")?;
+            let (run, output, mut outputs) = sanger_tool(
+                session.storage_anchor(),
+                "mafft",
+                "place_sanger",
+                std::slice::from_ref(&source),
+                session.evidence_runs(),
+                "placement.json",
+                serde_json::json!({"input":source,"fragment":fragment}),
+            )?;
+            outputs.push(run.review_snapshot(session).map_err(|e| e.to_string())?);
             let placement = SangerPlacement::read(&output)?;
             let hash = basecraft_io::sha256_file(&source).map_err(|e| e.to_string())?;
             if !hash.eq_ignore_ascii_case(&placement.source_sha256) {
@@ -1251,10 +1356,15 @@ impl qobject::SangerController {
             let indexed =
                 Arc::new(basecraft_io::cache::open_fasta(&source).map_err(|e| e.to_string())?);
             let alignment = AlignmentDoc::from_fasta(source.display().to_string(), &indexed);
-            Ok((dir, placement, alignment))
+            Ok((
+                run.finish(&outputs).map_err(|e| e.to_string())?,
+                output,
+                placement,
+                alignment,
+            ))
         })();
         match result {
-            Ok((dir, placement, alignment)) => {
+            Ok((run, output, placement, alignment)) => {
                 let result = self
                     .as_mut()
                     .rust_mut()
@@ -1264,7 +1374,6 @@ impl qobject::SangerController {
                     .and_then(|review| review.attach_alignment(placement, alignment));
                 match result {
                     Ok(()) => {
-                        self.as_mut().rust_mut().placement_dir = Some(dir);
                         let automatic =
                             self.rust().review_session.as_ref().is_some_and(|session| {
                                 session.events().iter().all(|op| {

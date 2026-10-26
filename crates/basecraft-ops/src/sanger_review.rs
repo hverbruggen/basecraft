@@ -2,6 +2,10 @@
 //! The source draft and AB1 files remain immutable; no reference base is
 //! inferred or substituted by these operations.
 
+mod storage;
+pub use storage::SangerRun;
+pub(crate) use storage::{is_review, relocate_package};
+
 use std::path::{Path, PathBuf};
 
 use basecraft_docs::sanger::{ReviewReference, ReviewSettings, SangerDraft};
@@ -82,6 +86,8 @@ struct StoredReview {
     draft_sha256: String,
     draft_json: String,
     events: Vec<ReviewOp>,
+    #[serde(default)]
+    evidence: storage::ReviewEvidence,
 }
 
 pub struct SangerReviewSession {
@@ -97,6 +103,9 @@ pub struct SangerReviewSession {
     events: Vec<ReviewOp>,
     undo: Vec<Change>,
     redo: Vec<Change>,
+    evidence: storage::ReviewEvidence,
+    anchor: PathBuf,
+    recovery: Option<PathBuf>,
 }
 
 impl SangerReviewSession {
@@ -215,6 +224,9 @@ impl SangerReviewSession {
             events: Vec::new(),
             undo: Vec::new(),
             redo: Vec::new(),
+            evidence: storage::ReviewEvidence::default(),
+            anchor: std::path::absolute(draft_path).map_err(|e| e.to_string())?,
+            recovery: None,
         })
     }
 
@@ -234,6 +246,20 @@ impl SangerReviewSession {
             serde_json::from_str(&stored.draft_json).map_err(|e| e.to_string())?;
         draft.validate()?;
         let decisions = vec![ReviewChoice::Pending; draft.columns.len()];
+        let parent = path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new("."))
+            .canonicalize()
+            .map_err(|e| e.to_string())?;
+        let mut evidence = stored.evidence;
+        evidence
+            .map_paths(|p| Ok(parent.join(p)))
+            .map_err(|e| e.to_string())?;
+        let bundle = crate::provenance::bundle_for_result(path);
+        if bundle.join("manifest.json").is_file() && !evidence.runs.contains(&bundle) {
+            evidence.runs.push(bundle);
+        }
         let mut session = Self {
             mask: Self::default_mask(draft.columns.len()),
             settings: ReviewSettings::default(),
@@ -247,6 +273,9 @@ impl SangerReviewSession {
             events: Vec::new(),
             undo: Vec::new(),
             redo: Vec::new(),
+            evidence,
+            anchor: std::path::absolute(path).map_err(|e| e.to_string())?,
+            recovery: None,
         };
         for event in stored.events {
             if let ReviewOp::Export { sha256, .. } = &event {
@@ -264,20 +293,8 @@ impl SangerReviewSession {
         Ok(session)
     }
 
-    pub fn save(&self, path: &Path) -> Result<(), String> {
-        let stored = StoredReview {
-            version: 1,
-            draft_path: self.draft_path.clone(),
-            draft_sha256: self.draft_sha256.clone(),
-            draft_json: self.draft_json.clone(),
-            events: self.events.clone(),
-        };
-        let bytes = serde_json::to_vec_pretty(&stored).map_err(|e| e.to_string())?;
-        basecraft_io::write_atomic(path, |output| {
-            output.write_all(&bytes)?;
-            output.write_all(b"\n")
-        })
-        .map_err(|e| e.to_string())
+    pub fn save(&mut self, path: &Path) -> Result<(), String> {
+        self.save_durable(path).map_err(|e| e.to_string())
     }
 
     pub fn decision(&self, column: usize) -> Option<&ReviewChoice> {
@@ -491,7 +508,7 @@ impl SangerReviewSession {
             }
         }
         self.events.push(op);
-        Ok(())
+        self.checkpoint()
     }
 
     /// Export only a fully resolved specimen sequence. The output hash is a
@@ -523,13 +540,24 @@ impl SangerReviewSession {
             return Err("Give the specimen a name".into());
         }
         let fasta = format!(">{label}\n{sequence}\n");
-        basecraft_io::write_atomic(path, |out| out.write_all(fasta.as_bytes()))
+        self.start_recovery()?;
+        // Same-filesystem no-clobber promotion protects a file created after
+        // preflight; do not replace another writer's output.
+        let parent = path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        let mut staged = tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
+        std::io::Write::write_all(staged.as_file_mut(), fasta.as_bytes())
             .map_err(|e| e.to_string())?;
+        staged.as_file().sync_all().map_err(|e| e.to_string())?;
+        staged.persist_noclobber(path).map_err(|e| e.to_string())?;
         let sha256 = basecraft_io::sha256_file(path).map_err(|e| e.to_string())?;
         self.apply(ReviewOp::Export {
             path: path.to_path_buf(),
             sha256,
-        })
+        })?;
+        self.publish_consensus(path).map_err(|e| format!("Consensus written to {}; supporting publication failed: {e}. Review decisions remain recoverable.",path.display()))
     }
 
     /// Initial automatic triage can be regenerated when orienting a fresh draft.
