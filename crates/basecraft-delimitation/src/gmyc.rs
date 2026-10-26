@@ -470,6 +470,23 @@ fn validate_events(time: &TimeTree) -> Result<()> {
     Ok(())
 }
 
+/// Split/fuse and exhaustive antichains can cut inside a zero-duration
+/// ancestral interval. A lineage-count maximum confined to that interval can
+/// give event density without exposure, making the likelihood unbounded.
+/// Single-threshold cuts keep the entire tied event together instead.
+fn validate_multithreshold_events(tree: &TreeDoc, time: &TimeTree) -> Result<()> {
+    if time.events.iter().any(|&i| {
+        tree.node(i)
+            .parent
+            .is_some_and(|p| time.ages[p].total_cmp(&time.ages[i]).is_eq())
+    }) {
+        return Err(Error(
+            "multi-threshold GMYC does not support nested tied branching events: partitions through zero-duration ancestral intervals can have unbounded likelihood; use single-threshold GMYC".into(),
+        ));
+    }
+    Ok(())
+}
+
 pub fn single(tree: &TreeDoc, time: &TimeTree, cancel: Option<&Path>) -> Result<GmycResult> {
     single_with_progress(tree, time, cancel, &|_, _| {})
 }
@@ -488,7 +505,9 @@ pub fn single_with_progress(
         .skip(1)
         .filter_map(|&i| {
             let roots = roots_at(tree, time, time.ages[i]);
-            seen.insert(roots.clone()).then_some((roots, time.ages[i]))
+            // A root-age tie has no mixed partition: the whole tree is already
+            // represented by the null fit, not an empty set of cluster roots.
+            (!roots.is_empty() && seen.insert(roots.clone())).then_some((roots, time.ages[i]))
         })
         .collect();
     let completed = std::sync::atomic::AtomicUsize::new(0);
@@ -704,6 +723,7 @@ pub fn multiple_with_progress(
     progress: &(dyn Fn(usize, usize) + Sync),
 ) -> Result<GmycResult> {
     validate_events(time)?;
+    validate_multithreshold_events(tree, time)?;
     if budget == 0 {
         return Err(Error(
             "multi-threshold search requires a positive candidate budget".into(),
@@ -854,6 +874,7 @@ pub fn exhaustive(
     cancel: Option<&Path>,
 ) -> Result<GmycResult> {
     validate_events(time)?;
+    validate_multithreshold_events(tree, time)?;
     let mut todo = vec![vec![tree.root()]];
     let mut seen = BTreeSet::new();
     let mut profile = vec![null(time)];
@@ -1008,6 +1029,42 @@ fn reduce_thresholds(tree: &TreeDoc, time: &TimeTree, roots: &[usize]) -> Vec<f6
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn root_age_ties_keep_null_and_admissible_mixed_partitions() {
+        for newick in ["((a:1,b:1):0,c:1);", "(((a:0.2,b:0.2):0.8,c:1):0,d:1);"] {
+            let tree = TreeDoc::from_newick("root tie", newick).unwrap();
+            let time = crate::time_tree::validate(&tree, true, 1e-8, true).unwrap();
+            let fit = single(&tree, &time, None).unwrap();
+            assert_eq!(fit.profile.len(), if time.tips.len() == 3 { 1 } else { 2 });
+            assert!(fit.profile.iter().all(|fit| fit.log_likelihood.is_finite()));
+        }
+    }
+
+    #[test]
+    fn nested_tie_has_zero_exposure_but_retains_event_density() {
+        let tree = TreeDoc::from_newick(
+            "nested tie",
+            "(((a:0.2,b:0.2):0,c:0.2):0.8,(d:0.1,e:0.1):0.9);",
+        )
+        .unwrap();
+        let time = crate::time_tree::validate(&tree, true, 1e-8, true).unwrap();
+        let prepared = prepare(&tree, &time, &roots_at(&tree, &time, 0.2)).unwrap();
+        let likelihood = prepared.likelihood([1.0, 1.0]).unwrap();
+        // After the root: (coal,div)=(0,2),(2,1),(6,1),(8,0),
+        // for durations 0.8,0,0.1,0.1. The tied event still has a density.
+        let coal = 3.0 / 1.4;
+        let div = 1.0 / 1.7;
+        let expected = (2.0_f64 * div).ln()
+            + (2.0_f64 * coal + div).ln()
+            + (6.0_f64 * coal + div).ln()
+            + (8.0_f64 * coal).ln()
+            - 4.0;
+        assert!((likelihood.coal_rate.exp() - coal).abs() < 1e-12);
+        assert!((likelihood.div_rate.exp() - div).abs() < 1e-12);
+        assert!((likelihood.value - expected).abs() < 1e-12);
+    }
+
     #[test]
     fn zero_distance_clades_become_one_tip_each() {
         let tree = TreeDoc::from_newick(
@@ -1033,6 +1090,160 @@ mod tests {
         let time = crate::time_tree::validate(&tidy, true, 1e-8, true).unwrap();
         assert!(collapse_zero_age(&tidy, &time).unwrap().is_none());
     }
+    #[test]
+    fn zero_age_collapse_preserves_surviving_paths_and_positive_events() {
+        let tree = TreeDoc::from_newick(
+            "paths",
+            "(((b:0,'a quoted':0):0,c:0):2,((e:1,f:1):0.5,(g:0,h:0):1.5):0.5);",
+        )
+        .unwrap();
+        let original = crate::time_tree::validate(&tree, true, 1e-8, true).unwrap();
+        let (collapsed, _) = collapse_zero_age(&tree, &original).unwrap().unwrap();
+        let retained = crate::time_tree::validate(&collapsed, true, 1e-8, true).unwrap();
+        assert_eq!(original.root_height, retained.root_height);
+        let positive: Vec<_> = original
+            .events
+            .iter()
+            .map(|&i| original.ages[i])
+            .filter(|&age| age > 0.0)
+            .collect();
+        assert_eq!(
+            positive,
+            retained
+                .events
+                .iter()
+                .map(|&i| retained.ages[i])
+                .collect::<Vec<_>>()
+        );
+        // In an ultrametric tree each pairwise path is twice its MRCA age.
+        // Checking every retained pair also checks the surviving hierarchy.
+        let mrca_age = |tree: &TreeDoc, time: &TimeTree, a: &str, b: &str| {
+            let mut ancestors = BTreeSet::new();
+            let mut node = Some(time.tips[a]);
+            while let Some(i) = node {
+                ancestors.insert(i);
+                node = tree.node(i).parent;
+            }
+            let mut i = time.tips[b];
+            while !ancestors.contains(&i) {
+                i = tree.node(i).parent.unwrap();
+            }
+            time.ages[i]
+        };
+        for a in retained.tips.keys() {
+            for b in retained.tips.keys() {
+                assert_eq!(
+                    mrca_age(&tree, &original, a, b),
+                    mrca_age(&collapsed, &retained, a, b)
+                );
+            }
+        }
+        let short =
+            TreeDoc::from_newick("short", "((a:0.000000001,b:0.000000001):0.999999999,c:1);")
+                .unwrap();
+        let time = crate::time_tree::validate(&short, true, 1e-8, true).unwrap();
+        assert!(collapse_zero_age(&short, &time).unwrap().is_none());
+        let all_zero = TreeDoc::from_newick("zero", "((a:0,b:0):0,c:0);").unwrap();
+        assert!(
+            crate::time_tree::validate(&all_zero, true, 1e-8, true)
+                .unwrap_err()
+                .0
+                .contains("positive finite root height")
+        );
+    }
+
+    #[test]
+    fn multiple_positive_intervals_are_reproducible_and_bounded_by_oracle() {
+        let tree = TreeDoc::from_newick(
+            "nested ties",
+            "(((a:0.15,b:0.15):0.05,c:0.2):0.8,(d:0.1,e:0.1):0.9);",
+        )
+        .unwrap();
+        let time = crate::time_tree::validate(&tree, true, 1e-8, true).unwrap();
+        let fit = |workers| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| multiple(&tree, &time, 100, None).unwrap())
+        };
+        let one = fit(1);
+        assert_eq!(
+            serde_json::to_value(&one).unwrap(),
+            serde_json::to_value(fit(2)).unwrap()
+        );
+        assert!(!one.global_optimum);
+        assert!(!one.stopping_condition.contains("budget reached"));
+        assert!(one.profile.iter().all(|fit| fit.log_likelihood.is_finite()));
+        let oracle = exhaustive(&tree, &time, 100, None).unwrap();
+        assert!(
+            oracle.profile[oracle.best].log_likelihood + 1e-8
+                >= one.profile[one.best].log_likelihood
+        );
+        assert!(
+            multiple(&tree, &time, 0, None)
+                .unwrap_err()
+                .0
+                .contains("positive candidate budget")
+        );
+        let partial = multiple(&tree, &time, 1, None).unwrap();
+        assert!(partial.stopping_condition.contains("partial search"));
+        assert!(partial.warnings.iter().any(|w| w.contains("unavailable")));
+    }
+
+    #[test]
+    fn splitting_a_nested_tie_has_unbounded_event_density() {
+        let tree = TreeDoc::from_newick(
+            "unbounded split",
+            "(((a:0.2,b:0.2):0,c:0.2):0.8,(d:0.1,e:0.1):0.9);",
+        )
+        .unwrap();
+        let time = crate::time_tree::validate(&tree, true, 1e-8, true).unwrap();
+        let roots = [
+            tree.node(time.tips["a"]).parent.unwrap(),
+            tree.node(time.tips["d"]).parent.unwrap(),
+        ];
+        let prepared = prepare(&tree, &time, &roots).unwrap();
+        assert_eq!(prepared.div, [2.0, 3.0, 2.0, 1.0]);
+        assert_eq!(prepared.dt[1], 0.0);
+        // Only the empty interval has diversification base 3. All positive
+        // exposure uses bases <= 2: density grows as p_div * ln(3/2).
+        let low = prepared.likelihood([1.0, 10.0]).unwrap().value;
+        let high = prepared.likelihood([1.0, 100.0]).unwrap().value;
+        assert!((high - low - 90.0 * (1.5_f64).ln()).abs() < 0.1);
+    }
+
+    #[test]
+    fn multithreshold_rejects_nested_ties_but_preserves_separate_equal_ages() {
+        for newick in [
+            "(((a:0.2,b:0.2):0,c:0.2):0.8,(d:0.1,e:0.1):0.9);",
+            "((a:0.2,(b:0.2,c:0.2):0):0.8,(d:0.1,e:0.1):0.9);",
+            "((a:1,b:1):0,c:1);",
+            "(a:1,(b:1,c:1):0);",
+            "(((a:0.2,b:0.2):0.8,c:1):0,d:1);",
+        ] {
+            let tree = TreeDoc::from_newick("nested", newick).unwrap();
+            let time = crate::time_tree::validate(&tree, true, 1e-8, true).unwrap();
+            assert!(single(&tree, &time, None).is_ok());
+            for error in [
+                multiple(&tree, &time, 100, None).unwrap_err(),
+                exhaustive(&tree, &time, 100, None).unwrap_err(),
+            ] {
+                assert!(error.0.contains("nested tied branching events"));
+                assert!(error.0.contains("unbounded likelihood"));
+            }
+        }
+        for newick in [
+            "((a:0.2,b:0.2):0.8,(c:0.2,d:0.2):0.8);",
+            "(((a:0.199999999,b:0.199999999):0.000000001,c:0.2):0.8,(d:0.1,e:0.1):0.9);",
+        ] {
+            let tree = TreeDoc::from_newick("supported", newick).unwrap();
+            let time = crate::time_tree::validate(&tree, true, 1e-8, true).unwrap();
+            assert!(multiple(&tree, &time, 100, None).is_ok());
+            assert!(exhaustive(&tree, &time, 100, None).is_ok());
+        }
+    }
+
     #[test]
     fn reference_summary_chi_square_convention_has_known_tails() {
         assert!((chi_square_tail(2.0, 2) - (-1.0f64).exp()).abs() < 1e-14);
