@@ -431,7 +431,7 @@ ApplicationWindow {
         customization: window.customization
         commandId: "tools.installed-operations"
         text: "Installed operations…"
-        iconName: "settings"
+        iconName: "more"
         tooltip: "Choose a compatible installed operation; other schemas remain available through the API"
         enabled: window.current !== null && window.currentPath.length > 0
         onTriggered: operationPicker.show(shell.project_dir.length ? shell.project_dir : shell.local_file_path(shell.parent_folder_url(window.currentPath)), window.currentPath, !!window.current.dirty)
