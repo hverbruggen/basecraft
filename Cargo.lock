@@ -346,6 +346,7 @@ dependencies = [
  "basecraft-ops",
  "basecraft-platform",
  "basecraft-protocol",
+ "fs4",
  "jsonschema",
  "serde",
  "serde_json",

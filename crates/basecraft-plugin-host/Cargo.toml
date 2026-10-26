@@ -9,6 +9,7 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
+fs4 = "0.13"
 jsonschema = { version = "0.33", default-features = false }
 ulid.workspace = true
 arrow-array.workspace = true

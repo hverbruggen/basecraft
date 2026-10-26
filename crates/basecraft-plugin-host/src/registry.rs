@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use basecraft_platform::paths::AppPaths;
 use basecraft_protocol::operation::{MAX_DESCRIPTOR_BYTES, OperationDescriptor, OperationPins};
+use fs4::fs_std::FileExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -295,7 +296,10 @@ pub fn package_digest(root: &Path) -> Result<String> {
         let name = relative
             .to_str()
             .ok_or_else(|| Error::Protocol("package paths must be UTF-8".into()))?;
-        hashes.push((name.to_owned(), basecraft_io::hash_file(&path)?));
+        hashes.push((
+            name.to_owned(),
+            basecraft_io::hash_file(&path).map_err(basecraft_ops::Error::from)?,
+        ));
     }
     Ok(basecraft_io::hash_bytes(&serde_json::to_vec(&hashes)?))
 }
@@ -337,12 +341,6 @@ fn package_files(root: &Path) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
-struct IndexLock(PathBuf);
-impl Drop for IndexLock {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
-    }
-}
 fn write_index(
     config: &RegistryConfig,
     change: impl FnOnce(&mut InstallationIndex) -> Result<()>,
@@ -355,25 +353,31 @@ fn write_index(
     let lock = config.index.with_extension("lock");
     let _file = std::fs::OpenOptions::new()
         .write(true)
-        .create_new(true)
+        .create(true)
+        .truncate(false)
         .open(&lock)
         .map_err(|e| {
             Error::Protocol(format!(
                 "cannot lock plugin index (another install may be active): {e}"
             ))
         })?;
-    let _guard = IndexLock(lock);
+    if !_file.try_lock_exclusive()? {
+        return Err(Error::Protocol(
+            "plugin index is locked by another installation".into(),
+        ));
+    }
     let mut index = load_index(config)?;
     change(&mut index)?;
     let bytes = serde_json::to_vec_pretty(&index)?;
     if bytes.len() > MAX_DESCRIPTOR_BYTES {
         return Err(Error::Protocol("plugin index exceeds size limit".into()));
     }
-    basecraft_io::write_atomic(&config.index, |out| std::io::Write::write_all(out, &bytes))?;
+    basecraft_io::write_atomic(&config.index, |out| std::io::Write::write_all(out, &bytes))
+        .map_err(basecraft_ops::Error::from)?;
     Ok(())
 }
 
-/// The caller displays INSTALL_WARNING during the explicit install action.
+/// The caller displays `INSTALL_WARNING` during the explicit install action.
 /// Copies are immutable by convention and never removed while jobs might use them.
 pub fn install(config: &RegistryConfig, source: &Path) -> Result<String> {
     let manifest = Manifest::load(source)?;

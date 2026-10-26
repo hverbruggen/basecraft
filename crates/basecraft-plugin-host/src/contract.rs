@@ -7,8 +7,8 @@ use std::collections::BTreeSet;
 
 use basecraft_protocol::operation::{
     CONTRACT_VERSION, ExecutionFamily, InputView, MAX_ARTIFACTS, MAX_BINDINGS,
-    MAX_DESCRIPTOR_BYTES, MAX_INPUT_FILES, MAX_NESTING, MAX_OPERATIONS, MAX_VALIDATION_WORK,
-    OperationContract, OperationDescriptor,
+    MAX_DESCRIPTOR_BYTES, MAX_FRAME_BYTES, MAX_INPUT_FILES, MAX_NESTING, MAX_OPERATIONS,
+    MAX_VALIDATION_WORK, OperationContract, OperationDescriptor,
 };
 use serde_json::{Map, Value, json};
 
@@ -111,7 +111,11 @@ impl BoundedSchema {
     }
 
     pub fn validate(&self, value: &Value) -> Result<()> {
-        let nodes = value_nodes(value, 0)?;
+        let bytes = serde_json::to_vec(value)?.len();
+        if bytes > MAX_FRAME_BYTES {
+            return Err(invalid("value exceeds frame byte limit"));
+        }
+        let nodes = value_nodes(value, 0)?.saturating_add(bytes);
         let work = self.work.saturating_mul(nodes);
         let work = if self.unique {
             work.saturating_mul(nodes)
@@ -294,6 +298,14 @@ pub fn validate_contract(plugin: &str, contract: &OperationContract) -> Result<(
             {
                 return Err(invalid("invalid output binding/cardinality"));
             }
+        }
+        if descriptor.family == ExecutionFamily::SequenceProposal
+            && (descriptor.inputs.len() != 1
+                || descriptor.inputs.values().any(|b| b.min != 1 || b.max != 1))
+        {
+            return Err(invalid(
+                "sequence proposals require exactly one snapshot binding",
+            ));
         }
         if (!descriptor.outputs.is_empty() && !descriptor.effects.artifact_write)
             || (descriptor.family == ExecutionFamily::FileAnalysis
