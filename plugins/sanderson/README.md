@@ -79,12 +79,21 @@ python3 plugins/sanderson/native/tools/stage_package.py \
 Stage **after** the build copies `source/plugins` into its disposable bundle
 and **before** runtime validation and atomic publication. The script checks
 the Linux x86_64 ELF, executable SHA-256, isolated Cargo lockfile, native
-source hashes and included GPL-3 notice. It writes the binary and identity
+source hashes and included GPL-3 notice. It also verifies the 49 locked Linux
+release dependencies and every copied notice hash, then stages the original
+license texts, copyright notices, source manifests, first-party GPL text and
+`THIRD_PARTY_NOTICES.md` beside the executable. `native/licenses/manifest.json`
+records exact crate archive SHA-256 values and license declarations. The two
+Argmin crate archives omitted license files; the corpus includes license texts
+fetched from their exact upstream release tags, with URLs and hashes recorded
+in the manifest. `native/tools/collect_release_licenses.py` documents the
+offline, archive-verified collection procedure; the SCI-0011 report gives
+the executed source paths and receipt. The stage script writes the binary and identity
 metadata atomically inside that package copy. The publisher must select the
 executable from the recorded standalone validation; rebuilding needs a new
 method validation and matching pinned identity. The normal source checkout
 has no `bin/` executable. The coordinator owns the shared build-tool hook,
-license closure, and package publication.
+final package review, and publication.
 
 For a built shared host, `test_host_integration.py` stages a disposable bundle
 and checks bundled discovery and CLI, Python and headless MCP execution,
@@ -101,6 +110,6 @@ Scientific references: Sanderson (2002), DOI
 and the inspected original-author r8s 1.81 `TimeAlgorithms.c` penalty/CV source.
 The full original paper was not available in the retained SCI-0010 research
 material, so literal paper-equation parity has not been established.
-Argmin 0.11 is dual MIT/Apache-2.0 licensed; dependency license notices and
-exact package identity still require delivery review against the isolated
-lockfile and recorded Cargo metadata.
+The native release's dependency notice corpus is pinned to the isolated
+lockfile and retained Cargo metadata. Argmin 0.11 is dual MIT/Apache-2.0
+licensed. Final bundle review should confirm staged notices before publication.
