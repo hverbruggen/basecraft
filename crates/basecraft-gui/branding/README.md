@@ -27,3 +27,16 @@ repository's GPL-3.0-or-later licence.
 
 The separately selected primary application icon is study 09, Woven b; study 12,
 Colourlight, is the alternate. This wordmark does not replace either icon.
+
+## ASCII animations
+
+The About dialog plays one of six ASCII animations, picked at random each time
+it opens: a chromatogram trace, a cladogram with species brackets, an alignment,
+a sequence loom, a branching B and a paper shuttle. They use the dark wordmark's
+background, letter ink, sage and amber, plus slate blue and terracotta for C
+and T.
+
+`ascii/generate.py` draws them. `python3 ascii/generate.py export` regenerates
+`../qml/AsciiArt.js`, which stores each distinct frame once; edit the script,
+not the generated file. `python3 ascii/generate.py play <name>` plays one in a
+terminal.

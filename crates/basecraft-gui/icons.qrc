@@ -55,5 +55,8 @@
     <file>icons/zoom-out.svg</file>
     <file>branding/logo-transparent-dark.png</file>
     <file>branding/logo-transparent-light.png</file>
+    <file>branding/wordmark-dark.png</file>
+    <file>branding/wordmark-light.png</file>
+    <file>qml/AsciiArt.js</file>
   </qresource>
 </RCC>
