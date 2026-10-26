@@ -131,7 +131,7 @@ ApplicationWindow {
             Qt.callLater(publishRibbonCommands)
         }
     }
-    readonly property var applicationCommands: [openCommand, saveCommand, saveAsCommand, projectCommand, shortcutsCommand, aboutCommand, preferencesCommand, textRepresentationCommand, contextShortcutsCommand, exportSvgCommand, historyCommand, methodsCommand, showProvenanceCommand, verifyProvenanceCommand, packageCommand, recoverCommand].concat(ribbonCommands)
+    readonly property var applicationCommands: [openCommand, saveCommand, saveAsCommand, projectCommand, shortcutsCommand, aboutCommand, preferencesCommand, textRepresentationCommand, contextShortcutsCommand, exportSvgCommand, historyCommand, methodsCommand, showProvenanceCommand, verifyProvenanceCommand, packageCommand, recoverCommand, installedOperationsCommand].concat(ribbonCommands)
     property var recentProjects: []
     property string recentProjectsError: ""
     function updateRecentProjects(reply) {
@@ -426,6 +426,16 @@ ApplicationWindow {
         function put(text) { clipboard.text = text; clipboard.selectAll(); clipboard.copy() }
     }
 
+    AppCommand {
+        id: installedOperationsCommand
+        customization: window.customization
+        commandId: "tools.installed-operations"
+        text: "Installed operations…"
+        iconName: "settings"
+        tooltip: "Choose a compatible installed operation; other schemas remain available through the API"
+        enabled: window.current !== null && window.currentPath.length > 0
+        onTriggered: operationPicker.show(shell.project_dir.length ? shell.project_dir : shell.local_file_path(shell.parent_folder_url(window.currentPath)), window.currentPath, !!window.current.dirty)
+    }
     AppCommand {
         id: openCommand
         customization: window.customization
@@ -897,6 +907,7 @@ ApplicationWindow {
                         RibbonButton { commandId: "ribbon.resume-saved-review-decisions"; text: "Open review…"; tip: "Resume saved review decisions"; keys: "Ctrl+Alt+O"; enabled: window.current && !window.current.dirty; onInvoked: window.traceDocument.openReview() }
                     }
                     RibbonGroup { title: "Document record"; actions: [historyCommand, methodsCommand] }
+                    RibbonGroup { title: "Plugins"; actions: [installedOperationsCommand] }
                     ExportGroup {}
                     HelpGroup {}
                 }
@@ -1316,6 +1327,7 @@ ApplicationWindow {
 
     // Settings for every plugin run, drawn from the plugin's manifest.
     ToolSettingsDialog { id: toolSettings }
+    OperationPickerDialog { id: operationPicker; onOpenResult: (path) => window.openPath(path) }
 
     ShortcutsDialog { id: shortcuts; commands: window.applicationCommands }
 

@@ -39,6 +39,12 @@ pub fn send(stream: &UnixStream, bytes: &[u8], fds: &[BorrowedFd<'_>]) -> io::Re
                 SendFlags::empty(),
             )?
         };
+        if n == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::WriteZero,
+                "plugin socket write returned zero",
+            ));
+        }
         first = false;
         sent += n;
     }
@@ -54,15 +60,23 @@ pub struct Receiver {
     /// Scratch space for one `recvmsg`, reused across calls.
     chunk: Box<[u8]>,
     fds: VecDeque<OwnedFd>,
+    max_frame: usize,
+    max_fds: usize,
 }
 
 impl Receiver {
     pub fn new(stream: UnixStream) -> Self {
+        Self::with_limits(stream, 8 * 1024 * 1024, MAX_FDS)
+    }
+
+    pub fn with_limits(stream: UnixStream, max_frame: usize, max_fds: usize) -> Self {
         Self {
             stream,
             buf: Vec::new(),
             chunk: vec![0u8; 64 * 1024].into_boxed_slice(),
             fds: VecDeque::new(),
+            max_frame,
+            max_fds: max_fds.min(MAX_FDS),
         }
     }
 
@@ -72,11 +86,25 @@ impl Receiver {
 
     /// The next line, without its newline. `None` at end of stream.
     pub fn line(&mut self) -> io::Result<Option<Vec<u8>>> {
+        self.line_checked(|| Ok(()))
+    }
+
+    pub fn line_checked(
+        &mut self,
+        mut check: impl FnMut() -> io::Result<()>,
+    ) -> io::Result<Option<Vec<u8>>> {
         loop {
+            check()?;
             if let Some(i) = self.buf.iter().position(|&b| b == b'\n') {
+                if i > self.max_frame {
+                    return Err(io::Error::other("plugin frame byte limit exceeded"));
+                }
                 let mut line: Vec<u8> = self.buf.drain(..=i).collect();
                 line.pop();
                 return Ok(Some(line));
+            }
+            if self.buf.len() > self.max_frame {
+                return Err(io::Error::other("plugin frame byte limit exceeded"));
             }
             let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(MAX_FDS))];
             let mut control = RecvAncillaryBuffer::new(&mut space);
@@ -91,7 +119,14 @@ impl Receiver {
                     self.fds.extend(fds);
                 }
             }
+            if got.flags.contains(rustix::net::ReturnFlags::CTRUNC) || self.fds.len() > self.max_fds
+            {
+                return Err(io::Error::other("plugin descriptor limit exceeded"));
+            }
             if got.bytes == 0 {
+                if !self.buf.is_empty() || !self.fds.is_empty() {
+                    return Err(io::Error::other("incomplete plugin frame at EOF"));
+                }
                 return Ok(None);
             }
             self.buf.extend_from_slice(&self.chunk[..got.bytes]);
@@ -100,7 +135,7 @@ impl Receiver {
 
     /// Take the next `n` received descriptors.
     pub fn take_fds(&mut self, n: usize) -> io::Result<Vec<OwnedFd>> {
-        if self.fds.len() < n {
+        if n > self.max_fds || self.fds.len() < n {
             return Err(io::Error::other(format!(
                 "expected {n} descriptors, have {}",
                 self.fds.len()
@@ -137,5 +172,42 @@ mod tests {
     fn tempfile_like() -> std::fs::File {
         let w = crate::shm::SharedWriter::new("t").unwrap();
         std::fs::File::from(OwnedFd::from(w.into_file()))
+    }
+}
+
+#[cfg(test)]
+mod bounds_tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn rejects_oversized_and_partial_frames_and_fd_backlog() {
+        let (mut sender, receiver) = UnixStream::pair().unwrap();
+        sender.write_all(b"12345\n").unwrap();
+        assert!(Receiver::with_limits(receiver, 4, 1).line().is_err());
+        let (mut sender, receiver) = UnixStream::pair().unwrap();
+        sender.write_all(b"partial").unwrap();
+        drop(sender);
+        assert!(Receiver::new(receiver).line().is_err());
+        let (sender, receiver) = UnixStream::pair().unwrap();
+        let writer = crate::shm::SharedWriter::new("fd-budget").unwrap();
+        let file = OwnedFd::from(writer.into_file());
+        send(&sender, b"one", &[file.as_fd()]).unwrap();
+        send(&sender, b"two\n", &[file.as_fd()]).unwrap();
+        assert!(Receiver::with_limits(receiver, 100, 1).line().is_err());
+    }
+
+    #[test]
+    fn bounded_receiver_preserves_multiple_frames_and_timeout_partial_reads() {
+        let (mut sender, receiver) = UnixStream::pair().unwrap();
+        receiver
+            .set_read_timeout(Some(std::time::Duration::from_millis(10)))
+            .unwrap();
+        let mut reader = Receiver::with_limits(receiver, 4, 1);
+        sender.write_all(b"12").unwrap();
+        assert!(reader.line().is_err());
+        sender.write_all(b"34\nok\n").unwrap();
+        assert_eq!(reader.line().unwrap().unwrap(), b"1234");
+        assert_eq!(reader.line().unwrap().unwrap(), b"ok");
     }
 }

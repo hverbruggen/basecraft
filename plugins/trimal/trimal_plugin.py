@@ -48,4 +48,5 @@ def trim(snapshot, params):
 
 
 if __name__ == "__main__":
+    plugin.contract()
     plugin.run()

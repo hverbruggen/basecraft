@@ -1,0 +1,9 @@
+schema = 1
+id = "org.example.legacy"
+name = "Legacy protocol fixture"
+version = "1.0.0"
+[entry]
+operation = "python:plugin.py"
+[[operations]]
+name = "noop"
+label = "Legacy no-op"

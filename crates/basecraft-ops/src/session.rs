@@ -283,6 +283,18 @@ impl Session {
         }
     }
 
+    /// Checked access for plugin snapshots; never index a wrong-kind/closed slot.
+    pub fn checked_sequence(&self, id: DocId) -> Result<&SequenceDoc> {
+        let slot = self
+            .docs
+            .get(id.0)
+            .ok_or_else(|| invalid("unknown document"))?;
+        let Loaded::Sequence(sequence) = &slot.content else {
+            return Err(invalid("snapshot requires a sequence document"));
+        };
+        Ok(&sequence.doc)
+    }
+
     pub fn doc_key(&self, id: DocId) -> &str {
         &self.docs[id.0].key
     }
@@ -1994,93 +2006,93 @@ impl Session {
                 return execute_tree(&mut t.doc, op).map(|before| (Inverse::Tree(before), None));
             }
         };
-        match op {
-            Op::SeqReplace {
-                start,
-                end,
-                residues,
-            } => {
-                if start > end || *end > doc.len() {
-                    return Err(invalid(format!(
-                        "range {start}..{end} outside 0..{}",
-                        doc.len()
-                    )));
-                }
-                let residues = normalise(residues)?;
-                let result = doc.replace(*start, *end, residues.as_bytes());
-                Ok((
-                    Inverse::Residues {
-                        inserted: residues.len() as u64,
-                        result,
-                    },
-                    None,
-                ))
-            }
-            Op::FeatureAdd { feature } => {
-                check_location(feature, doc.len())?;
-                let fid = doc.add_feature(feature.clone());
-                Ok((
-                    Inverse::Feature {
-                        id: fid,
-                        before: None,
-                    },
-                    Some(fid),
-                ))
-            }
-            Op::FeatureRemove { id } => {
-                let fid = FeatureId(*id);
-                let before = doc
-                    .remove_feature(fid)
-                    .ok_or_else(|| invalid(format!("no feature {id}")))?;
-                Ok((
-                    Inverse::Feature {
-                        id: fid,
-                        before: Some(before),
-                    },
-                    None,
-                ))
-            }
-            Op::FeatureUpdate { id, feature } => {
-                check_location(feature, doc.len())?;
-                let fid = FeatureId(*id);
-                if doc.feature(fid).is_none() {
-                    return Err(invalid(format!("no feature {id}")));
-                }
-                let before = doc.update_feature(fid, feature.clone());
-                Ok((Inverse::Feature { id: fid, before }, None))
-            }
-            Op::AlnReplace { .. }
-            | Op::AlnInsert { .. }
-            | Op::AlnFill { .. }
-            | Op::AlnInsertGaps { .. }
-            | Op::AlnDelete { .. }
-            | Op::AlnShift { .. }
-            | Op::AlnRemoveGapColumns {}
-            | Op::AlnMoveRows { .. }
-            | Op::AlnRenameRow { .. }
-            | Op::AlnAddSequences { .. }
-            | Op::AlnRemoveRows { .. } => Err(invalid(format!("{} needs an alignment", op.name()))),
-            Op::TreeReroot { .. }
-            | Op::TreeMidpointRoot {}
-            | Op::TreeMinimumVarianceRoot {}
-            | Op::TreeRootPosition { .. }
-            | Op::TreeRotate { .. }
-            | Op::TreeLadderize { .. }
-            | Op::TreeRenameTip { .. }
-            | Op::TreeAnnotate { .. }
-            | Op::TreeAddSupport { .. }
-            | Op::TreeRemoveSupport { .. }
-            | Op::TreeStyle { .. } => Err(invalid(format!("{} needs a tree", op.name()))),
-            Op::DelimitationEdit { .. } => Err(invalid("this needs a delimitation workspace")),
-            Op::JobFinished { .. } => Err(invalid("use log_job_finished")),
-            Op::Open { .. }
-            | Op::Save { .. }
-            | Op::Extract { .. }
-            | Op::Export { .. }
-            | Op::ToolRun { .. }
-            | Op::Undo { .. }
-            | Op::Redo { .. } => Err(invalid(format!("{} is not an edit", op.name()))),
+        execute_sequence(doc, op)
+    }
+
+    /// Validate/stage the full proposal batch before logging or live mutation.
+    /// Ordinary I/O failure rolls the journal back; power loss uses recovery.
+    pub fn apply_sequence_proposals(
+        &mut self,
+        id: DocId,
+        generation: u64,
+        revision: u64,
+        ops: &[Op],
+        actor: Actor,
+    ) -> Result<()> {
+        let slot = self
+            .docs
+            .get(id.0)
+            .ok_or_else(|| invalid("unknown document"))?;
+        let Loaded::Sequence(sequence) = &slot.content else {
+            return Err(invalid("proposals require a sequence document"));
+        };
+        if slot.generation != generation || sequence.doc.version() != revision {
+            return Err(invalid("stale_revision: proposal target changed"));
         }
+        if ops.len() > 4096 {
+            return Err(invalid("proposal count exceeds 4096"));
+        }
+        let mut candidate = sequence.doc.clone();
+        let mut prepared = Vec::new();
+        let mut entries = Vec::new();
+        for op in ops {
+            if !matches!(
+                op,
+                Op::SeqReplace { .. }
+                    | Op::FeatureAdd { .. }
+                    | Op::FeatureRemove { .. }
+                    | Op::FeatureUpdate { .. }
+            ) {
+                return Err(invalid(
+                    "proposal contains a prohibited host/lifecycle operation",
+                ));
+            }
+            let (inverse, feature) = execute_sequence(&mut candidate, op)?;
+            let mut entry = self.entry(
+                id,
+                actor.clone(),
+                op.clone(),
+                OpResult {
+                    hashes: vec![],
+                    feature: feature.map(|f| f.0),
+                },
+            );
+            entry.state = DocState {
+                len: candidate.len(),
+                features: candidate.features().count() as u64,
+                rows: None,
+            };
+            prepared.push((op.clone(), inverse, entry.id.clone()));
+            entries.push(entry);
+        }
+        if ops.is_empty() {
+            return Ok(());
+        }
+        self.flush()?;
+        self.track(id)?;
+        if let Some(log) = &mut self.log {
+            log.append_batch(&entries)?;
+        }
+        if self.tracked {
+            self.events.extend(entries);
+        }
+        let group = self.next_group;
+        self.next_group += 1;
+        let slot = &mut self.docs[id.0];
+        let Loaded::Sequence(sequence) = &mut slot.content else {
+            return Err(invalid("proposal document kind changed"));
+        };
+        sequence.doc = candidate;
+        slot.generation += ops.len() as u64;
+        slot.redo.clear();
+        slot.undo
+            .extend(prepared.into_iter().map(|(op, inverse, entry_id)| Applied {
+                entry_id,
+                op,
+                inverse,
+                group: Some(group),
+            }));
+        Ok(())
     }
 
     /// Undo the last operation on a document; returns the undone entry's id.
@@ -2227,6 +2239,96 @@ pub fn apply_drawing_edits(
 }
 
 /// Carry out a tree edit; returns the tree as it was.
+fn execute_sequence(doc: &mut SequenceDoc, op: &Op) -> Result<(Inverse, Option<FeatureId>)> {
+    match op {
+        Op::SeqReplace {
+            start,
+            end,
+            residues,
+        } => {
+            if start > end || *end > doc.len() {
+                return Err(invalid(format!(
+                    "range {start}..{end} outside 0..{}",
+                    doc.len()
+                )));
+            }
+            let residues = normalise(residues)?;
+            let result = doc.replace(*start, *end, residues.as_bytes());
+            Ok((
+                Inverse::Residues {
+                    inserted: residues.len() as u64,
+                    result,
+                },
+                None,
+            ))
+        }
+        Op::FeatureAdd { feature } => {
+            check_location(feature, doc.len())?;
+            let fid = doc.add_feature(feature.clone());
+            Ok((
+                Inverse::Feature {
+                    id: fid,
+                    before: None,
+                },
+                Some(fid),
+            ))
+        }
+        Op::FeatureRemove { id } => {
+            let fid = FeatureId(*id);
+            let before = doc
+                .remove_feature(fid)
+                .ok_or_else(|| invalid(format!("no feature {id}")))?;
+            Ok((
+                Inverse::Feature {
+                    id: fid,
+                    before: Some(before),
+                },
+                None,
+            ))
+        }
+        Op::FeatureUpdate { id, feature } => {
+            check_location(feature, doc.len())?;
+            let fid = FeatureId(*id);
+            if doc.feature(fid).is_none() {
+                return Err(invalid(format!("no feature {id}")));
+            }
+            let before = doc.update_feature(fid, feature.clone());
+            Ok((Inverse::Feature { id: fid, before }, None))
+        }
+        Op::AlnReplace { .. }
+        | Op::AlnInsert { .. }
+        | Op::AlnFill { .. }
+        | Op::AlnInsertGaps { .. }
+        | Op::AlnDelete { .. }
+        | Op::AlnShift { .. }
+        | Op::AlnRemoveGapColumns {}
+        | Op::AlnMoveRows { .. }
+        | Op::AlnRenameRow { .. }
+        | Op::AlnAddSequences { .. }
+        | Op::AlnRemoveRows { .. } => Err(invalid(format!("{} needs an alignment", op.name()))),
+        Op::TreeReroot { .. }
+        | Op::TreeMidpointRoot {}
+        | Op::TreeMinimumVarianceRoot {}
+        | Op::TreeRootPosition { .. }
+        | Op::TreeRotate { .. }
+        | Op::TreeLadderize { .. }
+        | Op::TreeRenameTip { .. }
+        | Op::TreeAnnotate { .. }
+        | Op::TreeAddSupport { .. }
+        | Op::TreeRemoveSupport { .. }
+        | Op::TreeStyle { .. } => Err(invalid(format!("{} needs a tree", op.name()))),
+        Op::DelimitationEdit { .. } => Err(invalid("this needs a delimitation workspace")),
+        Op::JobFinished { .. } => Err(invalid("use log_job_finished")),
+        Op::Open { .. }
+        | Op::Save { .. }
+        | Op::Extract { .. }
+        | Op::Export { .. }
+        | Op::ToolRun { .. }
+        | Op::Undo { .. }
+        | Op::Redo { .. } => Err(invalid(format!("{} is not an edit", op.name()))),
+    }
+}
+
 fn execute_tree(doc: &mut TreeDoc, op: &Op) -> Result<Box<TreeDoc>> {
     let before = Box::new(doc.clone());
     let edit = match op {

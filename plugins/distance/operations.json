@@ -1,0 +1,301 @@
+{
+  "schema": 1,
+  "operations": [
+    {
+      "name": "tree",
+      "version": "1.0.0",
+      "implementation": "tree",
+      "title": "Build distance trees",
+      "description": "Build distance trees. Uses the existing public plugin implementation and declared immutable inputs.",
+      "family": "file_analysis",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "enum": [
+              "p",
+              "jc69",
+              "k2p"
+            ],
+            "default": "k2p"
+          },
+          "min_overlap": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "threads": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          },
+          "tree_threads": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          },
+          "method": {
+            "enum": [
+              "sorted",
+              "fourpoint",
+              "njstar",
+              "mvrstar",
+              "upgma"
+            ]
+          },
+          "bootstrap": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          },
+          "seed": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "bootstrap_destination": {
+            "enum": [
+              "metadata",
+              "working"
+            ],
+            "default": "metadata"
+          }
+        },
+        "if": {
+          "properties": {
+            "bootstrap": {
+              "minimum": 1
+            }
+          },
+          "required": [
+            "bootstrap"
+          ]
+        },
+        "then": {
+          "properties": {
+            "method": {
+              "enum": [
+                "sorted",
+                "upgma"
+              ]
+            }
+          }
+        }
+      },
+      "result": {
+        "type": "null"
+      },
+      "inputs": {
+        "alignment": {
+          "view": "aligned_fasta",
+          "media_type": "text/x-fasta",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "outputs": {
+        "artifacts": {
+          "media_type": "application/vnd.basecraft.artifact-collection",
+          "min": 1,
+          "max": 1024,
+          "visibility": "result",
+          "collection": true
+        }
+      },
+      "effects": {
+        "document_write": false,
+        "artifact_write": true
+      },
+      "cpu_parameters": [
+        "threads",
+        "tree_threads"
+      ],
+      "legacy_adapter": {
+        "primary_input": "alignment",
+        "inputs": {
+          "alignment": "input"
+        },
+        "input_arrays": [],
+        "outputs": {
+          "output": {
+            "role": "artifacts",
+            "path": "tree.nwk"
+          }
+        },
+        "allocation": "artifacts"
+      }
+    },
+    {
+      "name": "matrix",
+      "version": "1.0.0",
+      "implementation": "matrix",
+      "title": "Calculate observed distances",
+      "description": "Calculate observed distances. Uses the existing public plugin implementation and declared immutable inputs.",
+      "family": "file_analysis",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "enum": [
+              "p",
+              "jc69",
+              "k2p"
+            ],
+            "default": "k2p"
+          },
+          "min_overlap": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "threads": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          },
+          "tree_threads": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          }
+        }
+      },
+      "result": {
+        "type": "null"
+      },
+      "inputs": {
+        "alignment": {
+          "view": "aligned_fasta",
+          "media_type": "text/x-fasta",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "outputs": {
+        "artifacts": {
+          "media_type": "application/vnd.basecraft.artifact-collection",
+          "min": 1,
+          "max": 1024,
+          "visibility": "result",
+          "collection": true
+        }
+      },
+      "effects": {
+        "document_write": false,
+        "artifact_write": true
+      },
+      "cpu_parameters": [
+        "threads",
+        "tree_threads"
+      ],
+      "legacy_adapter": {
+        "primary_input": "alignment",
+        "inputs": {
+          "alignment": "input"
+        },
+        "input_arrays": [],
+        "outputs": {
+          "output": {
+            "role": "artifacts",
+            "path": "distances.tsv"
+          }
+        },
+        "allocation": "artifacts"
+      }
+    },
+    {
+      "name": "groups",
+      "version": "1.0.0",
+      "implementation": "groups",
+      "title": "Summarize specimen groups",
+      "description": "Summarize specimen groups. Uses the existing public plugin implementation and declared immutable inputs.",
+      "family": "file_analysis",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "enum": [
+              "p",
+              "jc69",
+              "k2p"
+            ],
+            "default": "k2p"
+          },
+          "min_overlap": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "threads": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          },
+          "tree_threads": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          },
+          "groups_data": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "result": {
+        "type": "null"
+      },
+      "inputs": {
+        "alignment": {
+          "view": "aligned_fasta",
+          "media_type": "text/x-fasta",
+          "min": 1,
+          "max": 1
+        },
+        "groups": {
+          "view": "bytes",
+          "media_type": "application/json",
+          "min": 0,
+          "max": 1
+        }
+      },
+      "outputs": {
+        "artifacts": {
+          "media_type": "application/vnd.basecraft.artifact-collection",
+          "min": 1,
+          "max": 1024,
+          "visibility": "result",
+          "collection": true
+        }
+      },
+      "effects": {
+        "document_write": false,
+        "artifact_write": true
+      },
+      "cpu_parameters": [
+        "threads",
+        "tree_threads"
+      ],
+      "legacy_adapter": {
+        "primary_input": "alignment",
+        "inputs": {
+          "alignment": "input",
+          "groups": "groups"
+        },
+        "input_arrays": [],
+        "outputs": {
+          "output": {
+            "role": "artifacts",
+            "path": "groups.tsv"
+          }
+        },
+        "allocation": "artifacts"
+      }
+    }
+  ]
+}

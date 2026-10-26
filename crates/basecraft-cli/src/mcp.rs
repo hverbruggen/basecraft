@@ -5,7 +5,7 @@ use basecraft_protocol::{Actor, Op};
 use serde_json::{Value, json};
 use std::{
     collections::HashMap,
-    io::{BufRead, Write},
+    io::Write,
     path::{Path, PathBuf},
 };
 
@@ -62,7 +62,7 @@ impl Server {
         } else {
             ("sequence", self.session.doc(doc).version())
         };
-        json!({"document":doc.0,"path":self.session.doc_key(doc),"kind":kind,"version":version,
+        json!({"document":doc.0,"path":self.session.doc_key(doc),"kind":kind,"version":version,"generation":self.session.generation(doc),
             "state":self.session.state(doc),"can_undo":self.session.can_undo(doc),"can_redo":self.session.can_redo(doc)})
     }
 
@@ -181,15 +181,13 @@ impl Server {
                         "mapping",
                         "groups_data",
                         "replicates",
-                        "progress",
-                        "cancel_file",
                         "threshold",
                     ]
                     .contains(&k.as_str())
                 }) {
                     return Err("Unsupported tool parameter".into());
                 }
-                for name in ["analysis_input", "mapping", "progress", "cancel_file"] {
+                for name in ["analysis_input", "mapping"] {
                     if let Some(path) = params.get(name).and_then(Value::as_str) {
                         params.insert(name.into(), json!(self.path(path)?));
                     }
@@ -235,58 +233,359 @@ fn tools() -> Value {
     ]})
 }
 
+fn operation_tools(
+    registry: &basecraft_plugin_host::registry::Registry,
+    policy: &basecraft_plugin_host::policy::SessionPolicy,
+) -> Result<Vec<Value>> {
+    let mut definitions = tools()["tools"]
+        .as_array()
+        .ok_or("invalid built-in tool metadata")?
+        .clone();
+    for (name, description) in [
+        (
+            "basecraft.host.jobs_get.v1",
+            "Inspect a job owned by this session.",
+        ),
+        (
+            "basecraft.host.jobs_result.v1",
+            "Read a terminal job result without executing it again.",
+        ),
+        (
+            "basecraft.host.jobs_cancel.v1",
+            "Explicitly cancel an owned job.",
+        ),
+        (
+            "basecraft.host.jobs_repair.v1",
+            "Retry retained partial publication; never reruns the plugin.",
+        ),
+    ] {
+        let mut metadata = tool(
+            name,
+            description,
+            json!({"job":{"type":"string"}}),
+            &["job"],
+        );
+        metadata["outputSchema"] = outcome_schema()?;
+        definitions.push(metadata);
+    }
+    definitions.push(tool(
+        "basecraft.host.registry_refresh.v1",
+        "Refresh installed metadata without running plugins.",
+        json!({}),
+        &[],
+    ));
+    for operation in registry
+        .operations
+        .values()
+        .filter(|operation| policy.permits(operation) && operation.package.interpreter.is_some())
+    {
+        let mut schema = serde_json::to_value(schemars::schema_for!(
+            basecraft_protocol::operation::OperationRequest
+        ))?;
+        schema["properties"]["operation"] = json!({"const":operation.id});
+        schema["properties"]["parameters"] =
+            basecraft_plugin_host::contract::embedded_parameters(&operation.descriptor.parameters)?;
+        schema["required"] = json!([]);
+        let mut metadata = json!({"name":basecraft_plugin_host::contract::mcp_name(&operation.package.manifest.id,&operation.descriptor)?,
+            "description":operation.descriptor.description,"inputSchema":schema,"outputSchema":operation_outcome_schema(&operation.id, &operation.descriptor.result)?,
+            "annotations":{"readOnlyHint":!operation.descriptor.effects.document_write && !operation.descriptor.effects.artifact_write,
+                "destructiveHint":operation.descriptor.effects.document_write,"openWorldHint":true}});
+        metadata["_meta"] = json!({"basecraft":{"pins":operation.pins(&registry.generation),"runtime":"unverified"}});
+        definitions.push(metadata);
+    }
+    Ok(definitions)
+}
+
+fn operation_outcome_schema(id: &str, result: &Value) -> Result<Value> {
+    let mut envelope = outcome_schema()?;
+    let definitions = envelope.as_object_mut().and_then(|o| o.remove("$defs"));
+    let result =
+        basecraft_plugin_host::contract::embedded_schema(result, "#/allOf/1/then/properties/data")?;
+    let mut schema = json!({"type":"object", "properties":{"operation":{"const":id}},
+        "allOf":[envelope, {"if":{"required":["state"],"properties":{"state":{"const":"completed"}}},
+            "then":{"required":["data"],"properties":{"data":result}}}]});
+    if let Some(definitions) = definitions {
+        schema["$defs"] = definitions;
+    }
+    Ok(schema)
+}
+
+fn outcome_schema() -> Result<Value> {
+    let mut outcome = serde_json::to_value(schemars::schema_for!(
+        basecraft_protocol::operation::OperationOutcome
+    ))?;
+    let definitions = outcome.as_object_mut().and_then(|o| o.remove("$defs"));
+    let mut schema = json!({"type":"object","anyOf":[outcome,{"type":"object","required":["schema","operation","state","errors"],
+        "properties":{"schema":{"const":1},"operation":{"type":"string"},"state":{"const":"failed"},"errors":{"type":"array","items":{"$ref":"#/$defs/OperationError"}}}}]});
+    if let Some(definitions) = definitions {
+        schema["$defs"] = definitions;
+    }
+    Ok(schema)
+}
+
+fn structured(value: Value, failed: bool) -> Value {
+    json!({"content":[{"type":"text","text":value.to_string()}],"structuredContent":value,"isError":failed})
+}
+
 pub fn serve(root: &Path, writable: bool, model: &str) -> Result<()> {
+    use basecraft_plugin_host::{
+        jobs::JobManager,
+        policy::SessionPolicy,
+        registry::{Registry, RegistryConfig},
+    };
+    use basecraft_protocol::operation::{OperationErrorCode, OperationRequest, RuntimeState};
     let mut session = Session::recoverable(root.canonicalize()?)?;
     session.set_actor(Actor::Agent {
         model: model.into(),
     });
+    let policy = SessionPolicy::new(root, writable)?;
+    let config = RegistryConfig::discover()?;
+    let mut registry = Registry::load(&config)?;
+    let mut jobs = JobManager::default();
     let mut server = Server {
         session,
         documents: HashMap::new(),
         writable,
         initialized: false,
     };
-    let input = std::io::stdin();
+    basecraft_platform::interrupt::install()?;
+    let (sender, receiver) = std::sync::mpsc::sync_channel(16);
+    std::thread::spawn(move || {
+        let stdin = std::io::stdin();
+        let mut input = stdin.lock();
+        loop {
+            match crate::operations::read_frame(&mut input) {
+                Ok(Some(line)) => {
+                    if sender.send(Ok(line)).is_err() {
+                        break;
+                    }
+                }
+                Ok(None) => break,
+                Err(error) => {
+                    let _ = sender.send(Err(error));
+                    break;
+                }
+            }
+        }
+    });
     let mut output = std::io::stdout().lock();
-    for line in input.lock().lines() {
-        let line = line?;
-        let parsed: std::result::Result<Value, _> = serde_json::from_str(&line);
+    loop {
+        jobs.poll_proposals(&mut server.session);
+        if basecraft_platform::interrupt::interrupted() {
+            break;
+        }
+        let line = match receiver.recv_timeout(std::time::Duration::from_millis(25)) {
+            Ok(Ok(line)) => line,
+            Ok(Err(error)) => {
+                writeln!(
+                    output,
+                    "{}",
+                    json!({"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":error.to_string()}})
+                )?;
+                output.flush()?;
+                break;
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(_) => break,
+        };
+        let parsed: std::result::Result<Value, _> = serde_json::from_slice(&line);
         let response = match parsed {
-            Err(e) => {
-                json!({"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":e.to_string()}})
+            Err(error) => {
+                json!({"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":error.to_string()}})
             }
             Ok(request) => {
                 let id = request.get("id").cloned().unwrap_or(Value::Null);
-                if request["jsonrpc"] != "2.0" || !request["method"].is_string() {
+                if request["jsonrpc"] != "2.0"
+                    || !request["method"].is_string()
+                    || (!id.is_null() && !id.is_string() && !id.is_i64() && !id.is_u64())
+                {
                     json!({"jsonrpc":"2.0","id":id,"error":{"code":-32600,"message":"Invalid JSON-RPC request"}})
                 } else if request.get("id").is_none() {
+                    // Submission has no bounded wait request. Cancellation of a
+                    // completed request never cancels its accepted scientific job.
                     continue;
                 } else {
                     let method = request["method"].as_str().unwrap_or("");
-                    let result = match method {
+                    let result: std::result::Result<Value, (i64, String)> = (|| match method {
                         "initialize" => {
                             server.initialized = true;
                             Ok(
-                                json!({"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"basecraft","version":env!("CARGO_PKG_VERSION")},"instructions":"Headless project session; does not attach to the running GUI. Edits require --allow-writes."}),
+                                json!({"protocolVersion":"2025-11-25","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"basecraft","version":env!("CARGO_PKG_VERSION")},"instructions":"Independent headless project session. Installed operation calls return owned jobs. Use jobs_get/result/cancel; request cancellation does not cancel accepted jobs. Writes require --allow-writes."}),
                             )
                         }
                         "ping" => Ok(json!({})),
-                        _ if !server.initialized => Err((-32002, "Initialize first")),
-                        "tools/list" => Ok(tools()),
-                        "tools/call" => {
-                            let params = &request["params"];
-                            let call = server
-                                .call(params["name"].as_str().unwrap_or(""), &params["arguments"]);
-                            let (value, error) = match call {
-                                Ok(v) => (v, false),
-                                Err(e) => (json!({"error":e.to_string()}), true),
+                        _ if !server.initialized => Err((-32002, "Initialize first".into())),
+                        "tools/list" => {
+                            let definitions = operation_tools(&registry, &policy)
+                                .map_err(|e| (-32603, e.to_string()))?;
+                            let generation = basecraft_io::hash_bytes(
+                                &serde_json::to_vec(&definitions)
+                                    .map_err(|e| (-32603, e.to_string()))?,
+                            );
+                            let offset = if let Some(cursor) = request["params"]["cursor"].as_str()
+                            {
+                                let (pin, offset) = cursor
+                                    .rsplit_once(':')
+                                    .ok_or((-32602, "Invalid cursor".into()))?;
+                                if pin != generation {
+                                    return Err((
+                                        -32602,
+                                        "Stale tool generation; list again".into(),
+                                    ));
+                                }
+                                offset
+                                    .parse::<usize>()
+                                    .map_err(|_| (-32602, "Invalid cursor offset".into()))?
+                            } else {
+                                0
                             };
-                            Ok(
-                                json!({"content":[{"type":"text","text":value.to_string()}],"isError":error}),
-                            )
+                            if offset > definitions.len() {
+                                return Err((-32602, "Cursor offset out of range".into()));
+                            }
+                            let end = offset.saturating_add(16).min(definitions.len());
+                            let mut page = json!({"tools":&definitions[offset..end]});
+                            if end < definitions.len() {
+                                page["nextCursor"] = json!(format!("{generation}:{end}"));
+                            }
+                            Ok(page)
                         }
-                        _ => Err((-32601, "Method not found")),
-                    };
+                        "tools/call" => {
+                            let name = request["params"]["name"]
+                                .as_str()
+                                .ok_or((-32602, "Missing tool name".into()))?;
+                            let args = request["params"]
+                                .get("arguments")
+                                .cloned()
+                                .unwrap_or_else(|| json!({}));
+                            if !args.is_object() {
+                                return Err((-32602, "Tool arguments must be an object".into()));
+                            }
+                            if name == "basecraft.host.registry_refresh.v1" {
+                                let previous = operation_tools(&registry, &policy)
+                                    .map_err(|e| (-32603, e.to_string()))?;
+                                registry =
+                                    Registry::load(&config).map_err(|e| (-32603, e.to_string()))?;
+                                if previous
+                                    != operation_tools(&registry, &policy)
+                                        .map_err(|e| (-32603, e.to_string()))?
+                                {
+                                    writeln!(output,"{}",json!({"jsonrpc":"2.0","method":"notifications/tools/list_changed"})).map_err(|e| (-32603,e.to_string()))?;
+                                }
+                                return Ok(structured(
+                                    json!({"generation":registry.generation}),
+                                    false,
+                                ));
+                            }
+                            let job_result = match name {
+                                "basecraft.host.jobs_get.v1" => {
+                                    Some(jobs.get(args["job"].as_str().unwrap_or("")))
+                                }
+                                "basecraft.host.jobs_result.v1" => {
+                                    Some(jobs.result(args["job"].as_str().unwrap_or("")))
+                                }
+                                "basecraft.host.jobs_cancel.v1" => {
+                                    Some(jobs.cancel(args["job"].as_str().unwrap_or("")))
+                                }
+                                "basecraft.host.jobs_repair.v1" => {
+                                    Some(jobs.repair(args["job"].as_str().unwrap_or("")))
+                                }
+                                _ => None,
+                            };
+                            if let Some(result) = job_result {
+                                return Ok(match result {
+                                    Ok(outcome) => {
+                                        let failed = matches!(
+                                            outcome.state,
+                                            RuntimeState::Failed
+                                                | RuntimeState::Partial
+                                                | RuntimeState::Cancelled
+                                        );
+                                        structured(json!(outcome), failed)
+                                    }
+                                    Err(error) => structured(
+                                        basecraft_plugin_host::jobs::error_value(
+                                            "basecraft.host",
+                                            basecraft_plugin_host::jobs::error_code(&error),
+                                            error.to_string(),
+                                        ),
+                                        true,
+                                    ),
+                                });
+                            }
+                            if let Some(operation) = registry.operations.values().find(|op| {
+                                basecraft_plugin_host::contract::mcp_name(
+                                    &op.package.manifest.id,
+                                    &op.descriptor,
+                                )
+                                .is_ok_and(|tool| tool == name)
+                            }) {
+                                let mut supplied = args;
+                                if supplied
+                                    .get("operation")
+                                    .is_some_and(|id| id != &json!(operation.id))
+                                {
+                                    return Ok(structured(
+                                        basecraft_plugin_host::jobs::error_value(
+                                            &operation.id,
+                                            OperationErrorCode::InvalidArguments,
+                                            "tool operation identity mismatch",
+                                        ),
+                                        true,
+                                    ));
+                                }
+                                supplied["operation"] = json!(operation.id);
+                                if supplied.get("parameters").is_none() {
+                                    supplied["parameters"] = json!({});
+                                }
+                                let result = serde_json::from_value::<OperationRequest>(supplied)
+                                    .map_err(basecraft_plugin_host::Error::from)
+                                    .and_then(|request| {
+                                        jobs.submit_in_session(
+                                            &registry,
+                                            request,
+                                            policy.clone(),
+                                            model,
+                                            &mut server.session,
+                                        )
+                                    });
+                                return Ok(match result {
+                                    Ok(outcome) => {
+                                        if let Some(doc) = jobs.target_document(&outcome.run_id) {
+                                            server.documents.insert(doc.0, doc);
+                                        }
+                                        structured(json!(outcome), false)
+                                    }
+                                    Err(error) => structured(
+                                        basecraft_plugin_host::jobs::error_value(
+                                            &operation.id,
+                                            basecraft_plugin_host::jobs::error_code(&error),
+                                            error.to_string(),
+                                        ),
+                                        true,
+                                    ),
+                                });
+                            }
+                            let known = tools()["tools"]
+                                .as_array()
+                                .is_some_and(|tools| tools.iter().any(|tool| tool["name"] == name));
+                            if !known {
+                                return Err((-32602, "Unknown tool".into()));
+                            }
+                            Ok(match server.call(name, &args) {
+                                Ok(value) => structured(value, false),
+                                Err(error) => structured(
+                                    basecraft_plugin_host::jobs::error_value(
+                                        name,
+                                        OperationErrorCode::InvalidArguments,
+                                        error.to_string(),
+                                    ),
+                                    true,
+                                ),
+                            })
+                        }
+                        _ => Err((-32601, "Method not found".into())),
+                    })(
+                    );
                     match result {
                         Ok(result) => json!({"jsonrpc":"2.0","id":id,"result":result}),
                         Err((code, message)) => {
@@ -299,6 +598,7 @@ pub fn serve(root: &Path, writable: bool, model: &str) -> Result<()> {
         writeln!(output, "{response}")?;
         output.flush()?;
     }
+    drop(jobs);
     server.session.flush()?;
     Ok(())
 }

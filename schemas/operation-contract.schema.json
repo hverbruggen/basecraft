@@ -1,0 +1,284 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OperationContract",
+  "type": "object",
+  "properties": {
+    "operations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/OperationDescriptor"
+      }
+    },
+    "schema": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "operations"
+  ],
+  "$defs": {
+    "ArtifactVisibility": {
+      "type": "string",
+      "enum": [
+        "result",
+        "supporting"
+      ]
+    },
+    "Effects": {
+      "type": "object",
+      "properties": {
+        "artifact_write": {
+          "type": "boolean"
+        },
+        "document_write": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "document_write",
+        "artifact_write"
+      ]
+    },
+    "ExecutionFamily": {
+      "type": "string",
+      "enum": [
+        "file_analysis",
+        "sequence_proposal"
+      ]
+    },
+    "InputBinding": {
+      "type": "object",
+      "properties": {
+        "max": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "media_type": {
+          "type": "string"
+        },
+        "min": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "view": {
+          "$ref": "#/$defs/InputView"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "view",
+        "media_type",
+        "min",
+        "max"
+      ]
+    },
+    "InputView": {
+      "type": "string",
+      "enum": [
+        "bytes",
+        "aligned_fasta",
+        "ungapped_fasta",
+        "newick",
+        "sequence_snapshot"
+      ]
+    },
+    "LegacyAdapter": {
+      "type": "object",
+      "properties": {
+        "allocation": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "input_arrays": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "inputs": {
+          "description": "Named input binding -> legacy handler parameter.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "outputs": {
+          "description": "Legacy output parameter -> allocated role and relative member.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/LegacyOutput"
+          }
+        },
+        "primary_input": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "inputs",
+        "outputs"
+      ]
+    },
+    "LegacyOutput": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "path"
+      ]
+    },
+    "OperationDescriptor": {
+      "type": "object",
+      "properties": {
+        "cpu_parameter": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cpu_parameters": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "description": {
+          "type": "string"
+        },
+        "effects": {
+          "$ref": "#/$defs/Effects"
+        },
+        "family": {
+          "$ref": "#/$defs/ExecutionFamily"
+        },
+        "host_workflow": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "implementation": {
+          "type": "string"
+        },
+        "inputs": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/InputBinding"
+          },
+          "default": {}
+        },
+        "legacy_adapter": {
+          "description": "Explicit migration of a public two-argument SDK handler. Runtime controls\ncome only from the allocated context; scientific callers cannot set them.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LegacyAdapter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "outputs": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/OutputBinding"
+          },
+          "default": {}
+        },
+        "parameters": true,
+        "presentation": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "required_features": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "result": true,
+        "title": {
+          "type": "string"
+        },
+        "version": {
+          "description": "Semantic version; breaking behavior/default changes require a new major.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version",
+        "implementation",
+        "title",
+        "description",
+        "family",
+        "parameters",
+        "result",
+        "effects"
+      ]
+    },
+    "OutputBinding": {
+      "type": "object",
+      "properties": {
+        "collection": {
+          "description": "A collection is allocated one directory; members remain relative to it.",
+          "type": "boolean",
+          "default": false
+        },
+        "max": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "media_type": {
+          "type": "string"
+        },
+        "min": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "visibility": {
+          "$ref": "#/$defs/ArtifactVisibility"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "media_type",
+        "min",
+        "max",
+        "visibility"
+      ]
+    }
+  }
+}

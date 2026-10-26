@@ -18,6 +18,8 @@ AppContentDialog {
     readonly property bool alignmentInput: method === "asap" || (method === "gmyc" && source.currentIndex === 0)
     // PTP can build its own tree: IQ-TREE from the alignment, then rooted.
     readonly property bool ptpFromAlignment: method === "ptp" && ptpSource.currentIndex === 1
+    readonly property string ptpRooting: ptpFromAlignment ? ["midpoint", "mrttv"][rooting.currentIndex] : ["keep", "midpoint", "mrttv"][rooting.currentIndex]
+    readonly property bool rootsPtpTree: method === "ptp" && ptpRooting !== "keep"
     readonly property bool iqtreeDisplay: viewSetup ? treeChoice.currentIndex === 4 : (method === "asap" && asapView.currentIndex === 3) || ptpFromAlignment
     readonly property bool unsupportedDeduplication: !viewSetup && !alignmentInput && deduplicate.checked
     readonly property bool buildsTree: viewSetup && treeChoice.currentIndex > 1
@@ -32,6 +34,7 @@ AppContentDialog {
         ptpSource.currentIndex = alignment.length && !tree.length ? 1 : 0
         treeChoice.currentIndex = tree.length ? 1 : alignment.length ? 2 : 0
         input.text = alignmentInput || ptpFromAlignment ? alignment : tree
+        rooting.currentIndex = 0
         rooted.checked = false
         deduplicate.checked = kind === "gmyc" && alignmentInput
         open()
@@ -42,7 +45,7 @@ AppContentDialog {
         if (!viewSetup) p.deduplicate = deduplicate.checked
         if (method === "gmyc") p.candidate_budget = budget.value
         if (iqtreeDisplay) p.iqtree_model = iqtreeModel.text.trim()
-        if (ptpFromAlignment) p.rooting = ["midpoint", "mrttv"][rooting.currentIndex]
+        if (method === "ptp") p.rooting = ptpRooting
         if (method === "asap") p.replicates = replicates.value
         return p
     }
@@ -53,12 +56,12 @@ AppContentDialog {
     }
     readonly property bool validInput: viewSetup
         ? (treeChoice.currentIndex === 0 || (buildsTree ? alignmentPath.length > 0 : input.text.trim().length > 0)) && (!iqtreeDisplay || iqtreeModel.text.trim().length > 0)
-        : !engineProblem.length && !unsupportedDeduplication && input.text.trim().length > 0 && (alignmentInput || ptpFromAlignment || rooted.checked) && (!iqtreeDisplay || iqtreeModel.text.trim().length > 0)
+        : !engineProblem.length && !unsupportedDeduplication && input.text.trim().length > 0 && (alignmentInput || rootsPtpTree || rooted.checked) && (!iqtreeDisplay || iqtreeModel.text.trim().length > 0)
     onOpened: {
         standardButton(Dialog.Ok).text = viewSetup ? "Open workspace" : "Run analysis"
         standardButton(Dialog.Ok).enabled = Qt.binding(() => validInput)
     }
-    onAccepted: requested(operation(), buildsTree ? alignmentPath : input.text.trim(), rooted.checked || ptpFromAlignment,
+    onAccepted: requested(operation(), buildsTree ? alignmentPath : input.text.trim(), rooted.checked || rootsPtpTree,
         JSON.stringify(parameters()), viewSetup ? ["none", "existing", "upgma", "nj", "iqtree"][treeChoice.currentIndex]
         : method === "asap" ? ["none", "upgma", "nj", "iqtree"][asapView.currentIndex] : ptpFromAlignment ? "iqtree" : "existing")
 
@@ -108,7 +111,7 @@ AppContentDialog {
                 objectName: "ptpSource"
                 Layout.fillWidth: true
                 Layout.minimumWidth: 0
-                model: ["Existing rooted tree", "Alignment → IQ-TREE tree, then rooted"]
+                model: ["Existing tree", "Alignment → IQ-TREE tree, then rooted"]
                 enabled: dialog.alignmentPath.length > 0
                 Accessible.labelledBy: ptpSourceLabel
                 Accessible.name: ptpSourceLabel.text
@@ -116,7 +119,6 @@ AppContentDialog {
             }
             Label {
                 id: rootingLabel
-                visible: dialog.ptpFromAlignment
                 text: "Root the tree by"
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
@@ -124,10 +126,10 @@ AppContentDialog {
             AppComboBox {
                 id: rooting
                 objectName: "ptpRooting"
-                visible: dialog.ptpFromAlignment
                 Layout.fillWidth: true
                 Layout.minimumWidth: 0
-                model: ["Midpoint", "Minimum variance (MRTTV)"]
+                model: dialog.ptpFromAlignment ? ["Midpoint", "Minimum variance (MRTTV)"] : ["Keep existing root", "Midpoint", "Minimum variance (MRTTV)"]
+                onModelChanged: currentIndex = 0
                 Accessible.labelledBy: rootingLabel
                 Accessible.name: rootingLabel.text
             }
@@ -192,7 +194,7 @@ AppContentDialog {
             Layout.fillWidth: true
             Layout.minimumWidth: 0
             text: "This tree is rooted"
-            visible: !dialog.alignmentInput && !dialog.ptpFromAlignment && !dialog.buildsTree && (!dialog.viewSetup || treeChoice.currentIndex === 1)
+            visible: !dialog.alignmentInput && !dialog.rootsPtpTree && !dialog.buildsTree && (!dialog.viewSetup || treeChoice.currentIndex === 1)
         }
         AppFormRow {
             objectName: "samplingSettings"
@@ -409,7 +411,7 @@ AppContentDialog {
             Layout.preferredWidth: 1
             Layout.fillWidth: true
             wrapMode: Text.Wrap
-            text: dialog.method === "gmyc" ? "GMYC requires an ultrametric time tree. The alignment option builds an equal-rate UPGMA tree using your sampling choice. IQ-TREE substitution lengths are not a time tree; no dating or rooting is performed here." : dialog.method === "ptp" ? (dialog.ptpFromAlignment ? "PTP requires a rooted tree with branch lengths measured in substitutions. IQ-TREE infers a maximum-likelihood tree from all sequences, which is rooted by the method chosen and saved as its own tree file; PTP then runs on that tree, which also becomes the display tree. An outgroup rooting needs an existing tree." : "PTP requires a rooted tree with branch lengths measured in substitutions, such as an IQ-TREE tree you have rooted. No rooting or dating is done here.") : dialog.viewSetup ? "Click a node to select its sequences, then choose Group selection. A rooted ultrametric tree also supports a draggable threshold line. UPGMA provides this; neighbor joining and IQ-TREE support clade selection. IQ-TREE lengths are substitutions per site, not time." : "ASAP groups aligned DNA sequences. The display tree illustrates the results and does not change the species hypotheses. IQ-TREE lengths are substitutions per site, not time; model, seed and workers are retained."
+            text: dialog.method === "gmyc" ? "GMYC requires an ultrametric time tree. The alignment option builds an equal-rate UPGMA tree using your sampling choice. IQ-TREE substitution lengths are not a time tree; no dating or rooting is performed here." : dialog.method === "ptp" ? (dialog.ptpFromAlignment ? "PTP requires a rooted tree with branch lengths measured in substitutions. IQ-TREE infers a maximum-likelihood tree from all sequences, which is rooted by the method chosen and saved as its own tree file; PTP then runs on that tree, which also becomes the display tree. An outgroup rooting needs an existing tree." : "PTP requires a rooted tree with branch lengths measured in substitutions. Keep the supplied root or root a separate copy by midpoint or minimum variance (MRTTV) before fitting. The rooted copy also becomes the display tree; the original is preserved. No dating is performed.") : dialog.viewSetup ? "Click a node to select its sequences, then choose Group selection. A rooted ultrametric tree also supports a draggable threshold line. UPGMA provides this; neighbor joining and IQ-TREE support clade selection. IQ-TREE lengths are substitutions per site, not time." : "ASAP groups aligned DNA sequences. The display tree illustrates the results and does not change the species hypotheses. IQ-TREE lengths are substitutions per site, not time; model, seed and workers are retained."
         }
     }
 }

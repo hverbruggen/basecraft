@@ -1,21 +1,14 @@
-schema = 1
+schema = 2
+contract = "operations.json"
 id = "basecraft.distance"
 name = "Distance matrices, neighbor joining and UPGMA"
 version = "0.1.0"
 kinds = ["operation"]
 [entry]
 operation = "python:distance_plugin.py"
-[[operations]]
-name = "tree"
-label = "Infer a distance tree and retain its observed-distance cache"
-[[operations]]
-name = "matrix"
-label = "Calculate an observed DNA distance matrix"
-[[operations]]
-name = "groups"
-label = "Summarize specimen groups using cached distances"
 
-# The settings the app asks for before a run (see plugins/fasttree).
+
+
 [[forms]]
 id = "matrix"
 title = "Distance matrix"

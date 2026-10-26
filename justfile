@@ -61,12 +61,12 @@ protocol-license:
         exit 1
     fi
 
-# QML component tests, headless.
+# QML component tests, headless. File reads let sequencing tests load production QML.
 qml-test:
     #!/usr/bin/env bash
     set -euo pipefail
     for scale in 1 1.25 1.5 2; do
-        QT_QPA_PLATFORM=offscreen QT_QPA_PLATFORMTHEME= QT_QUICK_CONTROLS_STYLE=Basic QT_SCALE_FACTOR="$scale" \
+        QML_XHR_ALLOW_FILE_READ=1 QT_QPA_PLATFORM=offscreen QT_QPA_PLATFORMTHEME= QT_QUICK_CONTROLS_STYLE=Basic QT_SCALE_FACTOR="$scale" \
             "$(qmake6 -query QT_HOST_BINS)/qmltestrunner" -input crates/basecraft-gui/tests/qml
     done
 

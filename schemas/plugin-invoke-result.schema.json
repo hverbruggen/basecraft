@@ -4,6 +4,13 @@
   "description": "`invoke` result: proposed operations against the snapshot's version,\nand for operations that write files, what they wrote and with which tool.",
   "type": "object",
   "properties": {
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/PluginArtifact"
+      }
+    },
+    "data": true,
     "execution": {
       "description": "Actual process evidence supplied by newer plugins; absence stays unknown.",
       "anyOf": [
@@ -1986,6 +1993,23 @@
             "params"
           ]
         }
+      ]
+    },
+    "PluginArtifact": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "Relative to the allocated output for this role, never a destination.",
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "path"
       ]
     },
     "Provenance": {

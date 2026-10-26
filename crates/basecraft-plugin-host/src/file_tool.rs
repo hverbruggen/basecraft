@@ -44,6 +44,46 @@ pub fn cancel_run(id: &str) -> Result<()> {
     Ok(())
 }
 
+/// The built-in IQ-TREE form permits one support method per run. Both IQ-TREE
+/// bootstrap variants write percentages; their names preserve the distinction.
+pub(crate) fn iqtree_support(
+    selected: Option<&serde_json::Value>,
+) -> Option<(&'static str, basecraft_protocol::SupportKind)> {
+    match selected.and_then(serde_json::Value::as_str) {
+        Some("ufboot") => Some((
+            "Ultrafast bootstrap (UFBoot)",
+            basecraft_protocol::SupportKind::Bootstrap,
+        )),
+        Some("bootstrap") => Some((
+            "Standard bootstrap",
+            basecraft_protocol::SupportKind::Bootstrap,
+        )),
+        _ => None,
+    }
+}
+
+/// Persist producer semantics only when the parsed tree has exactly one support
+/// field. Slash-separated external/combined values need their own verified order.
+pub(crate) fn write_support_sidecar(
+    tree: &Path,
+    name: &str,
+    kind: basecraft_protocol::SupportKind,
+) -> Result<Option<PathBuf>> {
+    let mut doc = basecraft_ops::files::load_tree(tree)?.doc;
+    if doc.supports().len() != 1 {
+        return Ok(None);
+    }
+    let old = doc.supports()[0].name.clone();
+    doc.rename_support(&old, name);
+    doc.set_support_kind(name, kind);
+    let metadata = basecraft_ops::files::tree_sidecar(tree);
+    basecraft_io::write_atomic(&metadata, |w| {
+        basecraft_ops::files::write_tree_sidecar(&doc, w)
+    })
+    .map_err(basecraft_ops::Error::from)?;
+    Ok(Some(metadata))
+}
+
 struct CancellationRegistration(String);
 impl Drop for CancellationRegistration {
     fn drop(&mut self) {
@@ -76,6 +116,7 @@ pub struct FileJob {
     run_id: String,
     source_record: basecraft_ops::document_record::DocumentRecord,
     cpu_budget: usize,
+    accepted_registry: Option<std::sync::Arc<crate::registry::Registry>>,
     granted_budget: std::sync::atomic::AtomicUsize,
     source_path: PathBuf,
     source_version: u64,
@@ -208,6 +249,26 @@ impl FileJob {
         });
         self.artifacts = Some(run);
         Ok(())
+    }
+
+    pub(crate) fn with_registry(
+        mut self,
+        registry: std::sync::Arc<crate::registry::Registry>,
+    ) -> Self {
+        self.accepted_registry = Some(registry);
+        self
+    }
+
+    pub(crate) fn stage_registry(&self) -> Result<crate::registry::Registry> {
+        match &self.accepted_registry {
+            Some(registry) => Ok(registry.as_ref().clone()),
+            None => crate::registry::Registry::load(&crate::registry::RegistryConfig::discover()?),
+        }
+    }
+
+    pub fn with_cpu_budget(mut self, budget: usize) -> Self {
+        self.cpu_budget = budget.clamp(1, crate::compute::available());
+        self
     }
 
     pub fn species_input_evidence(&self) -> Result<serde_json::Value> {
@@ -366,6 +427,7 @@ impl FileJob {
             source_record: session.document_record(doc)?,
             source_hash,
             cpu_budget: crate::compute::effective_allocation()?,
+            accepted_registry: None,
             granted_budget: std::sync::atomic::AtomicUsize::new(0),
             artifacts,
             species: None,
@@ -427,6 +489,7 @@ impl FileJob {
                 basecraft_io::hash_file(&source_path).map_err(basecraft_ops::Error::from)?
             },
             cpu_budget: crate::compute::effective_allocation()?,
+            accepted_registry: None,
             granted_budget: std::sync::atomic::AtomicUsize::new(0),
             artifacts: None,
             species: None,
@@ -462,8 +525,7 @@ impl FileJob {
                 .unwrap_or_else(|| std::ffi::OsStr::new("input")),
         );
         let input_stamp = basecraft_ops::input_evidence::stamp(input)?;
-        std::fs::copy(input, &snapshot)?;
-        let hash = basecraft_io::hash_file(&snapshot).map_err(basecraft_ops::Error::from)?;
+        let hash = freeze_file(input, &snapshot)?;
         let run_id = ulid::Ulid::generate().to_string();
         let mut job = Self {
             plugin: plugin.into(),
@@ -480,6 +542,7 @@ impl FileJob {
             source_path,
             run_id,
             cpu_budget: crate::compute::effective_allocation()?,
+            accepted_registry: None,
             granted_budget: std::sync::atomic::AtomicUsize::new(0),
             artifacts: None,
             species: None,
@@ -566,8 +629,7 @@ impl FileJob {
                 .unwrap_or_else(|| std::ffi::OsStr::new("input")),
         );
         let input_stamp = basecraft_ops::input_evidence::stamp(input)?;
-        std::fs::copy(input, &snapshot)?;
-        let hash = basecraft_io::hash_file(&snapshot).map_err(basecraft_ops::Error::from)?;
+        let hash = freeze_file(input, &snapshot)?;
         let run_id = ulid::Ulid::generate().to_string();
         let mut job = Self {
             plugin: plugin.into(),
@@ -584,6 +646,7 @@ impl FileJob {
             source_record: self.following_record(input)?,
             source_hash: self.source_hash.clone(),
             cpu_budget: self.cpu_budget,
+            accepted_registry: self.accepted_registry.clone(),
             granted_budget: std::sync::atomic::AtomicUsize::new(0),
             artifacts: None,
             species: None,
@@ -1267,9 +1330,39 @@ impl FileJob {
         self.granted_budget
             .store(granted_budget, std::sync::atomic::Ordering::Relaxed);
         let manifest = Manifest::load(&self.plugin)?;
-        let mut process = PluginProcess::spawn_with_allocation(&manifest, granted_budget)?;
-        let mut params =
-            crate::compute::parameters(&manifest.id, self.params.clone(), granted_budget);
+        let (mut process, mut params) = if let Some(registry) = &self.accepted_registry {
+            let operation = registry
+                .operations
+                .values()
+                .find(|op| {
+                    op.package.manifest.id == manifest.id
+                        && op.descriptor.implementation == self.operation
+                })
+                .ok_or_else(|| Error::Protocol("accepted workflow stage is unavailable".into()))?;
+            operation.package.verify()?;
+            if operation.package.manifest.dir != manifest.dir {
+                return Err(Error::Protocol(
+                    "workflow stage package differs from accepted package".into(),
+                ));
+            }
+            let python =
+                operation.package.interpreter.as_deref().ok_or_else(|| {
+                    Error::Protocol("workflow stage runtime is unavailable".into())
+                })?;
+            (
+                PluginProcess::spawn_accepted(&manifest, python, granted_budget)?,
+                crate::compute::parameters_for(
+                    &operation.descriptor,
+                    self.params.clone(),
+                    granted_budget,
+                ),
+            )
+        } else {
+            (
+                PluginProcess::spawn_with_allocation(&manifest, granted_budget)?,
+                crate::compute::parameters(&manifest.id, self.params.clone(), granted_budget),
+            )
+        };
         params.insert("job_id".into(), json!(self.run_id));
         params.entry("original_source").or_insert(
             serde_json::to_value(&self.source_path).map_err(|e| Error::Protocol(e.to_string()))?,
@@ -1434,7 +1527,8 @@ impl FileJob {
             let mut published = std::collections::HashMap::new();
             for (path, allocation) in &allocated {
                 if let Some((name, false)) = allocation {
-                    let destination = run.publish(
+                    let destination = publish_artifact(
+                        run,
                         name,
                         basecraft_ops::analysis_store::ArtifactDestination::Metadata,
                     )?;
@@ -1450,7 +1544,8 @@ impl FileJob {
             };
             for (path, allocation) in &allocated {
                 if let Some((name, true)) = allocation {
-                    let destination = run.publish(
+                    let destination = publish_artifact(
+                        run,
                         name,
                         basecraft_ops::analysis_store::ArtifactDestination::WorkingDirectory,
                     )?;
@@ -1525,6 +1620,7 @@ impl FileJob {
                     "SH-like local support",
                     basecraft_protocol::SupportKind::Probability,
                 )),
+                "basecraft.iqtree" => iqtree_support(self.params.get("support")),
                 _ => None,
             };
             if let Some((name, kind)) = support {
@@ -1532,16 +1628,7 @@ impl FileJob {
                     if let Some(run) = &self.artifacts {
                         run.bind(tree)?;
                     }
-                    let mut doc = basecraft_ops::files::load_tree(tree)?.doc;
-                    if doc.supports().len() == 1 {
-                        let old = doc.supports()[0].name.clone();
-                        doc.rename_support(&old, name);
-                        doc.set_support_kind(name, kind);
-                        let metadata = basecraft_ops::files::tree_sidecar(tree);
-                        basecraft_io::write_atomic(&metadata, |w| {
-                            basecraft_ops::files::write_tree_sidecar(&doc, w)
-                        })
-                        .map_err(basecraft_ops::Error::from)?;
+                    if let Some(metadata) = write_support_sidecar(tree, name, kind)? {
                         result.outputs.push(metadata.to_string_lossy().into_owned());
                     }
                 }
@@ -1791,4 +1878,27 @@ mod tests {
             dir.path().join("rbcL.mafft-2.fasta")
         );
     }
+}
+
+/// Shared immutable-file preparation for legacy and registered jobs.
+pub(crate) fn freeze_file(source: &Path, destination: &Path) -> Result<String> {
+    let before = basecraft_ops::input_evidence::stamp(source)?;
+    std::fs::copy(source, destination)?;
+    let hash = basecraft_io::hash_file(destination).map_err(basecraft_ops::Error::from)?;
+    if before != basecraft_ops::input_evidence::stamp(source)?
+        || basecraft_io::hash_file(source).map_err(basecraft_ops::Error::from)? != hash
+    {
+        return Err(Error::Protocol("input changed during submission".into()));
+    }
+    Ok(hash)
+}
+
+/// Both execution families promote only validated staging files through the
+/// common store's no-clobber primitive.
+pub(crate) fn publish_artifact(
+    run: &basecraft_ops::analysis_store::ArtifactRun,
+    name: &str,
+    location: basecraft_ops::analysis_store::ArtifactDestination,
+) -> Result<PathBuf> {
+    Ok(run.publish(name, location)?)
 }

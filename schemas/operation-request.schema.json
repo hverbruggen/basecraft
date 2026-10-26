@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OperationRequest",
+  "type": "object",
+  "properties": {
+    "destinations": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {}
+    },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/InputReference"
+        }
+      },
+      "default": {}
+    },
+    "operation": {
+      "type": "string"
+    },
+    "parameters": true,
+    "pins": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/OperationPins"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "request_key": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "operation",
+    "parameters"
+  ],
+  "$defs": {
+    "InputReference": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "file"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "path"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "doc": {
+              "type": "string"
+            },
+            "generation": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "kind": {
+              "type": "string",
+              "const": "document"
+            },
+            "revision": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "doc",
+            "generation",
+            "revision"
+          ]
+        }
+      ]
+    },
+    "OperationPins": {
+      "type": "object",
+      "properties": {
+        "descriptor_digest": {
+          "type": "string"
+        },
+        "generation": {
+          "type": "string"
+        },
+        "package_digest": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "generation",
+        "package_digest",
+        "descriptor_digest"
+      ]
+    }
+  }
+}

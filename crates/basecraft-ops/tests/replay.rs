@@ -770,3 +770,76 @@ fn automatic_root_error_keeps_document_and_history() {
         );
     }
 }
+
+#[test]
+fn strict_sequence_proposals_stage_invalid_batches_and_replay_one_undo_group() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("sequence.fa");
+    std::fs::write(&path, ">sequence\nACGTACGT\n").unwrap();
+    let mut session = Session::new(temp.path());
+    let doc = session.open(&path).unwrap();
+    let generation = session.generation(doc);
+    let revision = session.doc(doc).version();
+    let actor = basecraft_protocol::Actor::Plugin {
+        id: "org.example.annotation".into(),
+        version: "1.0.0".into(),
+    };
+    let before = session.doc(doc).read(0, 8);
+    assert!(
+        session
+            .apply_sequence_proposals(
+                doc,
+                generation,
+                revision,
+                &[replace(0, 1, "T"), replace(0, 99, "A")],
+                actor.clone()
+            )
+            .is_err()
+    );
+    assert_eq!(session.doc(doc).read(0, 8), before);
+    assert_eq!(session.generation(doc), generation);
+    assert!(!session.can_undo(doc));
+    assert!(
+        session
+            .apply_sequence_proposals(
+                doc,
+                generation + 1,
+                revision,
+                &[replace(0, 1, "T")],
+                actor.clone()
+            )
+            .is_err()
+    );
+    assert!(
+        session
+            .apply_sequence_proposals(
+                doc,
+                generation,
+                revision,
+                &[Op::Save {
+                    path: "unsafe.fa".into()
+                }],
+                actor.clone()
+            )
+            .is_err()
+    );
+    let ops = [
+        replace(0, 1, "T"),
+        Op::FeatureAdd {
+            feature: feature(1, 4),
+        },
+    ];
+    session
+        .apply_sequence_proposals(doc, generation, revision, &ops, actor)
+        .unwrap();
+    assert_eq!(session.doc(doc).read(0, 8), b"TCGTACGT");
+    assert_eq!(session.doc(doc).features().count(), 1);
+    session.undo(doc).unwrap();
+    assert_eq!(session.doc(doc).read(0, 8), before);
+    assert_eq!(session.doc(doc).features().count(), 0);
+    session.redo(doc).unwrap();
+    assert_eq!(session.doc(doc).read(0, 8), b"TCGTACGT");
+    session.flush().unwrap();
+    assert!(replay::replay(temp.path()).unwrap().ok());
+    assert_eq!(std::fs::read(&path).unwrap(), b">sequence\nACGTACGT\n");
+}
