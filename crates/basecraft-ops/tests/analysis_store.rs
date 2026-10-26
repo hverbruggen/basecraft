@@ -385,7 +385,10 @@ fn multi_input_verification_uses_only_declared_owners_and_never_bypasses_breaks(
         .source
         .unwrap();
     assert_eq!(
-        input_evidence::verified_source(main.directory(), &reference).unwrap(),
+        input_evidence::verified_source(main.directory(), &reference)
+            .unwrap()
+            .canonicalize()
+            .unwrap(),
         source_b
     );
     let mut wrong_size = reference.clone();
