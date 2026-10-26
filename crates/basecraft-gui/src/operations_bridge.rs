@@ -202,10 +202,9 @@ impl qobject::AppOperations {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn supports_nested_calibrations_and_exclusive_smoothing() {
+        use super::*;
         let contract: Value =
             serde_json::from_str(include_str!("../../../plugins/sanderson/operations.json"))
                 .unwrap();
