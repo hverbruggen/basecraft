@@ -62,16 +62,14 @@ fn installed_multi_input_job_uses_common_storage_and_frozen_identity() {
     let output = temp.path().join("report.json");
     let publication = basecraft_ops::provenance::inspect(&output).unwrap();
     assert_eq!(publication.inputs.len(), 2);
-    assert!(
-        basecraft_ops::provenance::verify(&output)
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        basecraft_ops::provenance::verify(&output).unwrap(),
+        Vec::<String>::new()
     );
     std::fs::write(temp.path().join("b.txt"), b"changed").unwrap();
-    assert!(
-        !basecraft_ops::provenance::verify(&output)
-            .unwrap()
-            .is_empty()
+    assert_ne!(
+        basecraft_ops::provenance::verify(&output).unwrap(),
+        Vec::<String>::new()
     );
     let execution: serde_json::Value = serde_json::from_slice(
         &std::fs::read(Path::new(result.evidence.as_ref().unwrap()).join("execution.json"))
@@ -323,10 +321,9 @@ fn submitted_views_remain_frozen_when_both_originals_change_during_execution() {
     let outcome = wait(&jobs, &accepted.run_id);
     assert_eq!(outcome.state, RuntimeState::Completed, "{outcome:?}");
     assert_eq!(outcome.data, Some(json!({"bytes":7})));
-    assert!(
-        !basecraft_ops::provenance::verify(&temp.path().join("report.json"))
-            .unwrap()
-            .is_empty()
+    assert_ne!(
+        basecraft_ops::provenance::verify(&temp.path().join("report.json")).unwrap(),
+        Vec::<String>::new()
     );
 }
 
@@ -431,7 +428,7 @@ fn committed_proposals_stay_partial_and_repair_requires_recorded_session_activit
         }
         let partial = manager.result(&accepted.run_id).unwrap();
         assert_eq!(partial.state, RuntimeState::Partial, "{partial:?}");
-        assert!(partial.artifacts.is_empty());
+        assert_eq!(partial.artifacts, Vec::new());
         let persisted: serde_json::Value =
             serde_json::from_slice(&std::fs::read(run.join("runtime.json")).unwrap()).unwrap();
         assert_eq!(persisted["state"], "partial");

@@ -235,14 +235,9 @@ fn serve_jobs(project: &Path) -> Result<()> {
     std::thread::spawn(move || {
         let stdin = std::io::stdin();
         let mut input = stdin.lock();
-        loop {
-            match read_frame(&mut input) {
-                Ok(Some(line)) => {
-                    if sender.send(line).is_err() {
-                        break;
-                    }
-                }
-                _ => break,
+        while let Ok(Some(line)) = read_frame(&mut input) {
+            if sender.send(line).is_err() {
+                break;
             }
         }
     });

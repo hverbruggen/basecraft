@@ -1,5 +1,6 @@
 //! Both built-in IQ-TREE publication routes retain the same support semantics.
 //! A process-local fake executable supplies known Newick bytes without an ML run.
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -139,10 +140,9 @@ fn run_cases(root: &Path) {
             .unwrap();
         }
         check_tree(&moved_tree, label, multi);
-        assert!(
-            basecraft_ops::provenance::verify(&retained)
-                .unwrap()
-                .is_empty()
+        assert_eq!(
+            basecraft_ops::provenance::verify(&retained).unwrap(),
+            Vec::<String>::new()
         );
     }
 }
@@ -159,7 +159,7 @@ fn known_support_survives_both_publication_paths() {
     let executable = temporary.path().join("iqtree-double");
     std::fs::write(
         &executable,
-        r#"#!/usr/bin/env python3
+        r"#!/usr/bin/env python3
 import pathlib, sys
 if '--version' in sys.argv:
     print('IQ-TREE test double')
@@ -168,10 +168,9 @@ prefix = pathlib.Path(sys.argv[sys.argv.index('-pre') + 1])
 seed = int(sys.argv[sys.argv.index('-seed') + 1])
 label = '85/72' if seed == 42 else '0.95'
 prefix.with_suffix('.treefile').write_text(f'((t0:1,t1:1){label}:1,(t2:1,t3:1)99:1);\n')
-"#,
+",
     )
     .unwrap();
-    use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
     let status = Command::new(std::env::current_exe().unwrap())
         .args([

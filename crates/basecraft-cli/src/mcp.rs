@@ -324,7 +324,9 @@ fn outcome_schema() -> Result<Value> {
 }
 
 fn structured(value: Value, failed: bool) -> Value {
-    json!({"content":[{"type":"text","text":value.to_string()}],"structuredContent":value,"isError":failed})
+    let mut result = json!({"content":[{"type":"text","text":value.to_string()}],"isError":failed});
+    result["structuredContent"] = value;
+    result
 }
 
 pub fn serve(root: &Path, writable: bool, model: &str) -> Result<()> {
