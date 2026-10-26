@@ -63,7 +63,7 @@ Item {
             RibbonGroup {
                 id: last
                 title: "Help"
-                AppRibbonButton { id: help; text: "Shortcuts"; tip: "Keyboard shortcuts" }
+                AppRibbonButton { id: help; text: "Shortcuts…"; tip: "Keyboard shortcuts" }
             }
         }
         RibbonPage {
@@ -131,6 +131,11 @@ Item {
         }
         function test_action_toolbar_is_compact() {
             verify(actions.implicitHeight < 60, "style background must not force 40-pixel toolbar buttons")
+        }
+        function test_caption_ellipsis_is_presentation_only() {
+            compare(help.text, "Shortcuts…")
+            compare(help.captionText, "Shortcuts")
+            compare(help.Accessible.name, "Shortcuts…")
         }
         function test_action_only_page_fits_full_click_target_data() {
             const rows = []

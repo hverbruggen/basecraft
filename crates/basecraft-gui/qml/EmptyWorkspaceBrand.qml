@@ -11,9 +11,8 @@ Item {
     Image {
         objectName: "emptyWorkspaceLogo"
         anchors.centerIn: parent
-        // Allocate one quarter of the panel area, then fit unusually narrow panes.
-        width: Math.min(Math.sqrt(parent.width * parent.height * 0.25 * 1020 / 480),
-                        parent.width * 0.9, parent.height * 0.9 * 1020 / 480)
+        // The mark occupies one quarter of the available main-panel width.
+        width: Math.min(parent.width * 0.25, parent.height * 0.9 * 1020 / 480)
         height: width * 480 / 1020
         source: Qt.resolvedUrl("../branding/logo-transparent-" + (root.darkBackground ? "dark" : "light") + ".png")
         fillMode: Image.PreserveAspectFit

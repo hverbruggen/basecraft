@@ -28,7 +28,7 @@ Control {
             anchors.centerIn: parent
             width: parent.width
             height: implicitHeight
-            spacing: Kirigami.Units.smallSpacing * metrics.factor
+            spacing: metrics.groupSpacing
             Kirigami.ActionToolBar {
                 id: toolbar
                 // Keep fallback style minimums compact while reserving the full

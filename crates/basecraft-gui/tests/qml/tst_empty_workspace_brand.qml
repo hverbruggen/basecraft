@@ -7,8 +7,9 @@ Item {
     id: scene
     width: 1000
     height: 600
+    property real mainPanelWidth: width
     Rectangle { anchors.fill: parent; color: brand.backgroundColor }
-    EmptyWorkspaceBrand { id: brand; anchors.fill: parent; backgroundColor: "#1c2630" }
+    EmptyWorkspaceBrand { id: brand; anchors.left: parent.left; anchors.top: parent.top; anchors.bottom: parent.bottom; width: scene.mainPanelWidth; backgroundColor: "#1c2630" }
     Button { id: focusTarget; text: "Open"; x: 8; y: 8 }
 
     TestCase {
@@ -22,17 +23,18 @@ Item {
             for (const bg of ["#1c2630", "#f3eee4"]) {
                 brand.backgroundColor = bg
                 tryCompare(logo, "status", Image.Ready)
-                for (const size of [[1000, 600], [640, 480], [1600, 900]]) {
+                for (const size of [[1000, 600], [640, 480], [1600, 900], [800, 600]]) {
                     scene.width = size[0]
                     scene.height = size[1]
+                    mainPanelWidth = size[0] === 800 ? 400 : size[0]
                     waitForRendering(brand)
-                    const point = logo.mapToItem(scene, logo.width / 2, logo.height / 2)
-                    fuzzyCompare(point.x, scene.width / 2, 1)
-                    fuzzyCompare(point.y, scene.height / 2, 1)
+                    const point = logo.mapToItem(brand, logo.width / 2, logo.height / 2)
+                    fuzzyCompare(point.x, brand.width / 2, 1)
+                    fuzzyCompare(point.y, brand.height / 2, 1)
                     fuzzyCompare(logo.width / logo.height, 1020 / 480, 0.001)
                     verify(logo.width > 0 && logo.width <= scene.width)
-                    fuzzyCompare(logo.width * logo.height / (scene.width * scene.height), 0.25, 0.001)
-                    verify(logo.mapToItem(scene, 0, logo.height).y <= scene.height)
+                    fuzzyCompare(logo.width, Math.min(brand.width * 0.25, brand.height * 0.9 * 1020 / 480), 0.001)
+                    verify(logo.mapToItem(brand, 0, logo.height).y <= brand.height)
                     verify(logo.Accessible.name.indexOf("provenance built in") >= 0)
                     verify(focusTarget.activeFocus, "Decorative mark must not steal focus")
                     // Verify the actual coloured mark survives image loading and compositing.

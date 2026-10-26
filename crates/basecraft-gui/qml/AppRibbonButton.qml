@@ -8,8 +8,8 @@ ToolButton {
     property real symbolSize: ["left", "right", "up", "down", "previous", "next"].includes(iconName) ? 10 : 16
     topPadding: 3 * sizeFactor
     bottomPadding: 3 * sizeFactor
-    leftPadding: 6 * sizeFactor
-    rightPadding: 6 * sizeFactor
+    leftPadding: 5 * sizeFactor
+    rightPadding: 5 * sizeFactor
     background: Rectangle {
         color: Qt.alpha(button.palette.buttonText, button.down || button.checked ? 0.14 : button.hovered ? 0.07 : 0)
         border.color: button.visualFocus ? button.palette.highlight : "transparent"
@@ -19,6 +19,9 @@ ToolButton {
     property string keys
     property string badge
     property string iconName
+    // Keep accessible names and command identity intact while presenting
+    // compact ribbon captions without trailing menu ellipses.
+    readonly property string captionText: text.replace(/(?:\.\.\.|…)+\s*$/, "")
     readonly property real captionBaseline: contentItem.y + caption.y + caption.baselineOffset
     readonly property real symbolHeight: Math.max(metrics.symbolHeight, icon.height)
     Accessible.name: text.length ? text : tip
@@ -49,7 +52,7 @@ ToolButton {
                 id: symbolRow
                 anchors.centerIn: parent
                 spacing: 3 * button.sizeFactor
-                AppIcon { anchors.verticalCenter: parent.verticalCenter; visible: button.iconName.length > 0; name: button.iconName; size: button.icon.width; color: button.palette.buttonText }
+                AppIcon { objectName: "ribbonSymbolIcon"; anchors.verticalCenter: parent.verticalCenter; visible: button.iconName.length > 0; name: button.iconName; size: button.symbolSize * button.sizeFactor; color: button.palette.buttonText }
                 Text { anchors.verticalCenter: parent.verticalCenter; visible: button.badge.length > 0; text: button.badge; font: button.font; color: button.palette.buttonText }
             }
         }
@@ -57,8 +60,8 @@ ToolButton {
             id: caption
             anchors.horizontalCenter: parent.horizontalCenter
             y: symbols.visible ? symbols.implicitHeight + 2 * button.sizeFactor : 0
-            visible: text.length > 0
-            text: button.text
+            visible: button.captionText.length > 0
+            text: button.captionText
             font: button.font
             color: button.palette.buttonText
         }

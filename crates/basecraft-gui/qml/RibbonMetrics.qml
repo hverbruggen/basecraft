@@ -28,4 +28,5 @@ QtObject {
     // Shared tile: symbol band, caption, two-pixel gap and six-pixel padding.
     // ActionToolBar must reserve this height rather than constraining its tiles.
     readonly property real tileHeight: symbolHeight + Math.ceil(captionMetrics.height) + 8 * factor
+    readonly property real groupSpacing: 5 * factor
 }

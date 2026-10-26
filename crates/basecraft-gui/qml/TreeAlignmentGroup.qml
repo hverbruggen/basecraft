@@ -22,7 +22,7 @@ RibbonGroup {
         tip: (group.linkStatus.length ? group.linkStatus + "\n" : "")
             + (group.linkedPath.length ? "Linked alignment: " + group.linkedPath + "\n" : "")
             + (group.sourcePath.length ? "Original analysis source: " + group.sourcePath + "\n" : "")
-            + "Choose an alignment for viewing and selection after validating its identifiers. The original analysis source is retained."
+            + "Choose an alignment for viewing and selection. Identifiers are validated; the original analysis source is retained."
         enabled: group.controller !== null && !group.controller.busy
         onInvoked: group.linkRequested(group.controller)
     }

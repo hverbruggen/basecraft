@@ -12,8 +12,8 @@ RibbonGroup {
         objectName: "annotateClade"
         commandId: "ribbon.name-the-selected-clade-with-a-bar-or-a"
         customization: group.customization
-        text: "Annotate…"
-        iconName: "annotation-add"
+        text: "Annotate"
+        iconName: "clade-annotate"
         tip: "Name the selected clade, with a bar or a coloured field"
         keys: "Enter"
         enabled: group.controller !== null && group.controller.has_selection === true

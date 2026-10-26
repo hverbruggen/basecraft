@@ -65,6 +65,7 @@ Item {
             compare(order.title, "Tree style")
             const flip = findChild(clade, "flipSubtree")
             compare(flip.iconName, "tree-flip")
+            compare(findChild(clade, "annotateClade").iconName, "clade-annotate")
             compare(flip.Accessible.name, "Flip")
             flip.commandAction.trigger()
             compare(controller.last, "flip")
@@ -127,8 +128,11 @@ Item {
                 fuzzyCompare(button.mapToItem(ribbon, 0, button.captionBaseline).y, reference, 0.5,
                              "tree action captions share a baseline")
                 compare(button.symbolHeight, controls[0].symbolHeight)
-                compare(button.icon.width, 16)
-                compare(button.icon.height, 16)
+                const expectedSize = button.objectName === "manualRoot" ? 10.4 : 16
+                const icon = findChild(button, "ribbonSymbolIcon")
+                verify(icon)
+                compare(icon.width, expectedSize)
+                compare(icon.height, expectedSize)
                 verify(button.height >= button.implicitHeight)
                 verify(button.width >= button.implicitWidth)
             }

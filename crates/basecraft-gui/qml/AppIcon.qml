@@ -8,7 +8,7 @@ Item {
     id: root
     property string name
     property color color: "black"
-    property int size: 16
+    property real size: 16
     implicitWidth: size
     implicitHeight: size
     ControlsImpl.IconImage {
