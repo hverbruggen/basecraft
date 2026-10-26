@@ -329,3 +329,44 @@ fn submitted_views_remain_frozen_when_both_originals_change_during_execution() {
             .is_empty()
     );
 }
+
+#[test]
+fn late_collision_preserves_foreign_bytes_and_repairs_without_reexecuting() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(temp.path().join("a.txt"), b"abc\n").unwrap();
+    std::fs::write(temp.path().join("b.txt"), b"xy\n").unwrap();
+    let registry = registry(temp.path());
+    let mut jobs = JobManager::default();
+    let accepted = jobs
+        .submit(
+            &registry,
+            request("delayed"),
+            SessionPolicy::new(temp.path(), true).unwrap(),
+            "test",
+        )
+        .unwrap();
+    let destination = temp.path().join("report.json");
+    std::fs::write(&destination, b"unrelated concurrent writer").unwrap();
+    let partial = wait(&jobs, &accepted.run_id);
+    assert_eq!(partial.state, RuntimeState::Partial, "{partial:?}");
+    assert_eq!(
+        std::fs::read(&destination).unwrap(),
+        b"unrelated concurrent writer"
+    );
+    let evidence = Path::new(partial.evidence.as_ref().unwrap()).join("execution.json");
+    let execution = std::fs::read(&evidence).unwrap();
+    // Remove only the test-owned collision to make its destination available.
+    std::fs::remove_file(&destination).unwrap();
+    let repaired = jobs.repair(&accepted.run_id).unwrap();
+    assert_eq!(repaired.state, RuntimeState::Completed, "{repaired:?}");
+    assert_eq!(repaired.run_id, accepted.run_id);
+    assert_eq!(std::fs::read(&evidence).unwrap(), execution);
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&std::fs::read(destination).unwrap()).unwrap(),
+        json!({"bytes":7})
+    );
+    assert!(
+        jobs.repair(&accepted.run_id).is_err(),
+        "completed job cannot be rerun as repair"
+    );
+}
