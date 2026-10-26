@@ -284,37 +284,12 @@ fn verified_traces(draft: &SangerDraft) -> Result<Vec<Trace>, String> {
     Ok(traces)
 }
 
-fn tracy_calls(
-    path: &Path,
-    expected_engine: &str,
-) -> Result<basecraft_docs::sanger::TraceCalls, String> {
-    let dir = tempfile::Builder::new()
-        .prefix("basecraft-tracy-calls-")
-        .tempdir()
-        .map_err(|e| e.to_string())?;
-    let output = dir.path().join("calls.json");
-    let manifest = Manifest::load(&plugin_dir("tracy-sanger")).map_err(|e| e.to_string())?;
-    let mut plugin = PluginProcess::spawn(&manifest).map_err(|e| e.to_string())?;
-    plugin
-        .invoke(
-            "calls",
-            serde_json::json!({"read": path, "output": output, "engine_sha256": expected_engine}),
-            None,
-        )
-        .map_err(|e| e.to_string())?;
-    serde_json::from_slice(&std::fs::read(output).map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())
-}
-
 fn review_view(draft: &SangerDraft) -> Result<SangerReviewView, String> {
+    // Opening saved evidence must never re-run a caller or create job files.
+    // Older drafts without coordinates need explicit regeneration; instrument
+    // calls cannot silently substitute for the recorded Tracy call mapping.
     let traces = verified_traces(draft)?;
-    let mut enriched = draft.clone();
-    for read in &mut enriched.inputs {
-        if read.calls.is_none() {
-            read.calls = Some(tracy_calls(&read.path, &draft.engine_sha256)?);
-        }
-    }
-    SangerReviewView::new(enriched, traces)
+    SangerReviewView::new(draft.clone(), traces)
 }
 
 impl qobject::SangerController {
