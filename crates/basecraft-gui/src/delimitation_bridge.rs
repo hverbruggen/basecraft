@@ -571,23 +571,15 @@ impl qobject::DelimitationController {
     }
     pub fn root_display_tree(mut self: Pin<&mut Self>, method: &QString) -> bool {
         let result = (|| -> Result<PathBuf, String> {
-            let display = PathBuf::from(self.rust().display_path.to_string());
-            let (op, tag) = match method.to_string().as_str() {
-                "midpoint" => (Op::TreeMidpointRoot {}, "midpoint"),
-                "mrttv" => (Op::TreeMinimumVarianceRoot {}, "mrttv"),
-                other => return Err(format!("Unknown rooting {other:?}")),
-            };
-            // An ordinary tree edit and save, so the rooted file records how
-            // it was made.
-            let mut session = Session::recoverable(crate::bridge::project_root(&display))
+            let state = self.rust();
+            let session = state.session.as_ref().ok_or("No workspace")?;
+            let work = session.delimitation(state.doc.ok_or("No workspace")?);
+            let display = basecraft_ops::delimitation::checked_display_tree(work)
+                .map_err(|e| e.to_string())?
+                .ok_or("No display tree")?;
+            let mut rooting_session = Session::recoverable(crate::bridge::project_root(&display))
                 .map_err(|e| e.to_string())?;
-            let doc = session.open(&display).map_err(|e| e.to_string())?;
-            session.apply(doc, op).map_err(|e| e.to_string())?;
-            let target = display.with_extension(format!("{tag}-rooted.nwk"));
-            session
-                .save(doc, Some(&target))
-                .map_err(|e| e.to_string())?;
-            Ok(target)
+            root_tree_copy(&mut rooting_session, &display, &method.to_string())
         })();
         match result {
             Ok(path) => self
@@ -2064,9 +2056,172 @@ fn with_preview(
     work
 }
 
+/// Use the shared typed edit/save path, retaining source identity and rooting
+/// provenance. Reserve a whole output directory atomically: neither a previous
+/// result nor an unrelated tree, sidecar or provenance bundle can be replaced.
+fn root_tree_copy(
+    session: &mut Session,
+    display: &std::path::Path,
+    method: &str,
+) -> Result<PathBuf, String> {
+    let op = match method {
+        "midpoint" => Op::TreeMidpointRoot {},
+        "mrttv" => Op::TreeMinimumVarianceRoot {},
+        other => return Err(format!("Unknown rooting {other:?}")),
+    };
+    let doc = session.open(display).map_err(|e| e.to_string())?;
+    session.apply(doc, op).map_err(|e| e.to_string())?;
+    let prefix = format!(
+        "{}.{}-rooted-",
+        display.file_stem().unwrap_or_default().to_string_lossy(),
+        method
+    );
+    let output = tempfile::Builder::new()
+        .prefix(&prefix)
+        .tempdir_in(display.parent().unwrap_or(std::path::Path::new(".")))
+        .map_err(|e| e.to_string())?;
+    let target = output.path().join("tree.nwk");
+    session
+        .save(doc, Some(&target))
+        .map_err(|e| e.to_string())?;
+    // Keep only complete saves; a failed save cannot be fitted or attached.
+    let _ = output.keep();
+    Ok(target)
+}
+
 #[cfg(test)]
 mod naming_tests {
     use super::*;
+    fn rooting_session(root: &Path) -> Session {
+        let paths = basecraft_platform::paths::AppPaths::from_environment(|key| {
+            (key == "BASECRAFT_PROFILE_DIR").then(|| root.join("profile").into_os_string())
+        })
+        .unwrap();
+        Session::recoverable_with_paths(root, &paths).unwrap()
+    }
+
+    #[test]
+    fn rooted_copies_preserve_source_and_prior_results_with_provenance() {
+        for (method, operation, expected_depths) in [
+            ("midpoint", "tree.midpoint_root", [2.5, 4.5, 4.5]),
+            ("mrttv", "tree.minimum_variance_root", [3.0, 5.0, 4.0]),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let source = dir.path().join("supplied.nwk");
+            let original = b"(A:1,B:3,C:6);\n";
+            std::fs::write(&source, original).unwrap();
+            // The previous predictable filename may belong to the user.
+            let unrelated = source.with_extension(format!("{method}-rooted.nwk"));
+            std::fs::write(&unrelated, "unrelated tree").unwrap();
+            let mut session = rooting_session(dir.path());
+            let first = root_tree_copy(&mut session, &source, method).unwrap();
+            let first_bytes = std::fs::read(&first).unwrap();
+            let sidecar = basecraft_ops::files::tree_sidecar(&first);
+            let sidecar_bytes = std::fs::read(&sidecar).unwrap();
+            let mut session = rooting_session(dir.path());
+            let second = root_tree_copy(&mut session, &source, method).unwrap();
+            assert_ne!(first, second);
+            assert_eq!(std::fs::read(&source).unwrap(), original);
+            assert!(!basecraft_ops::files::tree_sidecar(&source).exists());
+            assert_eq!(
+                std::fs::read_to_string(unrelated).unwrap(),
+                "unrelated tree"
+            );
+            assert_eq!(std::fs::read(&first).unwrap(), first_bytes);
+            assert_eq!(std::fs::read(&sidecar).unwrap(), sidecar_bytes);
+            assert_eq!(std::fs::read(&second).unwrap(), first_bytes);
+            let tree = basecraft_ops::files::load_tree(&second).unwrap().doc;
+            for (name, expected) in ["A", "B", "C"].into_iter().zip(expected_depths) {
+                let mut node = tree
+                    .tips_in_order()
+                    .into_iter()
+                    .find(|&i| tree.node(i).name == name)
+                    .unwrap();
+                let mut depth = 0.0;
+                while let Some(parent) = tree.node(node).parent {
+                    depth += tree.node(node).length.unwrap();
+                    node = parent;
+                }
+                assert!(
+                    (depth - expected).abs() < 1e-9,
+                    "{method}: {name} depth {depth}"
+                );
+            }
+            for result in [&first, &second] {
+                let publication = basecraft_ops::provenance::inspect(result).unwrap();
+                assert!(
+                    publication
+                        .inputs
+                        .iter()
+                        .any(|input| input.hash == basecraft_io::hash_bytes(original))
+                );
+                assert!(
+                    publication
+                        .effective_edits
+                        .iter()
+                        .any(|edit| edit.operation.name() == operation)
+                );
+                assert!(
+                    basecraft_ops::provenance::verify(result)
+                        .unwrap()
+                        .is_empty()
+                );
+            }
+            // A supplied tree can itself have ancestry (including IQ-TREE's
+            // inference). Save As must carry its contributing publication.
+            let parent = basecraft_ops::provenance::inspect(&first).unwrap();
+            let mut session = rooting_session(dir.path());
+            let descendant = root_tree_copy(&mut session, &first, method).unwrap();
+            let publication = basecraft_ops::provenance::inspect(&descendant).unwrap();
+            assert!(publication.parents.contains(&parent.id));
+            assert!(
+                basecraft_ops::provenance::verify(&descendant)
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+    }
+
+    #[test]
+    fn rooting_errors_publish_no_tree_and_preserve_source() {
+        for method in ["midpoint", "mrttv"] {
+            for text in [None, Some("not a tree"), Some("(A:1,(B:10,C:1)90:1);")] {
+                let dir = tempfile::tempdir().unwrap();
+                let source = dir.path().join("input.nwk");
+                if let Some(text) = text {
+                    std::fs::write(&source, text).unwrap();
+                }
+                let mut session = rooting_session(dir.path());
+                assert!(root_tree_copy(&mut session, &source, method).is_err());
+                if let Some(text) = text {
+                    assert_eq!(std::fs::read_to_string(&source).unwrap(), text);
+                }
+                assert!(!std::fs::read_dir(dir.path()).unwrap().any(|entry| {
+                    entry
+                        .unwrap()
+                        .file_name()
+                        .to_string_lossy()
+                        .contains("-rooted-")
+                }));
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn rooting_output_write_failure_returns_error_without_replacing_input() {
+        let dir = tempfile::tempdir().unwrap();
+        // Valid source name, but the output prefix exceeds Linux NAME_MAX.
+        // This gives a deterministic write failure even under a privileged test user.
+        let source = dir.path().join(format!("{}.nwk", "x".repeat(240)));
+        let original = "(A:1,B:3,C:6);";
+        std::fs::write(&source, original).unwrap();
+        let mut session = rooting_session(dir.path());
+        assert!(root_tree_copy(&mut session, &source, "mrttv").is_err());
+        assert_eq!(std::fs::read_to_string(&source).unwrap(), original);
+        assert!(!basecraft_ops::files::tree_sidecar(&source).exists());
+    }
+
     #[test]
     fn workspaces_are_named_after_source_and_method() {
         let directory = tempfile::tempdir().unwrap();
