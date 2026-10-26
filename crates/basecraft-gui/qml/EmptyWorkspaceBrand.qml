@@ -1,7 +1,6 @@
 import QtQuick
-import QtQuick.Controls
 
-// A decorative empty-state mark: never takes focus or pointer input.
+// Render the approved composition as one image so the subtitle cannot reflow.
 Item {
     id: root
     property color backgroundColor: "white"
@@ -9,31 +8,18 @@ Item {
         + 0.7152 * backgroundColor.g + 0.0722 * backgroundColor.b < 0.5
     opacity: 0.7
 
-    Column {
+    Image {
+        objectName: "emptyWorkspaceLogo"
         anchors.centerIn: parent
-        width: Math.min(parent.width * 0.5, 800)
-        spacing: 8
-
-        Image {
-            id: logo
-            objectName: "emptyWorkspaceLogo"
-            anchors.horizontalCenter: parent.horizontalCenter
-            width: Math.min(root.width * 0.25, root.height * 1020 / 840)
-            height: width * 420 / 1020
-            source: Qt.resolvedUrl("../branding/wordmark-" + (root.darkBackground ? "dark" : "light") + ".png")
-            fillMode: Image.PreserveAspectFit
-            smooth: true
-            mipmap: true
-            Accessible.ignored: true
-        }
-
-        Label {
-            objectName: "emptyWorkspaceSubtitle"
-            width: parent.width
-            text: "A workbench for evolutionary biology and taxonomy, bringing together hands-on analysis, automation and AI assistance, with provenance built in."
-            color: root.darkBackground ? "#81978f" : "#83958b"
-            horizontalAlignment: Text.AlignHCenter
-            wrapMode: Text.WordWrap
-        }
+        // Allocate one quarter of the panel area, then fit unusually narrow panes.
+        width: Math.min(Math.sqrt(parent.width * parent.height * 0.25 * 1020 / 480),
+                        parent.width * 0.9, parent.height * 0.9 * 1020 / 480)
+        height: width * 480 / 1020
+        source: Qt.resolvedUrl("../branding/logo-transparent-" + (root.darkBackground ? "dark" : "light") + ".png")
+        fillMode: Image.PreserveAspectFit
+        smooth: true
+        mipmap: true
+        Accessible.role: Accessible.Graphic
+        Accessible.name: "Basecraft. A workbench for evolutionary biology and taxonomy, bringing together hands-on analysis, automation and AI assistance, with provenance built in."
     }
 }

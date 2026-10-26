@@ -11,10 +11,15 @@ opacity to the complete composition.
 `wordmark-light.svg` is transparent artwork for light surfaces. Both are editable
 vector masters with outlined lettering, requiring no installed font.
 
-The matching 3060-pixel PNGs are runtime derivatives of the SVG masters. They
+The opening panel uses `logo-transparent-dark.png` and
+`logo-transparent-light.png`: 3060-pixel derivatives of the complete logo-and-
+subtitle SVGs. Rendering the whole composition preserves its subtitle line
+breaks, spacing and proportions without font-dependent reflow. The PNGs also
 preserve the clipped soft-edge filter consistently across Qt image backends.
-Regenerate with `rsvg-convert -w 3060 wordmark-dark.svg -o wordmark-dark.png`
+Regenerate with `rsvg-convert -w 3060 logo-transparent-dark.svg -o logo-transparent-dark.png`
 and the corresponding light variant. Apply overall UI opacity at display time.
+Wordmark-only masters and their earlier PNG derivatives remain available for
+uses without a subtitle.
 
 Letter outlines derive from JetBrainsMono Nerd Font Regular; its SIL Open Font
 License is included in `OFL-JetBrainsMono.txt`. Original artwork follows the

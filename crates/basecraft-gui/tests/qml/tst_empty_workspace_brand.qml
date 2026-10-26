@@ -17,8 +17,7 @@ Item {
 
         function test_themes_and_resizing() {
             const logo = findChild(brand, "emptyWorkspaceLogo")
-            const subtitle = findChild(brand, "emptyWorkspaceSubtitle")
-            verify(logo !== null && subtitle !== null)
+            verify(logo !== null)
             focusTarget.forceActiveFocus()
             for (const bg of ["#1c2630", "#f3eee4"]) {
                 brand.backgroundColor = bg
@@ -29,9 +28,12 @@ Item {
                     waitForRendering(brand)
                     const point = logo.mapToItem(scene, logo.width / 2, logo.height / 2)
                     fuzzyCompare(point.x, scene.width / 2, 1)
+                    fuzzyCompare(point.y, scene.height / 2, 1)
+                    fuzzyCompare(logo.width / logo.height, 1020 / 480, 0.001)
                     verify(logo.width > 0 && logo.width <= scene.width)
-                    verify(subtitle.mapToItem(scene, 0, subtitle.height).y <= scene.height)
-                    verify(subtitle.text.indexOf("provenance built in") >= 0)
+                    fuzzyCompare(logo.width * logo.height / (scene.width * scene.height), 0.25, 0.001)
+                    verify(logo.mapToItem(scene, 0, logo.height).y <= scene.height)
+                    verify(logo.Accessible.name.indexOf("provenance built in") >= 0)
                     verify(focusTarget.activeFocus, "Decorative mark must not steal focus")
                     // Verify the actual coloured mark survives image loading and compositing.
                     const pixels = grabImage(scene)
