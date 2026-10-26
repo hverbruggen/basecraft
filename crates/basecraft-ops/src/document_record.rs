@@ -77,6 +77,12 @@ pub fn read_origin(
 }
 
 impl DocumentRecord {
+    /// In-memory locations of contributing publication bundles. Reading them
+    /// creates no records and does not expose mutable ancestry internals.
+    pub fn origin_bundles(&self) -> impl Iterator<Item = &Path> {
+        self.origins.iter().map(|(path, _)| path.as_path())
+    }
+
     pub fn empty(document: &str) -> Self {
         Self {
             schema_version: 1,

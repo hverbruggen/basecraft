@@ -15,6 +15,9 @@ struct Job {
     prepared: PreparedOperation,
     outcome: Mutex<OperationOutcome>,
     cancelled: Arc<AtomicBool>,
+    // Proposal activity is an owner-session journal write, separate from file
+    // publication. A publication-only repair cannot recreate a missing entry.
+    proposal_activity_recorded: AtomicBool,
     worker: Mutex<Option<JoinHandle<()>>>,
     proposals: Mutex<
         Option<(
@@ -152,6 +155,8 @@ impl JobManager {
                 );
                 continue;
             }
+            job.proposal_activity_recorded
+                .store(true, Ordering::Release);
             let mut final_outcome = outcome.clone();
             drop(outcome);
             let finalized = job
@@ -246,6 +251,7 @@ impl JobManager {
             prepared,
             outcome: Mutex::new(outcome.clone()),
             cancelled: Arc::new(AtomicBool::new(false)),
+            proposal_activity_recorded: AtomicBool::new(false),
             worker: Mutex::new(None),
             proposals: Mutex::new(None),
         });
@@ -321,6 +327,13 @@ impl JobManager {
                 "only a partial publication can be repaired".into(),
             ));
         }
+        if job.prepared.sequence.is_some()
+            && !job.proposal_activity_recorded.load(Ordering::Acquire)
+        {
+            return Err(Error::Protocol(
+                "evidence_incomplete: proposal tool-run activity was not recorded; publication-only repair cannot restore the owning session journal".into(),
+            ));
+        }
         let result = serde_json::from_slice(&basecraft_ops::provenance::read_record(
             &job.prepared.run.artifact("validated.json")?,
         )?)?;
@@ -345,11 +358,18 @@ impl JobManager {
                 .warnings
                 .push(format!("Repair remains incomplete: {error}"));
         }
-        job.prepared.persist(&repaired)?;
+        let persisted = job.prepared.persist(&repaired);
         *job.outcome
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = repaired.clone();
-        Ok(repaired)
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = repaired;
+        if let Err(error) = persisted {
+            fail(
+                job,
+                OperationErrorCode::EvidenceIncomplete,
+                error.to_string(),
+            );
+        }
+        self.get(id)
     }
     pub fn result(&self, id: &str) -> Result<OperationOutcome> {
         let outcome = self.get(id)?;
@@ -398,10 +418,18 @@ fn fail(job: &Job, code: OperationErrorCode, message: String) {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     outcome.effective_parameters = job.prepared.effective_parameters();
-    outcome.state = if job.cancelled.load(Ordering::Acquire) {
-        RuntimeState::Cancelled
-    } else if !outcome.artifacts.is_empty() || outcome.state == RuntimeState::Finalizing {
+    outcome.state = if !outcome.artifacts.is_empty()
+        || outcome
+            .proposals
+            .as_ref()
+            .is_some_and(|receipt| receipt.applied > 0)
+        || matches!(
+            outcome.state,
+            RuntimeState::Finalizing | RuntimeState::Partial | RuntimeState::Completed
+        ) {
         RuntimeState::Partial
+    } else if job.cancelled.load(Ordering::Acquire) {
+        RuntimeState::Cancelled
     } else {
         RuntimeState::Failed
     };
@@ -417,14 +445,15 @@ fn fail(job: &Job, code: OperationErrorCode, message: String) {
         evidence,
     });
     if let Err(error) = job.prepared.persist(&outcome) {
-        outcome.errors.push(OperationError {
+        let error = OperationError {
             code: OperationErrorCode::EvidenceIncomplete,
             message: error.to_string(),
             field: None,
             operation: outcome.operation.clone(),
             run_id: Some(outcome.run_id.clone()),
             evidence: outcome.evidence.clone(),
-        });
+        };
+        outcome.errors.push(error);
     }
 }
 
@@ -551,6 +580,8 @@ pub fn error_code(error: &Error) -> OperationErrorCode {
         OperationErrorCode::OutputConflict
     } else if message.contains("stale_revision") {
         OperationErrorCode::StaleRevision
+    } else if message.contains("evidence_incomplete") {
+        OperationErrorCode::EvidenceIncomplete
     } else if message.contains("unsupported_input") {
         OperationErrorCode::UnsupportedInput
     } else {

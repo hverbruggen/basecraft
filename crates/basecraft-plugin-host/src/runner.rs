@@ -136,9 +136,8 @@ impl PreparedOperation {
                 snapshot: crate::Snapshot::of(session.doc_key(doc), checked)?,
                 dependencies: session
                     .document_record(doc)?
-                    .origins
-                    .into_iter()
-                    .map(|(path, _)| path)
+                    .origin_bundles()
+                    .map(Path::to_path_buf)
                     .collect(),
             });
             bindings
