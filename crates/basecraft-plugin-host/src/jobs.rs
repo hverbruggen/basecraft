@@ -105,7 +105,7 @@ impl JobManager {
                 target.generation,
                 target.revision,
                 &result.ops,
-                actor,
+                &actor,
             ) {
                 job.outcome
                     .lock()
