@@ -211,6 +211,7 @@ impl FileJob {
         Ok(())
     }
 
+    #[must_use]
     pub(crate) fn with_registry(
         mut self,
         registry: std::sync::Arc<crate::registry::Registry>,
@@ -226,6 +227,7 @@ impl FileJob {
         }
     }
 
+    #[must_use]
     pub fn with_cpu_budget(mut self, budget: usize) -> Self {
         self.cpu_budget = budget.clamp(1, crate::compute::available());
         self
@@ -1830,24 +1832,6 @@ pub fn output_beside(file: &Path, suffix: &str, ext: &str) -> PathBuf {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn output_names_number_up() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("rbcL.aln.fasta");
-        let first = output_beside(&file, "mafft", "fasta");
-        assert_eq!(first, dir.path().join("rbcL.mafft.fasta"));
-        std::fs::write(&first, "").unwrap();
-        assert_eq!(
-            output_beside(&file, "mafft", "fasta"),
-            dir.path().join("rbcL.mafft-2.fasta")
-        );
-    }
-}
-
 /// Shared immutable-file preparation for legacy and registered jobs.
 pub(crate) fn freeze_file(source: &Path, destination: &Path) -> Result<String> {
     let before = basecraft_ops::input_evidence::stamp(source)?;
@@ -1869,4 +1853,22 @@ pub(crate) fn publish_artifact(
     location: basecraft_ops::analysis_store::ArtifactDestination,
 ) -> Result<PathBuf> {
     Ok(run.publish(name, location)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn output_names_number_up() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("rbcL.aln.fasta");
+        let first = output_beside(&file, "mafft", "fasta");
+        assert_eq!(first, dir.path().join("rbcL.mafft.fasta"));
+        std::fs::write(&first, "").unwrap();
+        assert_eq!(
+            output_beside(&file, "mafft", "fasta"),
+            dir.path().join("rbcL.mafft-2.fasta")
+        );
+    }
 }

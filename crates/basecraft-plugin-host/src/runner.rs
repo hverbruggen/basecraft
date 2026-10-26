@@ -1,5 +1,5 @@
 //! Shared registered-operation preparation and validated finalization. Scientific
-//! bytes and publications use the same FileJob/store/input-evidence primitives.
+//! bytes and publications use the same `FileJob`/store/input-evidence primitives.
 use std::collections::{BTreeMap, BTreeSet};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
@@ -13,7 +13,11 @@ use basecraft_ops::{
     input_evidence,
 };
 use basecraft_protocol::{
-    operation::*,
+    operation::{
+        ExecutionFamily, InputReference, InputView, InvocationContext, InvocationInputEvidence,
+        MAX_ARTIFACTS, MAX_NESTING, OperationOutcome, OperationRequest, PluginArtifact,
+        PublishedArtifact,
+    },
     plugin::InvokeResult,
     provenance::{ArtifactRevision, Completeness, Publication},
 };
@@ -363,7 +367,7 @@ impl PreparedOperation {
 
     pub fn execute(&self, cancelled: Arc<AtomicBool>) -> Result<InvokeResult> {
         if self.operation.descriptor.host_workflow.is_some() {
-            return self.execute_workflow(cancelled);
+            return self.execute_workflow(&cancelled);
         }
         let permit = crate::compute::reserve_cpu(
             self.context.cpu_threads,
@@ -854,7 +858,7 @@ fn export_collection(
 }
 
 impl PreparedOperation {
-    fn execute_workflow(&self, cancelled: Arc<AtomicBool>) -> Result<InvokeResult> {
+    fn execute_workflow(&self, cancelled: &AtomicBool) -> Result<InvokeResult> {
         if self.operation.package.manifest.id != "basecraft.host" {
             return Err(Error::Protocol(
                 "host workflows require the reserved application package".into(),
