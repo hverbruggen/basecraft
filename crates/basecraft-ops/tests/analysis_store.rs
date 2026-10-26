@@ -344,3 +344,135 @@ fn nested_collection_bindings_reopen_without_changing_sibling_bindings() {
         Some(run.directory())
     );
 }
+
+#[test]
+fn multi_input_verification_uses_only_declared_owners_and_never_bypasses_breaks() {
+    use basecraft_ops::input_evidence;
+    let temp = tempfile::tempdir().unwrap();
+    let source_a = temp.path().join("a.txt");
+    let source_b = temp.path().join("b.txt");
+    std::fs::write(&source_a, b"first").unwrap();
+    std::fs::write(&source_b, b"second").unwrap();
+    let make_ledger = |source: &std::path::Path| {
+        input_evidence::reference_input_with_dependencies(
+            &temp.path().join("result.txt"),
+            source,
+            &basecraft_io::hash_file(source).unwrap(),
+            &[],
+            "test input",
+        )
+        .unwrap()
+    };
+    let a = make_ledger(&source_a);
+    let b = make_ledger(&source_b);
+    let same_hash = make_ledger(&source_b);
+    let main = ArtifactRun::create(&temp.path().join("result.txt"), "multi-source").unwrap();
+    let dependencies = [
+        a.directory().to_owned(),
+        b.directory().to_owned(),
+        same_hash.directory().to_owned(),
+    ];
+    input_evidence::link_generated_input(
+        &main,
+        &dependencies,
+        b"submitted view",
+        "identity-v1",
+        "test",
+    )
+    .unwrap();
+    let reference = input_evidence::read_input(b.directory())
+        .unwrap()
+        .source
+        .unwrap();
+    assert_eq!(
+        input_evidence::verified_source(main.directory(), &reference).unwrap(),
+        source_b
+    );
+    let mut wrong_size = reference.clone();
+    wrong_size.stamp.size += 1;
+    assert!(input_evidence::verified_source(main.directory(), &wrong_size).is_err());
+    let mut broken = input_evidence::read_input(same_hash.directory()).unwrap();
+    broken.state = "broken".into();
+    input_evidence::write_json(&same_hash.directory().join("input.json"), &broken).unwrap();
+    for dependencies in [
+        dependencies.to_vec(),
+        dependencies.into_iter().rev().collect(),
+    ] {
+        input_evidence::link_generated_input(
+            &main,
+            &dependencies,
+            b"submitted view",
+            "identity-v1",
+            "test",
+        )
+        .unwrap();
+        assert!(
+            input_evidence::verified_source(main.directory(), &reference)
+                .unwrap_err()
+                .to_string()
+                .contains("explicitly broken")
+        );
+    }
+    // A mutable ledger with the right hash is insufficient: its verified,
+    // immutable publication must also declare that reference.
+    let undeclared = make_ledger(&source_a);
+    let mut altered = input_evidence::read_input(undeclared.directory()).unwrap();
+    altered.source = Some(reference.clone());
+    input_evidence::write_json(&undeclared.directory().join("input.json"), &altered).unwrap();
+    input_evidence::link_generated_input(
+        &main,
+        &[undeclared.directory().to_owned()],
+        b"submitted view",
+        "identity-v1",
+        "test",
+    )
+    .unwrap();
+    assert!(input_evidence::verified_source(main.directory(), &reference).is_err());
+}
+
+#[test]
+fn preserved_primary_is_not_replaced_by_a_matching_ancestor_with_missing_original() {
+    use basecraft_ops::input_evidence;
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("original.txt");
+    let bytes = b"retained primary bytes";
+    std::fs::write(&source, bytes).unwrap();
+    let hash = basecraft_io::hash_file(&source).unwrap();
+    let anchor = temp.path().join("result.txt");
+    let ancestor =
+        input_evidence::reference_input_with_dependencies(&anchor, &source, &hash, &[], "ancestor")
+            .unwrap();
+    let main = input_evidence::reference_input_with_dependencies(
+        &anchor,
+        &source,
+        &hash,
+        &[ancestor.directory().to_owned()],
+        "primary",
+    )
+    .unwrap();
+    // Preserve this primary while the ancestor still references the original.
+    // Matching ancestry is inspected for explicit breaks, not substituted for
+    // a primary whose identity and preserved bytes remain valid.
+    let mut input = input_evidence::read_input(main.directory()).unwrap();
+    let reference = input.source.clone().unwrap();
+    let preserved = main.directory().join("preserved-input");
+    std::fs::write(&preserved, bytes).unwrap();
+    input.state = "preserved".into();
+    input_evidence::write_json(&main.directory().join("input.json"), &input).unwrap();
+    std::fs::remove_file(&source).unwrap();
+    assert_eq!(
+        input_evidence::verified_source(main.directory(), &reference).unwrap(),
+        preserved
+    );
+    assert_eq!(std::fs::read(&preserved).unwrap(), bytes);
+    // A matching explicit break still fails closed, even with a good primary.
+    let mut broken = input_evidence::read_input(ancestor.directory()).unwrap();
+    broken.state = "broken".into();
+    input_evidence::write_json(&ancestor.directory().join("input.json"), &broken).unwrap();
+    assert!(
+        input_evidence::verified_source(main.directory(), &reference)
+            .unwrap_err()
+            .to_string()
+            .contains("explicitly broken")
+    );
+}

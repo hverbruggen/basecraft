@@ -216,3 +216,36 @@ fn completed_data_schema_embeds_local_references_at_its_actual_envelope_location
     assert!(!schema.is_valid(&json!({"state":"completed","data":{"bytes":-1}})));
     assert!(!schema.is_valid(&json!({"state":"completed","data":null})));
 }
+
+#[test]
+fn live_process_keeps_its_contract_snapshot_and_still_validates_declared_operations() {
+    let temp = tempfile::tempdir().unwrap();
+    let original =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/registry-plugin");
+    for name in ["plugin.toml", "operations.json", "plugin.py"] {
+        std::fs::copy(original.join(name), temp.path().join(name)).unwrap();
+    }
+    let manifest = Manifest::load(temp.path()).unwrap();
+    let python = std::env::var_os("BASECRAFT_PYTHON").map_or_else(
+        || std::path::PathBuf::from("python3"),
+        std::path::PathBuf::from,
+    );
+    let mut process = basecraft_plugin_host::PluginProcess::spawn_with(&manifest, &python).unwrap();
+    // Editable metadata changes affect future discovery/spawns. The live
+    // process keeps its negotiated snapshot, including strict declared schemas.
+    std::fs::write(
+        temp.path().join("operations.json"),
+        b"invalid changed contract",
+    )
+    .unwrap();
+    let error = process
+        .invoke("count", json!({"mode":"not-a-declared-mode"}), None)
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("Mode: value does not satisfy schema"),
+        "{error}"
+    );
+    process.ping().unwrap();
+}
