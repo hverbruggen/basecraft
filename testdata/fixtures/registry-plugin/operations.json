@@ -12,19 +12,60 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "include_newlines": {"type": "boolean", "default": true},
-          "mode": {"enum": ["normal", "slow", "fail", "invalid_data"], "default": "normal"}
+          "include_newlines": {
+            "type": "boolean",
+            "default": true
+          },
+          "mode": {
+            "enum": [
+              "normal",
+              "slow",
+              "fail",
+              "invalid_data",
+              "crash",
+              "noisy",
+              "hang",
+              "extra_output",
+              "symlink_output",
+              "delayed"
+            ],
+            "default": "normal"
+          }
         }
       },
       "result": {
         "type": "object",
         "additionalProperties": false,
-        "properties": {"bytes": {"type": "integer", "minimum": 0}},
-        "required": ["bytes"]
+        "properties": {
+          "bytes": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "bytes"
+        ]
       },
-      "inputs": {"sources": {"view": "bytes", "media_type": "application/octet-stream", "min": 1, "max": 8}},
-      "outputs": {"report": {"media_type": "application/json", "min": 1, "max": 1, "visibility": "result"}},
-      "effects": {"document_write": false, "artifact_write": true}
+      "inputs": {
+        "sources": {
+          "view": "bytes",
+          "media_type": "application/octet-stream",
+          "min": 1,
+          "max": 8
+        }
+      },
+      "outputs": {
+        "report": {
+          "media_type": "application/json",
+          "min": 1,
+          "max": 1,
+          "visibility": "result"
+        }
+      },
+      "effects": {
+        "document_write": false,
+        "artifact_write": true
+      }
     }
   ]
 }

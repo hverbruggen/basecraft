@@ -516,7 +516,9 @@ fn run_plugin(
     let mut session = basecraft_ops::Session::recoverable(root)?;
     let doc = session.open(file)?;
     let t_snap = Instant::now();
-    let snap = basecraft_plugin_host::Snapshot::of(session.doc_key(doc), session.doc(doc))?;
+    let generation = session.generation(doc);
+    let snap =
+        basecraft_plugin_host::Snapshot::of(session.doc_key(doc), session.checked_sequence(doc)?)?;
     let snap_ms = t_snap.elapsed().as_secs_f64() * 1e3;
     let t_call = Instant::now();
     let result = plugin.invoke(operation, serde_json::Value::Object(map), Some(&snap))?;
@@ -534,14 +536,9 @@ fn run_plugin(
         id: plugin.info.id.clone(),
         version: plugin.info.version.clone(),
     };
-    let report = basecraft_plugin_host::apply::apply_proposals(
-        &mut session,
-        doc,
-        snap.version,
-        result.ops,
-        &actor,
-    )?;
-    println!("applied {}, dropped {}", report.applied, report.dropped);
+    let count = result.ops.len();
+    session.apply_sequence_proposals(doc, generation, snap.version, &result.ops, actor)?;
+    println!("applied {count} proposals");
     if save {
         session.save(doc, None)?;
         println!("saved {}", file.display());

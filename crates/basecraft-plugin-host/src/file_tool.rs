@@ -76,6 +76,7 @@ pub struct FileJob {
     run_id: String,
     source_record: basecraft_ops::document_record::DocumentRecord,
     cpu_budget: usize,
+    accepted_registry: Option<std::sync::Arc<crate::registry::Registry>>,
     granted_budget: std::sync::atomic::AtomicUsize,
     source_path: PathBuf,
     source_version: u64,
@@ -208,6 +209,21 @@ impl FileJob {
         });
         self.artifacts = Some(run);
         Ok(())
+    }
+
+    pub(crate) fn with_registry(
+        mut self,
+        registry: std::sync::Arc<crate::registry::Registry>,
+    ) -> Self {
+        self.accepted_registry = Some(registry);
+        self
+    }
+
+    pub(crate) fn stage_registry(&self) -> Result<crate::registry::Registry> {
+        match &self.accepted_registry {
+            Some(registry) => Ok(registry.as_ref().clone()),
+            None => crate::registry::Registry::load(&crate::registry::RegistryConfig::discover()?),
+        }
     }
 
     pub fn with_cpu_budget(mut self, budget: usize) -> Self {
@@ -371,6 +387,7 @@ impl FileJob {
             source_record: session.document_record(doc)?,
             source_hash,
             cpu_budget: crate::compute::effective_allocation()?,
+            accepted_registry: None,
             granted_budget: std::sync::atomic::AtomicUsize::new(0),
             artifacts,
             species: None,
@@ -432,6 +449,7 @@ impl FileJob {
                 basecraft_io::hash_file(&source_path).map_err(basecraft_ops::Error::from)?
             },
             cpu_budget: crate::compute::effective_allocation()?,
+            accepted_registry: None,
             granted_budget: std::sync::atomic::AtomicUsize::new(0),
             artifacts: None,
             species: None,
@@ -484,6 +502,7 @@ impl FileJob {
             source_path,
             run_id,
             cpu_budget: crate::compute::effective_allocation()?,
+            accepted_registry: None,
             granted_budget: std::sync::atomic::AtomicUsize::new(0),
             artifacts: None,
             species: None,
@@ -587,6 +606,7 @@ impl FileJob {
             source_record: self.following_record(input)?,
             source_hash: self.source_hash.clone(),
             cpu_budget: self.cpu_budget,
+            accepted_registry: self.accepted_registry.clone(),
             granted_budget: std::sync::atomic::AtomicUsize::new(0),
             artifacts: None,
             species: None,
@@ -1270,9 +1290,39 @@ impl FileJob {
         self.granted_budget
             .store(granted_budget, std::sync::atomic::Ordering::Relaxed);
         let manifest = Manifest::load(&self.plugin)?;
-        let mut process = PluginProcess::spawn_with_allocation(&manifest, granted_budget)?;
-        let mut params =
-            crate::compute::parameters(&manifest.id, self.params.clone(), granted_budget);
+        let (mut process, mut params) = if let Some(registry) = &self.accepted_registry {
+            let operation = registry
+                .operations
+                .values()
+                .find(|op| {
+                    op.package.manifest.id == manifest.id
+                        && op.descriptor.implementation == self.operation
+                })
+                .ok_or_else(|| Error::Protocol("accepted workflow stage is unavailable".into()))?;
+            operation.package.verify()?;
+            if operation.package.manifest.dir != manifest.dir {
+                return Err(Error::Protocol(
+                    "workflow stage package differs from accepted package".into(),
+                ));
+            }
+            let python =
+                operation.package.interpreter.as_deref().ok_or_else(|| {
+                    Error::Protocol("workflow stage runtime is unavailable".into())
+                })?;
+            (
+                PluginProcess::spawn_accepted(&manifest, python, granted_budget)?,
+                crate::compute::parameters_for(
+                    &operation.descriptor,
+                    self.params.clone(),
+                    granted_budget,
+                ),
+            )
+        } else {
+            (
+                PluginProcess::spawn_with_allocation(&manifest, granted_budget)?,
+                crate::compute::parameters(&manifest.id, self.params.clone(), granted_budget),
+            )
+        };
         params.insert("job_id".into(), json!(self.run_id));
         params.entry("original_source").or_insert(
             serde_json::to_value(&self.source_path).map_err(|e| Error::Protocol(e.to_string()))?,

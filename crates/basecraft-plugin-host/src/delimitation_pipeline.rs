@@ -70,8 +70,7 @@ impl AlignmentJob {
             if retained < 2 {
                 return Err(Error::Protocol("GMYC unavailable: fewer than two retained haplotypes; no tree or fit was invented".into()));
             }
-            let registry =
-                crate::registry::Registry::load(&crate::registry::RegistryConfig::discover()?)?;
+            let registry = prepare.stage_registry()?;
             let plugin = registry
                 .resolve("basecraft.distance/tree@1", None)?
                 .package

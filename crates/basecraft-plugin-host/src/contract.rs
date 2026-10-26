@@ -441,7 +441,12 @@ pub fn normalize_parameters(descriptor: &OperationDescriptor, requested: &Value)
 
 /// Preserve local references when placing the parameter schema in an MCP request.
 pub fn embedded_parameters(schema: &Value) -> Result<Value> {
-    fn rebase(schema: &Value) -> Value {
+    embedded_schema(schema, "#/properties/parameters")
+}
+
+/// Embed an already bounded author schema at an absolute local JSON pointer.
+pub fn embedded_schema(schema: &Value, location: &str) -> Result<Value> {
+    fn rebase(schema: &Value, location: &str) -> Value {
         match schema {
             Value::Object(map) => Value::Object(
                 map.iter()
@@ -449,7 +454,7 @@ pub fn embedded_parameters(schema: &Value) -> Result<Value> {
                         let value = match key.as_str() {
                             "$ref" => value.as_str().map_or_else(
                                 || value.clone(),
-                                |r| json!(format!("#/properties/parameters{}", &r[1..])),
+                                |r| json!(format!("{location}{}", &r[1..])),
                             ),
                             "$defs" | "properties" => value.as_object().map_or_else(
                                 || value.clone(),
@@ -458,23 +463,25 @@ pub fn embedded_parameters(schema: &Value) -> Result<Value> {
                                         definitions
                                             .iter()
                                             .map(|(name, definition)| {
-                                                (name.clone(), rebase(definition))
+                                                (name.clone(), rebase(definition, location))
                                             })
                                             .collect(),
                                     )
                                 },
                             ),
                             "default" | "const" | "enum" | "examples" => value.clone(),
-                            _ => rebase(value),
+                            _ => rebase(value, location),
                         };
                         (key.clone(), value)
                     })
                     .collect::<Map<_, _>>(),
             ),
-            Value::Array(array) => Value::Array(array.iter().map(rebase).collect()),
+            Value::Array(array) => {
+                Value::Array(array.iter().map(|value| rebase(value, location)).collect())
+            }
             _ => schema.clone(),
         }
     }
     BoundedSchema::compile(schema)?;
-    Ok(rebase(schema))
+    Ok(rebase(schema, location))
 }

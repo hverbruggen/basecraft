@@ -44,6 +44,7 @@ pub struct PreparedOperation {
     pub policy: SessionPolicy,
     pub ledger_inputs: Vec<ArtifactRevision>,
     pub initiator: String,
+    workflow_registry: Option<Arc<crate::registry::Registry>>,
     _scratch: tempfile::TempDir,
 }
 
@@ -56,8 +57,18 @@ impl PreparedOperation {
         policy: SessionPolicy,
         initiator: String,
         session: Option<&mut basecraft_ops::Session>,
+        registry: &crate::registry::Registry,
     ) -> Result<Self> {
         policy.check(&operation)?;
+        let workflow_registry = if operation.descriptor.host_workflow.is_some() {
+            registry.resolve("basecraft.delimitation/haplotypes@1", None)?;
+            if operation.descriptor.host_workflow.as_deref() != Some("asap_alignment") {
+                registry.resolve("basecraft.distance/tree@1", None)?;
+            }
+            Some(Arc::new(registry.clone()))
+        } else {
+            None
+        };
         let mut sequence = None;
         let bindings = if operation.descriptor.family == ExecutionFamily::SequenceProposal {
             let session = session.ok_or_else(|| {
@@ -346,6 +357,7 @@ impl PreparedOperation {
             policy,
             ledger_inputs,
             initiator,
+            workflow_registry,
             _scratch: scratch,
         })
     }
@@ -362,7 +374,7 @@ impl PreparedOperation {
             return Err(Error::Protocol("cancelled before spawn".into()));
         }
         self.operation.package.verify()?;
-        let mut process = PluginProcess::spawn_allocated(
+        let mut process = PluginProcess::spawn_accepted(
             &self.operation.package.manifest,
             self.operation
                 .package
@@ -396,7 +408,7 @@ impl PreparedOperation {
         );
         let teardown = process.finish();
         let (stdout, stderr) = process.captured_output();
-        input_evidence::write_json(
+        let evidence = input_evidence::write_json(
             &self.run.artifact("execution.json")?,
             &json!({
                 "schema":1,"operation":self.operation.id,"package_version":self.operation.package.manifest.version,
@@ -405,13 +417,19 @@ impl PreparedOperation {
                 "process_instance":basecraft_platform::process_instance(),"context":context,
                 "requested_parameters":self.request.parameters,"effective_parameters":effective,"stdout":stdout,"stderr":stderr,
             }),
-        )?;
+        );
         match result {
             Ok(result) => {
                 teardown?;
+                evidence?;
                 Ok(result)
             }
-            Err(error) => Err(error),
+            Err(error) => match evidence {
+                Ok(()) => Err(error),
+                Err(evidence) => Err(Error::Protocol(format!(
+                    "{error}; execution evidence write failed: {evidence}"
+                ))),
+            },
         }
     }
 
@@ -846,8 +864,9 @@ impl PreparedOperation {
         if cancelled.load(Ordering::Acquire) {
             return Err(Error::Protocol("cancelled before workflow".into()));
         }
-        let registry =
-            crate::registry::Registry::load(&crate::registry::RegistryConfig::discover()?)?;
+        let registry = self.workflow_registry.as_ref().ok_or_else(|| {
+            Error::Protocol("host workflow is missing accepted stage registry".into())
+        })?;
         let preparation_plugin = registry
             .resolve("basecraft.delimitation/haplotypes@1", None)?
             .package
@@ -883,7 +902,8 @@ impl PreparedOperation {
             crate::file_tool::AlignmentInput::Aligned,
             root.join("preparation.json"),
         )?
-        .with_cpu_budget(self.context.cpu_threads);
+        .with_cpu_budget(self.context.cpu_threads)
+        .with_registry(registry.clone());
         let submitted = basecraft_io::hash_file(Path::new(&self.context.inputs["alignment"][0]))
             .map_err(basecraft_ops::Error::from)?;
         if preparation.input_key.1 != submitted {

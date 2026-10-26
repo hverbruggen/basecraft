@@ -1,10 +1,10 @@
 # Versioned operation contracts
 
-This describes the schema-2 metadata/SDK foundation. Static validation, local
-installation and discovery are implemented. Generic execution, API/MCP job
-adapters, proposal application and bundled migration are subsequent phases;
-installation alone does not yet expose a runnable generated MCP tool. Existing
-schema-1 commands keep their explicit routes.
+Schema-2 contracts drive discovery, validation and owned execution through the
+CLI, Python, MCP and the installed-operation picker. Existing schema-1 packages
+retain explicit legacy routes; their forms do not create typed operations.
+The implementation requires exact-source validation before release; the examples
+below describe the source interfaces, not a claim about an older installed build.
 
 ## Package and installation
 
@@ -147,7 +147,14 @@ The request type separates inputs, scientific parameters and destinations:
 }
 ```
 
-This is a contract example, not an available `operations run` command yet.
+Save the request as `request.json`, using the actual installed operation ID:
+
+```sh
+basecraft operations run org.example.seqtools/count@1 --project /path/to/project --request request.json --json
+```
+
+Relative bindings resolve beneath the project root. The supplied fixture uses
+`org.example.registry-fixture/count@1` and also declares a `mode` parameter.
 Parameters never choose executables, environment, output/control paths, job IDs
 or host allocation. All file references and destinations go through one policy
 resolver. It rejects traversal, symlink ancestors, hardlink input aliases,
@@ -195,9 +202,15 @@ Snapshots retain the existing sealed Arrow residues/features representation.
 `context_operation` handlers receive `(snapshot, parameters, context)`.
 Context schema 1 includes the public operation/run identity, named frozen input
 paths, allocated output paths, CPU allocation and host-owned cancel/progress
-paths. Generic strict atomic proposal application and stale-revision handling
-are not delivered by this metadata/SDK foundation. Authors must not assume that
-legacy remapping/dropped-edit behavior provides those guarantees.
+paths. The host retains the sealed snapshot and checks the owning session, document
+generation and revision before applying the whole typed proposal batch. Invalid
+or stale batches fail without applying a subset. Supported edits are sequence
+replacement and feature add/remove/update. A successful batch is one undo group;
+results never move to the newly selected GUI document. Headless sessions own
+independent documents. A file snapshot opens a sequence in that headless session;
+inspect the returned document ID and save explicitly through MCP when wanted.
+The generic picker currently offers file operations with scalar inputs and flat
+settings; sequence forms and headless clients cover proposal operations.
 
 ## JSON Schema profile and limits
 
@@ -239,11 +252,114 @@ The public protocol declares these exact limits:
 Validation estimates expanded schema work multiplied by instance nodes plus
 serialized bytes; uniqueItems also multiplies by instance size to bound pairwise
 work. Exceeding a limit returns an error; scientific inputs are not truncated.
-Bulk file/Arrow data is separate from bounded JSON frames. Runtime result counts,
-artifact publication, process output quotas and cancellation enforcement are
-remaining runner work; constants alone do not establish those guarantees.
-Connection waits are bounded at 20 seconds and initialize reads use a 20-second
-idle timeout; shutdown reads/writes use a 500 ms idle timeout,
-followed by a 500 ms exit wait and forced direct-child kill/reap. Invocation has
-no arbitrary short analysis timeout. Full process-tree cancellation and job
-ownership remain P3 work. Native MCP Tasks and GUI attachment are not advertised.
+Bulk file/Arrow data is separate from bounded JSON frames. Runtime artifact count and role cardinality, structured results and all declared
+files are checked before publication. Output members must be unique ordinary
+files within their allocated role; symlinks, hardlinks, escapes and undeclared
+files fail. Stdout and stderr are captured separately, each limited to 1 MiB.
+Connections/initialization have a total 20-second bound; writes/shutdown have a
+500 ms bound followed by forced process-group termination, leader reaping and
+bounded pipe draining. Invocation has no short analysis timeout by default.
+A trusted operator may set positive `BASECRAFT_PLUGIN_TIMEOUT_SECONDS`.
+Cancellation is cooperative through the allocated cancel file, followed by owned
+process-group termination. This is process ownership, not hostile-code isolation.
+
+## Headless clients and owned jobs
+
+```python
+from basecraft import operations
+
+metadata = operations.describe("org.example.registry-fixture/count@1")
+with operations.submit(
+    "org.example.registry-fixture/count@1", project="/path/to/project",
+    inputs={"sources": [{"kind": "file", "path": "first.txt"}]},
+    parameters={}, destinations={"report": "counts.json"},
+) as handle:
+    print(handle.status())
+    outcome = handle.result(timeout=120)
+    print(outcome["data"], outcome["artifacts"])
+```
+
+`operations.run` is the foreground convenience form. `OperationError` retains
+`code`, `run_id` and the host outcome. A wait timeout leaves the job running;
+`handle.cancel()` explicitly cancels it. Closing the handle closes its owning
+CLI session and cancels outstanding jobs. Set `BASECRAFT` to the matching CLI
+executable when it is not on PATH. The SDK interprets no scientific defaults.
+
+```sh
+basecraft mcp /path/to/project --allow-writes
+```
+
+MCP stdio targets 2025-11-25. After initialize, page `tools/list` using
+`nextCursor`; generated tools use `plugin_id.local_name.vMAJOR`. Arguments are
+an OperationRequest; the tool supplies its operation ID when omitted and rejects
+a different supplied ID. Calls return accepted jobs promptly in
+`structuredContent` and equivalent text JSON. Use
+`basecraft.host.jobs_get.v1`, `jobs_result.v1`, `jobs_cancel.v1` and
+`jobs_repair.v1`, each taking `{"job":"run_id"}`. Repair retries retained
+publication, never execution. `basecraft.host.registry_refresh.v1` refreshes
+metadata; changed lists notify `notifications/tools/list_changed`. Old cursors
+then fail. Accepted jobs retain their package/contract and session ownership.
+Read-only MCP sessions omit writing operations and recheck policy at invocation.
+Request cancellation does not cancel an already accepted job; disconnect does.
+Native MCP Tasks and live GUI attachment are not advertised.
+
+CLI/Python and MCP use the same normalized request and terminal outcome. Outcomes
+include requested/effective parameters, pins, validated data, published artifacts,
+proposal receipt, warnings, errors and evidence path. Errors distinguish invalid
+parameters, policy denial, stale metadata/revisions, unavailable packages,
+protocol violations, cancellation, engine failure and publication failure.
+Inspect `state` even when a foreground command returns valid JSON. Runtime states
+are queued/running/cancelling/finalizing followed by completed, failed, cancelled,
+interrupted or partial. IDs are usable only within their owning job session;
+there is no arbitrary on-disk job lookup or automatic crash resume.
+
+## Results, evidence and recovery
+
+The host freezes inputs before execution. Bytes are unchanged; alignment views
+use the existing canonical writer and Newick inputs are parsed. Context contains
+named frozen paths, per-input original/submitted hashes and transformation,
+allocated role destinations, CPU threads and cancel/progress paths. Authors
+must write only allocated outputs and return `data` matching the result schema
+and `artifacts` containing role-relative paths (`"."` for a single output).
+File operations return no edit proposals. Snapshot plugins receive the existing
+sealed Arrow pair via descriptors as well as retained host evidence.
+
+CPU settings declared by `cpu_parameter` or `cpu_parameters` are bound against
+the host allocation and validated again. Third-party code uses its configured
+interpreter (`BASECRAFT_PYTHON`, otherwise PATH python3). Bundles resolve their
+matching plugins, SDK and Python environment beside the executable; environment
+metadata installs nothing. Package digests do not fingerprint external engines.
+
+All inputs use ordinary shared input ledgers and ancestry. Publication uses the
+existing hidden analysis store, output hashes and reference-first export rules.
+Single outputs and collection destinations never overwrite existing files.
+Collections retain their relative layout. Evidence separates initiating caller
+from executor and records package/descriptor identity, effective parameters,
+submitted views, output hashes and captured diagnostics. Hidden support files
+remain referenced without adding automatic visible original copies.
+
+Finalization can cross multiple file/journal writes. A late failure reports
+`partial`, completed writes and retained evidence; these writes are not one
+filesystem transaction. Explicit repair uses retained validated bytes, verifies
+already published content and refuses collisions. Preserve the run directory
+and unrelated outputs when diagnosing failures. Crash records remain inspectable
+but are not automatically resumed. Power-loss recovery is distinct from ordinary
+I/O rollback of an atomic sequence proposal batch.
+
+## Bundled migration and conformance
+
+Bundled scientific entry points register their unchanged handlers with
+`plugin.contract()`. Explicit `legacy_adapter` bindings map public named inputs,
+scientific settings and host allocations to those handlers. Forms remain
+presentation metadata, not inferred schemas. Diagnostic legacy operations remain
+explicit legacy calls. Reserved `basecraft.host` contracts expose existing ASAP
+and GMYC alignment workflows; plugins cannot supply arbitrary host workflows.
+No generic workflow language or scientific algorithm is introduced.
+
+The independent fixture is under `testdata/fixtures/registry-plugin`. The
+source acceptance runner `crates/basecraft-cli/tests/operation_conformance.py`
+accepts an already built CLI, matching SDK interpreter and a disposable external
+root. It records the unchanged binary checksum, tests install/discovery, all
+three interfaces, policy/cancellation and a second operation added by package
+update without rebuilding. It never invokes Cargo. Scientific, replay, storage,
+QML, packaging and hostile-process regressions remain separate required checks.

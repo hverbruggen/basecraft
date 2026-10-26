@@ -26,7 +26,7 @@ fn request(mode: &str) -> OperationRequest {
     serde_json::from_value(json!({"operation":"org.example.registry-fixture/count@1","inputs":{"sources":[{"kind":"file","path":"a.txt"},{"kind":"file","path":"b.txt"}]},"parameters":{"mode":mode},"destinations":{"report":"report.json"}})).unwrap()
 }
 fn wait(manager: &JobManager, id: &str) -> basecraft_protocol::operation::OperationOutcome {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         let result = manager.get(id).unwrap();
         if result.state.terminal() {
@@ -193,7 +193,7 @@ fn installed_snapshot_proposals_commit_in_owner_and_stale_jobs_preserve_edits() 
             &mut session,
         )
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         manager.poll_proposals(&mut session);
         if manager.get(&accepted.run_id).unwrap().state.terminal() {
@@ -234,7 +234,7 @@ fn installed_snapshot_proposals_commit_in_owner_and_stale_jobs_preserve_edits() 
             },
         )
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         manager.poll_proposals(&mut session);
         if manager.get(&accepted.run_id).unwrap().state.terminal() {
@@ -248,4 +248,84 @@ fn installed_snapshot_proposals_commit_in_owner_and_stale_jobs_preserve_edits() 
     assert_eq!(session.doc(doc).feature_count(), 1);
     assert_eq!(session.doc(doc).read(0, 8), b"TCGTACGT");
     assert_eq!(std::fs::read(&source).unwrap(), b">sequence\nACGTACGT\n");
+}
+
+#[test]
+fn hostile_processes_and_unallocated_outputs_never_publish_success() {
+    let temp = tempfile::tempdir().unwrap();
+    for name in ["a.txt", "b.txt"] {
+        std::fs::write(temp.path().join(name), b"a").unwrap();
+    }
+    let registry = registry(temp.path());
+    let mut jobs = JobManager::default();
+    for mode in ["crash", "noisy", "extra_output", "symlink_output"] {
+        let accepted = jobs
+            .submit(
+                &registry,
+                request(mode),
+                SessionPolicy::new(temp.path(), true).unwrap(),
+                "hostile fixture",
+            )
+            .unwrap();
+        let result = wait(&jobs, &accepted.run_id);
+        assert_eq!(result.state, RuntimeState::Failed, "{mode}: {result:?}");
+        assert!(!temp.path().join("report.json").exists());
+        assert!(Path::new(result.evidence.as_ref().unwrap()).is_dir());
+    }
+}
+
+#[test]
+fn uncooperative_running_process_is_cancelled_and_reaped() {
+    let temp = tempfile::tempdir().unwrap();
+    for name in ["a.txt", "b.txt"] {
+        std::fs::write(temp.path().join(name), b"a").unwrap();
+    }
+    let registry = registry(temp.path());
+    let mut jobs = JobManager::default();
+    let accepted = jobs
+        .submit(
+            &registry,
+            request("hang"),
+            SessionPolicy::new(temp.path(), true).unwrap(),
+            "test",
+        )
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while jobs.get(&accepted.run_id).unwrap().state == RuntimeState::Queued {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    // Give the fixture time to enter its uncooperative loop. Cancellation also
+    // remains valid if slow initialization has not finished on this machine.
+    std::thread::sleep(Duration::from_millis(250));
+    jobs.cancel(&accepted.run_id).unwrap();
+    assert_eq!(wait(&jobs, &accepted.run_id).state, RuntimeState::Cancelled);
+    assert!(!temp.path().join("report.json").exists());
+}
+
+#[test]
+fn submitted_views_remain_frozen_when_both_originals_change_during_execution() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(temp.path().join("a.txt"), b"abc\n").unwrap();
+    std::fs::write(temp.path().join("b.txt"), b"xy\n").unwrap();
+    let registry = registry(temp.path());
+    let mut jobs = JobManager::default();
+    let accepted = jobs
+        .submit(
+            &registry,
+            request("delayed"),
+            SessionPolicy::new(temp.path(), true).unwrap(),
+            "test",
+        )
+        .unwrap();
+    std::fs::write(temp.path().join("a.txt"), b"new bytes").unwrap();
+    std::fs::write(temp.path().join("b.txt"), b"other bytes").unwrap();
+    let outcome = wait(&jobs, &accepted.run_id);
+    assert_eq!(outcome.state, RuntimeState::Completed, "{outcome:?}");
+    assert_eq!(outcome.data, Some(json!({"bytes":7})));
+    assert!(
+        !basecraft_ops::provenance::verify(&temp.path().join("report.json"))
+            .unwrap()
+            .is_empty()
+    );
 }

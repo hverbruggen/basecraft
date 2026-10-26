@@ -287,13 +287,27 @@ fn operation_tools(
             basecraft_plugin_host::contract::embedded_parameters(&operation.descriptor.parameters)?;
         schema["required"] = json!([]);
         let mut metadata = json!({"name":basecraft_plugin_host::contract::mcp_name(&operation.package.manifest.id,&operation.descriptor)?,
-            "description":operation.descriptor.description,"inputSchema":schema,"outputSchema":outcome_schema()?,
+            "description":operation.descriptor.description,"inputSchema":schema,"outputSchema":operation_outcome_schema(&operation.id, &operation.descriptor.result)?,
             "annotations":{"readOnlyHint":!operation.descriptor.effects.document_write && !operation.descriptor.effects.artifact_write,
                 "destructiveHint":operation.descriptor.effects.document_write,"openWorldHint":true}});
         metadata["_meta"] = json!({"basecraft":{"pins":operation.pins(&registry.generation),"runtime":"unverified"}});
         definitions.push(metadata);
     }
     Ok(definitions)
+}
+
+fn operation_outcome_schema(id: &str, result: &Value) -> Result<Value> {
+    let mut envelope = outcome_schema()?;
+    let definitions = envelope.as_object_mut().and_then(|o| o.remove("$defs"));
+    let result =
+        basecraft_plugin_host::contract::embedded_schema(result, "#/allOf/1/then/properties/data")?;
+    let mut schema = json!({"type":"object", "properties":{"operation":{"const":id}},
+        "allOf":[envelope, {"if":{"required":["state"],"properties":{"state":{"const":"completed"}}},
+            "then":{"required":["data"],"properties":{"data":result}}}]});
+    if let Some(definitions) = definitions {
+        schema["$defs"] = definitions;
+    }
+    Ok(schema)
 }
 
 fn outcome_schema() -> Result<Value> {

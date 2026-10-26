@@ -66,12 +66,23 @@ class RunHandle:
 
     def _call(self, request):
         with self._lock:
-            self._process.stdin.write(json.dumps(request).encode() + b"\n")
-            self._process.stdin.flush()
-            line = self._process.stdout.readline(_MAX_FRAME + 1)
-            if not line or len(line) > _MAX_FRAME:
-                raise OperationError({"errors": [{"code": "plugin_protocol_violation", "message": "Host job session closed or exceeded its frame limit"}]})
-            return json.loads(line)
+            try:
+                frame = json.dumps(request).encode() + b"\n"
+                if len(frame) > _MAX_FRAME:
+                    raise ValueError("Host request exceeded its frame limit")
+                self._process.stdin.write(frame)
+                self._process.stdin.flush()
+                line = self._process.stdout.readline(_MAX_FRAME + 1)
+                if not line or len(line) > _MAX_FRAME:
+                    raise ValueError("Host job session closed or exceeded its frame limit")
+                response = json.loads(line)
+                if not isinstance(response, dict):
+                    raise ValueError("Host job response must be an object")
+                return response
+            except (OSError, ValueError) as error:
+                raise OperationError({"run_id": self.job, "errors": [{
+                    "code": "plugin_protocol_violation", "message": str(error),
+                }]}) from error
 
     def status(self):
         return self._call({"method": "status", "job": self.job})

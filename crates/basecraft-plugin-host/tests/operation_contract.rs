@@ -201,3 +201,18 @@ fn embedding_distinguishes_property_names_and_literal_data_from_schema_keywords(
     );
     assert_eq!(embedded["properties"]["$ref"]["const"]["$ref"], "a literal");
 }
+
+#[test]
+fn completed_data_schema_embeds_local_references_at_its_actual_envelope_location() {
+    let result = json!({"type":"object", "$defs":{"count":{"type":"integer","minimum":0}},
+        "properties":{"bytes":{"$ref":"#/$defs/count"}},"required":["bytes"],"additionalProperties":false});
+    let embedded = contract::embedded_schema(&result, "#/allOf/1/then/properties/data").unwrap();
+    let envelope = json!({"allOf":[{"type":"object"},
+        {"if":{"required":["state"],"properties":{"state":{"const":"completed"}}},
+         "then":{"required":["data"],"properties":{"data":embedded}}}]});
+    let schema = jsonschema::draft202012::new(&envelope).unwrap();
+    assert!(schema.is_valid(&json!({"state":"queued","data":null})));
+    assert!(schema.is_valid(&json!({"state":"completed","data":{"bytes":7}})));
+    assert!(!schema.is_valid(&json!({"state":"completed","data":{"bytes":-1}})));
+    assert!(!schema.is_valid(&json!({"state":"completed","data":null})));
+}

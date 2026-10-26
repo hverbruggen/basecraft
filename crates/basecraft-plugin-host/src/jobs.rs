@@ -218,8 +218,14 @@ impl JobManager {
             .clone();
         let pins = operation.pins(&registry.generation);
         let key = request.request_key.clone();
-        let prepared =
-            PreparedOperation::prepare(operation, request, policy, initiator.into(), session)?;
+        let prepared = PreparedOperation::prepare(
+            operation,
+            request,
+            policy,
+            initiator.into(),
+            session,
+            registry,
+        )?;
         let outcome = OperationOutcome {
             schema: 1,
             operation: prepared.operation.id.clone(),

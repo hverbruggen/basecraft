@@ -84,6 +84,16 @@ impl PluginProcess {
 
     pub fn spawn_allocated(manifest: &Manifest, python: &Path, budget: usize) -> Result<Self> {
         crate::registry::require_enabled(&manifest.id)?;
+        Self::spawn_accepted(manifest, python, budget)
+    }
+
+    // Only the shared runner may use the package/policy frozen at acceptance.
+    // Subsequent disable/update/remove affects new submissions, not owned jobs.
+    pub(crate) fn spawn_accepted(
+        manifest: &Manifest,
+        python: &Path,
+        budget: usize,
+    ) -> Result<Self> {
         let cpu_budget = budget.clamp(1, crate::compute::available());
         let runtime_limit = std::env::var("BASECRAFT_PLUGIN_TIMEOUT_SECONDS")
             .ok()
