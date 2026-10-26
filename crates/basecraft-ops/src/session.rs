@@ -283,6 +283,18 @@ impl Session {
         }
     }
 
+    /// Checked access for plugin snapshots; never index a wrong-kind/closed slot.
+    pub fn checked_sequence(&self, id: DocId) -> Result<&SequenceDoc> {
+        let slot = self
+            .docs
+            .get(id.0)
+            .ok_or_else(|| invalid("unknown document"))?;
+        let Loaded::Sequence(sequence) = &slot.content else {
+            return Err(invalid("snapshot requires a sequence document"));
+        };
+        Ok(&sequence.doc)
+    }
+
     pub fn doc_key(&self, id: DocId) -> &str {
         &self.docs[id.0].key
     }

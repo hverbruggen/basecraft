@@ -62,7 +62,7 @@ impl Server {
         } else {
             ("sequence", self.session.doc(doc).version())
         };
-        json!({"document":doc.0,"path":self.session.doc_key(doc),"kind":kind,"version":version,
+        json!({"document":doc.0,"path":self.session.doc_key(doc),"kind":kind,"version":version,"generation":self.session.generation(doc),
             "state":self.session.state(doc),"can_undo":self.session.can_undo(doc),"can_redo":self.session.can_redo(doc)})
     }
 
@@ -358,6 +358,7 @@ pub fn serve(root: &Path, writable: bool, model: &str) -> Result<()> {
     });
     let mut output = std::io::stdout().lock();
     loop {
+        jobs.poll_proposals(&mut server.session);
         if basecraft_platform::interrupt::interrupted() {
             break;
         }
@@ -507,6 +508,19 @@ pub fn serve(root: &Path, writable: bool, model: &str) -> Result<()> {
                                 .is_ok_and(|tool| tool == name)
                             }) {
                                 let mut supplied = args;
+                                if supplied
+                                    .get("operation")
+                                    .is_some_and(|id| id != &json!(operation.id))
+                                {
+                                    return Ok(structured(
+                                        basecraft_plugin_host::jobs::error_value(
+                                            &operation.id,
+                                            OperationErrorCode::InvalidArguments,
+                                            "tool operation identity mismatch",
+                                        ),
+                                        true,
+                                    ));
+                                }
                                 supplied["operation"] = json!(operation.id);
                                 if supplied.get("parameters").is_none() {
                                     supplied["parameters"] = json!({});
@@ -514,10 +528,21 @@ pub fn serve(root: &Path, writable: bool, model: &str) -> Result<()> {
                                 let result = serde_json::from_value::<OperationRequest>(supplied)
                                     .map_err(basecraft_plugin_host::Error::from)
                                     .and_then(|request| {
-                                        jobs.submit(&registry, request, policy.clone(), model)
+                                        jobs.submit_in_session(
+                                            &registry,
+                                            request,
+                                            policy.clone(),
+                                            model,
+                                            &mut server.session,
+                                        )
                                     });
                                 return Ok(match result {
-                                    Ok(outcome) => structured(json!(outcome), false),
+                                    Ok(outcome) => {
+                                        if let Some(doc) = jobs.target_document(&outcome.run_id) {
+                                            server.documents.insert(doc.0, doc);
+                                        }
+                                        structured(json!(outcome), false)
+                                    }
                                     Err(error) => structured(
                                         basecraft_plugin_host::jobs::error_value(
                                             &operation.id,

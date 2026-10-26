@@ -160,3 +160,92 @@ fn denial_and_request_key_reuse_do_not_spawn_again() {
     );
     assert_eq!(wait(&jobs, &first.run_id).state, RuntimeState::Completed);
 }
+
+#[test]
+fn installed_snapshot_proposals_commit_in_owner_and_stale_jobs_preserve_edits() {
+    use basecraft_ops::Session;
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("sequence.fa");
+    std::fs::write(&source, b">sequence\nACGTACGT\n").unwrap();
+    let config = RegistryConfig {
+        bundled: temp.path().join("no-bundle"),
+        packages: temp.path().join("plugins"),
+        index: temp.path().join("index.json"),
+    };
+    registry::install(
+        &config,
+        &Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../testdata/fixtures/registry-sequence-plugin"),
+    )
+    .unwrap();
+    let registry = Registry::load(&config).unwrap();
+    let mut session = Session::new(temp.path());
+    let doc = session.open(&source).unwrap();
+    let mut manager = JobManager::default();
+    let request: OperationRequest = serde_json::from_value(json!({"operation":"org.example.registry-sequence/annotate@1",
+        "inputs":{"sequence":[{"kind":"document","doc":doc.0.to_string(),"generation":session.generation(doc),"revision":session.doc(doc).version()}]},"parameters":{}})).unwrap();
+    let accepted = manager
+        .submit_in_session(
+            &registry,
+            request,
+            SessionPolicy::new(temp.path(), true).unwrap(),
+            "test",
+            &mut session,
+        )
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        manager.poll_proposals(&mut session);
+        if manager.get(&accepted.run_id).unwrap().state.terminal() {
+            break;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let completed = manager.result(&accepted.run_id).unwrap();
+    assert_eq!(completed.state, RuntimeState::Completed, "{completed:?}");
+    assert_eq!(
+        completed.proposals.unwrap().document,
+        Some(doc.0.to_string())
+    );
+    assert_eq!(session.doc(doc).feature_count(), 1);
+    session.undo(doc).unwrap();
+    assert_eq!(session.doc(doc).feature_count(), 0);
+    session.redo(doc).unwrap();
+    assert_eq!(session.doc(doc).feature_count(), 1);
+    let stale: OperationRequest = serde_json::from_value(json!({"operation":"org.example.registry-sequence/annotate@1",
+        "inputs":{"sequence":[{"kind":"document","doc":doc.0.to_string(),"generation":session.generation(doc),"revision":session.doc(doc).version()}]},"parameters":{"slow":true}})).unwrap();
+    let accepted = manager
+        .submit_in_session(
+            &registry,
+            stale,
+            SessionPolicy::new(temp.path(), true).unwrap(),
+            "test",
+            &mut session,
+        )
+        .unwrap();
+    session
+        .apply(
+            doc,
+            basecraft_protocol::Op::SeqReplace {
+                start: 0,
+                end: 1,
+                residues: "T".into(),
+            },
+        )
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        manager.poll_proposals(&mut session);
+        if manager.get(&accepted.run_id).unwrap().state.terminal() {
+            break;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let failed = manager.result(&accepted.run_id).unwrap();
+    assert_eq!(failed.state, RuntimeState::Failed);
+    assert_eq!(session.doc(doc).feature_count(), 1);
+    assert_eq!(session.doc(doc).read(0, 8), b"TCGTACGT");
+    assert_eq!(std::fs::read(&source).unwrap(), b">sequence\nACGTACGT\n");
+}

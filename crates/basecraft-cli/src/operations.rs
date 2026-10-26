@@ -161,8 +161,15 @@ pub fn operations(command: OperationsCommand) -> Result<()> {
             request.operation = operation;
             let policy = basecraft_plugin_host::policy::SessionPolicy::new(&project, true)?;
             let mut jobs = basecraft_plugin_host::jobs::JobManager::default();
+            let mut session = basecraft_ops::Session::recoverable(project.canonicalize()?)?;
             basecraft_platform::interrupt::install()?;
-            let accepted = match jobs.submit(&registry, request.clone(), policy, "CLI") {
+            let accepted = match jobs.submit_in_session(
+                &registry,
+                request.clone(),
+                policy,
+                "CLI",
+                &mut session,
+            ) {
                 Ok(accepted) => accepted,
                 Err(error) => {
                     println!(
@@ -177,6 +184,7 @@ pub fn operations(command: OperationsCommand) -> Result<()> {
                 }
             };
             loop {
+                jobs.poll_proposals(&mut session);
                 if basecraft_platform::interrupt::interrupted() {
                     jobs.cancel(&accepted.run_id)?;
                 }
@@ -217,6 +225,7 @@ fn serve_jobs(project: &Path) -> Result<()> {
     let mut registry = Registry::load(&config)?;
     let policy = basecraft_plugin_host::policy::SessionPolicy::new(project, true)?;
     let mut jobs = basecraft_plugin_host::jobs::JobManager::default();
+    let mut session = basecraft_ops::Session::recoverable(project.canonicalize()?)?;
     basecraft_platform::interrupt::install()?;
     let (sender, receiver) = std::sync::mpsc::sync_channel(16);
     std::thread::spawn(move || {
@@ -235,6 +244,7 @@ fn serve_jobs(project: &Path) -> Result<()> {
     });
     let mut output = std::io::stdout().lock();
     loop {
+        jobs.poll_proposals(&mut session);
         if basecraft_platform::interrupt::interrupted() {
             break;
         }
@@ -247,11 +257,12 @@ fn serve_jobs(project: &Path) -> Result<()> {
         let operation = request["request"]["operation"].as_str().unwrap_or("");
         let response = (|| -> Result<Value> {
             match request["method"].as_str().unwrap_or("") {
-                "submit" => Ok(serde_json::to_value(jobs.submit(
+                "submit" => Ok(serde_json::to_value(jobs.submit_in_session(
                     &registry,
                     serde_json::from_value(request["request"].clone())?,
                     policy.clone(),
                     "Python",
+                    &mut session,
                 )?)?),
                 "status" => Ok(serde_json::to_value(
                     jobs.get(request["job"].as_str().ok_or("missing job")?)?,

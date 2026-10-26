@@ -1,0 +1,49 @@
+{
+  "schema": 1,
+  "operations": [
+    {
+      "name": "annotate",
+      "version": "1.0.0",
+      "implementation": "annotate",
+      "title": "Annotate a range",
+      "description": "Conformance annotation proposal against an exact sequence snapshot.",
+      "family": "sequence_proposal",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "start": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          },
+          "end": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "slow": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      },
+      "result": {
+        "type": "null"
+      },
+      "inputs": {
+        "sequence": {
+          "view": "sequence_snapshot",
+          "media_type": "application/vnd.apache.arrow.stream",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "outputs": {},
+      "effects": {
+        "document_write": true,
+        "artifact_write": false
+      }
+    }
+  ]
+}

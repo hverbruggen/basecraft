@@ -115,8 +115,8 @@ class RunHandle:
 
 def submit(operation, *, project, inputs=None, parameters=None, destinations=None,
            pins=None, request_key=None):
-    request = {"operation": operation, "inputs": inputs or {}, "parameters": parameters or {},
-               "destinations": destinations or {}}
+    request = {"operation": operation, "inputs": {} if inputs is None else inputs, "parameters": {} if parameters is None else parameters,
+               "destinations": {} if destinations is None else destinations}
     if pins is not None:
         request["pins"] = pins
     if request_key is not None:

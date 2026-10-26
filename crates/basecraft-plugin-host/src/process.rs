@@ -82,6 +82,22 @@ impl PluginProcess {
 
     pub fn spawn_allocated(manifest: &Manifest, python: &Path, budget: usize) -> Result<Self> {
         let cpu_budget = budget.clamp(1, crate::compute::available());
+        let runtime_limit = std::env::var("BASECRAFT_PLUGIN_TIMEOUT_SECONDS")
+            .ok()
+            .map(|value| {
+                let seconds: u64 = value.parse().map_err(|_| {
+                    Error::Protocol(
+                        "BASECRAFT_PLUGIN_TIMEOUT_SECONDS must be positive seconds".into(),
+                    )
+                })?;
+                if seconds == 0 {
+                    return Err(Error::Protocol(
+                        "BASECRAFT_PLUGIN_TIMEOUT_SECONDS must be positive".into(),
+                    ));
+                }
+                Ok(Duration::from_secs(seconds))
+            })
+            .transpose()?;
         let started = Instant::now();
         let script = manifest.python_entry()?.canonicalize()?;
         let dir = tempfile::Builder::new()
@@ -171,7 +187,7 @@ impl PluginProcess {
             )));
         }
         verify_handshake(manifest, &p.info)?;
-        p.deadline = None;
+        p.runtime_limit(runtime_limit);
         p.startup = started.elapsed();
         Ok(p)
     }

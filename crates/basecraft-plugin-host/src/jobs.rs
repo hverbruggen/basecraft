@@ -16,6 +16,12 @@ struct Job {
     outcome: Mutex<OperationOutcome>,
     cancelled: Arc<AtomicBool>,
     worker: Mutex<Option<JoinHandle<()>>>,
+    proposals: Mutex<
+        Option<(
+            basecraft_protocol::plugin::InvokeResult,
+            Vec<(String, std::path::PathBuf, String)>,
+        )>,
+    >,
 }
 
 #[derive(Default)]
@@ -31,6 +37,150 @@ impl JobManager {
         request: OperationRequest,
         policy: SessionPolicy,
         initiator: &str,
+    ) -> Result<OperationOutcome> {
+        self.submit_with_session(registry, request, policy, initiator, None)
+    }
+    pub fn submit_in_session(
+        &mut self,
+        registry: &Registry,
+        request: OperationRequest,
+        policy: SessionPolicy,
+        initiator: &str,
+        session: &mut basecraft_ops::Session,
+    ) -> Result<OperationOutcome> {
+        self.submit_with_session(registry, request, policy, initiator, Some(session))
+    }
+    pub fn target_document(&self, id: &str) -> Option<basecraft_ops::DocId> {
+        self.jobs
+            .get(id)
+            .and_then(|job| job.prepared.sequence.as_ref().map(|target| target.doc))
+    }
+    /// Called by the owning session thread. No session lock is held while a
+    /// plugin runs; generation/revision is checked at the actual edit boundary.
+    pub fn poll_proposals(&self, session: &mut basecraft_ops::Session) {
+        for job in self.jobs.values() {
+            if job
+                .prepared
+                .sequence
+                .as_ref()
+                .is_some_and(|target| target.session != session.id())
+            {
+                continue;
+            }
+            let pending = job
+                .proposals
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
+            let Some((result, validated)) = pending else {
+                continue;
+            };
+            let Some(target) = &job.prepared.sequence else {
+                continue;
+            };
+            let mut outcome = job
+                .outcome
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if job.cancelled.load(Ordering::Acquire) {
+                drop(outcome);
+                fail(
+                    job,
+                    OperationErrorCode::Cancelled,
+                    "cancelled before proposal commit".into(),
+                );
+                continue;
+            }
+            outcome.state = RuntimeState::Finalizing;
+            drop(outcome);
+            let actor = basecraft_protocol::Actor::Plugin {
+                id: job.prepared.operation.package.manifest.id.clone(),
+                version: job.prepared.operation.package.manifest.version.clone(),
+            };
+            if let Err(error) = session.apply_sequence_proposals(
+                target.doc,
+                target.generation,
+                target.revision,
+                &result.ops,
+                actor,
+            ) {
+                job.outcome
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .state = RuntimeState::Running;
+                fail(
+                    job,
+                    if error.to_string().contains("stale_revision") {
+                        OperationErrorCode::StaleRevision
+                    } else {
+                        OperationErrorCode::PluginProtocolViolation
+                    },
+                    error.to_string(),
+                );
+                continue;
+            }
+            let mut outcome = job
+                .outcome
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            outcome.proposals = Some(ProposalOutcome {
+                document: Some(target.doc.0.to_string()),
+                applied: result.ops.len(),
+                rejected: vec![],
+            });
+            outcome.warnings.push(format!(
+                "Proposals attached to session document {} at generation {}",
+                target.doc.0,
+                session.generation(target.doc)
+            ));
+            let snapshot_path = job.prepared.run.artifact("snapshot.arrow-pair");
+            let activity = snapshot_path.and_then(|path| {
+                let hash = basecraft_io::hash_file(&path).map_err(basecraft_ops::Error::from)?;
+                let key = basecraft_ops::input_evidence::relative(session.root(),&path)?;
+                let params = json!({"requested":job.prepared.request.parameters,"effective":outcome.effective_parameters,
+                    "operation":job.prepared.operation.id,"pins":outcome.pins,"initiator":job.prepared.initiator,"run_id":outcome.run_id});
+                session.log_tool_run(target.doc,basecraft_protocol::Actor::Plugin {id:job.prepared.operation.package.manifest.id.clone(),version:job.prepared.operation.package.manifest.version.clone()},
+                    (&job.prepared.operation.package.manifest.id,&job.prepared.operation.descriptor.implementation),params,&[(key,hash)],&[])?;
+                Ok(())
+            });
+            if let Err(error) = activity {
+                drop(outcome);
+                fail(
+                    job,
+                    OperationErrorCode::EvidenceIncomplete,
+                    error.to_string(),
+                );
+                continue;
+            }
+            let mut final_outcome = outcome.clone();
+            drop(outcome);
+            let finalized = job
+                .prepared
+                .finalize(&result, &validated, &mut final_outcome);
+            final_outcome.state = if finalized.is_ok() {
+                RuntimeState::Completed
+            } else {
+                RuntimeState::Partial
+            };
+            *job.outcome
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = final_outcome.clone();
+            if let Err(error) = finalized.and_then(|()| job.prepared.persist(&final_outcome)) {
+                fail(
+                    job,
+                    OperationErrorCode::PublicationIncomplete,
+                    error.to_string(),
+                );
+            }
+        }
+    }
+    fn submit_with_session(
+        &mut self,
+        registry: &Registry,
+        request: OperationRequest,
+        policy: SessionPolicy,
+        initiator: &str,
+        session: Option<&mut basecraft_ops::Session>,
     ) -> Result<OperationOutcome> {
         let digest = basecraft_io::hash_bytes(&serde_json::to_vec(&request)?);
         if let Some(key) = &request.request_key {
@@ -51,7 +201,8 @@ impl JobManager {
             .clone();
         let pins = operation.pins(&registry.generation);
         let key = request.request_key.clone();
-        let prepared = PreparedOperation::prepare(operation, request, policy, initiator.into())?;
+        let prepared =
+            PreparedOperation::prepare(operation, request, policy, initiator.into(), session)?;
         let outcome = OperationOutcome {
             schema: 1,
             operation: prepared.operation.id.clone(),
@@ -73,6 +224,7 @@ impl JobManager {
             outcome: Mutex::new(outcome.clone()),
             cancelled: Arc::new(AtomicBool::new(false)),
             worker: Mutex::new(None),
+            proposals: Mutex::new(None),
         });
         let task = job.clone();
         let worker = std::thread::Builder::new()
@@ -190,6 +342,19 @@ impl Drop for JobManager {
             let _ = self.cancel(id);
         }
         for job in self.jobs.values() {
+            if job
+                .proposals
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take()
+                .is_some()
+            {
+                fail(
+                    job,
+                    OperationErrorCode::Cancelled,
+                    "session closed before proposal commit".into(),
+                );
+            }
             if let Some(worker) = job
                 .worker
                 .lock()
@@ -281,6 +446,12 @@ fn execute(job: &Job) {
             return;
         }
     };
+    if job.prepared.sequence.is_some() {
+        *job.proposals
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((result, validated));
+        return;
+    }
     let mut outcome = job
         .outcome
         .lock()

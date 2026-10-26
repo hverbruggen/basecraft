@@ -24,7 +24,17 @@ use crate::{
     registry::RegisteredOperation,
 };
 
+pub struct SequenceTarget {
+    pub doc: basecraft_ops::DocId,
+    pub session: String,
+    pub generation: u64,
+    pub revision: u64,
+    pub snapshot: crate::Snapshot,
+    pub dependencies: Vec<PathBuf>,
+}
+
 pub struct PreparedOperation {
+    pub sequence: Option<SequenceTarget>,
     pub operation: RegisteredOperation,
     pub run: ArtifactRun,
     pub request: OperationRequest,
@@ -44,8 +54,85 @@ impl PreparedOperation {
         request: OperationRequest,
         policy: SessionPolicy,
         initiator: String,
+        session: Option<&mut basecraft_ops::Session>,
     ) -> Result<Self> {
-        let bindings = policy.resolve(&operation, &request)?;
+        policy.check(&operation)?;
+        let mut sequence = None;
+        let bindings = if operation.descriptor.family == ExecutionFamily::SequenceProposal {
+            let session = session.ok_or_else(|| {
+                Error::Protocol(
+                    "sequence operation requires an owning headless/document session".into(),
+                )
+            })?;
+            let name = operation
+                .descriptor
+                .inputs
+                .keys()
+                .next()
+                .ok_or_else(|| Error::Protocol("missing snapshot binding".into()))?;
+            if request.inputs.len() != 1
+                || request
+                    .inputs
+                    .get(name)
+                    .is_none_or(|values| values.len() != 1)
+            {
+                return Err(Error::Protocol(
+                    "sequence operation requires exactly its named snapshot input".into(),
+                ));
+            }
+            let (doc, bindings) = match &request.inputs[name][0] {
+                InputReference::File { path } => {
+                    let bindings = policy.resolve(&operation, &request)?;
+                    (session.open(&policy.path(path, false)?)?, bindings)
+                }
+                InputReference::Document {
+                    doc,
+                    generation,
+                    revision,
+                } => {
+                    let id = basecraft_ops::DocId(
+                        doc.parse()
+                            .map_err(|_| Error::Protocol("invalid session document ID".into()))?,
+                    );
+                    let checked = session.checked_sequence(id)?;
+                    if session.generation(id) != *generation || checked.version() != *revision {
+                        return Err(Error::Protocol(
+                            "stale_revision: snapshot target changed".into(),
+                        ));
+                    }
+                    for (role, path) in &request.destinations {
+                        if !operation.descriptor.outputs.contains_key(role) {
+                            return Err(Error::Protocol("unknown destination role".into()));
+                        }
+                        policy.path(path, true)?;
+                    }
+                    (
+                        id,
+                        crate::policy::ResolvedBindings {
+                            inputs: BTreeMap::new(),
+                            destinations: BTreeMap::new(),
+                        },
+                    )
+                }
+            };
+            let checked = session.checked_sequence(doc)?;
+            sequence = Some(SequenceTarget {
+                doc,
+                session: session.id().into(),
+                generation: session.generation(doc),
+                revision: checked.version(),
+                snapshot: crate::Snapshot::of(session.doc_key(doc), checked)?,
+                dependencies: session
+                    .document_record(doc)?
+                    .origins
+                    .into_iter()
+                    .map(|(path, _)| path)
+                    .collect(),
+            });
+            bindings
+        } else {
+            policy.resolve(&operation, &request)?
+        };
         let parameters =
             contract::normalize_parameters(&operation.descriptor, &request.parameters)?;
         operation.package.verify()?;
@@ -99,9 +186,7 @@ impl PreparedOperation {
                         basecraft_ops::files::load_tree(&path)?;
                         "identity-newick-v1"
                     }
-                    InputView::SequenceSnapshot => {
-                        return Err(Error::Protocol("sequence snapshot adapter required".into()));
-                    }
+                    InputView::SequenceSnapshot => "sequence-file-v1",
                 };
                 let submitted_hash =
                     basecraft_io::hash_file(&path).map_err(basecraft_ops::Error::from)?;
@@ -180,6 +265,36 @@ impl PreparedOperation {
             let _guard = input_evidence::lock()?;
             input_evidence::register(&run)?;
         }
+        if let Some(target) = &sequence {
+            let mut payload = Vec::new();
+            let residues = target.snapshot.residues.map()?;
+            let features = target.snapshot.features.map()?;
+            payload.extend_from_slice(&(residues.len() as u64).to_le_bytes());
+            payload.extend_from_slice(&residues);
+            payload.extend_from_slice(&features);
+            let mut dependencies = sources_from_upstream(run.directory())?;
+            dependencies.extend(target.dependencies.iter().cloned());
+            input_evidence::link_generated_input(
+                &run,
+                &dependencies,
+                &payload,
+                "sequence-arrow-buffers-v1",
+                "Sequence operation snapshot",
+            )?;
+            let name = "snapshot.arrow-pair";
+            basecraft_io::write_atomic(&run.artifact(name)?, |w| {
+                std::io::Write::write_all(w, &payload)
+            })
+            .map_err(basecraft_ops::Error::from)?;
+            ledger_inputs.push(ArtifactRevision {
+                id: format!("{}:snapshot", run.id()),
+                logical_name: name.into(),
+                hash: basecraft_io::hash_bytes(&payload),
+                size: payload.len() as u64,
+                retained: Some(name.into()),
+                reference: None,
+            });
+        }
         let mut outputs = BTreeMap::new();
         for (name, binding) in &operation.descriptor.outputs {
             let path = run.staging(name)?;
@@ -201,6 +316,7 @@ impl PreparedOperation {
         input_evidence::write_json(&run.artifact("descriptor.json")?, &operation.descriptor)?;
         input_evidence::write_json(&run.artifact("request.json")?, &request)?;
         Ok(Self {
+            sequence,
             operation,
             run,
             request,
@@ -244,7 +360,7 @@ impl PreparedOperation {
             &self.operation.descriptor.implementation,
             effective.clone(),
             context.clone(),
-            None,
+            self.sequence.as_ref().map(|target| &target.snapshot),
         );
         let teardown = process.finish();
         let (stdout, stderr) = process.captured_output();
@@ -271,10 +387,16 @@ impl PreparedOperation {
     pub fn validate_result(&self, result: &InvokeResult) -> Result<Vec<(String, PathBuf, String)>> {
         contract::BoundedSchema::compile(&self.operation.descriptor.result)?
             .validate(result.data.as_deref().unwrap_or(&Value::Null))?;
-        if !result.ops.is_empty() || !result.outputs.is_empty() {
+        if (!result.ops.is_empty()
+            && (self.sequence.is_none() || !self.operation.descriptor.effects.document_write))
+            || !result.outputs.is_empty()
+        {
             return Err(Error::Protocol(
                 "file operation returned proposals or legacy output paths".into(),
             ));
+        }
+        if result.ops.len() > 4096 {
+            return Err(Error::Protocol("proposal count exceeds 4096".into()));
         }
         if result.artifacts.len() > MAX_ARTIFACTS {
             return Err(Error::Protocol("artifact count limit exceeded".into()));
@@ -487,4 +609,19 @@ fn scan_files(directory: &Path, paths: &mut BTreeSet<PathBuf>, depth: usize) -> 
         }
     }
     Ok(())
+}
+
+fn sources_from_upstream(directory: &Path) -> Result<Vec<PathBuf>> {
+    if !directory.join("input.json").is_file() {
+        return Ok(Vec::new());
+    }
+    let record = input_evidence::read_input(directory)?;
+    Ok(record
+        .extra
+        .get("upstream")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|value| value["bundle"].as_str().map(|path| directory.join(path)))
+        .collect())
 }

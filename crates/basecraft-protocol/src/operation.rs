@@ -226,6 +226,8 @@ pub struct PublishedArtifact {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ProposalOutcome {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document: Option<String>,
     pub applied: usize,
     pub rejected: Vec<String>,
 }

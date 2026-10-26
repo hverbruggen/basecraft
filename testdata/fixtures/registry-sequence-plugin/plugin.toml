@@ -1,0 +1,7 @@
+schema = 2
+id = "org.example.registry-sequence"
+name = "Registry conformance fixture"
+version = "1.0.0"
+contract = "operations.json"
+[entry]
+operation = "python:plugin.py"
