@@ -193,6 +193,30 @@ fn retained(run: &ArtifactRun, path: &Path, index: usize) -> crate::Result<Artif
     })
 }
 
+fn carry_authored(dependencies: &[PathBuf], run: &ArtifactRun) -> crate::Result<()> {
+    for dependency in dependencies {
+        let authored = dependency.join("reports/methods.md");
+        if !authored.is_file() {
+            continue;
+        }
+        if std::fs::symlink_metadata(&authored)?
+            .file_type()
+            .is_symlink()
+        {
+            return Err(invalid(
+                "Authored methods path is a symlink; original preserved",
+            ));
+        }
+        std::fs::create_dir_all(run.directory().join("reports"))?;
+        basecraft_io::write_atomic(&run.directory().join("reports/methods.md"), |w| {
+            std::io::copy(&mut std::fs::File::open(&authored)?, w)?;
+            Ok(())
+        })?;
+        break;
+    }
+    Ok(())
+}
+
 fn publication(run: &ArtifactRun, origin: &str, artifacts: Vec<ArtifactRevision>) -> Publication {
     Publication {
         schema_version: 1,
@@ -249,6 +273,7 @@ impl SangerRun {
             &serde_json::from_slice::<serde_json::Value>(&payload)?,
         )?;
         linked_input(&run, &dependencies, &payload)?;
+        carry_authored(ancestors, &run)?;
         let result = Self {
             run,
             evidence,
@@ -657,6 +682,7 @@ impl SangerReviewSession {
             dependencies.sort();
             dependencies.dedup();
             linked_input(&run, &dependencies, self.draft_json.as_bytes())?;
+            carry_authored(&self.evidence.runs, &run)?;
             self.evidence.runs = vec![run.directory().into()];
             let snapshot = run.artifact("review.sanger-review.json")?;
             // The recovery copy is complete before attempting a visible replacement.
@@ -725,6 +751,7 @@ impl SangerReviewSession {
         dependencies.sort();
         dependencies.dedup();
         linked_input(&run, &dependencies, self.draft_json.as_bytes())?;
+        carry_authored(&self.evidence.runs, &run)?;
         let snapshot = run.artifact("review.sanger-review.json")?;
         self.write_embedded(&snapshot)?;
         let mut record = publication(
@@ -1040,12 +1067,24 @@ mod tests {
         let exact = review.draft_json.clone();
         let path = folder.join("specimen.sanger-review.json");
         review.save(&path).unwrap();
+        let authored = crate::provenance::bundle_for_result(&path).join("reports/methods.md");
+        std::fs::write(
+            &authored,
+            "User-authored laboratory methods, preserved verbatim.\n",
+        )
+        .unwrap();
+        review.save(&path).unwrap();
         let package = tmp.path().join("package");
         crate::provenance::package(&path, &package).unwrap();
         std::fs::remove_dir_all(folder).unwrap();
         let moved = tmp.path().join("moved-export");
         std::fs::rename(&package, &moved).unwrap();
         let path = moved.join("specimen.sanger-review.json");
+        assert_eq!(
+            std::fs::read_to_string(crate::provenance::companion(&path).join("reports/methods.md"))
+                .unwrap(),
+            "User-authored laboratory methods, preserved verbatim.\n"
+        );
         let reopened = SangerReviewSession::load(&path).unwrap();
         assert_eq!(reopened.draft_json, exact);
         assert_eq!(reopened.events(), review.events());
