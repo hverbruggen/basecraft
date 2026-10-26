@@ -3,19 +3,21 @@
   "operations": [{
     "name": "date_tree", "version": "1.0.0", "implementation": "date_tree",
     "title": "Date a rooted tree with Sanderson penalized likelihood",
-    "description": "Fit r8s 1.81 PL/TN to a supplied rooted substitution tree, with optional original-author branch cross-validation.",
+    "description": "Fit native Sanderson PL to a supplied rooted substitution tree, with terminal-branch prediction cross-validation.",
     "family": "file_analysis",
     "parameters": {
       "type": "object", "additionalProperties": false,
       "properties": {
         "branch_units": {"type": "string", "enum": ["substitutions_per_site", "substitution_counts"]},
         "sites": {"type": "integer", "minimum": 1, "maximum": 1000000000},
-        "root_age": {"type": "number", "minimum": 0.001, "maximum": 100000000},
+        "root_age": {"type": "number", "exclusiveMinimum": 0},
         "time_unit": {"type": "string", "minLength": 1, "maxLength": 80},
         "penalty": {"type": "string", "enum": ["add", "log"], "default": "log"},
         "lambda": {"type": "number", "exclusiveMinimum": 0, "maximum": 100000000},
-        "starts": {"type": "integer", "minimum": 1, "maximum": 25, "default": 3},
+        "starts": {"type": "integer", "minimum": 1, "maximum": 32, "default": 3},
         "seed": {"type": "integer", "minimum": 1, "maximum": 2147483647, "default": 1},
+        "max_iterations": {"type": "integer", "minimum": 1, "maximum": 100000, "default": 2000},
+        "max_seconds": {"type": "integer", "minimum": 1, "maximum": 86400, "default": 3600},
         "constraints": {"type": "array", "maxItems": 128, "default": [], "items": {
           "type": "object", "additionalProperties": false,
           "properties": {
@@ -33,7 +35,7 @@
         }
       },
       "required": ["branch_units", "sites", "root_age", "time_unit"],
-      "anyOf": [{"required": ["lambda"]}, {"required": ["cross_validation"]}]
+      "oneOf": [{"required": ["lambda"]}, {"required": ["cross_validation"]}]
     },
     "result": {
       "type": "object", "additionalProperties": false,

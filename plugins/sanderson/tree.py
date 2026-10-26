@@ -1,4 +1,4 @@
-"""Strict, bounded Newick handling for the r8s PL adapter.
+"""Strict, bounded Newick handling for native Sanderson PL transport.
 
 The parser accepts one explicitly bifurcating rooted tree. It never changes a
 branch length, label, or topology to accommodate an engine limitation.
@@ -137,25 +137,10 @@ def parse(source):
     return Parser(source).parse()
 
 
-def tips(node):
-    if not node.children:
-        return [node.key]
-    return [tip for child in node.children for tip in tips(child)]
-
-
-def neutral_newick(node):
-    body = "(" + ",".join(neutral_newick(child) for child in node.children) + ")" if node.children else node.key
-    return body + (":" + node.length_text if node.length_text else "")
-
-
-def topology(node):
-    return (("internal" if node.children else node.label), tuple(topology(child) for child in node.children))
-
-
 def labeled_newick(node, durations):
     if node.children:
         body = "(" + ",".join(labeled_newick(child, durations) for child in node.children) + ")"
     else:
         body = ""
     label = "'" + node.label.replace("'", "''") + "'" if node.label else ""
-    return body + label + (f":{durations[node.key]:.6f}" if node.key in durations else "")
+    return body + label + (f":{durations[node.key]:.17g}" if node.key in durations else "")

@@ -1,62 +1,70 @@
-# Sanderson penalized likelihood (r8s 1.81)
+# Sanderson penalized likelihood
 
-This schema-2 file operation accepts one supplied, explicitly rooted, binary
-Newick substitution tree. It fits the original-author **penalized-likelihood**
-method with r8s 1.81's truncated-Newton optimizer. It does not root a tree,
-choose fossils, implement NPRS, or infer a biological time scale.
+This schema-2 file operation fits a supplied, rooted binary substitution tree
+with a native Rust penalized-likelihood (PL) engine. It neither roots the tree
+nor chooses fossils. Its scientific calculation does not run R, r8s or Python
+optimizers. The Python handler only transports the frozen input and results to
+and from the native executable and host-owned artifact paths.
 
-The caller must give `branch_units`, `sites`, `root_age`, `time_unit`, and either
-`lambda` or `cross_validation`. `substitutions_per_site` lengths are multiplied
-by `sites`; `substitution_counts` lengths already are totals, while `sites`
-still determines reported rates per site. r8s 1.81 **forcibly rounds the total
-counts inside PL even if `round=no` was requested**. This adapter rejects every
-branch that does not scale to a positive integer count. It never modifies an
-original tree or silently rounds, collapses, or jitters its branches.
+## Scientific convention
 
-`root_age` fixes the root, with all extant tips at age zero. A dimensionless
-choice such as `root_age: 1, time_unit: "relative units"` yields relative
-times. Constraints are optional hard fixed/bounded ages on internal nodes.
-`node` can be a unique internal Newick label or an `N000001` style preorder ID
-(root is `N000001`; internal nodes are numbered in input traversal order).
-The adapter checks ancestral feasibility and validates the returned bounds.
-It supports no dated tips, uncertain fossils, polytomies, stem lengths, or
-zero/missing/nonfinite/negative branch lengths.
+The caller supplies `branch_units`, `sites`, `root_age`, `time_unit`, and a
+positive `lambda` or `cross_validation` grid. For per-site lengths `b`, the
+continuous observation is `x = b * sites`; total-substitution lengths already
+supply `x`. **No rounding is applied.** For a branch duration `d` and fitted
+total-substitution rate `q`, the expected observation is `q*d`. The objective
+minimizes `sum(q*d - x*log(q*d) + lgamma(x+1)) + lambda*roughness`. The gamma
+term extends the Poisson factorial to continuous inferred lengths. This is a
+quasi-likelihood convention; inferred lengths are not literal observed counts.
+Reported rates divide `q` by `sites`.
 
-`penalty` selects r8s additive or log-rate smoothing. `lambda` is the r8s
-`smoothing` value for that variant. The optional grid uses
-`10^(log10_start + i*log10_step)` for `count` points. r8s cross-validation
-prunes each terminal branch, refits, and predicts its substitutions. The
-adapter uses r8s's optimum selected from its unrounded chi-square-like errors
-only when every grid point succeeds, then performs a fresh full-data PL fit.
-The printed scores have two decimal places; grids whose printed optimum is
-ambiguous are rejected. This differs from
-ape `chronopl(CV=TRUE)`'s pruned-node-age criterion. Explicit `lambda` is
-recorded as requested but the selected CV value controls the fit when both
-are supplied.
+The roughness is the sum of squared differences between each branch rate and
+its parent branch rate, plus the **population variance** among root-child
+rates. `penalty=add` uses total-substitution rates; `penalty=log` applies the
+same structure to log rates. Lambda is variant-specific. Additive lambda also
+depends on the supplied count/time scales. The root is fixed to `root_age`,
+all extant tips are fixed to zero, and supplied hard internal ages must be
+strictly feasible with ancestry. A dimensionless root age of 1 with
+`time_unit="relative units"` yields relative times, not calendar dates.
+The numerical age map reserves a duration of at least `64*f64::EPSILON` times
+the supplied root age on every edge; tighter calibrations are rejected.
 
-The result contains a chronogram with the original labels and a JSON report
-with original input bytes as text, SHA-256, exact supplied branch lengths,
-node ages, fitted rates, settings, engine identity, CV scores, diagnostics and
-raw r8s output. The shared registry owns input freezing, output allocation,
-validation, publication and caller parity. r8s prints durations to six
-decimal places and fitted rates to five significant figures; these reported
-values do not support exact full-precision objective reevaluation. A
-converged local estimate is not a confidence interval or biological validity
-claim.
+The optional CV grid is `10^(log10_start + i*log10_step)`. Each terminal
+branch observation is withheld, its rate parameter is removed, and the other
+rates and ages are refitted. The held-out count is predicted from its fitted
+parent branch rate, or the sister root branch rate for a basal tip, times its
+estimated duration. The engine records squared and expected-count-normalized
+squared prediction errors, chooses the minimum latter only if all folds
+converge, then fits the full tree at that lambda. This reproduces the
+branch-prediction structure inspected in r8s 1.81 source, with the continuous
+observation convention above. It differs from ape `chronopl(CV=TRUE)`'s
+pruned-node-age criterion. Full CV is limited to 128 tips pending measured
+scaling and budget review.
 
-## Engine packaging gate
+The engine uses indexed tree arrays and analytic gradients, optimized with
+argmin 0.11 L-BFGS and a More-Thuente line search. Repeated starts are
+seeded deterministically; work arrays and the last objective/gradient are
+reused. Every fit has explicit iteration/evaluation/time budgets and checks
+host-owned cancellation. Native age/rate/constraint/convergence checks run
+before the host publishes outputs. A local optimum is not a confidence
+interval or evidence that topology, calibration or biological history is
+correct. Dated tips, polytomies, soft bounds, zero/missing/nonfinite lengths
+and automatic biological policy are unsupported.
 
-The plugin requires `bin/r8s` and `bin/engine.json` at runtime. The identity
-file must state the SHA-256 of the exact packaged binary, r8s version 1.81,
-and source archive SHA-256
-`9e89d7851d74d74487d147b77177a717e6c659b485c9b67f516340a6ed595080`.
-An analysis never downloads, installs or compiles an engine. The engine is
-currently absent while the coordinator's compilation/package hold applies;
-invocation returns an explicit availability error.
+## Source and packaging state
 
-Author source: https://sourceforge.net/projects/r8s/files/r8s1.81.tar.gz/download.
-The archive's `LICENSE` is GPL-3.0; its README says Sanderson's C is GPL and
-Stephen Nash's included truncated-Newton Fortran is public domain. A released
-bundle must include the applicable GPL notice and corresponding source. This
-plugin's Python source is part of GPL Basecraft; the separate protocol and
-SDK remain Apache-2.0.
+`native/` is an isolated Rust crate while WF-0017/coordinator owns the root
+Cargo workspace and lockfile. A built `bin/basecraft-sanderson-native` must be
+bundled atomically with the plugin; no analysis installs or compiles it.
+The current build hold prevents compilation, numerical execution, benchmarks,
+license closure for resolved dependencies, and packaging. The plugin therefore
+fails explicitly until the native binary is validated and packaged. The
+private worker report tracks these separate gates.
+
+Scientific references: Sanderson (2002), DOI
+[10.1093/oxfordjournals.molbev.a003974](https://doi.org/10.1093/oxfordjournals.molbev.a003974),
+and the inspected original-author r8s 1.81 `TimeAlgorithms.c` penalty/CV source.
+The full original paper was not available in the retained SCI-0010 research
+material, so literal paper-equation parity has not been established.
+Argmin 0.11 is dual MIT/Apache-2.0 licensed; dependency license notices and
+exact package identity require closure with the compiled lockfile.
