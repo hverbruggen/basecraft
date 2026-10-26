@@ -78,6 +78,12 @@ fn main() {
         ""
     );
 
+    let figure = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"200\" height=\"100\"><rect width=\"200\" height=\"100\" fill=\"#c02030\"/><text x=\"8\" y=\"50\" font-size=\"20\">A&amp;β</text></svg>";
+    let png = bridge::figure_png(figure).expect("Qt renders editable SVG text");
+    assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+    assert_eq!(u32::from_be_bytes(png[16..20].try_into().unwrap()), 1500);
+    assert_eq!(u32::from_be_bytes(png[20..24].try_into().unwrap()), 750);
+
     // Exercise QML initialization and the real QApplication event loop without
     // loading the window or opening any picker. Drop the engine before the app.
     let mut engine = QQmlApplicationEngine::new();
