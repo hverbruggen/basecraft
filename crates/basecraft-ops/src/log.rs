@@ -518,6 +518,85 @@ mod activity_tests {
     use super::*;
 
     #[test]
+    fn floating_tool_metrics_roundtrip_in_batches_and_reject_tampering() {
+        let parent = std::env::var_os("BASECRAFT_JOURNAL_PROBE_DIR")
+            .map_or_else(std::env::temp_dir, PathBuf::from);
+        fs::create_dir_all(&parent).unwrap();
+        let root = tempfile::Builder::new()
+            .prefix("journal-float-")
+            .tempdir_in(parent)
+            .unwrap();
+        let entry = |id: &str, metric: f64| LogEntry {
+            v: 1,
+            id: id.into(),
+            t: "2026-10-26T12:00:00Z".into(),
+            host: "journal-probe".into(),
+            session: "journal-probe-session".into(),
+            actor: Actor::Plugin {
+                id: "org.example.journal-probe".into(),
+                version: "1.0.0".into(),
+            },
+            doc: "input.fa".into(),
+            op: Op::ToolRun {
+                plugin: "org.example.journal-probe".into(),
+                operation: "metrics".into(),
+                params: serde_json::json!({"elapsed_seconds":metric,"metrics":{"fraction":metric}}),
+                inputs: vec![],
+                outputs: vec![],
+            },
+            result: basecraft_protocol::OpResult::default(),
+            state: basecraft_protocol::DocState {
+                len: 4,
+                features: 0,
+                rows: None,
+            },
+        };
+        // A concrete finite binary64 value whose shortest JSON decimal was
+        // parsed one ULP away by the old default serde_json parser.
+        let metric = f64::from_bits(0x3fef_5946_3bce_2af2);
+        let entries = [entry("01", metric), entry("02", 0.125), entry("03", metric)];
+        let mut writer = LogWriter::new(root.path(), "journal-probe");
+        writer.append_batch(&entries[..2]).unwrap();
+        writer.append(&entries[2]).unwrap();
+        drop(writer);
+        let journal = fs::read_dir(log_dir(root.path()).join("journal-probe"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let parsed = match read_all(root.path()) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                let retained = root.keep();
+                panic!(
+                    "journal failed roundtrip: {error}; retained exact journal under {}",
+                    retained.display()
+                );
+            }
+        };
+        assert_eq!(parsed, entries);
+        let original = fs::read_to_string(&journal).unwrap();
+        assert!(original.contains("0.9796477478097059"));
+        for line in original.lines() {
+            parse_entry(line).unwrap();
+        }
+        // The same numeric shape must not excuse actual content alteration.
+        let mut lines: Vec<_> = original.lines().map(str::to_owned).collect();
+        lines[1] = lines[1].replace("0.125", "0.25");
+        fs::write(&journal, format!("{}\n", lines.join("\n"))).unwrap();
+        assert!(
+            read_all(root.path())
+                .unwrap_err()
+                .to_string()
+                .contains("checksum mismatch")
+        );
+        let prefix = verified_prefix(&journal).unwrap();
+        assert_eq!(prefix.entries, entries[..1]);
+        assert!(prefix.problem.unwrap().contains("checksum mismatch"));
+    }
+
+    #[test]
     fn local_time_shifts_and_wraps() {
         assert_eq!(local_time("2026-10-10T13:04:05.025Z", 600), "23:04:05");
         assert_eq!(local_time("2026-10-10T23:30:00Z", 60), "00:30:00");
