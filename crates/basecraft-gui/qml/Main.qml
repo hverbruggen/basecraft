@@ -131,7 +131,7 @@ ApplicationWindow {
             Qt.callLater(publishRibbonCommands)
         }
     }
-    readonly property var applicationCommands: [openCommand, saveCommand, saveAsCommand, projectCommand, shortcutsCommand, aboutCommand, preferencesCommand, textRepresentationCommand, contextShortcutsCommand, exportSvgCommand, exportPngCommand, historyCommand, methodsCommand, showProvenanceCommand, verifyProvenanceCommand, packageCommand, recoverCommand, installedOperationsCommand].concat(ribbonCommands)
+    readonly property var applicationCommands: [openCommand, saveCommand, saveAsCommand, projectCommand, shortcutsCommand, aboutCommand, preferencesCommand, textRepresentationCommand, contextShortcutsCommand, learnCommand, exportSvgCommand, exportPngCommand, historyCommand, methodsCommand, showProvenanceCommand, verifyProvenanceCommand, packageCommand, recoverCommand, installedOperationsCommand].concat(ribbonCommands)
     property var recentProjects: []
     property string recentProjectsError: ""
     function updateRecentProjects(reply) {
@@ -526,6 +526,15 @@ ApplicationWindow {
         onTriggered: shortcuts.show(window.ribbonTab)
     }
     AppCommand {
+        id: learnCommand
+        customization: window.customization
+        commandId: "help.learn"
+        text: "Learn"
+        iconName: "book"
+        tooltip: "Open help and learning resources"
+        onTriggered: window.ribbonTabName = "Help"
+    }
+    AppCommand {
         id: exportSvgCommand
         customization: window.customization
         commandId: "ribbon.export-an-editable-svg-of-this-view"
@@ -785,6 +794,7 @@ ApplicationWindow {
     component HelpGroup: RibbonHelpGroup {
         shortcutsAction: contextShortcutsCommand
         aboutAction: aboutCommand
+        learnAction: learnCommand
         preferencesAction: preferencesCommand
         exportSvgAction: exportSvgCommand
         exportPngAction: exportPngCommand

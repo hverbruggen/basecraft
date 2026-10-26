@@ -7,6 +7,7 @@ Control {
     id: root
     required property Action shortcutsAction
     required property Action aboutAction
+    property Action learnAction
     property Action preferencesAction
     property Action exportSvgAction
     property Action exportPngAction
@@ -64,9 +65,10 @@ Control {
             }
             UtilityButton {
                 objectName: "ribbonHelpDocumentation"
+                action: root.learnAction
                 iconName: "book"
-                description: "Learn: documentation coming soon"
-                enabled: false
+                description: "Learn"
+                ToolTip.text: "Open help and learning resources"
             }
             UtilityButton {
                 id: exportButton

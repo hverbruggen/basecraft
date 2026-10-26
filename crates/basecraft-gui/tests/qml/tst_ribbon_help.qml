@@ -8,9 +8,11 @@ Item {
     width: 420; height: 240
     property int shortcutsCount: 0
     property int aboutCount: 0
+    property string ribbonTabName: "Tree"
     property bool dark: false
     AppCommand { id: shortcuts; commandId: "test.shortcuts"; text: "Keyboard shortcuts"; onTriggered: scene.shortcutsCount++ }
     AppCommand { id: about; commandId: "test.about"; text: "About Basecraft"; onTriggered: scene.aboutCount++ }
+    AppCommand { id: learn; commandId: "help.learn"; text: "Learn"; onTriggered: scene.ribbonTabName = "Help" }
     Rectangle { anchors.fill: parent; color: scene.dark ? "#1c2630" : "#f3eee4" }
     Ribbon {
         id: ribbon
@@ -22,6 +24,7 @@ Item {
                 id: help
                 shortcutsAction: shortcuts
                 aboutAction: about
+                learnAction: learn
                 backgroundColor: scene.dark ? "#1c2630" : "#f3eee4"
             }
         }
@@ -52,12 +55,20 @@ Item {
                     verify(reserved.mapToItem(help, 0, 0).x > info.mapToItem(help, 0, 0).x)
                     verify(separator.width > 0 && separator.height >= keys.height)
                     verify(reserved.mapToItem(help, reserved.width, reserved.height).y <= help.height + 1)
-                    compare(docs.enabled, false)
+                    compare(docs.enabled, true)
                     compare(reserved.activeFocusOnTab, false)
                     compare(reserved.children.length, 0)
 
                 }
             }
+        }
+        function test_learn_routes_to_help() {
+            const book = findChild(help, "ribbonHelpDocumentation")
+            scene.ribbonTabName = "Tree"
+            compare(book.Accessible.name, "Learn")
+            compare(book.ToolTip.text, "Open help and learning resources")
+            mouseClick(book)
+            compare(scene.ribbonTabName, "Help")
         }
         function test_actions_and_focus() {
             const keys = findChild(help, "ribbonHelpShortcuts")

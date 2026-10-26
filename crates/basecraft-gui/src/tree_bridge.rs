@@ -230,7 +230,7 @@ pub mod qobject {
     }
 }
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::time::{Instant, SystemTime};
 
