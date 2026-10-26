@@ -597,6 +597,40 @@ mod activity_tests {
     }
 
     #[test]
+    fn saved_float_journal_remains_readable() {
+        // Exact bytes from the failing pre-feature append_batch/append probe;
+        // also includes the 0.125 line accepted by the previous reader.
+        let baseline = include_str!(
+            "../../../testdata/fixtures/provenance-v1/floating-metrics-baseline.jsonl"
+        );
+        let entries: Vec<_> = baseline
+            .lines()
+            .map(|line| parse_entry(line).unwrap())
+            .collect();
+        assert_eq!(entries.len(), 3);
+        for (entry, expected) in entries.iter().zip([
+            0x3fef_5946_3bce_2af2,
+            0.125_f64.to_bits(),
+            0x3fef_5946_3bce_2af2,
+        ]) {
+            let Op::ToolRun { params, .. } = &entry.op else {
+                panic!("expected tool-run metric")
+            };
+            assert_eq!(
+                params["elapsed_seconds"].as_f64().unwrap().to_bits(),
+                expected
+            );
+        }
+        let altered = baseline.replace("0.9796477478097059", "0.979647747809706");
+        assert!(
+            parse_entry(altered.lines().next().unwrap())
+                .unwrap_err()
+                .to_string()
+                .contains("checksum mismatch")
+        );
+    }
+
+    #[test]
     fn local_time_shifts_and_wraps() {
         assert_eq!(local_time("2026-10-10T13:04:05.025Z", 600), "23:04:05");
         assert_eq!(local_time("2026-10-10T23:30:00Z", 60), "00:30:00");
