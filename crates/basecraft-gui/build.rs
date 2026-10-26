@@ -79,6 +79,7 @@ fn main() {
         "qml/AppRibbonButton.qml",
         "qml/AppTabButton.qml",
         "qml/RibbonGroup.qml",
+        "qml/RibbonHelpGroup.qml",
         "qml/RibbonPage.qml",
         "qml/RibbonTabs.qml",
         "qml/Ribbon.qml",

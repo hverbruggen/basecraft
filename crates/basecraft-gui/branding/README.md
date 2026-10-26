@@ -27,3 +27,6 @@ repository's GPL-3.0-or-later licence.
 
 The separately selected primary application icon is study 09, Woven b; study 12,
 Colourlight, is the alternate. This wordmark does not replace either icon.
+
+`icon-dark.svg` and `icon-light.svg` are the accepted 09 / Woven b primary
+icon, used without monochrome tinting by the ribbon About button.

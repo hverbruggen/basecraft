@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title"><title id="title">Basecraft — Woven b</title><rect id="background" x="16" y="16" width="480" height="480" rx="108" fill="#F3EEE4"/><g id="woven-b">
+ <path id="stem" d="M132 112L196 88V392H132Z" fill="#80B5A3"/>
+ <path id="stem-tip" d="M132 112L196 88V144H132Z" fill="#A4CCB8"/>
+ <path id="bowl-back" d="M196 200H324L388 264V344L324 408H196V344H324V264H196Z" fill="#EAB266"/>
+ <path id="upper-fold" d="M324 200L388 264H324Z" fill="#F5CC88"/>
+ <path id="right-strip" d="M324 264H388V344L324 408Z" fill="#D49148"/>
+ <path id="bottom-return" d="M132 344H324V408H196Z" fill="#EAB266"/>
+ <path id="bottom-fold" d="M132 344L196 408H132Z" fill="#AF733D"/>
+ <path id="stem-crossing" d="M132 184H196V280L132 256Z" fill="#80B5A3"/>
+ <path id="crossing-fold" d="M132 256L196 280V296L132 272Z" fill="#528879"/>
+</g></svg>

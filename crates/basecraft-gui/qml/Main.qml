@@ -766,9 +766,10 @@ ApplicationWindow {
         title: "Figure"
         actions: [exportSvgCommand]
     }
-    component ShortcutsGroup: RibbonGroup {
-        title: "Keys"
-        actions: [contextShortcutsCommand]
+    component HelpGroup: RibbonHelpGroup {
+        shortcutsAction: contextShortcutsCommand
+        aboutAction: aboutCommand
+        backgroundColor: shell.background
     }
     header: ColumnLayout {
         spacing: 0
@@ -837,20 +838,6 @@ ApplicationWindow {
                     Accessible.name: "Tasks and notifications, " + window.runningTaskCount + " running, " + window.failedTaskCount + " failed"
                     onClicked: tasksDialog.open()
                 }
-                AppIconButton {
-                    iconName: "more"; description: "More"
-                    focusPolicy: Qt.StrongFocus
-                    ToolTip.text: "More"
-                    ToolTip.visible: hovered
-                    onClicked: moreMenu.popup(this, 0, height)
-                    Menu {
-                        id: moreMenu
-                        MenuItem { text: "Tasks & notifications"; onTriggered: window.showActivity() }
-                        MenuItem { action: shortcutsCommand }
-                        MenuSeparator {}
-                        MenuItem { action: aboutCommand }
-                    }
-                }
             }
         }
 
@@ -910,7 +897,7 @@ ApplicationWindow {
                     }
                     RibbonGroup { title: "Document record"; actions: [historyCommand, methodsCommand] }
                     ExportGroup {}
-                    ShortcutsGroup {}
+                    HelpGroup {}
                 }
 
                 RibbonPage {
@@ -969,7 +956,7 @@ ApplicationWindow {
                     Item { Layout.fillWidth: true }
                     RibbonGroup { title: "Text"; actions: [textRepresentationCommand] }
                     ExportGroup {}
-                    ShortcutsGroup {}
+                    HelpGroup {}
                 }
 
                 RibbonPage {
@@ -1027,7 +1014,7 @@ ApplicationWindow {
                     }
                     Item { Layout.fillWidth: true }
                     ExportGroup {}
-                    ShortcutsGroup {}
+                    HelpGroup {}
                 }
 
                 RibbonPage {
@@ -1038,7 +1025,7 @@ ApplicationWindow {
                     }
                     Item { Layout.fillWidth: true }
                     ExportGroup {}
-                    ShortcutsGroup {}
+                    HelpGroup {}
                 }
 
                 RibbonPage {
@@ -1055,7 +1042,7 @@ ApplicationWindow {
                     }
                     Item { Layout.fillWidth: true }
                     ExportGroup {}
-                    ShortcutsGroup {}
+                    HelpGroup {}
                 }
 
                 // Alignment: edits on the selected block, its columns and rows.
@@ -1127,7 +1114,7 @@ ApplicationWindow {
                     }
                     Item { Layout.fillWidth: true }
                     ExportGroup {}
-                    ShortcutsGroup {}
+                    HelpGroup {}
                 }
 
                 // Tree: the selected clade, the order of clades, support
@@ -1208,7 +1195,7 @@ ApplicationWindow {
                     }
                     Item { Layout.fillWidth: true }
                     ExportGroup {}
-                    ShortcutsGroup {}
+                    HelpGroup {}
                 }
 
                 // Phylogeny: tree inference from the open alignment.
@@ -1254,7 +1241,7 @@ ApplicationWindow {
                     }
                     Item { Layout.fillWidth: true }
                     ExportGroup {}
-                    ShortcutsGroup {}
+                    HelpGroup {}
                 }
                 RibbonPage {
                     SpeciesMethodsGroup { commandSuffix: "workspace" }
@@ -1292,7 +1279,7 @@ ApplicationWindow {
                     }
                     Item { Layout.fillWidth: true }
                     ExportGroup {}
-                    ShortcutsGroup {}
+                    HelpGroup {}
                 }
 
                 RibbonPage {
@@ -1321,7 +1308,7 @@ ApplicationWindow {
                     }
                     Item { Layout.fillWidth: true }
                     ExportGroup {}
-                    ShortcutsGroup {}
+                    HelpGroup {}
                 }
         }
     }

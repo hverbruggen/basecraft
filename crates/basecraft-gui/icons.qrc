@@ -55,5 +55,7 @@
     <file>icons/zoom-out.svg</file>
     <file>branding/logo-transparent-dark.png</file>
     <file>branding/logo-transparent-light.png</file>
+    <file>branding/icon-dark.svg</file>
+    <file>branding/icon-light.svg</file>
   </qresource>
 </RCC>
