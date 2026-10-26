@@ -1439,6 +1439,7 @@ ApplicationWindow {
         id: about
         version: shell.version()
         backgroundColor: shell.background
+        onShortcutsRequested: shortcutsCommand.trigger()
     }
 
     FileDialog {

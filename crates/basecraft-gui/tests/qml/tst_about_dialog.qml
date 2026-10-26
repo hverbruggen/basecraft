@@ -10,6 +10,7 @@ Item {
     Rectangle { anchors.fill: parent; color: "#f3eee4" }
     Button { id: invoker; text: "About"; x: 8; y: 8 }
 
+    Component { id: spyComponent; SignalSpy {} }
     Component {
         id: dialogComponent
         AboutDialog { version: "0.0.0 (test)"; backgroundColor: "#f3eee4" }
@@ -33,17 +34,46 @@ Item {
             const { dialog } = openDialog()
             tryCompare(findChild(dialog.body, "aboutLogo"), "status", Image.Ready)
             compare(findChild(dialog.body, "aboutVersion").text, "0.0.0 (test)")
-            verify(findChild(dialog.body, "aboutTagline").text.indexOf("provenance built in") >= 0)
             verify(findChild(dialog.body, "aboutCitation").text.length > 0)
-            compare(findChild(dialog.body, "aboutUrl").text, "https://github.com/hverbruggen/basecraft")
-            const button = findChild(dialog.body, "aboutProjectPage")
-            verify(button.activeFocusOnTab, "The project page must be reachable by keyboard")
-            // Focus lands inside the dialog and returns to the invoker on Escape.
-            tryVerify(() => dialog.activeFocus || findChild(dialog.body, "aboutProjectPage").activeFocus
-                || dialog.footer.activeFocus || dialog.contentItem.activeFocus)
+            const copyright = findChild(dialog.body, "aboutCopyright")
+            verify(copyright.text.indexOf("https://hverbruggen.codeberg.page/") >= 0)
+            verify(copyright.activeFocusOnTab, "The lab link must be reachable by keyboard")
+            for (const name of ["aboutShortcuts", "aboutProjectPage", "aboutReport", "aboutClose"])
+                verify(findChild(dialog.footer, name).enabled, name + " must be usable")
+            verify(!findChild(dialog.footer, "aboutLearn").enabled, "Learn waits for the manual pages")
+            tryCompare(findChild(dialog.footer, "aboutClose"), "activeFocus", true)
             keyClick(Qt.Key_Escape)
             tryCompare(dialog, "visible", false)
             tryCompare(invoker, "activeFocus", true)
+        }
+
+        function test_shortcuts_button_hands_over() {
+            const { dialog } = openDialog()
+            const spy = createTemporaryObject(spyComponent, scene, { target: dialog, signalName: "shortcutsRequested" })
+            mouseClick(findChild(dialog.footer, "aboutShortcuts"))
+            compare(spy.count, 1)
+            tryCompare(dialog, "visible", false)
+        }
+
+        function test_footer_wraps_in_narrow_window() {
+            const { dialog } = openDialog()
+            const close = findChild(dialog.footer, "aboutClose")
+            waitForRendering(dialog.contentItem)
+            const oneRow = dialog.footer.height
+            verify(oneRow < close.height * 2, "Wide dialogs keep the buttons on one row")
+            dialog.width = 360
+            waitForRendering(dialog.contentItem)
+            verify(dialog.footer.height > oneRow, "Buttons must wrap onto more rows")
+            verify(close.mapToItem(dialog.footer, close.width, 0).x <= dialog.footer.width, "Close must stay inside")
+        }
+
+        function test_art_follows_theme() {
+            let { dialog, player } = openDialog({ backgroundColor: "#1c2630" })
+            verify(player.dark)
+            dialog.close()
+            ;({ dialog, player } = openDialog({ backgroundColor: "#f3eee4" }))
+            verify(!player.dark)
+            compare(player.artPalette.background, "#f3eee4")
         }
 
         function test_every_animation_fits_and_plays() {
@@ -65,8 +95,8 @@ Item {
                 let lit = 0
                 for (let y = 0; y < pixels.height; y += 2)
                     for (let x = 0; x < pixels.width; x += 2)
-                        if (pixels.red(x, y) + pixels.green(x, y) + pixels.blue(x, y) > 300) lit++
-                verify(lit > 20, player.animation.name + " must draw visible characters")
+                        if (pixels.red(x, y) + pixels.green(x, y) + pixels.blue(x, y) < 600) lit++
+                verify(lit > 20, player.animation.name + " must draw visible characters on the light theme")
             }
         }
 

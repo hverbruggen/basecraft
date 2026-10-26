@@ -1,11 +1,13 @@
 import QtQuick
 import "AsciiArt.js" as AsciiArt
 
-// One of the generated ASCII animations, picked at random, on the wordmark's
-// dark background. Decorative; plays only while visible.
-Rectangle {
+// One of the generated ASCII animations, picked at random, drawn straight onto
+// the surrounding background in the palette made for it. Decorative; plays only while visible.
+Item {
     id: root
     property font font
+    property bool dark: true
+    readonly property var artPalette: AsciiArt.palettes[dark ? "dark" : "light"]
     property int animationIndex: Math.floor(Math.random() * AsciiArt.animations.length)
     property int frame: 0
     readonly property int animationCount: AsciiArt.animations.length
@@ -20,12 +22,8 @@ Rectangle {
         return { chars: cells[0].split("\n"), styles: cells[1].split("\n") }
     }
 
-    color: AsciiArt.background
-    radius: 8
-    border.width: 1
-    border.color: Qt.rgba(1, 1, 1, 0.08)
-    implicitWidth: columns * cellWidth + 32
-    implicitHeight: rows * lineHeight + 24
+    implicitWidth: columns * cellWidth
+    implicitHeight: rows * lineHeight
     Accessible.ignored: true
     onAnimationIndexChanged: frame = 0
 
@@ -39,7 +37,7 @@ Rectangle {
         const flush = () => {
             if (!run.length) return
             const inverted = style in AsciiArt.inverse
-            out += "<font color=\"" + (inverted ? AsciiArt.background : AsciiArt.colours[style]) + "\">" + run + "</font>"
+            out += "<font color=\"" + (inverted ? artPalette.background : artPalette.colours[style]) + "\">" + run + "</font>"
             run = ""
         }
         for (let i = 0; i < chars.length; ++i) {
@@ -58,7 +56,7 @@ Rectangle {
             const styles = current.styles[row]
             for (let col = 0; col < styles.length; ++col)
                 if (styles[col] in AsciiArt.inverse)
-                    cells.push({ row: row, col: col, colour: AsciiArt.colours[AsciiArt.inverse[styles[col]]] })
+                    cells.push({ row: row, col: col, colour: artPalette.colours[AsciiArt.inverse[styles[col]]] })
         }
         return cells
     }

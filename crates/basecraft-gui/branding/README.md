@@ -32,9 +32,9 @@ Colourlight, is the alternate. This wordmark does not replace either icon.
 
 The About dialog plays one of six ASCII animations, picked at random each time
 it opens: a chromatogram trace, a cladogram with species brackets, an alignment,
-a sequence loom, a branching B and a paper shuttle. They use the dark wordmark's
-background, letter ink, sage and amber, plus slate blue and terracotta for C
-and T.
+a sequence loom, a branching B and a paper shuttle. On dark themes they use the
+dark wordmark's background, letter ink, sage and amber, plus slate blue and
+terracotta for C and T; light themes get darker tones of the same roles.
 
 `ascii/generate.py` draws them. `python3 ascii/generate.py export` regenerates
 `../qml/AsciiArt.js`, which stores each distinct frame once; edit the script,
