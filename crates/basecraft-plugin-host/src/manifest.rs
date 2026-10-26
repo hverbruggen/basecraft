@@ -10,6 +10,8 @@ use crate::{Error, Result};
 #[derive(Clone, Debug, Deserialize)]
 pub struct Manifest {
     pub schema: u32,
+    #[serde(default)]
+    pub contract: Option<String>,
     pub id: String,
     pub name: String,
     pub version: String,
@@ -261,11 +263,79 @@ impl Manifest {
         };
         let text = std::fs::read_to_string(&path).map_err(|e| err(e.to_string()))?;
         let mut m: Manifest = toml::from_str(&text).map_err(|e| err(e.to_string()))?;
-        if m.schema != 1 {
+        if m.schema != 1 && m.schema != 2 {
             return Err(err(format!("unsupported schema {}", m.schema)));
         }
         m.dir = dir.to_path_buf();
+        if m.schema == 2 {
+            if !m.operations.is_empty() {
+                return Err(err("schema 2 operations belong only in the contract".into()));
+            }
+            m.operation_contract()?;
+            m.python_entry()?;
+        } else if m.contract.is_some() {
+            return Err(err("schema 1 cannot declare an operation contract".into()));
+        }
         Ok(m)
+    }
+
+    /// Resolve a regular file contained within this package. Metadata loading never executes it.
+    pub fn package_file(&self, relative: &str) -> Result<PathBuf> {
+        let path = Path::new(relative);
+        if relative.is_empty()
+            || path
+                .components()
+                .any(|c| !matches!(c, std::path::Component::Normal(_)))
+        {
+            return Err(Error::Protocol(
+                "package file must be a relative path without traversal".into(),
+            ));
+        }
+        let root = self.dir.canonicalize()?;
+        let mut current = root.clone();
+        for part in path.components() {
+            current.push(part);
+            if std::fs::symlink_metadata(&current)?
+                .file_type()
+                .is_symlink()
+            {
+                return Err(Error::Protocol(
+                    "package files cannot use symbolic links".into(),
+                ));
+            }
+        }
+        if !current.is_file() {
+            return Err(Error::Protocol(
+                "package entry is not a regular file".into(),
+            ));
+        }
+        Ok(current)
+    }
+
+    pub fn operation_contract(
+        &self,
+    ) -> Result<Option<basecraft_protocol::operation::OperationContract>> {
+        if self.schema == 1 {
+            return Ok(None);
+        }
+        let relative = self
+            .contract
+            .as_deref()
+            .ok_or_else(|| Error::Protocol("schema 2 requires contract".into()))?;
+        let path = self.package_file(relative)?;
+        let file = std::fs::File::open(path)?;
+        use std::io::Read;
+        let mut bytes = Vec::new();
+        file.take((basecraft_protocol::operation::MAX_DESCRIPTOR_BYTES + 1) as u64)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() > basecraft_protocol::operation::MAX_DESCRIPTOR_BYTES {
+            return Err(Error::Protocol(
+                "operation contract exceeds byte limit".into(),
+            ));
+        }
+        let contract = serde_json::from_slice(&bytes)?;
+        crate::contract::validate_contract(&self.id, &contract)?;
+        Ok(Some(contract))
     }
 
     pub fn form(&self, id: &str) -> Option<&Form> {
@@ -281,7 +351,11 @@ impl Manifest {
                 path: self.dir.join("plugin.toml").display().to_string(),
                 message: format!("entry.operation {entry:?} is not python:<script>"),
             })?;
-        Ok(self.dir.join(script))
+        if self.schema == 2 {
+            self.package_file(script)
+        } else {
+            Ok(self.dir.join(script))
+        }
     }
 }
 

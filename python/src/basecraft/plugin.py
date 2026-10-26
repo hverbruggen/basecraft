@@ -31,6 +31,8 @@ from typing import Any
 
 PROTOCOL_VERSION = 1
 MAX_FDS = 16
+MAX_FRAME_BYTES = 8 * 1024 * 1024
+CONTRACT_CAPABILITY = "operation-contract-v1"
 
 Handler = Callable[["Snapshot | None", dict], "list[dict] | dict | None"]
 
@@ -101,10 +103,27 @@ class Plugin:
         self.id = plugin_id
         self.version = version
         self._ops: dict[str, Handler] = {}
+        self._context_ops: dict[str, Callable] = {}
 
     def operation(self, name: str) -> Callable[[Handler], Handler]:
         def register(fn: Handler) -> Handler:
+            if name in self._ops or name in self._context_ops:
+                raise ValueError(f"duplicate operation {name!r}")
             self._ops[name] = fn
+            return fn
+
+        return register
+
+    def context_operation(self, name: str) -> Callable:
+        """Register a schema-2 handler ``(snapshot, parameters, context)``.
+
+        Context contains host-allocated inputs, outputs and controls. Legacy
+        two-argument handlers keep their original calling convention.
+        """
+        def register(fn: Callable) -> Callable:
+            if name in self._ops or name in self._context_ops:
+                raise ValueError(f"duplicate operation {name!r}")
+            self._context_ops[name] = fn
             return fn
 
         return register
@@ -121,6 +140,8 @@ class Plugin:
                     return
                 buf += data
                 fds.extend(new_fds)
+                if len(buf) > MAX_FRAME_BYTES or len(fds) > MAX_FDS:
+                    raise ValueError("plugin protocol frame/descriptor limit exceeded")
             line, buf = buf.split(b"\n", 1)
             msg = json.loads(line)
             n = msg.get("fds", 0)
@@ -140,17 +161,26 @@ class Plugin:
                 "protocol": PROTOCOL_VERSION,
                 "id": self.id,
                 "version": self.version,
-                "operations": sorted(self._ops),
+                "operations": sorted(self._ops.keys() | self._context_ops.keys()),
+                "capabilities": [CONTRACT_CAPABILITY] if self._context_ops else [],
             }
         if method in ("ping", "shutdown"):
             return None
         if method == "invoke":
             name = params["operation"]
-            if name not in self._ops:
+            if name not in self._ops and name not in self._context_ops:
                 raise KeyError(f"no operation {name!r}")
             snap = Snapshot(params["snapshot"], fds) if params.get("snapshot") else None
             try:
-                out = self._ops[name](snap, params.get("params") or {})
+                if name in self._context_ops:
+                    context = params.get("context")
+                    if not isinstance(context, dict) or context.get("schema") != 1:
+                        raise ValueError("operation requires operation-contract-v1 host context")
+                    out = self._context_ops[name](snap, params.get("params") or {}, context)
+                else:
+                    if params.get("context") is not None:
+                        raise ValueError("legacy handler cannot accept operation contract context")
+                    out = self._ops[name](snap, params.get("params") or {})
             finally:
                 if snap is not None:
                     snap.close()

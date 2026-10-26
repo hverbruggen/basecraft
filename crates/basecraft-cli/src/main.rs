@@ -406,6 +406,18 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             std::fs::create_dir_all(&dir)?;
             let schemas = [
                 (
+                    "operation-contract",
+                    schemars::schema_for!(basecraft_protocol::operation::OperationContract),
+                ),
+                (
+                    "operation-request",
+                    schemars::schema_for!(basecraft_protocol::operation::OperationRequest),
+                ),
+                (
+                    "operation-outcome",
+                    schemars::schema_for!(basecraft_protocol::operation::OperationOutcome),
+                ),
+                (
                     "plugin-invoke-result",
                     schemars::schema_for!(basecraft_protocol::plugin::InvokeResult),
                 ),

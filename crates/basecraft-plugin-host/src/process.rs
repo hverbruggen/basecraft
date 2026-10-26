@@ -113,12 +113,15 @@ impl PluginProcess {
             }
         };
         stream.set_nonblocking(false)?;
+        stream.set_read_timeout(Some(CONNECT_TIMEOUT))?;
+        stream.set_write_timeout(Some(CONNECT_TIMEOUT))?;
         let mut p = Self {
             info: PluginInfo {
                 protocol: 0,
                 id: manifest.id.clone(),
                 version: manifest.version.clone(),
                 operations: Vec::new(),
+                capabilities: Vec::new(),
             },
             startup: Duration::ZERO,
             child,
@@ -135,6 +138,8 @@ impl PluginProcess {
                 p.info.protocol
             )));
         }
+        verify_handshake(manifest, &p.info)?;
+        p.rx.stream().set_read_timeout(None)?;
         p.startup = started.elapsed();
         Ok(p)
     }
@@ -155,7 +160,15 @@ impl PluginProcess {
             .rx
             .line()?
             .ok_or_else(|| Error::Protocol("plugin closed the connection".into()))?;
-        let msg: Message = serde_json::from_slice(&reply)?;
+        let raw: Value = serde_json::from_slice(&reply)?;
+        let msg: Message = serde_json::from_value(raw.clone())?;
+        if msg.jsonrpc != "2.0"
+            || msg.method.is_some()
+            || msg.params.is_some()
+            || (raw.get("result").is_some() == raw.get("error").is_some())
+        {
+            return Err(Error::Protocol("invalid JSON-RPC response shape".into()));
+        }
         let received = self.rx.take_fds(msg.fds)?;
         if msg.id != Some(id) {
             return Err(Error::Protocol(format!(
@@ -195,6 +208,7 @@ impl PluginProcess {
             operation: operation.to_string(),
             params,
             snapshot: snapshot.map(Snapshot::describe),
+            context: None,
         };
         let fds: Vec<BorrowedFd<'_>> = snapshot
             .map(|s| vec![s.residues.as_fd(), s.features.as_fd()])
@@ -202,10 +216,61 @@ impl PluginProcess {
         let (result, _) = self.call("invoke", serde_json::to_value(req)?, &fds)?;
         Ok(serde_json::from_value(result)?)
     }
+    /// Contract calls keep scientific parameters separate from allocated controls.
+    pub fn invoke_context(
+        &mut self,
+        implementation: &str,
+        parameters: Value,
+        context: basecraft_protocol::operation::InvocationContext,
+        snapshot: Option<&Snapshot>,
+    ) -> Result<InvokeResult> {
+        if !self
+            .info
+            .capabilities
+            .iter()
+            .any(|c| c == basecraft_protocol::operation::CONTRACT_CAPABILITY)
+        {
+            return Err(Error::Protocol(
+                "runtime lacks operation-contract-v1".into(),
+            ));
+        }
+        if !self
+            .info
+            .operations
+            .iter()
+            .any(|name| name == implementation)
+        {
+            return Err(Error::Protocol(
+                "runtime lacks declared implementation".into(),
+            ));
+        }
+        let request = Invoke {
+            operation: implementation.into(),
+            params: parameters,
+            snapshot: snapshot.map(Snapshot::describe),
+            context: Some(context),
+        };
+        let fds: Vec<_> = snapshot
+            .map(|s| vec![s.residues.as_fd(), s.features.as_fd()])
+            .unwrap_or_default();
+        let (result, received) = self.call("invoke", serde_json::to_value(request)?, &fds)?;
+        if !received.is_empty() {
+            return Err(Error::Protocol("unexpected result descriptors".into()));
+        }
+        Ok(serde_json::from_value(result)?)
+    }
 }
 
 impl Drop for PluginProcess {
     fn drop(&mut self) {
+        let _ = self
+            .rx
+            .stream()
+            .set_read_timeout(Some(Duration::from_millis(500)));
+        let _ = self
+            .rx
+            .stream()
+            .set_write_timeout(Some(Duration::from_millis(500)));
         let _ = self.call("shutdown", Value::Null, &[]);
         let deadline = Instant::now() + Duration::from_millis(500);
         while Instant::now() < deadline {
@@ -217,4 +282,40 @@ impl Drop for PluginProcess {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+
+/// Verify static package identity before any operation is invoked.
+pub fn verify_handshake(manifest: &Manifest, info: &PluginInfo) -> Result<()> {
+    if info.protocol != PROTOCOL_VERSION
+        || info.id != manifest.id
+        || info.version != manifest.version
+    {
+        return Err(Error::Protocol(
+            "runtime identity/version does not match manifest".into(),
+        ));
+    }
+    let unique: std::collections::BTreeSet<_> = info.operations.iter().collect();
+    if unique.len() != info.operations.len() {
+        return Err(Error::Protocol("duplicate runtime implementations".into()));
+    }
+    if let Some(contract) = manifest.operation_contract()? {
+        if !info
+            .capabilities
+            .iter()
+            .any(|c| c == basecraft_protocol::operation::CONTRACT_CAPABILITY)
+        {
+            return Err(Error::Protocol(
+                "schema 2 requires runtime operation-contract-v1 capability".into(),
+            ));
+        }
+        for descriptor in contract.operations {
+            if !info.operations.contains(&descriptor.implementation) {
+                return Err(Error::Protocol(format!(
+                    "runtime missing implementation {}",
+                    descriptor.implementation
+                )));
+            }
+        }
+    }
+    Ok(())
 }
