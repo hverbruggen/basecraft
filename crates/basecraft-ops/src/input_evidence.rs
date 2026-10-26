@@ -292,7 +292,7 @@ fn stores() -> Result<Vec<PathBuf>> {
 }
 
 /// Resolve an immutable run by identity only in registered stores. This avoids
-/// exposing machine paths in public ToolRun parameters and never scans trees.
+/// exposing machine paths in public `ToolRun` parameters and never scans trees.
 pub(crate) fn registered_run(id: &str, expected: &str) -> Result<PathBuf> {
     if id.is_empty() || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
         return Err(invalid("Unsafe input run identity"));

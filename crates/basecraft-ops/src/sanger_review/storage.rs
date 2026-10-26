@@ -35,6 +35,8 @@ impl Default for ReviewEvidence {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(super) struct Source {
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
     // Identity in the immutable draft/placement, never rebased.
     pub original: PathBuf,
     pub sha256: String,
@@ -46,6 +48,8 @@ pub(super) struct Source {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(super) struct Support {
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
     pub path: PathBuf,
     pub hash: String,
 }
@@ -90,6 +94,7 @@ fn source(path: &Path, sha256: &str, anchor: &Path) -> crate::Result<Source> {
     }
     let reference = inputs::read_input(ledger.directory())?.source;
     Ok(Source {
+        extra: BTreeMap::new(),
         original: path.clone(),
         path,
         sha256: sha256.into(),
@@ -387,10 +392,10 @@ impl SangerReviewSession {
                 .iter_mut()
                 .find(|s| s.sha256.eq_ignore_ascii_case(&read.sha256))
                 .ok_or("Draft input differs from registered Sanger input")?;
-            source.original = read.path.clone();
+            source.original.clone_from(&read.path);
         }
         self.evidence = evidence;
-        self.anchor = run.anchor.clone();
+        self.anchor.clone_from(&run.anchor);
         self.start_recovery()
     }
 
@@ -449,6 +454,7 @@ impl SangerReviewSession {
                     // Saving/recovering decisions remains possible without the
                     // original. No ledger may claim these unavailable bytes.
                     Source {
+                        extra: BTreeMap::new(),
                         original: read.path.clone(),
                         path: candidate,
                         sha256: read.sha256.clone(),
@@ -456,7 +462,7 @@ impl SangerReviewSession {
                         reference: None,
                     }
                 };
-                input.original = read.path.clone();
+                input.original.clone_from(&read.path);
                 self.evidence.sources.push(input);
             }
         }
@@ -477,6 +483,7 @@ impl SangerReviewSession {
         self.evidence.sources.push(context.clone());
         self.evidence.runs.extend(run.evidence.runs.clone());
         self.evidence.placement = Some(Support {
+            extra: BTreeMap::new(),
             path: path.into(),
             hash: basecraft_io::hash_file(path).map_err(|e| e.to_string())?,
         });
@@ -760,10 +767,11 @@ fn normalized(path: &Path) -> PathBuf {
 }
 
 pub(crate) fn is_review(path: &Path) -> bool {
-    path.extension().is_some_and(|e| e == "json")
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("json"))
         && crate::provenance::read_record(path)
-            .ok()
-            .is_some_and(|bytes| serde_json::from_slice::<StoredReview>(&bytes).is_ok())
+            .is_ok_and(|bytes| serde_json::from_slice::<StoredReview>(&bytes).is_ok())
 }
 
 #[derive(Serialize, Deserialize)]
@@ -917,7 +925,10 @@ mod tests {
         edit(&mut review);
         let path = folder.join("specimen.sanger-review.json");
         review.save(&path).unwrap();
-        assert!(crate::provenance::verify(&path).unwrap().is_empty());
+        assert_eq!(
+            crate::provenance::verify(&path).unwrap(),
+            Vec::<String>::new()
+        );
         assert_eq!(review.evidence.sources.len(), 1);
         let ledger = review.evidence.sources[0].ledger.as_ref().unwrap();
         assert_eq!(inputs::read_input(ledger).unwrap().state, "referenced");
@@ -947,7 +958,10 @@ mod tests {
         assert_eq!(reopened.decision(0), Some(&ReviewChoice::Pending));
         reopened.apply(ReviewOp::Redo).unwrap();
         assert_eq!(reopened.decision(0), Some(&ReviewChoice::Edit('G')));
-        assert!(crate::provenance::verify(&path).unwrap().is_empty());
+        assert_eq!(
+            crate::provenance::verify(&path).unwrap(),
+            Vec::<String>::new()
+        );
     }
 
     #[test]
@@ -970,7 +984,10 @@ mod tests {
         assert_eq!(reopened.events(), review.events());
         assert_eq!(reopened.unresolved(), 1);
         assert!(reopened.working_draft().unwrap().inputs[0].path.is_file());
-        assert!(crate::provenance::verify(&path).unwrap().is_empty());
+        assert_eq!(
+            crate::provenance::verify(&path).unwrap(),
+            Vec::<String>::new()
+        );
         let mut saved_again = reopened;
         saved_again
             .save(&moved.join("another.sanger-review.json"))
@@ -992,7 +1009,10 @@ mod tests {
             })
             .unwrap();
         review.export_consensus(&output, "sample").unwrap();
-        assert!(crate::provenance::verify(&output).unwrap().is_empty());
+        assert_eq!(
+            crate::provenance::verify(&output).unwrap(),
+            Vec::<String>::new()
+        );
         let package = tmp.path().join("export");
         crate::provenance::package(&output, &package).unwrap();
         std::fs::remove_dir_all(folder).unwrap();
@@ -1000,10 +1020,9 @@ mod tests {
             SangerReviewSession::load(&package.join("consensus.sanger-review.json")).unwrap();
         assert_eq!(resumed.resolved_sequence().as_deref(), Some("AC"));
         assert!(resumed.working_draft().is_ok());
-        assert!(
-            crate::provenance::verify(&package.join("consensus.fa"))
-                .unwrap()
-                .is_empty()
+        assert_eq!(
+            crate::provenance::verify(&package.join("consensus.fa")).unwrap(),
+            Vec::<String>::new()
         );
     }
 
@@ -1183,17 +1202,91 @@ mod tests {
         session.redo(doc).unwrap();
         let result = folder.join("added.afa");
         session.save(doc, Some(&result)).unwrap();
-        assert!(crate::provenance::verify(&result).unwrap().is_empty());
+        assert_eq!(
+            crate::provenance::verify(&result).unwrap(),
+            Vec::<String>::new()
+        );
         let package = tmp.path().join("export");
         crate::provenance::package(&result, &package).unwrap();
         drop(session);
         std::fs::remove_dir_all(folder).unwrap();
         let result = package.join("added.afa");
-        assert!(crate::provenance::verify(&result).unwrap().is_empty());
+        assert_eq!(
+            crate::provenance::verify(&result).unwrap(),
+            Vec::<String>::new()
+        );
         let mut session = crate::Session::recoverable(&package).unwrap();
         let doc = session.open(&result).unwrap();
         let saved_again = package.join("saved-again.afa");
         session.save(doc, Some(&saved_again)).unwrap();
-        assert!(crate::provenance::verify(&saved_again).unwrap().is_empty());
+        assert_eq!(
+            crate::provenance::verify(&saved_again).unwrap(),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn save_preserves_extension_metadata_and_refuses_source_aliases() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (mut review, trace) = draft(tmp.path());
+        let path = tmp.path().join("review.sanger-review.json");
+        review.save(&path).unwrap();
+        let mut extended: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        extended["future_envelope"] = serde_json::json!({"text":"keep user data"});
+        extended["evidence"]["future_support"] = serde_json::json!([1, 2]);
+        extended["evidence"]["sources"][0]["future_binding"] = "keep".into();
+        std::fs::write(&path, serde_json::to_vec(&extended).unwrap()).unwrap();
+        let mut loaded = SangerReviewSession::load(&path).unwrap();
+        let saved = tmp.path().join("another.sanger-review.json");
+        loaded.save(&saved).unwrap();
+        let roundtrip: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&saved).unwrap()).unwrap();
+        assert_eq!(roundtrip["future_envelope"], extended["future_envelope"]);
+        assert_eq!(
+            roundtrip["evidence"]["future_support"],
+            extended["evidence"]["future_support"]
+        );
+        assert_eq!(
+            roundtrip["evidence"]["sources"][0]["future_binding"],
+            "keep"
+        );
+        let alias = tmp.path().join("trace-alias.json");
+        std::fs::hard_link(&trace, &alias).unwrap();
+        let original = std::fs::read(&trace).unwrap();
+        assert!(loaded.save(&alias).is_err());
+        assert_eq!(std::fs::read(trace).unwrap(), original);
+    }
+
+    #[test]
+    fn cancellation_and_early_exit_retain_support_without_a_successful_result() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (_, trace) = draft(tmp.path());
+        for cancelled in [false, true] {
+            let run =
+                SangerRun::prepare(&trace, "consensus", std::slice::from_ref(&trace)).unwrap();
+            let directory = run.directory().to_path_buf();
+            std::fs::write(run.artifact("partial").unwrap(), b"recover me").unwrap();
+            let job = run.job_path().unwrap();
+            if cancelled {
+                run.cancelled("explicit cancellation").unwrap();
+            }
+            drop(run);
+            assert_eq!(
+                std::fs::read(directory.join("partial")).unwrap(),
+                b"recover me"
+            );
+            let record: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(job).unwrap()).unwrap();
+            assert_eq!(
+                record["status"],
+                if cancelled {
+                    "cancelled"
+                } else {
+                    "interrupted"
+                }
+            );
+            assert!(record["primary_output"].is_null());
+        }
     }
 }

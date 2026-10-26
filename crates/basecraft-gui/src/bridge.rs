@@ -1260,7 +1260,11 @@ impl qobject::GenomeController {
     }
 
     pub fn file_kind(&self, path: &QString) -> QString {
-        if path.to_string().ends_with(".sanger-review.json") {
+        if path
+            .to_string()
+            .to_ascii_lowercase()
+            .ends_with(".sanger-review.json")
+        {
             return QString::from("trace");
         }
         if Path::new(&path.to_string())

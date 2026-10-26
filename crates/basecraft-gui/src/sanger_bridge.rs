@@ -608,12 +608,6 @@ impl qobject::SangerController {
                 .review_session
                 .as_ref()
                 .ok_or("Open a draft first")?;
-            if !session.automatic_only() {
-                return Err(
-                    "This review already has decisions; open a fresh draft to change orientation"
-                        .into(),
-                );
-            }
             let draft = session.working_draft()?;
             let mut sources: Vec<_> = draft.inputs.iter().map(|r| r.path.clone()).collect();
             sources.push(PathBuf::from(alignment.to_string()));
@@ -633,6 +627,12 @@ impl qobject::SangerController {
             let evidence = if value["reversed"].as_array().is_none_or(Vec::is_empty) {
                 None
             } else {
+                if !session.automatic_only() {
+                    return Err(
+                    "This review already has decisions; open a fresh draft to change orientation"
+                        .into(),
+                );
+                }
                 // Reverse the immutable original, not its transient resolved paths.
                 let mut reversed = session.draft.reverse_complemented();
                 reversed.limitations.push(format!(
@@ -767,7 +767,11 @@ impl qobject::SangerController {
     }
 
     pub fn open_file(mut self: std::pin::Pin<&mut Self>, path: &QString) -> bool {
-        if path.to_string().ends_with(".sanger-review.json") {
+        if path
+            .to_string()
+            .to_ascii_lowercase()
+            .ends_with(".sanger-review.json")
+        {
             return self.open_review(path);
         }
         let path = PathBuf::from(path.to_string());
