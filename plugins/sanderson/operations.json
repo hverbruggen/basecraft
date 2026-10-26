@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "operations": [{
+    "name": "date_tree", "version": "1.0.0", "implementation": "date_tree",
+    "title": "Date a rooted tree with Sanderson penalized likelihood",
+    "description": "Fit native Sanderson PL to a supplied rooted substitution tree, with terminal-branch prediction cross-validation.",
+    "family": "file_analysis",
+    "parameters": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "branch_units": {"type": "string", "enum": ["substitutions_per_site", "substitution_counts"]},
+        "sites": {"type": "integer", "minimum": 1, "maximum": 1000000000},
+        "root_age": {"type": "number", "exclusiveMinimum": 0},
+        "time_unit": {"type": "string", "minLength": 1, "maxLength": 80},
+        "penalty": {"type": "string", "enum": ["add", "log"], "default": "log"},
+        "lambda": {"type": "number", "exclusiveMinimum": 0, "maximum": 100000000},
+        "starts": {"type": "integer", "minimum": 1, "maximum": 32, "default": 3},
+        "seed": {"type": "integer", "minimum": 1, "maximum": 2147483647, "default": 1},
+        "max_iterations": {"type": "integer", "minimum": 1, "maximum": 100000, "default": 2000},
+        "max_seconds": {"type": "integer", "minimum": 1, "maximum": 86400, "default": 3600},
+        "constraints": {"type": "array", "maxItems": 128, "default": [], "items": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "node": {"type": "string", "minLength": 1, "maxLength": 80},
+            "min_age": {"type": "number", "exclusiveMinimum": 0},
+            "max_age": {"type": "number", "exclusiveMinimum": 0}
+          }, "required": ["node", "min_age", "max_age"]
+        }},
+        "cross_validation": {"type": "object", "additionalProperties": false,
+          "properties": {
+            "log10_start": {"type": "number", "minimum": -8, "maximum": 8},
+            "log10_step": {"type": "number", "exclusiveMinimum": 0},
+            "count": {"type": "integer", "minimum": 2, "maximum": 30}
+          }, "required": ["log10_start", "log10_step", "count"]
+        }
+      },
+      "required": ["branch_units", "sites", "root_age", "time_unit"],
+      "oneOf": [{"required": ["lambda"]}, {"required": ["cross_validation"]}]
+    },
+    "result": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "lambda": {"type": "number", "exclusiveMinimum": 0},
+        "root_age": {"type": "number", "exclusiveMinimum": 0},
+        "time_unit": {"type": "string"},
+        "node_count": {"type": "integer", "minimum": 1},
+        "engine_sha256": {"type": "string"}
+      }, "required": ["lambda", "root_age", "time_unit", "node_count", "engine_sha256"]
+    },
+    "inputs": {"tree": {"view": "newick", "media_type": "text/x-newick", "min": 1, "max": 1}},
+    "outputs": {
+      "chronogram": {"media_type": "text/x-newick", "min": 1, "max": 1, "visibility": "result"},
+      "report": {"media_type": "application/json", "min": 1, "max": 1, "visibility": "supporting"}
+    },
+    "effects": {"document_write": false, "artifact_write": true}
+  }]
+}

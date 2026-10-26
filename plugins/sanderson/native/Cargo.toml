@@ -1,0 +1,32 @@
+[package]
+name = "basecraft-sanderson-native"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "GPL-3.0-or-later"
+publish = false
+
+# Kept independent while WF-0017 owns the root workspace and Cargo.lock.
+[workspace]
+
+[features]
+# Diagnostic timing only; disabled in the validated release executable.
+profile = []
+
+[profile.release]
+# Cross-crate inlining of the Argmin callback path; benchmarked against the
+# same source and convergence settings without LTO.
+lto = "thin"
+codegen-units = 1
+
+[dependencies]
+anyhow = "1.0"
+argmin = { version = "=0.11.0", default-features = false }
+argmin-math = { version = "=0.5.1", default-features = false, features = ["primitives", "vec"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+statrs = "=0.18.0"
+
+[[bin]]
+name = "basecraft-sanderson-native"
+path = "src/main.rs"
