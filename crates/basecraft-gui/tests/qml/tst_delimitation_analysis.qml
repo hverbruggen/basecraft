@@ -115,6 +115,46 @@ Item {
             verify(!dialog.ptpFromAlignment)
             dialog.reject()
         }
+        function test_existing_ptp_rooting_data() {
+            const rows = []
+            for (const rates of [0, 1])
+                for (const rooting of [0, 1, 2])
+                    rows.push({tag: rates + "-" + rooting, rates, rooting})
+            return rows
+        }
+        function test_existing_ptp_rooting(data) {
+            const dialog = createTemporaryObject(factory, parent)
+            requests.target = dialog; requests.clear()
+            dialog.show("ptp", "", "/project/supplied.nwk")
+            tryCompare(dialog, "opened", true)
+            const choice = findChild(dialog, "ptpRooting")
+            verify(choice.visible)
+            compare(choice.count, 3)
+            choice.currentIndex = data.rooting
+            findChild(dialog, "ptpRates").currentIndex = data.rates
+            compare(dialog.validInput, data.rooting !== 0)
+            compare(findChild(dialog, "rootedTree").visible, data.rooting === 0)
+            if (data.rooting === 0) findChild(dialog, "rootedTree").checked = true
+            verify(dialog.validInput)
+            findChild(dialog, "analysisInput").text = " "
+            verify(!dialog.validInput)
+            findChild(dialog, "analysisInput").text = "/project/supplied.nwk"
+            dialog.accept()
+            compare(requests.count, 1)
+            const args = requests.signalArguments[0]
+            compare(args[0], data.rates === 0 ? "ptp" : "mptp")
+            compare(args[1], "/project/supplied.nwk")
+            compare(args[2], true)
+            compare(JSON.parse(args[3]).rooting, ["keep", "midpoint", "mrttv"][data.rooting])
+            verify(JSON.parse(args[3]).iqtree_model === undefined)
+            compare(args[4], "existing")
+            // Reopening never silently carries a rooting choice to another input.
+            dialog.show("ptp", "", "/project/other.nwk")
+            tryCompare(dialog, "opened", true)
+            compare(dialog.parameters().rooting, "keep")
+            verify(!dialog.validInput)
+            dialog.reject()
+        }
         function test_missing_engine_blocks_run() {
             const dialog = createTemporaryObject(factory, parent)
             requests.target = dialog
