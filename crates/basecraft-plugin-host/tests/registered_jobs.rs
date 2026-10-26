@@ -79,6 +79,56 @@ fn installed_multi_input_job_uses_common_storage_and_frozen_identity() {
     assert_eq!(execution["initiator"], "test client");
     assert_eq!(execution["executor"], "org.example.registry-fixture");
 }
+
+#[test]
+fn registered_newick_inputs_keep_verifiable_identity_evidence() {
+    let temp = tempfile::tempdir().unwrap();
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/registry-plugin");
+    let package = temp.path().join("package");
+    std::fs::create_dir(&package).unwrap();
+    for name in ["plugin.toml", "plugin.py", "operations.json"] {
+        std::fs::copy(fixture.join(name), package.join(name)).unwrap();
+    }
+    let mut contract: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(package.join("operations.json")).unwrap()).unwrap();
+    contract["operations"][0]["inputs"]["sources"]["view"] = json!("newick");
+    std::fs::write(
+        package.join("operations.json"),
+        serde_json::to_vec(&contract).unwrap(),
+    )
+    .unwrap();
+    let config = RegistryConfig {
+        bundled: temp.path().join("no-bundle"),
+        packages: temp.path().join("profile/plugins"),
+        index: temp.path().join("profile/index.json"),
+    };
+    registry::install(&config, &package).unwrap();
+    let registry = Registry::load(&config).unwrap();
+    let original = b"(a:1,b:1);\n";
+    for name in ["a.txt", "b.txt"] {
+        std::fs::write(temp.path().join(name), original).unwrap();
+    }
+    let mut jobs = JobManager::default();
+    let accepted = jobs
+        .submit(
+            &registry,
+            request("normal"),
+            SessionPolicy::new(temp.path(), true).unwrap(),
+            "newick client",
+        )
+        .unwrap();
+    let outcome = wait(&jobs, &accepted.run_id);
+    assert_eq!(outcome.state, RuntimeState::Completed, "{outcome:?}");
+    assert_eq!(
+        basecraft_ops::provenance::verify(&temp.path().join("report.json")).unwrap(),
+        Vec::<String>::new()
+    );
+    for name in ["a.txt", "b.txt"] {
+        assert_eq!(std::fs::read(temp.path().join(name)).unwrap(), original);
+    }
+}
+
 #[test]
 fn invalid_data_does_not_publish_and_slow_job_cancels_without_extra_grants() {
     let temp = tempfile::tempdir().unwrap();

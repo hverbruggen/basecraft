@@ -39,19 +39,38 @@ def parse_result(text, expected):
                 "null_log_likelihood": float(null[1]), "lrt_passed": lrt_passed, "diagnostics": warnings}
 
 
-MISSING = "mPTP is not installed; install originating-group mPTP or set BASECRAFT_MPTP"
+MISSING = "The mPTP engine is missing from this Basecraft installation. Reinstall the complete Basecraft bundle or configure BASECRAFT_MPTP."
+
+
+def executable_path(params=None):
+    explicit = (params or {}).get("mptp_executable") or os.environ.get("BASECRAFT_MPTP")
+    if explicit:
+        return str(explicit)
+    bundled = Path(__file__).resolve().parents[2] / "bin" / "mptp"
+    if bundled.is_file():
+        return str(bundled)
+    return shutil.which("mptp")
 
 
 def engine_problem(params=None):
     """Why mPTP cannot run here, or None."""
-    executable = (params or {}).get("mptp_executable") or os.environ.get("BASECRAFT_MPTP") or shutil.which("mptp")
-    return None if executable and Path(executable).is_file() else MISSING
+    executable = executable_path(params)
+    if not executable or not Path(executable).is_file():
+        return MISSING
+    if not os.access(executable, os.X_OK):
+        return f"mPTP is not executable: {executable}. Repair the installation or configured engine path."
+    try:
+        subprocess.run([executable, "--version"], capture_output=True, timeout=10, check=True)
+    except (OSError, subprocess.SubprocessError) as error:
+        return f"mPTP could not start: {error}. Repair the installation or configured engine path."
+    return None
 
 
 def invoke(method, params, native, run_native):
-    executable = params.get("mptp_executable") or os.environ.get("BASECRAFT_MPTP") or shutil.which("mptp")
-    if not executable:
-        raise FileNotFoundError(MISSING)
+    problem = engine_problem(params)
+    if problem:
+        raise RuntimeError(problem)
+    executable = executable_path(params)
     if not params.get("rooted", False):
         raise ValueError("PTP/mPTP requires an explicitly rooted substitution-length tree")
     minimum = params.get("min_branch", 0.0)

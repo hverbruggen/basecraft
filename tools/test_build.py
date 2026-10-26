@@ -16,6 +16,8 @@ import time
 from pathlib import Path
 
 from build_runtime import output, runtime
+from bundled_tools import stage_tools
+from check_ptp import check_ptp
 
 REPO = Path(__file__).resolve().parents[1]
 BINARIES = (
@@ -260,6 +262,7 @@ sha256sum {" ".join(BINARIES)} > SHA256SUMS
     shutil.copytree(source / "plugins", bundle / "plugins")
     shutil.copytree(source / "python", bundle / "python")
     shutil.copy2(source / "tools/basecraft-launch.py", bundle / "launcher.py")
+    bundled_tools = stage_tools(bundle, root / "downloads")
     checks = stage / "checks"
     for backend in ("software", "opengl"):
         run(
@@ -291,6 +294,7 @@ sha256sum {" ".join(BINARIES)} > SHA256SUMS
     else:
         run(["just", "qml-test"], cwd=source)
     engines = engine_report(bundle)
+    ptp_receipt = check_ptp(bundle, checks / "ptp", REPO / ".pixi/envs/default/bin/python")
     manifest = {
         "schema_version": 1,
         "source_sha256": source_hash,
@@ -309,8 +313,11 @@ sha256sum {" ".join(BINARIES)} > SHA256SUMS
             *(["local RHI canvas and ribbon checks"] if args.ribbon_screenshots else []),
             "QML tests in remote CI" if receipt else "local QML tests",
             "local delimitation engine check",
+            "real PTP/mPTP fits and provenance through public operations",
         ],
         "engines": engines,
+        "bundled_tools": bundled_tools,
+        "ptp_receipt": ptp_receipt,
         "logs": str(stage),
     }
     (bundle / "build.json").write_text(json.dumps(manifest, indent=2) + "\n")
@@ -332,13 +339,14 @@ sha256sum {" ".join(BINARIES)} > SHA256SUMS
 
 
 # Engines a build must be able to run. ASAP is native to basecraft-delimitation;
-# mPTP is reported but not yet provisioned.
-REQUIRED_ENGINES = ()
+# Published bundles must contain a working PTP engine.
+REQUIRED_ENGINES = ("mptp",)
 
 
 def engine_report(bundle):
     """Ask the bundled adapters, in the launcher's environment, which engines run."""
     env = dict(os.environ)
+    env.pop("BASECRAFT_MPTP", None)
     probe = (
         "import json, sys; sys.path.insert(0, sys.argv[1]);"
         "import mptp_adapter;"

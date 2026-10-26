@@ -199,7 +199,7 @@ impl PreparedOperation {
                     InputView::Newick => {
                         // Validate the declared tree without substituting a fit/preparation workflow.
                         basecraft_ops::files::load_tree(&path)?;
-                        "identity-newick-v1"
+                        "identity-v1"
                     }
                     InputView::SequenceSnapshot => "sequence-file-v1",
                 };
