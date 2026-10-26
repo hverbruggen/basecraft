@@ -766,6 +766,113 @@ pub(crate) fn is_review(path: &Path) -> bool {
             .is_some_and(|bytes| serde_json::from_slice::<StoredReview>(&bytes).is_ok())
 }
 
+#[derive(Serialize, Deserialize)]
+struct AdditionEvidence {
+    schema_version: u32,
+    bundle: PathBuf,
+    id: String,
+    hash: String,
+    review: PathBuf,
+    review_hash: String,
+    sequence_hash: String,
+}
+
+impl SangerReviewSession {
+    /// Freeze the accepted input for alignment addition without exporting an AB1
+    /// or requiring a visible review file. This descriptor is never executable.
+    pub fn addition_evidence(&mut self) -> Result<String, String> {
+        let sequence = self
+            .resolved_sequence()
+            .filter(|s| !s.is_empty())
+            .ok_or("Resolve every review column before addition")?;
+        self.start_recovery()?;
+        let paths: Vec<_> = self
+            .working_draft()?
+            .inputs
+            .into_iter()
+            .map(|r| r.path)
+            .collect();
+        let run = SangerRun::prepare_with_dependencies(
+            self.storage_anchor(),
+            "accepted_review_input",
+            &paths,
+            self.evidence_runs(),
+        )
+        .map_err(|e| e.to_string())?;
+        let review = run.review_snapshot(self).map_err(|e| e.to_string())?;
+        let run = run
+            .finish(std::slice::from_ref(&review))
+            .map_err(|e| e.to_string())?;
+        let bytes = crate::provenance::read_record(&run.directory().join("manifest.json"))
+            .map_err(|e| e.to_string())?;
+        let evidence = AdditionEvidence {
+            schema_version: 1,
+            bundle: run.directory().into(),
+            id: run.run.id().into(),
+            hash: basecraft_io::hash_bytes(&bytes),
+            review: review.clone(),
+            review_hash: basecraft_io::hash_file(&review).map_err(|e| e.to_string())?,
+            sequence_hash: basecraft_io::hash_bytes(sequence.as_bytes()),
+        };
+        serde_json::to_string(&evidence).map_err(|e| e.to_string())
+    }
+}
+
+/// Verify the exact accepted review before selecting it as an alignment input.
+/// The actual row mutation continues through the existing typed alignment op.
+pub fn record_addition(
+    session: &mut crate::Session,
+    doc: crate::DocId,
+    descriptor: &str,
+    sequence: &str,
+) -> crate::Result<()> {
+    let evidence: AdditionEvidence = serde_json::from_str(descriptor)?;
+    if evidence.schema_version != 1
+        || evidence.sequence_hash != basecraft_io::hash_bytes(sequence.as_bytes())
+    {
+        return Err(invalid(
+            "Reviewed sequence differs from its Sanger evidence",
+        ));
+    }
+    let bytes = crate::provenance::read_record(&evidence.bundle.join("manifest.json"))?;
+    let publication: Publication = serde_json::from_slice(&bytes)?;
+    if publication.id != evidence.id
+        || basecraft_io::hash_bytes(&bytes) != evidence.hash
+        || basecraft_io::hash_file(&evidence.review)? != evidence.review_hash
+    {
+        return Err(invalid("Sanger addition evidence changed"));
+    }
+    let local = evidence
+        .review
+        .strip_prefix(&evidence.bundle)
+        .map_err(|_| invalid("Sanger review escapes its input run"))?;
+    if !publication
+        .inputs
+        .iter()
+        .any(|a| a.retained.as_deref() == local.to_str() && a.hash == evidence.review_hash)
+    {
+        return Err(invalid(
+            "Sanger review is not retained by the selected input run",
+        ));
+    }
+    let review = SangerReviewSession::load(&evidence.review).map_err(invalid)?;
+    if review.resolved_sequence().as_deref() != Some(sequence) {
+        return Err(invalid(
+            "Sanger review is unresolved or describes another sequence",
+        ));
+    }
+    let mut issues = crate::provenance::verify_records(&evidence.bundle, &publication)?;
+    issues.extend(inputs::verify_ancestors(&evidence.bundle)?);
+    if !issues.is_empty() {
+        return Err(invalid(issues.join("; ")));
+    }
+    let hash = session.snapshot_file(&evidence.review)?;
+    session.log_referenced_tool_run(doc,basecraft_protocol::Actor::Plugin {id:"basecraft.sanger-review".into(),version:"1".into()},
+        ("basecraft.sanger-review","reviewed_consensus_input"),
+        serde_json::json!({"sanger_input":{"schema_version":1,"id":evidence.id,"hash":evidence.hash},"review_hash":evidence.review_hash,"sequence_hash":evidence.sequence_hash}),
+        &[(evidence.review.to_string_lossy().into_owned(),hash)],&[])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1089,111 +1196,4 @@ mod tests {
         session.save(doc, Some(&saved_again)).unwrap();
         assert!(crate::provenance::verify(&saved_again).unwrap().is_empty());
     }
-}
-
-#[derive(Serialize, Deserialize)]
-struct AdditionEvidence {
-    schema_version: u32,
-    bundle: PathBuf,
-    id: String,
-    hash: String,
-    review: PathBuf,
-    review_hash: String,
-    sequence_hash: String,
-}
-
-impl SangerReviewSession {
-    /// Freeze the accepted input for alignment addition without exporting an AB1
-    /// or requiring a visible review file. This descriptor is never executable.
-    pub fn addition_evidence(&mut self) -> Result<String, String> {
-        let sequence = self
-            .resolved_sequence()
-            .filter(|s| !s.is_empty())
-            .ok_or("Resolve every review column before addition")?;
-        self.start_recovery()?;
-        let paths: Vec<_> = self
-            .working_draft()?
-            .inputs
-            .into_iter()
-            .map(|r| r.path)
-            .collect();
-        let run = SangerRun::prepare_with_dependencies(
-            self.storage_anchor(),
-            "accepted_review_input",
-            &paths,
-            self.evidence_runs(),
-        )
-        .map_err(|e| e.to_string())?;
-        let review = run.review_snapshot(self).map_err(|e| e.to_string())?;
-        let run = run
-            .finish(std::slice::from_ref(&review))
-            .map_err(|e| e.to_string())?;
-        let bytes = crate::provenance::read_record(&run.directory().join("manifest.json"))
-            .map_err(|e| e.to_string())?;
-        let evidence = AdditionEvidence {
-            schema_version: 1,
-            bundle: run.directory().into(),
-            id: run.run.id().into(),
-            hash: basecraft_io::hash_bytes(&bytes),
-            review: review.clone(),
-            review_hash: basecraft_io::hash_file(&review).map_err(|e| e.to_string())?,
-            sequence_hash: basecraft_io::hash_bytes(sequence.as_bytes()),
-        };
-        serde_json::to_string(&evidence).map_err(|e| e.to_string())
-    }
-}
-
-/// Verify the exact accepted review before selecting it as an alignment input.
-/// The actual row mutation continues through the existing typed alignment op.
-pub fn record_addition(
-    session: &mut crate::Session,
-    doc: crate::DocId,
-    descriptor: &str,
-    sequence: &str,
-) -> crate::Result<()> {
-    let evidence: AdditionEvidence = serde_json::from_str(descriptor)?;
-    if evidence.schema_version != 1
-        || evidence.sequence_hash != basecraft_io::hash_bytes(sequence.as_bytes())
-    {
-        return Err(invalid(
-            "Reviewed sequence differs from its Sanger evidence",
-        ));
-    }
-    let bytes = crate::provenance::read_record(&evidence.bundle.join("manifest.json"))?;
-    let publication: Publication = serde_json::from_slice(&bytes)?;
-    if publication.id != evidence.id
-        || basecraft_io::hash_bytes(&bytes) != evidence.hash
-        || basecraft_io::hash_file(&evidence.review)? != evidence.review_hash
-    {
-        return Err(invalid("Sanger addition evidence changed"));
-    }
-    let local = evidence
-        .review
-        .strip_prefix(&evidence.bundle)
-        .map_err(|_| invalid("Sanger review escapes its input run"))?;
-    if !publication
-        .inputs
-        .iter()
-        .any(|a| a.retained.as_deref() == local.to_str() && a.hash == evidence.review_hash)
-    {
-        return Err(invalid(
-            "Sanger review is not retained by the selected input run",
-        ));
-    }
-    let review = SangerReviewSession::load(&evidence.review).map_err(invalid)?;
-    if review.resolved_sequence().as_deref() != Some(sequence) {
-        return Err(invalid(
-            "Sanger review is unresolved or describes another sequence",
-        ));
-    }
-    let mut issues = crate::provenance::verify_records(&evidence.bundle, &publication)?;
-    issues.extend(inputs::verify_ancestors(&evidence.bundle)?);
-    if !issues.is_empty() {
-        return Err(invalid(issues.join("; ")));
-    }
-    let hash = session.snapshot_file(&evidence.review)?;
-    session.log_referenced_tool_run(doc,basecraft_protocol::Actor::Plugin {id:"basecraft.sanger-review".into(),version:"1".into()},
-        ("basecraft.sanger-review","reviewed_consensus_input"),
-        serde_json::json!({"sanger_input":{"schema_version":1,"bundle":evidence.bundle,"id":evidence.id,"hash":evidence.hash},"review_hash":evidence.review_hash,"sequence_hash":evidence.sequence_hash}),
-        &[(evidence.review.to_string_lossy().into_owned(),hash)],&[])
 }

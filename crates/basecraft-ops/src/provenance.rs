@@ -398,16 +398,7 @@ fn link_sanger_inputs(bundle: &Path, publication: &Publication) -> Result<()> {
                 return Err(invalid("Inherited Sanger input identity differs"));
             }
         } else {
-            let directory = Path::new(
-                dependency["bundle"]
-                    .as_str()
-                    .ok_or_else(|| invalid("Sanger input has no bundle"))?,
-            )
-            .canonicalize()?;
-            let bytes = read_record(&directory.join("records").join(format!("{id}.json")))?;
-            if basecraft_io::hash_bytes(&bytes) != expected {
-                return Err(invalid("Sanger input dependency changed before save"));
-            }
+            let directory = crate::input_evidence::registered_run(id, expected)?;
             upstream.push(serde_json::json!({"bundle":crate::input_evidence::relative(&bundle.canonicalize()?,&directory)?,"id":id,"hash":expected}));
         }
         processed.push(serde_json::json!(event));

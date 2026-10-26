@@ -291,6 +291,40 @@ fn stores() -> Result<Vec<PathBuf>> {
     Ok(paths)
 }
 
+/// Resolve an immutable run by identity only in registered stores. This avoids
+/// exposing machine paths in public ToolRun parameters and never scans trees.
+pub(crate) fn registered_run(id: &str, expected: &str) -> Result<PathBuf> {
+    if id.is_empty() || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
+        return Err(invalid("Unsafe input run identity"));
+    }
+    let mut found = None;
+    for store in stores()? {
+        let run = store.join("runs").join(id);
+        let record = run.join("records").join(format!("{id}.json"));
+        if !record.try_exists()? {
+            continue;
+        }
+        ArtifactRun::validate_store(&store)?;
+        for directory in [store.join("runs"), run.clone()] {
+            let metadata = std::fs::symlink_metadata(directory)?;
+            if !metadata.is_dir() || metadata.file_type().is_symlink() {
+                return Err(invalid("Unsafe registered input run"));
+            }
+        }
+        if basecraft_io::hash_file(&record)? != expected {
+            return Err(invalid("Registered input run checksum differs"));
+        }
+        let canonical = run.canonicalize()?;
+        if found.as_ref().is_some_and(|prior| prior != &canonical) {
+            return Err(invalid(
+                "Input run has multiple registered copies; explicit reassociation required",
+            ));
+        }
+        found = Some(canonical);
+    }
+    found.ok_or_else(|| invalid("Selected input run unavailable in known stores"))
+}
+
 /// Caller holds `lock`. Only explicit analysis execution registers a store.
 pub fn register(run: &ArtifactRun) -> Result<()> {
     let store = run
