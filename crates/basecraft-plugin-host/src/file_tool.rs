@@ -44,6 +44,46 @@ pub fn cancel_run(id: &str) -> Result<()> {
     Ok(())
 }
 
+/// The built-in IQ-TREE form permits one support method per run. Both IQ-TREE
+/// bootstrap variants write percentages; their names preserve the distinction.
+pub(crate) fn iqtree_support(
+    selected: Option<&serde_json::Value>,
+) -> Option<(&'static str, basecraft_protocol::SupportKind)> {
+    match selected.and_then(serde_json::Value::as_str) {
+        Some("ufboot") => Some((
+            "Ultrafast bootstrap (UFBoot)",
+            basecraft_protocol::SupportKind::Bootstrap,
+        )),
+        Some("bootstrap") => Some((
+            "Standard bootstrap",
+            basecraft_protocol::SupportKind::Bootstrap,
+        )),
+        _ => None,
+    }
+}
+
+/// Persist producer semantics only when the parsed tree has exactly one support
+/// field. Slash-separated external/combined values need their own verified order.
+pub(crate) fn write_support_sidecar(
+    tree: &Path,
+    name: &str,
+    kind: basecraft_protocol::SupportKind,
+) -> Result<Option<PathBuf>> {
+    let mut doc = basecraft_ops::files::load_tree(tree)?.doc;
+    if doc.supports().len() != 1 {
+        return Ok(None);
+    }
+    let old = doc.supports()[0].name.clone();
+    doc.rename_support(&old, name);
+    doc.set_support_kind(name, kind);
+    let metadata = basecraft_ops::files::tree_sidecar(tree);
+    basecraft_io::write_atomic(&metadata, |w| {
+        basecraft_ops::files::write_tree_sidecar(&doc, w)
+    })
+    .map_err(basecraft_ops::Error::from)?;
+    Ok(Some(metadata))
+}
+
 struct CancellationRegistration(String);
 impl Drop for CancellationRegistration {
     fn drop(&mut self) {
@@ -1580,6 +1620,7 @@ impl FileJob {
                     "SH-like local support",
                     basecraft_protocol::SupportKind::Probability,
                 )),
+                "basecraft.iqtree" => iqtree_support(self.params.get("support")),
                 _ => None,
             };
             if let Some((name, kind)) = support {
@@ -1587,16 +1628,7 @@ impl FileJob {
                     if let Some(run) = &self.artifacts {
                         run.bind(tree)?;
                     }
-                    let mut doc = basecraft_ops::files::load_tree(tree)?.doc;
-                    if doc.supports().len() == 1 {
-                        let old = doc.supports()[0].name.clone();
-                        doc.rename_support(&old, name);
-                        doc.set_support_kind(name, kind);
-                        let metadata = basecraft_ops::files::tree_sidecar(tree);
-                        basecraft_io::write_atomic(&metadata, |w| {
-                            basecraft_ops::files::write_tree_sidecar(&doc, w)
-                        })
-                        .map_err(basecraft_ops::Error::from)?;
+                    if let Some(metadata) = write_support_sidecar(tree, name, kind)? {
                         result.outputs.push(metadata.to_string_lossy().into_owned());
                     }
                 }
