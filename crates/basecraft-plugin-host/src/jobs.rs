@@ -8,8 +8,19 @@ use std::sync::{
 use std::thread::JoinHandle;
 
 use crate::{Error, Result, policy::SessionPolicy, registry::Registry, runner::PreparedOperation};
-use basecraft_protocol::operation::*;
+use basecraft_protocol::{
+    operation::{
+        OperationError, OperationErrorCode, OperationOutcome, OperationRequest, ProposalOutcome,
+        RuntimeState,
+    },
+    plugin::InvokeResult,
+};
 use serde_json::json;
+
+struct PendingProposals {
+    result: InvokeResult,
+    validated: Vec<(String, std::path::PathBuf, String)>,
+}
 
 struct Job {
     prepared: PreparedOperation,
@@ -19,12 +30,7 @@ struct Job {
     // publication. A publication-only repair cannot recreate a missing entry.
     proposal_activity_recorded: AtomicBool,
     worker: Mutex<Option<JoinHandle<()>>>,
-    proposals: Mutex<
-        Option<(
-            basecraft_protocol::plugin::InvokeResult,
-            Vec<(String, std::path::PathBuf, String)>,
-        )>,
-    >,
+    proposals: Mutex<Option<PendingProposals>>,
 }
 
 #[derive(Default)]
@@ -75,7 +81,7 @@ impl JobManager {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .take();
-            let Some((result, validated)) = pending else {
+            let Some(PendingProposals { result, validated }) = pending else {
                 continue;
             };
             let Some(target) = &job.prepared.sequence else {
@@ -508,7 +514,8 @@ fn execute(job: &Job) {
     if job.prepared.sequence.is_some() {
         *job.proposals
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((result, validated));
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some(PendingProposals { result, validated });
         return;
     }
     let mut outcome = job

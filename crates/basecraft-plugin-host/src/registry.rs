@@ -478,7 +478,7 @@ pub fn register_editable(config: &RegistryConfig, path: &Path) -> Result<()> {
 }
 
 /// Freeze the local runtime selection in this registry generation. Third-party
-/// installs do not scan arbitrary pixi environments; BASECRAFT_PYTHON is explicit.
+/// installs do not scan arbitrary pixi environments; `BASECRAFT_PYTHON` is explicit.
 fn configured_python(origin: Origin) -> Option<PathBuf> {
     let selected = if origin == Origin::Bundled {
         crate::process::python_interpreter()
