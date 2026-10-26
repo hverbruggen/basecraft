@@ -77,9 +77,9 @@ class RunHandle:
                     raise ValueError("Host job session closed or exceeded its frame limit")
                 response = json.loads(line)
                 if not isinstance(response, dict):
-                    raise ValueError("Host job response must be an object")
+                    raise TypeError("Host job response must be an object")
                 return response
-            except (OSError, ValueError) as error:
+            except (OSError, ValueError, TypeError) as error:
                 raise OperationError({"run_id": self.job, "errors": [{
                     "code": "plugin_protocol_violation", "message": str(error),
                 }]}) from error
