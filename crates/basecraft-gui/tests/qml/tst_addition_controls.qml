@@ -13,6 +13,7 @@ Item {
         property int changes: 0
         property string review_settings: JSON.stringify({strong_score:30,paired_score:20,ambiguity_percent:35,allow_weak_disagreement:true,weak_support_percent:80,check_reference:true,reference_percent:0,reference_min_rows:1})
         function add_sequences(text, name, mafft, orientation, keep) { calls.push({text,name,mafft,orientation,keep}) }
+        function add_reviewed_sequences(text, name, mafft, orientation, keep, evidence) { calls.push({text,name,mafft,orientation,keep,evidence}) }
         function apply_review_settings(text) { changes++; review_settings = text; return true }
     }
     AddSequenceDialog { id: plain; controller: fake }
@@ -92,12 +93,15 @@ Item {
             compare(findChild(plain.contentItem, "sequenceInput").text, ">one\nAC")
         }
         function test_reviewed_consensus_stays_hidden_and_keeps_its_id() {
-            reviewed.prepare("ACGT", "reviewed_sample", 0)
+            const evidence = JSON.stringify({schema_version: 1, id: "checked-review", hash: "b3:record"})
+            reviewed.prepare("ACGT", "reviewed_sample", 0, evidence)
             tryCompare(reviewed, "opened", true)
             verify(!findChild(reviewed.contentItem, "sequenceInput").visible)
             reviewed.submit(false)
             compare(fake.calls[0].name, "reviewed_sample")
             compare(fake.calls[0].text, "ACGT")
+            compare(fake.calls[0].evidence, evidence, "The selected review descriptor reaches the typed addition adapter")
+            compare(fake.calls[0].mafft, false)
         }
         function test_error_is_persistent_copyable_and_enter_closes_it() {
             const message = "These IDs are already in the alignment:\n\none\ntwo"

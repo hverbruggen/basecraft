@@ -169,7 +169,9 @@ FocusScope {
     }
     function addToAlignment() {
         const sequence = ctl.reviewed_sequence()
-        if (sequence.length && returnAlignment) returnAlignment.addReviewed(sequence, doc.specimenId)
+        if (!sequence.length || !returnAlignment) return
+        const evidence = ctl.reviewed_evidence()
+        if (evidence.length) returnAlignment.addReviewed(sequence, doc.specimenId, true, evidence)
     }
     function maskEnds() {
         const mask = JSON.parse(ctl.mask_settings)

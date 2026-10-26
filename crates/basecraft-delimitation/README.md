@@ -17,16 +17,36 @@ not silent replacements. Multiplicities never enter the likelihood. Searches
 have deterministic ties, cancellation boundaries and an explicit candidate
 budget. The redesigned estimator is deferred to v2 and absent here.
 
-**GMYC reference acceptance remains pending.** Analytic likelihood/rate checks,
-time scaling and worker reproducibility are implemented and pass; these are not
-executed R/splits comparisons. The inspected splits source clamps recent ages at
-1e-6; native input is not silently clamped. The current source comparison is
-`tomezard/splits` 1.1 at dc187fd (GMYC file unchanged from initial upload). Pinning
-and executing the published 1.0-20 release remain release prerequisites. The
-reference split/fuse neighborhood is implemented, but search-start and exact tie
-behavior require that comparison before a normal GUI analysis action is enabled.
-An exhausted multi-threshold budget returns a failed/incomplete result, never a
-completed hypothesis. Convergence alone never implies statistical support.
+Time-tree preparation fits a zero-age tree clade as one tip and restores its
+members in reported assignments. This tree preparation does not establish
+exact sequence identity or infer why the input tree has that clade. Separately,
+multiple-threshold and exhaustive searches reject nested internal events with
+exactly equal validated ages, including root-age ties and ties created by the
+explicit reference age clamp. A partition can split such an event across a
+zero-duration interval and produce unbounded likelihood. Single-threshold
+search remains supported for these inputs. Equal ages in separate clades and
+strictly positive intervals remain supported by the multi-threshold guard.
+
+Historical reference comparisons were executed on 2026-10-12 against unmodified
+`splits` 1.0-20 and 1.1 (`dc187fd`). Of 32 attempts, 28 completed comparisons
+and four were recorded as upstream output-assembly failures. Selected
+memberships agreed in 26/28 completed comparisons; the differences and
+likelihood/profile tolerances are documented in ADR 0014. Comparisons covered
+four-tip, simulated 8/16/32/64/100/128-tip, and eight-tip ladder trees, plus
+separately tied and very short positive branches. They did not establish
+empirical biological validity or cover large multi-threshold searches. On the
+ladder, the selected null and two-entity fits differed by only 4.8793e-9 in
+likelihood; both remain in the support profile. Selected-fit absolute tolerance
+was 1e-5; complete-profile tolerances were 1e-3 for single and 1e-3 for
+multiple fits. The maximum observed complete-profile errors were 0.000783489
+and 0.00004787, respectively.
+
+Both reference versions clamp recent ages at 1e-6 input units; native input is
+not silently clamped. An explicit matching clamp is available for reproduction.
+The reference split/fuse neighborhood is implemented, but it is a heuristic,
+not a global optimizer. An exhausted multi-threshold budget returns a
+failed/incomplete result, never a completed hypothesis. Convergence alone never
+implies statistical support.
 
 ## ASAP
 

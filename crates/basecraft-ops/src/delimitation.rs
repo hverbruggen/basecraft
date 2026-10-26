@@ -45,87 +45,13 @@ fn reference_input_with_dependencies(
     hash: &str,
     dependencies: &[PathBuf],
 ) -> Result<crate::analysis_store::ArtifactRun> {
-    use basecraft_protocol::provenance::{
-        ArtifactRevision, Completeness, InputReference, Publication,
-    };
-    let _lock = crate::input_evidence::lock()?;
-    let run =
-        crate::analysis_store::ArtifactRun::create(anchor, &ulid::Ulid::generate().to_string())?;
-    let source = source.canonicalize()?;
-    if basecraft_io::hash_file(&source)? != hash {
-        return Err(invalid(
-            "Species input changed while registering its evidence",
-        ));
-    }
-    let reference = InputReference {
-        path: crate::input_evidence::relative(run.directory(), &source)?,
-        stamp: crate::input_evidence::stamp(&source)?,
-        hash: hash.into(),
-        extra: BTreeMap::new(),
-    };
-    let mut input = crate::input_evidence::SubmittedInput {
-        schema_version: 1,
-        source: Some(reference.clone()),
-        submitted_hash: hash.into(),
-        submitted_size: reference.stamp.size,
-        transformation: "identity-v1".into(),
-        state: "referenced".into(),
-        extra: BTreeMap::new(),
-    };
-    let origin = crate::provenance::bundle_for_result(&source);
-    let mut upstream = Vec::new();
-    for dependency in dependencies.iter().chain(std::iter::once(&origin)) {
-        let manifest = dependency.join("manifest.json");
-        if manifest.is_file() {
-            let bytes = crate::provenance::read_record(&manifest)?;
-            let record: Publication = serde_json::from_slice(&bytes)?;
-            upstream.push(serde_json::json!({"bundle":crate::input_evidence::relative(run.directory(), dependency)?,"id":record.id,"hash":basecraft_io::hash_bytes(&bytes)}));
-        }
-    }
-    if !upstream.is_empty() {
-        input
-            .extra
-            .insert("upstream".into(), serde_json::json!(upstream));
-    }
-    crate::input_evidence::write_json(&run.artifact("input.json")?, &input)?;
-    crate::input_evidence::write_json(
-        &run.artifact("run.json")?,
-        &serde_json::json!({"schema_version":1,"id":run.id(),"result":anchor.file_name().and_then(|n| n.to_str()),"status":"referenced"}),
-    )?;
-    crate::input_evidence::register(&run)?;
-    let publication = Publication {
-        schema_version: 1,
-        id: run.id().into(),
-        session: run.id().into(),
-        parents: vec![],
-        parent_hashes: BTreeMap::new(),
-        created: basecraft_platform::now_rfc3339(),
-        origin: "Explicit species workspace input reference".into(),
-        inputs: vec![ArtifactRevision {
-            id: format!("{}:source", run.id()),
-            logical_name: source
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned(),
-            hash: hash.into(),
-            size: reference.stamp.size,
-            retained: None,
-            reference: Some(reference),
-        }],
-        outputs: vec![],
-        events: vec![],
-        effective_edits: vec![],
-        completeness: Completeness {
-            ancestry_known: false,
-            input_bytes_available: true,
-            execution_specification_available: false,
-            replay_verified: false,
-        },
-        report_template_version: 2,
-    };
-    crate::provenance::publish(run.directory(), &publication)?;
-    Ok(run)
+    crate::input_evidence::reference_input_with_dependencies(
+        anchor,
+        source,
+        hash,
+        dependencies,
+        "Explicit species workspace input reference",
+    )
 }
 
 /// Retain declared contributing ledgers, not copies of clean original inputs.

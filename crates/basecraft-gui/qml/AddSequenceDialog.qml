@@ -9,6 +9,7 @@ AppContentDialog {
     // Separate instances provide plain-text, FASTA and reviewed-consensus entry.
     property string inputKind: "text"
     property string reviewedSequence: ""
+    property string reviewEvidence: ""
     property string validationMessage: ""
     signal inputError(string message)
     title: inputKind === "fasta" ? "Add sequences from FASTA" : inputKind === "reviewed" ? "Add reviewed consensus" : "Add sequence from text"
@@ -18,7 +19,8 @@ AppContentDialog {
         if (inputKind === "fasta") sequenceInput.forceActiveFocus()
         else { sequenceName.forceActiveFocus(); sequenceName.selectAll() }
     }
-    function prepare(text, name = "", mafft = -1) {
+    function prepare(text, name = "", mafft = -1, evidence = "") {
+        reviewEvidence = evidence
         validationMessage = ""
         reviewedSequence = inputKind === "reviewed" ? text : ""
         sequenceInput.text = inputKind === "reviewed" ? "" : text
@@ -44,7 +46,9 @@ AppContentDialog {
             return
         }
         const mafft = additionMode.currentIndex === 1
-        controller.add_sequences(text, inputKind === "fasta" ? "" : sequenceName.text,
+        if (inputKind === "reviewed" && reviewEvidence.length)
+            controller.add_reviewed_sequences(text, sequenceName.text, mafft, mafft && checkOrientation.checked, mafft && keep, reviewEvidence)
+        else controller.add_sequences(text, inputKind === "fasta" ? "" : sequenceName.text,
             mafft, mafft && checkOrientation.checked, mafft && keep)
     }
     body: ColumnLayout {

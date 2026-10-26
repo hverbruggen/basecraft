@@ -47,7 +47,7 @@ FocusScope {
     function addText() { if (ctl.busy) return; activeAdditionDialog = textSequenceDialog; textSequenceDialog.prepare("") }
     function addFasta() { if (!ctl.busy) fastaDialog.open() }
     function addTraces() { traceDialog.open() }
-    function addReviewed(sequence, name, mafft = true) { if (ctl.busy) return; doc.activate(); activeAdditionDialog = reviewedSequenceDialog; reviewedSequenceDialog.prepare(sequence, name, mafft ? 1 : 0) }
+    function addReviewed(sequence, name, mafft = true, evidence = "") { if (ctl.busy) return; doc.activate(); activeAdditionDialog = reviewedSequenceDialog; reviewedSequenceDialog.prepare(sequence, name, mafft ? 1 : 0, evidence) }
     function prepareFasta(text) { if (ctl.busy) return; activeAdditionDialog = fastaSequenceDialog; fastaSequenceDialog.prepare(text) }
 
     AlignmentController { id: ctl }

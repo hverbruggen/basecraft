@@ -57,7 +57,11 @@ def calls(snapshot, params):
         Path(params["read"]), Path(tracy), target.with_suffix(".trace.json")
     )
     target.write_text(json.dumps(data))
-    return {"ops": [], "outputs": [str(target)], "message": "Tracy calls loaded"}
+    return {
+        "ops": [],
+        "outputs": [str(target), str(target.with_suffix(".trace.json"))],
+        "message": "Tracy calls loaded",
+    }
 
 
 @plugin.operation("primers")
