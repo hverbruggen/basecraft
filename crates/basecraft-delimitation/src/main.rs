@@ -490,7 +490,7 @@ fn run(
                     )?;
                     let tips: usize = groups.values().map(std::collections::BTreeSet::len).sum();
                     time.diagnostics.push(format!(
-                        "{tips} tips in {} zero-age tree clades; each clade was fitted as one tip and its members restored; no exact sequence identity is inferred",
+                        "{tips} tips in {} zero-age tree clades (zero distance within each clade); each clade was fitted as one tip and its members restored; no exact sequence identity is inferred",
                         groups.len()
                     ));
                     result.metrics.insert(
