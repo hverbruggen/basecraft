@@ -12,6 +12,10 @@ Item {
     property int frame: 0
     readonly property int animationCount: AsciiArt.animations.length
     readonly property var animation: AsciiArt.animations[animationIndex]
+    // Some animations are drawn wider and shown smaller, to keep them low.
+    readonly property font artFont: Qt.font(font.pointSize > 0
+        ? { family: font.family, pointSize: font.pointSize * animation.scale }
+        : { family: font.family, pixelSize: Math.max(1, Math.round(font.pixelSize * animation.scale)) })
     readonly property real cellWidth: metrics.advanceWidth("M")
     readonly property real lineHeight: metrics.height
     readonly property var current: {
@@ -24,7 +28,7 @@ Item {
     Accessible.ignored: true
     onAnimationIndexChanged: frame = 0
 
-    FontMetrics { id: metrics; font: root.font }
+    FontMetrics { id: metrics; font: root.artFont }
 
     function rowText(row) {
         // The row repeater can briefly outlive a switch to a shorter animation.
@@ -78,7 +82,7 @@ Item {
             Text {
                 y: index * root.lineHeight
                 height: root.lineHeight
-                font: root.font
+                font: root.artFont
                 textFormat: Text.StyledText
                 text: root.rowText(index)
             }

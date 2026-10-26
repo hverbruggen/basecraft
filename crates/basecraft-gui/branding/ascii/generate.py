@@ -1,5 +1,5 @@
 """Animated ASCII art for the About dialog: a chromatogram trace, a cladogram with species
-brackets, an alignment, a sequence loom, a branching B and a paper shuttle.
+brackets, an alignment, a sequence loom and a paper shuttle.
 
     python3 generate.py play <name>     play in the terminal (Ctrl-C to stop)
     python3 generate.py list            list the animation names
@@ -169,8 +169,10 @@ BOX = {frozenset("lr"): "─", frozenset("ud"): "│", frozenset("rd"): "┌", f
 
 
 def cladogram_frames():
-    """A tree grows from the root, its tips light up, then species clusters are bracketed one by one."""
-    # (name or children, branch length in columns)
+    """A tree grows from the root, its tips light up, then species clusters are bracketed one by one.
+    Drawn wide and shown at a smaller font size, so it is no taller than the others."""
+    widen, scale = 1.6, 0.8
+    # (name or children, branch length in columns before widening)
     tree = ([([([("a1", 6), ("a2", 6)], 5), ("a3", 11)], 6),
              ([([([("b1", 4), ("b2", 4)], 4), ("b3", 8)], 5),
                ([("c1", 9), ("d1", 9)], 7)], 4)], 3)
@@ -178,7 +180,7 @@ def cladogram_frames():
 
     def layout(node, x0):
         sub, length = node
-        x = x0 + length
+        x = x0 + round(length * widen)
         rec = {"x": x, "parent_x": x0, "kids": [], "name": None}
         nodes.append(rec)
         if isinstance(sub, str):
@@ -278,7 +280,7 @@ def cladogram_frames():
     for t in range(tip_x + 1, -2, -1):
         frames.append(draw(t, 0, 0) if t < 0 else _fade(draw(tip_x + 1, len(tips), len(clusters)), t))
     frames += [Canvas(width, height).frame()] * 10
-    return {"fps": 20, "frames": frames}
+    return {"fps": 20, "frames": frames, "scale": scale}
 
 
 def _fade(frame, cut):
@@ -411,71 +413,6 @@ def loom_frames():
     return {"fps": 20, "frames": frames}
 
 
-# --- branching B -------------------------------------------------------------------------------
-
-def branching_b_frames():
-    """A B drawn as a tree grows from its root; tips light up and signals run out to them."""
-    width, height = 32, 16
-    sx = lambda x: 8 + (x - 137) * 0.19      # 512 px concept-icon coordinates to dots
-    sy = lambda y: 2 + (y - 100) * 0.19
-    pts = {"root": (152, 395), "inL": (152, 326), "mid_l": (152, 255), "inU": (152, 185),
-           "top_l": (152, 115), "top_r": (262, 115), "N1": (352, 178), "mid": (262, 255),
-           "N2": (372, 330), "bot_r": (272, 395), "inU_r": (228, 185), "n1": (264, 166),
-           "inL_r": (240, 326), "n2": (280, 346)}
-    pts = {k: (sx(x), sy(y)) for k, (x, y) in pts.items()}
-    edges = [("root", "inL"), ("inL", "mid_l"), ("mid_l", "inU"), ("inU", "top_l"), ("top_l", "top_r"),
-             ("top_r", "N1"), ("N1", "mid"), ("mid", "mid_l"), ("mid", "N2"), ("N2", "bot_r"),
-             ("bot_r", "root"), ("inU", "inU_r"), ("inU_r", "n1"), ("inL", "inL_r"), ("inL_r", "n2")]
-    nodes = [("N1", "●", "G"), ("N2", "●", "G"), ("n1", "•", "A"), ("n2", "•", "A")]
-    seglen = {e: math.dist(pts[e[0]], pts[e[1]]) for e in edges}
-    dist = {k: math.inf for k in pts}
-    dist["root"] = 0.0
-    todo = set(pts)
-    while todo:                              # Dijkstra from the root
-        u = min(todo, key=dist.get)
-        todo.remove(u)
-        for a, b in edges:
-            for v, w in ((a, b), (b, a)):
-                if v == u:
-                    dist[w] = min(dist[w], dist[u] + seglen[(a, b)])
-    samples = []                              # (x, y, distance from root) along every edge
-    for a, b in edges:
-        (xa, ya), (xb, yb), ln = pts[a], pts[b], seglen[(a, b)]
-        steps = max(int(ln * 2), 1)
-        for i in range(steps + 1):
-            u = i / steps
-            samples.append((xa + (xb - xa) * u, ya + (yb - ya) * u,
-                            min(dist[a] + u * ln, dist[b] + (1 - u) * ln)))
-    far = max(d for *_, d in samples)
-
-    def draw(grown, pulses=(), popped=None):
-        cv = Canvas(width, height)
-        br = Braille(width, height)
-        for x, y, d in samples:
-            if d <= grown:
-                hot = any(p - 7 < d <= p for p in pulses)
-                for bx in (0, 1):
-                    for by in (0, 1):
-                        br.dot(x + bx, y + by, "w" if hot else ".")
-        br.blit(cv, prefer=("w",))
-        for name, ch, col in nodes:
-            x, y = pts[name]
-            if dist[name] <= grown:
-                fresh = popped is not None and 0 <= grown - dist[name] < 6
-                lit = any(0 <= p - dist[name] < 10 for p in pulses)
-                cv.put(int((x + 0.5) // 2), int((y + 0.5) // 4), "◉" if fresh or lit else ch, "w" if fresh or lit else col)
-        return cv.frame()
-
-    frames = [draw(g, popped=True) for g in [i * 2.0 for i in range(int(far / 2) + 4)]]
-    frames += [draw(far + 8)] * 10
-    for p in [i * 3.0 for i in range(int(far / 3) + 14)]:
-        frames.append(draw(far + 8, pulses=(p, p - far * 0.55)))
-    frames += [draw(far + 8)] * 24
-    frames += [draw(g) for g in [far - i * 3.0 for i in range(int(far / 3) + 2)]]
-    frames += [Canvas(width, height).frame()] * 8
-    return {"fps": 20, "frames": frames}
-
-
 # --- shuttle -----------------------------------------------------------------------------------
 
 def shuttle_frames():
@@ -532,7 +469,7 @@ def shuttle_frames():
 
 
 ANIMS = {"trace": trace_frames, "cladogram": cladogram_frames, "alignment": alignment_frames,
-         "loom": loom_frames, "branching-b": branching_b_frames, "shuttle": shuttle_frames}
+         "loom": loom_frames, "shuttle": shuttle_frames}
 
 
 def _ansi(style):
@@ -580,8 +517,8 @@ def export():
                 unique.append(list(key))
             order.append(seen[key])
         first = anim["frames"][0]
-        animations.append({"name": name, "fps": anim["fps"], "columns": len(first[0][0]), "rows": len(first),
-                           "frames": order, "unique": unique})
+        animations.append({"name": name, "fps": anim["fps"], "scale": anim.get("scale", 1),
+                           "columns": len(first[0][0]), "rows": len(first), "frames": order, "unique": unique})
         print(f"{name}: {len(order)} frames ({len(unique)} distinct), {len(first[0][0])}x{len(first)}")
     dump = lambda value: json.dumps(value, ensure_ascii=False, separators=(",", ":"))
     out = Path(__file__).resolve().parents[2] / "qml" / "AsciiArt.js"

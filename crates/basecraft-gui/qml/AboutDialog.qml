@@ -92,8 +92,8 @@ AppContentDialog {
                     + 0.7152 * dialog.backgroundColor.g + 0.0722 * dialog.backgroundColor.b < 0.5
                 source: Qt.resolvedUrl("../branding/wordmark-" + (darkBackground ? "dark" : "light") + ".png")
                 sourceClipRect: Qt.rect(210, 336, 2636, 624)
-                Layout.preferredWidth: 200
-                Layout.preferredHeight: 200 * 624 / 2636
+                Layout.preferredWidth: 300
+                Layout.preferredHeight: 300 * 624 / 2636
                 fillMode: Image.PreserveAspectFit
                 smooth: true
                 mipmap: true

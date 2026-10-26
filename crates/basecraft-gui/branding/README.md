@@ -30,9 +30,10 @@ Colourlight, is the alternate. This wordmark does not replace either icon.
 
 ## ASCII animations
 
-The About dialog plays one of six ASCII animations, picked at random each time
+The About dialog plays one of five ASCII animations, picked at random each time
 it opens: a chromatogram trace, a cladogram with species brackets, an alignment,
-a sequence loom, a branching B and a paper shuttle. On dark themes they use the
+a sequence loom and a paper shuttle. The cladogram is drawn wide and shown at
+80% of the font size so it is no taller than the others. On dark themes they use the
 dark wordmark's background, letter ink, sage and amber, plus slate blue and
 terracotta for C and T; light themes get darker tones of the same roles.
 

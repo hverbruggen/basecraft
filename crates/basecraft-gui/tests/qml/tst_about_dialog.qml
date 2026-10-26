@@ -14,7 +14,7 @@ Item {
     Component {
         id: dialogComponent
         // The application font is the desktop monospace family.
-        AboutDialog { version: "0.0.0 (test)"; backgroundColor: "#f3eee4"; font.family: "monospace" }
+        AboutDialog { version: "0.0.0"; backgroundColor: "#f3eee4"; font.family: "monospace" }
     }
 
     TestCase {
@@ -34,7 +34,7 @@ Item {
         function test_content() {
             const { dialog } = openDialog()
             tryCompare(findChild(dialog.body, "aboutLogo"), "status", Image.Ready)
-            compare(findChild(dialog.body, "aboutVersion").text, "0.0.0 (test)")
+            compare(findChild(dialog.body, "aboutVersion").text, "0.0.0")
             verify(findChild(dialog.body, "aboutCitation").text.length > 0)
             const copyright = findChild(dialog.body, "aboutCopyright")
             verify(copyright.text.indexOf("https://hverbruggen.codeberg.page/") >= 0)
@@ -98,6 +98,19 @@ Item {
                 verify(lit > 20, player.animation.name + " must draw visible characters on the light theme")
             }
         }
+
+        function test_scaled_animation_uses_smaller_font() {
+            const { player } = openDialog()
+            for (let i = 0; i < player.animationCount; ++i) {
+                player.animationIndex = i
+                if (player.animation.scale < 1) {
+                    verify(player.lineHeight < fullSize.height, player.animation.name + " must be drawn smaller")
+                    return
+                }
+            }
+            fail("Expected one animation drawn at a smaller size")
+        }
+        FontMetrics { id: fullSize; font.family: "monospace" }
 
         function test_bounded_by_small_window() {
             scene.width = 640
