@@ -1,6 +1,7 @@
 //! The `basecraft` command-line tool.
 
 mod mcp;
+mod operations;
 mod tools;
 
 use std::path::PathBuf;
@@ -18,6 +19,16 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Manage trusted local plugin packages.
+    Plugins {
+        #[command(subcommand)]
+        action: operations::PluginsCommand,
+    },
+    /// Inspect versioned installed operations without executing plugins.
+    Operations {
+        #[command(subcommand)]
+        action: operations::OperationsCommand,
+    },
     /// Readable history for the file's exact current contents. Does not write records.
     History {
         file: PathBuf,
@@ -166,6 +177,8 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
+        Command::Plugins { action } => operations::plugins(action)?,
+        Command::Operations { action } => operations::operations(action)?,
         Command::History { file, json } => {
             let file = file.canonicalize()?;
             let mut session =

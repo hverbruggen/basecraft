@@ -230,7 +230,7 @@ pub struct ProposalOutcome {
     pub rejected: Vec<String>,
 }
 
-/// Session-owned runtime view, independent of historical scientific JobStatus.
+/// Session-owned runtime view, independent of historical scientific `JobStatus`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct OperationOutcome {
     pub schema: u32,

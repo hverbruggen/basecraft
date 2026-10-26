@@ -91,6 +91,7 @@ impl PluginProcess {
             command.env(name, cpu_budget.to_string());
         }
         let mut child = command
+            .arg("-B")
             .arg(&script)
             .env("BASECRAFT_SOCKET", &socket)
             .env("PYTHONPATH", sdk_path())
