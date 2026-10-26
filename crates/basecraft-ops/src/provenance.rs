@@ -412,6 +412,12 @@ fn link_sanger_inputs(bundle: &Path, publication: &Publication) -> Result<()> {
     crate::input_evidence::write_json(&path, &input)
 }
 
+/// Publish a host-validated operation using the ordinary provenance writer.
+/// Callers retain pending artifacts and report partial writes if this fails.
+pub fn publish_operation(bundle: &Path, publication: &Publication) -> Result<()> {
+    publish(bundle, publication)
+}
+
 /// Artifacts must already be durable before this final manifest publication.
 pub(crate) fn publish(bundle: &Path, publication: &Publication) -> Result<()> {
     std::fs::create_dir_all(bundle.join("records"))?;

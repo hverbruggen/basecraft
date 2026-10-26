@@ -10,10 +10,12 @@ pub mod compute;
 pub mod contract;
 pub mod delimitation_pipeline;
 pub mod file_tool;
+pub mod jobs;
 pub mod manifest;
 pub mod policy;
 pub mod process;
 pub mod registry;
+pub mod runner;
 pub mod snapshot;
 
 mod distance_cache;

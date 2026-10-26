@@ -462,8 +462,7 @@ impl FileJob {
                 .unwrap_or_else(|| std::ffi::OsStr::new("input")),
         );
         let input_stamp = basecraft_ops::input_evidence::stamp(input)?;
-        std::fs::copy(input, &snapshot)?;
-        let hash = basecraft_io::hash_file(&snapshot).map_err(basecraft_ops::Error::from)?;
+        let hash = freeze_file(input, &snapshot)?;
         let run_id = ulid::Ulid::generate().to_string();
         let mut job = Self {
             plugin: plugin.into(),
@@ -566,8 +565,7 @@ impl FileJob {
                 .unwrap_or_else(|| std::ffi::OsStr::new("input")),
         );
         let input_stamp = basecraft_ops::input_evidence::stamp(input)?;
-        std::fs::copy(input, &snapshot)?;
-        let hash = basecraft_io::hash_file(&snapshot).map_err(basecraft_ops::Error::from)?;
+        let hash = freeze_file(input, &snapshot)?;
         let run_id = ulid::Ulid::generate().to_string();
         let mut job = Self {
             plugin: plugin.into(),
@@ -1434,7 +1432,8 @@ impl FileJob {
             let mut published = std::collections::HashMap::new();
             for (path, allocation) in &allocated {
                 if let Some((name, false)) = allocation {
-                    let destination = run.publish(
+                    let destination = publish_artifact(
+                        run,
                         name,
                         basecraft_ops::analysis_store::ArtifactDestination::Metadata,
                     )?;
@@ -1450,7 +1449,8 @@ impl FileJob {
             };
             for (path, allocation) in &allocated {
                 if let Some((name, true)) = allocation {
-                    let destination = run.publish(
+                    let destination = publish_artifact(
+                        run,
                         name,
                         basecraft_ops::analysis_store::ArtifactDestination::WorkingDirectory,
                     )?;
@@ -1791,4 +1791,27 @@ mod tests {
             dir.path().join("rbcL.mafft-2.fasta")
         );
     }
+}
+
+/// Shared immutable-file preparation for legacy and registered jobs.
+pub(crate) fn freeze_file(source: &Path, destination: &Path) -> Result<String> {
+    let before = basecraft_ops::input_evidence::stamp(source)?;
+    std::fs::copy(source, destination)?;
+    let hash = basecraft_io::hash_file(destination).map_err(basecraft_ops::Error::from)?;
+    if before != basecraft_ops::input_evidence::stamp(source)?
+        || basecraft_io::hash_file(source).map_err(basecraft_ops::Error::from)? != hash
+    {
+        return Err(Error::Protocol("input changed during submission".into()));
+    }
+    Ok(hash)
+}
+
+/// Both execution families promote only validated staging files through the
+/// common store's no-clobber primitive.
+pub(crate) fn publish_artifact(
+    run: &basecraft_ops::analysis_store::ArtifactRun,
+    name: &str,
+    location: basecraft_ops::analysis_store::ArtifactDestination,
+) -> Result<PathBuf> {
+    Ok(run.publish(name, location)?)
 }

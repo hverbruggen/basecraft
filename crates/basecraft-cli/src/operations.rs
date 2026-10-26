@@ -43,6 +43,21 @@ pub enum PluginsCommand {
 
 #[derive(Subcommand)]
 pub enum OperationsCommand {
+    /// Execute a shared request in the foreground; outputs one terminal JSON outcome.
+    Run {
+        operation: String,
+        #[arg(long)]
+        project: PathBuf,
+        #[arg(long)]
+        request: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Process-owned JSON job session used by the public Python client.
+    Serve {
+        #[arg(long)]
+        project: PathBuf,
+    },
     List {
         #[arg(long)]
         json: bool,
@@ -123,11 +138,150 @@ pub fn plugins(command: PluginsCommand) -> Result<()> {
 }
 
 pub fn operations(command: OperationsCommand) -> Result<()> {
+    if let OperationsCommand::Serve { project } = &command {
+        return serve_jobs(project);
+    }
     let registry = Registry::load(&RegistryConfig::discover()?)?;
     let value = match command {
+        OperationsCommand::Run {
+            operation,
+            project,
+            request,
+            ..
+        } => {
+            let bytes = std::fs::read(request)?;
+            if bytes.len() > basecraft_protocol::operation::MAX_FRAME_BYTES {
+                return Err("request exceeds byte limit".into());
+            }
+            let mut request: basecraft_protocol::operation::OperationRequest =
+                serde_json::from_slice(&bytes)?;
+            if request.operation != operation {
+                return Err("request operation differs from command".into());
+            }
+            request.operation = operation;
+            let policy = basecraft_plugin_host::policy::SessionPolicy::new(&project, true)?;
+            let mut jobs = basecraft_plugin_host::jobs::JobManager::default();
+            basecraft_platform::interrupt::install()?;
+            let accepted = match jobs.submit(&registry, request.clone(), policy, "CLI") {
+                Ok(accepted) => accepted,
+                Err(error) => {
+                    println!(
+                        "{}",
+                        basecraft_plugin_host::jobs::error_value(
+                            &request.operation,
+                            basecraft_plugin_host::jobs::error_code(&error),
+                            error.to_string()
+                        )
+                    );
+                    return Ok(());
+                }
+            };
+            loop {
+                if basecraft_platform::interrupt::interrupted() {
+                    jobs.cancel(&accepted.run_id)?;
+                }
+                let outcome = jobs.get(&accepted.run_id)?;
+                if outcome.state.terminal() {
+                    break serde_json::to_value(outcome)?;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+        }
+        OperationsCommand::Serve { .. } => return Err("invalid session dispatch".into()),
         OperationsCommand::List { .. } => list(&registry)?,
         OperationsCommand::Describe { operation, .. } => describe(&registry, &operation)?,
     };
     println!("{}", serde_json::to_string(&value)?);
+    Ok(())
+}
+
+/// Bounded stdio framing shared by the MCP owner and Python job session.
+pub fn read_frame(input: &mut impl std::io::BufRead) -> std::io::Result<Option<Vec<u8>>> {
+    use std::io::{BufRead, Read};
+    let mut bytes = Vec::new();
+    let count = input
+        .take((basecraft_protocol::operation::MAX_FRAME_BYTES + 1) as u64)
+        .read_until(b'\n', &mut bytes)?;
+    if count == 0 {
+        return Ok(None);
+    }
+    if count > basecraft_protocol::operation::MAX_FRAME_BYTES {
+        return Err(std::io::Error::other("stdio frame exceeds byte limit"));
+    }
+    Ok(Some(bytes))
+}
+
+fn serve_jobs(project: &Path) -> Result<()> {
+    use std::io::Write;
+    let config = RegistryConfig::discover()?;
+    let mut registry = Registry::load(&config)?;
+    let policy = basecraft_plugin_host::policy::SessionPolicy::new(project, true)?;
+    let mut jobs = basecraft_plugin_host::jobs::JobManager::default();
+    basecraft_platform::interrupt::install()?;
+    let (sender, receiver) = std::sync::mpsc::sync_channel(16);
+    std::thread::spawn(move || {
+        let stdin = std::io::stdin();
+        let mut input = stdin.lock();
+        loop {
+            match read_frame(&mut input) {
+                Ok(Some(line)) => {
+                    if sender.send(line).is_err() {
+                        break;
+                    }
+                }
+                _ => break,
+            }
+        }
+    });
+    let mut output = std::io::stdout().lock();
+    loop {
+        if basecraft_platform::interrupt::interrupted() {
+            break;
+        }
+        let line = match receiver.recv_timeout(std::time::Duration::from_millis(25)) {
+            Ok(line) => line,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(_) => break,
+        };
+        let request: Value = serde_json::from_slice(&line)?;
+        let operation = request["request"]["operation"].as_str().unwrap_or("");
+        let response = (|| -> Result<Value> {
+            match request["method"].as_str().unwrap_or("") {
+                "submit" => Ok(serde_json::to_value(jobs.submit(
+                    &registry,
+                    serde_json::from_value(request["request"].clone())?,
+                    policy.clone(),
+                    "Python",
+                )?)?),
+                "status" => Ok(serde_json::to_value(
+                    jobs.get(request["job"].as_str().ok_or("missing job")?)?,
+                )?),
+                "result" => Ok(serde_json::to_value(
+                    jobs.result(request["job"].as_str().ok_or("missing job")?)?,
+                )?),
+                "cancel" => Ok(serde_json::to_value(
+                    jobs.cancel(request["job"].as_str().ok_or("missing job")?)?,
+                )?),
+                "repair" => Ok(serde_json::to_value(
+                    jobs.repair(request["job"].as_str().ok_or("missing job")?)?,
+                )?),
+                "refresh" => {
+                    registry = Registry::load(&config)?;
+                    list(&registry)
+                }
+                _ => Err("unknown job-session method".into()),
+            }
+        })()
+        .unwrap_or_else(|error| {
+            basecraft_plugin_host::jobs::error_value(
+                operation,
+                basecraft_protocol::operation::OperationErrorCode::InvalidArguments,
+                error.to_string(),
+            )
+        });
+        writeln!(output, "{response}")?;
+        output.flush()?;
+    }
+    drop(jobs);
     Ok(())
 }

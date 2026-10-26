@@ -54,6 +54,7 @@ pub struct Package {
     pub digest: String,
     pub enabled: bool,
     pub descriptors: Vec<OperationDescriptor>,
+    pub interpreter: Option<PathBuf>,
 }
 
 impl Package {
@@ -204,12 +205,14 @@ impl Registry {
                     .map_or_else(Vec::new, |c| c.operations);
                 let digest = package_digest(&path)?;
                 let enabled = !index.disabled.contains(&manifest.id);
+                let interpreter = configured_python(origin);
                 Ok(Package {
                     manifest,
                     origin,
                     digest,
                     enabled,
                     descriptors,
+                    interpreter,
                 })
             })();
             match package {
@@ -277,6 +280,11 @@ impl Registry {
         if pins.is_some_and(|p| p != &operation.pins(&self.generation)) {
             return Err(Error::Protocol(
                 "plugin_changed: stale registry pins; discover again".into(),
+            ));
+        }
+        if operation.package.interpreter.is_none() {
+            return Err(Error::Protocol(
+                "plugin_unavailable: configure BASECRAFT_PYTHON or install python3".into(),
             ));
         }
         operation.package.verify()?;
@@ -469,5 +477,28 @@ pub fn register_editable(config: &RegistryConfig, path: &Path) -> Result<()> {
     write_index(config, |index| {
         index.editable.insert(path);
         Ok(())
+    })
+}
+
+/// Freeze the local runtime selection in this registry generation. Third-party
+/// installs do not scan arbitrary pixi environments; BASECRAFT_PYTHON is explicit.
+fn configured_python(origin: Origin) -> Option<PathBuf> {
+    let selected = if origin == Origin::Bundled {
+        crate::process::python_interpreter()
+    } else {
+        std::env::var_os("BASECRAFT_PYTHON").map_or_else(|| PathBuf::from("python3"), PathBuf::from)
+    };
+    if selected.is_absolute() {
+        return selected.canonicalize().ok().filter(|p| p.is_file());
+    }
+    if selected.components().count() != 1 {
+        return None;
+    }
+    std::env::var_os("PATH").and_then(|path| {
+        std::env::split_paths(&path)
+            .filter(|directory| directory.is_absolute())
+            .map(|directory| directory.join(&selected))
+            .find(|path| path.is_file())
+            .and_then(|path| path.canonicalize().ok())
     })
 }

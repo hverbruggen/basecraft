@@ -1,9 +1,15 @@
 //! A running plugin process.
 
+use basecraft_platform::process::OwnedProcess;
+use std::io::Read;
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::{Duration, Instant};
 
 use basecraft_platform::fdpass::{self, Receiver};
@@ -18,7 +24,12 @@ pub struct PluginProcess {
     pub info: PluginInfo,
     /// Time from spawning to the `initialize` reply.
     pub startup: Duration,
-    child: Child,
+    child: OwnedProcess,
+    cancelled: Option<Arc<AtomicBool>>,
+    deadline: Option<Instant>,
+    capture: Arc<Mutex<CapturedOutput>>,
+    capture_workers: Vec<std::thread::JoinHandle<()>>,
+    stopped: bool,
     rx: Receiver,
     next_id: u64,
     cpu_budget: usize,
@@ -69,10 +80,10 @@ impl PluginProcess {
         Self::spawn_allocated(manifest, &python_interpreter(), budget)
     }
 
-    fn spawn_allocated(manifest: &Manifest, python: &Path, budget: usize) -> Result<Self> {
+    pub fn spawn_allocated(manifest: &Manifest, python: &Path, budget: usize) -> Result<Self> {
         let cpu_budget = budget.clamp(1, crate::compute::available());
         let started = Instant::now();
-        let script = manifest.python_entry()?;
+        let script = manifest.python_entry()?.canonicalize()?;
         let dir = tempfile::Builder::new()
             .prefix("basecraft-plugin")
             .tempdir()?;
@@ -90,23 +101,33 @@ impl PluginProcess {
         ] {
             command.env(name, cpu_budget.to_string());
         }
-        let mut child = command
+        command
             .arg("-B")
             .arg(&script)
             .env("BASECRAFT_SOCKET", &socket)
             .env("PYTHONPATH", sdk_path())
             .stdin(Stdio::null())
-            .spawn()?;
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .current_dir(manifest.dir.canonicalize()?);
+        let mut child = OwnedProcess::spawn(&mut command)?;
+        let capture = Arc::new(Mutex::new(CapturedOutput::default()));
+        let mut capture_workers = Vec::new();
+        if let Some(stdout) = child.take_stdout() {
+            capture_workers.push(capture_output(stdout, capture.clone(), false)?);
+        }
+        if let Some(stderr) = child.take_stderr() {
+            capture_workers.push(capture_output(stderr, capture.clone(), true)?);
+        }
         let stream = loop {
             match listener.accept() {
                 Ok((s, _)) => break s,
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    if child.try_wait()?.is_some() {
+                    if child.exited()? {
                         return Err(Error::Exited(manifest.id.clone()));
                     }
                     if started.elapsed() > CONNECT_TIMEOUT {
-                        let _ = child.kill();
-                        let _ = child.wait();
+                        child.terminate();
                         return Err(Error::Timeout(manifest.id.clone()));
                     }
                     std::thread::sleep(Duration::from_millis(1));
@@ -115,8 +136,8 @@ impl PluginProcess {
             }
         };
         stream.set_nonblocking(false)?;
-        stream.set_read_timeout(Some(CONNECT_TIMEOUT))?;
-        stream.set_write_timeout(Some(CONNECT_TIMEOUT))?;
+        stream.set_read_timeout(Some(Duration::from_millis(100)))?;
+        stream.set_write_timeout(Some(Duration::from_millis(500)))?;
         let mut p = Self {
             info: PluginInfo {
                 protocol: 0,
@@ -127,6 +148,11 @@ impl PluginProcess {
             },
             startup: Duration::ZERO,
             child,
+            cancelled: None,
+            deadline: Some(started + CONNECT_TIMEOUT),
+            capture,
+            capture_workers,
+            stopped: false,
             rx: Receiver::with_limits(
                 stream,
                 basecraft_protocol::operation::MAX_FRAME_BYTES,
@@ -145,7 +171,7 @@ impl PluginProcess {
             )));
         }
         verify_handshake(manifest, &p.info)?;
-        p.rx.stream().set_read_timeout(None)?;
+        p.deadline = None;
         p.startup = started.elapsed();
         Ok(p)
     }
@@ -169,15 +195,70 @@ impl PluginProcess {
         }
         line.push(b'\n');
         fdpass::send(self.rx.stream(), &line, fds)?;
-        let reply = self
-            .rx
-            .line()?
-            .ok_or_else(|| Error::Protocol("plugin closed the connection".into()))?;
+        let reply = loop {
+            if self
+                .cancelled
+                .as_ref()
+                .is_some_and(|flag| flag.load(Ordering::Acquire))
+            {
+                return Err(Error::Protocol("cancelled".into()));
+            }
+            if self
+                .deadline
+                .is_some_and(|deadline| Instant::now() >= deadline)
+            {
+                return Err(Error::Timeout(self.info.id.clone()));
+            }
+            if self
+                .capture
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .exceeded
+            {
+                return Err(Error::Protocol(
+                    "plugin stdout/stderr quota exceeded".into(),
+                ));
+            }
+            let cancelled = self.cancelled.clone();
+            let deadline = self.deadline;
+            let capture = self.capture.clone();
+            match self.rx.line_checked(|| {
+                if cancelled
+                    .as_ref()
+                    .is_some_and(|flag| flag.load(Ordering::Acquire))
+                {
+                    return Err(std::io::Error::other("cancelled"));
+                }
+                if deadline.is_some_and(|limit| Instant::now() >= limit) {
+                    return Err(std::io::Error::other("plugin deadline exceeded"));
+                }
+                if capture
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .exceeded
+                {
+                    return Err(std::io::Error::other("plugin stdout/stderr quota exceeded"));
+                }
+                Ok(())
+            }) {
+                Ok(Some(reply)) => break reply,
+                Ok(None) => return Err(Error::Protocol("plugin closed the connection".into())),
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock
+                            | std::io::ErrorKind::TimedOut
+                            | std::io::ErrorKind::Interrupted
+                    ) => {}
+                Err(error) => return Err(error.into()),
+            }
+        };
         let raw: Value = serde_json::from_slice(&reply)?;
         let msg: Message = serde_json::from_value(raw.clone())?;
         if msg.jsonrpc != "2.0"
             || msg.method.is_some()
             || msg.params.is_some()
+            || (raw.get("error").is_some() && msg.error.is_none())
             || (raw.get("result").is_some() == raw.get("error").is_some())
         {
             return Err(Error::Protocol("invalid JSON-RPC response shape".into()));
@@ -276,24 +357,112 @@ impl PluginProcess {
 
 impl Drop for PluginProcess {
     fn drop(&mut self) {
-        let _ = self
-            .rx
-            .stream()
-            .set_read_timeout(Some(Duration::from_millis(500)));
-        let _ = self
-            .rx
-            .stream()
-            .set_write_timeout(Some(Duration::from_millis(500)));
-        let _ = self.call("shutdown", Value::Null, &[]);
-        let deadline = Instant::now() + Duration::from_millis(500);
-        while Instant::now() < deadline {
-            if matches!(self.child.try_wait(), Ok(Some(_))) {
-                return;
+        let _ = self.finish();
+    }
+}
+
+#[derive(Default)]
+struct CapturedOutput {
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    exceeded: bool,
+}
+const OUTPUT_QUOTA: usize = 1024 * 1024;
+fn capture_output(
+    mut reader: impl Read + Send + 'static,
+    captured: Arc<Mutex<CapturedOutput>>,
+    stderr: bool,
+) -> std::io::Result<std::thread::JoinHandle<()>> {
+    std::thread::Builder::new()
+        .name("plugin-output".into())
+        .spawn(move || {
+            let mut chunk = [0_u8; 8192];
+            loop {
+                let size = match reader.read(&mut chunk) {
+                    Ok(0) | Err(_) => return,
+                    Ok(size) => size,
+                };
+                let mut capture = captured
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let target = if stderr {
+                    &mut capture.stderr
+                } else {
+                    &mut capture.stdout
+                };
+                let remaining = OUTPUT_QUOTA.saturating_sub(target.len());
+                target.extend_from_slice(&chunk[..size.min(remaining)]);
+                if size > remaining {
+                    capture.exceeded = true;
+                }
             }
+        })
+}
+
+impl PluginProcess {
+    pub fn finish(&mut self) -> Result<()> {
+        if self.stopped {
+            return Ok(());
+        }
+        self.deadline = Some(Instant::now() + Duration::from_millis(500));
+        if !self
+            .cancelled
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::Acquire))
+        {
+            let _ = self.call("shutdown", Value::Null, &[]);
+        }
+        self.child.terminate();
+        self.stopped = true;
+        let deadline = Instant::now() + Duration::from_millis(500);
+        while self
+            .capture_workers
+            .iter()
+            .any(|worker| !worker.is_finished())
+            && Instant::now() < deadline
+        {
             std::thread::sleep(Duration::from_millis(5));
         }
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        let mut unfinished = false;
+        for worker in self.capture_workers.drain(..) {
+            if worker.is_finished() {
+                let _ = worker.join();
+            } else {
+                unfinished = true;
+            }
+        }
+        if unfinished {
+            return Err(Error::Protocol(
+                "plugin retained open output streams after teardown".into(),
+            ));
+        }
+        if self
+            .capture
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .exceeded
+        {
+            return Err(Error::Protocol(
+                "plugin stdout/stderr quota exceeded".into(),
+            ));
+        }
+        Ok(())
+    }
+    pub fn cancellation(&mut self, flag: Arc<AtomicBool>) {
+        self.cancelled = Some(flag);
+    }
+    pub fn runtime_limit(&mut self, limit: Option<Duration>) {
+        self.deadline = limit.map(|limit| Instant::now() + limit);
+    }
+    pub fn captured_output(&self) -> (String, String) {
+        let capture = self
+            .capture
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        (
+            String::from_utf8_lossy(&capture.stdout).into_owned(),
+            String::from_utf8_lossy(&capture.stderr).into_owned(),
+        )
     }
 }
 

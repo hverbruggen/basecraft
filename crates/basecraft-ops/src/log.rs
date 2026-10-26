@@ -38,6 +38,15 @@ impl LogWriter {
     }
 
     pub fn append(&mut self, entry: &LogEntry) -> Result<()> {
+        self.append_batch(std::slice::from_ref(entry))
+    }
+
+    /// One checked write with rollback on ordinary I/O failure. A power loss
+    /// remains a journal recovery event, not a filesystem transaction.
+    pub fn append_batch(&mut self, entries: &[LogEntry]) -> Result<()> {
+        let Some(entry) = entries.first() else {
+            return Ok(());
+        };
         if self.poisoned {
             return Err(crate::error::invalid(
                 "journal durability is uncertain; close this session and inspect recovery",
@@ -60,16 +69,19 @@ impl LogWriter {
             let file = OpenOptions::new().create(true).append(true).open(path)?;
             self.open = Some((month, file));
         }
-        let mut value = serde_json::to_value(entry)?;
-        let checksum = basecraft_io::hash_bytes(&serde_json::to_vec(&value)?);
-        value["_checksum"] = serde_json::json!(checksum);
-        value["_sequence"] = serde_json::json!(self.sequence);
-        let mut line = serde_json::to_vec(&value)?;
-        line.push(b'\n');
-        if line.len() > 8 << 20 {
-            return Err(crate::error::invalid(
-                "operation journal event exceeds 8 MiB limit",
-            ));
+        let mut line = Vec::new();
+        for (offset, entry) in entries.iter().enumerate() {
+            let mut value = serde_json::to_value(entry)?;
+            let checksum = basecraft_io::hash_bytes(&serde_json::to_vec(&value)?);
+            value["_checksum"] = serde_json::json!(checksum);
+            value["_sequence"] = serde_json::json!(self.sequence + offset as u64);
+            serde_json::to_writer(&mut line, &value)?;
+            line.push(b'\n');
+            if line.len() > 8 << 20 {
+                return Err(crate::error::invalid(
+                    "operation journal batch exceeds 8 MiB limit",
+                ));
+            }
         }
         if let Some((_, f)) = &mut self.open {
             // One write per line: with O_APPEND, a crash can't interleave
@@ -93,7 +105,7 @@ impl LogWriter {
                 }
                 return Err(error.into());
             }
-            self.sequence += 1;
+            self.sequence += entries.len() as u64;
         }
         Ok(())
     }

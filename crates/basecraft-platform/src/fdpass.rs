@@ -86,7 +86,15 @@ impl Receiver {
 
     /// The next line, without its newline. `None` at end of stream.
     pub fn line(&mut self) -> io::Result<Option<Vec<u8>>> {
+        self.line_checked(|| Ok(()))
+    }
+
+    pub fn line_checked(
+        &mut self,
+        mut check: impl FnMut() -> io::Result<()>,
+    ) -> io::Result<Option<Vec<u8>>> {
         loop {
+            check()?;
             if let Some(i) = self.buf.iter().position(|&b| b == b'\n') {
                 if i > self.max_frame {
                     return Err(io::Error::other("plugin frame byte limit exceeded"));

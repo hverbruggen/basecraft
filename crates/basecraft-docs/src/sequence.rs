@@ -50,6 +50,22 @@ pub struct SequenceDoc {
     summary: Mutex<Option<(u64, Arc<SeqSummary>)>>,
 }
 
+impl Clone for SequenceDoc {
+    fn clone(&self) -> Self {
+        Self {
+            name: self.name.clone(),
+            circular: self.circular,
+            genbank: self.genbank.clone(),
+            seq: self.seq.clone(),
+            features: self.features.clone(),
+            version: self.version,
+            changes: self.changes.clone(),
+            index: Mutex::new(None),
+            summary: Mutex::new(None),
+        }
+    }
+}
+
 /// One record of an indexed FASTA file as a residue source.
 pub struct FastaResidues {
     pub file: Arc<IndexedFasta>,
