@@ -11,7 +11,7 @@ use crate::{Result, analysis_store::ArtifactRun, error::invalid};
 /// Register one clean original using the shared reference/preserve/export lifecycle.
 /// This is an explicit analysis action, never a passive-open writer. Dependencies
 /// name immutable upstream runs; no source input is copied here.
-pub fn reference_input(
+pub fn reference_input_with_dependencies(
     anchor: &Path,
     source: &Path,
     hash: &str,

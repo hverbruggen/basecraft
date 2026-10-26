@@ -86,8 +86,13 @@ fn base(path: &Path) -> crate::Result<PathBuf> {
 fn source(path: &Path, sha256: &str, anchor: &Path) -> crate::Result<Source> {
     let path = path.canonicalize()?;
     let hash = basecraft_io::hash_file(&path)?;
-    let ledger =
-        inputs::reference_input(anchor, &path, &hash, &[], "Explicit Sanger input reference")?;
+    let ledger = inputs::reference_input_with_dependencies(
+        anchor,
+        &path,
+        &hash,
+        &[],
+        "Explicit Sanger input reference",
+    )?;
     // Check both identities around registration, never label a SHA-256 as BLAKE3.
     if !basecraft_io::sha256_file(&path)?.eq_ignore_ascii_case(sha256) {
         return Err(invalid("Sanger input changed while registering evidence"));
@@ -406,6 +411,59 @@ impl SangerReviewSession {
         self.evidence = evidence;
         self.anchor.clone_from(&run.anchor);
         self.start_recovery()
+    }
+
+    pub fn recovery_path(&self) -> Option<&Path> {
+        self.recovery.as_deref()
+    }
+
+    pub(super) fn resume_recovery(&mut self, path: &Path) -> Result<(), String> {
+        let paths = basecraft_platform::paths::AppPaths::discover().map_err(|e| e.to_string())?;
+        let absolute = std::path::absolute(path).map_err(|e| e.to_string())?;
+        if !absolute.starts_with(paths.state.join("jobs")) {
+            return Ok(());
+        }
+        // State recovery is an unsaved document. Its suggested Save/Export
+        // location must remain in the working folder, never in application state.
+        let mut folder = None;
+        for run in self.evidence.runs.iter().chain(
+            self.evidence
+                .sources
+                .iter()
+                .filter_map(|s| s.ledger.as_ref()),
+        ) {
+            let Ok(run) = run.canonicalize() else {
+                continue;
+            };
+            let candidate = if let Some(store) = run
+                .parent()
+                .and_then(Path::parent)
+                .filter(|p| p.file_name().is_some_and(|n| n == "analyses-v1"))
+            {
+                if ArtifactRun::validate_store(store).is_err() {
+                    continue;
+                }
+                store.parent().and_then(Path::parent)
+            } else if run
+                .file_name()
+                .is_some_and(|n| n.to_string_lossy().ends_with(".provenance"))
+            {
+                run.parent()
+            } else {
+                None
+            };
+            if let Some(candidate) = candidate.filter(|p| !p.starts_with(&paths.state)) {
+                folder = Some(candidate.to_path_buf());
+                break;
+            }
+        }
+        let folder = match folder {
+            Some(folder) => folder,
+            None => std::env::current_dir().map_err(|e| e.to_string())?,
+        };
+        self.anchor = folder.join("recovered-review.sanger-review.json");
+        self.recovery = Some(absolute);
+        Ok(())
     }
 
     pub fn storage_anchor(&self) -> &Path {
@@ -1083,6 +1141,8 @@ mod tests {
         assert!(review.save(&target).is_err());
         assert_eq!(std::fs::read(target.join("unrelated")).unwrap(), b"keep");
         let recovered = SangerReviewSession::load(review.recovery.as_ref().unwrap()).unwrap();
+        assert_eq!(recovered.storage_anchor().parent().unwrap(), tmp.path());
+        assert_eq!(recovered.recovery_path(), review.recovery.as_deref());
         assert_eq!(recovered.events(), review.events());
         assert_eq!(recovered.decision(0), Some(&ReviewChoice::Edit('G')));
         let mut broken: serde_json::Value =

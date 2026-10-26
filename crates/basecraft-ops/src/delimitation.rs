@@ -45,7 +45,7 @@ fn reference_input_with_dependencies(
     hash: &str,
     dependencies: &[PathBuf],
 ) -> Result<crate::analysis_store::ArtifactRun> {
-    crate::input_evidence::reference_input(
+    crate::input_evidence::reference_input_with_dependencies(
         anchor,
         source,
         hash,

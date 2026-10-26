@@ -298,6 +298,7 @@ impl SangerReviewSession {
                 session.apply(event)?;
             }
         }
+        session.resume_recovery(path)?;
         Ok(session)
     }
 

@@ -23,6 +23,13 @@ class ConsensusTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Duplicate trace content"):
                 merge(paths, Path("missing-tracy"), Path(directory) / "draft")
 
+    def test_content_addressed_abif_is_not_rejected_for_its_filename(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "preserved-input"
+            source.write_bytes(b"ABIFsynthetic-header")
+            with self.assertRaisesRegex(ValueError, "Tracy executable not found"):
+                merge([source], Path("basecraft-nonexistent-tracy"), Path(directory) / "draft")
+
     def test_every_read_must_join_a_connected_overlap(self):
         rows = [
             ("read_1", "AAAAA-----"),

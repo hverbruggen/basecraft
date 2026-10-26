@@ -871,16 +871,17 @@ impl qobject::SangerController {
         })();
         match result {
             Ok((mut review, session)) => {
+                let recovered = session.recovery_path().is_some();
                 {
                     let mut r = self.as_mut().rust_mut();
                     review.resize(r.view.width, r.view.height);
                     r.review = Some(review);
                     r.review_session = Some(session);
-                    r.review_path = Some(path.clone());
+                    r.review_path = if recovered { None } else { Some(path.clone()) };
 
                     r.trace = None;
                 }
-                self.as_mut().set_dirty(false);
+                self.as_mut().set_dirty(recovered);
                 self.as_mut()
                     .set_file_path(QString::from(path.to_string_lossy().as_ref()));
                 self.as_mut().set_message(QString::default());
