@@ -54,11 +54,13 @@ worker report records the executed commands and receipts.
    joint finite-difference baseline. Timing occurs inside the test, after
    compilation. Retain raw timings, peak RSS, hashes and convergence results.
 
-5. After WF-0017 is accepted, package the exact validated native executable
-   at `plugins/sanderson/bin/basecraft-sanderson-native`, include dependency
-   license notices/source facts, and run the schema-2 operation via GUI,
-   CLI, Python and headless MCP through the shared registry. Check denied
-   execution, immutable input identity, destination collision, malformed or
-   truncated native output, cancellation and atomic host publication. Do not
-   compile, install dependencies or create successful artifacts at analysis
-   time. Coordinator alone handles integration, push and publication.
+5. Stage the exact validated executable in a disposable package copy with
+   `native/tools/stage_package.py --package <bundle/plugins/sanderson>
+   --binary <validated-binary>`. The script pins executable and source hashes
+   and writes `bin/engine.json`; it does not compile. Run
+   `plugins/sanderson/test_host_integration.py` against a built shared host
+   with a matching SDK and a new disposable root. The SCI-0011 worker receipt
+   records executed CLI, Python and MCP checks. Coordinator-owned delivery
+   still needs the shared build-tool hook, dependency license closure, GUI
+   parameters, package validation and atomic publication. Do not infer these
+   gates from the standalone method result.

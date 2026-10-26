@@ -52,11 +52,22 @@ def _parameters(parameters, keys, labels):
     return settings
 
 
-def _binary():
-    path = Path(__file__).resolve().parent / "bin" / "basecraft-sanderson-native"
+def _binary(package=None):
+    package = Path(package) if package is not None else Path(__file__).resolve().parent
+    path = package / "bin" / "basecraft-sanderson-native"
     if not path.is_file():
         raise RuntimeError("Native Sanderson PL engine is not packaged")
-    return path, hashlib.sha256(path.read_bytes()).hexdigest()
+    try:
+        expected = json.loads((package / "native" / "validated-engine.json").read_text())
+        staged = json.loads((package / "bin" / "engine.json").read_text())
+    except (OSError, ValueError) as error:
+        raise RuntimeError("Native Sanderson PL engine identity is missing or invalid") from error
+    if staged != expected:
+        raise RuntimeError("Native Sanderson PL engine identity differs from validation")
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    if digest != expected["binary_sha256"]:
+        raise RuntimeError("Native Sanderson PL binary differs from validation")
+    return path, digest
 
 
 def _run(binary, request, cancel, seconds):

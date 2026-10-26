@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "name": "basecraft-sanderson-native",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "source_commit": "53361c93f96ae65b6f69d4ad5ea3b2813ce6bcd2",
+  "source_archive_sha256": "6594ef9cc4604c23f77cb3d6ad987035a784da654ed203a4eac6fa823d931575",
+  "target": "x86_64-unknown-linux-gnu",
+  "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)",
+  "cargo_lock_sha256": "dd7b4c7f7cde0aa04b01ce1ddffcfb3232cf18ee4eaf0b73047d665d0aef6859",
+  "binary_sha256": "017a879549a1bbade15b151121fcd1c2a38f5ac73ade5e73c840a9812bef3480",
+  "source_sha256": {
+    "src/lib.rs": "f3e5c175e21769a94843a911bbdaa2898df76514b3ae44397f92179fe3c65556",
+    "src/main.rs": "a743dffa12ab8f339d012a5238e031b0665ce224360726c6092a313725e64eeb",
+    "src/model.rs": "464c5cd1b537da50d3de6ae783cab806d1118d3e4a173f8f6eb4d1921c64c526",
+    "src/objective.rs": "eb95d3fd848bf3e0a9c5a3629507d12accd41623be62f8f949aee46ba48b8e76",
+    "src/reference.rs": "11370b41f941d8f20b20e68811238521aa6e7286af94a9a9b7ccd55f604e4805"
+  }
+}

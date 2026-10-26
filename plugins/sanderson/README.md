@@ -57,16 +57,44 @@ unscaled. A start is accepted only when L-BFGS reports convergence and the
 unscaled gradient norm is below the recorded absolute/initial-relative
 tolerance. These numerical controls do not change the fitted objective.
 
-## Source and packaging state
+## Source, package stage and delivery
 
 `native/` is an isolated Rust crate with its own lockfile while
-WF-0017/coordinator owns the root Cargo workspace and lockfile. The user
-authorized standalone numerical compilation and validation on build-host; the
-private worker report records the exact source, checks and measurements. A
-built `bin/basecraft-sanderson-native` must still be bundled atomically with
-the plugin; no analysis installs or compiles it. Registry integration and
-packaging remain separate work, so the plugin currently fails explicitly
-when the binary is absent.
+WF-0017/coordinator owns the root Cargo workspace and lockfile. Standalone
+numerical compilation and validation ran on build-host; the private worker
+report records the exact source, checks and measurements. The committed
+`native/validated-engine.json` pins that executable and the method source.
+The plugin requires `bin/basecraft-sanderson-native` and `bin/engine.json` in
+its package, verifies both against the pinned identity, and fails explicitly
+when either is absent or changed. No analysis installs or compiles the engine.
+
+The package stage is intentionally separate from the shared build tool:
+
+```sh
+python3 plugins/sanderson/native/tools/stage_package.py \
+  --package /disposable/bundle/plugins/sanderson \
+  --binary /validated/build-host/basecraft-sanderson-native
+```
+
+Stage **after** the build copies `source/plugins` into its disposable bundle
+and **before** runtime validation and atomic publication. The script checks
+the Linux x86_64 ELF, executable SHA-256, isolated Cargo lockfile, native
+source hashes and included GPL-3 notice. It writes the binary and identity
+metadata atomically inside that package copy. The publisher must select the
+executable from the recorded standalone validation; rebuilding needs a new
+method validation and matching pinned identity. The normal source checkout
+has no `bin/` executable. The coordinator owns the shared build-tool hook,
+license closure, and package publication.
+
+For a built shared host, `test_host_integration.py` stages a disposable bundle
+and checks bundled discovery and CLI, Python and headless MCP execution,
+including an internal-age bound, explicit CV, invalid input and unchanged
+source bytes. It requires an existing host executable, validated native
+binary, matching SDK in `PYTHONPATH`, and a new external `--root` directory.
+It does not compile or publish anything. The generic operation picker in the
+merged host cannot yet render this contract's numeric `root_age`/`lambda` and
+structured `constraints`/`cross_validation` fields; GUI exposure needs a
+coordinator-owned UI change before delivery.
 
 Scientific references: Sanderson (2002), DOI
 [10.1093/oxfordjournals.molbev.a003974](https://doi.org/10.1093/oxfordjournals.molbev.a003974),
@@ -74,4 +102,5 @@ and the inspected original-author r8s 1.81 `TimeAlgorithms.c` penalty/CV source.
 The full original paper was not available in the retained SCI-0010 research
 material, so literal paper-equation parity has not been established.
 Argmin 0.11 is dual MIT/Apache-2.0 licensed; dependency license notices and
-exact package identity require closure with the compiled lockfile.
+exact package identity still require delivery review against the isolated
+lockfile and recorded Cargo metadata.

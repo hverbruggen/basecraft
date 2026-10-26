@@ -9,12 +9,6 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "python" / "src"))
 
-from basecraft.plugin import Plugin  # noqa: E402
-
-if not hasattr(Plugin, "context_operation"):
-    # The accepted WF-0017 SDK is not in this checkout under the build hold.
-    Plugin.context_operation = lambda self, name: lambda handler: handler
-
 from plugin import _parameters, date_tree  # noqa: E402
 from tree import labeled_newick, parse  # noqa: E402
 
