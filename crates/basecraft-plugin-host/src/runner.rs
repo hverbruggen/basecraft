@@ -501,6 +501,44 @@ impl PreparedOperation {
             let hash = basecraft_io::hash_file(&path).map_err(basecraft_ops::Error::from)?;
             validated.push((artifact.role.clone(), path, hash));
         }
+        // The registered IQ-TREE route publishes a collection rather than a
+        // FileJob tree. Add the same sidecar before sealing that collection so
+        // retained results, explicit exports, verification and repair agree.
+        if self.operation.id == "basecraft.iqtree/tree@1"
+            && let Some((name, kind)) = file_tool::iqtree_support(self.parameters.get("support"))
+        {
+            let trees: Vec<_> = validated
+                .iter()
+                .filter(|(role, path, _)| {
+                    role == "artifacts"
+                        && path
+                            .extension()
+                            .is_some_and(|extension| extension.eq_ignore_ascii_case("nwk"))
+                })
+                .map(|(_, path, _)| path.clone())
+                .collect();
+            for tree in trees {
+                let sidecar = basecraft_ops::files::tree_sidecar(&tree);
+                match std::fs::symlink_metadata(&sidecar) {
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Ok(_) => {
+                        return Err(Error::Protocol(
+                            "IQ-TREE support sidecar already exists in staged output".into(),
+                        ));
+                    }
+                    Err(error) => return Err(error.into()),
+                }
+                if let Some(sidecar) = file_tool::write_support_sidecar(&tree, name, kind)? {
+                    if !paths.insert(sidecar.clone()) {
+                        return Err(Error::Protocol("duplicate support sidecar".into()));
+                    }
+                    *counts.entry("artifacts".into()).or_default() += 1;
+                    let hash =
+                        basecraft_io::hash_file(&sidecar).map_err(basecraft_ops::Error::from)?;
+                    validated.push(("artifacts".into(), sidecar, hash));
+                }
+            }
+        }
         for (role, binding) in &self.operation.descriptor.outputs {
             let count = counts.get(role).copied().unwrap_or(0);
             if count < binding.min || count > binding.max {
