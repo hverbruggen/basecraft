@@ -1,4 +1,5 @@
-schema = 1
+schema = 2
+contract = "operations.json"
 id = "basecraft.mafft"
 name = "MAFFT"
 version = "0.2.0"
@@ -12,15 +13,3 @@ operation = "python:mafft_plugin.py"
 # environment, $BASECRAFT_MAFFT, or the PATH.
 [environment]
 conda = ["bioconda::mafft"]
-
-[[operations]]
-name = "align"
-label = "Align sequences with MAFFT (default settings)"
-
-[[operations]]
-name = "place_sanger"
-label = "Place a Sanger draft against a frozen alignment"
-
-[[operations]]
-name = "add_sequences"
-label = "Add sequences to an existing alignment without losing bases"

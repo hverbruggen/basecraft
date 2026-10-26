@@ -1,4 +1,5 @@
-schema = 1
+schema = 2
+contract = "operations.json"
 id = "basecraft.orf-finder"
 name = "ORF finder"
 version = "0.1.0"
@@ -6,15 +7,3 @@ kinds = ["operation"]
 
 [entry]
 operation = "python:orf_finder.py"
-
-[[operations]]
-name = "find_orfs"
-label = "Find open reading frames"
-
-[[operations]]
-name = "selftest"
-label = "Report whether the snapshot arrived without a copy"
-
-[[operations]]
-name = "noop"
-label = "Do nothing (for measuring call overhead)"

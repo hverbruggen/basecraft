@@ -312,3 +312,35 @@ fn preserve_retries_and_failed_candidates_never_replace_retained_bytes() {
         damaged
     );
 }
+
+#[test]
+fn nested_collection_bindings_reopen_without_changing_sibling_bindings() {
+    let temp = tempfile::tempdir().unwrap();
+    let output = temp.path().join("single.txt");
+    let run = ArtifactRun::create(&output, "nested").unwrap();
+    std::fs::write(&output, b"single").unwrap();
+    run.bind(&output).unwrap();
+    let collection = temp.path().join("collection/subdir");
+    std::fs::create_dir_all(&collection).unwrap();
+    let member = collection.join("member.txt");
+    std::fs::write(&member, b"member").unwrap();
+    run.bind(&member).unwrap();
+    for path in [&output, &member] {
+        assert_eq!(
+            ArtifactRun::for_result(path).unwrap().as_deref(),
+            Some(run.directory())
+        );
+    }
+    // A same-named unrelated sibling must not accidentally inherit the binding.
+    let other = temp.path().join("other/member.txt");
+    std::fs::create_dir_all(other.parent().unwrap()).unwrap();
+    std::fs::write(&other, b"unrelated").unwrap();
+    assert!(ArtifactRun::for_result(&other).unwrap().is_none());
+    // Discovery retains access to the ledger after edits so the provenance
+    // verifier can diagnose changed bytes rather than losing the record.
+    std::fs::write(&member, b"changed").unwrap();
+    assert_eq!(
+        ArtifactRun::for_result(&member).unwrap().as_deref(),
+        Some(run.directory())
+    );
+}

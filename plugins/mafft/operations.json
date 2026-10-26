@@ -1,0 +1,217 @@
+{
+  "schema": 1,
+  "operations": [
+    {
+      "name": "align",
+      "version": "1.0.0",
+      "implementation": "align",
+      "title": "Align sequences with MAFFT",
+      "description": "Align sequences with MAFFT. Uses the existing public plugin implementation and declared immutable inputs.",
+      "family": "file_analysis",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "threads": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "result": {
+        "type": "null"
+      },
+      "inputs": {
+        "alignment": {
+          "view": "ungapped_fasta",
+          "media_type": "text/x-fasta",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "outputs": {
+        "artifacts": {
+          "media_type": "application/vnd.basecraft.artifact-collection",
+          "min": 1,
+          "max": 1024,
+          "visibility": "result",
+          "collection": true
+        }
+      },
+      "effects": {
+        "document_write": false,
+        "artifact_write": true
+      },
+      "cpu_parameters": [
+        "threads"
+      ],
+      "legacy_adapter": {
+        "primary_input": "alignment",
+        "inputs": {
+          "alignment": "input"
+        },
+        "input_arrays": [],
+        "outputs": {
+          "output": {
+            "role": "artifacts",
+            "path": "alignment.afa"
+          }
+        },
+        "allocation": "artifacts"
+      }
+    },
+    {
+      "name": "place_sanger",
+      "version": "1.0.0",
+      "implementation": "place_sanger",
+      "title": "Place a Sanger draft against a frozen alignment",
+      "description": "Place a Sanger draft against a frozen alignment. Uses the existing public plugin implementation and declared immutable inputs.",
+      "family": "file_analysis",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "fragment": {
+            "type": "string"
+          },
+          "threads": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "fragment"
+        ]
+      },
+      "result": {
+        "type": "null"
+      },
+      "inputs": {
+        "alignment": {
+          "view": "aligned_fasta",
+          "media_type": "text/x-fasta",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "outputs": {
+        "artifacts": {
+          "media_type": "application/vnd.basecraft.artifact-collection",
+          "min": 1,
+          "max": 1024,
+          "visibility": "result",
+          "collection": true
+        }
+      },
+      "effects": {
+        "document_write": false,
+        "artifact_write": true
+      },
+      "cpu_parameters": [
+        "threads"
+      ],
+      "legacy_adapter": {
+        "primary_input": "alignment",
+        "inputs": {
+          "alignment": "input"
+        },
+        "input_arrays": [],
+        "outputs": {
+          "output": {
+            "role": "artifacts",
+            "path": "placement.json"
+          }
+        },
+        "allocation": "artifacts"
+      }
+    },
+    {
+      "name": "add_sequences",
+      "version": "1.0.0",
+      "implementation": "add_sequences",
+      "title": "Add sequences without losing bases",
+      "description": "Add sequences without losing bases. Uses the existing public plugin implementation and declared immutable inputs.",
+      "family": "file_analysis",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "rows": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "array",
+              "prefixItems": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "items": false,
+              "minItems": 2,
+              "maxItems": 2
+            }
+          },
+          "orientation": {
+            "type": "boolean",
+            "default": false
+          },
+          "keep": {
+            "type": "boolean",
+            "default": true
+          },
+          "threads": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "rows"
+        ]
+      },
+      "result": {
+        "type": "null"
+      },
+      "inputs": {
+        "alignment": {
+          "view": "aligned_fasta",
+          "media_type": "text/x-fasta",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "outputs": {
+        "artifacts": {
+          "media_type": "application/vnd.basecraft.artifact-collection",
+          "min": 1,
+          "max": 1024,
+          "visibility": "result",
+          "collection": true
+        }
+      },
+      "effects": {
+        "document_write": false,
+        "artifact_write": true
+      },
+      "cpu_parameters": [
+        "threads"
+      ],
+      "legacy_adapter": {
+        "primary_input": "alignment",
+        "inputs": {
+          "alignment": "input"
+        },
+        "input_arrays": [],
+        "outputs": {
+          "output": {
+            "role": "artifacts",
+            "path": "addition.json"
+          }
+        },
+        "allocation": "artifacts"
+      }
+    }
+  ]
+}

@@ -1,15 +1,12 @@
-schema = 1
+schema = 2
+contract = "operations.json"
 id = "basecraft.iqtree"
 name = "IQ-TREE maximum-likelihood inference"
 version = "0.1.0"
 kinds = ["operation"]
 [entry]
 operation = "python:iqtree_plugin.py"
-[[operations]]
-name = "tree"
-label = "Infer a tree with IQ-TREE and retain the analysis report"
 
-# The settings the app asks for before a run (see plugins/fasttree).
 [[forms]]
 id = "tree"
 title = "IQ-TREE"

@@ -1,4 +1,5 @@
-schema = 1
+schema = 2
+contract = "operations.json"
 id = "basecraft.fasttree"
 name = "FastTree"
 version = "0.1.0"
@@ -13,12 +14,7 @@ operation = "python:fasttree_plugin.py"
 [environment]
 conda = ["bioconda::fasttree"]
 
-[[operations]]
-name = "tree"
-label = "Infer a maximum-likelihood tree with FastTree (GTR for DNA, LG for protein)"
 
-# The settings the app asks for before a run. The app draws the form from
-# these fields and sends their values as parameters.
 [[forms]]
 id = "tree"
 title = "FastTree"

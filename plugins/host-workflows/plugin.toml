@@ -1,0 +1,7 @@
+schema = 2
+contract = "operations.json"
+id = "basecraft.host"
+name = "Basecraft application workflows"
+version = "1.0.0"
+[entry]
+operation = "python:host_workflows.py"

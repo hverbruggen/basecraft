@@ -1,0 +1,68 @@
+{
+  "schema": 1,
+  "operations": [
+    {
+      "name": "trim",
+      "version": "1.0.0",
+      "implementation": "trim",
+      "title": "Trim an alignment with trimAl",
+      "description": "Trim an alignment with trimAl. Uses the existing public plugin implementation and declared immutable inputs.",
+      "family": "file_analysis",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "method": {
+            "enum": [
+              "automated1",
+              "gappyout",
+              "strict",
+              "strictplus",
+              "nogaps"
+            ],
+            "default": "automated1"
+          }
+        }
+      },
+      "result": {
+        "type": "null"
+      },
+      "inputs": {
+        "alignment": {
+          "view": "aligned_fasta",
+          "media_type": "text/x-fasta",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "outputs": {
+        "artifacts": {
+          "media_type": "application/vnd.basecraft.artifact-collection",
+          "min": 1,
+          "max": 1024,
+          "visibility": "result",
+          "collection": true
+        }
+      },
+      "effects": {
+        "document_write": false,
+        "artifact_write": true
+      },
+      "cpu_parameters": [],
+      "legacy_adapter": {
+        "primary_input": "alignment",
+        "inputs": {
+          "alignment": "input"
+        },
+        "input_arrays": [],
+        "outputs": {
+          "output": {
+            "role": "artifacts",
+            "path": "trimmed.afa"
+          }
+        },
+        "allocation": "artifacts"
+      }
+    }
+  ]
+}

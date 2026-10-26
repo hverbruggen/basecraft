@@ -65,6 +65,8 @@ pub struct PluginInfo {
     pub id: String,
     pub version: String,
     pub operations: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<String>,
 }
 
 /// A sequence snapshot: two Arrow IPC streams in shared memory.
@@ -94,12 +96,18 @@ pub struct Invoke {
     pub params: Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub snapshot: Option<SequenceSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<crate::operation::InvocationContext>,
 }
 
 /// `invoke` result: proposed operations against the snapshot's version,
 /// and for operations that write files, what they wrote and with which tool.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct InvokeResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<Box<Value>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifacts: Vec<crate::operation::PluginArtifact>,
     #[serde(default)]
     pub ops: Vec<Op>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

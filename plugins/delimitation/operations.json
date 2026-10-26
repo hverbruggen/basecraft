@@ -1,0 +1,1489 @@
+{
+  "schema": 1,
+  "operations": [
+    {
+      "name": "haplotypes",
+      "version": "1.0.0",
+      "implementation": "haplotypes",
+      "title": "Prepare exact aligned DNA haplotypes",
+      "description": "Prepare exact aligned DNA haplotypes. Uses the existing public plugin implementation and declared immutable inputs.",
+      "family": "file_analysis",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "rooted": {
+            "type": "boolean",
+            "default": false
+          },
+          "tree_index": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          },
+          "seed": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "workers": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 256
+          },
+          "deduplicate": {
+            "type": "boolean",
+            "default": false
+          },
+          "model": {
+            "enum": [
+              "p",
+              "jc69",
+              "k2p"
+            ],
+            "default": "k2p"
+          },
+          "min_overlap": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          }
+        }
+      },
+      "result": {
+        "type": "null"
+      },
+      "inputs": {
+        "alignment": {
+          "view": "aligned_fasta",
+          "media_type": "application/octet-stream",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "outputs": {
+        "artifacts": {
+          "media_type": "application/vnd.basecraft.artifact-collection",
+          "min": 1,
+          "max": 1024,
+          "visibility": "result",
+          "collection": true
+        }
+      },
+      "effects": {
+        "document_write": false,
+        "artifact_write": true
+      },
+      "cpu_parameters": [
+        "workers"
+      ],
+      "legacy_adapter": {
+        "primary_input": "alignment",
+        "inputs": {
+          "alignment": "input"
+        },
+        "input_arrays": [],
+        "outputs": {
+          "output": {
+            "role": "artifacts",
+            "path": "result.json"
+          }
+        },
+        "allocation": "artifacts"
+      }
+    },
+    {
+      "name": "validate_time_tree",
+      "version": "1.0.0",
+      "implementation": "validate_time_tree",
+      "title": "Validate an explicitly rooted imported time tree",
+      "description": "Validate an explicitly rooted imported time tree. Uses the existing public plugin implementation and declared immutable inputs.",
+      "family": "file_analysis",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "rooted": {
+            "type": "boolean",
+            "default": false
+          },
+          "tree_index": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          },
+          "seed": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "workers": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 256
+          },
+          "units": {
+            "type": "string"
+          },
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 0,
+            "uniqueItems": true
+          }
+        }
+      },
+      "result": {
+        "type": "null"
+      },
+      "inputs": {
+        "tree": {
+          "view": "newick",
+          "media_type": "application/octet-stream",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "outputs": {
+        "artifacts": {
+          "media_type": "application/vnd.basecraft.artifact-collection",
+          "min": 1,
+          "max": 1024,
+          "visibility": "result",
+          "collection": true
+        }
+      },
+      "effects": {
+        "document_write": false,
+        "artifact_write": true
+      },
+      "cpu_parameters": [
+        "workers"
+      ],
+      "legacy_adapter": {
+        "primary_input": "tree",
+        "inputs": {
+          "tree": "input"
+        },
+        "input_arrays": [],
+        "outputs": {
+          "output": {
+            "role": "artifacts",
+            "path": "result.json"
+          }
+        },
+        "allocation": "artifacts"
+      }
+    },
+    {
+      "name": "relative_time",
+      "version": "1.0.0",
+      "implementation": "relative_time",
+      "title": "Convert a fixed-root tree to constrained relative times",
+      "description": "Convert a fixed-root tree to constrained relative times. Uses the existing public plugin implementation and declared immutable inputs.",
+      "family": "file_analysis",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "rooted": {
+            "type": "boolean",
+            "default": false
+          },
+          "tree_index": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          },
+          "seed": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "workers": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 256
+          },
+          "reference_version": {
+            "type": "string"
+          },
+          "reference_age_clamp": {
+            "type": "boolean",
+            "default": false
+          },
+          "units": {
+            "type": "string"
+          },
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 0,
+            "uniqueItems": true
+          }
+        }
+      },
+      "result": {
+        "type": "null"
+      },
+      "inputs": {
+        "tree": {
+          "view": "newick",
+          "media_type": "application/octet-stream",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "outputs": {
+        "artifacts": {
+          "media_type": "application/vnd.basecraft.artifact-collection",
+          "min": 1,
+          "max": 1024,
+          "visibility": "result",
+          "collection": true
+        }
+      },
+      "effects": {
+        "document_write": false,
+        "artifact_write": true
+      },
+      "cpu_parameters": [
+        "workers"
+      ],
+      "legacy_adapter": {
+        "primary_input": "tree",
+        "inputs": {
+          "tree": "input"
+        },
+        "input_arrays": [],
+        "outputs": {
+          "output": {
+            "role": "artifacts",
+            "path": "result.json"
+          }
+        },
+        "allocation": "artifacts"
+      }
+    },
+    {
+      "name": "manual_cut",
+      "version": "1.0.0",
+      "implementation": "manual_cut",
+      "title": "Partition a time tree at a manual threshold",
+      "description": "Partition a time tree at a manual threshold. Uses the existing public plugin implementation and declared immutable inputs.",
+      "family": "file_analysis",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "rooted": {
+            "type": "boolean",
+            "default": false
+          },
+          "tree_index": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          },
+          "seed": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "workers": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 256
+          },
+          "threshold": {
+            "type": "number",
+            "minimum": 0
+          },
+          "units": {
+            "type": "string"
+          },
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 0,
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "threshold"
+        ]
+      },
+      "result": {
+        "type": "null"
+      },
+      "inputs": {
+        "tree": {
+          "view": "newick",
+          "media_type": "application/octet-stream",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "outputs": {
+        "artifacts": {
+          "media_type": "application/vnd.basecraft.artifact-collection",
+          "min": 1,
+          "max": 1024,
+          "visibility": "result",
+          "collection": true
+        }
+      },
+      "effects": {
+        "document_write": false,
+        "artifact_write": true
+      },
+      "cpu_parameters": [
+        "workers"
+      ],
+      "legacy_adapter": {
+        "primary_input": "tree",
+        "inputs": {
+          "tree": "input"
+        },
+        "input_arrays": [],
+        "outputs": {
+          "output": {
+            "role": "artifacts",
+            "path": "result.json"
+          }
+        },
+        "allocation": "artifacts"
+      }
+    },
+    {
+      "name": "gmyc_single",
+      "version": "1.0.0",
+      "implementation": "gmyc_single",
+      "title": "Native single-threshold GMYC (reference validation pending)",
+      "description": "Native single-threshold GMYC (reference validation pending). Uses the existing public plugin implementation and declared immutable inputs.",
+      "family": "file_analysis",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "rooted": {
+            "type": "boolean",
+            "default": false
+          },
+          "tree_index": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          },
+          "seed": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "workers": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 256
+          },
+          "deduplicate": {
+            "type": "boolean",
+            "default": false
+          },
+          "mapping_hash": {
+            "type": "string"
+          },
+          "original_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "retained_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "reference_version": {
+            "type": "string"
+          },
+          "reference_age_clamp": {
+            "type": "boolean",
+            "default": false
+          },
+          "units": {
+            "type": "string"
+          },
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 0,
+            "uniqueItems": true
+          }
+        }
+      },
+      "result": {
+        "type": "null"
+      },
+      "inputs": {
+        "tree": {
+          "view": "newick",
+          "media_type": "application/octet-stream",
+          "min": 1,
+          "max": 1
+        },
+        "mapping": {
+          "view": "bytes",
+          "media_type": "application/json",
+          "min": 0,
+          "max": 1
+        },
+        "alignment": {
+          "view": "aligned_fasta",
+          "media_type": "text/x-fasta",
+          "min": 0,
+          "max": 1
+        }
+      },
+      "outputs": {
+        "artifacts": {
+          "media_type": "application/vnd.basecraft.artifact-collection",
+          "min": 1,
+          "max": 1024,
+          "visibility": "result",
+          "collection": true
+        }
+      },
+      "effects": {
+        "document_write": false,
+        "artifact_write": true
+      },
+      "cpu_parameters": [
+        "workers"
+      ],
+      "legacy_adapter": {
+        "primary_input": "tree",
+        "inputs": {
+          "tree": "input",
+          "mapping": "mapping",
+          "alignment": "alignment_snapshot"
+        },
+        "input_arrays": [],
+        "outputs": {
+          "output": {
+            "role": "artifacts",
+            "path": "result.json"
+          }
+        },
+        "allocation": "artifacts"
+      }
+    },
+    {
+      "name": "gmyc_multiple",
+      "version": "1.0.0",
+      "implementation": "gmyc_multiple",
+      "title": "Native bounded multiple-threshold GMYC (reference validation pending)",
+      "description": "Native bounded multiple-threshold GMYC (reference validation pending). Uses the existing public plugin implementation and declared immutable inputs.",
+      "family": "file_analysis",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "rooted": {
+            "type": "boolean",
+            "default": false
+          },
+          "tree_index": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          },
+          "seed": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "workers": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 256
+          },
+          "deduplicate": {
+            "type": "boolean",
+            "default": false
+          },
+          "mapping_hash": {
+            "type": "string"
+          },
+          "original_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "retained_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "candidate_budget": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reference_version": {
+            "type": "string"
+          },
+          "reference_age_clamp": {
+            "type": "boolean",
+            "default": false
+          },
+          "units": {
+            "type": "string"
+          },
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 0,
+            "uniqueItems": true
+          }
+        }
+      },
+      "result": {
+        "type": "null"
+      },
+      "inputs": {
+        "tree": {
+          "view": "newick",
+          "media_type": "application/octet-stream",
+          "min": 1,
+          "max": 1
+        },
+        "mapping": {
+          "view": "bytes",
+          "media_type": "application/json",
+          "min": 0,
+          "max": 1
+        },
+        "alignment": {
+          "view": "aligned_fasta",
+          "media_type": "text/x-fasta",
+          "min": 0,
+          "max": 1
+        }
+      },
+      "outputs": {
+        "artifacts": {
+          "media_type": "application/vnd.basecraft.artifact-collection",
+          "min": 1,
+          "max": 1024,
+          "visibility": "result",
+          "collection": true
+        }
+      },
+      "effects": {
+        "document_write": false,
+        "artifact_write": true
+      },
+      "cpu_parameters": [
+        "workers"
+      ],
+      "legacy_adapter": {
+        "primary_input": "tree",
+        "inputs": {
+          "tree": "input",
+          "mapping": "mapping",
+          "alignment": "alignment_snapshot"
+        },
+        "input_arrays": [],
+        "outputs": {
+          "output": {
+            "role": "artifacts",
+            "path": "result.json"
+          }
+        },
+        "allocation": "artifacts"
+      }
+    },
+    {
+      "name": "gmyc_exhaustive",
+      "version": "1.0.0",
+      "implementation": "gmyc_exhaustive",
+      "title": "Exhaustive GMYC oracle for tiny trees",
+      "description": "Exhaustive GMYC oracle for tiny trees. Uses the existing public plugin implementation and declared immutable inputs.",
+      "family": "file_analysis",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "rooted": {
+            "type": "boolean",
+            "default": false
+          },
+          "tree_index": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          },
+          "seed": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "workers": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 256
+          },
+          "candidate_budget": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reference_version": {
+            "type": "string"
+          },
+          "reference_age_clamp": {
+            "type": "boolean",
+            "default": false
+          },
+          "units": {
+            "type": "string"
+          },
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 0,
+            "uniqueItems": true
+          }
+        }
+      },
+      "result": {
+        "type": "null"
+      },
+      "inputs": {
+        "tree": {
+          "view": "newick",
+          "media_type": "application/octet-stream",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "outputs": {
+        "artifacts": {
+          "media_type": "application/vnd.basecraft.artifact-collection",
+          "min": 1,
+          "max": 1024,
+          "visibility": "result",
+          "collection": true
+        }
+      },
+      "effects": {
+        "document_write": false,
+        "artifact_write": true
+      },
+      "cpu_parameters": [
+        "workers"
+      ],
+      "legacy_adapter": {
+        "primary_input": "tree",
+        "inputs": {
+          "tree": "input"
+        },
+        "input_arrays": [],
+        "outputs": {
+          "output": {
+            "role": "artifacts",
+            "path": "result.json"
+          }
+        },
+        "allocation": "artifacts"
+      }
+    },
+    {
+      "name": "inspect_tree",
+      "version": "1.0.0",
+      "implementation": "inspect_tree",
+      "title": "Validate a rooted substitution tree",
+      "description": "Validate a rooted substitution tree. Uses the existing public plugin implementation and declared immutable inputs.",
+      "family": "file_analysis",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "rooted": {
+            "type": "boolean",
+            "default": false
+          },
+          "tree_index": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          },
+          "seed": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "workers": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 256
+          },
+          "min_branch": {
+            "type": "number",
+            "minimum": 0
+          },
+          "units": {
+            "type": "string"
+          },
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 0,
+            "uniqueItems": true
+          }
+        }
+      },
+      "result": {
+        "type": "null"
+      },
+      "inputs": {
+        "tree": {
+          "view": "newick",
+          "media_type": "application/octet-stream",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "outputs": {
+        "artifacts": {
+          "media_type": "application/vnd.basecraft.artifact-collection",
+          "min": 1,
+          "max": 1024,
+          "visibility": "result",
+          "collection": true
+        }
+      },
+      "effects": {
+        "document_write": false,
+        "artifact_write": true
+      },
+      "cpu_parameters": [
+        "workers"
+      ],
+      "legacy_adapter": {
+        "primary_input": "tree",
+        "inputs": {
+          "tree": "input"
+        },
+        "input_arrays": [],
+        "outputs": {
+          "output": {
+            "role": "artifacts",
+            "path": "result.json"
+          }
+        },
+        "allocation": "artifacts"
+      }
+    },
+    {
+      "name": "ptp",
+      "version": "1.0.0",
+      "implementation": "ptp",
+      "title": "Single-rate PTP maximum likelihood through mPTP",
+      "description": "Single-rate PTP maximum likelihood through mPTP. Uses the existing public plugin implementation and declared immutable inputs.",
+      "family": "file_analysis",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "rooted": {
+            "type": "boolean",
+            "default": false
+          },
+          "tree_index": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          },
+          "seed": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "workers": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 256
+          },
+          "deduplicate": {
+            "type": "boolean",
+            "default": false
+          },
+          "mapping_hash": {
+            "type": "string"
+          },
+          "original_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "retained_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "min_branch": {
+            "type": "number",
+            "minimum": 0
+          },
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 0,
+            "uniqueItems": true
+          }
+        }
+      },
+      "result": {
+        "type": "null"
+      },
+      "inputs": {
+        "tree": {
+          "view": "newick",
+          "media_type": "application/octet-stream",
+          "min": 1,
+          "max": 1
+        },
+        "mapping": {
+          "view": "bytes",
+          "media_type": "application/json",
+          "min": 0,
+          "max": 1
+        },
+        "alignment": {
+          "view": "aligned_fasta",
+          "media_type": "text/x-fasta",
+          "min": 0,
+          "max": 1
+        }
+      },
+      "outputs": {
+        "artifacts": {
+          "media_type": "application/vnd.basecraft.artifact-collection",
+          "min": 1,
+          "max": 1024,
+          "visibility": "result",
+          "collection": true
+        }
+      },
+      "effects": {
+        "document_write": false,
+        "artifact_write": true
+      },
+      "cpu_parameters": [
+        "workers"
+      ],
+      "legacy_adapter": {
+        "primary_input": "tree",
+        "inputs": {
+          "tree": "input",
+          "mapping": "mapping",
+          "alignment": "alignment_snapshot"
+        },
+        "input_arrays": [],
+        "outputs": {
+          "output": {
+            "role": "artifacts",
+            "path": "result.json"
+          }
+        },
+        "allocation": "artifacts"
+      }
+    },
+    {
+      "name": "mptp",
+      "version": "1.0.0",
+      "implementation": "mptp",
+      "title": "Multi-rate mPTP maximum likelihood",
+      "description": "Multi-rate mPTP maximum likelihood. Uses the existing public plugin implementation and declared immutable inputs.",
+      "family": "file_analysis",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "rooted": {
+            "type": "boolean",
+            "default": false
+          },
+          "tree_index": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          },
+          "seed": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "workers": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 256
+          },
+          "deduplicate": {
+            "type": "boolean",
+            "default": false
+          },
+          "mapping_hash": {
+            "type": "string"
+          },
+          "original_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "retained_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "min_branch": {
+            "type": "number",
+            "minimum": 0
+          },
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 0,
+            "uniqueItems": true
+          }
+        }
+      },
+      "result": {
+        "type": "null"
+      },
+      "inputs": {
+        "tree": {
+          "view": "newick",
+          "media_type": "application/octet-stream",
+          "min": 1,
+          "max": 1
+        },
+        "mapping": {
+          "view": "bytes",
+          "media_type": "application/json",
+          "min": 0,
+          "max": 1
+        },
+        "alignment": {
+          "view": "aligned_fasta",
+          "media_type": "text/x-fasta",
+          "min": 0,
+          "max": 1
+        }
+      },
+      "outputs": {
+        "artifacts": {
+          "media_type": "application/vnd.basecraft.artifact-collection",
+          "min": 1,
+          "max": 1024,
+          "visibility": "result",
+          "collection": true
+        }
+      },
+      "effects": {
+        "document_write": false,
+        "artifact_write": true
+      },
+      "cpu_parameters": [
+        "workers"
+      ],
+      "legacy_adapter": {
+        "primary_input": "tree",
+        "inputs": {
+          "tree": "input",
+          "mapping": "mapping",
+          "alignment": "alignment_snapshot"
+        },
+        "input_arrays": [],
+        "outputs": {
+          "output": {
+            "role": "artifacts",
+            "path": "result.json"
+          }
+        },
+        "allocation": "artifacts"
+      }
+    },
+    {
+      "name": "workspace_tree",
+      "version": "1.0.0",
+      "implementation": "workspace_tree",
+      "title": "Open a species workspace from a tree",
+      "description": "Open a species workspace from a tree. Uses the existing public plugin implementation and declared immutable inputs.",
+      "family": "file_analysis",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "rooted": {
+            "type": "boolean",
+            "default": false
+          },
+          "tree_index": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          },
+          "seed": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "workers": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 256
+          }
+        }
+      },
+      "result": {
+        "type": "null"
+      },
+      "inputs": {
+        "tree": {
+          "view": "newick",
+          "media_type": "application/octet-stream",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "outputs": {
+        "artifacts": {
+          "media_type": "application/vnd.basecraft.artifact-collection",
+          "min": 1,
+          "max": 1024,
+          "visibility": "result",
+          "collection": true
+        }
+      },
+      "effects": {
+        "document_write": false,
+        "artifact_write": true
+      },
+      "cpu_parameters": [
+        "workers"
+      ],
+      "legacy_adapter": {
+        "primary_input": "tree",
+        "inputs": {
+          "tree": "input"
+        },
+        "input_arrays": [],
+        "outputs": {
+          "output": {
+            "role": "artifacts",
+            "path": "result.json"
+          }
+        },
+        "allocation": "artifacts"
+      }
+    },
+    {
+      "name": "workspace_alignment",
+      "version": "1.0.0",
+      "implementation": "workspace_alignment",
+      "title": "Open a species workspace from an alignment",
+      "description": "Open a species workspace from an alignment. Uses the existing public plugin implementation and declared immutable inputs.",
+      "family": "file_analysis",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "rooted": {
+            "type": "boolean",
+            "default": false
+          },
+          "tree_index": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          },
+          "seed": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "workers": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 256
+          },
+          "model": {
+            "enum": [
+              "p",
+              "jc69",
+              "k2p"
+            ],
+            "default": "k2p"
+          },
+          "min_overlap": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          }
+        }
+      },
+      "result": {
+        "type": "null"
+      },
+      "inputs": {
+        "alignment": {
+          "view": "aligned_fasta",
+          "media_type": "application/octet-stream",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "outputs": {
+        "artifacts": {
+          "media_type": "application/vnd.basecraft.artifact-collection",
+          "min": 1,
+          "max": 1024,
+          "visibility": "result",
+          "collection": true
+        }
+      },
+      "effects": {
+        "document_write": false,
+        "artifact_write": true
+      },
+      "cpu_parameters": [
+        "workers"
+      ],
+      "legacy_adapter": {
+        "primary_input": "alignment",
+        "inputs": {
+          "alignment": "input"
+        },
+        "input_arrays": [],
+        "outputs": {
+          "output": {
+            "role": "artifacts",
+            "path": "result.json"
+          }
+        },
+        "allocation": "artifacts"
+      }
+    },
+    {
+      "name": "asap",
+      "version": "1.0.0",
+      "implementation": "asap",
+      "title": "Native ASAP partitions with coalescent simulations",
+      "description": "Native ASAP partitions with coalescent simulations. Uses the existing public plugin implementation and declared immutable inputs.",
+      "family": "file_analysis",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "rooted": {
+            "type": "boolean",
+            "default": false
+          },
+          "tree_index": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          },
+          "seed": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "workers": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 256
+          },
+          "deduplicate": {
+            "type": "boolean",
+            "default": false
+          },
+          "mapping_hash": {
+            "type": "string"
+          },
+          "replicates": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 10000000,
+            "default": 100000
+          },
+          "partitions": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "default": 10
+          },
+          "stream": {
+            "enum": [
+              "parallel",
+              "reference"
+            ],
+            "default": "parallel"
+          },
+          "model": {
+            "enum": [
+              "p",
+              "jc69",
+              "k2p"
+            ],
+            "default": "k2p"
+          },
+          "min_overlap": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "original_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "retained_count": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "result": {
+        "type": "null"
+      },
+      "inputs": {
+        "alignment": {
+          "view": "aligned_fasta",
+          "media_type": "application/octet-stream",
+          "min": 1,
+          "max": 1
+        },
+        "mapping": {
+          "view": "bytes",
+          "media_type": "application/json",
+          "min": 0,
+          "max": 1
+        }
+      },
+      "outputs": {
+        "artifacts": {
+          "media_type": "application/vnd.basecraft.artifact-collection",
+          "min": 1,
+          "max": 1024,
+          "visibility": "result",
+          "collection": true
+        }
+      },
+      "effects": {
+        "document_write": false,
+        "artifact_write": true
+      },
+      "cpu_parameters": [
+        "workers"
+      ],
+      "legacy_adapter": {
+        "primary_input": "alignment",
+        "inputs": {
+          "alignment": "input",
+          "mapping": "mapping"
+        },
+        "input_arrays": [],
+        "outputs": {
+          "output": {
+            "role": "artifacts",
+            "path": "result.json"
+          }
+        },
+        "allocation": "artifacts"
+      }
+    },
+    {
+      "name": "asap_import",
+      "version": "1.0.0",
+      "implementation": "asap_import",
+      "title": "Import ASAP partitions from SPART-XML",
+      "description": "Import ASAP partitions from SPART-XML. Uses the existing public plugin implementation and declared immutable inputs.",
+      "family": "file_analysis",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "rooted": {
+            "type": "boolean",
+            "default": false
+          },
+          "tree_index": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          },
+          "seed": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "workers": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 256
+          }
+        }
+      },
+      "result": {
+        "type": "null"
+      },
+      "inputs": {
+        "partitions": {
+          "view": "bytes",
+          "media_type": "application/octet-stream",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "outputs": {
+        "artifacts": {
+          "media_type": "application/vnd.basecraft.artifact-collection",
+          "min": 1,
+          "max": 1024,
+          "visibility": "result",
+          "collection": true
+        }
+      },
+      "effects": {
+        "document_write": false,
+        "artifact_write": true
+      },
+      "cpu_parameters": [
+        "workers"
+      ],
+      "legacy_adapter": {
+        "primary_input": "partitions",
+        "inputs": {
+          "partitions": "input"
+        },
+        "input_arrays": [],
+        "outputs": {
+          "output": {
+            "role": "artifacts",
+            "path": "result.json"
+          }
+        },
+        "allocation": "artifacts"
+      }
+    },
+    {
+      "name": "group_statistics",
+      "version": "1.0.0",
+      "implementation": "group_statistics",
+      "title": "Summarize specimen groups with the shared cached-distance engine",
+      "description": "Summarize specimen groups with the shared cached-distance engine. Uses the existing public plugin implementation and declared immutable inputs.",
+      "family": "file_analysis",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "rooted": {
+            "type": "boolean",
+            "default": false
+          },
+          "tree_index": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          },
+          "seed": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "workers": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 256
+          },
+          "groups_data": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "model": {
+            "enum": [
+              "p",
+              "jc69",
+              "k2p"
+            ],
+            "default": "k2p"
+          },
+          "min_overlap": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          }
+        }
+      },
+      "result": {
+        "type": "null"
+      },
+      "inputs": {
+        "alignment": {
+          "view": "aligned_fasta",
+          "media_type": "application/octet-stream",
+          "min": 1,
+          "max": 1
+        },
+        "groups": {
+          "view": "bytes",
+          "media_type": "application/json",
+          "min": 0,
+          "max": 1
+        }
+      },
+      "outputs": {
+        "artifacts": {
+          "media_type": "application/vnd.basecraft.artifact-collection",
+          "min": 1,
+          "max": 1024,
+          "visibility": "result",
+          "collection": true
+        }
+      },
+      "effects": {
+        "document_write": false,
+        "artifact_write": true
+      },
+      "cpu_parameters": [
+        "workers"
+      ],
+      "legacy_adapter": {
+        "primary_input": "alignment",
+        "inputs": {
+          "alignment": "input",
+          "groups": "groups"
+        },
+        "input_arrays": [],
+        "outputs": {
+          "output": {
+            "role": "artifacts",
+            "path": "result.json"
+          }
+        },
+        "allocation": "artifacts"
+      }
+    }
+  ]
+}

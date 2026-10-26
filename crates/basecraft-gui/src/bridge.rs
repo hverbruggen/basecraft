@@ -479,12 +479,7 @@ fn started() -> &'static str {
 /// A bundled plugin's directory: under `$BASECRAFT_PLUGINS` if set, else
 /// the source tree's `plugins/` (development builds).
 pub(crate) fn plugin_dir(name: &str) -> PathBuf {
-    std::env::var_os("BASECRAFT_PLUGINS")
-        .map_or_else(
-            || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins"),
-            PathBuf::from,
-        )
-        .join(name)
+    basecraft_plugin_host::installation::plugins().join(name)
 }
 
 /// The project a file belongs to: the nearest ancestor with a `.basecraft`
@@ -1590,7 +1585,7 @@ impl qobject::GenomeController {
         mut params: serde_json::Value,
         range: Option<(u64, u64)>,
     ) -> Result<(usize, usize), String> {
-        use basecraft_plugin_host::{Manifest, PluginProcess, Snapshot, apply};
+        use basecraft_plugin_host::{Manifest, PluginProcess, Snapshot};
         let dir = plugin_dir(name);
         let manifest = Manifest::load(&dir).map_err(|e| format!("{e} ({})", dir.display()))?;
         let mut plugin = PluginProcess::spawn(&manifest).map_err(|e| e.to_string())?;
@@ -1598,22 +1593,35 @@ impl qobject::GenomeController {
             id: plugin.info.id.clone(),
             version: plugin.info.version.clone(),
         };
-        let (report, known) = {
-            let mut r = self.as_mut().rust_mut();
-            let r = &mut *r;
-            let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
+        let (snap, generation, doc_key, session_id) = {
+            let r = self.rust();
+            let (Some(session), Some(doc)) = (&r.session, r.doc) else {
                 return Err("no open file".into());
             };
             if let Some((a, b)) = range {
                 params["start"] = json!(a);
                 params["end"] = json!(b);
             }
-            let snap =
-                Snapshot::of(session.doc_key(doc), session.doc(doc)).map_err(|e| e.to_string())?;
-            let result = plugin
-                .invoke(operation, params, Some(&snap))
-                .map_err(|e| e.to_string())?;
-            // Running it again adds only features that aren't annotated yet.
+            let checked = session.checked_sequence(doc).map_err(|e| e.to_string())?;
+            (
+                Snapshot::of(session.doc_key(doc), checked).map_err(|e| e.to_string())?,
+                session.generation(doc),
+                session.doc_key(doc).to_owned(),
+                session.id().to_owned(),
+            )
+        };
+        let result = plugin
+            .invoke(operation, params, Some(&snap))
+            .map_err(|e| e.to_string())?;
+        let (report, known) = {
+            let mut r = self.as_mut().rust_mut();
+            let r = &mut *r;
+            let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
+                return Err("annotation target closed; proposals were not applied".into());
+            };
+            if session.doc_key(doc) != doc_key || session.id() != session_id {
+                return Err("annotation target changed; proposals were not applied".into());
+            }
             let found = result.ops.len();
             let ops: Vec<Op> = result
                 .ops
@@ -1627,9 +1635,16 @@ impl qobject::GenomeController {
                 })
                 .collect();
             let known = found - ops.len();
-            let report = apply::apply_proposals(session, doc, snap.version, ops, &actor)
+            session
+                .apply_sequence_proposals(doc, generation, snap.version, &ops, actor)
                 .map_err(|e| e.to_string())?;
-            (report, known)
+            (
+                basecraft_plugin_host::apply::Report {
+                    applied: ops.len(),
+                    dropped: 0,
+                },
+                known,
+            )
         };
         if report.applied > 0 {
             self.as_mut().set_dirty(true);

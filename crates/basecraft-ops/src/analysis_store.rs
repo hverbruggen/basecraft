@@ -208,53 +208,63 @@ impl ArtifactRun {
                 }
             }
         }
-        let hidden = parent.join(".basecraft");
-        if std::fs::symlink_metadata(&hidden).is_ok_and(|m| m.file_type().is_symlink()) {
-            return Err(invalid("hidden analysis directory is a symlink"));
-        }
-        let store = hidden.join("analyses-v1");
-        if !store.exists() {
-            return Ok(None);
-        }
-        Self::validate_store(&store)?;
-        let key = basecraft_io::hash_bytes(
+        let absolute = parent.join(
             result
                 .file_name()
-                .ok_or_else(|| invalid("result filename missing"))?
-                .as_encoded_bytes(),
+                .ok_or_else(|| invalid("result filename missing"))?,
         );
-        let bindings = store.join("bindings");
-        if std::fs::symlink_metadata(&bindings).is_ok_and(|m| m.file_type().is_symlink()) {
-            return Err(invalid("analysis bindings directory is a symlink"));
+        let mut base = parent.as_path();
+        for depth in 0..64 {
+            let relative = absolute
+                .strip_prefix(base)
+                .map_err(|_| invalid("result lies outside binding root"))?;
+            let key = basecraft_io::hash_bytes(relative.as_os_str().as_encoded_bytes());
+            let hidden = base.join(".basecraft");
+            let store = hidden.join("analyses-v1");
+            let binding = store.join("bindings").join(key.trim_start_matches("b3:"));
+            let exists = std::fs::symlink_metadata(&binding).is_ok();
+            if depth == 0 && store.exists() || exists {
+                if std::fs::symlink_metadata(&hidden)?.file_type().is_symlink() {
+                    return Err(invalid("hidden analysis directory is a symlink"));
+                }
+                Self::validate_store(&store)?;
+            }
+            if exists {
+                for directory in [store.join("bindings"), store.join("runs")] {
+                    let metadata = directory.symlink_metadata()?;
+                    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+                        return Err(invalid("unsafe analysis binding namespace"));
+                    }
+                }
+                let metadata = binding.symlink_metadata()?;
+                if !metadata.is_file() || metadata.file_type().is_symlink() {
+                    return Err(invalid("unsafe result binding"));
+                }
+                let value: serde_json::Value =
+                    serde_json::from_slice(&crate::provenance::read_record(&binding)?)?;
+                if value["schema_version"] != 1 || value["result"].as_str() != relative.to_str() {
+                    return Err(invalid("unsupported or mismatched result binding"));
+                }
+                let id = value["run"]
+                    .as_str()
+                    .ok_or_else(|| invalid("result binding has no run"))?;
+                component(id)?;
+                let run = store.join("runs").join(id);
+                if !run.exists() {
+                    return Ok(None);
+                }
+                let metadata = run.symlink_metadata()?;
+                if !metadata.is_dir() || metadata.file_type().is_symlink() {
+                    return Err(invalid("unsafe analysis run"));
+                }
+                return Ok(Some(run));
+            }
+            let Some(ancestor) = base.parent() else {
+                return Ok(None);
+            };
+            base = ancestor;
         }
-        if std::fs::symlink_metadata(store.join("runs")).is_ok_and(|m| m.file_type().is_symlink()) {
-            return Err(invalid("analysis runs directory is a symlink"));
-        }
-        let binding = bindings.join(key.trim_start_matches("b3:"));
-        match std::fs::symlink_metadata(&binding) {
-            Ok(m) if m.is_file() && !m.file_type().is_symlink() => {}
-            Ok(_) => return Err(invalid("unsafe result binding")),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(e) => return Err(e.into()),
-        }
-        let value: serde_json::Value =
-            serde_json::from_slice(&crate::provenance::read_record(&binding)?)?;
-        if value["schema_version"] != 1 {
-            return Err(invalid("unsupported result binding"));
-        }
-        let id = value["run"]
-            .as_str()
-            .ok_or_else(|| invalid("result binding has no run"))?;
-        component(id)?;
-        let run = store.join("runs").join(id);
-        if !run.exists() {
-            return Ok(None);
-        } // Explicitly removed analysis is in trash.
-        let metadata = std::fs::symlink_metadata(&run)?;
-        if !metadata.is_dir() || metadata.file_type().is_symlink() {
-            return Err(invalid("unsafe analysis run"));
-        }
-        Ok(Some(run))
+        Err(invalid("result binding ancestor depth exceeds 64"))
     }
 
     /// Bind only after primary and supporting outputs plus manifest are durable.
@@ -265,10 +275,19 @@ impl ArtifactRun {
             .and_then(Path::parent)
             .ok_or_else(|| invalid("run has no store"))?;
         directory(&store.join("bindings"))?;
-        let name = result
-            .file_name()
-            .ok_or_else(|| invalid("result filename missing"))?;
-        let key = basecraft_io::hash_bytes(name.as_encoded_bytes());
+        let parent = result
+            .parent()
+            .ok_or_else(|| invalid("result parent missing"))?
+            .canonicalize()?;
+        let absolute = parent.join(
+            result
+                .file_name()
+                .ok_or_else(|| invalid("result filename missing"))?,
+        );
+        let name = absolute
+            .strip_prefix(&self.working_directory)
+            .map_err(|_| invalid("binding result lies outside store working directory"))?;
+        let key = basecraft_io::hash_bytes(name.as_os_str().as_encoded_bytes());
         crate::input_evidence::write_json(
             &store.join("bindings").join(key.trim_start_matches("b3:")),
             &serde_json::json!({"schema_version":1,"run":self.id,"result":name.to_str().ok_or_else(|| invalid("result filename is not UTF-8"))?,"result_hash":basecraft_io::hash_file(result)?}),
@@ -320,4 +339,19 @@ pub(crate) fn retained_source(root: &Path, hash: &str) -> Result<Option<PathBuf>
         }
     }
     Ok(None)
+}
+
+impl ArtifactRun {
+    /// Validate members first, then atomically promote the owned collection.
+    pub fn publish_collection(&self, name: &str) -> Result<PathBuf> {
+        let source = self.staging(name)?;
+        let metadata = source.symlink_metadata()?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err(invalid("staged collection is not an ordinary directory"));
+        }
+        let destination = self.artifact(name)?;
+        basecraft_platform::atomic::rename_noreplace(&source, &destination)?;
+        std::fs::File::open(self.directory())?.sync_all()?;
+        Ok(destination)
+    }
 }

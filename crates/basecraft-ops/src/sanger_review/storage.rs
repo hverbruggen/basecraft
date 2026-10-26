@@ -137,30 +137,13 @@ pub struct SangerRun {
 }
 
 fn linked_input(run: &ArtifactRun, dependencies: &[PathBuf], payload: &[u8]) -> crate::Result<()> {
-    let mut upstream = Vec::new();
-    for dependency in dependencies {
-        let bytes = crate::provenance::read_record(&dependency.join("manifest.json"))?;
-        let publication: Publication = serde_json::from_slice(&bytes)?;
-        upstream.push(serde_json::json!({"bundle":inputs::relative(run.directory(), dependency)?, "id":publication.id,"hash":basecraft_io::hash_bytes(&bytes)}));
-    }
-    inputs::write_json(
-        &run.artifact("input.json")?,
-        &inputs::SubmittedInput {
-            schema_version: 1,
-            source: None,
-            submitted_hash: basecraft_io::hash_bytes(payload),
-            submitted_size: payload.len() as u64,
-            transformation: "identity-v1".into(),
-            state: "generated".into(),
-            extra: BTreeMap::from([("upstream".into(), serde_json::json!(upstream))]),
-        },
-    )?;
-    inputs::write_json(
-        &run.artifact("run.json")?,
-        &serde_json::json!({"schema_version":1,"id":run.id(),"result":"Sanger review/support","status":"prepared"}),
-    )?;
-    let _lock = inputs::lock()?;
-    inputs::register(run)
+    inputs::link_generated_input(
+        run,
+        dependencies,
+        payload,
+        "identity-v1",
+        "Sanger review/support",
+    )
 }
 
 fn retained(run: &ArtifactRun, path: &Path, index: usize) -> crate::Result<ArtifactRevision> {

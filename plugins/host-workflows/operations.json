@@ -1,0 +1,343 @@
+{
+  "schema": 1,
+  "operations": [
+    {
+      "name": "gmyc_alignment_single",
+      "version": "1.0.0",
+      "implementation": "gmyc_alignment_single",
+      "title": "Alignment to GMYC SINGLE",
+      "description": "Explicit application workflow: exact haplotype preparation, existing tree preparation where needed, and gmyc_single. Raw tree-fit operations remain separate.",
+      "family": "file_analysis",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "rooted": {
+            "type": "boolean",
+            "default": false
+          },
+          "tree_index": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          },
+          "seed": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "workers": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 256
+          },
+          "mapping_hash": {
+            "type": "string"
+          },
+          "original_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "retained_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "reference_version": {
+            "type": "string"
+          },
+          "reference_age_clamp": {
+            "type": "boolean",
+            "default": false
+          },
+          "units": {
+            "type": "string"
+          },
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 0,
+            "uniqueItems": true
+          },
+          "unique_haplotypes": {
+            "type": "boolean",
+            "default": true
+          },
+          "model": {
+            "enum": [
+              "p",
+              "jc69",
+              "k2p"
+            ],
+            "default": "k2p"
+          },
+          "min_overlap": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          }
+        }
+      },
+      "result": {
+        "type": "null"
+      },
+      "inputs": {
+        "alignment": {
+          "view": "aligned_fasta",
+          "media_type": "text/x-fasta",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "outputs": {
+        "artifacts": {
+          "media_type": "application/vnd.basecraft.artifact-collection",
+          "min": 1,
+          "max": 1024,
+          "visibility": "result",
+          "collection": true
+        }
+      },
+      "effects": {
+        "document_write": false,
+        "artifact_write": true
+      },
+      "cpu_parameters": [
+        "workers"
+      ],
+      "host_workflow": "gmyc_alignment_single",
+      "required_features": [
+        "operation-contract-v1",
+        "host-workflow-v1"
+      ]
+    },
+    {
+      "name": "gmyc_alignment_multiple",
+      "version": "1.0.0",
+      "implementation": "gmyc_alignment_multiple",
+      "title": "Alignment to GMYC MULTIPLE",
+      "description": "Explicit application workflow: exact haplotype preparation, existing tree preparation where needed, and gmyc_multiple. Raw tree-fit operations remain separate.",
+      "family": "file_analysis",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "rooted": {
+            "type": "boolean",
+            "default": false
+          },
+          "tree_index": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          },
+          "seed": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "workers": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 256
+          },
+          "mapping_hash": {
+            "type": "string"
+          },
+          "original_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "retained_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "candidate_budget": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reference_version": {
+            "type": "string"
+          },
+          "reference_age_clamp": {
+            "type": "boolean",
+            "default": false
+          },
+          "units": {
+            "type": "string"
+          },
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 0,
+            "uniqueItems": true
+          },
+          "unique_haplotypes": {
+            "type": "boolean",
+            "default": true
+          },
+          "model": {
+            "enum": [
+              "p",
+              "jc69",
+              "k2p"
+            ],
+            "default": "k2p"
+          },
+          "min_overlap": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          }
+        }
+      },
+      "result": {
+        "type": "null"
+      },
+      "inputs": {
+        "alignment": {
+          "view": "aligned_fasta",
+          "media_type": "text/x-fasta",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "outputs": {
+        "artifacts": {
+          "media_type": "application/vnd.basecraft.artifact-collection",
+          "min": 1,
+          "max": 1024,
+          "visibility": "result",
+          "collection": true
+        }
+      },
+      "effects": {
+        "document_write": false,
+        "artifact_write": true
+      },
+      "cpu_parameters": [
+        "workers"
+      ],
+      "host_workflow": "gmyc_alignment_multiple",
+      "required_features": [
+        "operation-contract-v1",
+        "host-workflow-v1"
+      ]
+    },
+    {
+      "name": "asap_alignment",
+      "version": "1.0.0",
+      "implementation": "asap_alignment",
+      "title": "Alignment to ASAP",
+      "description": "Explicit application workflow: exact haplotype preparation, existing tree preparation where needed, and asap. Raw tree-fit operations remain separate.",
+      "family": "file_analysis",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "rooted": {
+            "type": "boolean",
+            "default": false
+          },
+          "tree_index": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          },
+          "seed": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "workers": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 256
+          },
+          "mapping_hash": {
+            "type": "string"
+          },
+          "replicates": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 10000000,
+            "default": 100000
+          },
+          "partitions": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "default": 10
+          },
+          "stream": {
+            "enum": [
+              "parallel",
+              "reference"
+            ],
+            "default": "parallel"
+          },
+          "model": {
+            "enum": [
+              "p",
+              "jc69",
+              "k2p"
+            ],
+            "default": "k2p"
+          },
+          "min_overlap": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "original_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "retained_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "unique_haplotypes": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      },
+      "result": {
+        "type": "null"
+      },
+      "inputs": {
+        "alignment": {
+          "view": "aligned_fasta",
+          "media_type": "text/x-fasta",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "outputs": {
+        "artifacts": {
+          "media_type": "application/vnd.basecraft.artifact-collection",
+          "min": 1,
+          "max": 1024,
+          "visibility": "result",
+          "collection": true
+        }
+      },
+      "effects": {
+        "document_write": false,
+        "artifact_write": true
+      },
+      "cpu_parameters": [
+        "workers"
+      ],
+      "host_workflow": "asap_alignment",
+      "required_features": [
+        "operation-contract-v1",
+        "host-workflow-v1"
+      ]
+    }
+  ]
+}

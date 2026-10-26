@@ -37,33 +37,62 @@ pub fn parameters(
     mut params: Map<String, Value>,
     budget: usize,
 ) -> Map<String, Value> {
-    let keys: &[&str] = match plugin {
-        "basecraft.mafft" | "basecraft.iqtree" => &["threads"],
-        "basecraft.distance" => &["threads", "tree_threads"],
-        "basecraft.delimitation" => &["workers"],
-        _ => &[],
-    };
-    for &key in keys {
+    let descriptor = crate::registry::RegistryConfig::discover()
+        .ok()
+        .and_then(|config| crate::registry::Registry::load(&config).ok())
+        .and_then(|registry| {
+            registry
+                .packages
+                .get(plugin)
+                .and_then(|package| package.descriptors.first())
+                .cloned()
+        });
+    if let Some(descriptor) = descriptor {
+        params = parameters_for(&descriptor, params, budget);
+    }
+    params
+}
+
+/// Resolve resource parameters from the public contract, including old facade
+/// calls. Zero is automatic only where the declared schema permits it.
+pub fn parameters_for(
+    descriptor: &basecraft_protocol::operation::OperationDescriptor,
+    mut params: Map<String, Value>,
+    budget: usize,
+) -> Map<String, Value> {
+    for key in descriptor
+        .cpu_parameter
+        .iter()
+        .chain(&descriptor.cpu_parameters)
+    {
+        let field = &descriptor.parameters["properties"][key];
+        let cap = field["maximum"]
+            .as_u64()
+            .and_then(|n| usize::try_from(n).ok())
+            .unwrap_or(budget)
+            .min(budget)
+            .max(1);
         let effective = match params.get(key) {
-            None => Some(budget.max(1)),
+            None => Some(cap),
             Some(value) => value.as_u64().and_then(|n| {
-                if n == 0 && plugin != "basecraft.distance" {
+                if n == 0 && field["minimum"].as_u64().is_some_and(|min| min > 0) {
                     None
                 } else {
                     Some(if n == 0 {
-                        budget.max(1)
+                        cap
                     } else {
-                        usize::try_from(n).unwrap_or(usize::MAX).min(budget.max(1))
+                        usize::try_from(n).unwrap_or(usize::MAX).min(cap)
                     })
                 }
             }),
         };
         if let Some(effective) = effective {
-            params.insert(key.into(), json!(effective));
+            params.insert(key.clone(), json!(effective));
         }
     }
     params
 }
+
 /// One application process shares its configured CPU budget across concurrent
 /// file jobs. Independent GUI/CLI processes retain independent budgets.
 static JOB_BUDGET: (std::sync::Mutex<usize>, std::sync::Condvar) =

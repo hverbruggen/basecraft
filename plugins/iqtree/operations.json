@@ -1,0 +1,118 @@
+{
+  "schema": 1,
+  "operations": [
+    {
+      "name": "tree",
+      "version": "1.0.0",
+      "implementation": "tree",
+      "title": "Infer a tree with IQ-TREE",
+      "description": "Infer a tree with IQ-TREE. Uses the existing public plugin implementation and declared immutable inputs.",
+      "family": "file_analysis",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "type": "string",
+            "default": "MFP"
+          },
+          "invariant": {
+            "type": "boolean",
+            "default": false
+          },
+          "gamma": {
+            "type": "boolean",
+            "default": false
+          },
+          "support": {
+            "enum": [
+              "none",
+              "ufboot",
+              "bootstrap"
+            ],
+            "default": "none"
+          },
+          "replicates": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "threads": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "seed": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "keep_identical": {
+            "type": "boolean",
+            "default": false
+          },
+          "tree_role": {
+            "type": "string",
+            "default": "phylogenetic inference"
+          }
+        },
+        "if": {
+          "properties": {
+            "support": {
+              "const": "ufboot"
+            }
+          },
+          "required": [
+            "support"
+          ]
+        },
+        "then": {
+          "properties": {
+            "replicates": {
+              "minimum": 1000
+            }
+          }
+        }
+      },
+      "result": {
+        "type": "null"
+      },
+      "inputs": {
+        "alignment": {
+          "view": "aligned_fasta",
+          "media_type": "text/x-fasta",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "outputs": {
+        "artifacts": {
+          "media_type": "application/vnd.basecraft.artifact-collection",
+          "min": 1,
+          "max": 1024,
+          "visibility": "result",
+          "collection": true
+        }
+      },
+      "effects": {
+        "document_write": false,
+        "artifact_write": true
+      },
+      "cpu_parameters": [
+        "threads"
+      ],
+      "legacy_adapter": {
+        "primary_input": "alignment",
+        "inputs": {
+          "alignment": "input"
+        },
+        "input_arrays": [],
+        "outputs": {
+          "output": {
+            "role": "artifacts",
+            "path": "tree.nwk"
+          }
+        },
+        "allocation": "artifacts"
+      }
+    }
+  ]
+}

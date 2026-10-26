@@ -1,6 +1,7 @@
 //! The `basecraft` command-line tool.
 
 mod mcp;
+mod operations;
 mod tools;
 
 use std::path::PathBuf;
@@ -18,6 +19,16 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Manage trusted local plugin packages.
+    Plugins {
+        #[command(subcommand)]
+        action: operations::PluginsCommand,
+    },
+    /// Inspect versioned installed operations without executing plugins.
+    Operations {
+        #[command(subcommand)]
+        action: operations::OperationsCommand,
+    },
     /// Readable history for the file's exact current contents. Does not write records.
     History {
         file: PathBuf,
@@ -166,6 +177,8 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
+        Command::Plugins { action } => operations::plugins(action)?,
+        Command::Operations { action } => operations::operations(action)?,
         Command::History { file, json } => {
             let file = file.canonicalize()?;
             let mut session =
@@ -276,6 +289,9 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             matrix,
             groups,
         } => {
+            if progress.is_some() || cancel_file.is_some() || cache.is_some() {
+                return Err("Control/cache paths are host-managed; use operations run and owned job cancellation".into());
+            }
             let root = file
                 .parent()
                 .filter(|p| !p.as_os_str().is_empty())
@@ -285,10 +301,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             if !session.is_alignment(doc) {
                 return Err("distance inference requires an alignment".into());
             }
-            let plugin_root = std::env::var_os("BASECRAFT_PLUGINS").map_or_else(
-                || PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins"),
-                PathBuf::from,
-            );
+            let plugin_root = basecraft_plugin_host::installation::plugins();
             let operation = if groups.is_some() {
                 "groups"
             } else if matrix {
@@ -406,6 +419,18 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             std::fs::create_dir_all(&dir)?;
             let schemas = [
                 (
+                    "operation-contract",
+                    schemars::schema_for!(basecraft_protocol::operation::OperationContract),
+                ),
+                (
+                    "operation-request",
+                    schemars::schema_for!(basecraft_protocol::operation::OperationRequest),
+                ),
+                (
+                    "operation-outcome",
+                    schemars::schema_for!(basecraft_protocol::operation::OperationOutcome),
+                ),
+                (
                     "plugin-invoke-result",
                     schemars::schema_for!(basecraft_protocol::plugin::InvokeResult),
                 ),
@@ -491,7 +516,9 @@ fn run_plugin(
     let mut session = basecraft_ops::Session::recoverable(root)?;
     let doc = session.open(file)?;
     let t_snap = Instant::now();
-    let snap = basecraft_plugin_host::Snapshot::of(session.doc_key(doc), session.doc(doc))?;
+    let generation = session.generation(doc);
+    let snap =
+        basecraft_plugin_host::Snapshot::of(session.doc_key(doc), session.checked_sequence(doc)?)?;
     let snap_ms = t_snap.elapsed().as_secs_f64() * 1e3;
     let t_call = Instant::now();
     let result = plugin.invoke(operation, serde_json::Value::Object(map), Some(&snap))?;
@@ -509,14 +536,9 @@ fn run_plugin(
         id: plugin.info.id.clone(),
         version: plugin.info.version.clone(),
     };
-    let report = basecraft_plugin_host::apply::apply_proposals(
-        &mut session,
-        doc,
-        snap.version,
-        result.ops,
-        &actor,
-    )?;
-    println!("applied {}, dropped {}", report.applied, report.dropped);
+    let count = result.ops.len();
+    session.apply_sequence_proposals(doc, generation, snap.version, &result.ops, actor)?;
+    println!("applied {count} proposals");
     if save {
         session.save(doc, None)?;
         println!("saved {}", file.display());

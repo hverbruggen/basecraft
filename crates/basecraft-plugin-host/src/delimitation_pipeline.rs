@@ -70,11 +70,13 @@ impl AlignmentJob {
             if retained < 2 {
                 return Err(Error::Protocol("GMYC unavailable: fewer than two retained haplotypes; no tree or fit was invented".into()));
             }
-            let plugin = prepare
-                .plugin
-                .parent()
-                .ok_or_else(|| Error::Protocol("plugin directory has no parent".into()))?
-                .join("distance");
+            let registry = prepare.stage_registry()?;
+            let plugin = registry
+                .resolve("basecraft.distance/tree@1", None)?
+                .package
+                .manifest
+                .dir
+                .clone();
             let mut tree = following_alignment(
                 prepare,
                 self.unique_haplotypes,
