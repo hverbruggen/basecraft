@@ -123,6 +123,15 @@ def main():
     fixture = Path(__file__).resolve().parents[3] / "testdata/fixtures/registry-plugin"
     package = root / "external-package"
     shutil.copytree(fixture, package)
+    # The isolated profile deliberately has no bundled tools. Supply enough
+    # declared aliases to exercise multiple MCP pages independently of bundles.
+    contract_path = package / "operations.json"
+    contract = json.loads(contract_path.read_text())
+    for index in range(20):
+        alias = copy.deepcopy(contract["operations"][0])
+        alias["name"] = f"page_fixture_{index}"
+        contract["operations"].append(alias)
+    contract_path.write_text(json.dumps(contract))
     project = root / "project"
     project.mkdir()
     (project / "a.txt").write_bytes(b"abc\n")
