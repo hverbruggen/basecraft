@@ -126,10 +126,22 @@ impl BoundedSchema {
             return Err(invalid("validation work budget exceeded"));
         }
         self.validator.validate(value).map_err(|e| {
-            // Do not copy arbitrary instance values into errors.
+            // Include the declared field's readable name without copying its
+            // arbitrary instance value (which may contain private content).
+            let pointer = e.instance_path.to_string();
+            let field = pointer
+                .split('/')
+                .nth(1)
+                .unwrap_or("value")
+                .replace("~1", "/")
+                .replace("~0", "~");
+            let mut letters = field.chars();
+            let label = letters.next().map_or_else(
+                || "Value".into(),
+                |first| first.to_uppercase().chain(letters).collect::<String>(),
+            );
             invalid(format!(
-                "value does not satisfy schema at {}",
-                e.instance_path
+                "{label}: value does not satisfy schema at {pointer}"
             ))
         })
     }

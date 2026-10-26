@@ -23,6 +23,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 pub struct PluginProcess {
     pub info: PluginInfo,
     manifest: Manifest,
+    contract: Option<basecraft_protocol::operation::OperationContract>,
     /// Time from spawning to the `initialize` reply.
     pub startup: Duration,
     child: OwnedProcess,
@@ -113,6 +114,7 @@ impl PluginProcess {
             .transpose()?;
         let started = Instant::now();
         let script = manifest.python_entry()?.canonicalize()?;
+        let contract = manifest.operation_contract()?;
         let dir = tempfile::Builder::new()
             .prefix("basecraft-plugin")
             .tempdir()?;
@@ -169,6 +171,7 @@ impl PluginProcess {
         stream.set_write_timeout(Some(Duration::from_millis(500)))?;
         let mut p = Self {
             manifest: manifest.clone(),
+            contract,
             info: PluginInfo {
                 protocol: 0,
                 id: manifest.id.clone(),
@@ -332,7 +335,7 @@ impl PluginProcess {
             .get("cancel_file")
             .and_then(Value::as_str)
             .map(PathBuf::from);
-        if let Some(contract) = self.manifest.operation_contract()? {
+        if let Some(contract) = &self.contract {
             let matching: Vec<_> = contract
                 .operations
                 .iter()
@@ -395,8 +398,9 @@ impl PluginProcess {
                     input_evidence: std::collections::BTreeMap::new(),
                     legacy_parameters: controls,
                 };
+                let implementation = descriptor.implementation.clone();
                 return self.invoke_context(
-                    &descriptor.implementation,
+                    &implementation,
                     Value::Object(scientific),
                     context,
                     snapshot,
@@ -404,11 +408,9 @@ impl PluginProcess {
             }
         }
         let params = match params {
-            Value::Object(params) => Value::Object(crate::compute::parameters(
-                &self.info.id,
-                params,
-                self.cpu_budget,
-            )),
+            Value::Object(params) if self.contract.is_none() => Value::Object(
+                crate::compute::parameters(&self.info.id, params, self.cpu_budget),
+            ),
             value => value,
         };
         let req = Invoke {

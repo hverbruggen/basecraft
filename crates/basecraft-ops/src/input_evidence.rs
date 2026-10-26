@@ -748,9 +748,44 @@ fn owning_ledger(bundle: &Path) -> Result<(PathBuf, SubmittedInput)> {
 
 /// Resolve evidence only on explicit verification/export/relink. No UI-event hashing.
 pub fn verified_source(bundle: &Path, reference: &InputReference) -> Result<PathBuf> {
-    let (location, input) = owning_ledger(bundle)?;
+    let (mut location, mut input) = owning_ledger(bundle)?;
     if input.state == "broken" {
         return Err(invalid("evidence chain explicitly broken"));
+    }
+    let primary_matches = input.source.as_ref().is_some_and(|source| {
+        source.hash == reference.hash && source.stamp.size == reference.stamp.size
+    });
+    // Multi-input publications retain one ordinary ledger per original. Follow
+    // only declared, bounded, hash-checked ancestry, with no filesystem scan.
+    let mut matching = None;
+    for (directory, publication) in ancestors(bundle)? {
+        let declared = publication.inputs.iter().any(|artifact| {
+            artifact.hash == reference.hash
+                && artifact.size == reference.stamp.size
+                && artifact.reference.as_ref().is_some_and(|source| {
+                    source.hash == reference.hash && source.stamp.size == reference.stamp.size
+                })
+        });
+        if !declared {
+            continue;
+        }
+        let (owner, candidate) = owning_ledger(&directory)?;
+        if candidate.source.as_ref().is_some_and(|source| {
+            source.hash == reference.hash && source.stamp.size == reference.stamp.size
+        }) {
+            // Check every declared matching owner before selecting one: an
+            // intact same-hash sibling must not hide an explicit evidence break.
+            if candidate.state == "broken" {
+                return Err(invalid("evidence chain explicitly broken"));
+            }
+            if matching.is_none() {
+                matching = Some((owner, candidate));
+            }
+        }
+    }
+    if !primary_matches && let Some((owner, candidate)) = matching {
+        location = owner;
+        input = candidate;
     }
     let effective = input
         .source
