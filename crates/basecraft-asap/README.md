@@ -22,6 +22,16 @@ On 10000 sequences the parallel stream took 2.4 s on 16 threads, against 20 s
 for the reference stream. Earlier datasets gave 6.5 to 11 times the
 single-thread speed.
 
+Historical reference comparisons and measurements were run on build-host on
+2026-10-17. Across 12 dataset/model combinations, native reference-stream
+candidate outputs matched the reference exactly on both reference and
+Basecraft-supplied distance matrices. The 50-seed comparison below covers two
+JC69 datasets only. These results cover the tested inputs and do not establish
+biological validity or distributional equivalence of the parallel stream.
+Current application modes are native `parallel` and native `reference` (the
+latter reproduces reference output on Linux/glibc); no upstream ASAP execution
+adapter is part of the current plugin.
+
 ## Parallel against reference
 
 Seeds 1 to 50 per stream on two JC69 matrices, build-host, 2026-10-18.
@@ -54,6 +64,9 @@ seeds and correlated nodes I can't tell whether it is real.
 
 `tests/reference.rs` checks the Mantidactylus tables in
 `testdata/fixtures/asap/` exactly, on both distance sources (Linux/glibc only).
-`examples/asap_bench.rs` is the benchmark driver. The full comparison, data
-sources and scripts are in the private workspace notes,
-`methods_research/asap_native/README.md`.
+The exact comparisons used seed 1; the earlier 20-seed comparison and the
+50-seed spread comparison cover Astraptes and Halimeda only. The 50-seed results
+show similar observed p-value spread on those two datasets, with a small
+unresolved +0.001 mean shift on Astraptes. These samples do not establish
+distributional equivalence or rule out bias on other datasets.
+`examples/asap_bench.rs` is the benchmark driver.
