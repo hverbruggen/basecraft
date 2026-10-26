@@ -289,9 +289,15 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             matrix,
             groups,
         } => {
-            if progress.is_some() || cancel_file.is_some() || cache.is_some() {
-                return Err("Control/cache paths are host-managed; use operations run and owned job cancellation".into());
+            if progress.is_some() || cancel_file.is_some() {
+                return Err(
+                    "Control paths are host-managed; use operations run and owned job cancellation"
+                        .into(),
+                );
             }
+            // The explicit CLI cache option remains a compatibility route.
+            // FileJob validates aliases, freezes reused bytes and retains the
+            // managed cache evidence before publishing any secondary copy.
             let root = file
                 .parent()
                 .filter(|p| !p.as_os_str().is_empty())
