@@ -34,7 +34,9 @@ rustix = { version = "1.1", features = ["fs", "net"] }
 schemars = "1.2"
 ulid = "3.0"
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+# Journals hash canonical JSON before writing; parsing must preserve every
+# serialized binary64 value exactly when checking that checksum on replay.
+serde_json = { version = "1.0", features = ["float_roundtrip"] }
 tempfile = "3.27"
 clap = { version = "4.6", features = ["derive"] }
 thiserror = "2.0"
