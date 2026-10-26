@@ -416,6 +416,7 @@ impl PreparedOperation {
             &json!({
                 "schema":1,"operation":self.operation.id,"package_version":self.operation.package.manifest.version,
                 "package_digest":self.operation.package.digest,"descriptor_digest":self.operation.descriptor_digest,
+                "runtime":self.operation.package.manifest.managed_runtime,"interpreter":self.operation.package.interpreter,
                 "initiator":self.initiator,"executor":self.operation.package.manifest.id,
                 "process_instance":basecraft_platform::process_instance(),"context":context,
                 "requested_parameters":self.request.parameters,"effective_parameters":effective,"stdout":stdout,"stderr":stderr,

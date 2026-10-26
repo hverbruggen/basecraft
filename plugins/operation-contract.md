@@ -56,9 +56,9 @@ Discovery uses the bundled root (`BASECRAFT_PLUGINS` override), the managed
 user-data plugin directory and explicitly registered editable directories. It
 never imports entry scripts or searches project directories. `BASECRAFT_PROFILE_DIR`
 selects an isolated profile. Discovery does not create missing profile directories.
-Interpreters, SDK and external engines remain runtime prerequisites; discovery
-reports runtime as `unverified`, never as a successful engine check. Environment
-metadata does not install dependencies. Current subprocess support is Unix-only.
+Discovery reports runtime as `unverified`, never as a successful engine execution check.
+Explicit installation provisions optional declared runtimes as described below;
+legacy packages retain their existing interpreter/tool requirements. Current subprocess support is Unix-only.
 
 Managed copies are selected by an atomically replaced index, with OS locking.
 Each digest/version directory remains available to jobs holding old registry
@@ -325,10 +325,11 @@ File operations return no edit proposals. Snapshot plugins receive the existing
 sealed Arrow pair via descriptors as well as retained host evidence.
 
 CPU settings declared by `cpu_parameter` or `cpu_parameters` are bound against
-the host allocation and validated again. Third-party code uses its configured
-interpreter (`BASECRAFT_PYTHON`, otherwise PATH python3). Bundles resolve their
+the host allocation and validated again. Third-party code uses its declared managed runtime when present, otherwise its legacy
+configured interpreter (`BASECRAFT_PYTHON`, otherwise PATH python3). Bundles resolve their
 matching plugins, SDK and Python environment beside the executable; environment
-metadata installs nothing. Package digests do not fingerprint external engines.
+metadata alone installs nothing. Managed runtime lock identity is recorded separately
+from package digests; legacy package digests do not fingerprint external engines.
 
 All inputs use ordinary shared input ledgers and ancestry. Publication uses the
 existing hidden analysis store, output hashes and reference-first export rules.
@@ -363,3 +364,67 @@ root. It records the unchanged binary checksum, tests install/discovery, all
 three interfaces, policy/cancellation and a second operation added by package
 update without rebuilding. It never invokes Cargo. Scientific, replay, storage,
 QML, packaging and hostile-process regressions remain separate required checks.
+
+## Automatically installed dependencies
+
+An optional runtime table opts a package (schema 1 or 2) into managed provisioning:
+
+```toml
+[runtime]
+channels = ["conda-forge", "bioconda"]
+executables = ["mafft"]
+
+[runtime.dependencies]
+python = ">=3.11,<3.14"
+mafft = "7.*"
+
+[runtime.pypi-dependencies]
+packaging = ">=24"
+```
+
+Explicit install/update uses the Pixi executable supplied with Basecraft to solve
+and install Conda/native packages and PyPI dependencies automatically. No separate
+Conda, global pip, administrator access or manual dependency installation is needed.
+`BASECRAFT_PIXI` explicitly overrides the provisioner for developers; otherwise
+Basecraft selects adjacent `bin/pixi` before PATH. Missing, non-executable or broken
+Pixi, solve/download/install failures and dependency verification failures are
+reported by the shared installer. A failed attempt never activates the new package
+or changes the previous working runtime. Reinstalling repairs a missing runtime.
+The install warning and default-enabled policy are unchanged; an explicit disable
+choice survives updates and reinstalls.
+
+Channels are bounded named channels; dependency values are version strings in
+Pixi's Conda or PyPI format. No package-provided tasks, shell hooks, local/path/git
+requirements or activation scripts are accepted. Unknown runtime fields are errors.
+Basecraft always includes Python (default `>=3.11,<3.14`), pyarrow and numpy for its
+SDK; constrain these under `runtime.dependencies`, not PyPI. Installation checks
+SDK imports, the supported Python version, declared PyPI distributions and every
+`runtime.executables` command. List all required native commands there; commands
+must exist in the managed environment, rather than accidentally resolving from the
+user's PATH. No imports or undeclared tools are inferred. Packages with no runtime
+table keep their legacy developer runtime behavior (`BASECRAFT_PYTHON`, otherwise
+PATH python3; bundled packages select their matching bundled environment).
+
+Each attempt uses a new prefix in `data/plugin-runtimes/` beside the managed
+`data/plugins/` directory, outside immutable package digest trees and outside
+source checkouts. User Pixi detached-environment settings are disabled for these
+prefixes. A successful prefix retains its generated manifest, `pixi.lock` and
+`runtime.json` receipt. The atomic installation index selects both code and runtime;
+registry generations and execution evidence include the interpreter, prefix,
+manifest digest and resolved lock digest. Accepted jobs retain their previous
+selection through updates, disablement and removal. Old environments are retained;
+there is no automatic garbage collection. Discovery/list/refresh only read metadata
+and verify retained locks; they never solve, install, download or execute Python.
+A missing or changed runtime produces a diagnostic and cannot be invoked.
+
+Managed declarations take priority over `BASECRAFT_PYTHON` and ambient Python.
+Editable registration does not provision dependencies: install declared packages
+to run them; a declared editable runtime without an installed selection is diagnosed.
+All process routes prepend the selected interpreter's bin directory to PATH,
+including bundled Python. Package `bin/` follows it, before ambient tools. Authors
+may ship executable native artifacts there for dependencies unavailable in channels
+(subject to licensing and platform compatibility). These are regular package files,
+covered by the package fingerprint and executable permissions; they are not downloaded
+or built by shell hooks. `runtime.executables` verifies environment-installed tools,
+not package-bin artifacts. Do not declare an unavailable channel package and expect
+a packaged artifact to override a failed solve. Current process transport is Unix-only.
