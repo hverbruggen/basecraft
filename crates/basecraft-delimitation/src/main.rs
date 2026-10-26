@@ -490,7 +490,7 @@ fn run(
                     )?;
                     let tips: usize = groups.values().map(std::collections::BTreeSet::len).sum();
                     time.diagnostics.push(format!(
-                        "{tips} sequences in {} groups are at zero distance from the others in their group (they differ only at gaps or ambiguous sites); each group was fitted as one tip and its members restored",
+                        "{tips} tips in {} zero-age tree clades; each clade was fitted as one tip and its members restored; no exact sequence identity is inferred",
                         groups.len()
                     ));
                     result.metrics.insert(
