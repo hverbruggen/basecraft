@@ -107,6 +107,7 @@ fn main() {
         "qml/ToolSettingsDialog.qml",
         "qml/TextPromptDialog.qml",
         "qml/AppIcon.qml",
+        "qml/EmptyWorkspaceBrand.qml",
         "qml/AppIconButton.qml",
         "qml/AppControlBackground.qml",
         "qml/AppButton.qml",

@@ -1693,6 +1693,7 @@ ApplicationWindow {
 
             StackLayout {
                 id: stack
+                visible: openFiles.count > 0
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 currentIndex: tabs.currentIndex
@@ -1775,8 +1776,16 @@ ApplicationWindow {
                 }
             }
 
+            EmptyWorkspaceBrand {
+                objectName: "emptyWorkspaceBrand"
+                visible: openFiles.count === 0 && shell.project_dir.length === 0
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                backgroundColor: shell.background
+            }
+
             Label {
-                visible: openFiles.count === 0
+                visible: openFiles.count === 0 && shell.project_dir.length > 0
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 horizontalAlignment: Text.AlignHCenter

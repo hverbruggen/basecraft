@@ -53,5 +53,7 @@
     <file>icons/waveform.svg</file>
     <file>icons/zoom-in.svg</file>
     <file>icons/zoom-out.svg</file>
+    <file>branding/wordmark-dark.png</file>
+    <file>branding/wordmark-light.png</file>
   </qresource>
 </RCC>
