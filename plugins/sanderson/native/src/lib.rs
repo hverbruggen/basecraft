@@ -18,6 +18,7 @@ pub struct StartDiagnostic {
     start: usize,
     objective: Option<f64>,
     gradient_norm: Option<f64>,
+    gradient_tolerance: Option<f64>,
     iterations: Option<u64>,
     termination: String,
 }
@@ -51,7 +52,6 @@ pub struct Output {
 struct Fit {
     parameters: Vec<f64>,
     objective: f64,
-    gradient_norm: f64,
     starts: Vec<StartDiagnostic>,
 }
 
@@ -69,10 +69,13 @@ fn fit(
         }
         let problem = Problem::new(model, lambda, holdout)?;
         let initial = problem.initial(start as u64)?;
+        let initial_scale = problem.scale_optimizer_at(&initial)?;
+        let gradient_tolerance =
+            (1e-4 * (problem.dimension as f64).sqrt()).max(1e-7 * initial_scale);
         let solver = LBFGS::new(MoreThuenteLineSearch::new(), 10)
-            .with_tolerance_grad(1e-7)
+            .with_tolerance_grad(gradient_tolerance / initial_scale)
             .map_err(|error| error.to_string())?
-            .with_tolerance_cost(1e-11)
+            .with_tolerance_cost(0.0)
             .map_err(|error| error.to_string())?;
         let remaining = deadline.saturating_duration_since(Instant::now());
         let result = Executor::new(problem, solver)
@@ -89,6 +92,7 @@ fn fit(
                 start: start + 1,
                 objective: None,
                 gradient_norm: None,
+                gradient_tolerance: None,
                 iterations: None,
                 termination: error.to_string(),
             }),
@@ -101,28 +105,28 @@ fn fit(
                         start: start + 1,
                         objective: None,
                         gradient_norm: None,
+                        gradient_tolerance: None,
                         iterations: Some(iter),
                         termination: "no best parameters".into(),
                     });
                     continue;
                 };
-                let problem = result
-                    .problem
-                    .problem
-                    .as_ref()
-                    .ok_or("optimizer lost its problem state")?;
-                let (objective, gradient) = problem.value_and_gradient(parameters)?;
+                // A line search can return with its problem temporarily taken.
+                // Recheck independently from the immutable model and parameters.
+                let check = Problem::new(model, lambda, holdout)?;
+                let (objective, gradient) = check.value_and_gradient(parameters)?;
                 let gradient_norm = gradient
                     .iter()
                     .map(|value| value * value)
                     .sum::<f64>()
                     .sqrt();
                 let converged = matches!(reason, Some(TerminationReason::SolverConverged))
-                    && gradient_norm <= 1e-4 * (parameters.len() as f64).sqrt();
+                    && gradient_norm <= gradient_tolerance;
                 all_starts.push(StartDiagnostic {
                     start: start + 1,
                     objective: Some(objective),
                     gradient_norm: Some(gradient_norm),
+                    gradient_tolerance: Some(gradient_tolerance),
                     iterations: Some(iter),
                     termination: format!(
                         "{}{}",
@@ -138,7 +142,6 @@ fn fit(
                     best = Some(Fit {
                         parameters: parameters.clone(),
                         objective,
-                        gradient_norm,
                         starts: Vec::new(),
                     });
                 }
@@ -315,29 +318,60 @@ mod tests {
     }
 
     #[test]
-    fn analytic_gradient_matches_central_difference_for_both_penalties() {
+    fn analytic_gradient_matches_central_difference_for_penalties_bounds_and_cv() {
         for penalty in ["add", "log"] {
-            let model = model::Model::new(sample(penalty)).unwrap();
-            let problem = Problem::new(&model, 0.01, None).unwrap();
-            let mut x = problem.initial(2).unwrap();
-            let (_, gradient) = problem.value_and_gradient(&x).unwrap();
-            for i in 0..x.len() {
-                let old = x[i];
-                let h = 1e-6;
-                x[i] = old + h;
-                let positive = problem.value(&x).unwrap();
-                x[i] = old - h;
-                let negative = problem.value(&x).unwrap();
-                x[i] = old;
-                let numerical = (positive - negative) / (2.0 * h);
-                let tolerance = 1e-5 * numerical.abs().max(1.0);
-                assert!(
-                    (gradient[i] - numerical).abs() < tolerance,
-                    "{penalty} parameter {i}: analytic={} numerical={numerical}",
-                    gradient[i]
-                );
+            let mut input = sample(penalty);
+            input.parameters.constraints.push(model::Constraint {
+                node: 1,
+                min_age: 0.3,
+                max_age: 0.7,
+            });
+            let model = model::Model::new(input).unwrap();
+            for holdout in [None, Some(2), Some(4)] {
+                let problem = Problem::new(&model, 0.01, holdout).unwrap();
+                let mut x = problem.initial(2).unwrap();
+                let (_, gradient) = problem.value_and_gradient(&x).unwrap();
+                for i in 0..x.len() {
+                    let old = x[i];
+                    let h = 1e-6;
+                    x[i] = old + h;
+                    let positive = problem.value(&x).unwrap();
+                    x[i] = old - h;
+                    let negative = problem.value(&x).unwrap();
+                    x[i] = old;
+                    let numerical = (positive - negative) / (2.0 * h);
+                    let tolerance = 1e-5 * numerical.abs().max(1.0);
+                    assert!(
+                        (gradient[i] - numerical).abs() < tolerance,
+                        "{penalty} holdout {holdout:?} parameter {i}: analytic={} numerical={numerical}",
+                        gradient[i]
+                    );
+                }
             }
         }
+    }
+
+    #[test]
+    fn active_lower_age_bound_has_feasible_one_sided_minimum() {
+        let mut input = sample("log");
+        for (i, length) in [(1, 0.05), (2, 0.05), (3, 0.05), (4, 0.1)] {
+            input.nodes[i].length = Some(length);
+        }
+        input.parameters.lambda = Some(1.0);
+        input.parameters.constraints.push(model::Constraint {
+            node: 1,
+            min_age: 0.6,
+            max_age: 0.8,
+        });
+        let model = model::Model::new(input.clone()).unwrap();
+        let fitted = solve(input).unwrap();
+        assert!((fitted.ages[1] - 0.6).abs() < 1e-6);
+        let mut perturbation = fitted.ages.clone();
+        perturbation[1] += 1e-5;
+        let one_sided =
+            reference::objective(&model, &perturbation, &fitted.rates_per_site, fitted.lambda)
+                .unwrap();
+        assert!(one_sided > fitted.objective);
     }
 
     #[test]
@@ -366,7 +400,20 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "run only on build-host after the coordinator lifts the compile hold"]
+    fn objective_evaluation_budget_is_enforced() {
+        let mut input = sample("log");
+        input.parameters.max_iterations = 1;
+        let model = model::Model::new(input).unwrap();
+        let problem = Problem::new(&model, 1.0, None).unwrap();
+        let x = problem.initial(0).unwrap();
+        for _ in 0..100 {
+            assert!(problem.value(&x).is_ok());
+        }
+        assert!(problem.value(&x).unwrap_err().contains("evaluation budget"));
+    }
+
+    #[test]
+    #[ignore = "build-host scaling benchmark; run separately from routine tests"]
     fn benchmark_objective_against_direct_reference() {
         let path = std::env::var("BASECRAFT_SANDERSON_BENCH_REQUEST").expect("fixture path");
         let request = std::fs::read_to_string(path).unwrap();
@@ -382,6 +429,8 @@ mod tests {
             let direct = reference::objective(&model, ages, rates, 1.0).unwrap();
             assert!((direct - cost).abs() <= 1e-8 * direct.abs().max(1.0));
         }
+        let direct_at_a = reference::objective_from_parameters(&model, &a, 1.0).unwrap();
+        assert!((direct_at_a - cost_a).abs() <= 1e-8 * cost_a.abs().max(1.0));
         let repetitions = if model.nodes.len() > 200 { 300 } else { 2000 };
         let start = Instant::now();
         for i in 0..repetitions {
@@ -398,10 +447,54 @@ mod tests {
             std::hint::black_box(reference::objective(&model, ages, rates, 1.0).unwrap());
         }
         let direct = start.elapsed();
+        let joint_repetitions = if model.nodes.len() > 200 {
+            2
+        } else if model.nodes.len() > 20 {
+            5
+        } else {
+            20
+        };
+        let start = Instant::now();
+        for i in 0..joint_repetitions {
+            std::hint::black_box(
+                problem
+                    .value_and_gradient(if i % 2 == 0 { &a } else { &b })
+                    .unwrap(),
+            );
+        }
+        let indexed_joint = start.elapsed();
+        let start = Instant::now();
+        for i in 0..joint_repetitions {
+            let parameter = if i % 2 == 0 { &a } else { &b };
+            let mut trial = parameter.clone();
+            let mut finite_gradient = vec![0.0; trial.len()];
+            let h = 1e-6;
+            for j in 0..trial.len() {
+                trial[j] += h;
+                let positive = reference::objective_from_parameters(&model, &trial, 1.0).unwrap();
+                trial[j] -= 2.0 * h;
+                let negative = reference::objective_from_parameters(&model, &trial, 1.0).unwrap();
+                trial[j] += h;
+                finite_gradient[j] = (positive - negative) / (2.0 * h);
+            }
+            if i == 0 {
+                let (_, analytic) = problem.value_and_gradient(parameter).unwrap();
+                for (j, (&expected, &measured)) in finite_gradient.iter().zip(&analytic).enumerate()
+                {
+                    assert!(
+                        (expected - measured).abs() <= 2e-4 * expected.abs().max(1.0),
+                        "independent finite difference differs at parameter {j}: expected={expected} analytic={measured}"
+                    );
+                }
+            }
+            std::hint::black_box(finite_gradient);
+        }
+        let direct_fd_joint = start.elapsed();
         println!(
-            "nodes={} evaluations={} indexed={optimized:?} direct={direct:?}",
+            "nodes={} cost_evaluations={} indexed_cost_and_gradient={optimized:?} direct_cost_only={direct:?} joint_evaluations={} indexed_joint={indexed_joint:?} direct_finite_difference_joint={direct_fd_joint:?}",
             model.nodes.len(),
-            repetitions
+            repetitions,
+            joint_repetitions,
         );
     }
 }

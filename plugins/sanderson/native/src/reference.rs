@@ -45,3 +45,39 @@ pub fn objective(
     roughness += ((a - mean).powi(2) + (b - mean).powi(2)) / 2.0;
     Ok(value + lambda * roughness)
 }
+
+#[cfg(test)]
+pub fn objective_from_parameters(model: &Model, x: &[f64], lambda: f64) -> Result<f64, String> {
+    let n = model.nodes.len();
+    let free = model.free_nodes.len();
+    if x.len() != free + n - 1 {
+        return Err("reference parameter length mismatch".into());
+    }
+    let mut age = vec![0.0; n];
+    age[0] = 1.0;
+    let mut cursor = 0;
+    for i in 1..n {
+        let node = &model.nodes[i];
+        if node.children.is_empty() {
+            continue;
+        }
+        if model.required_lower[i] == model.upper[i] {
+            age[i] = model.required_lower[i];
+        } else {
+            let parent = node.parent.ok_or("missing parent")?;
+            let upper = model.upper[i].min(age[parent] - crate::model::GAP);
+            let fraction = 1.0 / (1.0 + (-x[cursor]).exp());
+            age[i] = model.required_lower[i] + (upper - model.required_lower[i]) * fraction;
+            cursor += 1;
+        }
+    }
+    let ages: Vec<f64> = age
+        .into_iter()
+        .map(|value| value * model.root_age)
+        .collect();
+    let mut rates = vec![None; n];
+    for i in 1..n {
+        rates[i] = Some(x[free + i - 1].exp() / model.root_age / model.sites);
+    }
+    objective(model, &ages, &rates, lambda)
+}

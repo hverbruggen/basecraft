@@ -13,6 +13,7 @@ pub struct Problem<'a> {
     pub rate_var: Vec<Option<usize>>,
     pub dimension: usize,
     pub evaluations: Cell<u64>,
+    optimizer_scale: Cell<f64>,
     started: Instant,
     scratch: RefCell<Scratch>,
 }
@@ -28,6 +29,8 @@ struct Scratch {
     parent_derivative: Vec<f64>,
     local_derivative: Vec<f64>,
 }
+
+pub type DecodedFit = (Vec<f64>, Vec<Option<f64>>, f64, f64);
 
 fn sigmoid(value: f64) -> f64 {
     if value >= 0.0 {
@@ -69,6 +72,7 @@ impl<'a> Problem<'a> {
             rate_var,
             dimension,
             evaluations: Cell::new(0),
+            optimizer_scale: Cell::new(1.0),
             started: Instant::now(),
             scratch: RefCell::new(Scratch {
                 last: Vec::new(),
@@ -108,6 +112,19 @@ impl<'a> Problem<'a> {
             }
         }
         Ok(x)
+    }
+
+    pub fn scale_optimizer_at(&self, x: &[f64]) -> Result<f64, String> {
+        let (_, gradient) = self.value_and_gradient(x)?;
+        let largest = gradient.iter().fold(0.0_f64, |a, b| a.max(b.abs()));
+        if !largest.is_finite() {
+            return Err("nonfinite initial PL gradient".into());
+        }
+        // A positive constant rescales the solver's objective, not the PL
+        // minimizer. It keeps the first L-BFGS trial step well conditioned.
+        let scale = largest.max(1.0);
+        self.optimizer_scale.set(scale);
+        Ok(scale)
     }
 
     fn map_ages(&self, x: &[f64], s: &mut Scratch) -> Result<(), String> {
@@ -302,13 +319,13 @@ impl<'a> Problem<'a> {
         Ok(s.gradient.clone())
     }
 
-    pub fn unpack(&self, x: &[f64]) -> Result<(Vec<f64>, Vec<Option<f64>>, f64, f64), String> {
+    pub fn unpack(&self, x: &[f64]) -> Result<DecodedFit, String> {
         let (cost, gradient) = self.value_and_gradient(x)?;
         let s = self.scratch.borrow();
         let mut rates = vec![None; self.model.nodes.len()];
-        for i in 1..rates.len() {
+        for (i, rate) in rates.iter_mut().enumerate().skip(1) {
             if self.rate_var[i].is_some() {
-                rates[i] = Some(s.rate[i] / self.model.sites);
+                *rate = Some(s.rate[i] / self.model.sites);
             }
         }
         let ages = s.age.iter().map(|age| age * self.model.root_age).collect();
@@ -367,6 +384,7 @@ impl CostFunction for Problem<'_> {
     type Output = f64;
     fn cost(&self, param: &Self::Param) -> Result<Self::Output, Error> {
         self.value(param)
+            .map(|cost| cost / self.optimizer_scale.get())
             .map_err(|message| anyhow::anyhow!(message))
     }
 }
@@ -376,6 +394,12 @@ impl Gradient for Problem<'_> {
     type Gradient = Vec<f64>;
     fn gradient(&self, param: &Self::Param) -> Result<Self::Gradient, Error> {
         self.gradient_vector(param)
+            .map(|gradient| {
+                gradient
+                    .into_iter()
+                    .map(|value| value / self.optimizer_scale.get())
+                    .collect()
+            })
             .map_err(|message| anyhow::anyhow!(message))
     }
 }

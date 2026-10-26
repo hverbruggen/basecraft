@@ -1,11 +1,14 @@
-# SCI-0011 validation recipe (execute only after the coordinator lifts the hold)
+# SCI-0011 standalone validation recipe
 
-All compilation and Rust tests run on build-host under the shared compile lock,
-with at most 24 combined cores, a fresh disposable profile, and both
+The user lifted the hold for this standalone crate; broader Basecraft
+integration and package builds remain held. All compilation and Rust tests run
+on build-host under the shared compile lock, with at most 24 combined cores,
+an isolated build profile, and both
 `CARGO_TARGET_DIR` and `TMPDIR` outside the synced checkout. Coordinate the
 standalone `native/Cargo.toml` and its resolved lockfile with WF-0017 before
 connecting it to the root workspace or publication recipe. This file records
-commands to run later; none were run under the hold.
+commands for reproducing the standalone method checks. The SCI-0011 private
+worker report records the executed commands and receipts.
 
 1. Freeze the exact SCI-0011 commit and toolchain. Resolve/check the pinned
    `argmin=0.11.0`, `argmin-math=0.5.1`, `statrs=0.18.0` dependency tree and
@@ -13,9 +16,9 @@ commands to run later; none were run under the hold.
    shared lock and external target/temp storage:
 
    ```sh
-   cargo test --manifest-path plugins/sanderson/native/Cargo.toml
-   cargo clippy --manifest-path plugins/sanderson/native/Cargo.toml --all-targets -- -D warnings
-   cargo build --manifest-path plugins/sanderson/native/Cargo.toml --release
+   cargo test --locked --manifest-path plugins/sanderson/native/Cargo.toml
+   cargo clippy --locked --manifest-path plugins/sanderson/native/Cargo.toml --all-targets -- -D warnings
+   cargo build --locked --manifest-path plugins/sanderson/native/Cargo.toml --release
    ```
 
 2. Check analytic gradient against central differences for both additive and
@@ -35,16 +38,21 @@ commands to run later; none were run under the hold.
    CV by replacing `cross_validation: null` with an explicit log grid in a
    disposable copy of the request.
 
-4. Measure the native executable end to end and the optimized objective
-   against the direct reference evaluator for all three sizes. Build the
-   ignored benchmark test once, then run that compiled test binary directly
-   with `/usr/bin/time -v` and
-   `BASECRAFT_SANDERSON_BENCH_REQUEST=<fixture>/request.json` to exclude
-   compilation memory/time from the measurement. The ignored test prints
-   indexed and direct evaluation times and first verifies numerical agreement.
-   Repeat on the same machine/toolchain with warm caches, retain raw timings,
-   peak RSS, fixture hashes and convergence diagnostics. Do not claim a speedup
-   before these measurements.
+4. Measure the release executable end to end with
+   `python3 tools/measure.py <binary> <fixture>/request.json <output.json>`.
+   The helper uses Linux child-process resource accounting to report elapsed
+   time and peak RSS; it does no scientific calculation. Repeat each size on
+   the same machine/toolchain. For the objective benchmark, run from this
+   crate directory:
+
+   ```sh
+   BASECRAFT_SANDERSON_BENCH_REQUEST=<fixture>/request.json cargo test --locked --release --lib benchmark_objective_against_direct_reference -- --ignored --nocapture
+   ```
+
+   The test verifies the independent objective and finite-difference gradient.
+   It reports cost-only versus indexed cost-plus-gradient separately from the
+   joint finite-difference baseline. Timing occurs inside the test, after
+   compilation. Retain raw timings, peak RSS, hashes and convergence results.
 
 5. After WF-0017 is accepted, package the exact validated native executable
    at `plugins/sanderson/bin/basecraft-sanderson-native`, include dependency

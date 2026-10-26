@@ -51,15 +51,22 @@ interval or evidence that topology, calibration or biological history is
 correct. Dated tips, polytomies, soft bounds, zero/missing/nonfinite lengths
 and automatic biological policy are unsupported.
 
+The optimizer divides the objective and gradient by a positive constant based
+on the largest initial gradient component; the reported PL objective remains
+unscaled. A start is accepted only when L-BFGS reports convergence and the
+unscaled gradient norm is below the recorded absolute/initial-relative
+tolerance. These numerical controls do not change the fitted objective.
+
 ## Source and packaging state
 
-`native/` is an isolated Rust crate while WF-0017/coordinator owns the root
-Cargo workspace and lockfile. A built `bin/basecraft-sanderson-native` must be
-bundled atomically with the plugin; no analysis installs or compiles it.
-The current build hold prevents compilation, numerical execution, benchmarks,
-license closure for resolved dependencies, and packaging. The plugin therefore
-fails explicitly until the native binary is validated and packaged. The
-private worker report tracks these separate gates.
+`native/` is an isolated Rust crate with its own lockfile while
+WF-0017/coordinator owns the root Cargo workspace and lockfile. The user
+authorized standalone numerical compilation and validation on build-host; the
+private worker report records the exact source, checks and measurements. A
+built `bin/basecraft-sanderson-native` must still be bundled atomically with
+the plugin; no analysis installs or compiles it. Registry integration and
+packaging remain separate work, so the plugin currently fails explicitly
+when the binary is absent.
 
 Scientific references: Sanderson (2002), DOI
 [10.1093/oxfordjournals.molbev.a003974](https://doi.org/10.1093/oxfordjournals.molbev.a003974),
