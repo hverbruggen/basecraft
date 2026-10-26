@@ -1435,6 +1435,19 @@ impl qobject::SangerController {
                     .and_then(|review| review.attach_alignment(placement, alignment));
                 match result {
                     Ok(()) => {
+                        self.as_mut().set_dirty(true);
+                        let attached = self
+                            .as_mut()
+                            .rust_mut()
+                            .review_session
+                            .as_mut()
+                            .ok_or_else(|| "No review is open".to_string())
+                            .and_then(|session| session.attach_placement(&run, &output));
+                        if let Err(error) = attached {
+                            self.as_mut().set_message(QString::from(error));
+                            self.as_mut().set_message_kind(QString::from("fail"));
+                            return false;
+                        }
                         let automatic =
                             self.rust().review_session.as_ref().is_some_and(|session| {
                                 session.events().iter().all(|op| {
