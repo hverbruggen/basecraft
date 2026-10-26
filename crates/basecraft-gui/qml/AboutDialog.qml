@@ -2,7 +2,7 @@ import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
-// Wordmark, a randomly chosen ASCII animation, version, copyright, licences and citation.
+// Wordmark and version, a randomly chosen ASCII animation, copyright, licences and citation.
 AppContentDialog {
     id: dialog
     title: "About Basecraft"
@@ -12,25 +12,48 @@ AppContentDialog {
     readonly property string projectUrl: "https://github.com/hverbruggen/basecraft"
     readonly property string labUrl: "https://hverbruggen.codeberg.page/"
 
+    // Short labels: size to the text rather than the style's minimum width.
+    component FooterButton: AppButton { implicitWidth: contentItem.implicitWidth + leftPadding + rightPadding }
+
     // Asks the window to open the keyboard shortcuts after this dialog closes.
     signal shortcutsRequested()
     initialFocusItem: closeButton
+    // The wordmark already names the dialog; the title stays for assistive technology.
+    header: Item {}
 
-    // One row of themed buttons, right-aligned, wrapping in narrow windows.
+    // Themed buttons, right-aligned. They never widen the dialog: when the content
+    // is narrower than one row of buttons, they split into two balanced rows.
     footer: Item {
-        readonly property real naturalWidth: {
-            let total = Math.max(0, actions.children.length - 1) * actions.spacing
-            for (const child of actions.children) total += child.implicitWidth
-            return total
+        id: footerRow
+        readonly property var widths: Array.from(actions.children, child => child.implicitWidth)
+        readonly property real available: width - dialog.leftPadding - dialog.rightPadding
+        // Rows the Flow would make at a given width, filling each row greedily.
+        function rowsAt(width) {
+            let rows = 1, used = -actions.spacing
+            for (const w of widths) {
+                if (used + actions.spacing + w > width + 0.5) { rows++; used = w }
+                else used += actions.spacing + w
+            }
+            return rows
         }
-        implicitWidth: naturalWidth + dialog.leftPadding + dialog.rightPadding
+        // The narrowest width that keeps the fewest rows, so a wrapped second row is as full as the first.
+        readonly property real flowWidth: {
+            const total = widths.reduce((a, b) => a + b, 0) + Math.max(0, widths.length - 1) * actions.spacing
+            if (total <= available) return total
+            const fewest = rowsAt(available)
+            let best = available
+            for (let w = Math.max(...widths); w < available; w += 4)
+                if (rowsAt(w) === fewest) { best = w; break }
+            return best
+        }
+        implicitWidth: Math.max(...widths) + dialog.leftPadding + dialog.rightPadding
         implicitHeight: actions.implicitHeight + dialog.topPadding + dialog.bottomPadding
         Flow {
             id: actions
             anchors.right: parent.right
             anchors.rightMargin: dialog.rightPadding
             y: dialog.topPadding
-            width: Math.min(parent.width - dialog.leftPadding - dialog.rightPadding, parent.naturalWidth)
+            width: footerRow.flowWidth
             spacing: 8
             Item {
                 implicitWidth: learn.implicitWidth
@@ -40,7 +63,7 @@ AppContentDialog {
                 ToolTip.text: "Manual pages are not written yet"
                 ToolTip.visible: learnHover.hovered
                 HoverHandler { id: learnHover }
-                AppButton {
+                FooterButton {
                     id: learn
                     objectName: "aboutLearn"
                     text: "Learn"
@@ -48,23 +71,42 @@ AppContentDialog {
                     Accessible.description: "Manual pages are not written yet"
                 }
             }
-            AppButton { objectName: "aboutShortcuts"; text: "Keyboard shortcuts"; onClicked: { dialog.close(); dialog.shortcutsRequested() } }
-            AppButton { objectName: "aboutProjectPage"; text: "Project page"; onClicked: Qt.openUrlExternally(dialog.projectUrl) }
-            AppButton { objectName: "aboutReport"; text: "Report a problem"; onClicked: Qt.openUrlExternally(dialog.projectUrl + "/issues/new") }
-            AppButton { id: closeButton; objectName: "aboutClose"; text: "Close"; onClicked: dialog.close() }
+            FooterButton { objectName: "aboutShortcuts"; text: "Shortcuts"; onClicked: { dialog.close(); dialog.shortcutsRequested() } }
+            FooterButton { objectName: "aboutProjectPage"; text: "GitHub"; onClicked: Qt.openUrlExternally(dialog.projectUrl) }
+            FooterButton { objectName: "aboutReport"; text: "Report bug"; onClicked: Qt.openUrlExternally(dialog.projectUrl + "/issues/new") }
+            FooterButton { id: closeButton; objectName: "aboutClose"; text: "Close"; onClicked: dialog.close() }
         }
     }
 
     body: ColumnLayout {
-        spacing: 10
+        spacing: 8
 
-        BrandLogo {
-            id: logo
-            objectName: "aboutLogo"
+        RowLayout {
             Layout.alignment: Qt.AlignHCenter
-            Layout.preferredWidth: Math.min(260, dialog.availableWidth)
-            Layout.preferredHeight: width * 420 / 1020
-            backgroundColor: dialog.backgroundColor
+            spacing: 10
+            // The wordmark artwork has wide transparent margins; show only the lettering.
+            Image {
+                id: logo
+                objectName: "aboutLogo"
+                readonly property bool darkBackground: 0.2126 * dialog.backgroundColor.r
+                    + 0.7152 * dialog.backgroundColor.g + 0.0722 * dialog.backgroundColor.b < 0.5
+                source: Qt.resolvedUrl("../branding/wordmark-" + (darkBackground ? "dark" : "light") + ".png")
+                sourceClipRect: Qt.rect(210, 336, 2636, 624)
+                Layout.preferredWidth: 200
+                Layout.preferredHeight: 200 * 624 / 2636
+                fillMode: Image.PreserveAspectFit
+                smooth: true
+                mipmap: true
+                Accessible.role: Accessible.Graphic
+                Accessible.name: "Basecraft"
+            }
+            Label {
+                objectName: "aboutVersion"
+                text: dialog.version
+                opacity: 0.7
+                Layout.alignment: Qt.AlignBottom
+                Accessible.name: "Version " + dialog.version
+            }
         }
 
         // Loaded on opening, so the frame data never slows down startup.
@@ -77,44 +119,35 @@ AppContentDialog {
             Binding { target: art.item; property: "dark"; value: logo.darkBackground; when: art.item !== null }
         }
 
-        GridLayout {
-            Layout.fillWidth: true
-            columns: 2
-            columnSpacing: 16
-            rowSpacing: 4
-
-            Label { text: "Version"; opacity: 0.7 }
-            Label { objectName: "aboutVersion"; text: dialog.version; Layout.fillWidth: true; wrapMode: Text.Wrap }
-
-            Label { text: "Copyright"; opacity: 0.7 }
-            Label {
-                id: copyright
-                objectName: "aboutCopyright"
-                textFormat: Text.StyledText
-                linkColor: dialog.palette.link
-                text: "© 2026 <a href=\"" + dialog.labUrl + "\">Heroen Verbruggen</a>"
-                activeFocusOnTab: true
-                Accessible.role: Accessible.Link
-                Accessible.name: "Heroen Verbruggen, lab website"
-                onLinkActivated: link => Qt.openUrlExternally(link)
-                Keys.onReturnPressed: Qt.openUrlExternally(dialog.labUrl)
-                Keys.onSpacePressed: Qt.openUrlExternally(dialog.labUrl)
-                HoverHandler { cursorShape: copyright.hoveredLink ? Qt.PointingHandCursor : Qt.ArrowCursor }
-                Rectangle {
-                    anchors.fill: parent
-                    anchors.margins: -2
-                    visible: copyright.activeFocus
-                    color: "transparent"
-                    border.color: dialog.palette.highlight
-                    radius: 2
-                }
+        Label {
+            id: copyright
+            objectName: "aboutCopyright"
+            Layout.alignment: Qt.AlignHCenter
+            textFormat: Text.StyledText
+            linkColor: dialog.palette.link
+            text: "© 2026 <a href=\"" + dialog.labUrl + "\">Heroen Verbruggen</a>  ·  GPL-3.0-or-later, Apache-2.0"
+            activeFocusOnTab: true
+            Accessible.role: Accessible.Link
+            Accessible.name: "Copyright 2026 Heroen Verbruggen, lab website. Licences GPL-3.0-or-later and Apache-2.0"
+            onLinkActivated: link => Qt.openUrlExternally(link)
+            Keys.onReturnPressed: Qt.openUrlExternally(dialog.labUrl)
+            Keys.onSpacePressed: Qt.openUrlExternally(dialog.labUrl)
+            HoverHandler { cursorShape: copyright.hoveredLink ? Qt.PointingHandCursor : Qt.ArrowCursor }
+            Rectangle {
+                anchors.fill: parent
+                anchors.margins: -2
+                visible: copyright.activeFocus
+                color: "transparent"
+                border.color: dialog.palette.highlight
+                radius: 2
             }
+        }
 
-            Label { text: "Licence"; opacity: 0.7 }
-            Label { text: "GPL-3.0-or-later, Apache-2.0"; Layout.fillWidth: true; wrapMode: Text.Wrap }
-
-            Label { text: "Citation"; opacity: 0.7 }
-            Label { objectName: "aboutCitation"; text: "Not yet available"; Layout.fillWidth: true; wrapMode: Text.Wrap }
+        Label {
+            objectName: "aboutCitation"
+            Layout.alignment: Qt.AlignHCenter
+            text: "Citation not yet available"
+            opacity: 0.7
         }
     }
 }

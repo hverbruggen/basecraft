@@ -13,7 +13,8 @@ Item {
     Component { id: spyComponent; SignalSpy {} }
     Component {
         id: dialogComponent
-        AboutDialog { version: "0.0.0 (test)"; backgroundColor: "#f3eee4" }
+        // The application font is the desktop monospace family.
+        AboutDialog { version: "0.0.0 (test)"; backgroundColor: "#f3eee4"; font.family: "monospace" }
     }
 
     TestCase {
@@ -59,11 +60,11 @@ Item {
             const { dialog } = openDialog()
             const close = findChild(dialog.footer, "aboutClose")
             waitForRendering(dialog.contentItem)
-            const oneRow = dialog.footer.height
-            verify(oneRow < close.height * 2, "Wide dialogs keep the buttons on one row")
-            dialog.width = 360
+            // The buttons never set the dialog's width; the content does.
+            verify(dialog.footer.implicitWidth < dialog.body.implicitWidth + dialog.leftPadding + dialog.rightPadding)
+            dialog.width = 300
             waitForRendering(dialog.contentItem)
-            verify(dialog.footer.height > oneRow, "Buttons must wrap onto more rows")
+            verify(dialog.footer.height > close.height * 1.5, "Buttons must wrap onto more rows")
             verify(close.mapToItem(dialog.footer, close.width, 0).x <= dialog.footer.width, "Close must stay inside")
         }
 
@@ -79,14 +80,12 @@ Item {
         function test_every_animation_fits_and_plays() {
             const { dialog, player } = openDialog()
             verify(player.animationIndex >= 0 && player.animationIndex < player.animationCount)
-            const width = player.width, height = player.height
             for (let i = 0; i < player.animationCount; ++i) {
                 player.animationIndex = i
                 const art = findChild(player, "asciiArt")
-                verify(art.width <= player.width && art.height <= player.height,
-                       player.animation.name + " must fit its panel")
-                fuzzyCompare(player.width, width, 1, "Switching animations must not resize the dialog")
-                fuzzyCompare(player.height, height, 1)
+                tryVerify(() => Math.abs(player.width - player.animation.columns * player.cellWidth) < 1,
+                          1000, player.animation.name + " must size the art to itself")
+                tryVerify(() => player.width <= dialog.availableWidth + 0.5, 1000, player.animation.name + " must fit the dialog")
                 const start = player.frame
                 tryVerify(() => player.frame !== start, 2000, player.animation.name + " must advance")
                 waitForRendering(player)

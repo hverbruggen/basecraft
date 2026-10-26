@@ -14,16 +14,13 @@ Item {
     readonly property var animation: AsciiArt.animations[animationIndex]
     readonly property real cellWidth: metrics.advanceWidth("M")
     readonly property real lineHeight: metrics.height
-    // Size for the largest animation so switching never resizes the dialog.
-    readonly property int columns: Math.max(...AsciiArt.animations.map(a => a.columns))
-    readonly property int rows: Math.max(...AsciiArt.animations.map(a => a.rows))
     readonly property var current: {
         const cells = animation.unique[animation.frames[frame % animation.frames.length]]
         return { chars: cells[0].split("\n"), styles: cells[1].split("\n") }
     }
 
-    implicitWidth: columns * cellWidth
-    implicitHeight: rows * lineHeight
+    implicitWidth: animation.columns * cellWidth
+    implicitHeight: animation.rows * lineHeight
     Accessible.ignored: true
     onAnimationIndexChanged: frame = 0
 
@@ -64,9 +61,7 @@ Item {
     Item {
         id: art
         objectName: "asciiArt"
-        anchors.centerIn: parent
-        width: root.animation.columns * root.cellWidth
-        height: root.animation.rows * root.lineHeight
+        anchors.fill: parent
 
         Repeater {
             model: root.invertedCells
