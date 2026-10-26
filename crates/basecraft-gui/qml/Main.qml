@@ -570,15 +570,16 @@ ApplicationWindow {
         onOpenDocument: path => window.openPath(path)
         onCopyText: text => clipboard.put(text)
     }
+    readonly property string savedRecordPath: window.traceOpen && window.current ? window.current.file_path : window.currentPath
     property string provenanceSource: ""
     property string provenanceExport: ""
     function inspectProvenance(operation) {
         provenanceExport = ""
         provenanceDialog.open()
-        provenance.start(operation, window.currentPath, "")
+        provenance.start(operation, window.savedRecordPath, "")
     }
     function exportProvenance(operation) {
-        provenanceSource = window.currentPath
+        provenanceSource = window.savedRecordPath
         provenanceExport = operation
         provenanceFolder.open()
     }
@@ -611,7 +612,7 @@ ApplicationWindow {
         tooltip: "Open the saved result's readable provenance folder"
         enabled: window.current !== null && !provenance.busy
         onTriggered: {
-            const folder = provenance.bundle_path(window.currentPath)
+            const folder = provenance.bundle_path(window.savedRecordPath)
             if (folder.length) Qt.openUrlExternally(shell.local_file_url(folder))
             else provenanceDialog.open()
         }

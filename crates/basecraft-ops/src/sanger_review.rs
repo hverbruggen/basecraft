@@ -3,7 +3,7 @@
 //! inferred or substituted by these operations.
 
 mod storage;
-pub use storage::SangerRun;
+pub use storage::{SangerRun, record_addition};
 pub(crate) use storage::{is_review, relocate_package};
 
 use std::path::{Path, PathBuf};
@@ -88,6 +88,8 @@ struct StoredReview {
     events: Vec<ReviewOp>,
     #[serde(default)]
     evidence: storage::ReviewEvidence,
+    #[serde(flatten)]
+    extra: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 pub struct SangerReviewSession {
@@ -106,6 +108,7 @@ pub struct SangerReviewSession {
     evidence: storage::ReviewEvidence,
     anchor: PathBuf,
     recovery: Option<PathBuf>,
+    stored_extra: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 impl SangerReviewSession {
@@ -227,6 +230,7 @@ impl SangerReviewSession {
             evidence: storage::ReviewEvidence::default(),
             anchor: std::path::absolute(draft_path).map_err(|e| e.to_string())?,
             recovery: None,
+            stored_extra: std::collections::BTreeMap::new(),
         })
     }
 
@@ -253,6 +257,9 @@ impl SangerReviewSession {
             .canonicalize()
             .map_err(|e| e.to_string())?;
         let mut evidence = stored.evidence;
+        if evidence.schema_version != 1 {
+            return Err("Unsupported Sanger support version".into());
+        }
         evidence
             .map_paths(|p| Ok(parent.join(p)))
             .map_err(|e| e.to_string())?;
@@ -276,6 +283,7 @@ impl SangerReviewSession {
             evidence,
             anchor: std::path::absolute(path).map_err(|e| e.to_string())?,
             recovery: None,
+            stored_extra: stored.extra,
         };
         for event in stored.events {
             if let ReviewOp::Export { sha256, .. } = &event {

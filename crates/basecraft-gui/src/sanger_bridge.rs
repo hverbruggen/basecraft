@@ -83,6 +83,8 @@ pub mod qobject {
         #[qinvokable]
         fn reviewed_sequence(self: Pin<&mut SangerController>) -> QString;
         #[qinvokable]
+        fn reviewed_evidence(self: Pin<&mut SangerController>) -> QString;
+        #[qinvokable]
         fn reviewed_fasta(self: Pin<&mut SangerController>, name: &QString) -> QString;
         #[qinvokable]
         fn open_draft(self: Pin<&mut SangerController>, path: &QString) -> bool;
@@ -511,10 +513,20 @@ impl qobject::SangerController {
             .set_signal_threshold(i32::try_from(threshold).unwrap_or(20));
         self.as_mut()
             .set_input_paths(QString::from(serde_json::to_string(&paths).unwrap()));
-        let name = basecraft_viewmodel::sanger_review::suggested_name(&paths);
-        let export = paths
-            .first()
-            .and_then(|p| p.parent())
+        let names: Vec<_> = self.rust().review_session.as_ref().map_or_else(
+            || paths.clone(),
+            |s| s.draft.inputs.iter().map(|r| r.path.clone()).collect(),
+        );
+        let name = basecraft_viewmodel::sanger_review::suggested_name(&names);
+        let anchor = self
+            .rust()
+            .review_session
+            .as_ref()
+            .map(|s| s.storage_anchor().to_path_buf());
+        let export = anchor
+            .as_deref()
+            .and_then(Path::parent)
+            .or_else(|| paths.first().and_then(|p| p.parent()))
             .unwrap_or(Path::new("/tmp"))
             .join(format!("{name}_consensus_from_basecraft.fasta"));
         self.as_mut().set_proposed_name(QString::from(&name));
@@ -585,6 +597,7 @@ impl qobject::SangerController {
             self.as_mut().set_message(QString::from(error));
             return false;
         }
+        self.refresh();
         true
     }
 
@@ -689,6 +702,24 @@ impl qobject::SangerController {
                 self.as_mut()
                     .set_message(QString::from(&crate::bridge::error_summary(&e)));
                 false
+            }
+        }
+    }
+
+    pub fn reviewed_evidence(mut self: std::pin::Pin<&mut Self>) -> QString {
+        let result = self
+            .as_mut()
+            .rust_mut()
+            .review_session
+            .as_mut()
+            .ok_or_else(|| "No review is open".to_string())
+            .and_then(SangerReviewSession::addition_evidence);
+        match result {
+            Ok(value) => QString::from(value),
+            Err(error) => {
+                self.as_mut().set_message_kind(QString::from("fail"));
+                self.as_mut().set_message(QString::from(error));
+                QString::default()
             }
         }
     }
@@ -975,6 +1006,11 @@ impl qobject::SangerController {
             _ => return false,
         };
         let column = self.rust().review.as_ref().map(|review| review.selected);
+        let events_before = self
+            .rust()
+            .review_session
+            .as_ref()
+            .map_or(0, |s| s.events().len());
         let result = match (self.as_mut().rust_mut().review_session.as_mut(), column) {
             (Some(session), Some(column)) => session.start_recovery().and_then(|()| {
                 session.apply(ReviewOp::Set {
@@ -984,6 +1020,14 @@ impl qobject::SangerController {
             }),
             _ => Err("No Sanger review is open".into()),
         };
+        if self
+            .rust()
+            .review_session
+            .as_ref()
+            .is_some_and(|s| s.events().len() > events_before)
+        {
+            self.as_mut().set_dirty(true);
+        }
         match result {
             Ok(()) => {
                 self.as_mut().set_dirty(true);
@@ -1001,6 +1045,11 @@ impl qobject::SangerController {
     }
 
     fn review_history(mut self: std::pin::Pin<&mut Self>, op: ReviewOp) {
+        let events_before = self
+            .rust()
+            .review_session
+            .as_ref()
+            .map_or(0, |s| s.events().len());
         let result = self
             .as_mut()
             .rust_mut()
@@ -1008,6 +1057,14 @@ impl qobject::SangerController {
             .as_mut()
             .ok_or_else(|| "No Sanger review is open".to_string())
             .and_then(|session| session.start_recovery().and_then(|()| session.apply(op)));
+        if self
+            .rust()
+            .review_session
+            .as_ref()
+            .is_some_and(|s| s.events().len() > events_before)
+        {
+            self.as_mut().set_dirty(true);
+        }
         match result {
             Ok(()) => {
                 self.as_mut().set_dirty(true);

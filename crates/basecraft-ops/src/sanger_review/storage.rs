@@ -9,13 +9,28 @@ use std::{
     path::{Path, PathBuf},
 };
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub(super) struct ReviewEvidence {
+    pub schema_version: u32,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
     #[serde(default)]
     pub runs: Vec<PathBuf>,
     #[serde(default)]
     pub sources: Vec<Source>,
     pub placement: Option<Support>,
+}
+
+impl Default for ReviewEvidence {
+    fn default() -> Self {
+        Self {
+            schema_version: 1,
+            extra: BTreeMap::new(),
+            runs: vec![],
+            sources: vec![],
+            placement: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -107,6 +122,8 @@ pub struct SangerRun {
     evidence: ReviewEvidence,
     operation: String,
     anchor: PathBuf,
+    terminal: std::cell::Cell<bool>,
+    started: String,
 }
 
 fn linked_input(run: &ArtifactRun, dependencies: &[PathBuf], payload: &[u8]) -> crate::Result<()> {
@@ -145,6 +162,12 @@ fn retained(run: &ArtifactRun, path: &Path, index: usize) -> crate::Result<Artif
         .any(|c| !matches!(c, std::path::Component::Normal(_)))
     {
         return Err(invalid("Unsafe Sanger support path"));
+    }
+    if !path
+        .canonicalize()?
+        .starts_with(run.directory().canonicalize()?)
+    {
+        return Err(invalid("Sanger support escapes its owned directory"));
     }
     if std::fs::symlink_metadata(path)?.file_type().is_symlink() {
         return Err(invalid("Sanger support is a symlink"));
@@ -221,6 +244,8 @@ impl SangerRun {
             evidence,
             operation: operation.into(),
             anchor: std::path::absolute(anchor)?,
+            terminal: std::cell::Cell::new(false),
+            started: basecraft_platform::now_rfc3339(),
         };
         result.status("running", None, None)?;
         Ok(result)
@@ -254,7 +279,7 @@ impl SangerRun {
         diagnostic: Option<&str>,
     ) -> crate::Result<()> {
         let value = serde_json::json!({"schema_version":1,"id":self.run.id(),"owner_instance":basecraft_platform::process_instance(),
-            "status":status,"operation":self.operation,"started":basecraft_platform::now_rfc3339(),
+            "status":status,"operation":self.operation,"started":self.started,
             "source":{"path":self.evidence.sources.first().map(|s| &s.path)},"outputs":{},"primary_output":result,
             "diagnostics":diagnostic,"artifact_run":self.run.directory()});
         inputs::write_json(&self.run.artifact("execution.json")?, &value)?;
@@ -264,7 +289,15 @@ impl SangerRun {
     }
 
     pub fn failed(&self, diagnostic: &str) -> crate::Result<()> {
-        self.status("failed", None, Some(diagnostic))
+        self.status("failed", None, Some(diagnostic))?;
+        self.terminal.set(true);
+        Ok(())
+    }
+
+    pub fn cancelled(&self, diagnostic: &str) -> crate::Result<()> {
+        self.status("cancelled", None, Some(diagnostic))?;
+        self.terminal.set(true);
+        Ok(())
     }
 
     /// Retain only declared, checked output files. The invocation directory itself
@@ -292,7 +325,22 @@ impl SangerRun {
         )?;
         self.evidence.runs.push(self.directory().into());
         self.status("support_retained", None, None)?;
+        self.terminal.set(true);
         Ok(self)
+    }
+}
+
+impl Drop for SangerRun {
+    fn drop(&mut self) {
+        if !self.terminal.get() {
+            // Best effort during unwinding/early validation failure. The durable
+            // reservation and pre-execution record survive even if this write fails.
+            let _ = self.status(
+                "interrupted",
+                None,
+                Some("Sanger support was not published; owned files retained"),
+            );
+        }
     }
 }
 
@@ -300,6 +348,33 @@ fn job_path(id: &str) -> crate::Result<PathBuf> {
     let paths =
         basecraft_platform::paths::AppPaths::discover().map_err(|e| invalid(e.to_string()))?;
     Ok(paths.state.join("jobs").join(id).join("manifest.json"))
+}
+
+fn unavailable_sources(evidence: &ReviewEvidence, record: &mut Publication) {
+    record.completeness.input_bytes_available =
+        evidence.sources.iter().all(|s| s.checked().is_ok());
+    for (index, source) in evidence
+        .sources
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.ledger.is_none() && s.checked().is_err())
+    {
+        // SHA-256 remains explicitly identified. No BLAKE3 identity or original
+        // byte length may be invented when those bytes are unavailable.
+        record.inputs.push(ArtifactRevision {
+            id: format!("{}:unavailable:{index}", record.id),
+            logical_name: source
+                .original
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned(),
+            hash: format!("sha256:{}", source.sha256),
+            size: 0,
+            retained: None,
+            reference: None,
+        });
+    }
 }
 
 impl SangerReviewSession {
@@ -342,7 +417,12 @@ impl SangerReviewSession {
                     s.original == read.path && s.sha256.eq_ignore_ascii_case(&read.sha256)
                 })
             {
-                read.path = source.checked().map_err(|e| e.to_string())?;
+                read.path = source.checked().map_err(|e| {
+                    format!(
+                        "Sanger original unavailable at {}: {e}",
+                        source.original.display()
+                    )
+                })?;
             }
         }
         Ok(draft)
@@ -435,6 +515,7 @@ impl SangerReviewSession {
             draft_json: self.draft_json.clone(),
             events: self.events.clone(),
             evidence,
+            extra: self.stored_extra.clone(),
         })
     }
 
@@ -472,66 +553,87 @@ impl SangerReviewSession {
     pub(super) fn save_durable(&mut self, path: &Path) -> crate::Result<()> {
         // Never replace an input, even through a symlink or alternate spelling.
         let absolute = std::path::absolute(path)?;
-        let destination = path.canonicalize().unwrap_or_else(|_| absolute.clone());
-        for read in &self.draft.inputs {
-            if read
-                .path
-                .canonicalize()
-                .unwrap_or_else(|_| read.path.clone())
-                == destination
-            {
-                return Err(invalid("Review cannot replace a source AB1"));
+        let mut protected: Vec<_> = self.draft.inputs.iter().map(|r| r.path.clone()).collect();
+        protected.push(self.draft_path.clone());
+        for source in &self.evidence.sources {
+            protected.push(source.path.clone());
+            if let Some(ledger) = &source.ledger {
+                protected.push(ledger.join("preserved-input"));
+            }
+        }
+        for input in protected {
+            if same_file(path, &input)? {
+                return Err(invalid(
+                    "Review cannot replace a source trace, draft or alignment context",
+                ));
             }
         }
         self.ensure_sources(path)?;
         self.start_recovery().map_err(invalid)?;
         let run = ArtifactRun::create(path, &ulid::Ulid::generate().to_string())?;
-        let mut dependencies = self.evidence.runs.clone();
-        dependencies.extend(
-            self.evidence
-                .sources
-                .iter()
-                .filter_map(|s| s.ledger.clone()),
-        );
-        dependencies.sort();
-        dependencies.dedup();
-        linked_input(&run, &dependencies, self.draft_json.as_bytes())?;
-        self.evidence.runs = vec![run.directory().into()];
-        let snapshot = run.artifact("review.sanger-review.json")?;
-        // The recovery copy is complete before attempting a visible replacement.
-        self.write_embedded(&snapshot)?;
-        let mut artifacts = vec![retained(&run, &snapshot, 0)?];
-        if path.is_file() {
-            let previous = run.artifact("previous-review")?;
-            basecraft_io::write_atomic(&previous, |w| {
-                std::io::copy(&mut std::fs::File::open(path)?, w)?;
-                Ok(())
-            })?;
-            artifacts.push(retained(&run, &previous, 1)?);
+        let previous_evidence = self.evidence.clone();
+        let outcome = (|| -> crate::Result<()> {
+            let mut dependencies = self.evidence.runs.clone();
+            dependencies.extend(
+                self.evidence
+                    .sources
+                    .iter()
+                    .filter_map(|s| s.ledger.clone()),
+            );
+            dependencies.sort();
+            dependencies.dedup();
+            linked_input(&run, &dependencies, self.draft_json.as_bytes())?;
+            self.evidence.runs = vec![run.directory().into()];
+            let snapshot = run.artifact("review.sanger-review.json")?;
+            // The recovery copy is complete before attempting a visible replacement.
+            self.write_embedded(&snapshot)?;
+            let draft = run.artifact("draft.json")?;
+            basecraft_io::write_atomic(&draft, |w| w.write_all(self.draft_json.as_bytes()))?;
+            let mut artifacts = vec![retained(&run, &snapshot, 0)?, retained(&run, &draft, 1)?];
+            if path.is_file() {
+                let previous = run.artifact("previous-review")?;
+                basecraft_io::write_atomic(&previous, |w| {
+                    std::io::copy(&mut std::fs::File::open(path)?, w)?;
+                    Ok(())
+                })?;
+                artifacts.push(retained(&run, &previous, 2)?);
+            }
+            let bytes = serde_json::to_vec_pretty(&self.stored_at(path)?)?;
+            let staged = run.staging("review")?;
+            basecraft_io::write_atomic(&staged, |w| w.write_all(&bytes))?;
+            let mut record = publication(
+                &run,
+                "Explicit saved Sanger review; decisions and support retained",
+                artifacts,
+            );
+            unavailable_sources(&self.evidence, &mut record);
+            record.outputs.push(ArtifactRevision {
+                id: format!("{}:review", run.id()),
+                logical_name: path
+                    .file_name()
+                    .ok_or_else(|| invalid("Review has no filename"))?
+                    .to_string_lossy()
+                    .into_owned(),
+                hash: basecraft_io::hash_bytes(&bytes),
+                size: bytes.len() as u64,
+                retained: None,
+                reference: None,
+            });
+            crate::provenance::publish(run.directory(), &record)?;
+            basecraft_io::write_atomic(path, |w| w.write_all(&bytes))?;
+            run.bind(path)?;
+            Ok(())
+        })();
+        if let Err(error) = outcome {
+            if !run.directory().join("manifest.json").is_file() {
+                self.evidence = previous_evidence;
+            }
+            let recovery = self.checkpoint();
+            return Err(invalid(format!(
+                "Review save failed: {error}; recovery checkpoint: {}",
+                recovery.map_or_else(|e| e, |()| "retained".into())
+            )));
         }
-        let bytes = serde_json::to_vec_pretty(&self.stored_at(path)?)?;
-        let staged = run.staging("review")?;
-        basecraft_io::write_atomic(&staged, |w| w.write_all(&bytes))?;
-        let mut record = publication(
-            &run,
-            "Explicit saved Sanger review; decisions and support retained",
-            artifacts,
-        );
-        record.outputs.push(ArtifactRevision {
-            id: format!("{}:review", run.id()),
-            logical_name: path
-                .file_name()
-                .ok_or_else(|| invalid("Review has no filename"))?
-                .to_string_lossy()
-                .into_owned(),
-            hash: basecraft_io::hash_bytes(&bytes),
-            size: bytes.len() as u64,
-            retained: None,
-            reference: None,
-        });
-        crate::provenance::publish(run.directory(), &record)?;
-        basecraft_io::write_atomic(path, |w| w.write_all(&bytes))?;
-        run.bind(path)?;
         self.anchor = absolute;
         self.checkpoint().map_err(invalid)
     }
@@ -556,6 +658,7 @@ impl SangerReviewSession {
             "Sanger accepted consensus; full review evidence retained",
             vec![retained(&run, &snapshot, 0)?],
         );
+        unavailable_sources(&self.evidence, &mut record);
         record.outputs.push(ArtifactRevision {
             id: format!("{}:consensus", run.id()),
             logical_name: path
@@ -623,6 +726,23 @@ pub(crate) fn relocate_package(
         }
     }
     inputs::write_json(copied, &stored)
+}
+
+fn same_file(a: &Path, b: &Path) -> crate::Result<bool> {
+    if normalized(&std::path::absolute(a)?) == normalized(&std::path::absolute(b)?) {
+        return Ok(true);
+    }
+    if let (Ok(a), Ok(b)) = (a.canonicalize(), b.canonicalize()) {
+        if a == b {
+            return Ok(true);
+        }
+    }
+    #[cfg(unix)]
+    if let (Ok(a), Ok(b)) = (std::fs::metadata(a), std::fs::metadata(b)) {
+        use std::os::unix::fs::MetadataExt;
+        return Ok(a.dev() == b.dev() && a.ino() == b.ino());
+    }
+    Ok(false)
 }
 
 fn normalized(path: &Path) -> PathBuf {
@@ -804,6 +924,7 @@ mod tests {
                 .is_err()
         );
         std::fs::write(&trace, &original).unwrap();
+        inputs::relink(review.evidence.sources[0].ledger.as_ref().unwrap(), &trace).unwrap();
         let conflict = inputs::conflicts(&trace).unwrap();
         assert!(!conflict.analyses.is_empty());
         inputs::resolve(&conflict, inputs::SavePolicy::PreserveCopy).unwrap();
@@ -857,4 +978,222 @@ mod tests {
         assert!(job["primary_output"].is_null());
         assert!(trace.is_file());
     }
+
+    #[test]
+    fn multiple_read_and_placement_evidence_export_with_exact_original_mappings() {
+        let tmp = tempfile::tempdir().unwrap();
+        let folder = tmp.path().join("original");
+        let (first, trace) = draft(&folder);
+        let other = folder.join("other.ab1");
+        std::fs::write(&other, b"ABIFsecond synthetic trace").unwrap();
+        let mut raw: serde_json::Value = serde_json::from_str(&first.draft_json).unwrap();
+        raw["mode"] = "consensus".into();
+        raw["inputs"].as_array_mut().unwrap().push(serde_json::json!({"read":2,"path":other,"sha256":basecraft_io::sha256_file(&other).unwrap(),"orientation":"forward","calls":{"sequence":"AC","positions":[3,4],"scores":[20,30]}}));
+        let run = SangerRun::prepare(&trace, "consensus", &[trace.clone(), other]).unwrap();
+        let evidence = run.artifact("evidence.json").unwrap();
+        inputs::write_json(&evidence, &raw).unwrap();
+        let reads = run.artifact("reads.align.fa").unwrap();
+        std::fs::write(&reads, ">r1\nAC\n>r2\nAC\n").unwrap();
+        let run = run.finish(&[evidence.clone(), reads]).unwrap();
+        let mut review = SangerReviewSession::new(&evidence).unwrap();
+        review.attach_run(&run).unwrap();
+        edit(&mut review);
+        let alignment = folder.join("context.afa");
+        std::fs::write(&alignment, ">a\nAC\n>b\nAC\n").unwrap();
+        let placement_run = SangerRun::prepare_with_dependencies(
+            &trace,
+            "place_sanger",
+            std::slice::from_ref(&alignment),
+            review.evidence_runs(),
+        )
+        .unwrap();
+        let placement_path = placement_run.artifact("placement.json").unwrap();
+        let placement = SangerPlacement {
+            status: "candidate_requires_review".into(),
+            engine: "MAFFT".into(),
+            version: "synthetic".into(),
+            source_path: alignment.clone(),
+            source_sha256: basecraft_io::sha256_file(&alignment).unwrap(),
+            source_rows: 2,
+            source_width: 2,
+            fragment: "AC".into(),
+            map: vec![Some(0), Some(1)],
+            aligned_probe: "AC".into(),
+            insertions: 0,
+            parameters: vec!["--mapout".into()],
+        };
+        inputs::write_json(&placement_path, &placement).unwrap();
+        let placement_run = placement_run
+            .finish(std::slice::from_ref(&placement_path))
+            .unwrap();
+        review
+            .attach_placement(&placement_run, &placement_path)
+            .unwrap();
+        let path = folder.join("multi.sanger-review.json");
+        review.save(&path).unwrap();
+        let package = tmp.path().join("export");
+        crate::provenance::package(&path, &package).unwrap();
+        std::fs::remove_dir_all(folder).unwrap();
+        let reopened =
+            SangerReviewSession::load(&package.join("multi.sanger-review.json")).unwrap();
+        assert_eq!(reopened.draft_json, review.draft_json);
+        assert_eq!(reopened.working_draft().unwrap().inputs.len(), 2);
+        let restored = reopened.placement().unwrap().unwrap();
+        assert_eq!(restored.map, placement.map);
+        assert_eq!(restored.source_sha256, placement.source_sha256);
+        assert!(restored.source_path.is_file());
+        assert_eq!(reopened.decision(0), Some(&ReviewChoice::Edit('G')));
+    }
+
+    #[test]
+    fn alignment_addition_retains_review_ancestry_and_packages_without_originals() {
+        let tmp = tempfile::tempdir().unwrap();
+        let folder = tmp.path().join("original");
+        let (mut review, _) = draft(&folder);
+        review
+            .apply(ReviewOp::Set {
+                columns: vec![0, 1],
+                choice: ReviewChoice::Accept,
+            })
+            .unwrap();
+        let descriptor = review.addition_evidence().unwrap();
+        let alignment = folder.join("alignment.afa");
+        std::fs::write(&alignment, ">a\nAC\n>b\nAG\n").unwrap();
+        let mut session = crate::Session::recoverable(&folder).unwrap();
+        let doc = session.open(&alignment).unwrap();
+        assert!(record_addition(&mut session, doc, &descriptor, "TT").is_err());
+        record_addition(&mut session, doc, &descriptor, "AC").unwrap();
+        session
+            .apply(
+                doc,
+                basecraft_protocol::Op::AlnAddSequences {
+                    rows: vec![("specimen".into(), "AC".into())],
+                    reference: None,
+                },
+            )
+            .unwrap();
+        session.undo(doc).unwrap();
+        session.redo(doc).unwrap();
+        let result = folder.join("added.afa");
+        session.save(doc, Some(&result)).unwrap();
+        assert!(crate::provenance::verify(&result).unwrap().is_empty());
+        let package = tmp.path().join("export");
+        crate::provenance::package(&result, &package).unwrap();
+        drop(session);
+        std::fs::remove_dir_all(folder).unwrap();
+        let result = package.join("added.afa");
+        assert!(crate::provenance::verify(&result).unwrap().is_empty());
+        let mut session = crate::Session::recoverable(&package).unwrap();
+        let doc = session.open(&result).unwrap();
+        let saved_again = package.join("saved-again.afa");
+        session.save(doc, Some(&saved_again)).unwrap();
+        assert!(crate::provenance::verify(&saved_again).unwrap().is_empty());
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct AdditionEvidence {
+    schema_version: u32,
+    bundle: PathBuf,
+    id: String,
+    hash: String,
+    review: PathBuf,
+    review_hash: String,
+    sequence_hash: String,
+}
+
+impl SangerReviewSession {
+    /// Freeze the accepted input for alignment addition without exporting an AB1
+    /// or requiring a visible review file. This descriptor is never executable.
+    pub fn addition_evidence(&mut self) -> Result<String, String> {
+        let sequence = self
+            .resolved_sequence()
+            .filter(|s| !s.is_empty())
+            .ok_or("Resolve every review column before addition")?;
+        self.start_recovery()?;
+        let paths: Vec<_> = self
+            .working_draft()?
+            .inputs
+            .into_iter()
+            .map(|r| r.path)
+            .collect();
+        let run = SangerRun::prepare_with_dependencies(
+            self.storage_anchor(),
+            "accepted_review_input",
+            &paths,
+            self.evidence_runs(),
+        )
+        .map_err(|e| e.to_string())?;
+        let review = run.review_snapshot(self).map_err(|e| e.to_string())?;
+        let run = run
+            .finish(std::slice::from_ref(&review))
+            .map_err(|e| e.to_string())?;
+        let bytes = crate::provenance::read_record(&run.directory().join("manifest.json"))
+            .map_err(|e| e.to_string())?;
+        let evidence = AdditionEvidence {
+            schema_version: 1,
+            bundle: run.directory().into(),
+            id: run.run.id().into(),
+            hash: basecraft_io::hash_bytes(&bytes),
+            review: review.clone(),
+            review_hash: basecraft_io::hash_file(&review).map_err(|e| e.to_string())?,
+            sequence_hash: basecraft_io::hash_bytes(sequence.as_bytes()),
+        };
+        serde_json::to_string(&evidence).map_err(|e| e.to_string())
+    }
+}
+
+/// Verify the exact accepted review before selecting it as an alignment input.
+/// The actual row mutation continues through the existing typed alignment op.
+pub fn record_addition(
+    session: &mut crate::Session,
+    doc: crate::DocId,
+    descriptor: &str,
+    sequence: &str,
+) -> crate::Result<()> {
+    let evidence: AdditionEvidence = serde_json::from_str(descriptor)?;
+    if evidence.schema_version != 1
+        || evidence.sequence_hash != basecraft_io::hash_bytes(sequence.as_bytes())
+    {
+        return Err(invalid(
+            "Reviewed sequence differs from its Sanger evidence",
+        ));
+    }
+    let bytes = crate::provenance::read_record(&evidence.bundle.join("manifest.json"))?;
+    let publication: Publication = serde_json::from_slice(&bytes)?;
+    if publication.id != evidence.id
+        || basecraft_io::hash_bytes(&bytes) != evidence.hash
+        || basecraft_io::hash_file(&evidence.review)? != evidence.review_hash
+    {
+        return Err(invalid("Sanger addition evidence changed"));
+    }
+    let local = evidence
+        .review
+        .strip_prefix(&evidence.bundle)
+        .map_err(|_| invalid("Sanger review escapes its input run"))?;
+    if !publication
+        .inputs
+        .iter()
+        .any(|a| a.retained.as_deref() == local.to_str() && a.hash == evidence.review_hash)
+    {
+        return Err(invalid(
+            "Sanger review is not retained by the selected input run",
+        ));
+    }
+    let review = SangerReviewSession::load(&evidence.review).map_err(invalid)?;
+    if review.resolved_sequence().as_deref() != Some(sequence) {
+        return Err(invalid(
+            "Sanger review is unresolved or describes another sequence",
+        ));
+    }
+    let mut issues = crate::provenance::verify_records(&evidence.bundle, &publication)?;
+    issues.extend(inputs::verify_ancestors(&evidence.bundle)?);
+    if !issues.is_empty() {
+        return Err(invalid(issues.join("; ")));
+    }
+    let hash = session.snapshot_file(&evidence.review)?;
+    session.log_referenced_tool_run(doc,basecraft_protocol::Actor::Plugin {id:"basecraft.sanger-review".into(),version:"1".into()},
+        ("basecraft.sanger-review","reviewed_consensus_input"),
+        serde_json::json!({"sanger_input":{"schema_version":1,"bundle":evidence.bundle,"id":evidence.id,"hash":evidence.hash},"review_hash":evidence.review_hash,"sequence_hash":evidence.sequence_hash}),
+        &[(evidence.review.to_string_lossy().into_owned(),hash)],&[])
 }
