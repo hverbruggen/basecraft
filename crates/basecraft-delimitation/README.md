@@ -17,6 +17,16 @@ not silent replacements. Multiplicities never enter the likelihood. Searches
 have deterministic ties, cancellation boundaries and an explicit candidate
 budget. The redesigned estimator is deferred to v2 and absent here.
 
+Time-tree preparation fits a zero-age tree clade as one tip and restores its
+members in reported assignments. This tree preparation does not establish
+exact sequence identity or infer why the input tree has that clade. Separately,
+multiple-threshold and exhaustive searches reject nested internal events with
+exactly equal validated ages, including root-age ties and ties created by the
+explicit reference age clamp. A partition can split such an event across a
+zero-duration interval and produce unbounded likelihood. Single-threshold
+search remains supported for these inputs. Equal ages in separate clades and
+strictly positive intervals remain supported by the multi-threshold guard.
+
 Historical reference comparisons were executed on 2026-10-12 against unmodified
 `splits` 1.0-20 and 1.1 (`dc187fd`). Of 32 attempts, 28 completed comparisons
 and four were recorded as upstream output-assembly failures. Selected
