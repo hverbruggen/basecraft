@@ -102,6 +102,13 @@ pub mod qobject {
             publication: bool,
         );
         #[qinvokable]
+        fn export_figure_png(
+            self: Pin<&mut DelimitationController>,
+            path: &QString,
+            scope: i32,
+            publication: bool,
+        );
+        #[qinvokable]
         fn preview_cut(self: Pin<&mut DelimitationController>, threshold: f64);
         #[qinvokable]
         fn preview_position(self: Pin<&mut DelimitationController>, geometry: &QString, x: f64);
@@ -1142,7 +1149,17 @@ impl qobject::DelimitationController {
                 .map(|(theme, _)| theme)
                 .unwrap_or_default()
         };
-        self.export_with(path, &theme);
+        self.export_with(path, &theme, false);
+    }
+    pub fn export_figure_png(self: Pin<&mut Self>, path: &QString, _scope: i32, publication: bool) {
+        let theme = if publication {
+            basecraft_viewmodel::Theme::publication()
+        } else {
+            crate::bridge::load_theme()
+                .map(|(theme, _)| theme)
+                .unwrap_or_default()
+        };
+        self.export_with(path, &theme, true);
     }
     pub fn preview_cut(mut self: Pin<&mut Self>, threshold: f64) {
         let result = {
@@ -1341,9 +1358,14 @@ impl qobject::DelimitationController {
         let theme = crate::bridge::load_theme()
             .map(|(theme, _)| theme)
             .unwrap_or_default();
-        self.export_with(path, &theme);
+        self.export_with(path, &theme, false);
     }
-    fn export_with(mut self: Pin<&mut Self>, path: &QString, theme: &basecraft_viewmodel::Theme) {
+    fn export_with(
+        mut self: Pin<&mut Self>,
+        path: &QString,
+        theme: &basecraft_viewmodel::Theme,
+        png: bool,
+    ) {
         let result = (|| -> Result<(), Box<dyn std::error::Error>> {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
@@ -1362,9 +1384,16 @@ impl qobject::DelimitationController {
                 &tree, &columns, 900.0, 20.0, theme, &font,
             );
             let svg = delimitation::comparison_svg(work, &figure, &font);
-            s.export(d, Path::new(&path.to_string()), "svg", |w| {
-                w.write_all(svg.as_bytes())
-            })?;
+            if png {
+                let bytes = crate::bridge::figure_png(&svg)?;
+                s.export(d, Path::new(&path.to_string()), "png", |w| {
+                    w.write_all(&bytes)
+                })?;
+            } else {
+                s.export(d, Path::new(&path.to_string()), "svg", |w| {
+                    w.write_all(svg.as_bytes())
+                })?;
+            }
             Ok(())
         })();
         match result {

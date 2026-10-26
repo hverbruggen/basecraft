@@ -9,6 +9,7 @@ pub mod qobject {
     unsafe extern "C++" {
         include!("instanceview.h");
         fn configure_canvas_graphics();
+        fn render_figure_png(svg: &QString, width: i32) -> Result<QByteArray>;
         include!("cxx-qt-lib/qbytearray.h");
         type QByteArray = cxx_qt_lib::QByteArray;
         include!("cxx-qt-lib/qstring.h");
@@ -62,6 +63,13 @@ pub mod qobject {
         fn export_svg(self: Pin<&mut GenomeController>, path: &QString);
         #[qinvokable]
         fn export_figure(
+            self: Pin<&mut GenomeController>,
+            path: &QString,
+            scope: i32,
+            publication: bool,
+        );
+        #[qinvokable]
+        fn export_figure_png(
             self: Pin<&mut GenomeController>,
             path: &QString,
             scope: i32,
@@ -265,6 +273,35 @@ use basecraft_viewmodel::{Frame, GenomeView, Mode, Theme};
 use cxx_qt::CxxQtType;
 use cxx_qt_lib::{QByteArray, QString, QUrl};
 use serde_json::{Value, json};
+
+/// Rasterize the exact SVG being exported. Qt's image format plugin preserves
+/// the vector figure as the single source of geometry for both formats.
+pub(crate) fn figure_png(svg: &str) -> Result<Vec<u8>, String> {
+    qobject::render_figure_png(&QString::from(svg), 1500)
+        .map(|bytes| bytes.as_ref().to_vec())
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod figure_export_tests {
+    use super::figure_png;
+
+    #[test]
+    fn png_renders_svg_at_proportional_size() {
+        let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100\" height=\"50\"><rect width=\"100\" height=\"50\" fill=\"#c02030\"/></svg>";
+        let png = figure_png(svg).unwrap();
+        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+        assert_eq!(u32::from_be_bytes(png[16..20].try_into().unwrap()), 1500);
+        assert_eq!(u32::from_be_bytes(png[20..24].try_into().unwrap()), 750);
+        assert!(png.len() > 1000, "rendered image must contain figure data");
+    }
+
+    #[test]
+    fn png_rejects_extreme_aspect_ratio() {
+        let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1\" height=\"10000\"/>";
+        assert!(figure_png(svg).is_err());
+    }
+}
 
 // Qt key codes and modifiers used below.
 /// One zoom step from the keyboard or the ribbon.
@@ -612,7 +649,21 @@ impl qobject::GenomeController {
         self.export_figure(path, 0, false);
     }
 
-    pub fn export_figure(mut self: Pin<&mut Self>, path: &QString, scope: i32, publication: bool) {
+    pub fn export_figure(self: Pin<&mut Self>, path: &QString, scope: i32, publication: bool) {
+        self.export_figure_with(path, scope, publication, false);
+    }
+
+    pub fn export_figure_png(self: Pin<&mut Self>, path: &QString, scope: i32, publication: bool) {
+        self.export_figure_with(path, scope, publication, true);
+    }
+
+    fn export_figure_with(
+        mut self: Pin<&mut Self>,
+        path: &QString,
+        scope: i32,
+        publication: bool,
+        png: bool,
+    ) {
         if !(0..=2).contains(&scope) {
             self.fail("Unknown figure scope");
             return;
@@ -663,7 +714,12 @@ impl qobject::GenomeController {
                 &r.mono_font.to_string(),
                 theme.background,
             );
-            session.export(doc, &target, "svg", |w| w.write_all(svg.as_bytes()))
+            if png {
+                let bytes = figure_png(&svg).map_err(basecraft_ops::Error::Invalid)?;
+                session.export(doc, &target, "png", |w| w.write_all(&bytes))
+            } else {
+                session.export(doc, &target, "svg", |w| w.write_all(svg.as_bytes()))
+            }
         })();
         match result {
             Ok(()) => self.done(&format!("Exported {}", file_name(&target))),

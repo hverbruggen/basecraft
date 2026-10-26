@@ -135,6 +135,13 @@ pub mod qobject {
             publication: bool,
         );
         #[qinvokable]
+        fn export_figure_png(
+            self: Pin<&mut AlignmentController>,
+            path: &QString,
+            scope: i32,
+            publication: bool,
+        );
+        #[qinvokable]
         fn resize(self: Pin<&mut AlignmentController>, width: f64, height: f64);
         #[qinvokable]
         fn wheel(
@@ -567,7 +574,21 @@ impl qobject::AlignmentController {
         self.export_figure(path, 0, false);
     }
 
-    pub fn export_figure(mut self: Pin<&mut Self>, path: &QString, scope: i32, publication: bool) {
+    pub fn export_figure(self: Pin<&mut Self>, path: &QString, scope: i32, publication: bool) {
+        self.export_figure_with(path, scope, publication, false);
+    }
+
+    pub fn export_figure_png(self: Pin<&mut Self>, path: &QString, scope: i32, publication: bool) {
+        self.export_figure_with(path, scope, publication, true);
+    }
+
+    fn export_figure_with(
+        mut self: Pin<&mut Self>,
+        path: &QString,
+        scope: i32,
+        publication: bool,
+        png: bool,
+    ) {
         if !(0..=2).contains(&scope) {
             self.fail("Unknown figure scope");
             return;
@@ -602,7 +623,13 @@ impl qobject::AlignmentController {
                 &r.mono_font.to_string(),
                 theme.background,
             );
-            session.export(doc, &target, "svg", |w| w.write_all(svg.as_bytes()))
+            if png {
+                let bytes =
+                    crate::bridge::figure_png(&svg).map_err(basecraft_ops::Error::Invalid)?;
+                session.export(doc, &target, "png", |w| w.write_all(&bytes))
+            } else {
+                session.export(doc, &target, "svg", |w| w.write_all(svg.as_bytes()))
+            }
         })();
         match result {
             Ok(()) => self.done(&format!("Exported {}", file_name(&target))),

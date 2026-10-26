@@ -225,6 +225,13 @@ pub mod qobject {
             scope: i32,
             publication: bool,
         );
+        #[qinvokable]
+        fn export_figure_png(
+            self: Pin<&mut TreeController>,
+            path: &QString,
+            scope: i32,
+            publication: bool,
+        );
     }
 }
 
@@ -1652,7 +1659,21 @@ impl qobject::TreeController {
         self.export_figure(path, 2, false);
     }
 
-    pub fn export_figure(mut self: Pin<&mut Self>, path: &QString, scope: i32, publication: bool) {
+    pub fn export_figure(self: Pin<&mut Self>, path: &QString, scope: i32, publication: bool) {
+        self.export_figure_with(path, scope, publication, false);
+    }
+
+    pub fn export_figure_png(self: Pin<&mut Self>, path: &QString, scope: i32, publication: bool) {
+        self.export_figure_with(path, scope, publication, true);
+    }
+
+    fn export_figure_with(
+        mut self: Pin<&mut Self>,
+        path: &QString,
+        scope: i32,
+        publication: bool,
+        png: bool,
+    ) {
         if !(0..=2).contains(&scope) {
             self.fail("Unknown figure scope");
             return;
@@ -1703,7 +1724,13 @@ impl qobject::TreeController {
             } else {
                 to_svg_with_style(tree, 900.0, 20.0, &theme, &r.mono_font.to_string())
             };
-            session.export(doc, &target, "svg", |w| w.write_all(svg.as_bytes()))
+            if png {
+                let bytes =
+                    crate::bridge::figure_png(&svg).map_err(basecraft_ops::Error::Invalid)?;
+                session.export(doc, &target, "png", |w| w.write_all(&bytes))
+            } else {
+                session.export(doc, &target, "svg", |w| w.write_all(svg.as_bytes()))
+            }
         })();
         match result {
             Ok(()) => self.done(&format!("Exported {}", file_name(&target))),
