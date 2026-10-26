@@ -1422,18 +1422,11 @@ ApplicationWindow {
         }
     }
 
-    AppContentDialog {
+    AboutDialog {
         id: about
-        title: "About Basecraft"
-        modal: true
-        standardButtons: Dialog.Close
-        body: ColumnLayout {
-            spacing: 6
-            Label { text: "Basecraft " + shell.version(); font.bold: true }
-            Label { text: "A workbench for sequences and their annotations." }
-            Label { text: "Edits support undo and replay. Recovery records are kept in application state."; opacity: 0.7 }
-            Label { text: "GPL-3.0-or-later; plugin protocol and Python SDK Apache-2.0."; opacity: 0.7 }
-        }
+        version: shell.version()
+        backgroundColor: shell.background
+        onShortcutsRequested: shortcutsCommand.trigger()
     }
 
     FileDialog {

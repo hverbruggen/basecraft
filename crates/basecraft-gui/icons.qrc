@@ -57,5 +57,8 @@
     <file>branding/logo-transparent-light.png</file>
     <file>branding/icon-dark.svg</file>
     <file>branding/icon-light.svg</file>
+    <file>branding/wordmark-dark.png</file>
+    <file>branding/wordmark-light.png</file>
+    <file>qml/AsciiArt.js</file>
   </qresource>
 </RCC>
