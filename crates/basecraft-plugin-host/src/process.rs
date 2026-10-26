@@ -153,7 +153,13 @@ impl PluginProcess {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .current_dir(manifest.dir.canonicalize()?);
-        let mut child = OwnedProcess::spawn(&mut command)?;
+        let mut child = OwnedProcess::spawn(&mut command).map_err(|e| {
+            Error::Protocol(format!(
+                "cannot start plugin {} with interpreter {}: {e}",
+                manifest.id,
+                python.display()
+            ))
+        })?;
         let capture = Arc::new(Mutex::new(CapturedOutput::default()));
         let mut capture_workers = Vec::new();
         if let Some(stdout) = child.take_stdout() {

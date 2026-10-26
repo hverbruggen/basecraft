@@ -9,7 +9,10 @@ use basecraft_plugin_host::{
 };
 
 fn fixture() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/registry-plugin")
+    std::env::var_os("BASECRAFT_RUNTIME_TEST_FIXTURE").map_or_else(
+        || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/registry-plugin"),
+        PathBuf::from,
+    )
 }
 fn config(root: &Path) -> RegistryConfig {
     RegistryConfig {
@@ -70,6 +73,20 @@ fn runtime_is_frozen_updates_preserve_disabled_and_failed_solve_preserves_active
     let runtime = package.manifest.managed_runtime.as_ref().unwrap();
     assert!(!runtime.root.starts_with(&package.manifest.dir));
     assert_eq!(package.interpreter.as_ref(), Some(&runtime.interpreter));
+    std::fs::write(temp.path().join("input"), "abc").unwrap();
+    let request = serde_json::from_value(serde_json::json!({"operation":"org.example.registry-fixture/count@1", "parameters":{},"inputs":{"sources":[{"kind":"file","path":"input"}]},"destinations":{"report":"report"}})).unwrap();
+    let accepted = basecraft_plugin_host::runner::PreparedOperation::prepare(
+        first
+            .resolve("org.example.registry-fixture/count@1", None)
+            .unwrap()
+            .clone(),
+        request,
+        basecraft_plugin_host::policy::SessionPolicy::new(temp.path(), true).unwrap(),
+        "runtime update test".into(),
+        None,
+        &first,
+    )
+    .unwrap();
     registry::set_enabled(&config, &id, false).unwrap();
     registry::install_with_pixi(&config, &source, &pixi).unwrap();
     let updated = Registry::load(&config).unwrap();
@@ -85,6 +102,17 @@ fn runtime_is_frozen_updates_preserve_disabled_and_failed_solve_preserves_active
             .root
     );
     package.verify().unwrap();
+    let result = accepted
+        .execute(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+            false,
+        )))
+        .unwrap();
+    assert_eq!(result.data, Some(Box::new(serde_json::json!({"bytes":3}))));
+    let evidence: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(accepted.run.artifact("execution.json").unwrap()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(evidence["runtime"]["root"], runtime.root.to_str().unwrap());
     let mut process =
         PluginProcess::spawn_with(&package.manifest, Path::new("/does/not/exist")).unwrap();
     process.finish().unwrap();
@@ -121,6 +149,21 @@ fn runtime_is_frozen_updates_preserve_disabled_and_failed_solve_preserves_active
     );
     assert_eq!(before, std::fs::read(&config.index).unwrap());
     package.verify().unwrap();
+    let current_runtime = updated.packages[&id]
+        .manifest
+        .managed_runtime
+        .as_ref()
+        .unwrap();
+    std::fs::remove_file(
+        current_runtime
+            .root
+            .join(".pixi/envs/default/bin/nativecheck"),
+    )
+    .unwrap();
+    let missing = Registry::load(&config).unwrap();
+    assert!(missing.packages.is_empty());
+    assert!(missing.diagnostics[0].message.contains("nativecheck"));
+    assert!(missing.diagnostics[0].message.contains("not executable"));
     // Retained lock corruption gives a useful discovery/invocation diagnosis.
     std::fs::write(runtime.root.join("pixi.lock"), "changed").unwrap();
     assert!(
@@ -247,4 +290,5 @@ fn actual_pixi_installs_and_invokes_declared_runtime() {
         serde_json::to_string_pretty(runtime).unwrap()
     );
     println!("{}", String::from_utf8_lossy(&output.stdout));
+    println!("retained disposable profile: {}", temp.keep().display());
 }

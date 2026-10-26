@@ -1,5 +1,6 @@
 //! Install-time Pixi provisioning. Discovery only reads retained receipts/locks.
 use std::collections::BTreeMap;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -108,6 +109,8 @@ impl RuntimeSpec {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Runtime {
+    pub schema: u32,
+    pub executables: Vec<String>,
     pub root: PathBuf,
     pub interpreter: PathBuf,
     pub lock_digest: String,
@@ -121,12 +124,29 @@ impl Runtime {
                 .map_err(basecraft_ops::Error::from)
                 .map_err(Into::into)
         };
-        if !self.root.is_absolute()
+        if self.schema != 1
+            || self.executables.iter().any(|n| !name(n))
+            || !self.root.is_absolute()
             || self.interpreter != self.root.join(".pixi/envs/default/bin/python")
         {
             return Err(Error::Protocol(
                 "invalid managed runtime prefix; reinstall the plugin".into(),
             ));
+        }
+        for executable in std::iter::once(self.interpreter.clone()).chain(
+            self.executables
+                .iter()
+                .map(|n| self.root.join(".pixi/envs/default/bin").join(n)),
+        ) {
+            if !executable
+                .metadata()
+                .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+            {
+                return Err(Error::Protocol(format!(
+                    "managed plugin runtime executable missing or not executable: {}; reinstall the plugin",
+                    executable.display()
+                )));
+            }
         }
         if !self.interpreter.is_file()
             || hash(self.root.join("pixi.lock")).map_err(|e| {
@@ -148,7 +168,7 @@ impl Runtime {
     }
 }
 
-/// BASECRAFT_PIXI is an explicit developer override; deployed tool wins over PATH.
+/// `BASECRAFT_PIXI` is an explicit developer override; deployed tool wins over PATH.
 pub fn pixi() -> PathBuf {
     if let Some(path) = std::env::var_os("BASECRAFT_PIXI") {
         return path.into();
@@ -241,6 +261,8 @@ pub fn provision_with(
         "plugin dependency verification",
     )?;
     let runtime = Runtime {
+        schema: 1,
+        executables: spec.executables.clone(),
         root: pending.path().to_owned(),
         interpreter,
         lock_digest: basecraft_io::hash_file(&pending.path().join("pixi.lock"))
