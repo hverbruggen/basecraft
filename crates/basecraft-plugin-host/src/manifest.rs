@@ -19,6 +19,12 @@ pub struct Manifest {
     #[serde(default)]
     pub kinds: Vec<String>,
     pub entry: Entry,
+    /// Declarative dependencies, provisioned only by explicit installation.
+    #[serde(default)]
+    pub runtime: Option<crate::runtime::RuntimeSpec>,
+    /// Frozen by registry discovery, never supplied by package metadata.
+    #[serde(skip)]
+    pub managed_runtime: Option<crate::runtime::Runtime>,
     #[serde(default)]
     pub operations: Vec<OperationDecl>,
     /// Settings forms the app shows before running an operation.
@@ -275,6 +281,9 @@ impl Manifest {
             return Err(err(format!("unsupported schema {}", m.schema)));
         }
         m.dir = dir.to_path_buf();
+        if let Some(runtime) = &m.runtime {
+            runtime.validate()?;
+        }
         if m.schema == 2 {
             if !m.operations.is_empty() {
                 return Err(err("schema 2 operations belong only in the contract".into()));

@@ -17,6 +17,7 @@ pub mod policy;
 pub mod process;
 pub mod registry;
 pub mod runner;
+pub mod runtime;
 pub mod snapshot;
 
 mod distance_cache;

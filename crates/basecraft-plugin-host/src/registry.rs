@@ -61,6 +61,9 @@ impl Package {
                 "plugin_changed: package contents changed; refresh registry".into(),
             ));
         }
+        if let Some(runtime) = &self.manifest.managed_runtime {
+            runtime.verify()?;
+        }
         Ok(())
     }
 }
@@ -103,6 +106,8 @@ struct InstallationIndex {
     schema: u32,
     #[serde(default)]
     active: BTreeMap<String, String>,
+    #[serde(default)]
+    runtimes: BTreeMap<String, crate::runtime::Runtime>,
     #[serde(default)]
     disabled: BTreeSet<String>,
     #[serde(default)]
@@ -185,7 +190,7 @@ impl Registry {
         let mut by_id: BTreeMap<String, Vec<Arc<Package>>> = BTreeMap::new();
         for (path, origin, expected_id) in candidates {
             let package = (|| -> Result<Package> {
-                let manifest = Manifest::load(&path)?;
+                let mut manifest = Manifest::load(&path)?;
                 contract::validate_plugin_id(&manifest.id)?;
                 if origin != Origin::Bundled && manifest.id.starts_with("basecraft.") {
                     return Err(Error::Protocol(
@@ -202,7 +207,17 @@ impl Registry {
                     .map_or_else(Vec::new, |c| c.operations);
                 let digest = package_digest(&path)?;
                 let enabled = !index.disabled.contains(&manifest.id);
-                let interpreter = configured_python(origin);
+                let interpreter = if manifest.runtime.is_some() {
+                    let directory = index.active.get(&manifest.id);
+                    let runtime = directory.and_then(|d| index.runtimes.get(d)).filter(|r| {
+                        origin == Origin::Managed && r.package_digest == digest
+                    }).ok_or_else(|| Error::Protocol("managed plugin runtime unavailable; install or reinstall this package to provision dependencies".into()))?;
+                    runtime.verify()?;
+                    manifest.managed_runtime = Some(runtime.clone());
+                    Some(runtime.interpreter.clone())
+                } else {
+                    configured_python(origin)
+                };
                 Ok(Package {
                     manifest,
                     origin,
@@ -256,7 +271,15 @@ impl Registry {
         diagnostics.sort_by(|a, b| (&a.path, &a.message).cmp(&(&b.path, &b.message)));
         let identity: Vec<_> = packages
             .iter()
-            .map(|(id, p)| (id, &p.digest, p.enabled))
+            .map(|(id, p)| {
+                (
+                    id,
+                    &p.digest,
+                    p.enabled,
+                    &p.interpreter,
+                    &p.manifest.managed_runtime,
+                )
+            })
             .collect();
         let generation = basecraft_io::hash_bytes(&serde_json::to_vec(&(&identity, &diagnostics))?);
         Ok(Self {
@@ -385,6 +408,11 @@ fn write_index(
 /// The caller displays `INSTALL_WARNING` during the explicit install action.
 /// Copies are immutable by convention and never removed while jobs might use them.
 pub fn install(config: &RegistryConfig, source: &Path) -> Result<String> {
+    install_with_pixi(config, source, &crate::runtime::pixi())
+}
+
+/// Explicit tool selection for embedding and controlled installer tests.
+pub fn install_with_pixi(config: &RegistryConfig, source: &Path, pixi: &Path) -> Result<String> {
     let manifest = Manifest::load(source)?;
     contract::validate_plugin_id(&manifest.id)?;
     if manifest.id.starts_with("basecraft.") {
@@ -396,47 +424,47 @@ pub fn install(config: &RegistryConfig, source: &Path) -> Result<String> {
     let directory = format!("{}-{}", manifest.id, digest.replace(':', "-"));
     std::fs::create_dir_all(&config.packages)?;
     let destination = config.packages.join(&directory);
-    if destination.exists() {
-        if package_digest(&destination)? != digest {
-            return Err(Error::Protocol("installed package digest mismatch".into()));
+    let pending = tempfile::Builder::new()
+        .prefix(".install-")
+        .tempdir_in(&config.packages)?;
+    for file in package_files(source)? {
+        let relative = file
+            .strip_prefix(source)
+            .map_err(|e| Error::Protocol(e.to_string()))?;
+        let target = pending.path().join(relative);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)?;
         }
-        write_index(config, |index| {
-            index.active.insert(manifest.id.clone(), directory);
-            Ok(())
-        })?;
-    } else {
-        let pending = tempfile::Builder::new()
-            .prefix(".install-")
-            .tempdir_in(&config.packages)?;
-        for file in package_files(source)? {
-            let relative = file
-                .strip_prefix(source)
-                .map_err(|e| Error::Protocol(e.to_string()))?;
-            let target = pending.path().join(relative);
-            if let Some(parent) = target.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            std::fs::copy(file, target)?;
-        }
-        if package_digest(pending.path())? != digest {
-            return Err(Error::Protocol(
-                "plugin_changed: package changed during installation".into(),
-            ));
-        }
-        Manifest::load(pending.path())?;
-        // Serialize rename/selection together; an existing digest directory is verified.
-        write_index(config, |index| {
-            if destination.exists() {
-                if package_digest(&destination)? != digest {
-                    return Err(Error::Protocol("installed package digest mismatch".into()));
-                }
-            } else {
-                std::fs::rename(pending.path(), &destination)?;
-            }
-            index.active.insert(manifest.id.clone(), directory.clone());
-            Ok(())
-        })?;
+        std::fs::copy(file, target)?;
     }
+    if package_digest(pending.path())? != digest {
+        return Err(Error::Protocol(
+            "plugin_changed: package changed during installation".into(),
+        ));
+    }
+    let snapshot = Manifest::load(pending.path())?;
+    let runtime_root = config
+        .packages
+        .parent()
+        .ok_or_else(|| Error::Protocol("packages need parent directory".into()))?
+        .join("plugin-runtimes");
+    let runtime = crate::runtime::provision_with(&snapshot, &digest, &runtime_root, pixi)?;
+    // Serialize package publication and runtime selection together. Any failure
+    // leaves the old index/package/runtime available to both new and owned jobs.
+    write_index(config, |index| {
+        if destination.exists() {
+            if package_digest(&destination)? != digest {
+                return Err(Error::Protocol("installed package digest mismatch".into()));
+            }
+        } else {
+            std::fs::rename(pending.path(), &destination)?;
+        }
+        if let Some(runtime) = &runtime {
+            index.runtimes.insert(directory.clone(), runtime.clone());
+        }
+        index.active.insert(manifest.id.clone(), directory.clone());
+        Ok(())
+    })?;
     Ok(manifest.id)
 }
 

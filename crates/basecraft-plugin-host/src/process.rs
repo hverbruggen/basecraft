@@ -95,6 +95,17 @@ impl PluginProcess {
         python: &Path,
         budget: usize,
     ) -> Result<Self> {
+        let python = if manifest.runtime.is_some() {
+            let runtime = manifest.managed_runtime.as_ref().ok_or_else(|| {
+                Error::Protocol(
+                    "declared plugin runtime unavailable; install the plugin first".into(),
+                )
+            })?;
+            runtime.verify()?;
+            runtime.interpreter.as_path()
+        } else {
+            python
+        };
         let cpu_budget = budget.clamp(1, crate::compute::available());
         let runtime_limit = std::env::var("BASECRAFT_PLUGIN_TIMEOUT_SECONDS")
             .ok()
@@ -122,6 +133,7 @@ impl PluginProcess {
         let listener = UnixListener::bind(&socket)?;
         listener.set_nonblocking(true)?;
         let mut command = Command::new(python);
+        crate::runtime::configure_command(&mut command, manifest, python)?;
         for name in [
             "BASECRAFT_CPU_THREADS",
             "OMP_NUM_THREADS",
@@ -477,13 +489,13 @@ impl Drop for PluginProcess {
 }
 
 #[derive(Default)]
-struct CapturedOutput {
-    stdout: Vec<u8>,
-    stderr: Vec<u8>,
-    exceeded: bool,
+pub(crate) struct CapturedOutput {
+    pub(crate) stdout: Vec<u8>,
+    pub(crate) stderr: Vec<u8>,
+    pub(crate) exceeded: bool,
 }
 const OUTPUT_QUOTA: usize = 1024 * 1024;
-fn capture_output(
+pub(crate) fn capture_output(
     mut reader: impl Read + Send + 'static,
     captured: Arc<Mutex<CapturedOutput>>,
     stderr: bool,
