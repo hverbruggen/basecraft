@@ -2161,10 +2161,9 @@ mod naming_tests {
                         .iter()
                         .any(|edit| edit.operation.name() == operation)
                 );
-                assert!(
-                    basecraft_ops::provenance::verify(result)
-                        .unwrap()
-                        .is_empty()
+                assert_eq!(
+                    basecraft_ops::provenance::verify(result).unwrap(),
+                    Vec::<String>::new()
                 );
             }
             // A supplied tree can itself have ancestry (including IQ-TREE's
@@ -2174,10 +2173,9 @@ mod naming_tests {
             let descendant = root_tree_copy(&mut session, &first, method).unwrap();
             let publication = basecraft_ops::provenance::inspect(&descendant).unwrap();
             assert!(publication.parents.contains(&parent.id));
-            assert!(
-                basecraft_ops::provenance::verify(&descendant)
-                    .unwrap()
-                    .is_empty()
+            assert_eq!(
+                basecraft_ops::provenance::verify(&descendant).unwrap(),
+                Vec::<String>::new()
             );
         }
     }
