@@ -201,7 +201,8 @@ impl GlibcRand {
         let seed = if seed == 0 { 1 } else { seed };
         let mut state = [0u32; 31];
         state[0] = seed;
-        let mut word = i64::from(seed);
+        // glibc stores the unsigned seed in an int32_t before seeding.
+        let mut word = i64::from(seed as i32);
         for value in state.iter_mut().skip(1) {
             let hi = word / 127_773;
             let lo = word % 127_773;
@@ -1323,11 +1324,45 @@ mod tests {
         assert_eq!(zero.next_i32(), 1_804_289_383);
     }
 
+    #[test]
+    fn glibc_high_unsigned_seeds() {
+        // Captured from glibc srand(unsigned int)/rand(), not our recurrence.
+        for (seed, expected) in [
+            (
+                2_147_483_648,
+                [
+                    1_336_741_213,
+                    1_210_407_648,
+                    1_447_044_896,
+                    337_392_383,
+                    82_502_902,
+                ],
+            ),
+            (
+                u32::MAX,
+                [
+                    254_925_627,
+                    1_205_188_300,
+                    366_127_624,
+                    1_401_405_153,
+                    76_053_476,
+                ],
+            ),
+        ] {
+            let mut rand = GlibcRand::new(seed);
+            assert_eq!(
+                std::array::from_fn::<_, 5, _>(|_| rand.next_i32()),
+                expected
+            );
+        }
+    }
+
     /// glibc `random_r` written as its pointer form, for cross-checking blocks.
     fn random_r(seed: u32, count: usize) -> Vec<i32> {
         let mut s = [0u32; 31];
         s[0] = seed;
-        let mut word = i64::from(seed);
+        // glibc stores the unsigned seed in an int32_t before seeding.
+        let mut word = i64::from(seed as i32);
         for v in s.iter_mut().skip(1) {
             let (hi, lo) = (word / 127_773, word % 127_773);
             word = 16_807 * lo - 2_836 * hi;
