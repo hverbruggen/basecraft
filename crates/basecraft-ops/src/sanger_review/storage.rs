@@ -294,12 +294,18 @@ impl SangerRun {
     }
 
     pub fn failed(&self, diagnostic: &str) -> crate::Result<()> {
+        if self.terminal.get() {
+            return Err(invalid("Sanger run already terminated"));
+        }
         self.status("failed", None, Some(diagnostic))?;
         self.terminal.set(true);
         Ok(())
     }
 
     pub fn cancelled(&self, diagnostic: &str) -> crate::Result<()> {
+        if self.terminal.get() {
+            return Err(invalid("Sanger run already terminated"));
+        }
         self.status("cancelled", None, Some(diagnostic))?;
         self.terminal.set(true);
         Ok(())
@@ -308,6 +314,9 @@ impl SangerRun {
     /// Retain only declared, checked output files. The invocation directory itself
     /// stays durable even if a plugin fails before returning its declaration.
     pub fn finish(mut self, paths: &[PathBuf]) -> crate::Result<Self> {
+        if self.terminal.get() || paths.is_empty() {
+            return Err(invalid("Sanger run terminated or has no declared outputs"));
+        }
         let mut artifacts = vec![retained(&self.run, &self.run.artifact("request.json")?, 0)?];
         let mut paths = paths.to_vec();
         let parameters = self.run.artifact("parameters.json")?;
@@ -1270,8 +1279,13 @@ mod tests {
             let job = run.job_path().unwrap();
             if cancelled {
                 run.cancelled("explicit cancellation").unwrap();
+                assert!(
+                    run.finish(&[directory.join("partial")]).is_err(),
+                    "late results must not publish after cancellation"
+                );
+            } else {
+                drop(run);
             }
-            drop(run);
             assert_eq!(
                 std::fs::read(directory.join("partial")).unwrap(),
                 b"recover me"
