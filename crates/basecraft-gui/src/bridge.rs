@@ -1636,7 +1636,7 @@ impl qobject::GenomeController {
                 .collect();
             let known = found - ops.len();
             session
-                .apply_sequence_proposals(doc, generation, snap.version, &ops, actor)
+                .apply_sequence_proposals(doc, generation, snap.version, &ops, &actor)
                 .map_err(|e| e.to_string())?;
             (
                 basecraft_plugin_host::apply::Report {

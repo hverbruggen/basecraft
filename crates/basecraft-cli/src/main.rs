@@ -537,7 +537,7 @@ fn run_plugin(
         version: plugin.info.version.clone(),
     };
     let count = result.ops.len();
-    session.apply_sequence_proposals(doc, generation, snap.version, &result.ops, actor)?;
+    session.apply_sequence_proposals(doc, generation, snap.version, &result.ops, &actor)?;
     println!("applied {count} proposals");
     if save {
         session.save(doc, None)?;

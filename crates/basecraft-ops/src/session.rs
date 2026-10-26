@@ -2017,7 +2017,7 @@ impl Session {
         generation: u64,
         revision: u64,
         ops: &[Op],
-        actor: Actor,
+        actor: &Actor,
     ) -> Result<()> {
         let slot = self
             .docs

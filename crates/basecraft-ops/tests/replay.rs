@@ -792,7 +792,7 @@ fn strict_sequence_proposals_stage_invalid_batches_and_replay_one_undo_group() {
                 generation,
                 revision,
                 &[replace(0, 1, "T"), replace(0, 99, "A")],
-                actor.clone()
+                &actor
             )
             .is_err()
     );
@@ -801,13 +801,7 @@ fn strict_sequence_proposals_stage_invalid_batches_and_replay_one_undo_group() {
     assert!(!session.can_undo(doc));
     assert!(
         session
-            .apply_sequence_proposals(
-                doc,
-                generation + 1,
-                revision,
-                &[replace(0, 1, "T")],
-                actor.clone()
-            )
+            .apply_sequence_proposals(doc, generation + 1, revision, &[replace(0, 1, "T")], &actor)
             .is_err()
     );
     assert!(
@@ -819,7 +813,7 @@ fn strict_sequence_proposals_stage_invalid_batches_and_replay_one_undo_group() {
                 &[Op::Save {
                     path: "unsafe.fa".into()
                 }],
-                actor.clone()
+                &actor
             )
             .is_err()
     );
@@ -830,7 +824,7 @@ fn strict_sequence_proposals_stage_invalid_batches_and_replay_one_undo_group() {
         },
     ];
     session
-        .apply_sequence_proposals(doc, generation, revision, &ops, actor)
+        .apply_sequence_proposals(doc, generation, revision, &ops, &actor)
         .unwrap();
     assert_eq!(session.doc(doc).read(0, 8), b"TCGTACGT");
     assert_eq!(session.doc(doc).features().count(), 1);
