@@ -74,6 +74,10 @@ pub enum Penalty {
 #[derive(Clone, Debug)]
 pub struct Model {
     pub nodes: Vec<InputNode>,
+    pub parents: Vec<usize>,
+    pub is_tip: Vec<bool>,
+    pub nonbasal_edges: Vec<(usize, usize)>,
+    pub basal: [usize; 2],
     pub observed: Vec<f64>,
     pub ln_factorial: Vec<f64>,
     pub lower: Vec<f64>,
@@ -245,8 +249,18 @@ impl Model {
         let free_nodes = (1..nodes.len())
             .filter(|&i| !nodes[i].children.is_empty() && required_lower[i] < upper[i])
             .collect();
+        let parents: Vec<usize> = nodes.iter().map(|node| node.parent.unwrap_or(0)).collect();
+        let is_tip: Vec<bool> = nodes.iter().map(|node| node.children.is_empty()).collect();
+        let nonbasal_edges = (1..nodes.len())
+            .filter_map(|i| (parents[i] != 0).then_some((i, parents[i])))
+            .collect();
+        let basal = [nodes[0].children[0], nodes[0].children[1]];
         Ok(Self {
             nodes,
+            parents,
+            is_tip,
+            nonbasal_edges,
+            basal,
             observed,
             ln_factorial,
             lower,

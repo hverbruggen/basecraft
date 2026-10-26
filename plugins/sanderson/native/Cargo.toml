@@ -9,6 +9,16 @@ publish = false
 # Kept independent while WF-0017 owns the root workspace and Cargo.lock.
 [workspace]
 
+[features]
+# Diagnostic timing only; disabled in the validated release executable.
+profile = []
+
+[profile.release]
+# Cross-crate inlining of the Argmin callback path; benchmarked against the
+# same source and convergence settings without LTO.
+lto = "thin"
+codegen-units = 1
+
 [dependencies]
 anyhow = "1.0"
 argmin = { version = "=0.11.0", default-features = false }

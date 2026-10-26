@@ -57,10 +57,18 @@ worker report records the executed commands and receipts.
 5. Stage the exact validated executable in a disposable package copy with
    `native/tools/stage_package.py --package <bundle/plugins/sanderson>
    --binary <validated-binary>`. The script pins executable and source hashes
-   and writes `bin/engine.json`; it does not compile. Run
+   and writes `bin/engine.json`, first-party GPL text and the exact audited
+   49-crate release dependency notices; it does not compile. Run
    `plugins/sanderson/test_host_integration.py` against a built shared host
    with a matching SDK and a new disposable root. The SCI-0011 worker receipt
    records executed CLI, Python and MCP checks. Coordinator-owned delivery
-   still needs the shared build-tool hook, dependency license closure, GUI
-   parameters, package validation and atomic publication. Do not infer these
-   gates from the standalone method result.
+   still needs the shared build-tool hook, GUI parameters, exact-source
+   package validation and atomic publication. Do not infer these gates from
+   the standalone method result.
+
+6. For the benchmark-only ape comparison, see `BENCHMARK_APE.md` and the
+   committed `tools/benchmark_ape.py`, `benchmark_chronos.R`, and
+   `benchmark_ab.py`. It pins ape source and the model/stopping mismatches,
+   generates shared synthetic trees with known ages/rates, checks independent
+   objectives and constraints, and keeps timed output outside the checkout.
+   R/ape is never a runtime dependency of this plugin.

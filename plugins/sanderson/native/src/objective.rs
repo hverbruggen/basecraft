@@ -16,6 +16,41 @@ pub struct Problem<'a> {
     optimizer_scale: Cell<f64>,
     started: Instant,
     scratch: RefCell<Scratch>,
+    #[cfg(feature = "profile")]
+    profile: ProfileStats,
+}
+
+#[cfg(feature = "profile")]
+#[derive(Default)]
+struct ProfileStats {
+    cost_calls: Cell<u64>,
+    gradient_calls: Cell<u64>,
+    computes: Cell<u64>,
+    age_ns: Cell<u64>,
+    likelihood_ns: Cell<u64>,
+    penalty_ns: Cell<u64>,
+    assemble_ns: Cell<u64>,
+}
+
+#[cfg(feature = "profile")]
+impl Drop for Problem<'_> {
+    fn drop(&mut self) {
+        if std::env::var_os("BASECRAFT_SANDERSON_PROFILE").is_some() {
+            eprintln!(
+                "profile nodes={} dimension={} holdout={:?} cost_calls={} gradient_calls={} computes={} age_ns={} likelihood_ns={} penalty_ns={} assemble_ns={}",
+                self.model.nodes.len(),
+                self.dimension,
+                self.holdout,
+                self.profile.cost_calls.get(),
+                self.profile.gradient_calls.get(),
+                self.profile.computes.get(),
+                self.profile.age_ns.get(),
+                self.profile.likelihood_ns.get(),
+                self.profile.penalty_ns.get(),
+                self.profile.assemble_ns.get()
+            );
+        }
+    }
 }
 
 struct Scratch {
@@ -46,9 +81,7 @@ impl<'a> Problem<'a> {
         if !lambda.is_finite() || lambda <= 0.0 {
             return Err("invalid PL lambda".into());
         }
-        if holdout.is_some_and(|i| {
-            i == 0 || i >= model.nodes.len() || !model.nodes[i].children.is_empty()
-        }) {
+        if holdout.is_some_and(|i| i == 0 || i >= model.nodes.len() || !model.is_tip[i]) {
             return Err("CV holdout must be one terminal branch".into());
         }
         let mut age_var = vec![None; model.nodes.len()];
@@ -85,6 +118,8 @@ impl<'a> Problem<'a> {
                 parent_derivative: vec![0.0; n],
                 local_derivative: vec![0.0; n],
             }),
+            #[cfg(feature = "profile")]
+            profile: ProfileStats::default(),
         })
     }
 
@@ -100,7 +135,7 @@ impl<'a> Problem<'a> {
         self.map_ages(&x, &mut scratch)?;
         for i in 1..self.model.nodes.len() {
             if let Some(j) = self.rate_var[i] {
-                let parent = self.model.nodes[i].parent.ok_or("missing parent")?;
+                let parent = self.model.parents[i];
                 let duration = scratch.age[parent] - scratch.age[i];
                 if duration <= 0.0 {
                     return Err("initial ages violate strict ancestry".into());
@@ -132,9 +167,8 @@ impl<'a> Problem<'a> {
         s.parent_derivative.fill(0.0);
         s.local_derivative.fill(0.0);
         for i in 1..self.model.nodes.len() {
-            let node = &self.model.nodes[i];
-            let parent = node.parent.ok_or("missing parent")?;
-            if node.children.is_empty() {
+            let parent = self.model.parents[i];
+            if self.model.is_tip[i] {
                 s.age[i] = 0.0;
                 continue;
             }
@@ -166,7 +200,11 @@ impl<'a> Problem<'a> {
         if x.len() != self.dimension || x.iter().any(|value| !value.is_finite()) {
             return Err("invalid optimizer vector".into());
         }
+        #[cfg(feature = "profile")]
+        let phase_start = Instant::now();
         self.map_ages(x, s)?;
+        #[cfg(feature = "profile")]
+        let phase_ages = Instant::now();
         s.age_gradient.fill(0.0);
         s.rate_gradient.fill(0.0);
         s.gradient.fill(0.0);
@@ -182,7 +220,7 @@ impl<'a> Problem<'a> {
                 return Err("nonfinite fitted rate".into());
             }
             s.rate[i] = q_scaled / self.model.root_age;
-            let parent = self.model.nodes[i].parent.ok_or("missing parent")?;
+            let parent = self.model.parents[i];
             let duration = s.age[parent] - s.age[i];
             let mean = q_scaled * duration;
             if !mean.is_finite() || mean <= 0.0 {
@@ -195,13 +233,11 @@ impl<'a> Problem<'a> {
             s.age_gradient[parent] += age_derivative;
             s.age_gradient[i] -= age_derivative;
         }
+        #[cfg(feature = "profile")]
+        let phase_likelihood = Instant::now();
         let mut roughness = 0.0;
-        for i in 1..n {
+        for &(i, parent) in &self.model.nonbasal_edges {
             if Some(i) == self.holdout {
-                continue;
-            }
-            let parent = self.model.nodes[i].parent.ok_or("missing parent")?;
-            if parent == 0 {
                 continue;
             }
             let left = match self.model.penalty {
@@ -227,10 +263,7 @@ impl<'a> Problem<'a> {
             s.rate_gradient[i] += self.lambda * 2.0 * difference * left_chain;
             s.rate_gradient[parent] -= self.lambda * 2.0 * difference * right_chain;
         }
-        let basal = [
-            self.model.nodes[0].children[0],
-            self.model.nodes[0].children[1],
-        ];
+        let basal = self.model.basal;
         if self.holdout != Some(basal[0]) && self.holdout != Some(basal[1]) {
             let values = basal.map(|i| {
                 if self.model.penalty == Penalty::Add {
@@ -251,10 +284,12 @@ impl<'a> Problem<'a> {
                 s.rate_gradient[i] += self.lambda * delta * chain;
             }
         }
+        #[cfg(feature = "profile")]
+        let phase_penalty = Instant::now();
         for i in (1..n).rev() {
             if let Some(j) = self.age_var[i] {
                 s.gradient[j] = s.age_gradient[i] * s.local_derivative[i];
-                let parent = self.model.nodes[i].parent.ok_or("missing parent")?;
+                let parent = self.model.parents[i];
                 s.age_gradient[parent] += s.age_gradient[i] * s.parent_derivative[i];
             }
         }
@@ -269,6 +304,26 @@ impl<'a> Problem<'a> {
         }
         s.last.clear();
         s.last.extend_from_slice(x);
+        #[cfg(feature = "profile")]
+        {
+            self.profile.computes.set(self.profile.computes.get() + 1);
+            self.profile.age_ns.set(
+                self.profile.age_ns.get()
+                    + phase_ages.duration_since(phase_start).as_nanos() as u64,
+            );
+            self.profile.likelihood_ns.set(
+                self.profile.likelihood_ns.get()
+                    + phase_likelihood.duration_since(phase_ages).as_nanos() as u64,
+            );
+            self.profile.penalty_ns.set(
+                self.profile.penalty_ns.get()
+                    + phase_penalty.duration_since(phase_likelihood).as_nanos() as u64,
+            );
+            self.profile.assemble_ns.set(
+                self.profile.assemble_ns.get()
+                    + Instant::now().duration_since(phase_penalty).as_nanos() as u64,
+            );
+        }
         Ok(())
     }
 
@@ -350,12 +405,10 @@ impl<'a> Problem<'a> {
         let tip = self.holdout.ok_or("not a CV fold")?;
         self.value_and_gradient(x)?;
         let s = self.scratch.borrow();
-        let parent = self.model.nodes[tip]
-            .parent
-            .ok_or("missing held-out parent")?;
+        let parent = self.model.parents[tip];
         let donor = if parent == 0 {
-            self.model.nodes[0]
-                .children
+            self.model
+                .basal
                 .iter()
                 .copied()
                 .find(|&sibling| sibling != tip)
@@ -383,6 +436,10 @@ impl CostFunction for Problem<'_> {
     type Param = Vec<f64>;
     type Output = f64;
     fn cost(&self, param: &Self::Param) -> Result<Self::Output, Error> {
+        #[cfg(feature = "profile")]
+        self.profile
+            .cost_calls
+            .set(self.profile.cost_calls.get() + 1);
         self.value(param)
             .map(|cost| cost / self.optimizer_scale.get())
             .map_err(|message| anyhow::anyhow!(message))
@@ -393,6 +450,10 @@ impl Gradient for Problem<'_> {
     type Param = Vec<f64>;
     type Gradient = Vec<f64>;
     fn gradient(&self, param: &Self::Param) -> Result<Self::Gradient, Error> {
+        #[cfg(feature = "profile")]
+        self.profile
+            .gradient_calls
+            .set(self.profile.gradient_calls.get() + 1);
         self.gradient_vector(param)
             .map(|gradient| {
                 gradient

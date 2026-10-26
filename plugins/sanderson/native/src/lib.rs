@@ -71,7 +71,7 @@ fn fit(
         let initial = problem.initial(start as u64)?;
         let initial_scale = problem.scale_optimizer_at(&initial)?;
         let gradient_tolerance =
-            (1e-4 * (problem.dimension as f64).sqrt()).max(1e-7 * initial_scale);
+            (2e-6 * (problem.dimension as f64).sqrt()).max(1e-9 * initial_scale);
         let solver = LBFGS::new(MoreThuenteLineSearch::new(), 10)
             .with_tolerance_grad(gradient_tolerance / initial_scale)
             .map_err(|error| error.to_string())?

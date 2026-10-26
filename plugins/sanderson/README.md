@@ -56,6 +56,12 @@ on the largest initial gradient component; the reported PL objective remains
 unscaled. A start is accepted only when L-BFGS reports convergence and the
 unscaled gradient norm is below the recorded absolute/initial-relative
 tolerance. These numerical controls do not change the fitted objective.
+The stopping tolerance is `max(2e-6*sqrt(number_of_parameters),
+1e-9*initial_gradient_scale)`. A compact indexed ancestry map and Thin LTO
+reduce measured runtime while preserving byte-identical results relative to
+the same criterion without those speed changes. The separate
+[`native/BENCHMARK_APE.md`](native/BENCHMARK_APE.md) records the benchmark-only
+ape comparison and its model differences.
 
 ## Source, package stage and delivery
 
