@@ -26,6 +26,21 @@ const DISC: u8 = 127;
 #[derive(Clone, Debug, Default)]
 pub struct Frame {
     data: Vec<f32>,
+    text_runs: Vec<TextRun>,
+}
+
+/// Source text retained where the screen's ASCII atlas cannot represent it.
+/// The SVG serializer replaces the corresponding glyph quads with real text.
+#[derive(Clone, Debug)]
+pub(crate) struct TextRun {
+    pub start: usize,
+    pub end: usize,
+    pub x: f32,
+    pub y: f32,
+    pub size: f32,
+    pub text: String,
+    pub color: Rgba,
+    pub vertical: bool,
 }
 
 impl Frame {
@@ -35,6 +50,7 @@ impl Frame {
 
     pub fn clear(&mut self) {
         self.data.clear();
+        self.text_runs.clear();
     }
 
     pub fn len(&self) -> usize {
@@ -49,8 +65,13 @@ impl Frame {
         &self.data
     }
 
+    pub(crate) fn text_runs(&self) -> &[TextRun] {
+        &self.text_runs
+    }
+
     /// Append another frame with its geometry translated by `dx, dy`.
     pub fn append_translated(&mut self, other: &Frame, dx: f32, dy: f32) {
+        let start = self.len();
         for instance in other.data.chunks_exact(FLOATS_PER_INSTANCE) {
             let mut translated = [0.0; FLOATS_PER_INSTANCE];
             translated.copy_from_slice(instance);
@@ -60,6 +81,14 @@ impl Frame {
             }
             self.data.extend_from_slice(&translated);
         }
+        self.text_runs
+            .extend(other.text_runs.iter().cloned().map(|mut run| {
+                run.start += start;
+                run.end += start;
+                run.x += dx;
+                run.y += dy;
+                run
+            }));
     }
 
     /// The instance data as bytes in native endianness, for upload.
@@ -149,6 +178,7 @@ impl Frame {
     /// Text running top to bottom (turned a quarter clockwise), its line
     /// starting at `(x, y)` with `x` the left edge; returns its length.
     pub fn text_down(&mut self, x: f32, y: f32, size: f32, text: &str, color: Rgba) -> f32 {
+        let start = self.len();
         let advance = size * GLYPH_ADVANCE;
         let mut cy = y;
         for b in text.bytes() {
@@ -170,11 +200,25 @@ impl Frame {
             }
             cy += advance;
         }
+        if !text.is_ascii() {
+            let end = self.len();
+            self.text_runs.push(TextRun {
+                start,
+                end,
+                x,
+                y,
+                size,
+                text: text.into(),
+                color,
+                vertical: true,
+            });
+        }
         cy - y
     }
 
     /// A line of text starting at `(x, y)`; returns its width.
     pub fn text(&mut self, x: f32, y: f32, size: f32, text: &str, color: Rgba) -> f32 {
+        let start = self.len();
         let advance = size * GLYPH_ADVANCE;
         let mut cx = x;
         for b in text.bytes() {
@@ -182,6 +226,19 @@ impl Frame {
                 self.glyph(cx, y, size, b, color);
             }
             cx += advance;
+        }
+        if !text.is_ascii() {
+            let end = self.len();
+            self.text_runs.push(TextRun {
+                start,
+                end,
+                x,
+                y,
+                size,
+                text: text.into(),
+                color,
+                vertical: false,
+            });
         }
         cx - x
     }
