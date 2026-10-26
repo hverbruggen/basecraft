@@ -106,6 +106,7 @@ impl PluginProcess {
                     }
                     if started.elapsed() > CONNECT_TIMEOUT {
                         let _ = child.kill();
+                        let _ = child.wait();
                         return Err(Error::Timeout(manifest.id.clone()));
                     }
                     std::thread::sleep(Duration::from_millis(1));
@@ -126,7 +127,11 @@ impl PluginProcess {
             },
             startup: Duration::ZERO,
             child,
-            rx: Receiver::new(stream),
+            rx: Receiver::with_limits(
+                stream,
+                basecraft_protocol::operation::MAX_FRAME_BYTES,
+                basecraft_protocol::operation::MAX_FDS,
+            ),
             next_id: 1,
             cpu_budget,
             _socket_dir: dir,
@@ -155,6 +160,13 @@ impl PluginProcess {
         let id = self.next_id;
         self.next_id += 1;
         let mut line = serde_json::to_vec(&Message::request(id, method, params, fds.len()))?;
+        if line.len() > basecraft_protocol::operation::MAX_FRAME_BYTES
+            || fds.len() > basecraft_protocol::operation::MAX_FDS
+        {
+            return Err(Error::Protocol(
+                "outgoing frame/descriptor limit exceeded".into(),
+            ));
+        }
         line.push(b'\n');
         fdpass::send(self.rx.stream(), &line, fds)?;
         let reply = self

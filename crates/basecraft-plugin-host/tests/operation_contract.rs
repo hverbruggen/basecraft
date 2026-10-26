@@ -139,3 +139,63 @@ fn schema_two_negotiation_refuses_false_or_legacy_runtime() {
     .unwrap();
     assert!(legacy.capabilities.is_empty());
 }
+
+#[test]
+fn negotiated_sdk_context_runs_and_legacy_call_is_refused() {
+    use basecraft_plugin_host::PluginProcess;
+    use basecraft_protocol::operation::InvocationContext;
+    use std::collections::BTreeMap;
+    let manifest = fixture();
+    let python = std::env::var_os("BASECRAFT_PYTHON").map_or_else(
+        || std::path::PathBuf::from("python3"),
+        std::path::PathBuf::from,
+    );
+    let mut process = PluginProcess::spawn_with(&manifest, &python).unwrap();
+    process.ping().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let input = temp.path().join("input");
+    std::fs::write(&input, b"ab\nc\n").unwrap();
+    let report = temp.path().join("report.json");
+    let context = InvocationContext {
+        schema: 1,
+        operation: "org.example.registry-fixture/count@1".into(),
+        run_id: "test".into(),
+        inputs: BTreeMap::from([("sources".into(), vec![input.display().to_string()])]),
+        outputs: BTreeMap::from([("report".into(), report.display().to_string())]),
+        cpu_threads: 1,
+        cancel_file: temp.path().join("cancel").display().to_string(),
+        progress_file: temp.path().join("progress").display().to_string(),
+    };
+    let result = process
+        .invoke_context(
+            "count",
+            json!({"include_newlines":false,"mode":"normal"}),
+            context,
+            None,
+        )
+        .unwrap();
+    assert_eq!(*result.data.unwrap(), json!({"bytes":3}));
+    assert_eq!(result.artifacts[0].role, "report");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&std::fs::read(report).unwrap()).unwrap(),
+        json!({"bytes":3})
+    );
+    assert!(process.invoke("count", json!({}), None).is_err());
+}
+
+#[test]
+fn embedding_distinguishes_property_names_and_literal_data_from_schema_keywords() {
+    let schema = json!({
+        "type":"object", "$defs":{"text":{"type":"string"}},
+        "properties":{
+            "default":{"$ref":"#/$defs/text"},
+            "$ref":{"type":"object","const":{"$ref":"a literal"}}
+        }
+    });
+    let embedded = contract::embedded_parameters(&schema).unwrap();
+    assert_eq!(
+        embedded["properties"]["default"]["$ref"],
+        "#/properties/parameters/$defs/text"
+    );
+    assert_eq!(embedded["properties"]["$ref"]["const"]["$ref"], "a literal");
+}

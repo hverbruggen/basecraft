@@ -389,7 +389,6 @@ pub fn normalize_parameters(descriptor: &OperationDescriptor, requested: &Value)
 
 /// Preserve local references when placing the parameter schema in an MCP request.
 pub fn embedded_parameters(schema: &Value) -> Result<Value> {
-    BoundedSchema::compile(schema)?;
     fn rebase(schema: &Value) -> Value {
         match schema {
             Value::Object(map) => Value::Object(
@@ -399,6 +398,19 @@ pub fn embedded_parameters(schema: &Value) -> Result<Value> {
                             "$ref" => value.as_str().map_or_else(
                                 || value.clone(),
                                 |r| json!(format!("#/properties/parameters{}", &r[1..])),
+                            ),
+                            "$defs" | "properties" => value.as_object().map_or_else(
+                                || value.clone(),
+                                |definitions| {
+                                    Value::Object(
+                                        definitions
+                                            .iter()
+                                            .map(|(name, definition)| {
+                                                (name.clone(), rebase(definition))
+                                            })
+                                            .collect(),
+                                    )
+                                },
                             ),
                             "default" | "const" | "enum" | "examples" => value.clone(),
                             _ => rebase(value),
@@ -411,5 +423,6 @@ pub fn embedded_parameters(schema: &Value) -> Result<Value> {
             _ => schema.clone(),
         }
     }
+    BoundedSchema::compile(schema)?;
     Ok(rebase(schema))
 }

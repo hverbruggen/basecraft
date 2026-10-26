@@ -351,7 +351,7 @@ fn write_index(
         .ok_or_else(|| Error::Protocol("index needs parent directory".into()))?;
     std::fs::create_dir_all(parent)?;
     let lock = config.index.with_extension("lock");
-    let _file = std::fs::OpenOptions::new()
+    let index_lock = std::fs::OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(false)
@@ -361,7 +361,7 @@ fn write_index(
                 "cannot lock plugin index (another install may be active): {e}"
             ))
         })?;
-    if !_file.try_lock_exclusive()? {
+    if !index_lock.try_lock_exclusive()? {
         return Err(Error::Protocol(
             "plugin index is locked by another installation".into(),
         ));
@@ -391,7 +391,15 @@ pub fn install(config: &RegistryConfig, source: &Path) -> Result<String> {
     let directory = format!("{}-{}", manifest.id, digest.replace(':', "-"));
     std::fs::create_dir_all(&config.packages)?;
     let destination = config.packages.join(&directory);
-    if !destination.exists() {
+    if destination.exists() {
+        if package_digest(&destination)? != digest {
+            return Err(Error::Protocol("installed package digest mismatch".into()));
+        }
+        write_index(config, |index| {
+            index.active.insert(manifest.id.clone(), directory);
+            Ok(())
+        })?;
+    } else {
         let pending = tempfile::Builder::new()
             .prefix(".install-")
             .tempdir_in(&config.packages)?;
@@ -421,14 +429,6 @@ pub fn install(config: &RegistryConfig, source: &Path) -> Result<String> {
                 std::fs::rename(pending.path(), &destination)?;
             }
             index.active.insert(manifest.id.clone(), directory.clone());
-            Ok(())
-        })?;
-    } else {
-        if package_digest(&destination)? != digest {
-            return Err(Error::Protocol("installed package digest mismatch".into()));
-        }
-        write_index(config, |index| {
-            index.active.insert(manifest.id.clone(), directory);
             Ok(())
         })?;
     }

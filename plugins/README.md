@@ -26,3 +26,10 @@ has a `name`, `label`, `type` (`choice`, `integer` or `boolean`) and
 
 The host checks the values against the form before a run. See `fasttree`,
 `iqtree` and `distance`.
+
+## Installed operation contracts
+
+See [versioned operation contracts](operation-contract.md) for schema-2 metadata,
+local installation/default enablement, safety warning, SDK compatibility and the
+bounded offline schema profile. This foundation retains explicit schema-1 routes;
+generic execution and generated API/MCP jobs are subsequent implementation phases.

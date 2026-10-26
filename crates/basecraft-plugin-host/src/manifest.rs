@@ -1,5 +1,6 @@
 //! `plugin.toml`.
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -261,7 +262,14 @@ impl Manifest {
             path: path.display().to_string(),
             message,
         };
-        let text = std::fs::read_to_string(&path).map_err(|e| err(e.to_string()))?;
+        let file = std::fs::File::open(&path).map_err(|e| err(e.to_string()))?;
+        let mut text = String::new();
+        file.take((basecraft_protocol::operation::MAX_DESCRIPTOR_BYTES + 1) as u64)
+            .read_to_string(&mut text)
+            .map_err(|e| err(e.to_string()))?;
+        if text.len() > basecraft_protocol::operation::MAX_DESCRIPTOR_BYTES {
+            return Err(err("manifest exceeds byte limit".into()));
+        }
         let mut m: Manifest = toml::from_str(&text).map_err(|e| err(e.to_string()))?;
         if m.schema != 1 && m.schema != 2 {
             return Err(err(format!("unsupported schema {}", m.schema)));
@@ -324,7 +332,6 @@ impl Manifest {
             .ok_or_else(|| Error::Protocol("schema 2 requires contract".into()))?;
         let path = self.package_file(relative)?;
         let file = std::fs::File::open(path)?;
-        use std::io::Read;
         let mut bytes = Vec::new();
         file.take((basecraft_protocol::operation::MAX_DESCRIPTOR_BYTES + 1) as u64)
             .read_to_end(&mut bytes)?;

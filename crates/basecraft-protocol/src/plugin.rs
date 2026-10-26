@@ -105,7 +105,7 @@ pub struct Invoke {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct InvokeResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub data: Option<Value>,
+    pub data: Option<Box<Value>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub artifacts: Vec<crate::operation::PluginArtifact>,
     #[serde(default)]
