@@ -44,3 +44,39 @@ class PluginContextTests(unittest.TestCase):
         self.assertEqual(plugin._dispatch("invoke", request, []), {"data": {"ok": True}})
         with self.assertRaises(ValueError):
             plugin.operation("new")(lambda _snapshot, _parameters: None)
+
+    def test_declared_legacy_adapter_preserves_controls_and_allocated_collections(self):
+        import json
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "outputs"
+            output.mkdir()
+            contract = root / "operations.json"
+            contract.write_text(json.dumps({"schema": 1, "operations": [{
+                "implementation": "old", "legacy_adapter": {
+                    "primary_input": "source", "inputs": {"source": "input"},
+                    "outputs": {"output": {"role": "artifacts", "path": "result.txt"}},
+                    "allocation": "artifacts",
+                },
+            }]}))
+            plugin = Plugin("org.example.adapter", "1.0.0")
+
+            @plugin.operation("old")
+            def old(_snapshot, parameters):
+                self.assertEqual(parameters["count"], 3)
+                self.assertEqual(parameters["input"], str(root / "source"))
+                target = Path(parameters["output"])
+                target.write_text("exact result")
+                target.with_suffix(".log").write_text("diagnostic")
+                return {"outputs": [str(target)], "ops": []}
+
+            plugin.contract(contract)
+            self.assertEqual(plugin._dispatch("initialize", {}, [])["capabilities"], ["operation-contract-v1"])
+            context = {"schema": 1, "inputs": {"source": [str(root / "source")]},
+                       "outputs": {"artifacts": str(output)}, "run_id": "owned",
+                       "cancel_file": str(root / "cancel"), "progress_file": str(root / "progress")}
+            result = plugin._dispatch("invoke", {"operation": "old", "params": {"count": 3}, "context": context}, [])
+            self.assertEqual(result["artifacts"], [{"role": "artifacts", "path": "result.log"}, {"role": "artifacts", "path": "result.txt"}])
+            self.assertIsNone(result["data"])

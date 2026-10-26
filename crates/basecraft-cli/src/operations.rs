@@ -149,7 +149,11 @@ pub fn operations(command: OperationsCommand) -> Result<()> {
             request,
             ..
         } => {
-            let bytes = std::fs::read(request)?;
+            use std::io::Read;
+            let mut bytes = Vec::new();
+            std::fs::File::open(request)?
+                .take((basecraft_protocol::operation::MAX_FRAME_BYTES + 1) as u64)
+                .read_to_end(&mut bytes)?;
             if bytes.len() > basecraft_protocol::operation::MAX_FRAME_BYTES {
                 return Err("request exceeds byte limit".into());
             }
@@ -255,7 +259,7 @@ fn serve_jobs(project: &Path) -> Result<()> {
         };
         let request: Value = serde_json::from_slice(&line)?;
         let operation = request["request"]["operation"].as_str().unwrap_or("");
-        let response = (|| -> Result<Value> {
+        let response = (|| -> basecraft_plugin_host::Result<Value> {
             match request["method"].as_str().unwrap_or("") {
                 "submit" => Ok(serde_json::to_value(jobs.submit_in_session(
                     &registry,
@@ -264,29 +268,40 @@ fn serve_jobs(project: &Path) -> Result<()> {
                     "Python",
                     &mut session,
                 )?)?),
-                "status" => Ok(serde_json::to_value(
-                    jobs.get(request["job"].as_str().ok_or("missing job")?)?,
-                )?),
-                "result" => Ok(serde_json::to_value(
-                    jobs.result(request["job"].as_str().ok_or("missing job")?)?,
-                )?),
-                "cancel" => Ok(serde_json::to_value(
-                    jobs.cancel(request["job"].as_str().ok_or("missing job")?)?,
-                )?),
-                "repair" => Ok(serde_json::to_value(
-                    jobs.repair(request["job"].as_str().ok_or("missing job")?)?,
-                )?),
+                "status" => Ok(serde_json::to_value(jobs.get(
+                    request["job"].as_str().ok_or_else(|| {
+                        basecraft_plugin_host::Error::Protocol("missing job".into())
+                    })?,
+                )?)?),
+                "result" => Ok(serde_json::to_value(jobs.result(
+                    request["job"].as_str().ok_or_else(|| {
+                        basecraft_plugin_host::Error::Protocol("missing job".into())
+                    })?,
+                )?)?),
+                "cancel" => Ok(serde_json::to_value(jobs.cancel(
+                    request["job"].as_str().ok_or_else(|| {
+                        basecraft_plugin_host::Error::Protocol("missing job".into())
+                    })?,
+                )?)?),
+                "repair" => Ok(serde_json::to_value(jobs.repair(
+                    request["job"].as_str().ok_or_else(|| {
+                        basecraft_plugin_host::Error::Protocol("missing job".into())
+                    })?,
+                )?)?),
                 "refresh" => {
                     registry = Registry::load(&config)?;
                     list(&registry)
+                        .map_err(|error| basecraft_plugin_host::Error::Protocol(error.to_string()))
                 }
-                _ => Err("unknown job-session method".into()),
+                _ => Err(basecraft_plugin_host::Error::Protocol(
+                    "unknown job-session method".into(),
+                )),
             }
         })()
         .unwrap_or_else(|error| {
             basecraft_plugin_host::jobs::error_value(
                 operation,
-                basecraft_protocol::operation::OperationErrorCode::InvalidArguments,
+                basecraft_plugin_host::jobs::error_code(&error),
                 error.to_string(),
             )
         });

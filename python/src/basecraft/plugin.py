@@ -104,6 +104,7 @@ class Plugin:
         self.version = version
         self._ops: dict[str, Handler] = {}
         self._context_ops: dict[str, Callable] = {}
+        self._adapters: dict[str, Callable] = {}
 
     def operation(self, name: str) -> Callable[[Handler], Handler]:
         def register(fn: Handler) -> Handler:
@@ -127,6 +128,103 @@ class Plugin:
             return fn
 
         return register
+
+    def contract(self, path="operations.json") -> None:
+        """Bind declared compatibility adapters to existing public SDK handlers.
+
+        New plugins can use context_operation directly. This migration adapter
+        never changes scientific choices or interprets arbitrary control paths.
+        """
+        from pathlib import Path
+
+        path = Path(path)
+        if not path.is_absolute():
+            path = Path(sys.argv[0]).resolve().parent / path
+        contract = json.loads(path.read_text())
+        if contract["schema"] != 1:
+            raise ValueError("unsupported operation contract")
+        for descriptor in contract["operations"]:
+            name = descriptor["implementation"]
+            if name in self._context_ops:
+                continue
+            handler = self._ops.get(name)
+            adapter = descriptor.get("legacy_adapter")
+            if handler is None or adapter is None:
+                raise ValueError(f"no public handler/adapter for {name!r}")
+            self._adapters[name] = self._adapt(handler, adapter)
+
+    @staticmethod
+    def _adapt(handler, adapter):
+        def invoke(snapshot, parameters, context):
+            from pathlib import Path
+
+            effective = dict(parameters)
+            controls = context.get("legacy_parameters", {})
+            if any(key in effective for key in controls):
+                raise ValueError("legacy context overlaps scientific parameters")
+            effective.update(controls)
+            if controls:
+                # Explicit host compatibility facade. Its preallocated flat
+                # bindings and publication policy stay with FileJob; the same
+                # scientific schema/defaults and context capability still apply.
+                return handler(snapshot, effective)
+            for binding, parameter in adapter["inputs"].items():
+                paths = context["inputs"].get(binding, [])
+                if binding in adapter.get("input_arrays", []):
+                    effective[parameter] = paths
+                elif paths:
+                    if len(paths) != 1:
+                        raise ValueError(f"{binding} requires one file")
+                    effective[parameter] = paths[0]
+            for parameter, binding in adapter["outputs"].items():
+                root = Path(context["outputs"][binding["role"]])
+                target = root if binding["path"] == "." else root / binding["path"]
+                target.parent.mkdir(parents=True, exist_ok=True)
+                effective[parameter] = str(target)
+            effective.update(job_id=context["run_id"], cancel_file=context["cancel_file"], progress=context["progress_file"])
+            if allocation := adapter.get("allocation"):
+                root = context["outputs"][allocation]
+                effective.setdefault("analysis_artifacts", {"metadata_directory": root, "working_directory": root, "run_id": context["run_id"]})
+                all_evidence = context.get("input_evidence", {})
+                evidence = all_evidence.get(adapter.get("primary_input"), []) if adapter.get("primary_input") else next(iter(all_evidence.values()), [])
+                if evidence:
+                    record = evidence[0]
+                    if record.get("original_path"):
+                        effective.setdefault("original_source", record["original_path"])
+                        effective.setdefault("input_evidence", dict(record, path=record["original_path"]))
+            alignment = context.get("input_evidence", {}).get("alignment", [])
+            if alignment and "alignment_snapshot" in effective:
+                record = alignment[0]
+                effective.setdefault("alignment_input_hash", record["submitted_hash"])
+                effective.setdefault("alignment_evidence", dict(record, path=record.get("original_path") or effective["alignment_snapshot"]))
+            output = handler(snapshot, effective)
+            if output is None:
+                output = {"ops": []}
+            elif isinstance(output, list):
+                output = {"ops": output}
+            else:
+                output = dict(output)
+            reported = output.pop("outputs", [])
+            artifacts = []
+            allocated = []
+            for role, supplied in context["outputs"].items():
+                root = Path(supplied)
+                if root.is_dir():
+                    for member in sorted(root.rglob("*")):
+                        if member.is_symlink():
+                            raise ValueError("symlink output is not allowed")
+                        if member.is_file():
+                            artifacts.append({"role": role, "path": str(member.relative_to(root))})
+                            allocated.append(member)
+                elif root.is_file():
+                    artifacts.append({"role": role, "path": "."})
+                    allocated.append(root)
+            if any(Path(path) not in allocated for path in reported):
+                raise ValueError("handler reported an unallocated artifact")
+            output.update(artifacts=artifacts, data=output.get("data"))
+            return output
+
+        return invoke
 
     def run(self) -> None:
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -162,7 +260,7 @@ class Plugin:
                 "id": self.id,
                 "version": self.version,
                 "operations": sorted(self._ops.keys() | self._context_ops.keys()),
-                "capabilities": [CONTRACT_CAPABILITY] if self._context_ops else [],
+                "capabilities": [CONTRACT_CAPABILITY] if self._context_ops or self._adapters else [],
             }
         if method in ("ping", "shutdown"):
             return None
@@ -172,11 +270,12 @@ class Plugin:
                 raise KeyError(f"no operation {name!r}")
             snap = Snapshot(params["snapshot"], fds) if params.get("snapshot") else None
             try:
-                if name in self._context_ops:
+                if name in self._context_ops or (name in self._adapters and params.get("context") is not None):
                     context = params.get("context")
                     if not isinstance(context, dict) or context.get("schema") != 1:
                         raise ValueError("operation requires operation-contract-v1 host context")
-                    out = self._context_ops[name](snap, params.get("params") or {}, context)
+                    handler = self._context_ops.get(name) or self._adapters[name]
+                    out = handler(snap, params.get("params") or {}, context)
                 else:
                     if params.get("context") is not None:
                         raise ValueError("legacy handler cannot accept operation contract context")

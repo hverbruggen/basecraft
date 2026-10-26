@@ -188,19 +188,15 @@ fn one_binding_resolver_checks_arrays_traversal_links_and_collisions() {
 
 #[test]
 fn schema_one_stays_legacy_and_schema_two_contract_path_cannot_escape() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins");
-    for entry in std::fs::read_dir(root).unwrap() {
-        let path = entry.unwrap().path();
-        if path.join("plugin.toml").exists() {
-            assert!(
-                Manifest::load(&path)
-                    .unwrap()
-                    .operation_contract()
-                    .unwrap()
-                    .is_none()
-            );
-        }
-    }
+    let legacy =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/legacy-plugin");
+    assert!(
+        Manifest::load(&legacy)
+            .unwrap()
+            .operation_contract()
+            .unwrap()
+            .is_none()
+    );
     let temp = tempfile::tempdir().unwrap();
     std::fs::write(
         temp.path().join("plugin.toml"),

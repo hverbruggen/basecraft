@@ -153,10 +153,19 @@ pub fn verify(result: &Path) -> Result<Vec<String>> {
         let path = if index == 0 && !hidden {
             result.to_path_buf()
         } else {
-            safe_relative(
-                result.parent().unwrap_or(Path::new(".")),
-                &output.logical_name,
-            )?
+            let base = if output.retained.as_deref() == Some(output.logical_name.as_str()) {
+                bundle.as_path()
+            } else if hidden {
+                bundle
+                    .parent()
+                    .and_then(Path::parent)
+                    .and_then(Path::parent)
+                    .and_then(Path::parent)
+                    .ok_or_else(|| invalid("invalid hidden publication path"))?
+            } else {
+                result.parent().unwrap_or(Path::new("."))
+            };
+            safe_relative(base, &output.logical_name)?
         };
         match basecraft_io::hash_file(&path) {
             Ok(hash) if hash == output.hash => {}

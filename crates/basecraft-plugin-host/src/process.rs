@@ -22,10 +22,12 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 
 pub struct PluginProcess {
     pub info: PluginInfo,
+    manifest: Manifest,
     /// Time from spawning to the `initialize` reply.
     pub startup: Duration,
     child: OwnedProcess,
     cancelled: Option<Arc<AtomicBool>>,
+    cancel_path: Option<PathBuf>,
     deadline: Option<Instant>,
     capture: Arc<Mutex<CapturedOutput>>,
     capture_workers: Vec<std::thread::JoinHandle<()>>,
@@ -41,6 +43,9 @@ pub struct PluginProcess {
 pub fn python_interpreter() -> PathBuf {
     if let Some(p) = std::env::var_os("BASECRAFT_PYTHON") {
         return PathBuf::from(p);
+    }
+    if let Some(python) = crate::installation::bundled_python() {
+        return python;
     }
     let pixi_envs = std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache/pixi/envs"));
     if let Some(dir) = pixi_envs
@@ -61,10 +66,7 @@ pub fn python_interpreter() -> PathBuf {
 
 /// Where the `basecraft` Python SDK lives during development.
 fn sdk_path() -> PathBuf {
-    std::env::var_os("BASECRAFT_PYTHONPATH").map_or_else(
-        || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../python/src"),
-        PathBuf::from,
-    )
+    crate::installation::sdk()
 }
 
 impl PluginProcess {
@@ -81,6 +83,7 @@ impl PluginProcess {
     }
 
     pub fn spawn_allocated(manifest: &Manifest, python: &Path, budget: usize) -> Result<Self> {
+        crate::registry::require_enabled(&manifest.id)?;
         let cpu_budget = budget.clamp(1, crate::compute::available());
         let runtime_limit = std::env::var("BASECRAFT_PLUGIN_TIMEOUT_SECONDS")
             .ok()
@@ -155,6 +158,7 @@ impl PluginProcess {
         stream.set_read_timeout(Some(Duration::from_millis(100)))?;
         stream.set_write_timeout(Some(Duration::from_millis(500)))?;
         let mut p = Self {
+            manifest: manifest.clone(),
             info: PluginInfo {
                 protocol: 0,
                 id: manifest.id.clone(),
@@ -165,6 +169,7 @@ impl PluginProcess {
             startup: Duration::ZERO,
             child,
             cancelled: None,
+            cancel_path: None,
             deadline: Some(started + CONNECT_TIMEOUT),
             capture,
             capture_workers,
@@ -212,6 +217,9 @@ impl PluginProcess {
         line.push(b'\n');
         fdpass::send(self.rx.stream(), &line, fds)?;
         let reply = loop {
+            if self.cancel_path.as_ref().is_some_and(|path| path.exists()) {
+                return Err(Error::Protocol("cancelled".into()));
+            }
             if self
                 .cancelled
                 .as_ref()
@@ -238,7 +246,11 @@ impl PluginProcess {
             let cancelled = self.cancelled.clone();
             let deadline = self.deadline;
             let capture = self.capture.clone();
+            let cancel_path = self.cancel_path.clone();
             match self.rx.line_checked(|| {
+                if cancel_path.as_ref().is_some_and(|path| path.exists()) {
+                    return Err(std::io::Error::other("cancelled"));
+                }
                 if cancelled
                     .as_ref()
                     .is_some_and(|flag| flag.load(Ordering::Acquire))
@@ -306,6 +318,81 @@ impl PluginProcess {
         params: Value,
         snapshot: Option<&Snapshot>,
     ) -> Result<InvokeResult> {
+        self.cancel_path = params
+            .get("cancel_file")
+            .and_then(Value::as_str)
+            .map(PathBuf::from);
+        if let Some(contract) = self.manifest.operation_contract()? {
+            let matching: Vec<_> = contract
+                .operations
+                .iter()
+                .filter(|descriptor| descriptor.implementation == operation)
+                .collect();
+            if matching.len() > 1 {
+                return Err(Error::Protocol(
+                    "ambiguous legacy operation major; use its canonical registry ID".into(),
+                ));
+            }
+            if let Some(descriptor) = matching.first() {
+                let given = params.as_object().ok_or_else(|| {
+                    Error::Protocol("operation parameters must be an object".into())
+                })?;
+                let properties = descriptor.parameters["properties"]
+                    .as_object()
+                    .ok_or_else(|| Error::Protocol("missing parameter properties".into()))?;
+                let scientific: serde_json::Map<String, Value> = given
+                    .iter()
+                    .filter(|(key, _)| properties.contains_key(*key))
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect();
+                let scientific =
+                    crate::contract::normalize_parameters(descriptor, &Value::Object(scientific))?;
+                let scientific = crate::compute::parameters_for(
+                    descriptor,
+                    scientific
+                        .as_object()
+                        .cloned()
+                        .ok_or_else(|| Error::Protocol("invalid normalized parameters".into()))?,
+                    self.cpu_budget,
+                );
+                crate::contract::BoundedSchema::compile(&descriptor.parameters)?
+                    .validate(&Value::Object(scientific.clone()))?;
+                let controls: std::collections::BTreeMap<_, _> = given
+                    .iter()
+                    .filter(|(key, _)| !properties.contains_key(*key))
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect();
+                let context = basecraft_protocol::operation::InvocationContext {
+                    schema: 1,
+                    operation: crate::contract::operation_id(&self.manifest.id, descriptor)?,
+                    run_id: given
+                        .get("job_id")
+                        .and_then(Value::as_str)
+                        .map_or_else(|| ulid::Ulid::generate().to_string(), str::to_owned),
+                    inputs: std::collections::BTreeMap::new(),
+                    outputs: std::collections::BTreeMap::new(),
+                    cpu_threads: self.cpu_budget,
+                    cancel_file: given
+                        .get("cancel_file")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .into(),
+                    progress_file: given
+                        .get("progress")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .into(),
+                    input_evidence: std::collections::BTreeMap::new(),
+                    legacy_parameters: controls,
+                };
+                return self.invoke_context(
+                    &descriptor.implementation,
+                    Value::Object(scientific),
+                    context,
+                    snapshot,
+                );
+            }
+        }
         let params = match params {
             Value::Object(params) => Value::Object(crate::compute::parameters(
                 &self.info.id,

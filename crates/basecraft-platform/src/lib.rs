@@ -2,6 +2,7 @@
 //! shared memory and descriptor passing, and later file watching and SIGBUS
 //! handling.
 
+pub mod atomic;
 #[cfg(unix)]
 pub mod fdpass;
 pub mod interrupt;

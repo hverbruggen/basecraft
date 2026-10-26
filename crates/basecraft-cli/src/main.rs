@@ -289,6 +289,9 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             matrix,
             groups,
         } => {
+            if progress.is_some() || cancel_file.is_some() || cache.is_some() {
+                return Err("Control/cache paths are host-managed; use operations run and owned job cancellation".into());
+            }
             let root = file
                 .parent()
                 .filter(|p| !p.as_os_str().is_empty())
@@ -298,10 +301,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             if !session.is_alignment(doc) {
                 return Err("distance inference requires an alignment".into());
             }
-            let plugin_root = std::env::var_os("BASECRAFT_PLUGINS").map_or_else(
-                || PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins"),
-                PathBuf::from,
-            );
+            let plugin_root = basecraft_plugin_host::installation::plugins();
             let operation = if groups.is_some() {
                 "groups"
             } else if matrix {

@@ -53,6 +53,7 @@ def main():
         print(json.dumps(manifest, indent=2))
         return
     env = dict(os.environ)
+    env.setdefault("BASECRAFT", str(bundle / "bin/basecraft"))
     env.setdefault("BASECRAFT_PLUGINS", str(bundle / "plugins"))
     env.setdefault("BASECRAFT_PYTHONPATH", str(bundle / "python/src"))
     env.setdefault("BASECRAFT_DISTANCE", str(bundle / "bin/basecraft-distance"))

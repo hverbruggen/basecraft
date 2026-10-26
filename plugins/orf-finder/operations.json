@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "operations": [
+    {
+      "name": "find_orfs",
+      "version": "1.0.0",
+      "implementation": "find_orfs",
+      "title": "Find open reading frames",
+      "description": "Find open reading frames. Uses the existing public plugin implementation and declared immutable inputs.",
+      "family": "sequence_proposal",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "min_codons": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 100
+          },
+          "start": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          },
+          "end": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "result": {
+        "type": "null"
+      },
+      "inputs": {
+        "sequence": {
+          "view": "sequence_snapshot",
+          "media_type": "application/vnd.apache.arrow.stream",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "outputs": {},
+      "effects": {
+        "document_write": true,
+        "artifact_write": false
+      },
+      "cpu_parameters": [],
+      "legacy_adapter": {
+        "primary_input": null,
+        "inputs": {},
+        "input_arrays": [],
+        "outputs": {},
+        "allocation": null
+      }
+    }
+  ]
+}

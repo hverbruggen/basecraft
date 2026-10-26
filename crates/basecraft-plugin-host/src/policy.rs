@@ -163,12 +163,6 @@ impl SessionPolicy {
         let mut destinations = BTreeMap::new();
         let mut unique = BTreeSet::new();
         for (name, path) in &request.destinations {
-            let binding = &operation.descriptor.outputs[name];
-            if binding.collection {
-                return Err(Error::Protocol(
-                    "invalid_arguments: collections are retained in the run store".into(),
-                ));
-            }
             let resolved = self.path(path, true)?;
             // Canonical parent prevents lexical aliases such as './'.
             let key = resolved

@@ -46,8 +46,37 @@ pub struct OperationDescriptor {
     pub required_features: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cpu_parameter: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cpu_parameters: Vec<String>,
+    /// Explicit migration of a public two-argument SDK handler. Runtime controls
+    /// come only from the allocated context; scientific callers cannot set them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legacy_adapter: Option<LegacyAdapter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_workflow: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub presentation: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LegacyAdapter {
+    #[serde(default)]
+    pub primary_input: Option<String>,
+    /// Named input binding -> legacy handler parameter.
+    pub inputs: BTreeMap<String, String>,
+    #[serde(default)]
+    pub input_arrays: Vec<String>,
+    /// Legacy output parameter -> allocated role and relative member.
+    pub outputs: BTreeMap<String, LegacyOutput>,
+    #[serde(default)]
+    pub allocation: Option<String>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LegacyOutput {
+    pub role: String,
+    pub path: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -150,6 +179,21 @@ pub struct InvocationContext {
     pub cpu_threads: usize,
     pub cancel_file: String,
     pub progress_file: String,
+    #[serde(default)]
+    pub input_evidence: BTreeMap<String, Vec<InvocationInputEvidence>>,
+    /// Host-owned legacy compatibility metadata, never caller parameters.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub legacy_parameters: BTreeMap<String, Value>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct InvocationInputEvidence {
+    pub original_path: Option<String>,
+    pub source_hash: Option<String>,
+    pub submitted_hash: String,
+    pub transformation: String,
+    pub run_directory: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

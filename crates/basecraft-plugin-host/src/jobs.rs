@@ -156,7 +156,7 @@ impl JobManager {
             drop(outcome);
             let finalized = job
                 .prepared
-                .finalize(&result, &validated, &mut final_outcome);
+                .finalize(&result, &validated, &mut final_outcome, false);
             final_outcome.state = if finalized.is_ok() {
                 RuntimeState::Completed
             } else {
@@ -182,7 +182,24 @@ impl JobManager {
         initiator: &str,
         session: Option<&mut basecraft_ops::Session>,
     ) -> Result<OperationOutcome> {
-        let digest = basecraft_io::hash_bytes(&serde_json::to_vec(&request)?);
+        let descriptor = request
+            .request_key
+            .as_ref()
+            .and_then(|key| self.requests.get(key))
+            .and_then(|(_, id)| self.jobs.get(id))
+            .map(|job| &job.prepared.operation.descriptor)
+            .or_else(|| {
+                registry
+                    .operations
+                    .get(&request.operation)
+                    .map(|op| &op.descriptor)
+            });
+        let mut normalized = request.clone();
+        if let Some(descriptor) = descriptor {
+            normalized.parameters =
+                crate::contract::normalize_parameters(descriptor, &request.parameters)?;
+        }
+        let digest = basecraft_io::hash_bytes(&serde_json::to_vec(&normalized)?);
         if let Some(key) = &request.request_key {
             if let Some((existing, id)) = self.requests.get(key) {
                 if existing != &digest {
@@ -309,7 +326,9 @@ impl JobManager {
         outcome.state = RuntimeState::Finalizing;
         let mut repaired = outcome.clone();
         drop(outcome);
-        let result = job.prepared.finalize(&result, &artifacts, &mut repaired);
+        let result = job
+            .prepared
+            .finalize(&result, &artifacts, &mut repaired, true);
         repaired.state = if result.is_ok() {
             RuntimeState::Completed
         } else {
@@ -372,6 +391,7 @@ fn fail(job: &Job, code: OperationErrorCode, message: String) {
         .outcome
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    outcome.effective_parameters = job.prepared.effective_parameters();
     outcome.state = if job.cancelled.load(Ordering::Acquire) {
         RuntimeState::Cancelled
     } else if !outcome.artifacts.is_empty() || outcome.state == RuntimeState::Finalizing {
@@ -435,6 +455,10 @@ fn execute(job: &Job) {
             return;
         }
     };
+    job.outcome
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .effective_parameters = job.prepared.effective_parameters();
     let validated = match job.prepared.validate_result(&result) {
         Ok(validated) => validated,
         Err(error) => {
@@ -470,7 +494,7 @@ fn execute(job: &Job) {
     drop(outcome);
     let result = job.prepared.persist(&final_outcome).and_then(|()| {
         job.prepared
-            .finalize(&result, &validated, &mut final_outcome)
+            .finalize(&result, &validated, &mut final_outcome, false)
     });
     *job.outcome
         .lock()

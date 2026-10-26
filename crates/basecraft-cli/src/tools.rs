@@ -2,7 +2,7 @@
 use basecraft_ops::{DocId, Session};
 use basecraft_plugin_host::{FileJob, file_tool::AlignmentInput};
 use serde_json::{Map, Value, json};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 pub fn run(
     session: &mut Session,
@@ -11,6 +11,31 @@ pub fn run(
     output: PathBuf,
     mut params: Map<String, Value>,
 ) -> Result<Value, Box<dyn std::error::Error>> {
+    if params.keys().any(|key| {
+        [
+            "executable",
+            "python",
+            "environment",
+            "env",
+            "input",
+            "output",
+            "job_id",
+            "cancel_file",
+            "progress",
+            "analysis_artifacts",
+            "original_source",
+            "input_evidence",
+            "alignment_evidence",
+            "alignment_snapshot",
+            "generation",
+            "progress_job_id",
+            "public_method",
+            "cache",
+        ]
+        .contains(&key.as_str())
+    }) {
+        return Err("Execution/control paths are host-managed; use operations run with named inputs and destinations".into());
+    }
     // Tools run inside their run folder, so a relative output would resolve there.
     let output = std::path::absolute(output)?;
     if name != "delimitation" && !session.is_alignment(doc) {
@@ -65,10 +90,7 @@ pub fn run(
     if output.exists() && output.canonicalize()? == source.canonicalize()? {
         return Err("Output must differ from the source alignment".into());
     }
-    let plugins = std::env::var_os("BASECRAFT_PLUGINS").map_or_else(
-        || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins"),
-        PathBuf::from,
-    );
+    let plugins = basecraft_plugin_host::installation::plugins();
     let mut job = FileJob::from_alignment(
         session,
         doc,
@@ -92,10 +114,7 @@ fn run_delimitation(
     mut params: Map<String, Value>,
     method: &str,
 ) -> Result<Value, Box<dyn std::error::Error>> {
-    let plugins = std::env::var_os("BASECRAFT_PLUGINS").map_or_else(
-        || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins"),
-        PathBuf::from,
-    );
+    let plugins = basecraft_plugin_host::installation::plugins();
     if matches!(
         method,
         "gmyc_alignment_single" | "gmyc_alignment_multiple" | "asap"

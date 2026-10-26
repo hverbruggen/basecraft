@@ -39,6 +39,7 @@ pub struct PreparedOperation {
     pub run: ArtifactRun,
     pub request: OperationRequest,
     pub parameters: Value,
+    granted_parameters: std::sync::Mutex<Value>,
     pub context: InvocationContext,
     pub policy: SessionPolicy,
     pub ledger_inputs: Vec<ArtifactRevision>,
@@ -139,7 +140,7 @@ impl PreparedOperation {
         let scratch = tempfile::Builder::new()
             .prefix("basecraft-operation-")
             .tempdir()?;
-        let mut frozen = BTreeMap::new();
+        let mut frozen_inputs = BTreeMap::new();
         let mut sources = Vec::new();
         for (name, paths) in bindings.inputs {
             let binding = &operation.descriptor.inputs[&name];
@@ -199,14 +200,10 @@ impl PreparedOperation {
                 ));
                 values.push(path.display().to_string());
             }
-            frozen.insert(name.clone(), values);
+            frozen_inputs.insert(name.clone(), values);
         }
         let run_id = ulid::Ulid::generate().to_string();
-        let anchor = request
-            .destinations
-            .values()
-            .next()
-            .map_or_else(|| policy.root.join("operation"), |p| policy.root.join(p));
+        let anchor = policy.root.join("operation");
         let anchor = if policy.artifact_write {
             anchor
         } else {
@@ -220,6 +217,7 @@ impl PreparedOperation {
         let mut ledger_inputs = Vec::new();
         let mut upstream = Vec::new();
         let mut first_input = None;
+        let mut evidence: BTreeMap<String, Vec<InvocationInputEvidence>> = BTreeMap::new();
         for (source, original_hash, submitted_hash, transformation, frozen) in sources {
             let ledger = input_evidence::reference_input_with_dependencies(
                 &anchor,
@@ -233,6 +231,22 @@ impl PreparedOperation {
             record.submitted_size = std::fs::metadata(&frozen)?.len();
             record.transformation = transformation.into();
             input_evidence::write_json(&ledger.artifact("input.json")?, &record)?;
+            if let Some(role) = frozen_inputs
+                .iter()
+                .find(|(_, paths)| paths.contains(&frozen.display().to_string()))
+                .map(|(role, _)| role.clone())
+            {
+                evidence
+                    .entry(role)
+                    .or_default()
+                    .push(InvocationInputEvidence {
+                        original_path: Some(source.display().to_string()),
+                        source_hash: Some(original_hash.clone()),
+                        submitted_hash: record.submitted_hash.clone(),
+                        transformation: record.transformation.clone(),
+                        run_directory: ledger.directory().display().to_string(),
+                    });
+            }
             let manifest = ledger.artifact("manifest.json")?;
             upstream.push(json!({"bundle":input_evidence::relative(run.directory(),ledger.directory())?,"id":ledger.id(),"hash":basecraft_io::hash_file(&manifest).map_err(basecraft_ops::Error::from)?}));
             let mut reference = record
@@ -297,7 +311,11 @@ impl PreparedOperation {
         }
         let mut outputs = BTreeMap::new();
         for (name, binding) in &operation.descriptor.outputs {
-            let path = run.staging(name)?;
+            let path = if operation.descriptor.host_workflow.is_some() {
+                run.artifact("workflow")?
+            } else {
+                run.staging(name)?
+            };
             if binding.collection {
                 std::fs::create_dir(&path)?;
             }
@@ -307,11 +325,13 @@ impl PreparedOperation {
             schema: 1,
             operation: operation.id.clone(),
             run_id,
-            inputs: frozen,
+            inputs: frozen_inputs,
             outputs,
             cpu_threads: crate::compute::effective_allocation()?,
             cancel_file: run.artifact("cancel")?.display().to_string(),
             progress_file: run.artifact("progress")?.display().to_string(),
+            input_evidence: evidence,
+            legacy_parameters: BTreeMap::new(),
         };
         input_evidence::write_json(&run.artifact("descriptor.json")?, &operation.descriptor)?;
         input_evidence::write_json(&run.artifact("request.json")?, &request)?;
@@ -320,6 +340,7 @@ impl PreparedOperation {
             operation,
             run,
             request,
+            granted_parameters: std::sync::Mutex::new(parameters.clone()),
             parameters,
             context,
             policy,
@@ -330,6 +351,9 @@ impl PreparedOperation {
     }
 
     pub fn execute(&self, cancelled: Arc<AtomicBool>) -> Result<InvokeResult> {
+        if self.operation.descriptor.host_workflow.is_some() {
+            return self.execute_workflow(cancelled);
+        }
         let permit = crate::compute::reserve_cpu(
             self.context.cpu_threads,
             Some(Path::new(&self.context.cancel_file)),
@@ -350,12 +374,20 @@ impl PreparedOperation {
         process.cancellation(cancelled);
         let mut context = self.context.clone();
         context.cpu_threads = permit.threads();
-        let mut effective = self.parameters.clone();
-        if let Some(parameter) = &self.operation.descriptor.cpu_parameter {
-            effective[parameter] = json!(permit.threads());
-        }
+        let effective = Value::Object(crate::compute::parameters_for(
+            &self.operation.descriptor,
+            self.parameters
+                .as_object()
+                .cloned()
+                .ok_or_else(|| Error::Protocol("parameters are not an object".into()))?,
+            permit.threads(),
+        ));
         contract::BoundedSchema::compile(&self.operation.descriptor.parameters)?
             .validate(&effective)?;
+        *self
+            .granted_parameters
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = effective.clone();
         let result = process.invoke_context(
             &self.operation.descriptor.implementation,
             effective.clone(),
@@ -458,7 +490,12 @@ impl PreparedOperation {
             }
         }
         let mut actual = BTreeSet::new();
-        scan_files(&self.run.directory().join("pending"), &mut actual, 0)?;
+        let scan_root = if self.operation.descriptor.host_workflow.is_some() {
+            self.run.artifact("workflow")?
+        } else {
+            self.run.directory().join("pending")
+        };
+        scan_files(&scan_root, &mut actual, 0)?;
         if actual != paths {
             return Err(Error::Protocol("undeclared extra staged outputs".into()));
         }
@@ -474,14 +511,124 @@ impl PreparedOperation {
         result: &InvokeResult,
         validated: &[(String, PathBuf, String)],
         outcome: &mut OperationOutcome,
+        repair: bool,
     ) -> Result<()> {
+        let mut collections = BTreeMap::new();
+        for (role, binding) in &self.operation.descriptor.outputs {
+            if !binding.collection {
+                continue;
+            }
+            let members: Vec<_> = validated
+                .iter()
+                .filter(|(member, _, _)| member == role)
+                .collect();
+            if members.is_empty() {
+                continue;
+            }
+            let staging = PathBuf::from(&self.context.outputs[role]);
+            let retained = if self.operation.descriptor.host_workflow.is_some() {
+                staging.clone()
+            } else {
+                self.run.artifact(role)?
+            };
+            let intent = self
+                .run
+                .artifact(&format!("collection-{role}-intent.json"))?;
+            let mut expected = BTreeMap::new();
+            for (_, path, hash) in &members {
+                let relative = path.strip_prefix(&staging).map_err(|_| {
+                    Error::Protocol("collection member lies outside allocation".into())
+                })?;
+                expected.insert(relative.to_path_buf(), (*hash).clone());
+            }
+            if retained == staging {
+                verify_collection(&retained, &expected)?;
+            } else if retained.exists() {
+                if !repair || !intent.is_file() {
+                    return Err(Error::Protocol(
+                        "output_conflict: retained collection already exists".into(),
+                    ));
+                }
+                verify_collection(&retained, &expected)?;
+            } else {
+                verify_collection(&staging, &expected)?;
+                input_evidence::write_json(&intent, &json!({"schema":1,"members":expected}))?;
+                for path in expected.keys() {
+                    std::fs::File::open(staging.join(path))?.sync_all()?;
+                }
+                self.run.publish_collection(role)?;
+            }
+            for (relative, hash) in &expected {
+                let path = retained.join(relative).display().to_string();
+                if !outcome
+                    .artifacts
+                    .iter()
+                    .any(|a| a.path == path && &a.digest == hash)
+                {
+                    outcome.artifacts.push(PublishedArtifact {
+                        role: role.clone(),
+                        path,
+                        digest: hash.clone(),
+                    });
+                }
+            }
+            self.persist(outcome)?;
+            if let Some(destination) = self.request.destinations.get(role) {
+                let destination_path = self.policy.root.join(destination);
+                let intent = self
+                    .run
+                    .artifact(&format!("collection-{role}-export.json"))?;
+                if destination_path.exists() {
+                    if !repair || !intent.is_file() {
+                        return Err(Error::Protocol(
+                            "output_conflict: collection destination exists".into(),
+                        ));
+                    }
+                    verify_collection(&destination_path, &expected)?;
+                } else {
+                    let destination = self.policy.path(destination, true)?;
+                    input_evidence::write_json(
+                        &intent,
+                        &json!({"schema":1,"destination":destination,"members":expected}),
+                    )?;
+                    export_collection(&retained, &destination, &expected)?;
+                }
+                for (relative, hash) in &expected {
+                    let path = destination_path.join(relative).display().to_string();
+                    if !outcome
+                        .artifacts
+                        .iter()
+                        .any(|a| a.path == path && &a.digest == hash)
+                    {
+                        outcome.artifacts.push(PublishedArtifact {
+                            role: role.clone(),
+                            path,
+                            digest: hash.clone(),
+                        });
+                    }
+                }
+                self.persist(outcome)?;
+            }
+            collections.insert(role.clone(), retained);
+        }
         let mut publication_outputs = Vec::new();
         for (index, (role, path, digest)) in validated.iter().enumerate() {
-            let name = if self.operation.descriptor.outputs[role].collection {
-                format!("{role}-{index}")
-            } else {
-                role.clone()
-            };
+            let name = role.clone();
+            if let Some(retained) = collections.get(role) {
+                let relative = path
+                    .strip_prefix(Path::new(&self.context.outputs[role]))
+                    .map_err(|_| Error::Protocol("collection member escapes allocation".into()))?;
+                let retained = retained.join(relative);
+                publication_outputs.push(ArtifactRevision {
+                    id: format!("{}:output-{index}", self.run.id()),
+                    logical_name: input_evidence::relative(&self.policy.root, &retained)?,
+                    hash: digest.clone(),
+                    size: std::fs::metadata(&retained)?.len(),
+                    retained: Some(input_evidence::relative(self.run.directory(), &retained)?),
+                    reference: None,
+                });
+                continue;
+            }
             let retained = self.run.artifact(&name)?;
             if outcome
                 .artifacts
@@ -550,7 +697,7 @@ impl PreparedOperation {
                 )?,
                 hash: digest.clone(),
                 size: std::fs::metadata(&retained)?.len(),
-                retained: None,
+                retained: Some(input_evidence::relative(self.run.directory(), &retained)?),
                 reference: None,
             });
         }
@@ -579,10 +726,16 @@ impl PreparedOperation {
             report_template_version: 2,
         };
         basecraft_ops::provenance::publish_operation(self.run.directory(), &publication)?;
-        for destination in self.request.destinations.values() {
-            self.run.bind(&self.policy.root.join(destination))?;
+        for artifact in &outcome.artifacts {
+            self.run.bind(Path::new(&artifact.path))?;
         }
         Ok(())
+    }
+    pub fn effective_parameters(&self) -> Value {
+        self.granted_parameters
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
     pub fn persist(&self, outcome: &OperationOutcome) -> Result<()> {
         input_evidence::write_json(&self.run.artifact("runtime.json")?, outcome)?;
@@ -591,6 +744,12 @@ impl PreparedOperation {
 }
 
 fn scan_files(directory: &Path, paths: &mut BTreeSet<PathBuf>, depth: usize) -> Result<()> {
+    let metadata = directory.symlink_metadata()?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(Error::Protocol(
+            "artifact root is not an ordinary directory".into(),
+        ));
+    }
     if depth > MAX_NESTING {
         return Err(Error::Protocol("artifact nesting limit exceeded".into()));
     }
@@ -624,4 +783,181 @@ fn sources_from_upstream(directory: &Path) -> Result<Vec<PathBuf>> {
         .flatten()
         .filter_map(|value| value["bundle"].as_str().map(|path| directory.join(path)))
         .collect())
+}
+
+fn verify_collection(root: &Path, expected: &BTreeMap<PathBuf, String>) -> Result<()> {
+    let metadata = root.symlink_metadata()?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(Error::Protocol("collection root is unsafe".into()));
+    }
+    let mut actual = BTreeSet::new();
+    scan_files(root, &mut actual, 0)?;
+    if actual != expected.keys().map(|path| root.join(path)).collect() {
+        return Err(Error::Protocol(
+            "collection members differ from validated output".into(),
+        ));
+    }
+    for (relative, hash) in expected {
+        let path = root.join(relative);
+        if path.symlink_metadata()?.nlink() != 1
+            || basecraft_io::hash_file(&path).map_err(basecraft_ops::Error::from)? != *hash
+        {
+            return Err(Error::Protocol(
+                "collection bytes changed after validation".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+fn export_collection(
+    source: &Path,
+    destination: &Path,
+    expected: &BTreeMap<PathBuf, String>,
+) -> Result<()> {
+    let parent = destination
+        .parent()
+        .ok_or_else(|| Error::Protocol("missing collection destination parent".into()))?;
+    let pending = tempfile::Builder::new()
+        .prefix(".basecraft-export-")
+        .tempdir_in(parent)?;
+    for (relative, hash) in expected {
+        let target = pending.path().join(relative);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::copy(source.join(relative), &target)?;
+        if basecraft_io::hash_file(&target).map_err(basecraft_ops::Error::from)? != *hash {
+            return Err(Error::Protocol("collection changed during export".into()));
+        }
+        std::fs::File::open(target)?.sync_all()?;
+    }
+    basecraft_platform::atomic::rename_noreplace(pending.path(), destination)?;
+    std::fs::File::open(parent)?.sync_all()?;
+    Ok(())
+}
+
+impl PreparedOperation {
+    fn execute_workflow(&self, cancelled: Arc<AtomicBool>) -> Result<InvokeResult> {
+        if self.operation.package.manifest.id != "basecraft.host" {
+            return Err(Error::Protocol(
+                "host workflows require the reserved application package".into(),
+            ));
+        }
+        if cancelled.load(Ordering::Acquire) {
+            return Err(Error::Protocol("cancelled before workflow".into()));
+        }
+        let registry =
+            crate::registry::Registry::load(&crate::registry::RegistryConfig::discover()?)?;
+        let preparation_plugin = registry
+            .resolve("basecraft.delimitation/haplotypes@1", None)?
+            .package
+            .manifest
+            .dir
+            .clone();
+        let evidence = self
+            .context
+            .input_evidence
+            .get("alignment")
+            .and_then(|values| values.first())
+            .ok_or_else(|| Error::Protocol("workflow requires named alignment evidence".into()))?;
+        let source = PathBuf::from(
+            evidence
+                .original_path
+                .as_deref()
+                .ok_or_else(|| Error::Protocol("workflow needs a file-backed alignment".into()))?,
+        );
+        if Some(basecraft_io::hash_file(&source).map_err(basecraft_ops::Error::from)?)
+            != evidence.source_hash
+        {
+            return Err(Error::Protocol(
+                "alignment changed before workflow preparation".into(),
+            ));
+        }
+        let root = PathBuf::from(&self.context.outputs["artifacts"]);
+        let mut session = basecraft_ops::Session::unlogged(&self.policy.root);
+        let doc = session.open(&source)?;
+        let mut preparation = crate::FileJob::from_alignment(
+            &session,
+            doc,
+            (&preparation_plugin, "haplotypes"),
+            crate::file_tool::AlignmentInput::Aligned,
+            root.join("preparation.json"),
+        )?
+        .with_cpu_budget(self.context.cpu_threads);
+        let submitted = basecraft_io::hash_file(Path::new(&self.context.inputs["alignment"][0]))
+            .map_err(basecraft_ops::Error::from)?;
+        if preparation.input_key.1 != submitted {
+            return Err(Error::Protocol(
+                "workflow preparation differs from accepted alignment".into(),
+            ));
+        }
+        let effective = Value::Object(crate::compute::parameters_for(
+            &self.operation.descriptor,
+            self.parameters
+                .as_object()
+                .cloned()
+                .ok_or_else(|| Error::Protocol("workflow parameters must be an object".into()))?,
+            self.context.cpu_threads,
+        ));
+        *self
+            .granted_parameters
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = effective.clone();
+        preparation.params.extend(
+            effective
+                .as_object()
+                .cloned()
+                .ok_or_else(|| Error::Protocol("workflow parameters must be an object".into()))?,
+        );
+        preparation
+            .params
+            .insert("cancel_file".into(), json!(self.context.cancel_file));
+        preparation
+            .params
+            .insert("progress".into(), json!(self.context.progress_file));
+        let method = self
+            .operation
+            .descriptor
+            .host_workflow
+            .as_deref()
+            .ok_or_else(|| Error::Protocol("missing host workflow".into()))?;
+        let fit_method = if method == "asap_alignment" {
+            "asap"
+        } else if method == "gmyc_alignment_multiple" {
+            "gmyc_multiple"
+        } else {
+            "gmyc_single"
+        };
+        let unique = self.parameters["unique_haplotypes"]
+            .as_bool()
+            .unwrap_or(fit_method != "asap");
+        let workflow = crate::delimitation_pipeline::AlignmentJob {
+            preparation,
+            unique_haplotypes: unique,
+            fit_method: fit_method.into(),
+            output: root.join("analysis.spart"),
+        };
+        let execution = workflow.run().record(&mut session, doc);
+        input_evidence::write_json(
+            &self.run.artifact("execution.json")?,
+            &json!({"schema":1,"workflow":method,"initiator":self.initiator,"executor":"basecraft.host","requested_parameters":self.request.parameters,"effective_parameters":self.effective_parameters(),"package_digest":self.operation.package.digest,"descriptor_digest":self.operation.descriptor_digest,"process_instance":basecraft_platform::process_instance()}),
+        )?;
+        let mut result = execution?;
+        let mut files = BTreeSet::new();
+        scan_files(&root, &mut files, 0)?;
+        result.artifacts = files
+            .into_iter()
+            .map(|path| {
+                path.strip_prefix(&root)
+                    .map(|relative| PluginArtifact {
+                        role: "artifacts".into(),
+                        path: relative.to_string_lossy().into_owned(),
+                    })
+                    .map_err(|_| Error::Protocol("workflow artifact escapes allocation".into()))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        result.outputs.clear();
+        result.data = None;
+        Ok(result)
+    }
 }

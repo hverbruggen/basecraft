@@ -1,10 +1,8 @@
-schema = 1
+schema = 2
+contract = "operations.json"
 id = "basecraft.trimal"
 name = "trimAl alignment trimming"
 version = "0.1.0"
 kinds = ["operation"]
 [entry]
 operation = "python:trimal_plugin.py"
-[[operations]]
-name = "trim"
-label = "Trim an alignment with trimAl"

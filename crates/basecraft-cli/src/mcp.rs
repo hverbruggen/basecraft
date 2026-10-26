@@ -181,15 +181,13 @@ impl Server {
                         "mapping",
                         "groups_data",
                         "replicates",
-                        "progress",
-                        "cancel_file",
                         "threshold",
                     ]
                     .contains(&k.as_str())
                 }) {
                     return Err("Unsupported tool parameter".into());
                 }
-                for name in ["analysis_input", "mapping", "progress", "cancel_file"] {
+                for name in ["analysis_input", "mapping"] {
                     if let Some(path) = params.get(name).and_then(Value::as_str) {
                         params.insert(name.into(), json!(self.path(path)?));
                     }

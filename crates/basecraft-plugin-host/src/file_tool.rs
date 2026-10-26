@@ -210,6 +210,11 @@ impl FileJob {
         Ok(())
     }
 
+    pub fn with_cpu_budget(mut self, budget: usize) -> Self {
+        self.cpu_budget = budget.clamp(1, crate::compute::available());
+        self
+    }
+
     pub fn species_input_evidence(&self) -> Result<serde_json::Value> {
         let run = self
             .artifacts

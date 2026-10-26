@@ -165,6 +165,8 @@ fn negotiated_sdk_context_runs_and_legacy_call_is_refused() {
         cpu_threads: 1,
         cancel_file: temp.path().join("cancel").display().to_string(),
         progress_file: temp.path().join("progress").display().to_string(),
+        input_evidence: BTreeMap::new(),
+        legacy_parameters: BTreeMap::new(),
     };
     let result = process
         .invoke_context(

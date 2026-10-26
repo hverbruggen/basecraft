@@ -35,10 +35,7 @@ pub struct RegistryConfig {
 impl RegistryConfig {
     pub fn discover() -> Result<Self> {
         let paths = AppPaths::discover().map_err(|e| Error::Protocol(e.to_string()))?;
-        let bundled = std::env::var_os("BASECRAFT_PLUGINS").map_or_else(
-            || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins"),
-            PathBuf::from,
-        );
+        let bundled = crate::installation::plugins();
         Ok(Self {
             bundled,
             packages: paths.data.join("plugins"),
@@ -501,4 +498,14 @@ fn configured_python(origin: Origin) -> Option<PathBuf> {
             .find(|path| path.is_file())
             .and_then(|path| path.canonicalize().ok())
     })
+}
+
+/// Every invocation route, including explicit legacy facades, honors the same
+/// local disabled choice. This reads configuration without creating it.
+pub fn require_enabled(id: &str) -> Result<()> {
+    let config = RegistryConfig::discover()?;
+    if load_index(&config)?.disabled.contains(id) {
+        return Err(Error::Protocol("plugin_disabled".into()));
+    }
+    Ok(())
 }

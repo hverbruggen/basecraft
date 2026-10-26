@@ -265,11 +265,9 @@ pub fn validate_contract(plugin: &str, contract: &OperationContract) -> Result<(
         if !valid_name(&descriptor.implementation) {
             return Err(invalid("invalid implementation name"));
         }
-        if descriptor
-            .required_features
-            .iter()
-            .any(|f| f != basecraft_protocol::operation::CONTRACT_CAPABILITY)
-        {
+        if descriptor.required_features.iter().any(|f| {
+            f != basecraft_protocol::operation::CONTRACT_CAPABILITY && f != "host-workflow-v1"
+        }) {
             return Err(invalid("unsupported required host feature"));
         }
         if descriptor.inputs.len() > MAX_BINDINGS || descriptor.outputs.len() > MAX_BINDINGS {
@@ -334,12 +332,66 @@ pub fn validate_contract(plugin: &str, contract: &OperationContract) -> Result<(
         {
             return Err(invalid("reserved control parameter"));
         }
-        if let Some(cpu) = &descriptor.cpu_parameter {
+        for cpu in descriptor
+            .cpu_parameter
+            .iter()
+            .chain(&descriptor.cpu_parameters)
+        {
             let field = properties
                 .get(cpu)
                 .ok_or_else(|| invalid("CPU binding is not a parameter"))?;
             if field.get("type") != Some(&json!("integer")) {
                 return Err(invalid("CPU parameter must be integer"));
+            }
+        }
+        if let Some(workflow) = &descriptor.host_workflow {
+            if plugin != "basecraft.host"
+                || ![
+                    "gmyc_alignment_single",
+                    "gmyc_alignment_multiple",
+                    "asap_alignment",
+                ]
+                .contains(&workflow.as_str())
+            {
+                return Err(invalid("unsupported or unreserved host workflow"));
+            }
+        }
+        if let Some(adapter) = &descriptor.legacy_adapter {
+            if adapter
+                .inputs
+                .iter()
+                .any(|(role, param)| !descriptor.inputs.contains_key(role) || !valid_name(param))
+                || adapter
+                    .input_arrays
+                    .iter()
+                    .any(|role| !adapter.inputs.contains_key(role))
+            {
+                return Err(invalid("invalid legacy input binding"));
+            }
+            let mut bound = BTreeSet::new();
+            for (param, output) in &adapter.outputs {
+                let binding = descriptor
+                    .outputs
+                    .get(&output.role)
+                    .ok_or_else(|| invalid("undeclared legacy output role"))?;
+                if !valid_name(param)
+                    || !bound.insert(param)
+                    || (output.path != "."
+                        && (!binding.collection
+                            || output.path.is_empty()
+                            || std::path::Path::new(&output.path)
+                                .components()
+                                .any(|p| !matches!(p, std::path::Component::Normal(_)))))
+                {
+                    return Err(invalid("invalid legacy output allocation"));
+                }
+            }
+            if adapter
+                .allocation
+                .as_ref()
+                .is_some_and(|role| !descriptor.outputs.get(role).is_some_and(|b| b.collection))
+            {
+                return Err(invalid("legacy allocation requires a collection output"));
             }
         }
         BoundedSchema::compile(&descriptor.parameters)?;
