@@ -370,3 +370,139 @@ fn late_collision_preserves_foreign_bytes_and_repairs_without_reexecuting() {
         "completed job cannot be rerun as repair"
     );
 }
+
+#[test]
+fn committed_proposals_stay_partial_and_repair_requires_recorded_session_activity() {
+    for missing_activity in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("sequence.fa");
+        let original = b">sequence\nACGTACGT\n";
+        std::fs::write(&source, original).unwrap();
+        let config = RegistryConfig {
+            bundled: temp.path().join("no-bundle"),
+            packages: temp.path().join("plugins"),
+            index: temp.path().join("index.json"),
+        };
+        registry::install(
+            &config,
+            &Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../testdata/fixtures/registry-sequence-plugin"),
+        )
+        .unwrap();
+        let registry = Registry::load(&config).unwrap();
+        let mut session = basecraft_ops::Session::new(temp.path());
+        let doc = session.open(&source).unwrap();
+        let request: OperationRequest = serde_json::from_value(json!({
+            "operation":"org.example.registry-sequence/annotate@1",
+            "inputs":{"sequence":[{"kind":"document","doc":doc.0.to_string(),
+                "generation":session.generation(doc),"revision":session.doc(doc).version()}]},
+            "parameters":{}
+        }))
+        .unwrap();
+        let mut manager = JobManager::default();
+        let accepted = manager
+            .submit_in_session(
+                &registry,
+                request,
+                SessionPolicy::new(temp.path(), true).unwrap(),
+                "test",
+                &mut session,
+            )
+            .unwrap();
+        let run = Path::new(accepted.evidence.as_ref().unwrap());
+        let snapshot = run.join("snapshot.arrow-pair");
+        let retained_snapshot = std::fs::read(&snapshot).unwrap();
+        if missing_activity {
+            // The sealed in-memory plugin input survives; the later owner-thread
+            // activity hash fails after the valid proposals have been applied.
+            std::fs::remove_file(&snapshot).unwrap();
+        } else {
+            // ToolRun logging succeeds, but publication cannot create records/.
+            std::fs::write(run.join("records"), b"injected publication obstruction").unwrap();
+        }
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            manager.poll_proposals(&mut session);
+            if manager.get(&accepted.run_id).unwrap().state.terminal() {
+                break;
+            }
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let partial = manager.result(&accepted.run_id).unwrap();
+        assert_eq!(partial.state, RuntimeState::Partial, "{partial:?}");
+        assert!(partial.artifacts.is_empty());
+        let persisted: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(run.join("runtime.json")).unwrap()).unwrap();
+        assert_eq!(persisted["state"], "partial");
+        assert_eq!(
+            partial.errors[0].code,
+            if missing_activity {
+                basecraft_protocol::operation::OperationErrorCode::EvidenceIncomplete
+            } else {
+                basecraft_protocol::operation::OperationErrorCode::PublicationIncomplete
+            }
+        );
+        assert_eq!(partial.proposals.as_ref().unwrap().applied, 1);
+        assert_eq!(session.doc(doc).feature_count(), 1);
+        let activities = || {
+            session
+                .document_record(doc)
+                .unwrap()
+                .events
+                .into_iter()
+                .filter(|event| matches!(event.op, basecraft_protocol::Op::ToolRun { .. }))
+                .count()
+        };
+        if missing_activity {
+            assert_eq!(activities(), 0);
+            std::fs::write(&snapshot, retained_snapshot).unwrap();
+            let error = manager.repair(&accepted.run_id).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("publication-only repair cannot restore")
+            );
+            assert_eq!(
+                manager.result(&accepted.run_id).unwrap().state,
+                RuntimeState::Partial
+            );
+            assert_eq!(
+                activities(),
+                0,
+                "repair must not pretend to restore the missing ToolRun"
+            );
+        } else {
+            assert_eq!(activities(), 1);
+            std::fs::remove_file(run.join("records")).unwrap();
+            // A failed runtime receipt during repair must also leave an owned,
+            // terminal Partial state, rather than getting stuck Finalizing.
+            std::fs::remove_file(run.join("runtime.json")).unwrap();
+            std::fs::create_dir(run.join("runtime.json")).unwrap();
+            let still_partial = manager.repair(&accepted.run_id).unwrap();
+            assert_eq!(still_partial.state, RuntimeState::Partial);
+            assert_eq!(
+                manager.get(&accepted.run_id).unwrap().state,
+                RuntimeState::Partial
+            );
+            assert!(still_partial.errors.iter().any(|error| error.code
+                == basecraft_protocol::operation::OperationErrorCode::EvidenceIncomplete));
+            std::fs::remove_dir(run.join("runtime.json")).unwrap();
+            let repaired = manager.repair(&accepted.run_id).unwrap();
+            assert_eq!(repaired.state, RuntimeState::Completed, "{repaired:?}");
+            assert_eq!(
+                activities(),
+                1,
+                "publication repair must not repeat the activity"
+            );
+        }
+        assert_eq!(
+            session.doc(doc).feature_count(),
+            1,
+            "repair must not reapply edits"
+        );
+        session.undo(doc).unwrap();
+        assert_eq!(session.doc(doc).feature_count(), 0);
+        assert_eq!(std::fs::read(source).unwrap(), original);
+    }
+}
