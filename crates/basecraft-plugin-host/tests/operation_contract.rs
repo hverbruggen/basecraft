@@ -137,7 +137,7 @@ fn schema_two_negotiation_refuses_false_or_legacy_runtime() {
         json!({"protocol":1,"id":"basecraft.orf-finder","version":"0.1.0","operations":[]}),
     )
     .unwrap();
-    assert!(legacy.capabilities.is_empty());
+    assert_eq!(legacy.capabilities, Vec::<String>::new());
 }
 
 #[test]

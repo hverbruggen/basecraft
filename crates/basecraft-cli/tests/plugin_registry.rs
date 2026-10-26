@@ -44,7 +44,7 @@ fn external_metadata_install_warning_and_disable_policy_from_outside_repository(
     assert!(warning.contains("responsible for checking"));
     let listed = run(temp.path(), &["operations", "list", "--json"]);
     let metadata = value(&listed);
-    assert!(listed.stderr.is_empty());
+    assert_eq!(listed.stderr, Vec::<u8>::new());
     assert_eq!(metadata["operations"][0]["enabled"], true);
     assert_eq!(metadata["operations"][0]["runtime"], "unverified");
     let id = "org.example.registry-fixture/count@1";
