@@ -77,5 +77,4 @@ compile_commands.json
 # Development docs stay local: on disk and in pCloud, not on GitHub.
 /docs/
 /CLAUDE.md
-/README.md
 /methods_research/
