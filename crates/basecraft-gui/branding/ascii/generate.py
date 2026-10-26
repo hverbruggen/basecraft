@@ -171,7 +171,7 @@ BOX = {frozenset("lr"): "─", frozenset("ud"): "│", frozenset("rd"): "┌", f
 def cladogram_frames():
     """A tree grows from the root, its tips light up, then species clusters are bracketed one by one.
     Drawn wide and shown at a smaller font size, so it is no taller than the others."""
-    widen, scale = 1.6, 0.8
+    widen, scale = 2.6, 0.8
     # (name or children, branch length in columns before widening)
     tree = ([([([("a1", 6), ("a2", 6)], 5), ("a3", 11)], 6),
              ([([([("b1", 4), ("b2", 4)], 4), ("b3", 8)], 5),
@@ -237,7 +237,7 @@ def cladogram_frames():
                 best = rec
         return best
 
-    width, height = bracket_x + 8, 2 * len(tips) - 1
+    width, height = bracket_x + 5, 2 * len(tips) - 1
 
     def draw(reveal, n_tips, n_clusters):
         cv = Canvas(width, height)

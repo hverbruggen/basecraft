@@ -33,7 +33,7 @@ Colourlight, is the alternate. This wordmark does not replace either icon.
 The About dialog plays one of five ASCII animations, picked at random each time
 it opens: a chromatogram trace, a cladogram with species brackets, an alignment,
 a sequence loom and a paper shuttle. The cladogram is drawn wide and shown at
-80% of the font size so it is no taller than the others. On dark themes they use the
+80% of the font size, filling the dialog width without being taller than the others. On dark themes they use the
 dark wordmark's background, letter ink, sage and amber, plus slate blue and
 terracotta for C and T; light themes get darker tones of the same roles.
 

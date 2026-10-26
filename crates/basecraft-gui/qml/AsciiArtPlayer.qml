@@ -16,7 +16,7 @@ Item {
     readonly property font artFont: Qt.font(font.pointSize > 0
         ? { family: font.family, pointSize: font.pointSize * animation.scale }
         : { family: font.family, pixelSize: Math.max(1, Math.round(font.pixelSize * animation.scale)) })
-    readonly property real cellWidth: metrics.advanceWidth("M")
+    readonly property real cellWidth: cell.advanceWidth
     readonly property real lineHeight: metrics.height
     readonly property var current: {
         const cells = animation.unique[animation.frames[frame % animation.frames.length]]
@@ -29,6 +29,8 @@ Item {
     onAnimationIndexChanged: frame = 0
 
     FontMetrics { id: metrics; font: root.artFont }
+    // A property, unlike FontMetrics.advanceWidth(), so the width follows font changes.
+    TextMetrics { id: cell; font: root.artFont; text: "M" }
 
     function rowText(row) {
         // The row repeater can briefly outlive a switch to a shorter animation.

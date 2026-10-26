@@ -105,6 +105,7 @@ Item {
                 player.animationIndex = i
                 if (player.animation.scale < 1) {
                     verify(player.lineHeight < fullSize.height, player.animation.name + " must be drawn smaller")
+                    verify(player.cellWidth < fullSize.averageCharacterWidth, "Its columns must narrow with the font")
                     return
                 }
             }
