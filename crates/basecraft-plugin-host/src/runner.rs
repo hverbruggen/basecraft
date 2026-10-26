@@ -538,6 +538,20 @@ impl PreparedOperation {
                     *counts.entry("artifacts".into()).or_default() += 1;
                     let hash =
                         basecraft_io::hash_file(&sidecar).map_err(basecraft_ops::Error::from)?;
+                    // Bound tree reads use the run-root sidecar; the collection
+                    // member carries the same initial metadata when exported.
+                    let hidden = self.run.artifact(
+                        sidecar
+                            .file_name()
+                            .and_then(|file| file.to_str())
+                            .ok_or_else(|| Error::Protocol("support sidecar filename".into()))?,
+                    )?;
+                    basecraft_io::write_atomic(&hidden, |writer| {
+                        let mut input = std::fs::File::open(&sidecar)?;
+                        std::io::copy(&mut input, writer)?;
+                        Ok(())
+                    })
+                    .map_err(basecraft_ops::Error::from)?;
                     validated.push(("artifacts".into(), sidecar, hash));
                 }
             }
