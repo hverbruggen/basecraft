@@ -1037,6 +1037,21 @@ pub fn analyse(
             "ASAP sequence length, simulation limit and reported count must be positive".into(),
         ));
     }
+    for (name, value) in [
+        ("p-value threshold", settings.p_threshold),
+        ("score weight", settings.score_weight),
+    ] {
+        if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+            return Err(Error(format!(
+                "ASAP {name} must be finite and between 0 and 1"
+            )));
+        }
+    }
+    if !settings.slope_weight.is_finite() || settings.slope_weight < 0.0 {
+        return Err(Error(
+            "ASAP slope window must be finite and nonnegative".into(),
+        ));
+    }
     // Upstream `compareCase` is a total order, so any construction order and
     // sort give its result. Adding 0.0 turns -0.0 into 0.0, which upstream
     // compares equal; `total_cmp` would otherwise order them.
@@ -1527,6 +1542,87 @@ mod tests {
             values: &values,
         };
         assert!(analyse(&distances, &Settings::default(), |_, _| true).is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_scientific_settings() {
+        let distances = Distances {
+            n: 3,
+            values: &[0.01, 0.2, 0.3],
+        };
+        for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -0.1, 1.1] {
+            for settings in [
+                Settings {
+                    p_threshold: value,
+                    ..Settings::default()
+                },
+                Settings {
+                    score_weight: value,
+                    ..Settings::default()
+                },
+            ] {
+                assert!(analyse(&distances, &settings, |_, _| true).is_err());
+            }
+        }
+        for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -0.1] {
+            let settings = Settings {
+                slope_weight: value,
+                ..Settings::default()
+            };
+            assert!(analyse(&distances, &settings, |_, _| true).is_err());
+        }
+    }
+
+    #[test]
+    fn simulation_cap_below_initial_batch_uses_exact_budget() {
+        // The first merge has no simulation. The final three-leaf node has
+        // one within-group pair and is testable. Replay exactly `cap` draws
+        // independently of test_round's adaptive loop and parallel blocks.
+        let distances = Distances {
+            n: 3,
+            values: &[0.01, 0.2, 0.3],
+        };
+        for stream in [Stream::Reference, Stream::Parallel] {
+            for cap in [1, 17, 100, 499, 500] {
+                let settings = Settings {
+                    max_simulations: cap,
+                    stream,
+                    ..Settings::default()
+                };
+                let run = analyse(&distances, &settings, |_, _| true).unwrap();
+                let root_index = run.nodes.len() - 1;
+                let root = &run.nodes[root_index];
+                let length = f64::from(settings.sequence_length);
+                let pi_inter = root.sum_inter / root.nb_inter as f64;
+                let mutation_rate = length * pi_inter * 3.0 / 4.0 / 2.0;
+                let observed = root.sum_intra / root.nb_intra as f64 * length;
+                let mut coalescent = Coalescent::new(3);
+                let mut reference = GlibcRand::new(settings.seed);
+                let successes = (0..cap)
+                    .filter(|&replicate| {
+                        let simulated = match stream {
+                            Stream::Reference => {
+                                coalescent.simulate(3, mutation_rate, 2, &mut reference)
+                            }
+                            Stream::Parallel => coalescent.simulate(
+                                3,
+                                mutation_rate,
+                                2,
+                                &mut Xoshiro::keyed(settings.seed, root_index, replicate),
+                            ),
+                        }
+                        .unwrap();
+                        let pi = if simulated.1 == 0 {
+                            0.0
+                        } else {
+                            simulated.0 / simulated.1 as f64
+                        };
+                        pi - EPSILON <= observed
+                    })
+                    .count();
+                assert_eq!(root.p_value, (successes as f64 + 1.0) / (cap as f64 + 1.0));
+            }
+        }
     }
 
     #[test]
