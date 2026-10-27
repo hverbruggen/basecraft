@@ -5,5 +5,6 @@ import org.kde.kirigami as Kirigami
 RowLayout {
     id: page
     RibbonMetrics { id: metrics; control: page }
-    spacing: Kirigami.Units.smallSpacing * 2 * metrics.factor
+    // Match the explicit spacing used by the Delimitation ribbon page.
+    spacing: 6 * metrics.factor
 }

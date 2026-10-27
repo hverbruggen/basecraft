@@ -269,10 +269,26 @@ Item {
             ribbon.currentIndex = 1
             verify(waitForPolish(ribbon.Window.window))
             compare(ribbon.scrollPosition, 0)
-            compare(ribbon.height, tall, "all pages reserve the same body and scrollbar height")
+            compare(ribbon.height, tall, "all pages retain a stable ribbon height")
             ribbon.currentIndex = -1
             verify(waitForPolish(ribbon.Window.window))
             compare(ribbon.currentPage, null)
+        }
+        function test_scrollbar_overlays_without_reserving_a_band() {
+            ribbon.width = 180
+            verify(waitForPolish(ribbon.Window.window))
+            verify(ribbon.overflowing)
+            const bar = findChild(ribbon, "ribbonScrollBar")
+            verify(bar)
+            verify(bar.visible)
+            fuzzyCompare(ribbon.implicitHeight, ribbon.pageHeight + ribbon.topPadding + ribbon.bottomPadding, 0.5,
+                         "scrollbar must not add a blank strip to every ribbon page")
+            compare(bar.y, ribbon.topPadding,
+                    "scrollbar overlays the viewport's top edge, outside captions and controls")
+            ribbon.width = 1000
+            verify(waitForPolish(ribbon.Window.window))
+            verify(!ribbon.overflowing)
+            verify(!bar.visible)
         }
         function findActionButton(item, action) {
             if (item.action === action && item.visible) return item
