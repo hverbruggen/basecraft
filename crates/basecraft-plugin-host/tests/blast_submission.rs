@@ -11,7 +11,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const MOCK: &str = r#"
+const MOCK: &str = r"
 import json, os, time
 from pathlib import Path
 from basecraft.plugin import Plugin
@@ -34,7 +34,7 @@ def submit(snapshot,params,context):
 @plugin.context_operation('receipt')
 def receipt(snapshot,params,context): return dict(ops=[],data=None)
 plugin.run()
-"#;
+";
 
 fn registry(root: &Path) -> Registry {
     let dir = root.join("bundle/blast");

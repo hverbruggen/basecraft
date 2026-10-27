@@ -228,6 +228,7 @@ pub struct SequenceTarget {
 
 pub struct PreparedOperation {
     pub(crate) lifecycle: crate::lifecycle::Lifecycle,
+    pub(crate) input_diagnostics: Vec<String>,
     pub sequence: Option<SequenceTarget>,
     pub operation: RegisteredOperation,
     pub run: ArtifactRun,
@@ -339,6 +340,7 @@ impl PreparedOperation {
         } else {
             policy.resolve(&operation, &request)?
         };
+        let input_diagnostics = lifecycle.verify_retained(&bindings.inputs)?;
         let mut supplied_parameters = request.parameters.clone();
         if lifecycle.external() && supplied_parameters.get("contact_email").is_none() {
             let contact = std::env::var("BASECRAFT_BLAST_CONTACT_EMAIL").map_err(|_| {
@@ -589,6 +591,7 @@ impl PreparedOperation {
         input_evidence::write_json(&run.artifact("request.json")?, &request)?;
         Ok(Self {
             lifecycle,
+            input_diagnostics,
             sequence,
             operation,
             run,
@@ -930,6 +933,9 @@ impl PreparedOperation {
         outcome: &mut OperationOutcome,
         repair: bool,
     ) -> Result<()> {
+        if self.lifecycle.external() && !self.run.artifact("execution.json")?.is_file() {
+            return Err(Error::Protocol("execution evidence unavailable; retain RID and receipt; publication-only repair cannot invent missing execution evidence".into()));
+        }
         let mut collections = BTreeMap::new();
         for (role, binding) in &self.operation.descriptor.outputs {
             if !binding.collection {

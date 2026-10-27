@@ -109,3 +109,17 @@ It returns the retained RID/URL without any network call. It does not recreate
 job ownership or pretend publication completed. Within the original session,
 use the existing job repair operation for partial publication. RID URLs are
 temporary links; permanent results must be downloaded in NCBI's browser page.
+
+The receipt reader requires the original query-preparation artifact directory,
+not an arbitrary unbound pair of JSON files. Host preparation verifies the shared
+input ledger and retained query hash; published receipts also use the shared
+artifact/provenance verifier and output identity. Upstream changes are retained
+as diagnostics. Domain checks validate schema 1, query SHA-256, approval identity,
+full plan equality and the NCBI RID URL. Generic frame/schema/file bounds still
+apply. No remote submission occurs. An explicitly invoked receipt read creates
+the normal local registered-operation/input bookkeeping in application state;
+it does not recreate, poll or resume the original remote search or job.
+
+Service references: [URL API](https://blast.ncbi.nlm.nih.gov/doc/blast-help/urlapi.html),
+[usage guidelines](https://blast.ncbi.nlm.nih.gov/doc/blast-help/developerinfo.html),
+[aggregate query limits](https://support.nlm.nih.gov/knowledgebase/article/KA-03289/en-us).

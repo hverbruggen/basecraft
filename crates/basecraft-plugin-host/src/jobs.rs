@@ -245,10 +245,10 @@ impl JobManager {
             pins,
             requested_parameters: prepared.request.parameters.clone(),
             effective_parameters: prepared.parameters.clone(),
+            warnings: prepared.input_diagnostics.clone(),
             data: None,
             artifacts: vec![],
             proposals: None,
-            warnings: vec![],
             errors: vec![],
             evidence: Some(prepared.run.directory().display().to_string()),
         };

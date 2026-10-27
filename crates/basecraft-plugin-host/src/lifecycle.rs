@@ -21,23 +21,66 @@ pub enum Lifecycle {
     #[default]
     Ordinary,
     ExternalSubmission,
+    RetainedReceipt,
 }
 
 impl Lifecycle {
     pub fn for_operation(operation: &RegisteredOperation) -> Result<Self> {
         operation.package.verify()?;
-        Ok(
-            if operation.package.origin == Origin::Bundled
-                && operation.id == "basecraft.blast/submit@1"
-            {
-                Self::ExternalSubmission
-            } else {
-                Self::Ordinary
-            },
-        )
+        Ok(if operation.package.origin == Origin::Bundled {
+            match operation.id.as_str() {
+                "basecraft.blast/submit@1" => Self::ExternalSubmission,
+                "basecraft.blast/receipt@1" => Self::RetainedReceipt,
+                _ => Self::Ordinary,
+            }
+        } else {
+            Self::Ordinary
+        })
     }
+
     pub fn external(self) -> bool {
         self == Self::ExternalSubmission
+    }
+    /// Reuse shared artifact and input-ledger verification for a retained read.
+    /// Changed original sources are diagnostics, not a reason to lose a valid RID.
+    pub fn verify_retained(
+        self,
+        inputs: &std::collections::BTreeMap<String, Vec<std::path::PathBuf>>,
+    ) -> Result<Vec<String>> {
+        if self != Self::RetainedReceipt {
+            return Ok(Vec::new());
+        }
+        let receipt = &inputs["receipt"][0];
+        let query = &inputs["query"][0];
+        let run = query
+            .parent()
+            .ok_or_else(|| Error::Protocol("missing query evidence directory".into()))?;
+        let input = basecraft_ops::input_evidence::read_input(run)?;
+        if input.state != "generated"
+            || input.transformation != "blast-query-preparation-v1"
+            || input.submitted_hash
+                != basecraft_io::hash_file(query).map_err(basecraft_ops::Error::from)?
+        {
+            return Err(Error::Protocol(
+                "retained query differs from shared input evidence".into(),
+            ));
+        }
+        let mut diagnostics = basecraft_ops::input_evidence::verify_ancestors(run)?;
+        if run.join("manifest.json").is_file() {
+            diagnostics.extend(basecraft_ops::provenance::verify(receipt)?);
+            let publication = basecraft_ops::provenance::inspect(receipt)?;
+            let hash = basecraft_io::hash_file(receipt).map_err(basecraft_ops::Error::from)?;
+            if !publication.outputs.iter().any(|output| output.hash == hash) {
+                return Err(Error::Protocol(
+                    "retained receipt differs from published artifact identity".into(),
+                ));
+            }
+        } else if receipt != &run.join("pending/receipt") && receipt != &run.join("receipt") {
+            return Err(Error::Protocol(
+                "unpublished receipt must be in its allocated run".into(),
+            ));
+        }
+        Ok(diagnostics)
     }
     pub fn configure(
         self,
