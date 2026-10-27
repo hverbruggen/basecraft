@@ -478,6 +478,17 @@ impl SangerReviewSession {
         &self.anchor
     }
 
+    /// Link an already published public-operation run into the review ancestry.
+    pub fn attach_operation_run(&mut self, directory: &Path) -> Result<(), String> {
+        if !directory.join("manifest.json").is_file() || !directory.join("runtime.json").is_file() {
+            return Err("Completed caller support is missing".into());
+        }
+        if !self.evidence.runs.iter().any(|run| run == directory) {
+            self.evidence.runs.push(directory.to_path_buf());
+        }
+        self.start_recovery()
+    }
+
     pub fn evidence_runs(&self) -> &[PathBuf] {
         &self.evidence.runs
     }
@@ -509,6 +520,9 @@ impl SangerReviewSession {
     }
 
     fn ensure_sources(&mut self, anchor: &Path) -> crate::Result<()> {
+        for set in &mut self.retained {
+            set.ensure_sources(anchor)?;
+        }
         for read in &self.draft.inputs {
             if !self
                 .evidence
@@ -586,7 +600,7 @@ impl SangerReviewSession {
         Ok(Some(placement))
     }
 
-    fn stored_at(&self, path: &Path) -> crate::Result<StoredReview> {
+    fn stored_single_at(&self, path: &Path) -> crate::Result<StoredReview> {
         let mut evidence = self.evidence.clone();
         let parent = base(path)?;
         evidence.map_paths(|p| Ok(PathBuf::from(inputs::relative(&parent, p)?)))?;
@@ -599,6 +613,21 @@ impl SangerReviewSession {
             evidence,
             extra: self.stored_extra.clone(),
         })
+    }
+
+    fn stored_at(&self, path: &Path) -> crate::Result<serde_json::Value> {
+        if self.retained.is_empty() {
+            return Ok(serde_json::to_value(self.stored_single_at(path)?)?);
+        }
+        let mut sets = vec![self.stored_single_at(path)?];
+        for set in &self.retained {
+            sets.push(set.stored_single_at(path)?);
+        }
+        Ok(serde_json::to_value(super::StoredCallSets {
+            version: 2,
+            selected: self.draft_sha256.clone(),
+            sets,
+        })?)
     }
 
     fn write_embedded(&self, path: &Path) -> crate::Result<()> {
@@ -637,6 +666,16 @@ impl SangerReviewSession {
         let absolute = std::path::absolute(path)?;
         let mut protected: Vec<_> = self.draft.inputs.iter().map(|r| r.path.clone()).collect();
         protected.push(self.draft_path.clone());
+        for set in &self.retained {
+            protected.push(set.draft_path.clone());
+            protected.extend(set.draft.inputs.iter().map(|read| read.path.clone()));
+            protected.extend(
+                set.evidence
+                    .sources
+                    .iter()
+                    .map(|source| source.path.clone()),
+            );
+        }
         for source in &self.evidence.sources {
             protected.push(source.path.clone());
             if let Some(ledger) = &source.ledger {
@@ -656,6 +695,15 @@ impl SangerReviewSession {
         let previous_evidence = self.evidence.clone();
         let outcome = (|| -> crate::Result<()> {
             let mut dependencies = self.evidence.runs.clone();
+            for set in &self.retained {
+                dependencies.extend(set.evidence.runs.clone());
+                dependencies.extend(
+                    set.evidence
+                        .sources
+                        .iter()
+                        .filter_map(|source| source.ledger.clone()),
+                );
+            }
             dependencies.extend(
                 self.evidence
                     .sources
@@ -725,6 +773,15 @@ impl SangerReviewSession {
         self.ensure_sources(path)?;
         let run = ArtifactRun::create(path, &ulid::Ulid::generate().to_string())?;
         let mut dependencies = self.evidence.runs.clone();
+        for set in &self.retained {
+            dependencies.extend(set.evidence.runs.clone());
+            dependencies.extend(
+                set.evidence
+                    .sources
+                    .iter()
+                    .filter_map(|source| source.ledger.clone()),
+            );
+        }
         dependencies.extend(
             self.evidence
                 .sources
@@ -771,7 +828,32 @@ pub(crate) fn relocate_package(
     paths: &BTreeMap<PathBuf, String>,
 ) -> crate::Result<()> {
     let bytes = crate::provenance::read_record(copied)?;
-    let mut stored: StoredReview = serde_json::from_slice(&bytes)?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes)?;
+    let value = match value["version"].as_u64() {
+        Some(1) => {
+            let mut stored: StoredReview = serde_json::from_value(value)?;
+            relocate_stored(&mut stored, original, copied, bundle, paths)?;
+            serde_json::to_value(stored)?
+        }
+        Some(2) => {
+            let mut stored: super::StoredCallSets = serde_json::from_value(value)?;
+            for set in &mut stored.sets {
+                relocate_stored(set, original, copied, bundle, paths)?;
+            }
+            serde_json::to_value(stored)?
+        }
+        _ => return Err(invalid("Unsupported Sanger review version")),
+    };
+    inputs::write_json(copied, &value)
+}
+
+fn relocate_stored(
+    stored: &mut StoredReview,
+    original: &Path,
+    copied: &Path,
+    bundle: &Path,
+    paths: &BTreeMap<PathBuf, String>,
+) -> crate::Result<()> {
     let parent = base(original)?;
     stored
         .evidence
@@ -809,7 +891,7 @@ pub(crate) fn relocate_package(
             return Err(invalid("Sanger exported source SHA-256 differs"));
         }
     }
-    inputs::write_json(copied, &stored)
+    Ok(())
 }
 
 fn same_file(a: &Path, b: &Path) -> crate::Result<bool> {
@@ -847,8 +929,7 @@ pub(crate) fn is_review(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
         .is_some_and(|e| e.eq_ignore_ascii_case("json"))
-        && crate::provenance::read_record(path)
-            .is_ok_and(|bytes| serde_json::from_slice::<StoredReview>(&bytes).is_ok())
+        && super::evidence_kind(path) == Some(super::EvidenceKind::Review)
 }
 
 #[derive(Serialize, Deserialize)]

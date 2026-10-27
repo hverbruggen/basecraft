@@ -79,7 +79,6 @@ AppDialog {
             ["Ctrl+Z / Ctrl+Shift+Z", "Undo / redo consensus edits"],
             ["Ctrl+S", "Save review decisions"],
             ["F2", "Edit the consensus sequence ID"],
-            ["Ctrl+Alt+O / Ctrl+Shift+D", "Open saved review / draft evidence (File ribbon)"],
             ["Ctrl+Shift+A", "Add consensus to the source alignment"],
             ["Ctrl+Shift+E", "Export consensus to FASTA"],
             ["Ctrl+Shift+C", "Copy consensus as FASTA"],

@@ -22,6 +22,8 @@ def consensus(snapshot, params):
         Path(tracy)
     ):
         raise ValueError("Tracy changed since this draft; regenerate explicitly")
+    engine_hash = file_hash(Path(tracy))
+    input_hashes = [file_hash(path) for path in reads]
     report = merge(
         reads,
         Path(tracy),
@@ -30,6 +32,12 @@ def consensus(snapshot, params):
         minimum_identity=float(params.get("minimum_identity", 0.8)),
         signal_threshold=int(params.get("signal_threshold", 20)),
     )
+    if file_hash(Path(tracy)) != engine_hash or report["engine_sha256"] != engine_hash:
+        raise ValueError("Tracy changed during calling; results were not accepted")
+    if [file_hash(path) for path in reads] != input_hashes or [
+        item["sha256"] for item in report["inputs"]
+    ] != input_hashes:
+        raise ValueError("Sanger input changed during calling; results were not accepted")
     return {
         "ops": [],
         "outputs": [

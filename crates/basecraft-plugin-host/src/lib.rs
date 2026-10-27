@@ -18,6 +18,7 @@ pub mod process;
 pub mod registry;
 pub mod runner;
 pub mod runtime;
+pub mod sanger_calls;
 pub mod snapshot;
 
 mod distance_cache;

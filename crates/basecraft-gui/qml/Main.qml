@@ -914,8 +914,6 @@ ApplicationWindow {
                     RibbonGroup {
                         title: "Review files"
                         enabled: window.traceOpen
-                        RibbonButton { commandId: "ribbon.open-saved-draft-evidence"; text: "Open draft"; tip: "Open saved draft evidence"; keys: "Ctrl+Shift+D"; enabled: window.current && !window.current.dirty; onInvoked: window.traceDocument.openDraft() }
-                        RibbonButton { commandId: "ribbon.resume-saved-review-decisions"; text: "Open review"; tip: "Resume saved review decisions"; keys: "Ctrl+Alt+O"; enabled: window.current && !window.current.dirty; onInvoked: window.traceDocument.openReview() }
                     }
                     RibbonGroup { title: "Document record"; actions: [historyCommand, methodsCommand] }
                     HelpGroup {}
@@ -1277,13 +1275,30 @@ ApplicationWindow {
                 RibbonPage {
                     spacing: 6 * window.ribbonSizeFactor
                     RibbonGroup {
+                        title: "Calls"
+                        enabled: window.traceOpen && window.current && window.current.review_mode
+                        AppComboBox {
+                            id: traceCallSets
+                            Accessible.name: "Trace call set"
+                            model: window.traceOpen && window.current ? JSON.parse(window.current.call_sets) : []
+                            textRole: "label"
+                            valueRole: "id"
+                            currentIndex: window.traceOpen && window.current ? model.findIndex(row => row.id === window.current.selected_call_set) : -1
+                            onActivated: window.current.select_calls(currentValue)
+                            ToolTip.text: "Each call set retains its own reviewed decisions. Computed calls are an alternative, not a guarantee of greater accuracy."
+                            ToolTip.visible: hovered
+                        }
+                        RibbonButton { commandId: "trace.compute-calls"; text: "Compute"; tip: "Compute or reuse alternative Tracy calls"; enabled: window.current && !window.current.calling && window.traceDocument && window.traceDocument.traceRows.length === 1; onInvoked: window.current.compute_calls() }
+                        RibbonButton { commandId: "trace.cancel-calls"; text: "Cancel"; tip: "Cancel background calling; keep the current review"; enabled: window.current && window.current.calling; onInvoked: window.current.cancel_calls() }
+                    }
+                    RibbonGroup {
                         title: "Issues"
                         enabled: window.traceOpen
                         RibbonButton { commandId: "ribbon.previous-unresolved-issue"; iconName: "previous"; tip: "Previous unresolved issue"; keys: "Alt+← or ["; enabled: (window.traceOpen && window.current && window.current.review_mode); onInvoked: window.traceDocument.issue(false) }
                         RibbonButton { commandId: "ribbon.next-unresolved-issue"; iconName: "next"; tip: "Next unresolved issue"; keys: "Alt+→ or ]"; enabled: (window.traceOpen && window.current && window.current.review_mode); onInvoked: window.traceDocument.issue(true) }
                         RibbonButton { commandId: "ribbon.accept-this-base-and-go-to-the-next-issue"; text: "Accept"; iconName: "accept"; tip: "Accept this base and go to the next issue"; keys: "Alt+Enter"; enabled: (window.traceOpen && window.current && window.current.review_mode); onInvoked: window.traceDocument.accept() }
                         RibbonButton { commandId: "ribbon.choose-alignment-context"; text: "Alignment"; tip: "Choose alignment context"; keys: "Ctrl+Alt+A"; enabled: (window.traceOpen && window.current && window.current.review_mode && window.traceDocument && window.traceDocument.returnAlignment === null); onInvoked: window.traceDocument.alignmentContext() }
-                        RibbonButton { commandId: "ribbon.combine-up-to-three-reads"; text: "Draft reads"; tip: "Combine up to three reads"; keys: "Ctrl+Alt+D"; enabled: (window.traceOpen && window.current && !window.current.review_mode); onInvoked: window.traceDocument.draftReads() }
+                        RibbonButton { commandId: "ribbon.combine-up-to-three-reads"; text: "Draft reads"; tip: "Combine up to three reads"; keys: "Ctrl+Alt+D"; enabled: (window.traceOpen && window.current && window.traceDocument && window.traceDocument.traceRows.length === 1); onInvoked: window.traceDocument.draftReads() }
                         RibbonButton { commandId: "ribbon.choose-the-terminal-signal-percentage-for-a-new-draft"; text: "Signal cutoff"; tip: "Choose the terminal signal percentage for a new draft"; onInvoked: window.traceDocument.signalSettings() }
                     }
                     RibbonGroup {
@@ -1424,10 +1439,10 @@ ApplicationWindow {
 
     FileDialog {
         id: openDialog
-        title: "Open a sequence, alignment or tree"
+        title: "Open a sequence, alignment, trace, review or tree"
         currentFolder: window.activeFolder()
         onVisibleChanged: if (visible) currentFolder = window.activeFolder()
-        nameFilters: ["Sequences, alignments, traces and trees (*.gb *.gbk *.genbank *.gbff *.fasta *.fa *.fna *.fas *.ffn *.faa *.afa *.ab1 *.abi *.nwk *.newick *.tre *.tree *.trees *.treefile *.contree *.nex *.nexus *.nxs)", "All files (*)"]
+        nameFilters: ["Sequences, alignments, traces and trees (*.gb *.gbk *.genbank *.gbff *.fasta *.fa *.fna *.fas *.ffn *.faa *.afa *.ab1 *.abi *.json *.nwk *.newick *.tre *.tree *.trees *.treefile *.contree *.nex *.nexus *.nxs)", "All files (*)"]
         onAccepted: window.openPath(window.localPath(selectedFile))
     }
 

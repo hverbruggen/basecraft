@@ -1311,11 +1311,7 @@ impl qobject::GenomeController {
     }
 
     pub fn file_kind(&self, path: &QString) -> QString {
-        if path
-            .to_string()
-            .to_ascii_lowercase()
-            .ends_with(".sanger-review.json")
-        {
+        if basecraft_ops::sanger_review::evidence_kind(Path::new(&path.to_string())).is_some() {
             return QString::from("trace");
         }
         if Path::new(&path.to_string())

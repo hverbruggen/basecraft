@@ -38,8 +38,6 @@ FocusScope {
     }
     function alignmentContext() { alignmentDialog.open() }
     function draftReads() { additionalDialog.open() }
-    function openDraft() { draftDialog.open() }
-    function openReview() { openReviewDialog.open() }
     function activeFolder() { return fileUrls.parent_folder_url(ctl.export_path) }
     function exportConsensus() { beginExport("fasta") }
     function copyConsensus() { beginExport("clipboard") }
@@ -76,8 +74,6 @@ FocusScope {
         }
     }
     Connections { target: ctl; function onProposed_nameChanged() { doc.specimenId = ctl.proposed_name } }
-    Shortcut { sequence: "Ctrl+Alt+O"; enabled: doc.visible && !ctl.dirty; onActivated: doc.openReview() }
-    Shortcut { sequence: "Ctrl+Shift+D"; enabled: doc.visible && !ctl.dirty; onActivated: doc.openDraft() }
     Shortcut { sequence: "Ctrl+="; enabled: doc.visible; onActivated: ctl.zoom_in() }
     Shortcut { sequence: "Ctrl++"; enabled: doc.visible; onActivated: ctl.zoom_in() }
     Shortcut { sequence: "Ctrl+-"; enabled: doc.visible; onActivated: ctl.zoom_out() }
@@ -89,7 +85,7 @@ FocusScope {
     Shortcut { sequence: "Ctrl+Shift+C"; enabled: doc.visible && ctl.review_mode && ctl.unresolved === 0; onActivated: doc.copyConsensus() }
     Shortcut { sequence: "Ctrl+Shift+A"; enabled: doc.visible && ctl.review_mode && ctl.unresolved === 0 && doc.returnAlignment !== null; onActivated: doc.addToAlignment() }
     Shortcut { sequence: "Ctrl+Alt+A"; enabled: doc.visible && ctl.review_mode && doc.returnAlignment === null; onActivated: doc.alignmentContext() }
-    Shortcut { sequence: "Ctrl+Alt+D"; enabled: doc.visible && !ctl.review_mode; onActivated: doc.draftReads() }
+    Shortcut { sequence: "Ctrl+Alt+D"; enabled: doc.visible && traceRows.length === 1; onActivated: doc.draftReads() }
     Shortcut { sequence: "Ctrl+Alt+Home"; enabled: doc.visible && ctl.review_mode; onActivated: doc.setMaskStart(ctl.selected_column) }
     Shortcut { sequence: "Ctrl+Alt+End"; enabled: doc.visible && ctl.review_mode; onActivated: doc.setMaskEnd(ctl.selected_column) }
 
@@ -119,7 +115,7 @@ FocusScope {
         returnAlignment = target
         reviewReference = reference
         if (!ctl.open_file(paths[0])) return
-        const ready = paths.length === 1 ? ctl.single_review(cutoff) : ctl.draft_consensus(JSON.stringify(paths.slice(1)), cutoff)
+        const ready = paths.length === 1 ? (cutoff === 20 || ctl.single_review(cutoff)) : ctl.draft_consensus(JSON.stringify(paths.slice(1)), cutoff)
         if (ready && reference.length && ctl.orient_review(reference)) ctl.place_alignment(reference)
     }
     function signalSettings() {
@@ -253,24 +249,9 @@ FocusScope {
     Shortcut { sequence: "Ctrl+Alt+M"; enabled: doc.visible && ctl.review_mode; onActivated: doc.maskEnds() }
     Shortcut { sequence: "Ctrl+Alt+P"; enabled: doc.visible && ctl.review_mode; onActivated: doc.setPrimers() }
     SangerController { id: ctl }
+    Timer { interval: 200; repeat: true; running: ctl.calling; onTriggered: ctl.poll_calls() }
     Shortcut { sequence: "F2"; enabled: doc.visible && ctl.review_mode; onActivated: doc.beginExport("fasta") }
     function localPath(url) { return fileUrls.local_file_path(url) }
-    FileDialog {
-        currentFolder: doc.activeFolder()
-        onVisibleChanged: if (visible) currentFolder = doc.activeFolder()
-        id: draftDialog
-        title: "Open draft evidence"
-        nameFilters: ["Draft evidence (*.json)", "All files (*)"]
-        onAccepted: ctl.open_draft(doc.localPath(selectedFile))
-    }
-    FileDialog {
-        currentFolder: doc.activeFolder()
-        onVisibleChanged: if (visible) currentFolder = doc.activeFolder()
-        id: openReviewDialog
-        title: "Open Sanger review"
-        nameFilters: ["Sanger review (*.sanger-review.json)", "JSON files (*.json)"]
-        onAccepted: ctl.open_review(doc.localPath(selectedFile))
-    }
     FileDialog {
         currentFolder: doc.activeFolder()
         onVisibleChanged: if (visible) currentFolder = doc.activeFolder()

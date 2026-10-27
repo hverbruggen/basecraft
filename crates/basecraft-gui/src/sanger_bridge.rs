@@ -44,9 +44,20 @@ pub mod qobject {
         #[qproperty(i32, unresolved)]
         #[qproperty(i32, signal_threshold)]
         #[qproperty(QString, input_paths)]
+        #[qproperty(QString, call_sets)]
+        #[qproperty(QString, selected_call_set)]
+        #[qproperty(bool, calling)]
         #[qproperty(QString, review_settings)]
         type SangerController = super::SangerRust;
 
+        #[qinvokable]
+        fn poll_calls(self: Pin<&mut SangerController>);
+        #[qinvokable]
+        fn cancel_calls(self: Pin<&mut SangerController>);
+        #[qinvokable]
+        fn compute_calls(self: Pin<&mut SangerController>);
+        #[qinvokable]
+        fn select_calls(self: Pin<&mut SangerController>, id: &QString) -> bool;
         #[qinvokable]
         fn document_record(self: &SangerController) -> QString;
         #[qinvokable]
@@ -215,6 +226,10 @@ pub struct SangerRust {
     signal_threshold: i32,
     input_paths: QString,
     review_settings: QString,
+    call_sets: QString,
+    selected_call_set: QString,
+    calling: bool,
+    caller: basecraft_plugin_host::sanger_calls::SangerCaller,
     trace: Option<Trace>,
     review: Option<SangerReviewView>,
     review_session: Option<SangerReviewSession>,
@@ -264,6 +279,10 @@ impl Default for SangerRust {
             review_settings: QString::from(
                 serde_json::to_string(&basecraft_docs::sanger::ReviewSettings::default()).unwrap(),
             ),
+            call_sets: QString::from("[]"),
+            selected_call_set: QString::default(),
+            calling: false,
+            caller: basecraft_plugin_host::sanger_calls::SangerCaller::default(),
             trace: None,
             review: None,
             review_session: None,
@@ -354,6 +373,96 @@ fn session_view(session: &SangerReviewSession) -> Result<SangerReviewView, Strin
 }
 
 impl qobject::SangerController {
+    fn call_error(mut self: std::pin::Pin<&mut Self>, error: &str) {
+        self.as_mut().set_calling(false);
+        self.as_mut().set_message_kind(QString::from("fail"));
+        self.set_message(QString::from(format!(
+            "Alternative calls: {error}. Instrument review remains available."
+        )));
+    }
+
+    pub fn cancel_calls(mut self: std::pin::Pin<&mut Self>) {
+        let result = self.as_mut().rust_mut().caller.cancel();
+        self.as_mut().set_calling(false);
+        match result {
+            Ok(()) => {
+                self.as_mut().set_message_kind(QString::from("notify"));
+                self.set_message(QString::from("Alternative calling cancelled"));
+            }
+            Err(error) => self.call_error(&error),
+        }
+    }
+
+    fn retain_calls(
+        mut self: std::pin::Pin<&mut Self>,
+        called: basecraft_plugin_host::sanger_calls::CalledDraft,
+    ) {
+        let result = (|| -> Result<(), String> {
+            let source = called
+                .draft
+                .inputs
+                .first()
+                .ok_or("Caller returned no source")?
+                .path
+                .clone();
+            let mut alternate = SangerReviewSession::from_draft(called.draft, &source)?;
+            alternate.attach_operation_run(&called.run)?;
+            let mut r = self.as_mut().rust_mut();
+            let session = r.review_session.as_mut().ok_or("Trace was closed")?;
+            session.retain_call_set(alternate)?;
+            session.start_recovery()
+        })();
+        self.as_mut().set_dirty(true);
+        self.as_mut().refresh();
+        match result {
+            Ok(()) => {
+                self.as_mut().set_calling(false);
+                self.as_mut().set_message_kind(QString::from("done"));
+                self.set_message(QString::from(
+                    "Computed calls retained. Choose a call set to compare and review.",
+                ));
+            }
+            Err(error) => self.call_error(&error),
+        }
+    }
+
+    pub fn compute_calls(self: std::pin::Pin<&mut Self>) {
+        self.single_review(20);
+    }
+
+    pub fn poll_calls(mut self: std::pin::Pin<&mut Self>) {
+        let result = self.as_mut().rust_mut().caller.poll();
+        match result {
+            Ok(Some(called)) => self.retain_calls(called),
+            Ok(None) => {}
+            Err(error) => self.call_error(&error),
+        }
+    }
+
+    pub fn select_calls(mut self: std::pin::Pin<&mut Self>, id: &QString) -> bool {
+        let result = (|| -> Result<SangerReviewView, String> {
+            let mut r = self.as_mut().rust_mut();
+            let session = r.review_session.as_mut().ok_or("No review is open")?;
+            session.select_call_set(&id.to_string())?;
+            session_view(session)
+        })();
+        match result {
+            Ok(mut view) => {
+                let mut r = self.as_mut().rust_mut();
+                view.resize(r.view.width, r.view.height);
+                r.review = Some(view);
+                drop(r);
+                self.as_mut().set_dirty(true);
+                self.refresh();
+                true
+            }
+            Err(error) => {
+                self.call_error(&error);
+                false
+            }
+        }
+    }
+
     pub fn record_revision(&self) -> QString {
         QString::from(
             format!(
@@ -582,6 +691,14 @@ impl qobject::SangerController {
         self.as_mut().set_review_decision(QString::from(&decision));
         self.as_mut().set_unresolved(unresolved);
         self.as_mut().set_alignment_context(QString::from(&context));
+        let (sets, selected) = self.rust().review_session.as_ref().map_or_else(
+            || (serde_json::json!([]), String::new()), |session| {
+                (serde_json::json!(session.call_sets().iter().enumerate().map(|(i, (id, engine))|
+                    serde_json::json!({"id":id,"label":format!("{} calls · {}", if *engine == "ABI" { "Instrument" } else { "Computed" }, i + 1)})).collect::<Vec<_>>()),
+                session.draft_sha256.clone())
+            });
+        self.as_mut().set_call_sets(QString::from(sets.to_string()));
+        self.as_mut().set_selected_call_set(QString::from(selected));
     }
 
     fn install_draft_run(mut self: std::pin::Pin<&mut Self>, run: &SangerRun, path: &Path) -> bool {
@@ -682,35 +799,35 @@ impl qobject::SangerController {
     }
 
     pub fn single_review(mut self: std::pin::Pin<&mut Self>, signal_threshold: i32) -> bool {
-        let result = (|| -> Result<(SangerRun, PathBuf), String> {
-            if !(1..=90).contains(&signal_threshold) {
-                return Err("Signal cutoff must be between 1 and 90 percent".into());
-            }
-            if self.rust().trace.is_none() {
-                return Err("Open an AB1 trace first".into());
-            }
-            let path = PathBuf::from(self.rust().file_path.to_string());
-            let (run, output, outputs) = sanger_tool(
-                &path,
-                "tracy-sanger",
-                "consensus",
-                std::slice::from_ref(&path),
-                &[],
-                "draft",
-                serde_json::json!({"reads":[path],"signal_threshold":signal_threshold}),
-            )?;
-            let evidence = output.join("evidence.json");
-            Ok((run.finish(&outputs).map_err(|e| e.to_string())?, evidence))
-        })();
+        let Ok(threshold) = u32::try_from(signal_threshold) else {
+            return false;
+        };
+        let source = self.rust().review_session.as_ref().and_then(|session| {
+            (session.draft.inputs.len() == 1).then(|| session.draft.inputs[0].clone())
+        });
+        let Some(source) = source else {
+            return false;
+        };
+        let result = self
+            .as_mut()
+            .rust_mut()
+            .caller
+            .start(&source.path, &source.sha256, threshold);
         match result {
-            Ok((run, path)) => self.install_draft_run(&run, &path),
-            Err(e) => {
-                self.as_mut().set_message_kind(QString::from("error"));
-                self.as_mut()
-                    .set_message(QString::from(&crate::bridge::error_summary(&e)));
-                false
+            Ok(Some(called)) => self.retain_calls(called),
+            Ok(None) => {
+                self.as_mut().set_calling(true);
+                self.as_mut().set_message_kind(QString::from("notify"));
+                self.as_mut().set_message(QString::from(
+                    "Computing alternative calls in background; current calls remain selected",
+                ));
+            }
+            Err(error) => {
+                self.call_error(&error);
+                return false;
             }
         }
+        true
     }
 
     pub fn reviewed_evidence(mut self: std::pin::Pin<&mut Self>) -> QString {
@@ -774,48 +891,40 @@ impl qobject::SangerController {
     }
 
     pub fn open_file(mut self: std::pin::Pin<&mut Self>, path: &QString) -> bool {
-        if path
-            .to_string()
-            .to_ascii_lowercase()
-            .ends_with(".sanger-review.json")
-        {
-            return self.open_review(path);
+        match basecraft_ops::sanger_review::evidence_kind(Path::new(&path.to_string())) {
+            Some(basecraft_ops::sanger_review::EvidenceKind::Review) => {
+                return self.open_review(path);
+            }
+            Some(basecraft_ops::sanger_review::EvidenceKind::Draft) => {
+                return self.open_draft(path);
+            }
+            None => {}
         }
         let path = PathBuf::from(path.to_string());
-        // Viewing an AB1 uses its recorded instrument calls. Recalling with
-        // Tracy is an explicit analysis and may create execution evidence.
-        let loaded = abif::open(&path).map_err(|e| e.to_string());
+        let loaded = basecraft_ops::sanger_review::instrument_review(&path)
+            .and_then(|session| session_view(&session).map(|view| (session, view)));
         match loaded {
-            Ok(trace) => {
+            Ok((session, mut view)) => {
+                self.as_mut().cancel_calls();
                 {
                     let mut r = self.as_mut().rust_mut();
-                    r.view.start = 0.0;
-                    r.view.selected = 0;
-                    let calls = trace.display_calls();
-                    if let (Some(first), Some(last)) =
-                        (calls.positions.first(), calls.positions.last())
-                    {
-                        r.view.samples_per_pixel = (f64::from(last - first)
-                            / display_count(calls.positions.len().saturating_sub(1).max(1))
-                            / 12.0)
-                            .max(0.25);
-                    }
-                    r.trace = Some(trace);
-                    r.review = None;
-
-                    r.review_session = None;
+                    view.resize(r.view.width, r.view.height);
+                    // Keep the raw trace for the existing multi-read draft action.
+                    r.trace = view.lanes.first().map(|lane| lane.trace.clone());
+                    r.review = Some(view);
+                    r.review_session = Some(session);
                     r.review_path = None;
                 }
                 self.as_mut()
                     .set_file_path(QString::from(path.to_string_lossy().as_ref()));
-                self.as_mut().set_message(QString::default());
-                self.as_mut().set_message_kind(QString::default());
-                self.refresh();
+                self.as_mut().set_dirty(false);
+                self.as_mut().refresh();
+                self.compute_calls();
                 true
             }
             Err(error) => {
-                self.as_mut().set_message_kind(QString::from("error"));
-                self.as_mut().set_message(QString::from(&error));
+                self.as_mut().set_message_kind(QString::from("fail"));
+                self.as_mut().set_message(QString::from(error));
                 false
             }
         }
@@ -844,6 +953,7 @@ impl qobject::SangerController {
         })();
         match result {
             Ok((mut review, session)) => {
+                self.as_mut().cancel_calls();
                 {
                     let mut r = self.as_mut().rust_mut();
                     review.resize(r.view.width, r.view.height);
@@ -878,6 +988,7 @@ impl qobject::SangerController {
         })();
         match result {
             Ok((mut review, session)) => {
+                self.as_mut().cancel_calls();
                 let recovered = session.recovery_path().is_some();
                 {
                     let mut r = self.as_mut().rust_mut();
@@ -1068,7 +1179,7 @@ impl qobject::SangerController {
             .review_session
             .as_mut()
             .ok_or_else(|| "No Sanger review is open".to_string())
-            .and_then(|session| session.start_recovery().and_then(|()| session.apply(op)));
+            .and_then(|session| session.apply(op).and_then(|()| session.start_recovery()));
         if self
             .rust()
             .review_session
@@ -1087,6 +1198,7 @@ impl qobject::SangerController {
             Err(error) => {
                 self.as_mut().set_message_kind(QString::from("error"));
                 self.as_mut().set_message(QString::from(&error));
+                self.refresh();
             }
         }
     }
