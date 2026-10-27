@@ -1100,6 +1100,7 @@ ApplicationWindow {
                             tip: "Realign the sequences with MAFFT, default settings, into a new file"
                             onInvoked: window.current.align_mafft()
                         }
+                        RibbonButton { commandId: "alignment.blast"; text: "BLAST"; tip: "Submit selected or all FASTA rows to NCBI"; iconName: "search"; onInvoked: window.beginBlast("all") }
                         RibbonButton { commandId: "ribbon.trim-unreliable-columns-with-trimal-automated1-into-a-new";
                             iconName: "trim"
                             text: "trimAL"
@@ -1820,11 +1821,12 @@ ApplicationWindow {
         }
     }
 
-    BlastDialog { id: blastDialog; onCopyText: text => clipboard.put(text) }
+    AppOperations { id: blastBackend }
+    BlastDialog { id: blastDialog; backend: blastBackend; onCopyText: text => clipboard.put(text) }
     function beginBlast(mode, feature) {
         const controller = window.current
-        const annotation = feature === undefined ? controller.selected_feature() : feature
-        blastDialog.show(source => controller.blast_queries(source, annotation), mode)
+        const annotation = window.alignmentOpen ? -1 : (feature === undefined ? controller.selected_feature() : feature)
+        blastDialog.show(source => controller.blast_queries(source, annotation), mode, window.alignmentOpen)
     }
 
     // Only what applies where you clicked: an annotation, or the selection.
@@ -1879,6 +1881,7 @@ ApplicationWindow {
         AlnItem { text: "Insert gap column"; visible: alnMenu.columns; onTriggered: window.current.insert_column() }
         AlnItem { text: alnMenu.info.columns === 1 ? "Delete column" : "Delete " + alnMenu.info.columns + " columns"; visible: alnMenu.columns; onTriggered: window.current.delete_columns() }
         AlnItem { text: "Strip gap-only columns"; visible: alnMenu.columns || alnMenu.rows; onTriggered: window.current.remove_gap_columns() }
+        AlnItem { text: "BLAST selected rows at NCBI"; onTriggered: window.beginBlast("rows") }
         AlnItem { text: "Copy as FASTA"; onTriggered: clipboard.put(window.current.selection_text()) }
     }
 

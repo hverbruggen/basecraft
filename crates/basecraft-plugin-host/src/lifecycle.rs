@@ -114,7 +114,12 @@ impl Lifecycle {
             .data
             .as_deref()
             .ok_or_else(|| Error::Protocol("external submission missing data".into()))?;
-        if data["query_hash"] != plan["query_hash"]
+        let mut summary = plan.clone();
+        if let Some(object) = summary.as_object_mut() {
+            object.remove("fasta");
+        }
+        if data["plan"] != summary
+            || data["query_hash"] != plan["query_hash"]
             || data["approval_hash"] != plan["approval_hash"]
             || data["plan"]["records"] != plan["records"]
             || data["program"] != plan["program"]

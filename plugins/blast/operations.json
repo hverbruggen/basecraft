@@ -58,8 +58,7 @@
           }
         },
         "required": [
-          "alphabet",
-          "contact_email"
+          "alphabet"
         ]
       },
       "result": {
@@ -154,6 +153,111 @@
       "effects": {
         "document_write": false,
         "artifact_write": true
+      }
+    },
+    {
+      "name": "receipt",
+      "version": "1.0.0",
+      "implementation": "receipt",
+      "title": "Read retained BLAST submission",
+      "description": "Verify and read a retained receipt against its query preparation after restart. Never contacts NCBI or repeats a submission.",
+      "family": "file_analysis",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "result": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "schema": {
+            "const": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "accepted",
+              "unknown",
+              "cancelled",
+              "rejected"
+            ]
+          },
+          "rid": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "url": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "query_hash": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "approval_hash": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "message": {
+            "type": "string",
+            "maxLength": 2048
+          },
+          "submitted_at": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "program": {
+            "type": "string"
+          },
+          "database": {
+            "type": "string"
+          },
+          "submitted_residues": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "plan": {
+            "type": "object"
+          },
+          "request_fields": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "schema",
+          "status",
+          "rid",
+          "url",
+          "query_hash",
+          "approval_hash",
+          "message",
+          "program",
+          "database",
+          "submitted_residues",
+          "plan",
+          "request_fields",
+          "submitted_at"
+        ]
+      },
+      "inputs": {
+        "receipt": {
+          "view": "bytes",
+          "media_type": "application/json",
+          "min": 1,
+          "max": 1
+        },
+        "query": {
+          "view": "bytes",
+          "media_type": "application/json",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "outputs": {},
+      "effects": {
+        "document_write": false,
+        "artifact_write": false
       }
     }
   ]

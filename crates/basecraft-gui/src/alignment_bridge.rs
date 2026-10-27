@@ -222,6 +222,8 @@ pub mod qobject {
         #[qinvokable]
         fn selection_text(self: &AlignmentController) -> QString;
         #[qinvokable]
+        fn blast_queries(self: &AlignmentController, source: &QString, feature: i32) -> QString;
+        #[qinvokable]
         fn select_all(self: Pin<&mut AlignmentController>);
         /// Select rows `r0..r1` by columns `c0..c1`.
         #[qinvokable]
@@ -1107,6 +1109,30 @@ impl qobject::AlignmentController {
             .flatten()
             .unwrap_or_default();
         QString::from(&text)
+    }
+
+    pub fn blast_queries(&self, source: &QString, _feature: i32) -> QString {
+        let result = self
+            .with_doc(|doc| {
+                let source = source.to_string();
+                let block = self.rust().view.block();
+                let rows = if source == "all" {
+                    (0, doc.row_count())
+                } else {
+                    block.rows
+                };
+                let columns = if source == "selection" {
+                    block.cols
+                } else {
+                    (0, doc.len())
+                };
+                basecraft_ops::blast::from_alignment(doc, rows, columns)
+            })
+            .unwrap_or_else(|| Err(basecraft_ops::Error::Invalid("Alignment closed".into())));
+        QString::from(&match result {
+            Ok(queries) => serde_json::to_string(&queries).unwrap_or_default(),
+            Err(error) => serde_json::json!({"error":error.to_string()}).to_string(),
+        })
     }
 
     pub fn selection_text(&self) -> QString {

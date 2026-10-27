@@ -57,12 +57,16 @@ pub fn from_fasta(bytes: &[u8], source: &str) -> Result<Vec<Query>> {
 
 /// Read every FASTA/GenBank record, or a GUI-generated frozen query collection.
 pub fn from_file(path: &Path) -> Result<Vec<Query>> {
+    from_file_named(path, &path.display().to_string())
+}
+
+pub fn from_file_named(path: &Path, source: &str) -> Result<Vec<Query>> {
     let bytes = std::fs::read(path)?;
     if bytes.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b'[') {
         return Ok(serde_json::from_slice(&bytes)?);
     }
     if bytes.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b'>') {
-        return from_fasta(&bytes, &path.display().to_string());
+        return from_fasta(&bytes, source);
     }
     basecraft_io::genbank::parse(&bytes)?
         .into_iter()
@@ -70,12 +74,33 @@ pub fn from_file(path: &Path) -> Result<Vec<Query>> {
         .map(|(i, rec)| {
             let molecule = rec.molecule.clone();
             let mut query = from_doc(&SequenceDoc::from_genbank(rec), None, None)?;
-            query.source["path"] = json!(path.display().to_string());
+            query.source["path"] = json!(source);
             query.source["record"] = json!(i);
             query.source["molecule"] = json!(molecule);
             Ok(query)
         })
         .collect()
+}
+
+/// Current alignment bytes, including unsaved changes; row and column choices
+/// remain explicit and use the same preparation as sequence documents/files.
+pub fn from_alignment(
+    doc: &basecraft_docs::AlignmentDoc,
+    rows: (usize, usize),
+    columns: (u64, u64),
+) -> Result<Vec<Query>> {
+    if rows.0 >= rows.1
+        || rows.1 > doc.row_count()
+        || columns.0 >= columns.1
+        || columns.1 > doc.len()
+    {
+        return Err(invalid("BLAST selection is empty or outside the alignment"));
+    }
+    (rows.0..rows.1).map(|row| Ok(Query {
+        name:doc.row(row).name.clone(),
+        sequence:String::from_utf8(doc.read(row,columns.0,columns.1)).map_err(|_|invalid("Non-ASCII alignment query"))?,
+        source:json!({"document":doc.name,"revision":doc.version(),"record":row,"ranges":[columns],"strand":"+"}),
+    })).collect()
 }
 
 /// Reuse Extract's spliced/reverse behavior. Mixed-strand features are rejected
@@ -131,7 +156,7 @@ pub fn from_doc(
             |f| f.label().unwrap_or(&f.kind).to_owned(),
         ),
         sequence: String::from_utf8(sequence).map_err(|_| invalid("Non-ASCII query"))?,
-        source: json!({"document":doc.name,"revision":doc.version(),"ranges":segments,"strand":if reverse {"-"} else {"+"}}),
+        source: json!({"document":doc.name,"revision":doc.version(),"ranges":segments,"strand":if reverse {"-"} else {"+"},"molecule":doc.genbank.as_ref().map(|meta| &meta.molecule)}),
     })
 }
 
@@ -140,6 +165,11 @@ pub fn from_doc(
 pub fn prepare(queries: &[Query], settings: &Value) -> Result<Plan> {
     if queries.is_empty() {
         return Err(invalid("BLAST query contains no records"));
+    }
+    if queries.len() > 4096 {
+        return Err(invalid(
+            "BLAST supports at most 4096 query records per submission; choose a smaller batch",
+        ));
     }
     let alphabet = settings["alphabet"].as_str().unwrap_or("");
     let (allowed, limit) = match alphabet {
@@ -167,6 +197,17 @@ pub fn prepare(queries: &[Query], settings: &Value) -> Result<Plan> {
     let mut normalized = Vec::new();
     let mut total = 0usize;
     for query in queries {
+        if let Some(molecule) = query.source["molecule"].as_str() {
+            let molecule = molecule.to_ascii_lowercase();
+            let protein = molecule.contains("protein") || molecule == "aa";
+            let nucleotide = molecule.contains("dna") || molecule.contains("rna");
+            if (protein && alphabet != "protein") || (nucleotide && alphabet != "nucleotide") {
+                return Err(invalid(format!(
+                    "{}: chosen alphabet disagrees with document molecule {}",
+                    query.name, molecule
+                )));
+            }
+        }
         let seq: Vec<_> = query
             .sequence
             .bytes()
@@ -199,7 +240,9 @@ pub fn prepare(queries: &[Query], settings: &Value) -> Result<Plan> {
         let retained = seq.len().min(budget);
         budget -= retained;
         let id = format!("query_{}", i + 1);
-        records.push(json!({"id":id,"name":query.name,"source":query.source,"original_length":seq.len(),"submitted_length":retained,"submitted_query_range":[0,retained],"omitted":retained==0,"shortened":retained>0 && retained<seq.len(),"removed_gaps_or_whitespace":query.sequence.len()-seq.len()}));
+        let input_ranges = retained_offsets(&query.sequence, retained);
+        let source_ranges = project_ranges(&query.source, &input_ranges)?;
+        records.push(json!({"submitted_input_ranges":input_ranges,"submitted_source_ranges":source_ranges,"id":id,"name":query.name,"source":query.source,"original_length":seq.len(),"submitted_length":retained,"submitted_query_range":[0,retained],"omitted":retained==0,"shortened":retained>0 && retained<seq.len(),"removed_gaps_or_whitespace":query.sequence.len()-seq.len()}));
         if retained > 0 {
             basecraft_io::fasta::write_record(&mut fasta, id.as_bytes(), &seq[..retained], 80)?;
         }
@@ -212,7 +255,7 @@ pub fn prepare(queries: &[Query], settings: &Value) -> Result<Plan> {
         object.remove("approval_hash");
     }
     let approval_hash = basecraft_io::hash_bytes(&serde_json::to_vec(&(queries, identity))?);
-    Ok(Plan {
+    let plan = Plan {
         schema: 1,
         alphabet: alphabet.into(),
         program: program.into(),
@@ -226,7 +269,70 @@ pub fn prepare(queries: &[Query], settings: &Value) -> Result<Plan> {
         fasta: String::from_utf8(fasta).map_err(|_| invalid("Invalid FASTA"))?,
         approval_hash,
         truncation: total > limit && settings["truncate"] == true,
-    })
+    };
+    if serde_json::to_vec(&plan)?.len() > 3 * 1024 * 1024 {
+        return Err(invalid(
+            "BLAST query mapping exceeds the evidence limit; select fewer records or a less fragmented range",
+        ));
+    }
+    Ok(plan)
+}
+
+fn retained_offsets(sequence: &str, count: usize) -> Vec<(u64, u64)> {
+    let mut ranges: Vec<(u64, u64)> = Vec::new();
+    for (offset, _) in sequence
+        .bytes()
+        .enumerate()
+        .filter(|(_, b)| !b.is_ascii_whitespace() && *b != b'-' && *b != b'.')
+        .take(count)
+    {
+        let offset = offset as u64;
+        if let Some(last) = ranges.last_mut()
+            && last.1 == offset
+        {
+            last.1 += 1;
+        } else {
+            ranges.push((offset, offset + 1));
+        }
+    }
+    ranges
+}
+
+fn project_ranges(source: &Value, retained: &[(u64, u64)]) -> Result<Vec<Value>> {
+    let Some(ranges) = source["ranges"].as_array() else {
+        return Ok(Vec::new());
+    };
+    let mut offset = 0u64;
+    let reverse = source["strand"] == "-";
+    let mut projected = Vec::new();
+    for range in ranges {
+        let a = range[0]
+            .as_u64()
+            .ok_or_else(|| invalid("Invalid source range"))?;
+        let b = range[1]
+            .as_u64()
+            .filter(|b| *b >= a)
+            .ok_or_else(|| invalid("Invalid source range"))?;
+        let length = b - a;
+        let next = offset
+            .checked_add(length)
+            .ok_or_else(|| invalid("Source range overflow"))?;
+        for &(lo, hi) in retained {
+            let start = lo.max(offset);
+            let end = hi.min(next);
+            if start < end {
+                let (start, end) = if reverse {
+                    (b - (end - offset), b - (start - offset))
+                } else {
+                    (a + start - offset, a + end - offset)
+                };
+                projected
+                    .push(json!({"start":start,"end":end,"strand":if reverse {"-"} else {"+"}}));
+            }
+        }
+        offset = next;
+    }
+    Ok(projected)
 }
 
 pub fn authorize(plan: &Plan, settings: &Value) -> Result<()> {
@@ -307,7 +413,60 @@ mod tests {
         let feature = doc.features().next().unwrap().1;
         let query = from_doc(&doc, None, Some(feature)).unwrap();
         assert_eq!(query.sequence.to_ascii_uppercase(), "AAATTT");
-        assert_eq!(doc.read(0, 12), b"aaacccgggttt");
+        assert_eq!(doc.read(0, 12), b"AAACCCGGGTTT");
         assert!(from_doc(&doc, Some((4, 99)), None).is_err());
+    }
+    #[test]
+    fn unsaved_selection_join_ranges_and_changed_bytes() {
+        let mut doc = SequenceDoc::new(
+            "unsaved",
+            std::sync::Arc::new(b"AAACCCGGGTTT".to_vec()),
+            Vec::new(),
+            true,
+        );
+        doc.insert(3, b"AT");
+        let q = from_doc(&doc, Some((3, 8)), None).unwrap();
+        assert_eq!(q.sequence, "ATCCC");
+        let s = settings("nucleotide");
+        let p = prepare(&[q.clone()], &s).unwrap();
+        assert_eq!(
+            p.records[0]["submitted_source_ranges"],
+            json!([{"start":3,"end":8,"strand":"+"}])
+        );
+        let mut approved = s;
+        approved["approval_hash"] = json!(p.approval_hash);
+        let mut changed = q;
+        changed.sequence.replace_range(0..1, "G");
+        assert!(authorize(&prepare(&[changed], &approved).unwrap(), &approved).is_err());
+        let reverse = json!({"ranges":[[9,12],[0,3]],"strand":"-"});
+        assert_eq!(
+            project_ranges(&reverse, &[(0, 4)]).unwrap(),
+            vec![
+                json!({"start":9,"end":12,"strand":"-"}),
+                json!({"start":2,"end":3,"strand":"-"})
+            ]
+        );
+    }
+    #[test]
+    fn current_alignment_all_rows_and_selected_columns() {
+        use basecraft_docs::alignment::AlnRow;
+        let doc = basecraft_docs::AlignmentDoc::new(
+            "batch",
+            vec![
+                AlnRow::new("same", std::sync::Arc::new(b"A-CGT".to_vec())),
+                AlnRow::new("same", std::sync::Arc::new(b"NNCGT".to_vec())),
+            ],
+        );
+        let q = from_alignment(&doc, (0, 2), (0, 5)).unwrap();
+        let plan = prepare(&q, &settings("nucleotide")).unwrap();
+        assert_eq!(plan.records.len(), 2);
+        assert_eq!(plan.submitted_residues, 9);
+        assert_eq!(
+            plan.records[0]["submitted_input_ranges"],
+            json!([[0, 1], [2, 5]])
+        );
+        let q = from_alignment(&doc, (1, 2), (2, 4)).unwrap();
+        assert_eq!(q[0].sequence, "CG");
+        assert!(from_alignment(&doc, (2, 3), (0, 1)).is_err());
     }
 }

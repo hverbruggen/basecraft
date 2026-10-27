@@ -150,5 +150,29 @@ def submit(_snapshot, parameters, context):
     return submit_prepared(parameters, context)
 
 
+def inspect_retained(receipt, plan):
+    """Read an existing receipt after restart, with no service contact."""
+    expected = "sha256:" + hashlib.sha256(plan["fasta"].encode()).hexdigest()
+    if (plan["schema"] != 1 or plan["query_hash"] != expected
+            or receipt["query_hash"] != expected
+            or receipt["approval_hash"] != plan["approval_hash"]
+            or receipt["plan"] != {k: v for k, v in plan.items() if k != "fasta"}):
+        raise ValueError("Retained BLAST receipt does not match the frozen query")
+    if receipt["status"] == "accepted":
+        rid = receipt["rid"]
+        if not RID.fullmatch(rid) or receipt["url"] != ENDPOINT + "?" + urlencode({"CMD": "Get", "RID": rid, "FORMAT_TYPE": "HTML"}):
+            raise ValueError("Malformed retained RID/link")
+    elif receipt["rid"] or receipt["url"]:
+        raise ValueError("Non-accepted receipt contains an RID/link")
+    return receipt
+
+
+@plugin.context_operation("receipt")
+def receipt(_snapshot, _parameters, context):
+    data = inspect_retained(json.loads(Path(context["inputs"]["receipt"][0]).read_text()),
+                            json.loads(Path(context["inputs"]["query"][0]).read_text()))
+    return {"ops": [], "data": data}
+
+
 if __name__ == "__main__":
     plugin.run()

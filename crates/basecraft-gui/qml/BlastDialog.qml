@@ -2,7 +2,6 @@ import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
-import Basecraft
 
 AppFormDialog {
     id: dialog
@@ -11,6 +10,8 @@ AppFormDialog {
     initialFocusItem: alphabet
     property var sourceProvider: null
     property string sourceMode: "whole"
+    property bool alignment: false
+    readonly property var modes: alignment ? ["all", "rows", "selection"] : ["whole", "selection", "annotation", "all"]
     property var preview: ({})
     property string frozenSource: ""
     property string frozenSettings: ""
@@ -21,7 +22,7 @@ AppFormDialog {
     // Injectable browser boundary for tests; retry only opens the retained URL.
     property var openBrowser: url => Qt.openUrlExternally(url)
     signal copyText(string text)
-    AppOperations { id: backend }
+    required property var backend
     Timer {
         interval: 200; repeat: true; running: backend.busy
         onTriggered: {
@@ -29,18 +30,19 @@ AppFormDialog {
             if (!backend.busy) dialog.completed()
         }
     }
-    function show(provider, mode) {
+    function show(provider, mode, isAlignment) {
         if (backend.busy) { open(); return }
+        alignment = isAlignment === true
         sourceProvider = provider
         sourceMode = mode || "whole"
-        sourceChoice.currentIndex = ["whole", "selection", "annotation", "all"].indexOf(sourceMode)
+        sourceChoice.currentIndex = modes.indexOf(sourceMode)
         preview = ({}); frozenSource = ""; frozenSettings = ""
         formError = ""; resultUrl = ""; resultMessage = ""; submitted = false
         contact.text = backend.blast_contact()
         open()
     }
     function settings() {
-        return JSON.stringify({alphabet: alphabet.currentIndex === 0 ? "nucleotide" : "protein",
+        return JSON.stringify({alphabet: alphabet.currentIndex < 0 ? "" : (alphabet.currentIndex === 0 ? "nucleotide" : "protein"),
             database: database.currentText, expect: Number(expect.text), max_hits: maxHits.value,
             megablast: megablast.checked, contact_email: contact.text.trim()})
     }
@@ -86,28 +88,28 @@ AppFormDialog {
         text: "Selected sequences will be sent to NCBI over HTTPS. Basecraft submits once and opens your browser; NCBI runs the search. RID links are temporary."
     }
     AppComboBox {
-        id: sourceChoice; Kirigami.FormData.label: "Query source"
-        model: ["Whole current sequence", "Current selection", "Annotation", "All FASTA records (current unsaved first record)"]
+        id: sourceChoice; objectName: "blastSource"; Kirigami.FormData.label: "Query source"
+        model: dialog.alignment ? ["All current FASTA rows", "Selected rows (whole sequences)", "Selected rows and columns"] : ["Whole current sequence", "Current selection", "Annotation", "All FASTA records (current unsaved first record)"]
         enabled: !backend.busy && !dialog.submitted
-        onActivated: { dialog.sourceMode = ["whole", "selection", "annotation", "all"][currentIndex]; dialog.invalidate() }
+        onActivated: { dialog.sourceMode = dialog.modes[currentIndex]; dialog.invalidate() }
     }
     AppComboBox {
-        id: alphabet; Kirigami.FormData.label: "Query alphabet"
-        model: ["Nucleotide", "Protein"]
+        id: alphabet; objectName: "blastAlphabet"; Kirigami.FormData.label: "Query alphabet"
+        model: ["Nucleotide", "Protein"]; currentIndex: -1
         enabled: !backend.busy && !dialog.submitted
-        onActivated: dialog.invalidate()
+        onActivated: { if (currentIndex !== 0) megablast.checked = false; dialog.invalidate() }
     }
     AppComboBox {
         id: database; Kirigami.FormData.label: "Target database"
         model: ["nt", "nr"]; enabled: !backend.busy && !dialog.submitted
-        onActivated: dialog.invalidate()
+        onActivated: { if (currentText !== "nt") megablast.checked = false; dialog.invalidate() }
     }
     Label {
         Kirigami.FormData.label: "Program"
         text: alphabet.currentIndex === 0 ? (database.currentText === "nt" ? "blastn" : "blastx") : (database.currentText === "nr" ? "blastp" : "tblastn")
     }
     TextField {
-        id: contact; Kirigami.FormData.label: "NCBI contact email"
+        id: contact; objectName: "blastContact"; Kirigami.FormData.label: "NCBI contact email"
         enabled: !backend.busy && !dialog.submitted
         placeholderText: "Authorized service contact"
         onTextEdited: dialog.invalidate()
@@ -117,7 +119,7 @@ AppFormDialog {
         text: "0.05"; enabled: !backend.busy && !dialog.submitted
         onTextEdited: dialog.invalidate()
     }
-    SpinBox {
+    AppSpinBox {
         id: maxHits; Kirigami.FormData.label: "Maximum hits"
         from: 1; to: 5000; value: 100; editable: true
         enabled: !backend.busy && !dialog.submitted
@@ -141,13 +143,16 @@ AppFormDialog {
         Layout.fillWidth: true; wrapMode: Text.Wrap; visible: dialog.preview.oversized === true
         text: "Oversized query. Proposed policy: keep leading residues in input order, retain complete records until one must be shortened, then omit subsequent records. Cancel/Close sends nothing; change the source and preview again, or explicitly proceed with truncation. The original source stays unchanged."
     }
-    Repeater {
+    ColumnLayout {
+      Layout.fillWidth: true
+      Repeater {
         model: dialog.preview.records || []
         delegate: Label {
             required property var modelData
             Layout.fillWidth: true; wrapMode: Text.Wrap
-            text: modelData.id + " “" + modelData.name + "”: " + (modelData.omitted ? "OMITTED (" + modelData.original_length + " residues)" : "keep query positions 1–" + modelData.submitted_length + " of " + modelData.original_length + (modelData.shortened ? " — SHORTENED" : "")) + "; source " + JSON.stringify(modelData.source) + (modelData.removed_gaps_or_whitespace ? "; removed " + modelData.removed_gaps_or_whitespace + " gap/whitespace characters" : "")
+            text: modelData.id + " “" + modelData.name + "”: " + (modelData.omitted ? "OMITTED (" + modelData.original_length + " residues)" : "keep query positions 1–" + modelData.submitted_length + " of " + modelData.original_length + (modelData.shortened ? " — SHORTENED" : "")) + "; submitted source ranges " + JSON.stringify(modelData.submitted_source_ranges || []) + "; source " + JSON.stringify(modelData.source) + (modelData.removed_gaps_or_whitespace ? "; removed " + modelData.removed_gaps_or_whitespace + " gap/whitespace characters" : "")
         }
+    }
     }
     AppButton {
         text: dialog.preview.oversized ? "Proceed with truncation and open browser" : "Submit and open browser"

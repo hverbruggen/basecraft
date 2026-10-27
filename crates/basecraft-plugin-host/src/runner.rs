@@ -339,8 +339,18 @@ impl PreparedOperation {
         } else {
             policy.resolve(&operation, &request)?
         };
+        let mut supplied_parameters = request.parameters.clone();
+        if lifecycle.external() && supplied_parameters.get("contact_email").is_none() {
+            let contact = std::env::var("BASECRAFT_BLAST_CONTACT_EMAIL").map_err(|_| {
+                Error::Protocol(
+                    "Configure BASECRAFT_BLAST_CONTACT_EMAIL or supply contact_email for NCBI"
+                        .into(),
+                )
+            })?;
+            supplied_parameters["contact_email"] = json!(contact);
+        }
         let parameters =
-            contract::normalize_parameters(&operation.descriptor, &request.parameters)?;
+            contract::normalize_parameters(&operation.descriptor, &supplied_parameters)?;
         operation.package.verify()?;
         let scratch = tempfile::Builder::new()
             .prefix("basecraft-operation-")
@@ -368,13 +378,10 @@ impl PreparedOperation {
                 ));
                 let original_hash = file_tool::freeze_file(&source, &path)?;
                 if lifecycle.external() {
-                    let mut queries = basecraft_ops::blast::from_file(&path)?;
-                    for query in &mut queries {
-                        if query.source.is_object() && query.source.get("path").is_some() {
-                            query.source["path"] = json!(source.display().to_string());
-                        }
-                    }
-                    submission_queries.extend(queries);
+                    submission_queries.extend(basecraft_ops::blast::from_file_named(
+                        &path,
+                        &source.display().to_string(),
+                    )?);
                 }
                 let transformation = match binding.view {
                     InputView::Bytes => "identity-v1",
@@ -647,6 +654,8 @@ impl PreparedOperation {
             let receipt = Path::new(&self.context.outputs["receipt"]);
             if receipt.is_file() {
                 result = (|| -> Result<InvokeResult> {
+                    let metadata = receipt.symlink_metadata()?;
+                    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.nlink()!=1 { return Err(Error::Protocol("unsafe retained receipt; submission status unknown".into())); }
                     let data =
                         serde_json::from_slice(&basecraft_ops::provenance::read_record(receipt)?)?;
                     Ok(InvokeResult {
@@ -697,11 +706,14 @@ impl PreparedOperation {
                 }
                 Ok(result)
             }
-            Err(error) => match evidence {
+            Err(error) => {
+                let error = if self.lifecycle.external() { Error::Protocol(format!("Submission status unknown unless retained receipt proves acceptance: {error}. Do not automatically resubmit")) } else {error};
+                match evidence {
                 Ok(()) => Err(error),
                 Err(evidence) => Err(Error::Protocol(format!(
                     "{error}; execution evidence write failed: {evidence}"
                 ))),
+            }
             },
         }
     }
@@ -717,6 +729,10 @@ impl PreparedOperation {
         let plan: Value = serde_json::from_slice(&basecraft_ops::provenance::read_record(
             &self.run.artifact("query-preparation.json")?,
         )?)?;
+        let receipt = Path::new(&self.context.outputs["receipt"]);
+        if let Ok(metadata) = receipt.symlink_metadata() && (!metadata.is_file() || metadata.file_type().is_symlink() || metadata.nlink()!=1) {
+            return Err(Error::Protocol("unsafe allocated receipt; submission status unknown".into()));
+        }
         self.lifecycle.validate_identity(result, &plan)
     }
 
