@@ -759,7 +759,7 @@ pub fn plan_headers(
                 FieldTarget::Specimen => source.specimen = field.into(),
                 FieldTarget::Taxon => source.taxon = Some(field.replace('_', " ")),
                 FieldTarget::Column { column } => {
-                    source.values.push((column.clone(), field.into()))
+                    source.values.push((column.clone(), field.into()));
                 }
                 FieldTarget::Record | FieldTarget::Ignore => {}
             }
@@ -910,7 +910,10 @@ pub fn template_rows(
     meta: &ProjectMetadata,
     records: &[(String, String)],
 ) -> (Vec<String>, Vec<Vec<String>>) {
-    let mut columns: Vec<Column> = model::KNOWN_COLUMNS.iter().map(|k| k.column()).collect();
+    let mut columns: Vec<Column> = model::KNOWN_COLUMNS
+        .iter()
+        .map(KnownColumn::column)
+        .collect();
     for column in &meta.specimens.columns {
         if !columns.iter().any(|c| c.name == column.name) {
             columns.push(column.clone());

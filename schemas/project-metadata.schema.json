@@ -1,0 +1,540 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ProjectMetadata",
+  "description": "The project's specimen metadata, as held in memory and edited by\n[`MetadataEdit`]s.",
+  "type": "object",
+  "properties": {
+    "identifications": {
+      "description": "In the order they were recorded. A specimen's current identification\nis its last one; earlier ones remain as its identification history.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Identification"
+      }
+    },
+    "import": {
+      "$ref": "#/$defs/ImportSettings",
+      "default": {}
+    },
+    "links": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/RecordLink"
+      }
+    },
+    "specimens": {
+      "description": "The specimen roster: one row per specimen, keyed by its local ID.",
+      "$ref": "#/$defs/Table"
+    },
+    "taxa": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Taxon"
+      }
+    },
+    "version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": true,
+  "required": [
+    "version",
+    "specimens"
+  ],
+  "$defs": {
+    "Cell": {
+      "description": "One value. The variant must match its column's kind; any column may hold\na missing-value reason instead.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "text"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "date": {
+              "$ref": "#/$defs/PartialDate"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "date"
+          ]
+        },
+        {
+          "description": "Latitude or longitude in decimal degrees.",
+          "type": "object",
+          "properties": {
+            "degrees": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "degrees"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "number": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "number"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "category": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "category"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "missing": {
+              "$ref": "#/$defs/MissingReason"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "missing"
+          ]
+        }
+      ]
+    },
+    "Column": {
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ColumnKind"
+        },
+        "name": {
+          "description": "A Darwin Core term (`catalogNumber`, `eventDate`, ...) or a user name:\nan ASCII letter followed by letters, digits or underscores.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "kind"
+      ]
+    },
+    "ColumnKind": {
+      "description": "What a column holds. Every kind also accepts an INSDC missing-value reason.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "text"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "A calendar date at its true precision: year, year and month, or day.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "date"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "WGS84 decimal degrees, -90 to 90.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "latitude"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "WGS84 decimal degrees, -180 to 180.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "longitude"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "A number, in `unit` when given.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "number"
+            },
+            "unit": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "One of `levels`.",
+          "type": "object",
+          "properties": {
+            "levels": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "categorical"
+            }
+          },
+          "required": [
+            "type",
+            "levels"
+          ]
+        }
+      ]
+    },
+    "FieldTarget": {
+      "description": "What an imported field holds.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "role": {
+              "type": "string",
+              "const": "ignore"
+            }
+          },
+          "required": [
+            "role"
+          ]
+        },
+        {
+          "description": "The specimen's local ID: the key that rows are matched on.",
+          "type": "object",
+          "properties": {
+            "role": {
+              "type": "string",
+              "const": "specimen"
+            }
+          },
+          "required": [
+            "role"
+          ]
+        },
+        {
+          "description": "A sequence record ID to link to the row's specimen.",
+          "type": "object",
+          "properties": {
+            "role": {
+              "type": "string",
+              "const": "record"
+            }
+          },
+          "required": [
+            "role"
+          ]
+        },
+        {
+          "description": "A taxon name; the specimen is identified as that taxon.",
+          "type": "object",
+          "properties": {
+            "role": {
+              "type": "string",
+              "const": "taxon"
+            }
+          },
+          "required": [
+            "role"
+          ]
+        },
+        {
+          "description": "A value for a specimen column.",
+          "type": "object",
+          "properties": {
+            "column": {
+              "type": "string"
+            },
+            "role": {
+              "type": "string",
+              "const": "column"
+            }
+          },
+          "required": [
+            "role",
+            "column"
+          ]
+        }
+      ]
+    },
+    "HeaderPattern": {
+      "description": "How to read fields from structured FASTA headers, such as\n`HV1234|Caulerpa taxifolia|2019-05-12`.",
+      "type": "object",
+      "properties": {
+        "fields": {
+          "description": "What each field holds, in order. Fields past the end are ignored.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FieldTarget"
+          }
+        },
+        "name": {
+          "type": "string"
+        },
+        "separator": {
+          "description": "Splits the header line (without `>`). Must not be empty.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "separator",
+        "fields"
+      ]
+    },
+    "Identification": {
+      "description": "A recorded assignment of a specimen to a taxon. Re-identification adds\nanother; it never overwrites the earlier one.",
+      "type": "object",
+      "properties": {
+        "date": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PartialDate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "identified_by": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "remarks": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "specimen": {
+          "type": "string"
+        },
+        "taxon": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "specimen",
+        "taxon"
+      ]
+    },
+    "ImportSettings": {
+      "description": "Saved import settings, so a project's next import repeats its last one.",
+      "type": "object",
+      "properties": {
+        "header_patterns": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HeaderPattern"
+          }
+        },
+        "spreadsheet_mappings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SpreadsheetMapping"
+          }
+        }
+      }
+    },
+    "MissingReason": {
+      "description": "Why a value is missing: the INSDC missing-value vocabulary, written as\nINSDC writes it.",
+      "type": "string",
+      "enum": [
+        "not applicable",
+        "missing",
+        "not collected",
+        "not provided",
+        "restricted access",
+        "missing: control sample",
+        "missing: sample group",
+        "missing: synthetic construct",
+        "missing: lab stock",
+        "missing: third party data",
+        "missing: data agreement established pre-2023",
+        "missing: endangered species",
+        "missing: human-identifiable"
+      ]
+    },
+    "PartialDate": {
+      "description": "A date at year, month or day precision",
+      "type": "string",
+      "pattern": "^[0-9]{4}(-[0-9]{2}(-[0-9]{2})?)?$"
+    },
+    "RecordLink": {
+      "description": "A stored link from a sequence record to the specimen it came from. Many\nrecords may link to one specimen. Links are made at import and never\nre-derived from names.",
+      "type": "object",
+      "properties": {
+        "document": {
+          "type": "string"
+        },
+        "record": {
+          "type": "string"
+        },
+        "specimen": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "document",
+        "record",
+        "specimen"
+      ]
+    },
+    "Row": {
+      "type": "object",
+      "properties": {
+        "cells": {
+          "description": "Column name to value; absent columns have no value.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Cell"
+          },
+          "default": {}
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ]
+    },
+    "SpreadsheetMapping": {
+      "description": "Remembered spreadsheet column mapping.",
+      "type": "object",
+      "properties": {
+        "columns": {
+          "description": "Source column header to what it holds. Unmapped columns are ignored.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/FieldTarget"
+          }
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "columns"
+      ]
+    },
+    "Table": {
+      "description": "A typed table: declared columns and rows keyed by a stable ID.",
+      "type": "object",
+      "properties": {
+        "columns": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Column"
+          }
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Row"
+          }
+        }
+      },
+      "required": [
+        "columns",
+        "rows"
+      ]
+    },
+    "Taxon": {
+      "description": "A taxon that specimens can be identified as.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "description": "The name used in this project's research.",
+          "type": "string"
+        },
+        "submitted_name": {
+          "description": "The name to submit when it differs, such as an informal name for an\nundescribed species (`Caulerpa sp. 3 HV-2026`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "taxid": {
+          "description": "NCBI Taxonomy ID, when known.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ]
+    }
+  }
+}
