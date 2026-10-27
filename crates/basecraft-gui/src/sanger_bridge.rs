@@ -229,6 +229,7 @@ pub struct SangerRust {
     call_sets: QString,
     selected_call_set: QString,
     calling: bool,
+    pending_calls: bool,
     caller: basecraft_plugin_host::sanger_calls::SangerCaller,
     trace: Option<Trace>,
     review: Option<SangerReviewView>,
@@ -282,6 +283,7 @@ impl Default for SangerRust {
             call_sets: QString::from("[]"),
             selected_call_set: QString::default(),
             calling: false,
+            pending_calls: false,
             caller: basecraft_plugin_host::sanger_calls::SangerCaller::default(),
             trace: None,
             review: None,
@@ -382,6 +384,7 @@ impl qobject::SangerController {
     }
 
     pub fn cancel_calls(mut self: std::pin::Pin<&mut Self>) {
+        self.as_mut().rust_mut().pending_calls = false;
         let result = self.as_mut().rust_mut().caller.cancel();
         self.as_mut().set_calling(false);
         match result {
@@ -431,6 +434,11 @@ impl qobject::SangerController {
     }
 
     pub fn poll_calls(mut self: std::pin::Pin<&mut Self>) {
+        if self.rust().pending_calls {
+            self.as_mut().rust_mut().pending_calls = false;
+            self.compute_calls();
+            return;
+        }
         let result = self.as_mut().rust_mut().caller.poll();
         match result {
             Ok(Some(called)) => self.retain_calls(called),
@@ -799,6 +807,7 @@ impl qobject::SangerController {
     }
 
     pub fn single_review(mut self: std::pin::Pin<&mut Self>, signal_threshold: i32) -> bool {
+        self.as_mut().rust_mut().pending_calls = false;
         let Ok(threshold) = u32::try_from(signal_threshold) else {
             return false;
         };
@@ -919,7 +928,12 @@ impl qobject::SangerController {
                     .set_file_path(QString::from(path.to_string_lossy().as_ref()));
                 self.as_mut().set_dirty(false);
                 self.as_mut().refresh();
-                self.compute_calls();
+                self.as_mut().rust_mut().pending_calls = true;
+                self.as_mut().set_calling(true);
+                self.as_mut().set_message_kind(QString::from("notify"));
+                self.set_message(QString::from(
+                    "Alternative calling queued; reviewing instrument calls",
+                ));
                 true
             }
             Err(error) => {
@@ -1135,12 +1149,12 @@ impl qobject::SangerController {
             .as_ref()
             .map_or(0, |s| s.events().len());
         let result = match (self.as_mut().rust_mut().review_session.as_mut(), column) {
-            (Some(session), Some(column)) => session.start_recovery().and_then(|()| {
-                session.apply(ReviewOp::Set {
+            (Some(session), Some(column)) => session
+                .apply(ReviewOp::Set {
                     columns: vec![column],
                     choice,
                 })
-            }),
+                .and_then(|()| session.start_recovery()),
             _ => Err("No Sanger review is open".into()),
         };
         if self
@@ -1162,6 +1176,7 @@ impl qobject::SangerController {
             Err(error) => {
                 self.as_mut().set_message_kind(QString::from("error"));
                 self.as_mut().set_message(QString::from(&error));
+                self.refresh();
                 false
             }
         }

@@ -94,13 +94,44 @@ fn main() {
             std::process::exit(1);
         })
         .release();
+    let sanger_folder = tempfile::tempdir().expect("Sanger flow folder");
+    let trace_path = sanger_folder.path().join("trace.ab1");
+    std::fs::copy(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../testdata/fixtures/compact/sanger-review/forward.ab1"),
+        &trace_path,
+    )
+    .unwrap();
+    let saved_path = sanger_folder.path().join("saved-review.json");
+    let sanger_qml = format!(
+        r#"
+        SangerController {{ id: sanger }}
+        SangerController {{ id: reopened }}
+        Component.onCompleted: {{
+            function check(value, message) {{ if (!value) {{ console.error(message); Qt.exit(2) }} }}
+            check(sanger.open_file({}), "AB1 open failed");
+            check(sanger.review_mode, "AB1 must enter review immediately");
+            check(sanger.calling, "Alternative calling must be queued");
+            sanger.cancel_calls();
+            check(!sanger.calling, "Cancel must detach queued work");
+            check(sanger.review_set("edit", "G"), "Instrument review edit failed");
+            check(sanger.save_review({}), "Review save failed");
+            check(reopened.open_file({}), "Normal open of saved review failed");
+            check(reopened.review_decision.indexOf("G") >= 0, "Manual decision lost on reopen");
+        }}
+    "#,
+        serde_json::to_string(&trace_path).unwrap(),
+        serde_json::to_string(&saved_path).unwrap(),
+        serde_json::to_string(&saved_path).unwrap()
+    );
     engine.pin_mut().load_data(
-        &QByteArray::from(
-            "import QtQuick; import Basecraft; Item { width: 800; height: 600; \
-             OperationPickerDialog {} \
-             OperationParameters { schema: ({type: 'object', properties: {age: {type: 'number'}}, required: ['age']}) } \
-             Timer { interval: 1; running: true; onTriggered: Qt.quit() } }",
-        ),
+        &QByteArray::from(format!(
+            "import QtQuick; import Basecraft; Item {{ width: 800; height: 600; \
+             OperationPickerDialog {{}} \
+             OperationParameters {{ schema: ({{type: 'object', properties: {{age: {{type: 'number'}}}}, required: ['age']}}) }} \
+             {sanger_qml} \
+             Timer {{ interval: 1; running: true; onTriggered: Qt.quit() }} }}",
+        )),
         &QUrl::default(),
     );
     std::thread::spawn(|| {

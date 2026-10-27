@@ -75,6 +75,13 @@ fn checked(outcome: &OperationOutcome, identity: &Identity) -> Result<CalledDraf
     if basecraft_io::hash_file(&path).map_err(|e| e.to_string())? != artifact.digest {
         return Err("Cached caller evidence changed; recompute calls".into());
     }
+    for artifact in &outcome.artifacts {
+        if basecraft_io::hash_file(Path::new(&artifact.path)).map_err(|e| e.to_string())?
+            != artifact.digest
+        {
+            return Err("Retained caller output changed; recompute calls".into());
+        }
+    }
     let mut draft = SangerDraft::read(&path)?;
     if draft.inputs.len() != 1
         || draft.engine != "Tracy"
@@ -85,13 +92,22 @@ fn checked(outcome: &OperationOutcome, identity: &Identity) -> Result<CalledDraf
                 .unwrap_or_default()
         || draft.signal_threshold.map(u64::from) != identity.parameters["signal_threshold"].as_u64()
         || draft.minimum_overlap != 50
-        || draft.minimum_identity != 0.8
+        || draft.minimum_identity.to_bits() != 0.8_f64.to_bits()
         || basecraft_io::sha256_file(&identity.source).map_err(|e| e.to_string())?
             != identity.sha256
     {
         return Err(
             "Source or executed caller identity changed; instrument review preserved".into(),
         );
+    }
+    let trace = basecraft_io::abif::open(&identity.source).map_err(|e| e.to_string())?;
+    if draft.inputs[0].calls.as_ref().is_none_or(|calls| {
+        calls
+            .positions
+            .last()
+            .is_none_or(|position| *position as usize >= trace.samples())
+    }) {
+        return Err("Caller coordinates do not fit the original trace".into());
     }
     // Runtime outputs live under the owned run's artifacts collection.
     let run = path
@@ -284,5 +300,76 @@ mod tests {
         std::fs::write(&source, original).unwrap();
         std::fs::write(&path, "damaged evidence").unwrap();
         assert!(checked(&outcome, &identity).is_err());
+    }
+}
+
+#[cfg(test)]
+mod live_tests {
+    use super::*;
+    #[test]
+    #[ignore = "requires BASECRAFT_SANGER_FIXTURE, public plugin Python and Tracy"]
+    fn actual_open_call_review_reopen_cache_cancel_and_stale_source() {
+        use basecraft_ops::sanger_review::{ReviewChoice, ReviewOp, SangerReviewSession};
+        let fixture = std::env::var_os("BASECRAFT_SANGER_FIXTURE").expect("public AB1 fixture");
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source.ab1");
+        std::fs::copy(fixture, &source).unwrap();
+        let original = std::fs::read(&source).unwrap();
+        let mut review = basecraft_ops::sanger_review::instrument_review(&source).unwrap();
+        let instrument_id = review.draft_sha256.clone();
+        let sha256 = review.draft.inputs[0].sha256.clone();
+        let mut caller = SangerCaller::default();
+        assert!(caller.start(&source, &sha256, 20).unwrap().is_none());
+        // Review remains editable while the shared job runs.
+        review
+            .apply(ReviewOp::Set {
+                columns: vec![0],
+                choice: ReviewChoice::Edit('G'),
+            })
+            .unwrap();
+        let started = std::time::Instant::now();
+        let called = loop {
+            if let Some(called) = caller.poll().unwrap() {
+                break called;
+            }
+            assert!(started.elapsed().as_secs() < 120, "caller timeout");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        let mut computed = SangerReviewSession::from_draft(called.draft, &source).unwrap();
+        computed.attach_operation_run(&called.run).unwrap();
+        let computed_id = computed.draft_sha256.clone();
+        computed
+            .apply(ReviewOp::Set {
+                columns: vec![0],
+                choice: ReviewChoice::Edit('C'),
+            })
+            .unwrap();
+        review.retain_call_set(computed).unwrap();
+        assert_eq!(
+            review.draft_sha256, instrument_id,
+            "completion must not switch calls"
+        );
+        assert_eq!(review.decision(0), Some(&ReviewChoice::Edit('G')));
+        assert!(
+            caller.start(&source, &sha256, 20).unwrap().is_some(),
+            "reuse completed receipt"
+        );
+        review.select_call_set(&computed_id).unwrap();
+        let saved = tmp.path().join("saved.json");
+        review.save(&saved).unwrap();
+        let mut reopened = SangerReviewSession::load(&saved).unwrap();
+        assert_eq!(reopened.decision(0), Some(&ReviewChoice::Edit('C')));
+        reopened.select_call_set(&instrument_id).unwrap();
+        assert_eq!(reopened.decision(0), Some(&ReviewChoice::Edit('G')));
+        assert!(caller.start(&source, &sha256, 19).unwrap().is_none());
+        caller.cancel().unwrap();
+        assert!(
+            caller.poll().unwrap().is_none(),
+            "late completion must be detached after cancel"
+        );
+        assert_eq!(std::fs::read(&source).unwrap(), original);
+        std::fs::write(&source, "different bytes at the same path").unwrap();
+        assert!(caller.start(&source, &sha256, 20).is_err());
+        assert_eq!(reopened.decision(0), Some(&ReviewChoice::Edit('G')));
     }
 }

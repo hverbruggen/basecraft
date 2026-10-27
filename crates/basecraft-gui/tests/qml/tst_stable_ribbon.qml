@@ -90,7 +90,7 @@ Item {
             scene.ribbonTabName = "Phylogeny"
             for (const kind of ["", "sequence", "alignment", "tree", "delimitation", "trace"]) {
                 scene.currentKind = kind
-                scene.current = kind ? {busy: false, dirty: false, gap_column_count: 2, tip_font: 13, support_font: 10, has_support: true, linked_alignment: "", zoom_text: "100 %", bootstrap_running: false, review_mode: true, unresolved: 0} : null
+                scene.current = kind ? {busy: false, dirty: false, gap_column_count: 2, tip_font: 13, support_font: 10, has_support: true, linked_alignment: "", zoom_text: "100 %", bootstrap_running: false, review_mode: true, unresolved: 0, calling: false, call_sets: "[]", selected_call_set: ""} : null
                 compare(scene.ribbonTab, "Phylogeny", "document switch retains tab")
                 for (const name of scene.ribbonTabs) {
                     scene.ribbonTabName = name
