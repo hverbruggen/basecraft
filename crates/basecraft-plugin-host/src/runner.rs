@@ -411,7 +411,9 @@ impl PreparedOperation {
                         basecraft_ops::files::load_tree(&path)?;
                         "identity-v1"
                     }
-                    InputView::SequenceSnapshot => "sequence-file-v1",
+                    // The file is frozen unchanged; the sealed snapshot is a
+                    // separate generated input recorded below.
+                    InputView::SequenceSnapshot => "identity-v1",
                 };
                 let submitted_hash =
                     basecraft_io::hash_file(&path).map_err(basecraft_ops::Error::from)?;
