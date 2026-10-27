@@ -85,7 +85,7 @@
   ],
   "$defs": {
     "Actor": {
-      "description": "Who made a change.",
+      "description": "Who made a change: a person in the GUI (`human`), a script through the\nCLI or Python API (`script`), an assistant over MCP (`agent`), or a tool,\nplugin or outside program. New kinds are additive; older records keep\ntheir kinds.",
       "oneOf": [
         {
           "type": "object",
@@ -144,6 +144,7 @@
           ]
         },
         {
+          "description": "An assistant over MCP, named by its client's model ID.",
           "type": "object",
           "properties": {
             "kind": {
@@ -157,6 +158,23 @@
           "required": [
             "kind",
             "model"
+          ]
+        },
+        {
+          "description": "A script driving Basecraft through the CLI or the Python API, named by\nits client (for example `CLI` or `Python`).",
+          "type": "object",
+          "properties": {
+            "client": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "script"
+            }
+          },
+          "required": [
+            "kind",
+            "client"
           ]
         },
         {
