@@ -7,7 +7,17 @@ Item {
     width: 800
     height: 600
     CladeEditor { id: clade }
-    TreeStyleDialog { id: style }
+    QtObject {
+        id: treeController
+        function style_json() {
+            return JSON.stringify({
+                sets: [{name: "Bootstrap", source: "", decimals: 0, automatic_decimals: 0, proportions: false}],
+                style: {support_shown: [], support_min: 0, support_decimals: {}, support_proportions: {},
+                    symbols: null, branch_width: 1, vertical_bar_labels: true, scale_bar: true}
+            })
+        }
+    }
+    TreeStyleDialog { id: style; controller: treeController }
     AppErrorLabel { id: error; text: "Invalid location: enter a valid GenBank range." }
     TestCase {
         name: "DialogAccessibility"
@@ -29,12 +39,14 @@ Item {
             clade.close()
         }
         function test_tree_fields_follow_visible_labels() {
-            style.open()
+            style.openStyle("support")
             tryCompare(style, "opened", true)
-            checkField(style, "minimum", "Hide values below", "Hide values below (%)")
+            checkField(style, "supportMinimum0", "Hide below (%)", "Bootstrap hide below (percent)")
             checkField(style, "symbolSet", "Circles at nodes for")
-            checkField(style, "tipFont", "Tip names (px)")
-            checkField(style, "supportFont", "Value size (px)")
+            style.close()
+            tryCompare(style, "opened", false)
+            style.openStyle("extra")
+            tryCompare(style, "opened", true)
             checkField(style, "branchWidth", "Branch width (px)")
             style.close()
         }

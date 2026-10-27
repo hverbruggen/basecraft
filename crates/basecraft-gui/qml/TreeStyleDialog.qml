@@ -175,9 +175,10 @@ AppContentDialog {
                 }
                 RowLayout {
                     Layout.leftMargin: 24
-                    Label { text: "Hide below (%)" }
+                    Label { id: minimumLabel; text: "Hide below (%)" }
                     AppSpinBox {
                         objectName: "supportMinimum" + supportRow.index
+                        Accessible.labelledBy: minimumLabel
                         Accessible.name: supportRow.name + " hide below (percent)"
                         from: 0; to: 100; editable: true
                         value: supportRow.minimum

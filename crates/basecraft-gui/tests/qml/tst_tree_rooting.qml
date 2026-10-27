@@ -34,9 +34,10 @@ Item {
             controller.busy = false
             controller.last = ""
         }
-        function test_full_size_reroot_arrow_scales() {
+        function test_reduced_reroot_arrow_scales() {
             host.sizeFactor = 2
-            compare(findChild(group, "manualRoot").icon.width, 32)
+            compare(findChild(group, "manualRoot").symbolSize, 16 * 0.65)
+            compare(findChild(group, "manualRoot").icon.width, Math.round(32 * 0.65))
             compare(findChild(group, "midpointRoot").icon.width, 32)
         }
         function test_selection_and_routing() {
