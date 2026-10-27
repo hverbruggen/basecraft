@@ -8,6 +8,7 @@ pub mod gff3;
 pub mod newick;
 pub mod source;
 pub mod spart;
+pub mod table;
 
 mod error;
 
