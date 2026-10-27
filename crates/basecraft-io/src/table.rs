@@ -166,10 +166,10 @@ pub fn read_delimited(bytes: &[u8], delimiter: char) -> Result<Sheet> {
         record.push(field);
         records.push(record);
     }
-    sheet_from_records(records, Vec::new())
+    sheet_from_records(records, &[])
 }
 
-fn sheet_from_records(records: Vec<Vec<String>>, date_cells: Vec<(usize, usize)>) -> Result<Sheet> {
+fn sheet_from_records(records: Vec<Vec<String>>, date_cells: &[(usize, usize)]) -> Result<Sheet> {
     let mut records = records.into_iter();
     let mut headers: Vec<String> = records
         .next()
@@ -182,7 +182,9 @@ fn sheet_from_records(records: Vec<Vec<String>>, date_cells: Vec<(usize, usize)>
         headers.pop();
     }
     if headers.is_empty() {
-        return Err(invalid("spreadsheet has no column headers in its first row"));
+        return Err(invalid(
+            "spreadsheet has no column headers in its first row",
+        ));
     }
     let mut seen = std::collections::BTreeSet::new();
     for header in &headers {
@@ -222,8 +224,8 @@ pub fn read_spreadsheet(path: &Path) -> Result<Sheet> {
         "csv" => {
             let bytes = std::fs::read(path)?;
             let first = bytes.split(|b| *b == b'\n').next().unwrap_or_default();
-            let commas = first.iter().filter(|b| **b == b',').count();
-            let semicolons = first.iter().filter(|b| **b == b';').count();
+            let commas = memchr::memchr_iter(b',', first).count();
+            let semicolons = memchr::memchr_iter(b';', first).count();
             read_delimited(&bytes, if semicolons > commas { ';' } else { ',' })
         }
         "tsv" | "tab" | "txt" => read_delimited(&std::fs::read(path)?, '\t'),
@@ -294,7 +296,7 @@ fn read_workbook(path: &Path) -> Result<Sheet> {
         .filter(|(r, _)| *r > skipped)
         .map(|(r, c)| (r - skipped - 1, c))
         .collect();
-    sheet_from_records(records, date_cells)
+    sheet_from_records(records, &date_cells)
 }
 
 /// A worksheet for an `.ods` file. Every cell is text, so spreadsheet
@@ -320,8 +322,9 @@ fn xml(text: &str) -> String {
     out
 }
 
-/// An OpenDocument spreadsheet holding `sheets`, header rows in bold.
+/// An `OpenDocument` spreadsheet holding `sheets`, header rows in bold.
 pub fn write_ods(sheets: &[OdsSheet<'_>]) -> Result<Vec<u8>> {
+    use std::fmt::Write as _;
     use zip::write::SimpleFileOptions;
     let mut content = String::from(
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -337,20 +340,22 @@ pub fn write_ods(sheets: &[OdsSheet<'_>]) -> Result<Vec<u8>> {
     );
     for sheet in sheets {
         let width = sheet.headers.len().max(1);
-        content.push_str(&format!(
-            "<table:table table:name=\"{}\"><table:table-column table:style-name=\"col\" table:default-cell-style-name=\"text\" table:number-columns-repeated=\"{width}\"/>\n",
+        let _ = writeln!(
+            content,
+            "<table:table table:name=\"{}\"><table:table-column table:style-name=\"col\" table:default-cell-style-name=\"text\" table:number-columns-repeated=\"{width}\"/>",
             xml(sheet.name)
-        ));
+        );
         let row = |cells: &[String], style: &str| {
             let mut out = String::from("<table:table-row>");
             for cell in cells {
                 if cell.is_empty() {
-                    out.push_str(&format!("<table:table-cell table:style-name=\"{style}\"/>"));
+                    let _ = write!(out, "<table:table-cell table:style-name=\"{style}\"/>");
                 } else {
-                    out.push_str(&format!(
+                    let _ = write!(
+                        out,
                         "<table:table-cell table:style-name=\"{style}\" office:value-type=\"string\"><text:p>{}</text:p></table:table-cell>",
                         xml(cell)
-                    ));
+                    );
                 }
             }
             out.push_str("</table:table-row>\n");
@@ -407,9 +412,11 @@ mod tests {
 
     #[test]
     fn delimited_text_handles_quotes() {
-        let sheet =
-            read_delimited(b"\xEF\xBB\xBFid,name\r\nHV1,\"Caulerpa, \"\"sp\"\"\"\n\nHV2,\"two\nlines\"", ',')
-                .unwrap();
+        let sheet = read_delimited(
+            b"\xEF\xBB\xBFid,name\r\nHV1,\"Caulerpa, \"\"sp\"\"\"\n\nHV2,\"two\nlines\"",
+            ',',
+        )
+        .unwrap();
         assert_eq!(sheet.headers, ["id", "name"]);
         assert_eq!(
             sheet.rows,
@@ -425,7 +432,10 @@ mod tests {
     #[test]
     fn ods_template_reads_back_as_text() {
         let headers = vec!["specimen_id".to_string(), "eventDate".into()];
-        let rows = vec![vec!["0012".to_string(), "2019-05".into()], vec!["A<1>".into(), String::new()]];
+        let rows = vec![
+            vec!["0012".to_string(), "2019-05".into()],
+            vec!["A<1>".into(), String::new()],
+        ];
         let bytes = write_ods(&[OdsSheet {
             name: "Specimens",
             headers: &headers,
@@ -439,6 +449,6 @@ mod tests {
         let sheet = read_spreadsheet(&path).unwrap();
         assert_eq!(sheet.headers, headers);
         assert_eq!(sheet.rows, rows);
-        assert!(sheet.date_cells.is_empty());
+        assert_eq!(sheet.date_cells, Vec::<(usize, usize)>::new());
     }
 }

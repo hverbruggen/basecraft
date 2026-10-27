@@ -329,7 +329,9 @@ pub fn open(path: &Path) -> Result<Opened> {
     let format = Format::from_path(path)?;
     match format {
         Format::Delimitation => Err(crate::error::invalid("this is a delimitation workspace")),
-        Format::Metadata => Err(crate::error::invalid("this is the project's specimen metadata")),
+        Format::Metadata => Err(crate::error::invalid(
+            "this is the project's specimen metadata",
+        )),
         Format::Tree => Err(crate::error::invalid(format!(
             "{} is a tree, not a sequence",
             path.display()

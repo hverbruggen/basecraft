@@ -98,7 +98,8 @@ fn header_import_links_identifies_saves_and_replays() {
         .unwrap();
         assert!(again.changes.is_empty(), "{:?}", again.changes);
         // A typed edit, undone and redone.
-        let change = metadata::cell_change(s.metadata(doc), "HV1", "eventDate", "2019-05-12").unwrap();
+        let change =
+            metadata::cell_change(s.metadata(doc), "HV1", "eventDate", "2019-05-12").unwrap();
         s.apply(
             doc,
             Op::MetadataEdit {
@@ -112,7 +113,10 @@ fn header_import_links_identifies_saves_and_replays() {
         )
         .unwrap();
         s.undo(doc).unwrap();
-        assert_eq!(metadata::cell_text(s.metadata(doc), "HV1", "eventDate"), "2019-05");
+        assert_eq!(
+            metadata::cell_text(s.metadata(doc), "HV1", "eventDate"),
+            "2019-05"
+        );
         s.redo(doc).unwrap();
         assert_eq!(
             metadata::cell_text(s.metadata(doc), "HV1", "eventDate"),
@@ -133,7 +137,10 @@ fn header_import_links_identifies_saves_and_replays() {
         s.save(doc, None).unwrap();
     }
     let specimens = std::fs::read_to_string(root.join("metadata/specimens.tsv")).unwrap();
-    assert!(specimens.starts_with("specimen_id\teventDate\n"), "{specimens}");
+    assert!(
+        specimens.starts_with("specimen_id\teventDate\n"),
+        "{specimens}"
+    );
     assert!(specimens.contains("HV2\tnot collected\n"), "{specimens}");
     let records = std::fs::read_to_string(root.join("metadata/records.tsv")).unwrap();
     assert!(
@@ -153,7 +160,11 @@ fn header_import_links_identifies_saves_and_replays() {
     let report = replay::replay(root).unwrap();
     assert!(report.ok(), "{:#?}", report.problems);
     let history = s.document_record(doc).unwrap().report().unwrap();
-    assert!(serde_json::to_string(&history).unwrap().contains("Specimen metadata"));
+    assert!(
+        serde_json::to_string(&history)
+            .unwrap()
+            .contains("Specimen metadata")
+    );
 }
 
 #[test]
@@ -217,10 +228,19 @@ fn spreadsheet_import_flags_conflicts_duplicates_and_bad_values() {
         },
     )
     .unwrap();
-    assert!(overwrite.changes.cells.iter().any(|c| c.column == "eventDate"));
+    assert!(
+        overwrite
+            .changes
+            .cells
+            .iter()
+            .any(|c| c.column == "eventDate")
+    );
     assert!(overwrite.issues.iter().any(|i| i.kind == "invalid"));
     metadata::apply_plan(&mut s, doc, overwrite.changes).unwrap();
-    assert_eq!(metadata::cell_text(s.metadata(doc), "HV1", "eventDate"), "2018");
+    assert_eq!(
+        metadata::cell_text(s.metadata(doc), "HV1", "eventDate"),
+        "2018"
+    );
     assert!(s.metadata(doc).specimens.rows.iter().any(|r| r.id == "HV3"));
 }
 
@@ -238,18 +258,32 @@ fn template_round_trips_through_import() {
     let path = root.join("template.ods");
     metadata::write_template(s.metadata(doc), &records, &path).unwrap();
     let mut sheet = metadata::read_sheet(&path).unwrap();
-    assert_eq!(&sheet.headers[..4], ["document", "record", "specimen_id", "organism"]);
+    assert_eq!(
+        &sheet.headers[..4],
+        ["document", "record", "specimen_id", "organism"]
+    );
     assert_eq!(sheet.rows.len(), 3);
     // Someone fills it in.
     let column = |name: &str| sheet.column(name).unwrap();
-    let (id, organism, date) = (column("specimen_id"), column("organism"), column("eventDate"));
+    let (id, organism, date) = (
+        column("specimen_id"),
+        column("organism"),
+        column("eventDate"),
+    );
     for (row, specimen) in ["A1", "A1", "A2"].iter().enumerate() {
         sheet.rows[row][id] = (*specimen).into();
         sheet.rows[row][organism] = "Codium fragile".into();
         sheet.rows[row][date] = "2020-01".into();
     }
     let mapping = metadata::guess_mapping(s.metadata(doc), &sheet.headers);
-    let plan = metadata::plan_sheet(s.metadata(doc), &sheet, &mapping, None, ImportOptions::default()).unwrap();
+    let plan = metadata::plan_sheet(
+        s.metadata(doc),
+        &sheet,
+        &mapping,
+        None,
+        ImportOptions::default(),
+    )
+    .unwrap();
     // A1 appears twice: its second row is a duplicate and its record isn't linked.
     assert_eq!(plan.changes.specimens, ["A1", "A2"]);
     assert_eq!(plan.changes.links.len(), 2);
@@ -273,11 +307,7 @@ fn outside_edits_future_versions_and_unknown_fields() {
     value["later_feature"] = serde_json::json!({"kept": true});
     std::fs::write(&manifest, serde_json::to_vec(&value).unwrap()).unwrap();
     // An outside edit to a table is read, checked and reported.
-    std::fs::write(
-        root.join("metadata/specimens.tsv"),
-        "specimen_id\nHV9\n",
-    )
-    .unwrap();
+    std::fs::write(root.join("metadata/specimens.tsv"), "specimen_id\nHV9\n").unwrap();
     {
         let mut s = Session::unlogged(root);
         let doc = s.open(&manifest).unwrap();
@@ -305,13 +335,25 @@ fn outside_edits_future_versions_and_unknown_fields() {
     assert!(s.metadata_notices(doc).is_empty());
     drop(s);
     // An undeclared column or a bad value is refused with its location.
-    std::fs::write(root.join("metadata/specimens.tsv"), "specimen_id\tcolour\nHV9\tred\n").unwrap();
-    let error = Session::unlogged(root).open(&manifest).err().unwrap().to_string();
+    std::fs::write(
+        root.join("metadata/specimens.tsv"),
+        "specimen_id\tcolour\nHV9\tred\n",
+    )
+    .unwrap();
+    let error = Session::unlogged(root)
+        .open(&manifest)
+        .err()
+        .unwrap()
+        .to_string();
     assert!(error.contains("import the edited table"), "{error}");
     // A newer format is refused clearly.
     let mut newer = saved.clone();
     newer["version"] = serde_json::json!(2);
     std::fs::write(&manifest, serde_json::to_vec(&newer).unwrap()).unwrap();
-    let error = Session::unlogged(root).open(&manifest).err().unwrap().to_string();
+    let error = Session::unlogged(root)
+        .open(&manifest)
+        .err()
+        .unwrap()
+        .to_string();
     assert!(error.contains("newer Basecraft"), "{error}");
 }

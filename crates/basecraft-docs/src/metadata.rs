@@ -152,7 +152,10 @@ fn check_text(what: &str, text: &str) -> Result<(), EditError> {
     if text.trim() != text {
         return fail(format!("{what} {text:?} has surrounding spaces"));
     }
-    if text.chars().any(|c| c.is_control() && c != '\t' && c != '\n') {
+    if text
+        .chars()
+        .any(|c| c.is_control() && c != '\t' && c != '\n')
+    {
         return fail(format!("{what} contains a control character"));
     }
     if MissingReason::from_term(text).is_some() {
@@ -183,9 +186,9 @@ pub fn check_cell(column: &Column, cell: &Cell) -> Result<(), EditError> {
         (ColumnKind::Categorical { levels }, Cell::Category(level)) if levels.contains(level) => {
             Ok(())
         }
-        (ColumnKind::Categorical { .. }, Cell::Category(level)) => {
-            fail(format!("{what} {level:?} is not one of the column's levels"))
-        }
+        (ColumnKind::Categorical { .. }, Cell::Category(level)) => fail(format!(
+            "{what} {level:?} is not one of the column's levels"
+        )),
         _ => fail(format!("{what} does not match the column type")),
     }
 }
@@ -282,9 +285,9 @@ pub fn validate(meta: &ProjectMetadata) -> Result<(), EditError> {
             return fail(format!("specimen {} appears twice", row.id));
         }
         for (name, cell) in &row.cells {
-            let column = columns
-                .get(name.as_str())
-                .ok_or_else(|| EditError(format!("specimen {} has undeclared column {name}", row.id)))?;
+            let column = columns.get(name.as_str()).ok_or_else(|| {
+                EditError(format!("specimen {} has undeclared column {name}", row.id))
+            })?;
             check_cell(column, cell)
                 .map_err(|e| EditError(format!("specimen {}: {}", row.id, e.0)))?;
         }
@@ -311,8 +314,7 @@ pub fn validate(meta: &ProjectMetadata) -> Result<(), EditError> {
     }
     let mut identifications = BTreeSet::new();
     for identification in &meta.identifications {
-        if !valid_id(&identification.id) || !identifications.insert(identification.id.as_str())
-        {
+        if !valid_id(&identification.id) || !identifications.insert(identification.id.as_str()) {
             return fail(format!(
                 "identification ID {:?} is invalid or repeated",
                 identification.id
@@ -460,10 +462,15 @@ fn apply_changes(meta: &mut ProjectMetadata, changes: &ChangeSet) -> Result<(), 
         .map(|(i, r)| (r.id.clone(), i))
         .collect();
     for change in &changes.cells {
-        let row = index
-            .get(&change.specimen)
-            .ok_or_else(|| EditError(format!("specimen {} is not in the roster", change.specimen)))?;
-        if !meta.specimens.columns.iter().any(|c| c.name == change.column) {
+        let row = index.get(&change.specimen).ok_or_else(|| {
+            EditError(format!("specimen {} is not in the roster", change.specimen))
+        })?;
+        if !meta
+            .specimens
+            .columns
+            .iter()
+            .any(|c| c.name == change.column)
+        {
             return fail(format!("there is no column {}", change.column));
         }
         let cells = &mut meta.specimens.rows[*row].cells;

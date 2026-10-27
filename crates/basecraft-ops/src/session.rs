@@ -813,7 +813,9 @@ impl Session {
                             hash.clone_from(&expected[0]);
                         }
                     }
-                    if let Some(expected_sidecar) = expected.get(1).filter(|_| !self.is_metadata(id)) {
+                    if let Some(expected_sidecar) =
+                        expected.get(1).filter(|_| !self.is_metadata(id))
+                    {
                         let sidecar = if self.is_tree(id) || self.is_delimitation(id) {
                             files::tree_sidecar(&target)
                         } else {
@@ -2235,7 +2237,10 @@ impl Session {
             }
             (Loaded::Sequence(o), inverse) => undo_sequence(&mut o.doc, inverse),
             (
-                Loaded::Alignment(_) | Loaded::Tree(_) | Loaded::Delimitation(_) | Loaded::Metadata(_),
+                Loaded::Alignment(_)
+                | Loaded::Tree(_)
+                | Loaded::Delimitation(_)
+                | Loaded::Metadata(_),
                 _,
             ) => {
                 return Err(invalid("undo of the wrong kind of edit"));

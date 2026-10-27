@@ -86,7 +86,9 @@ pub enum ColumnKind {
         unit: Option<String>,
     },
     /// One of `levels`.
-    Categorical { levels: Vec<String> },
+    Categorical {
+        levels: Vec<String>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -214,7 +216,9 @@ impl JsonSchema for PartialDate {
 
 /// Why a value is missing: the INSDC missing-value vocabulary, written as
 /// INSDC writes it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
 pub enum MissingReason {
     #[serde(rename = "not applicable")]
     NotApplicable,
@@ -320,7 +324,9 @@ pub struct Identification {
 }
 
 /// A sequence record in a project document.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
 pub struct RecordRef {
     /// Project-relative path of the sequence file.
     pub document: String,
@@ -388,7 +394,9 @@ pub enum FieldTarget {
     /// A taxon name; the specimen is identified as that taxon.
     Taxon,
     /// A value for a specimen column.
-    Column { column: String },
+    Column {
+        column: String,
+    },
 }
 
 /// One value to set, or with no value, to clear.
@@ -473,7 +481,16 @@ mod tests {
             let json = serde_json::to_string(&date).unwrap();
             assert_eq!(serde_json::from_str::<PartialDate>(&json).unwrap(), date);
         }
-        for text in ["19", "2019-5", "2019-13", "2023-02-29", "2019-04-31", "0000", "", "2019/05"] {
+        for text in [
+            "19",
+            "2019-5",
+            "2019-13",
+            "2023-02-29",
+            "2019-04-31",
+            "0000",
+            "",
+            "2019/05",
+        ] {
             assert!(PartialDate::parse(text).is_err(), "{text}");
         }
     }

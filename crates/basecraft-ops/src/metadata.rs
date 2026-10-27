@@ -30,7 +30,12 @@ const SPECIMENS: &str = "specimens.tsv";
 const TAXA: &str = "taxa.tsv";
 const IDENTIFICATIONS: &str = "identifications.tsv";
 const RECORDS: &str = "records.tsv";
-const TAXA_HEADER: [&str; 4] = ["taxon_id", "scientific_name", "submitted_name", "ncbi_taxid"];
+const TAXA_HEADER: [&str; 4] = [
+    "taxon_id",
+    "scientific_name",
+    "submitted_name",
+    "ncbi_taxid",
+];
 const IDENTIFICATIONS_HEADER: [&str; 6] = [
     "identification_id",
     SPECIMEN_ID,
@@ -110,7 +115,9 @@ pub fn load(manifest_path: &Path) -> Result<OpenedMetadata> {
     let value: serde_json::Value = serde_json::from_slice(&std::fs::read(manifest_path)?)
         .map_err(|e| invalid(format!("{MANIFEST} is not valid JSON: {e}")))?;
     if value["format"] != FORMAT {
-        return Err(invalid(format!("{MANIFEST} is not a Basecraft metadata manifest")));
+        return Err(invalid(format!(
+            "{MANIFEST} is not a Basecraft metadata manifest"
+        )));
     }
     let version = value["version"].as_u64().unwrap_or(0);
     if version > u64::from(METADATA_VERSION) {
@@ -119,7 +126,9 @@ pub fn load(manifest_path: &Path) -> Result<OpenedMetadata> {
         )));
     }
     if version != u64::from(METADATA_VERSION) {
-        return Err(invalid(format!("metadata format version {version} is not supported")));
+        return Err(invalid(format!(
+            "metadata format version {version} is not supported"
+        )));
     }
     let manifest: Manifest = serde_json::from_value(value)
         .map_err(|e| invalid(format!("{MANIFEST} is malformed: {e}")))?;
@@ -208,8 +217,9 @@ pub fn load(manifest_path: &Path) -> Result<OpenedMetadata> {
                 identified_by: optional(&f[3]),
                 date: optional(&f[4])
                     .map(|d| {
-                        basecraft_protocol::metadata::PartialDate::parse(&d)
-                            .map_err(|e| invalid(format!("{IDENTIFICATIONS} line {}: {e}", line + 2)))
+                        basecraft_protocol::metadata::PartialDate::parse(&d).map_err(|e| {
+                            invalid(format!("{IDENTIFICATIONS} line {}: {e}", line + 2))
+                        })
                     })
                     .transpose()?,
                 remarks: optional(&f[5]),
@@ -389,6 +399,9 @@ pub struct Plan {
     pub rows: usize,
     /// Rows that matched an existing specimen.
     pub matched: usize,
+    /// The spreadsheet mapping used, for review and to remember.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub mapping: BTreeMap<String, FieldTarget>,
 }
 
 /// How an import treats existing data.
@@ -492,7 +505,10 @@ impl<'a> Planner<'a> {
             self.issue(
                 "invalid",
                 row,
-                format!("{:?} is not a usable specimen ID; row skipped", source.specimen),
+                format!(
+                    "{:?} is not a usable specimen ID; row skipped",
+                    source.specimen
+                ),
                 false,
             );
             return;
@@ -559,7 +575,11 @@ impl<'a> Planner<'a> {
                         "{specimen} {name} is {:?}; the import has {:?}{}",
                         format_cell(current),
                         format_cell(&value),
-                        if included { " (replacing it)" } else { " (kept)" }
+                        if included {
+                            " (replacing it)"
+                        } else {
+                            " (kept)"
+                        }
                     ),
                     included,
                 );
@@ -583,7 +603,12 @@ impl<'a> Planner<'a> {
 
     fn identify(&mut self, specimen: &str, name: &str, row: Option<usize>) {
         if !model::valid_id(name) {
-            self.issue("invalid", row, format!("{name:?} is not a usable taxon name"), false);
+            self.issue(
+                "invalid",
+                row,
+                format!("{name:?} is not a usable taxon name"),
+                false,
+            );
             return;
         }
         let taxon = if let Some(id) = self.taxa_by_name.get(name) {
@@ -608,12 +633,14 @@ impl<'a> Planner<'a> {
             return;
         }
         if let Some(previous) = current {
-            let previous = model::taxon(self.meta, &previous)
-                .map_or(previous.clone(), |t| t.name.clone());
+            let previous =
+                model::taxon(self.meta, &previous).map_or(previous.clone(), |t| t.name.clone());
             self.issue(
                 "conflict",
                 row,
-                format!("{specimen} is identified as {previous}; the import re-identifies it as {name}"),
+                format!(
+                    "{specimen} is identified as {previous}; the import re-identifies it as {name}"
+                ),
                 true,
             );
         }
@@ -727,7 +754,9 @@ pub fn plan_headers(
             match target {
                 FieldTarget::Specimen => source.specimen = field.into(),
                 FieldTarget::Taxon => source.taxon = Some(field.replace('_', " ")),
-                FieldTarget::Column { column } => source.values.push((column.clone(), field.into())),
+                FieldTarget::Column { column } => {
+                    source.values.push((column.clone(), field.into()))
+                }
                 FieldTarget::Record | FieldTarget::Ignore => {}
             }
         }
@@ -926,10 +955,22 @@ pub fn write_template(
     let (headers, rows) = template_rows(meta, records);
     let help_headers = vec!["column".to_string(), "what to enter".into()];
     let mut help: Vec<Vec<String>> = vec![
-        vec!["document".into(), "Sequence file the record is in (leave as written)".into()],
-        vec!["record".into(), "Sequence record ID (leave as written)".into()],
-        vec![SPECIMEN_ID.into(), "Your stable ID for the specimen; several records may share one".into()],
-        vec!["organism".into(), "Taxon name the specimen is identified as".into()],
+        vec![
+            "document".into(),
+            "Sequence file the record is in (leave as written)".into(),
+        ],
+        vec![
+            "record".into(),
+            "Sequence record ID (leave as written)".into(),
+        ],
+        vec![
+            SPECIMEN_ID.into(),
+            "Your stable ID for the specimen; several records may share one".into(),
+        ],
+        vec![
+            "organism".into(),
+            "Taxon name the specimen is identified as".into(),
+        ],
     ];
     for name in headers.iter().skip(4) {
         let description = model::known_column(name).map_or_else(
@@ -1007,7 +1048,11 @@ pub fn summary(changes: &ChangeSet) -> String {
     count(changes.cells.len(), "value", "values");
     count(changes.columns.len(), "new column", "new columns");
     count(changes.taxa.len(), "taxon", "taxa");
-    count(changes.identifications.len(), "identification", "identifications");
+    count(
+        changes.identifications.len(),
+        "identification",
+        "identifications",
+    );
     count(changes.links.len(), "record link", "record links");
     if parts.is_empty() {
         "no changes".into()
@@ -1056,7 +1101,10 @@ pub fn describe(edit: &basecraft_protocol::metadata::MetadataEdit) -> String {
         MetadataEdit::RemoveSpecimens { specimens } => format!(
             "Removed {} from the specimen roster",
             if specimens.len() == 1 {
-                format!("specimen {}", specimens.iter().next().map_or("", String::as_str))
+                format!(
+                    "specimen {}",
+                    specimens.iter().next().map_or("", String::as_str)
+                )
             } else {
                 format!("{} specimens", specimens.len())
             }
@@ -1074,4 +1122,158 @@ pub fn describe(edit: &basecraft_protocol::metadata::MetadataEdit) -> String {
         ),
         MetadataEdit::SetImportSettings { .. } => "Saved metadata import settings".into(),
     }
+}
+
+// Requests shared by the CLI, MCP and the GUI, so every route plans an
+// import the same way.
+
+/// Plan an import from a sequence file's structured headers.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HeaderImport {
+    /// Project-relative path of the FASTA file.
+    pub document: String,
+    pub pattern: HeaderPattern,
+    #[serde(default)]
+    pub options: ImportOptions,
+}
+
+/// Plan an import from a spreadsheet.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SheetImport {
+    /// Path of the spreadsheet (absolute, or relative to the project).
+    pub path: String,
+    /// Column header to target. Omitted: guessed from the headers.
+    #[serde(default)]
+    pub mapping: Option<BTreeMap<String, FieldTarget>>,
+    /// Project-relative sequence file whose records the `record` column
+    /// names. Omitted: a template's `document` column, if any.
+    #[serde(default)]
+    pub document: Option<String>,
+    #[serde(default)]
+    pub options: ImportOptions,
+}
+
+/// A project-relative document key for `path`, which must be inside the
+/// project and exist.
+pub fn document_key(project: &Path, path: &Path) -> Result<String> {
+    let full = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        project.join(path)
+    };
+    let full = full
+        .canonicalize()
+        .map_err(|e| invalid(format!("{}: {e}", path.display())))?;
+    let root = project.canonicalize()?;
+    let relative = full.strip_prefix(&root).map_err(|_| {
+        invalid(format!(
+            "{} is outside the project; links name files inside it",
+            path.display()
+        ))
+    })?;
+    relative
+        .to_str()
+        .map(str::to_string)
+        .ok_or_else(|| invalid("file names must be UTF-8"))
+}
+
+fn checked_metadata(session: &Session, doc: crate::DocId) -> Result<&ProjectMetadata> {
+    if !session.is_metadata(doc) {
+        return Err(invalid("choose the project metadata document"));
+    }
+    Ok(session.metadata(doc))
+}
+
+pub fn plan_header_import(
+    session: &Session,
+    doc: crate::DocId,
+    request: &HeaderImport,
+) -> Result<Plan> {
+    let meta = checked_metadata(session, doc)?;
+    let key = document_key(session.root(), Path::new(&request.document))?;
+    let headers = fasta_headers(&session.root().join(&key))?;
+    plan_headers(meta, &key, &headers, &request.pattern, request.options)
+}
+
+pub fn plan_sheet_import(
+    session: &Session,
+    doc: crate::DocId,
+    request: &SheetImport,
+) -> Result<Plan> {
+    let meta = checked_metadata(session, doc)?;
+    let path = Path::new(&request.path);
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        session.root().join(path)
+    };
+    let sheet = read_sheet(&path)?;
+    let mapping = request
+        .mapping
+        .clone()
+        .unwrap_or_else(|| guess_mapping(meta, &sheet.headers));
+    let document = request
+        .document
+        .as_deref()
+        .map(|d| document_key(session.root(), Path::new(d)))
+        .transpose()?;
+    let mut plan = plan_sheet(meta, &sheet, &mapping, document.as_deref(), request.options)?;
+    plan.mapping = mapping;
+    Ok(plan)
+}
+
+/// Write the template for every record of `document` (project-relative).
+pub fn template_for(
+    session: &Session,
+    doc: crate::DocId,
+    document: &str,
+    output: &Path,
+) -> Result<usize> {
+    let meta = checked_metadata(session, doc)?;
+    let key = document_key(session.root(), Path::new(document))?;
+    let records: Vec<(String, String)> = fasta_headers(&session.root().join(&key))?
+        .into_iter()
+        .map(|(id, _)| (key.clone(), id))
+        .collect();
+    write_template(meta, &records, output)?;
+    Ok(records.len())
+}
+
+/// Linked and unlinked records of a sequence file. Loading never needs
+/// links; this only reports them.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinkStatus {
+    pub document: String,
+    pub records: usize,
+    pub unlinked: Vec<String>,
+}
+
+pub fn link_status(session: &Session, doc: crate::DocId, document: &str) -> Result<LinkStatus> {
+    let meta = checked_metadata(session, doc)?;
+    let key = document_key(session.root(), Path::new(document))?;
+    let records: Vec<String> = fasta_headers(&session.root().join(&key))?
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    let unlinked = model::unlinked(meta, &key, &records)
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    Ok(LinkStatus {
+        document: key,
+        records: records.len(),
+        unlinked,
+    })
+}
+
+/// INSDC source qualifiers for a specimen, as `{qualifier: value}` plus the
+/// required ones that are missing.
+pub fn insdc(session: &Session, doc: crate::DocId, specimen: &str) -> Result<serde_json::Value> {
+    let meta = checked_metadata(session, doc)?;
+    let source = model::insdc_source(meta, specimen).map_err(|e| invalid(e.0))?;
+    Ok(serde_json::json!({
+        "specimen": specimen,
+        "qualifiers": source.qualifiers.into_iter().collect::<BTreeMap<_, _>>(),
+        "missing": source.missing,
+    }))
 }
