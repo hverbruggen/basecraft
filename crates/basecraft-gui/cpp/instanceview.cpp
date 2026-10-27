@@ -4,6 +4,9 @@
 #include <limits>
 #include <cstring>
 #include <QtCore/QPointer>
+#include <QtCore/QBuffer>
+#include <QtGui/QImageReader>
+#include <stdexcept>
 
 #include <QtGui/QFont>
 #include <QtGui/QGuiApplication>
@@ -33,6 +36,33 @@ void configure_canvas_graphics()
     format.setProfile(QSurfaceFormat::CoreProfile);
 #endif
     QSurfaceFormat::setDefaultFormat(format);
+}
+
+QByteArray render_figure_png(const QString &svg, int width)
+{
+    constexpr qint64 maxPixels = 40'000'000;
+    if (width < 1 || width > 10'000)
+        throw std::runtime_error("PNG width is out of range");
+    QByteArray source = svg.toUtf8();
+    QBuffer input(&source);
+    if (!input.open(QIODevice::ReadOnly))
+        throw std::runtime_error("Could not read SVG figure");
+    QImageReader reader(&input, "svg");
+    const QSize original = reader.size();
+    if (!original.isValid() || original.width() < 1 || original.height() < 1)
+        throw std::runtime_error("SVG figure has invalid dimensions or Qt SVG support is unavailable");
+    const qint64 height = (qint64(original.height()) * width + original.width() / 2) / original.width();
+    if (height < 1 || height > 10'000 || height * width > maxPixels)
+        throw std::runtime_error("PNG figure exceeds the supported image size");
+    reader.setScaledSize(QSize(width, int(height)));
+    QImage image = reader.read();
+    if (image.isNull() || image.width() != width || image.height() != height)
+        throw std::runtime_error("Qt could not render the SVG figure as PNG");
+    QByteArray png;
+    QBuffer output(&png);
+    if (!output.open(QIODevice::WriteOnly) || !image.save(&output, "PNG"))
+        throw std::runtime_error("Could not encode PNG figure");
+    return png;
 }
 
 namespace {

@@ -8,7 +8,7 @@
     clippy::many_single_char_names,
     clippy::float_cmp
 )]
-use crate::frame::{ATLAS_COLS, ATLAS_ROWS, FLOATS_PER_INSTANCE, Frame, Rgba};
+use crate::frame::{ATLAS_COLS, ATLAS_ROWS, FLOATS_PER_INSTANCE, Frame, Rgba, TextRun};
 use std::fmt::Write as _;
 
 pub fn escape(text: &str) -> String {
@@ -28,6 +28,33 @@ fn color(c: &[f32]) -> String {
     )
 }
 
+fn source_text(svg: &mut String, run: &TextRun) {
+    let text = escape(&run.text);
+    let fill = color(&run.color);
+    let size = run.size * 0.8;
+    // Frame::text advances by UTF-8 byte, so keep that allocated width.
+    // Character-count width would shift the following atlas geometry.
+    #[allow(clippy::cast_precision_loss)]
+    let length = run.text.len() as f32 * run.size * 0.5;
+    let opacity = run.color[3];
+    if run.vertical {
+        let _ = writeln!(
+            svg,
+            "<text transform=\"translate({} {}) rotate(90)\" x=\"0\" y=\"{}\" font-size=\"{size}\" textLength=\"{length}\" lengthAdjust=\"spacing\" xml:space=\"preserve\" fill=\"{fill}\" opacity=\"{opacity}\">{text}</text>",
+            run.x + run.size,
+            run.y,
+            run.size * 0.5,
+        );
+    } else {
+        let _ = writeln!(
+            svg,
+            "<text x=\"{}\" y=\"{}\" font-size=\"{size}\" textLength=\"{length}\" lengthAdjust=\"spacing\" dominant-baseline=\"central\" xml:space=\"preserve\" fill=\"{fill}\" opacity=\"{opacity}\">{text}</text>",
+            run.x,
+            run.y + run.size * 0.5,
+        );
+    }
+}
+
 /// Export the visible frame, including its theme and font.
 /// A single viewport clip matches the screen's bounds.
 pub fn frame_svg(frame: &Frame, width: f32, height: f32, font: &str, background: Rgba) -> String {
@@ -41,7 +68,22 @@ pub fn frame_svg(frame: &Frame, width: f32, height: f32, font: &str, background:
         .chunks_exact(FLOATS_PER_INSTANCE)
         .enumerate()
         .peekable();
+    let mut runs = frame.text_runs().iter().peekable();
     while let Some((i, q)) = quads.next() {
+        let mut replaced = false;
+        while runs.peek().is_some_and(|run| run.start == i) {
+            let Some(run) = runs.next() else { break };
+            source_text(&mut svg, run);
+            if run.end > i {
+                for _ in i + 1..run.end {
+                    quads.next();
+                }
+                replaced = true;
+            }
+        }
+        if replaced {
+            continue;
+        }
         let xs = [q[0], q[2], q[4], q[6]];
         let ys = [q[1], q[3], q[5], q[7]];
         if xs.iter().all(|&x| x >= width)
@@ -81,7 +123,14 @@ pub fn frame_svg(frame: &Frame, width: f32, height: f32, font: &str, background:
                     if a <= 0. || b != 0. || c != 0. {
                         break;
                     }
-                    let Some((_, next)) = quads.peek() else { break };
+                    let Some((next_index, next)) = quads.peek() else {
+                        break;
+                    };
+                    // A retained Unicode source run replaces its own atlas
+                    // quads. Let the outer loop emit that run in source order.
+                    if runs.peek().is_some_and(|run| run.start == *next_index) {
+                        break;
+                    }
                     if next[14] <= 0.
                         || next[8..12] != q[8..12]
                         || next[1] != f
@@ -142,6 +191,9 @@ pub fn frame_svg(frame: &Frame, width: f32, height: f32, font: &str, background:
             }
         }
     }
+    for run in runs {
+        source_text(&mut svg, run);
+    }
     svg.push_str("</g>\n</svg>\n");
     svg
 }
@@ -162,5 +214,47 @@ mod tests {
         assert!(svg.contains("width=\"3\" height=\"4\""));
         assert!(!svg.contains("<image"));
         assert!(svg.contains(">A&lt;&amp;</text>"));
+    }
+
+    #[test]
+    fn unicode_text_survives_atlas_and_translated_frames() {
+        let mut strip = Frame::new();
+        strip.text(10., 20., 12., "Aé&北", [0., 0., 0., 1.]);
+        strip.text_down(30., 40., 12., "β", [0., 0., 0., 1.]);
+        let mut frame = Frame::new();
+        frame.append_translated(&strip, 5., 7.);
+        let svg = frame_svg(&frame, 200., 100., "Test", [1.; 4]);
+        assert!(svg.contains("Aé&amp;北"));
+        assert!(svg.contains(">β</text>"));
+        assert!(svg.contains("x=\"15\" y=\"33\""));
+        assert!(svg.contains("translate(47 47) rotate(90)"));
+        assert_eq!(svg.matches("<text ").count(), 2);
+        assert!(!svg.contains("<image"));
+    }
+
+    #[test]
+    fn adjacent_ascii_and_mixed_text_keep_separate_editable_runs() {
+        let mut frame = Frame::new();
+        frame.text(10., 20., 10., "A", [0., 0., 0., 1.]);
+        frame.text(15., 20., 10., "Bé", [0., 0., 0., 1.]);
+        let svg = frame_svg(&frame, 100., 50., "Test", [1.; 4]);
+        assert_eq!(svg.matches("<text ").count(), 2);
+        let ascii = svg.find(">A</text>").expect("first ASCII run");
+        let mixed = svg.find(">Bé</text>").expect("retained mixed run");
+        assert!(ascii < mixed);
+    }
+
+    #[test]
+    fn zero_quad_unicode_run_keeps_its_position_between_text_calls() {
+        let mut frame = Frame::new();
+        frame.text(10., 20., 10., "A", [0., 0., 0., 1.]);
+        frame.text(15., 20., 10., "β", [0., 0., 0., 1.]);
+        frame.text(25., 20., 10., "Bé", [0., 0., 0., 1.]);
+        let svg = frame_svg(&frame, 100., 50., "Test", [1.; 4]);
+        assert_eq!(svg.matches("<text ").count(), 3);
+        let ascii = svg.find(">A</text>").expect("first ASCII run");
+        let unicode = svg.find(">β</text>").expect("zero-quad Unicode run");
+        let mixed = svg.find(">Bé</text>").expect("last mixed run");
+        assert!(ascii < unicode && unicode < mixed);
     }
 }

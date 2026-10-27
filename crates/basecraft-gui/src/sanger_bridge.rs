@@ -152,6 +152,13 @@ pub mod qobject {
             publication: bool,
         );
         #[qinvokable]
+        fn export_figure_png(
+            self: Pin<&mut SangerController>,
+            path: &QString,
+            scope: i32,
+            publication: bool,
+        );
+        #[qinvokable]
         fn save(self: Pin<&mut SangerController>);
     }
 }
@@ -1719,12 +1726,37 @@ impl qobject::SangerController {
     }
 
     pub fn export_figure(
-        mut self: std::pin::Pin<&mut Self>,
+        self: std::pin::Pin<&mut Self>,
         path: &QString,
-        _scope: i32,
+        scope: i32,
         publication: bool,
     ) {
-        let result = {
+        self.export_figure_with(path, scope, publication, false);
+    }
+
+    pub fn export_figure_png(
+        self: std::pin::Pin<&mut Self>,
+        path: &QString,
+        scope: i32,
+        publication: bool,
+    ) {
+        self.export_figure_with(path, scope, publication, true);
+    }
+
+    fn export_figure_with(
+        mut self: std::pin::Pin<&mut Self>,
+        path: &QString,
+        scope: i32,
+        publication: bool,
+        png: bool,
+    ) {
+        if !(0..=2).contains(&scope) {
+            self.as_mut().set_message_kind(QString::from("error"));
+            self.as_mut()
+                .set_message(QString::from("Unknown figure scope"));
+            return;
+        }
+        let result = (|| -> Result<(), Box<dyn std::error::Error>> {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
             let theme = if publication {
@@ -1751,11 +1783,29 @@ impl qobject::SangerController {
                             );
                     }
                 }
+                let previous = (review.left, review.column_width, review.hovered);
+                if scope == 2 {
+                    review.fit();
+                } else if scope == 1 {
+                    // A selected call with neighbouring calls gives the signal
+                    // enough context to read in a standalone figure.
+                    #[allow(clippy::cast_precision_loss)]
+                    let start = review.selected.saturating_sub(5) as f64;
+                    review.left = start;
+                    review.column_width = (review.width / 11.0).clamp(1.0, 100.0);
+                }
                 review.build(&theme, &mut r.scratch);
+                (review.left, review.column_width, review.hovered) = previous;
             } else if let Some(trace) = &r.trace {
-                r.view.build_wrapped(trace, &theme, &mut r.scratch);
+                let mut view = r.view.clone();
+                if scope == 2 {
+                    view.fit_wrapped(trace);
+                } else if scope == 1 {
+                    view.center_call(trace, view.selected);
+                }
+                view.build_wrapped(trace, &theme, &mut r.scratch);
             } else {
-                return;
+                return Err("No trace open".into());
             }
             let xml = svg::frame_svg(
                 &r.scratch,
@@ -1764,12 +1814,24 @@ impl qobject::SangerController {
                 &r.mono_font.to_string(),
                 theme.background,
             );
-            basecraft_io::write_atomic(Path::new(&path.to_string()), |out| {
-                out.write_all(xml.as_bytes())
-            })
-        };
+            if png {
+                let bytes = crate::bridge::figure_png(&xml)?;
+                basecraft_io::write_atomic(Path::new(&path.to_string()), |out| {
+                    out.write_all(&bytes)
+                })?;
+            } else {
+                basecraft_io::write_atomic(Path::new(&path.to_string()), |out| {
+                    out.write_all(xml.as_bytes())
+                })?;
+            }
+            Ok(())
+        })();
         match result {
-            Ok(()) => self.as_mut().set_message(QString::from("Exported SVG")),
+            Ok(()) => self.as_mut().set_message(QString::from(if png {
+                "Exported PNG"
+            } else {
+                "Exported SVG"
+            })),
             Err(error) => {
                 self.as_mut().set_message_kind(QString::from("error"));
                 self.as_mut().set_message(QString::from(&error.to_string()));
