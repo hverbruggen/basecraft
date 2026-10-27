@@ -781,12 +781,26 @@ impl SangerReviewSession {
             });
             crate::provenance::publish(run.directory(), &record)?;
             let replacing = crate::save_guard::Revision::check(self.accepted.as_ref(), path)?;
-            if replacing {
-                basecraft_io::write_atomic(path, |w| w.write_all(&bytes))?;
+            let written = if replacing {
+                basecraft_io::write_atomic(path, |w| w.write_all(&bytes))
+                    .map_err(crate::Error::from)
             } else {
-                run.publish_secondary("visible-review.json", path)?;
+                run.publish_secondary("visible-review.json", path)
+            };
+            if let Err(error) = written {
+                // No-clobber publication can fail syncing the directory after
+                // visible bytes are present. Do not describe that as unsaved.
+                if basecraft_io::hash_file(path).ok().as_ref()
+                    == Some(&basecraft_io::hash_bytes(&bytes))
+                {
+                    return Err(invalid(format!(
+                        "intended review bytes are visible; publication incomplete: {error}; reopen before retrying; repair evidence: {}",
+                        run.directory().display()
+                    )));
+                }
+                return Err(error);
             }
-            self.accepted = Some(crate::save_guard::Revision::accepted(path, &bytes)?);
+            self.accepted = Some(crate::save_guard::Revision::accepted(path, &bytes).map_err(|error| invalid(format!("review data saved; target verification incomplete: {error}; repair evidence: {}", run.directory().display())))?);
             self.anchor.clone_from(&absolute);
             run.bind(path).map_err(|error| {
                 invalid(format!(
