@@ -198,12 +198,17 @@ fn plugin_command_runs_registered_sequence_operations() {
         String::from_utf8_lossy(&edited.stderr)
     );
     assert_eq!(std::fs::read(&other).unwrap(), b">other\nTCGT\n");
-    // Replacing the run's own input asks for an evidence decision, which the
-    // CLI save cannot give; the file stays unchanged.
+    // The run's own input is the document it edits, so saving the proposals
+    // needs no evidence decision.
     let saved = call(&["end=4", "--save"]);
-    assert!(!saved.status.success());
-    let error = String::from_utf8_lossy(&saved.stderr);
-    assert!(error.contains("analysis_input_conflict"), "{error}");
+    assert!(
+        saved.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&saved.stdout),
+        String::from_utf8_lossy(&saved.stderr)
+    );
+    let gff = std::fs::read_to_string(project.join("sequence.gff3")).unwrap();
+    assert!(gff.contains("\t1\t4\t"), "{gff}");
     // The frozen sequence file is recorded as an unchanged (identity) read that
     // the shared evidence reader accepts; the session snapshot is generated.
     let mut records = Vec::new();
@@ -214,6 +219,15 @@ fn plugin_command_runs_registered_sequence_operations() {
             .unwrap_or_else(|error| panic!("{}: {error}", run.display()));
         if let (Some(source), "identity-v1") = (&input.source, input.transformation.as_str()) {
             assert_eq!(input.submitted_hash, source.hash, "{}", run.display());
+            // Sequence runs mark the file they edit; nothing else does here.
+            assert_eq!(
+                input
+                    .extra
+                    .get(basecraft_ops::input_evidence::PROPOSAL_TARGET),
+                Some(&Value::Bool(true)),
+                "{}",
+                run.display()
+            );
         }
         transformations.push((input.state, input.transformation));
     }
@@ -233,4 +247,110 @@ fn plugin_command_runs_registered_sequence_operations() {
         "{outcome}"
     );
     assert_eq!(std::fs::read(&sequence).unwrap(), b">sequence\nACGTACGT\n");
+}
+
+/// A file another analysis read still guards saves; `--input-conflict` passes
+/// the same decision the application asks the user for.
+#[test]
+fn plugin_save_honours_the_input_conflict_decision() {
+    let temp = tempfile::tempdir().unwrap();
+    let profile = temp.path().join("profile");
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures");
+    let package = temp.path().join("package");
+    std::fs::create_dir(&package).unwrap();
+    for entry in std::fs::read_dir(fixtures.join("registry-sequence-plugin")).unwrap() {
+        let entry = entry.unwrap();
+        std::fs::copy(entry.path(), package.join(entry.file_name())).unwrap();
+    }
+    let project = temp.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    let sequence = project.join("sequence.fa");
+    std::fs::write(&sequence, ">sequence\nACGTACGT\n").unwrap();
+    let basecraft = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_basecraft"))
+            .args(args)
+            .env("BASECRAFT_PROFILE_DIR", &profile)
+            .env("BASECRAFT_PLUGINS", temp.path().join("no-bundle"))
+            .output()
+            .unwrap()
+    };
+    let ok = |output: Output| {
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output
+    };
+    ok(basecraft(&[
+        "plugins",
+        "register-editable",
+        package.to_str().unwrap(),
+    ]));
+    let counter = fixtures.join("registry-plugin");
+    ok(basecraft(&[
+        "plugins",
+        "install",
+        counter.to_str().unwrap(),
+    ]));
+    // An ordinary analysis that read sequence.fa.
+    let request = temp.path().join("request.json");
+    std::fs::write(
+        &request,
+        serde_json::json!({"operation":"org.example.registry-fixture/count@1",
+            "inputs":{"sources":[{"kind":"file","path":"sequence.fa"}]},
+            "parameters":{"mode":"normal"},"destinations":{"report":"count.json"}})
+        .to_string(),
+    )
+    .unwrap();
+    let counted = ok(basecraft(&[
+        "operations",
+        "run",
+        "org.example.registry-fixture/count@1",
+        "--project",
+        project.to_str().unwrap(),
+        "--request",
+        request.to_str().unwrap(),
+    ]));
+    let counted: Value = serde_json::from_slice(&counted.stdout).unwrap();
+    assert_eq!(counted["state"], "completed", "{counted}");
+    let plugin = |extra: &[&str]| {
+        let mut args = vec![
+            "plugin",
+            package.to_str().unwrap(),
+            sequence.to_str().unwrap(),
+            "annotate",
+            "end=4",
+            "--save",
+        ];
+        args.extend_from_slice(extra);
+        basecraft(&args)
+    };
+    // Default and explicit cancel refuse, naming the conflict; nothing is saved.
+    for extra in [&[][..], &["--input-conflict", "cancel"][..]] {
+        let error = failure(&plugin(extra));
+        assert!(error.contains("analysis_input_conflict"), "{error}");
+        assert!(!project.join("sequence.gff3").exists());
+    }
+    let error = failure(&plugin(&["--input-conflict", "keep"]));
+    assert!(error.contains("preserve_copy"), "{error}");
+    // --input-conflict needs --save.
+    let error = failure(&basecraft(&[
+        "plugin",
+        package.to_str().unwrap(),
+        sequence.to_str().unwrap(),
+        "annotate",
+        "--input-conflict",
+        "cancel",
+    ]));
+    assert!(error.contains("--save"), "{error}");
+    // Preserving a copy keeps the earlier analysis verifiable and saves.
+    ok(plugin(&["--input-conflict", "preserve_copy"]));
+    assert!(project.join("sequence.gff3").exists());
+    ok(basecraft(&[
+        "provenance",
+        "verify",
+        project.join("count.json").to_str().unwrap(),
+    ]));
 }

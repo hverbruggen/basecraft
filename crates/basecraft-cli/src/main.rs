@@ -145,6 +145,11 @@ enum Command {
         /// Save the file afterwards.
         #[arg(long)]
         save: bool,
+        /// If saving would replace a file that other analyses recorded as
+        /// their input: cancel, preserve_copy, remove_analysis or
+        /// break_evidence. The same decision the application asks for.
+        #[arg(long, requires = "save", value_parser = save_policy, default_value = "cancel")]
+        input_conflict: basecraft_ops::input_evidence::SavePolicy,
     },
     /// Write JSON Schemas for the protocol types into a directory.
     Schemas { dir: PathBuf },
@@ -198,6 +203,13 @@ pub(crate) fn script_session(
         client: "CLI".into(),
     });
     Ok(session)
+}
+
+/// Parse an input-conflict decision by its shared serialized name.
+fn save_policy(name: &str) -> Result<basecraft_ops::input_evidence::SavePolicy, String> {
+    serde_json::from_value(serde_json::Value::from(name)).map_err(|_| {
+        "expected cancel, preserve_copy, remove_analysis or break_evidence".to_string()
+    })
 }
 
 fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
@@ -433,7 +445,14 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             operation,
             params,
             save,
-        } => run_plugin(&plugin, &file, &operation, &params, save)?,
+            input_conflict,
+        } => run_plugin(
+            &plugin,
+            &file,
+            &operation,
+            &params,
+            save.then_some(input_conflict),
+        )?,
         Command::Schemas { dir } => {
             std::fs::create_dir_all(&dir)?;
             let schemas = [
@@ -511,7 +530,7 @@ fn run_plugin(
     file: &std::path::Path,
     operation: &str,
     params: &[String],
-    save: bool,
+    save: Option<basecraft_ops::input_evidence::SavePolicy>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut map = serde_json::Map::new();
     for p in params {
@@ -562,8 +581,8 @@ fn run_plugin(
     let count = result.ops.len();
     session.apply_sequence_proposals(doc, generation, snap.version, &result.ops, &actor)?;
     println!("applied {count} proposals");
-    if save {
-        session.save(doc, None)?;
+    if let Some(policy) = save {
+        session.save_with_evidence(doc, None, policy)?;
         println!("saved {}", file.display());
     }
     println!("total {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
@@ -577,7 +596,7 @@ fn run_registered_plugin(
     file: &std::path::Path,
     operation: &str,
     parameters: serde_json::Map<String, serde_json::Value>,
-    save: bool,
+    save: Option<basecraft_ops::input_evidence::SavePolicy>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use basecraft_plugin_host::registry::{Registry, RegistryConfig};
     use basecraft_protocol::operation::{ExecutionFamily, InputReference, OperationRequest};
@@ -626,8 +645,12 @@ fn run_registered_plugin(
     if outcome["state"] != "completed" {
         return Err(format!("{} did not complete", registered.id).into());
     }
-    if save {
-        session.save(target.ok_or("operation returned no target document")?, None)?;
+    if let Some(policy) = save {
+        session.save_with_evidence(
+            target.ok_or("operation returned no target document")?,
+            None,
+            policy,
+        )?;
     }
     Ok(())
 }
