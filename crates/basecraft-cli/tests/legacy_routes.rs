@@ -152,7 +152,8 @@ fn plugin_command_runs_registered_sequence_operations() {
     let completed = call(&["end=4"]);
     assert!(
         completed.status.success(),
-        "{}",
+        "{}\n{}",
+        String::from_utf8_lossy(&completed.stdout),
         String::from_utf8_lossy(&completed.stderr)
     );
     let outcome: Value = serde_json::from_slice(&completed.stdout).unwrap();
