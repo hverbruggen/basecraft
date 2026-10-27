@@ -115,7 +115,7 @@ pub struct TreeStyle {
     /// the scale; ambiguous imported sets with all finite values in 0–1 use
     /// proportions. Legacy `support_proportions` overrides only Unknown imports. 0 shows all.
     pub support_min: u32,
-    /// Per-set thresholds in percent, falling back to support_min.
+    /// Per-set thresholds in percent, falling back to `support_min`.
     pub support_minimums: BTreeMap<String, u32>,
     /// Display conversion only: true renders fractions, false percentages.
     pub support_fraction: BTreeMap<String, bool>,
