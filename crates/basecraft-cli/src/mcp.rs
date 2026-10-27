@@ -350,6 +350,23 @@ fn structured(value: Value, failed: bool) -> Value {
     result
 }
 
+/// Read one newline-terminated MCP stdio frame, refusing frames over
+/// `MAX_FRAME_BYTES`. The Python `Session` client enforces the same limit.
+fn read_frame(input: &mut impl std::io::BufRead) -> std::io::Result<Option<Vec<u8>>> {
+    use std::io::{BufRead, Read};
+    let mut bytes = Vec::new();
+    let count = input
+        .take((basecraft_protocol::operation::MAX_FRAME_BYTES + 1) as u64)
+        .read_until(b'\n', &mut bytes)?;
+    if count == 0 {
+        return Ok(None);
+    }
+    if count > basecraft_protocol::operation::MAX_FRAME_BYTES {
+        return Err(std::io::Error::other("stdio frame exceeds byte limit"));
+    }
+    Ok(Some(bytes))
+}
+
 pub fn serve(root: &Path, writable: bool, model: &str) -> Result<()> {
     use basecraft_plugin_host::{
         jobs::JobManager,
@@ -377,7 +394,7 @@ pub fn serve(root: &Path, writable: bool, model: &str) -> Result<()> {
         let stdin = std::io::stdin();
         let mut input = stdin.lock();
         loop {
-            match crate::operations::read_frame(&mut input) {
+            match read_frame(&mut input) {
                 Ok(Some(line)) => {
                     if sender.send(Ok(line)).is_err() {
                         break;
