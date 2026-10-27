@@ -281,8 +281,10 @@ with operations.submit(
 
 `operations.run` is the foreground convenience form. `OperationError` retains
 `code`, `run_id` and the host outcome. A wait timeout leaves the job running;
-`handle.cancel()` explicitly cancels it. Closing the handle closes its owning
-CLI session and cancels outstanding jobs. Set `BASECRAFT` to the matching CLI
+`handle.cancel()` explicitly cancels it. Each handle runs in its own writable
+`basecraft mcp` session; closing the handle cancels an unfinished job and ends
+that session. `basecraft.session.Session` runs several jobs and document edits
+in one session (see `guide/scripting.md`). Set `BASECRAFT` to the matching CLI
 executable when it is not on PATH. The SDK interprets no scientific defaults.
 
 ```sh

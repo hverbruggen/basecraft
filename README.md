@@ -16,6 +16,9 @@ Qt/QML interface, command-line tools, Python SDK and MCP server.
 - Retain analysis inputs, settings and history alongside standard data formats.
 - Use interactive, scripted or MCP-connected workflows through the same core.
 
+See [guide/scripting.md](guide/scripting.md) for the CLI and Python scripting
+reference and [guide/mcp.md](guide/mcp.md) for connecting an assistant.
+
 Basecraft is development software. Platform packaging and biological validation
 of the Sanger review workflow are still in progress.
 
