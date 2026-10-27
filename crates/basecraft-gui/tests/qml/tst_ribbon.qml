@@ -269,10 +269,63 @@ Item {
             ribbon.currentIndex = 1
             verify(waitForPolish(ribbon.Window.window))
             compare(ribbon.scrollPosition, 0)
-            compare(ribbon.height, tall, "all pages reserve the same body and scrollbar height")
+            compare(ribbon.height, tall, "all pages retain a stable ribbon height")
             ribbon.currentIndex = -1
             verify(waitForPolish(ribbon.Window.window))
             compare(ribbon.currentPage, null)
+        }
+        function test_scrollbar_overlays_without_reserving_a_band() {
+            const originalWidth = ribbon.width
+            ribbon.width = 180
+            verify(waitForPolish(ribbon.Window.window))
+            verify(ribbon.overflowing)
+            const bar = findChild(ribbon, "ribbonScrollBar")
+            verify(bar)
+            verify(bar.visible)
+            fuzzyCompare(ribbon.implicitHeight, ribbon.pageHeight + ribbon.topPadding + ribbon.bottomPadding, 0.5,
+                         "scrollbar must not add a blank strip to every ribbon page")
+            compare(bar.y + bar.height, ribbon.topPadding,
+                    "scrollbar stays within the ribbon's existing top padding")
+            ribbon.width = 1000
+            verify(waitForPolish(ribbon.Window.window))
+            verify(!ribbon.overflowing)
+            verify(!bar.visible)
+            ribbon.width = originalWidth
+            verify(waitForPolish(ribbon.Window.window))
+        }
+        function test_overflow_scrollbar_does_not_block_top_row_button() {
+            const originalWidth = ribbon.width
+            const originalFactor = host.sizeFactor
+            const originalInvocations = host.invocations
+            const bar = findChild(ribbon, "ribbonScrollBar")
+            const button = findActionButton(actions, command)
+            verify(bar && button)
+            for (const factor of [1, 1.25, 1.5, 1.75, 2]) {
+                host.sizeFactor = factor
+                ribbon.width = 180
+                verify(waitForPolish(ribbon.Window.window))
+                verify(bar.visible)
+                const buttonTopLeft = button.mapToItem(ribbon, 0, 0)
+                const left = Math.max(buttonTopLeft.x, bar.x)
+                const right = Math.min(buttonTopLeft.x + button.width, bar.x + bar.width)
+                const top = Math.max(buttonTopLeft.y, bar.y)
+                const bottom = Math.min(buttonTopLeft.y + button.height, bar.y + bar.height)
+                verify(right <= left || bottom <= top,
+                       `scrollbar hit area overlaps button at scale ${factor}: button=${buttonTopLeft.x},${buttonTopLeft.y},${button.width},${button.height} bar=${bar.x},${bar.y},${bar.width},${bar.height}`)
+                const before = host.invocations
+                const point = button.mapToItem(host, button.width / 2, button.height / 2)
+                mouseClick(host, point.x, point.y)
+                compare(host.invocations, before + 1, "overflow must not block the visible ribbon button")
+                editor.forceActiveFocus()
+            }
+            verify(editor.activeFocus, "restore the test's keyboard focus context")
+            host.invocations = originalInvocations
+            host.sizeFactor = originalFactor
+            ribbon.width = originalWidth
+            ribbon.currentIndex = 0
+            verify(waitForPolish(ribbon.Window.window))
+            editor.forceActiveFocus()
+            tryVerify(() => editor.activeFocus)
         }
         function findActionButton(item, action) {
             if (item.action === action && item.visible) return item
@@ -301,8 +354,11 @@ Item {
         function test_tab_keyboard_changes_page(data) {
             host.sizeFactor = data.factor
             tabs.selectedName = "File"
+            tryVerify(() => !tabs.rebuilding && tabs.currentIndex === 0 && tabs.selectedName === "File",
+                      1000, "wait for deferred tab-list rebuild and selection callbacks")
             waitForPolish(tabs)
             tabs.itemAt(0).forceActiveFocus(Qt.TabFocusReason)
+            tryVerify(() => tabs.itemAt(0).activeFocus, 1000, "File tab must own keyboard focus before Right")
             keyClick(Qt.Key_Right)
             tryCompare(tabs, "selectedName", "View")
             keyClick(Qt.Key_End)

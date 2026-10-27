@@ -40,8 +40,9 @@ Control {
         for (const page of stack.children) result = Math.max(result, page.implicitHeight)
         return result
     }
-    // Reserve the same scrollbar band on every page, including wide windows.
-    implicitHeight: pageHeight + topPadding + bottomPadding + bar.implicitHeight
+    // Keep page height independent of overflow; the scrollbar overlays the
+    // viewport edge so wide and narrow pages have identical geometry.
+    implicitHeight: pageHeight + topPadding + bottomPadding
     padding: Kirigami.Units.smallSpacing * ribbonSizeFactor
     clip: true
 
@@ -70,7 +71,7 @@ Control {
         x: ribbon.leftPadding
         y: ribbon.topPadding
         width: ribbon.availableWidth
-        height: Math.max(0, ribbon.availableHeight - bar.implicitHeight)
+        height: ribbon.availableHeight
         clip: true
         contentWidth: Math.max(width, ribbon.pageWidth)
         contentHeight: height
@@ -80,11 +81,15 @@ Control {
         boundsBehavior: Flickable.StopAtBounds
         ScrollBar.horizontal: ScrollBar {
             id: bar
+            objectName: "ribbonScrollBar"
             parent: ribbon
             x: viewport.x
-            y: viewport.y + viewport.height
+            // Keep the entire interactive strip inside the ribbon's existing
+            // top padding, clear of the top row's click targets.
+            y: 0
             width: viewport.width
-            policy: ScrollBar.AlwaysOn
+            height: ribbon.topPadding
+            policy: ScrollBar.AsNeeded
             visible: ribbon.overflowing
             active: true
         }
