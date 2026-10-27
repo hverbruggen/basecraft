@@ -1,6 +1,7 @@
 //! Format readers and writers, indexes and memory mapping.
 
 pub mod abif;
+pub mod archive;
 pub mod cache;
 pub mod fasta;
 pub mod genbank;

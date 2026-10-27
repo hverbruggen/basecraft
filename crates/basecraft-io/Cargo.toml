@@ -9,9 +9,9 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
-# Spreadsheet import (.ods, .xlsx); MIT. The .ods template writer uses the same zip.
-calamine = "=0.35.0"
-zip = { version = "7", default-features = false, features = ["deflate"] }
+# ZIP members of .ods and .xlsx spreadsheets (already used through png).
+crc32fast = "1.5"
+flate2 = "1.1"
 roxmltree = { path = "../../vendor/roxmltree" }
 basecraft-protocol.workspace = true
 blake3.workspace = true
