@@ -616,7 +616,7 @@ impl PreparedOperation {
             return Err(Error::Protocol("cancelled before spawn".into()));
         }
         self.operation.package.verify()?;
-        let _contact = self.lifecycle.reserve(&cancelled)?;
+        let contact = self.lifecycle.reserve(&cancelled)?;
         let mut process = PluginProcess::spawn_accepted(
             &self.operation.package.manifest,
             self.operation
@@ -650,12 +650,22 @@ impl PreparedOperation {
             self.sequence.as_ref().map(|target| &target.snapshot),
         );
         let teardown = process.finish();
+        let contact_evidence = contact
+            .as_ref()
+            .map_or(Ok(()), crate::lifecycle::ContactPermit::complete);
         if self.lifecycle.external() && result.is_err() {
             let receipt = Path::new(&self.context.outputs["receipt"]);
             if receipt.is_file() {
                 result = (|| -> Result<InvokeResult> {
                     let metadata = receipt.symlink_metadata()?;
-                    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.nlink()!=1 { return Err(Error::Protocol("unsafe retained receipt; submission status unknown".into())); }
+                    if !metadata.is_file()
+                        || metadata.file_type().is_symlink()
+                        || metadata.nlink() != 1
+                    {
+                        return Err(Error::Protocol(
+                            "unsafe retained receipt; submission status unknown".into(),
+                        ));
+                    }
                     let data =
                         serde_json::from_slice(&basecraft_ops::provenance::read_record(receipt)?)?;
                     Ok(InvokeResult {
@@ -692,11 +702,12 @@ impl PreparedOperation {
                     teardown?;
                     evidence?;
                 } else {
-                    let diagnostics: Vec<_> = [teardown.err(), evidence.err()]
-                        .into_iter()
-                        .flatten()
-                        .map(|e| e.to_string())
-                        .collect();
+                    let diagnostics: Vec<_> =
+                        [teardown.err(), evidence.err(), contact_evidence.err()]
+                            .into_iter()
+                            .flatten()
+                            .map(|e| e.to_string())
+                            .collect();
                     if !diagnostics.is_empty() {
                         result.message = Some(format!(
                             "Local execution evidence incomplete: {}",
@@ -707,14 +718,20 @@ impl PreparedOperation {
                 Ok(result)
             }
             Err(error) => {
-                let error = if self.lifecycle.external() { Error::Protocol(format!("Submission status unknown unless retained receipt proves acceptance: {error}. Do not automatically resubmit")) } else {error};
+                let error = if self.lifecycle.external() {
+                    Error::Protocol(format!(
+                        "Submission status unknown unless retained receipt proves acceptance: {error}. Do not automatically resubmit"
+                    ))
+                } else {
+                    error
+                };
                 match evidence {
-                Ok(()) => Err(error),
-                Err(evidence) => Err(Error::Protocol(format!(
-                    "{error}; execution evidence write failed: {evidence}"
-                ))),
+                    Ok(()) => Err(error),
+                    Err(evidence) => Err(Error::Protocol(format!(
+                        "{error}; execution evidence write failed: {evidence}"
+                    ))),
+                }
             }
-            },
         }
     }
 
@@ -730,8 +747,12 @@ impl PreparedOperation {
             &self.run.artifact("query-preparation.json")?,
         )?)?;
         let receipt = Path::new(&self.context.outputs["receipt"]);
-        if let Ok(metadata) = receipt.symlink_metadata() && (!metadata.is_file() || metadata.file_type().is_symlink() || metadata.nlink()!=1) {
-            return Err(Error::Protocol("unsafe allocated receipt; submission status unknown".into()));
+        if let Ok(metadata) = receipt.symlink_metadata()
+            && (!metadata.is_file() || metadata.file_type().is_symlink() || metadata.nlink() != 1)
+        {
+            return Err(Error::Protocol(
+                "unsafe allocated receipt; submission status unknown".into(),
+            ));
         }
         self.lifecycle.validate_identity(result, &plan)
     }

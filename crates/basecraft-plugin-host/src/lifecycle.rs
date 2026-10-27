@@ -54,7 +54,7 @@ impl Lifecycle {
     }
     /// At least ten seconds between contacts across GUI/CLI/MCP processes.
     /// Reservation is conservative: a cancelled reservation may send nothing.
-    pub fn reserve(self, cancelled: &AtomicBool) -> Result<Option<std::fs::File>> {
+    pub fn reserve(self, cancelled: &AtomicBool) -> Result<Option<ContactPermit>> {
         if !self.external() {
             return Ok(None);
         }
@@ -100,8 +100,10 @@ impl Lifecycle {
                 ));
             }
             if now - previous >= 10.0 {
-                basecraft_ops::input_evidence::write_json(&stamp, &now)?;
-                return Ok(Some(lock));
+                // If startup/shutdown fails before completion can be recorded,
+                // conservatively cover initialization + invocation + teardown.
+                basecraft_ops::input_evidence::write_json(&stamp, &(now + 60.0))?;
+                return Ok(Some(ContactPermit { _lock: lock, stamp }));
             }
             std::thread::sleep(Duration::from_millis(50));
         }
@@ -157,6 +159,24 @@ impl Lifecycle {
         {
             return Err(Error::Protocol("external submission receipt/query identity mismatch; submission status unknown; do not resubmit automatically".into()));
         }
+        Ok(())
+    }
+}
+
+/// Keep the interprocess lock through timestamp completion. Spacing is measured
+/// from the END of the previous contact, so slow initialization/upload cannot
+/// accidentally shorten the actual interval between two POSTs.
+pub(crate) struct ContactPermit {
+    _lock: std::fs::File,
+    stamp: std::path::PathBuf,
+}
+impl ContactPermit {
+    pub fn complete(&self) -> Result<()> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|e| Error::Protocol(e.to_string()))?
+            .as_secs_f64();
+        basecraft_ops::input_evidence::write_json(&self.stamp, &now)?;
         Ok(())
     }
 }

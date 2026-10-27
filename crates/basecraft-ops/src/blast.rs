@@ -92,7 +92,7 @@ pub fn from_alignment(
     if rows.0 >= rows.1
         || rows.1 > doc.row_count()
         || columns.0 >= columns.1
-        || columns.1 > doc.len()
+        || columns.1 > doc.width()
     {
         return Err(invalid("BLAST selection is empty or outside the alignment"));
     }

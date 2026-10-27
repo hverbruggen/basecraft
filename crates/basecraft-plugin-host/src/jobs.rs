@@ -435,7 +435,11 @@ fn fail(job: &Job, code: OperationErrorCode, message: String) {
         ) {
         RuntimeState::Partial
     } else if job.cancelled.load(Ordering::Acquire) {
-        if job.prepared.lifecycle.external() && code != OperationErrorCode::Cancelled { RuntimeState::Interrupted } else { RuntimeState::Cancelled }
+        if job.prepared.lifecycle.external() && code != OperationErrorCode::Cancelled {
+            RuntimeState::Interrupted
+        } else {
+            RuntimeState::Cancelled
+        }
     } else {
         RuntimeState::Failed
     };

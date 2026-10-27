@@ -1124,7 +1124,7 @@ impl qobject::AlignmentController {
                 let columns = if source == "selection" {
                     block.cols
                 } else {
-                    (0, doc.len())
+                    (0, doc.width())
                 };
                 basecraft_ops::blast::from_alignment(doc, rows, columns)
             })
