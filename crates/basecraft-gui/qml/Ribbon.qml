@@ -35,7 +35,13 @@ Control {
     readonly property real viewportWidth: viewport.width
     readonly property real scrollPosition: viewport.contentX
     readonly property bool overflowing: contentWidth > viewportWidth
-    implicitHeight: (currentPage ? currentPage.implicitHeight : 0) + topPadding + bottomPadding + (overflowing ? bar.implicitHeight : 0)
+    readonly property real pageHeight: {
+        let result = 0
+        for (const page of stack.children) result = Math.max(result, page.implicitHeight)
+        return result
+    }
+    // Reserve the same scrollbar band on every page, including wide windows.
+    implicitHeight: pageHeight + topPadding + bottomPadding + bar.implicitHeight
     padding: Kirigami.Units.smallSpacing * ribbonSizeFactor
     clip: true
 
@@ -64,7 +70,7 @@ Control {
         x: ribbon.leftPadding
         y: ribbon.topPadding
         width: ribbon.availableWidth
-        height: Math.max(0, ribbon.availableHeight - (ribbon.overflowing ? bar.implicitHeight : 0))
+        height: Math.max(0, ribbon.availableHeight - bar.implicitHeight)
         clip: true
         contentWidth: Math.max(width, ribbon.pageWidth)
         contentHeight: height

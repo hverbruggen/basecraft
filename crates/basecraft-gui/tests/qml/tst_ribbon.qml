@@ -269,7 +269,7 @@ Item {
             ribbon.currentIndex = 1
             verify(waitForPolish(ribbon.Window.window))
             compare(ribbon.scrollPosition, 0)
-            verify(ribbon.height < tall)
+            compare(ribbon.height, tall, "all pages reserve the same body and scrollbar height")
             ribbon.currentIndex = -1
             verify(waitForPolish(ribbon.Window.window))
             compare(ribbon.currentPage, null)

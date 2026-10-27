@@ -23,7 +23,7 @@ Item {
             for (const bg of ["#1c2630", "#f3eee4"]) {
                 brand.backgroundColor = bg
                 tryCompare(logo, "status", Image.Ready)
-                for (const size of [[1000, 600], [640, 480], [1600, 900], [800, 600]]) {
+                for (const size of [[1000, 600], [640, 480], [1600, 900], [800, 600], [800, 1000]]) {
                     scene.width = size[0]
                     scene.height = size[1]
                     mainPanelWidth = size[0] === 800 ? 400 : size[0]

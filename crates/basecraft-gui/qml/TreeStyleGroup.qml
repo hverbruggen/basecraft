@@ -64,7 +64,7 @@ RibbonGroup {
         objectName: "treeStyleExtra"
         commandId: group.scope + ".style-extra"
         customization: group.customization
-        text: "Extra…"
+        text: "Extra"
         iconName: "tree-style"
         tip: "Branch width, clade label direction and the scale bar"
         enabled: group.controller !== null

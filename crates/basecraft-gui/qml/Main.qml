@@ -94,15 +94,8 @@ ApplicationWindow {
     readonly property bool treeOpen: currentKind === "tree"
     readonly property bool delimitationOpen: currentKind === "delimitation"
     readonly property bool traceOpen: currentKind === "trace"
-    // The third tab is Annotations for a sequence, Alignment for an
-    // alignment, Tree for a tree; an alignment also gets Phylogeny and
-    // Delimitation, where the analyses start.
-    readonly property var ribbonTabs: ["File", "View", alignmentOpen ? "Alignment" : treeOpen ? "Tree" : delimitationOpen ? "Delimitation" : traceOpen ? "Trace" : "Annotations"]
-        .concat(alignmentOpen ? ["Phylogeny", "Delimitation"] : [], ["Help"])
-    // The chosen tab if this document has it, else its third tab (a tab
-    // for another kind of document), else File.
-    readonly property string ribbonTab: ribbonTabs.includes(ribbonTabName) ? ribbonTabName
-        : ["Annotations", "Alignment", "Tree", "Phylogeny", "Delimitation", "Trace"].includes(ribbonTabName) ? ribbonTabs[2] : "File"
+    readonly property var ribbonTabs: ["File", "View", "Annotations", "Alignment", "Phylogeny", "Tree", "Delimitation", "Trace", "Help"]
+    readonly property string ribbonTab: ribbonTabs.includes(ribbonTabName) ? ribbonTabName : "File"
     // Each tab's panel in the ribbon's stack.
     readonly property var ribbonPanels: ({ "File": 0, "View": 1, "Annotations": 2, "Help": 3, "Alignment": 4, "Tree": 5, "Phylogeny": 6, "Delimitation": 7, "Trace": 8 })
     // Only the wrapped layout is offered for now; files always open in it.
@@ -241,9 +234,7 @@ ApplicationWindow {
         current = d ? d.controller : null
         currentView = d ? d.view : null
         currentPath = d ? d.path : ""
-        const firstOpen = d && (d.kind === "alignment" || d.kind === "delimitation") && !d.ribbonInitialized
         currentKind = d ? d.kind : ""
-        if (firstOpen) { d.ribbonInitialized = true; ribbonTabName = currentKind === "alignment" ? "Alignment" : "Delimitation" }
         if (currentView && (focusOpenedDocument || !tabs.activeFocus)) {
             // Background model updates must not steal focus from controls/dialogs.
             if (focusOpenedDocument || !window.activeFocusItem || !window.activeFocusItem.visible)
@@ -293,7 +284,8 @@ ApplicationWindow {
 
     property var delimitationSource: null
     function beginDelimitation(method) {
-        if (!current || current.busy) return
+        if (!current || current.busy || !(alignmentOpen || treeOpen || delimitationOpen)) return
+        if (method === "asap" && !alignmentOpen && !(delimitationOpen && current.linked_alignment.length)) return
         delimitationSource = current
         speciesDialog.engineProblems = method === "ptp" ? JSON.parse(shell.delimitation_engines()) : ({})
         speciesDialog.show(method, alignmentOpen ? current.file_path : current.linked_alignment || "",
@@ -785,10 +777,11 @@ ApplicationWindow {
         id: speciesMethods
         required property string commandSuffix
         title: "Species delimitation"
-        RibbonButton { commandId: "species.gmyc-" + speciesMethods.commandSuffix; text: "GMYC"; iconName: "tree-gmyc"; enabled: window.current !== null && !window.current.busy; onInvoked: window.beginDelimitation("gmyc") }
-        RibbonButton { commandId: "species.asap-" + speciesMethods.commandSuffix; text: "ASAP"; iconName: "matrix-asap"; enabled: window.current !== null && !window.current.busy; onInvoked: window.beginDelimitation("asap") }
-        RibbonButton { commandId: "species.ptp-" + speciesMethods.commandSuffix; text: "PTP"; iconName: "phylogram-ptp"; enabled: window.current !== null && !window.current.busy; onInvoked: window.beginDelimitation("ptp") }
-        RibbonButton { commandId: "species.manual-" + speciesMethods.commandSuffix; text: "Manual"; iconName: "tree-gmyc"; enabled: window.current !== null && !window.current.busy; onInvoked: window.beginDelimitation("manual") }
+        readonly property bool canRun: (window.alignmentOpen || window.treeOpen || window.delimitationOpen) && window.current !== null && !window.current.busy
+        RibbonButton { commandId: "species.gmyc-" + speciesMethods.commandSuffix; text: "GMYC"; iconName: "tree-gmyc"; enabled: speciesMethods.canRun; onInvoked: window.beginDelimitation("gmyc") }
+        RibbonButton { commandId: "species.asap-" + speciesMethods.commandSuffix; text: "ASAP"; iconName: "matrix-asap"; enabled: (window.alignmentOpen || (window.delimitationOpen && window.current && window.current.linked_alignment.length > 0)) && speciesMethods.canRun; onInvoked: window.beginDelimitation("asap") }
+        RibbonButton { commandId: "species.ptp-" + speciesMethods.commandSuffix; text: "PTP"; iconName: "phylogram-ptp"; enabled: speciesMethods.canRun; onInvoked: window.beginDelimitation("ptp") }
+        RibbonButton { commandId: "species.manual-" + speciesMethods.commandSuffix; text: "Manual"; iconName: "tree-gmyc"; enabled: speciesMethods.canRun; onInvoked: window.beginDelimitation("manual") }
         RibbonButton { commandId: "species.combine-" + speciesMethods.commandSuffix; text: "Combine"; iconName: "align"; onInvoked: combinePicker.open() }
     }
     component HelpGroup: RibbonHelpGroup {
@@ -920,9 +913,9 @@ ApplicationWindow {
                     Item { Layout.fillWidth: true }
                     RibbonGroup {
                         title: "Review files"
-                        visible: window.traceOpen
-                        RibbonButton { commandId: "ribbon.open-saved-draft-evidence"; text: "Open draft…"; tip: "Open saved draft evidence"; keys: "Ctrl+Shift+D"; enabled: window.current && !window.current.dirty; onInvoked: window.traceDocument.openDraft() }
-                        RibbonButton { commandId: "ribbon.resume-saved-review-decisions"; text: "Open review…"; tip: "Resume saved review decisions"; keys: "Ctrl+Alt+O"; enabled: window.current && !window.current.dirty; onInvoked: window.traceDocument.openReview() }
+                        enabled: window.traceOpen
+                        RibbonButton { commandId: "ribbon.open-saved-draft-evidence"; text: "Open draft"; tip: "Open saved draft evidence"; keys: "Ctrl+Shift+D"; enabled: window.current && !window.current.dirty; onInvoked: window.traceDocument.openDraft() }
+                        RibbonButton { commandId: "ribbon.resume-saved-review-decisions"; text: "Open review"; tip: "Resume saved review decisions"; keys: "Ctrl+Alt+O"; enabled: window.current && !window.current.dirty; onInvoked: window.traceDocument.openReview() }
                     }
                     RibbonGroup { title: "Document record"; actions: [historyCommand, methodsCommand] }
                     HelpGroup {}
@@ -932,45 +925,36 @@ ApplicationWindow {
                     spacing: 6 * window.ribbonSizeFactor
                     RibbonGroup {
                         title: "Zoom"
-                        RibbonButton { commandId: "ribbon.zoom-out"; iconName: "zoom-out"; tip: "Zoom out"; keys: "Ctrl+−"; onInvoked: (window.delimitationOpen ? window.currentView.controller : window.current).zoom_out() }
-                        RibbonButton { commandId: "ribbon.zoom-in"; iconName: "zoom-in"; tip: "Zoom in"; keys: "Ctrl++"; onInvoked: (window.delimitationOpen ? window.currentView.controller : window.current).zoom_in() }
+                        enabled: (window.delimitationOpen ? window.speciesTree : window.current) !== null
+                        RibbonButton { commandId: "ribbon.zoom-out"; iconName: "zoom-out"; tip: "Zoom out"; keys: "Ctrl+−"; onInvoked: (window.delimitationOpen ? window.speciesTree : window.current).zoom_out() }
+                        RibbonButton { commandId: "ribbon.zoom-in"; iconName: "zoom-in"; tip: "Zoom in"; keys: "Ctrl++"; onInvoked: (window.delimitationOpen ? window.speciesTree : window.current).zoom_in() }
                         RibbonButton { commandId: "ribbon.fit";
                             text: "Fit"
                             iconName: "fit"
                             tip: window.alignmentOpen ? "Show the whole width of the alignment" : window.treeOpen ? "Show the whole tree" : "Show the whole sequence"
                             keys: "Ctrl+0"
-                            onInvoked: (window.delimitationOpen ? window.currentView.controller : window.current).fit()
+                            onInvoked: (window.delimitationOpen ? window.speciesTree : window.current).fit()
                         }
-                        RibbonButton { commandId: "ribbon.zoom-to-the-selection"; text: "Selection"; iconName: "selection"; visible: commandAction.visible && (!window.treeOpen && !window.delimitationOpen && !window.traceOpen); tip: "Zoom to the selection"; onInvoked: window.current.zoom_to_selection() }
-                        TextField {
-                            id: zoomInput
+                        RibbonButton { commandId: "ribbon.zoom-to-the-selection"; text: "Selection"; iconName: "selection"; enabled: window.current !== null && (window.currentKind === "sequence" || window.alignmentOpen); tip: "Zoom to the selection"; onInvoked: window.current.zoom_to_selection() }
+                        RibbonNumberField {
                             objectName: "zoomPercentage"
-                            readonly property var controller: window.delimitationOpen ? window.currentView.controller : window.current
-                            property string currentZoom: controller ? controller.zoom_text : ""
-                            FontMetrics { id: zoomMetrics; font: zoomInput.font }
-                            implicitWidth: zoomMetrics.advanceWidth("100") + leftPadding + rightPadding + 8
+                            label: "%"
+                            tip: "Zoom percentage"
+                            readonly property var controller: window.delimitationOpen ? window.speciesTree : window.current
+                            from: 0; to: 20000
+                            value: controller ? parseFloat(controller.zoom_text) : 100
+                            fractional: true
                             enabled: controller !== null
-                            Accessible.name: "Zoom percentage"
-                            selectByMouse: true
-                            validator: DoubleValidator { bottom: 0.000001; top: 20000; notation: DoubleValidator.StandardNotation; locale: "C" }
-                            function resetText() { text = currentZoom.split("%")[0].trim() }
-                            Component.onCompleted: resetText()
-                            onCurrentZoomChanged: if (!activeFocus) resetText()
-                            onEditingFinished: {
-                                if (controller && acceptableInput) controller.set_zoom_percent(Number(text))
-                                resetText()
-                            }
-                            Keys.onEscapePressed: { resetText(); focus = false }
+                            onEdited: value => { if (controller) controller.set_zoom_percent(value) }
                         }
-                        Label { text: "%" }
                     }
-                    ToolSeparator { Layout.fillHeight: true; visible: window.currentKind === "sequence" }
+                    ToolSeparator { Layout.fillHeight: true; enabled: window.currentKind === "sequence" }
                     // Linear and circular layouts exist in the code but are
                     // not offered for now; the wrapped layout is the view.
                     RibbonGroup {
                         title: "Show"
                         // Only sequences have a GC plot.
-                        visible: window.currentKind === "sequence"
+                        enabled: window.currentKind === "sequence"
                         AppCheckBox {
                             text: "GC content"
                             ToolTip.text: "Show the GC content plot"
@@ -989,9 +973,10 @@ ApplicationWindow {
                 RibbonPage {
                     spacing: 6 * window.ribbonSizeFactor
                     RibbonGroup {
+                        enabled: window.currentKind === "sequence"
                         title: "Annotation"
-                        RibbonButton { commandId: "ribbon.annotate-the-selection"; text: "Add…"; iconName: "annotation-add"; tip: "Annotate the selection"; keys: "Ctrl+N"; onInvoked: editor.openNew() }
-                        RibbonButton { commandId: "ribbon.edit-the-selected-annotation"; text: "Edit…"; iconName: "annotation-edit"; tip: "Edit the selected annotation"; keys: "Enter"; onInvoked: editor.openSelected() }
+                        RibbonButton { commandId: "ribbon.annotate-the-selection"; text: "Add"; iconName: "annotation-add"; tip: "Annotate the selection"; keys: "Ctrl+N"; onInvoked: editor.openNew() }
+                        RibbonButton { commandId: "ribbon.edit-the-selected-annotation"; text: "Edit"; iconName: "annotation-edit"; tip: "Edit the selected annotation"; keys: "Enter"; onInvoked: editor.openSelected() }
                         RibbonButton { commandId: "ribbon.delete-the-selected-annotation";
                             text: "Delete"
                             iconName: "annotation-delete"
@@ -1006,12 +991,14 @@ ApplicationWindow {
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
+                        enabled: window.currentKind === "sequence"
                         title: "Go to"
                         RibbonButton { commandId: "ribbon.select-the-previous-annotation"; text: "Previous"; iconName: "left"; tip: "Select the previous annotation"; onInvoked: window.current.step_feature(false) }
                         RibbonButton { commandId: "ribbon.select-the-next-annotation"; text: "Next"; iconName: "right"; tip: "Select the next annotation"; onInvoked: window.current.step_feature(true) }
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
+                        enabled: window.currentKind === "sequence"
                         title: "Sequence"
                         RibbonButton { commandId: "ribbon.copy-the-selected-annotation-s-sequence";
                             text: "Copy"
@@ -1027,6 +1014,7 @@ ApplicationWindow {
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
+                        enabled: window.currentKind === "sequence"
                         title: "Find"
                         RibbonButton { commandId: "ribbon.annotate-open-reading-frames";
                             text: "ORFs"
@@ -1063,6 +1051,7 @@ ApplicationWindow {
                 RibbonPage {
                     spacing: 6 * window.ribbonSizeFactor
                     RibbonGroup {
+                        enabled: window.alignmentOpen
                         title: "Editing mode"
                         ModeButton { commandId: "ribbon.insert-typing-inserts-bases-the-rest-of-the-row";
                             iconName: "add"
@@ -1083,6 +1072,7 @@ ApplicationWindow {
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
+                        enabled: window.alignmentOpen
                         title: "Columns"
                         RibbonButton { commandId: "ribbon.delete-columns-containing-only-gaps-across-all-rows-including";
                             iconName: "columns"
@@ -1095,6 +1085,7 @@ ApplicationWindow {
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
+                        enabled: window.alignmentOpen
                         title: "Rows"
                         RibbonButton { commandId: "ribbon.move-the-selected-rows-up"; text: "Up"; iconName: "up"; tip: "Move the selected rows up"; keys: "Alt+↑"; onInvoked: window.current.move_rows(true) }
                         RibbonButton { commandId: "ribbon.move-the-selected-rows-down"; text: "Down"; iconName: "down"; tip: "Move the selected rows down"; keys: "Alt+↓"; onInvoked: window.current.move_rows(false) }
@@ -1103,10 +1094,11 @@ ApplicationWindow {
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
+                        enabled: window.alignmentOpen
                         title: "Align"
                         RibbonButton { commandId: "ribbon.realign-the-sequences-with-mafft-default-settings-into-a";
                             iconName: "align"
-                            text: window.current && window.current.busy ? "Aligning…" : "MAFFT"
+                            text: window.current && window.current.busy ? "Aligning" : "MAFFT"
                             enabled: window.current !== null && !window.current.busy
                             tip: "Realign the sequences with MAFFT, default settings, into a new file"
                             onInvoked: window.current.align_mafft()
@@ -1121,6 +1113,7 @@ ApplicationWindow {
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
+                        enabled: window.alignmentOpen
                         title: "Add sequence"
                         RibbonButton { commandId: "ribbon.type-a-new-sequence-or-paste-fasta"; text: "Type/paste"; iconName: "new-file"; tip: "Type a new sequence or paste FASTA"; enabled: window.current !== null && !window.current.busy; onInvoked: docs.itemAt(tabs.currentIndex).addText() }
                         RibbonButton { commandId: "ribbon.add-all-sequences-from-a-fasta-file"; text: "FASTA"; iconName: "add-file"; tip: "Add all sequences from a FASTA file"; enabled: window.current !== null && !window.current.busy; onInvoked: docs.itemAt(tabs.currentIndex).addFasta() }
@@ -1134,16 +1127,15 @@ ApplicationWindow {
                 // values and figures.
                 RibbonPage {
                     spacing: 6 * window.ribbonSizeFactor
-                    SpeciesMethodsGroup { commandSuffix: "tree" }
-                    ToolSeparator { Layout.fillHeight: true }
                     TreeRootingGroup {
-                        controller: window.current
+                        controller: window.treeOpen ? window.current : null
                         treeOpen: window.treeOpen
                         customization: window.customization
                         Component.onCompleted: commands.forEach(command => window.registerRibbonCommand(command))
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
+                        enabled: window.treeOpen
                         title: "Rate smoothing"
                         RibbonButton {
                             commandId: "tree.rate-smoothing"
@@ -1156,7 +1148,7 @@ ApplicationWindow {
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     TreeCladeGroup {
-                        controller: window.current
+                        controller: window.treeOpen ? window.current : null
                         customization: window.customization
                         onAnnotateRequested: cladeEditor.openSelected()
                         Component.onCompleted: commands.forEach(command => window.registerRibbonCommand(command))
@@ -1171,10 +1163,11 @@ ApplicationWindow {
                     ToolSeparator { Layout.fillHeight: true }
                     // Support values: everything but Add is greyed while the tree has none.
                     RibbonGroup {
+                        enabled: window.treeOpen
                         id: supportGroup
                         title: "Support"
                         readonly property bool hasSupport: window.treeOpen && window.current !== null && window.current.has_support === true
-                        RibbonButton { commandId: "ribbon.add-support-values-from-another-analysis-of-the-same"; text: "Add…"; tip: "Add support values from another analysis of the same taxa, matched branch by branch"; onInvoked: supportFile.open() }
+                        RibbonButton { commandId: "ribbon.add-support-values-from-another-analysis-of-the-same"; text: "Add"; tip: "Add support values from another analysis of the same taxa, matched branch by branch"; onInvoked: supportFile.open() }
                         RibbonNumberField {
                             objectName: "supportFont"
                             label: "Size"
@@ -1184,11 +1177,11 @@ ApplicationWindow {
                             enabled: supportGroup.hasSupport
                             onEdited: value => window.current.set_sizes(0, value, 0)
                         }
-                        RibbonButton { commandId: "ribbon.which-support-values-show-circles-at-nodes-sizes"; text: "Style…"; iconName: "support-style"; tip: "Which support values show and how, and circles at nodes"; enabled: supportGroup.hasSupport; onInvoked: treeStyle.openStyle("support") }
+                        RibbonButton { commandId: "ribbon.which-support-values-show-circles-at-nodes-sizes"; text: "Style"; iconName: "support-style"; tip: "Which support values show and how, and circles at nodes"; enabled: supportGroup.hasSupport; onInvoked: treeStyle.openStyle("support") }
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     TreeAlignmentGroup {
-                        controller: window.current
+                        controller: window.treeOpen ? window.current : null
                         customization: window.customization
                         onLinkRequested: (target) => linkAlignmentFile.ask(target)
                         Component.onCompleted: commands.forEach(command => window.registerRibbonCommand(command))
@@ -1201,6 +1194,7 @@ ApplicationWindow {
                 RibbonPage {
                     spacing: 6 * window.ribbonSizeFactor
                     RibbonGroup {
+                        enabled: window.alignmentOpen
                         title: "Distance tree"
                         Repeater {
                             model: [{label: "Matrix", value: "matrix"}, {label: "NJ", value: "nj"}, {label: "UPGMA", value: "upgma"}]
@@ -1222,10 +1216,11 @@ ApplicationWindow {
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
+                        enabled: window.alignmentOpen
                         title: "Maximum likelihood"
                         RibbonButton { commandId: "ribbon.infer-a-tree-with-fasttree-standard-settings-gtr-for";
                             iconName: "phylogram"
-                            text: window.current && window.current.busy ? "Running…" : "FastTree"
+                            text: window.current && window.current.busy ? "Running" : "FastTree"
                             enabled: window.current !== null && !window.current.busy
                             tip: "Infer a tree with FastTree: choose the model, rate variation and support values"
                             onInvoked: toolSettings.show(window.current, "fasttree", "tree")
@@ -1246,9 +1241,9 @@ ApplicationWindow {
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
                         title: "Display"
-                        ModeButton { commandId: "species.tree-view"; text: "Tree view"; tip: "The tree with a bar column per hypothesis"; iconName: "phylogram"; enabled: window.speciesView !== null && window.current.display_path.length > 0; active: window.speciesView !== null && !window.speciesView.showGroups; onInvoked: window.speciesView.showGroups = false }
-                        ModeButton { commandId: "species.text-view"; text: "Text view"; tip: "Each hypothesis's species and their sequences, as text"; iconName: "text-representation"; enabled: window.speciesView !== null; active: window.speciesView !== null && window.speciesView.showGroups; onInvoked: window.speciesView.showGroups = true }
-                        RibbonButton { commandId: "species.layout"; text: "Layout…"; tip: "Bar width, the gap between columns and the space between species, for every column"; iconName: "bar-layout"; enabled: window.speciesView !== null && window.speciesView.columnInfo.columns.length > 0; onInvoked: window.speciesView.layoutBars() }
+                        ModeButton { commandId: "species.tree-view"; text: "Tree"; tip: "The tree with a bar column per hypothesis"; iconName: "phylogram"; enabled: window.speciesView !== null && window.current.display_path.length > 0; active: window.speciesView !== null && !window.speciesView.showGroups; onInvoked: window.speciesView.showGroups = false }
+                        ModeButton { commandId: "species.text-view"; text: "Text"; tip: "Each hypothesis's species and their sequences, as text"; iconName: "text-representation"; enabled: window.speciesView !== null; active: window.speciesView !== null && window.speciesView.showGroups; onInvoked: window.speciesView.showGroups = true }
+                        RibbonButton { commandId: "species.layout"; text: "Layout"; tip: "Bar width, the gap between columns and the space between species, for every column"; iconName: "bar-layout"; enabled: window.speciesView !== null && window.speciesView.columnInfo.columns.length > 0; onInvoked: window.speciesView.layoutBars() }
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     // The same tree style controls as the tree page, for the
@@ -1259,20 +1254,20 @@ ApplicationWindow {
                         customization: window.customization
                         onExtraRequested: treeStyle.openStyle("extra")
                         Component.onCompleted: commands.forEach(command => window.registerRibbonCommand(command))
-                        RibbonButton { commandId: "species.support-style"; text: "Support…"; iconName: "support-style"; tip: "Which support values show and how, and their size"; enabled: window.speciesTree !== null && window.speciesTree.has_support; onInvoked: treeStyle.openStyle("support") }
+                        RibbonButton { commandId: "species.support-style"; text: "Support"; iconName: "support-style"; tip: "Which support values show and how, and their size"; enabled: window.speciesTree !== null && window.speciesTree.has_support; onInvoked: treeStyle.openStyle("support") }
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
                         title: "Hypotheses"
-                        RibbonButton { commandId: "species.new"; text: "New…"; tip: "New species hypothesis, empty or copied from another"; iconName: "add"; enabled: window.speciesView !== null && !window.current.busy; onInvoked: window.speciesView.newHypothesis() }
-                        RibbonButton { commandId: "species.columns"; text: "Columns…"; tip: "Choose which hypotheses get a bar column"; iconName: "columns"; enabled: window.speciesView !== null; onInvoked: window.speciesView.chooseColumns() }
+                        RibbonButton { commandId: "species.new"; text: "New"; tip: "New species hypothesis, empty or copied from another"; iconName: "add"; enabled: window.speciesView !== null && !window.current.busy; onInvoked: window.speciesView.newHypothesis() }
+                        RibbonButton { commandId: "species.columns"; text: "Columns"; tip: "Choose which hypotheses get a bar column"; iconName: "columns"; enabled: window.speciesView !== null; onInvoked: window.speciesView.chooseColumns() }
                         ModeButton { commandId: "species.details"; text: "Details"; tip: "Species of the hypothesis being edited, fit report and distances"; iconName: "info"; enabled: window.speciesView !== null; active: window.speciesView !== null && window.speciesView.detailsOpen; onInvoked: window.speciesView.detailsOpen = !window.speciesView.detailsOpen }
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
                         title: "Tools"
                         ModeButton { commandId: "species.select-tool"; text: "Select"; tip: "Click a node to select its clade, or a bar to select a species"; iconName: "selection"; enabled: window.speciesView !== null; active: window.speciesView !== null && window.speciesView.tool === "select"; onInvoked: window.speciesView.setTool("select") }
-                        ModeButton { commandId: "species.threshold-cut"; text: "Threshold cut"; tip: window.speciesView !== null && !window.current.can_cut ? "Needs an ultrametric display tree (all tips the same distance from the root)" : "Drag a threshold across the tree and save the species it defines"; iconName: "trim"; enabled: window.speciesView !== null && window.current.can_cut; active: window.speciesView !== null && window.speciesView.tool === "cut"; onInvoked: window.speciesView.setTool("cut") }
+                        ModeButton { commandId: "species.threshold-cut"; text: "Threshold"; tip: window.speciesView !== null && !window.current.can_cut ? "Needs an ultrametric display tree (all tips the same distance from the root)" : "Drag a threshold across the tree and save the species it defines"; iconName: "trim"; enabled: window.speciesView !== null && window.current.can_cut; active: window.speciesView !== null && window.speciesView.tool === "cut"; onInvoked: window.speciesView.setTool("cut") }
                         RibbonButton { commandId: "species.display"; text: "Attach"; tip: window.speciesView !== null && window.current.display_path.length ? "A display tree is attached" : "Attach or build a display tree"; iconName: "tree"; enabled: window.speciesView !== null && !window.current.busy && !window.current.display_path.length; onInvoked: window.beginDelimitation("view") }
                     }
                     Item { Layout.fillWidth: true }
@@ -1283,23 +1278,24 @@ ApplicationWindow {
                     spacing: 6 * window.ribbonSizeFactor
                     RibbonGroup {
                         title: "Issues"
-                        RibbonButton { commandId: "ribbon.previous-unresolved-issue"; iconName: "previous"; tip: "Previous unresolved issue"; keys: "Alt+← or ["; visible: commandAction.visible && (window.traceOpen && window.current && window.current.review_mode); onInvoked: window.traceDocument.issue(false) }
-                        RibbonButton { commandId: "ribbon.next-unresolved-issue"; iconName: "next"; tip: "Next unresolved issue"; keys: "Alt+→ or ]"; visible: commandAction.visible && (window.traceOpen && window.current && window.current.review_mode); onInvoked: window.traceDocument.issue(true) }
-                        RibbonButton { commandId: "ribbon.accept-this-base-and-go-to-the-next-issue"; text: "Accept"; iconName: "accept"; tip: "Accept this base and go to the next issue"; keys: "Alt+Enter"; visible: commandAction.visible && (window.traceOpen && window.current && window.current.review_mode); onInvoked: window.traceDocument.accept() }
-                        RibbonButton { commandId: "ribbon.choose-alignment-context"; text: "Alignment…"; tip: "Choose alignment context"; keys: "Ctrl+Alt+A"; visible: commandAction.visible && (window.traceOpen && window.current && window.current.review_mode && window.traceDocument && window.traceDocument.returnAlignment === null); onInvoked: window.traceDocument.alignmentContext() }
-                        RibbonButton { commandId: "ribbon.combine-up-to-three-reads"; text: "Draft reads…"; tip: "Combine up to three reads"; keys: "Ctrl+Alt+D"; visible: commandAction.visible && (window.traceOpen && window.current && !window.current.review_mode); onInvoked: window.traceDocument.draftReads() }
-                        RibbonButton { commandId: "ribbon.choose-the-terminal-signal-percentage-for-a-new-draft"; text: "Signal cutoff…"; tip: "Choose the terminal signal percentage for a new draft"; onInvoked: window.traceDocument.signalSettings() }
+                        enabled: window.traceOpen
+                        RibbonButton { commandId: "ribbon.previous-unresolved-issue"; iconName: "previous"; tip: "Previous unresolved issue"; keys: "Alt+← or ["; enabled: (window.traceOpen && window.current && window.current.review_mode); onInvoked: window.traceDocument.issue(false) }
+                        RibbonButton { commandId: "ribbon.next-unresolved-issue"; iconName: "next"; tip: "Next unresolved issue"; keys: "Alt+→ or ]"; enabled: (window.traceOpen && window.current && window.current.review_mode); onInvoked: window.traceDocument.issue(true) }
+                        RibbonButton { commandId: "ribbon.accept-this-base-and-go-to-the-next-issue"; text: "Accept"; iconName: "accept"; tip: "Accept this base and go to the next issue"; keys: "Alt+Enter"; enabled: (window.traceOpen && window.current && window.current.review_mode); onInvoked: window.traceDocument.accept() }
+                        RibbonButton { commandId: "ribbon.choose-alignment-context"; text: "Alignment"; tip: "Choose alignment context"; keys: "Ctrl+Alt+A"; enabled: (window.traceOpen && window.current && window.current.review_mode && window.traceDocument && window.traceDocument.returnAlignment === null); onInvoked: window.traceDocument.alignmentContext() }
+                        RibbonButton { commandId: "ribbon.combine-up-to-three-reads"; text: "Draft reads"; tip: "Combine up to three reads"; keys: "Ctrl+Alt+D"; enabled: (window.traceOpen && window.current && !window.current.review_mode); onInvoked: window.traceDocument.draftReads() }
+                        RibbonButton { commandId: "ribbon.choose-the-terminal-signal-percentage-for-a-new-draft"; text: "Signal cutoff"; tip: "Choose the terminal signal percentage for a new draft"; onInvoked: window.traceDocument.signalSettings() }
                     }
                     RibbonGroup {
                         title: "Masking"
-                        visible: window.traceOpen && window.current && window.current.review_mode
-                        RibbonButton { commandId: "ribbon.choose-the-consensus-range-to-keep-in-exports"; text: "Mask ends…"; tip: "Choose the consensus range to keep in exports"; keys: "Ctrl+Alt+M"; onInvoked: window.traceDocument.maskEnds() }
-                        RibbonButton { commandId: "ribbon.find-partial-terminal-primer-candidates-and-mask-them"; text: "Set primers…"; tip: "Find partial terminal primer candidates and mask them"; keys: "Ctrl+Alt+P"; onInvoked: window.traceDocument.setPrimers() }
+                        enabled: window.traceOpen && window.current && window.current.review_mode
+                        RibbonButton { commandId: "ribbon.choose-the-consensus-range-to-keep-in-exports"; text: "Mask ends"; tip: "Choose the consensus range to keep in exports"; keys: "Ctrl+Alt+M"; onInvoked: window.traceDocument.maskEnds() }
+                        RibbonButton { commandId: "ribbon.find-partial-terminal-primer-candidates-and-mask-them"; text: "Set primers"; tip: "Find partial terminal primer candidates and mask them"; keys: "Ctrl+Alt+P"; onInvoked: window.traceDocument.setPrimers() }
                     }
                     RibbonGroup {
                         title: "Export consensus"
-                        visible: window.traceOpen && window.current && window.current.review_mode
-                        ExportConsensusButton { commandId: "ribbon.add-the-edited-consensus-to-its-alignment"; text: "to alignment"; tip: "Add the edited consensus to its alignment"; keys: "Ctrl+Shift+A"; visible: commandAction.visible && (window.traceDocument && window.traceDocument.returnAlignment !== null); enabled: window.current && window.current.unresolved === 0; onInvoked: window.traceDocument.addToAlignment() }
+                        enabled: window.traceOpen && window.current && window.current.review_mode
+                        ExportConsensusButton { commandId: "ribbon.add-the-edited-consensus-to-its-alignment"; text: "to alignment"; tip: "Add the edited consensus to its alignment"; keys: "Ctrl+Shift+A"; enabled: window.traceDocument !== null && window.traceDocument.returnAlignment !== null && window.current && window.current.unresolved === 0; onInvoked: window.traceDocument.addToAlignment() }
                         ExportConsensusButton { commandId: "ribbon.export-the-edited-consensus-as-fasta"; text: "to fasta"; tip: "Export the edited consensus as FASTA"; keys: "Ctrl+Shift+E"; enabled: window.current && window.current.unresolved === 0; onInvoked: window.traceDocument.exportConsensus() }
                         ExportConsensusButton { commandId: "ribbon.copy-the-edited-consensus-as-fasta"; text: "to clipboard"; tip: "Copy the edited consensus as FASTA"; keys: "Ctrl+Shift+C"; enabled: window.current && window.current.unresolved === 0; onInvoked: window.traceDocument.copyConsensus() }
                     }
