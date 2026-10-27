@@ -215,7 +215,7 @@ pub fn read_input(run: &Path) -> Result<SubmittedInput> {
     }
     if !matches!(
         record.transformation.as_str(),
-        "canonical-fasta-v1" | "ungapped-fasta-v1" | "canonical-newick-v1" | "identity-v1"
+        "canonical-fasta-v1" | "ungapped-fasta-v1" | "canonical-newick-v1" | "identity-v1" | "blast-query-preparation-v1"
     ) || matches!(record.state.as_str(), "referenced" | "preserved") && record.source.is_none()
         || record.state == "generated" && record.source.is_some()
     {
