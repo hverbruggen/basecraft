@@ -9,6 +9,16 @@ use basecraft_protocol::{
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, path::PathBuf, time::Instant};
 
+/// The fit stage of a reserved alignment workflow (`basecraft.host` descriptors).
+pub fn workflow_fit(workflow: &str) -> Option<&'static str> {
+    match workflow {
+        "asap_alignment" => Some("asap"),
+        "gmyc_alignment_single" => Some("gmyc_single"),
+        "gmyc_alignment_multiple" => Some("gmyc_multiple"),
+        _ => None,
+    }
+}
+
 pub struct AlignmentJob {
     pub preparation: FileJob,
     pub unique_haplotypes: bool,

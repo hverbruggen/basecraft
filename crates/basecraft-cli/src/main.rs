@@ -65,9 +65,11 @@ enum Command {
         #[arg(long, default_value = "mcp-client")]
         model_id: String,
     },
-    /// Run a bundled alignment tool through the same public plugin as the GUI.
+    /// Compatibility route: run a bundled tool's registered operation and write one
+    /// result file, as the GUI does. Parameters are validated against the
+    /// operation descriptor; prefer `operations run` for new scripts.
     Tool {
-        #[arg(value_parser = ["mafft", "trimal", "iqtree", "fasttree", "distance", "delimitation"])]
+        #[arg(value_parser = clap::builder::PossibleValuesParser::new(tools::NAMES))]
         tool: String,
         file: PathBuf,
         #[arg(long)]
@@ -78,29 +80,33 @@ enum Command {
     },
     /// Apply a typed JSON operation to a document and save it.
     Edit { file: PathBuf, operation: String },
-    /// Calculate DNA distances or infer a tree through the bundled distance plugin.
+    /// Calculate DNA distances or infer a tree with the registered
+    /// basecraft.distance operations. Omitted settings take the descriptor
+    /// defaults shown by `operations describe basecraft.distance/tree@1`.
     Distance {
         file: PathBuf,
         #[arg(long)]
         output: PathBuf,
-        #[arg(long, default_value = "k2p", value_parser = ["p", "jc69", "k2p"])]
-        model: String,
-        #[arg(long, value_parser = ["sorted", "fourpoint", "njstar", "mvrstar", "upgma"])]
+        /// p, jc69 or k2p.
+        #[arg(long)]
+        model: Option<String>,
+        /// sorted, fourpoint, njstar, mvrstar or upgma.
+        #[arg(long)]
         method: Option<String>,
-        #[arg(long, default_value_t = 1)]
-        min_overlap: u64,
+        #[arg(long)]
+        min_overlap: Option<u64>,
         #[arg(long)]
         threads: Option<usize>,
         #[arg(long)]
         tree_threads: Option<usize>,
         /// Exact ordinary site bootstrap for sorted NJ/UPGMA (off by default).
-        #[arg(long, default_value_t = 0)]
-        bootstrap: usize,
-        /// Where to retain bootstrap replicate trees (relative to the output directory).
-        #[arg(long, default_value = "metadata", value_parser = ["metadata", "working"])]
-        bootstrap_destination: String,
-        #[arg(long, default_value_t = 1)]
-        seed: u64,
+        #[arg(long)]
+        bootstrap: Option<usize>,
+        /// Where to retain bootstrap replicate trees: metadata or working.
+        #[arg(long)]
+        bootstrap_destination: Option<String>,
+        #[arg(long)]
+        seed: Option<u64>,
         #[arg(long)]
         progress: Option<PathBuf>,
         #[arg(long)]
@@ -121,7 +127,9 @@ enum Command {
         #[arg(default_value = ".")]
         project: PathBuf,
     },
-    /// Run a plugin operation on a file and apply what it proposes.
+    /// Run a plugin's sequence operation on a file and apply what it proposes.
+    /// Schema-2 packages must be installed or registered and run through the
+    /// registered operation; schema-1 directories keep the legacy direct call.
     Plugin {
         /// Plugin directory, with a plugin.toml.
         plugin: PathBuf,
@@ -261,7 +269,10 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let mut session = basecraft_ops::Session::recoverable(root)?;
             let doc = session.open(&file)?;
             let params = serde_json::from_str(&params)?;
-            let result = tools::run(&mut session, doc, &tool, output, params)?;
+            let registry = basecraft_plugin_host::registry::Registry::load(
+                &basecraft_plugin_host::registry::RegistryConfig::discover()?,
+            )?;
+            let result = tools::run(&registry, &mut session, doc, &tool, output, params)?;
             println!("{result}");
         }
         Command::Edit { file, operation } => {
@@ -304,10 +315,6 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 .unwrap_or(std::path::Path::new("."));
             let mut session = basecraft_ops::Session::recoverable(root)?;
             let doc = session.open(&file)?;
-            if !session.is_alignment(doc) {
-                return Err("distance inference requires an alignment".into());
-            }
-            let plugin_root = basecraft_plugin_host::installation::plugins();
             let operation = if groups.is_some() {
                 "groups"
             } else if matrix {
@@ -315,61 +322,51 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 "tree"
             };
-            let mut job = basecraft_plugin_host::FileJob::from_alignment(
-                &session,
-                doc,
-                (&plugin_root.join("distance"), operation),
-                basecraft_plugin_host::file_tool::AlignmentInput::Aligned,
-                output,
+            // Only explicit flags; the operation descriptor supplies defaults.
+            let mut params = serde_json::Map::new();
+            for (name, value) in [
+                ("model", model.map(serde_json::Value::from)),
+                ("method", method.map(serde_json::Value::from)),
+                ("min_overlap", min_overlap.map(serde_json::Value::from)),
+                ("threads", threads.map(serde_json::Value::from)),
+                ("tree_threads", tree_threads.map(serde_json::Value::from)),
+                ("bootstrap", bootstrap.map(serde_json::Value::from)),
+                (
+                    "bootstrap_destination",
+                    bootstrap_destination.map(serde_json::Value::from),
+                ),
+                ("seed", seed.map(serde_json::Value::from)),
+                (
+                    "groups_data",
+                    groups
+                        .map(
+                            |path| -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+                                Ok(serde_json::from_reader(std::fs::File::open(path)?)?)
+                            },
+                        )
+                        .transpose()?,
+                ),
+            ] {
+                if let Some(value) = value {
+                    params.insert(name.into(), value);
+                }
+            }
+            let mut host = serde_json::Map::new();
+            if let Some(path) = cache {
+                host.insert("cache".into(), serde_json::json!(path));
+            }
+            let registry = basecraft_plugin_host::registry::Registry::load(
+                &basecraft_plugin_host::registry::RegistryConfig::discover()?,
             )?;
-            if bootstrap > 0 && operation != "tree" {
-                return Err("bootstrap is available for tree inference only".into());
-            }
-            job.params
-                .insert("bootstrap".into(), serde_json::json!(bootstrap));
-            job.params.insert("seed".into(), serde_json::json!(seed));
-            if bootstrap > 0 {
-                job.params.insert(
-                    "bootstrap_destination".into(),
-                    serde_json::json!(bootstrap_destination),
-                );
-            }
-            if let Some(path) = progress {
-                job.params
-                    .insert("progress".into(), serde_json::json!(path));
-            }
-            if let Some(path) = cancel_file {
-                job.params
-                    .insert("cancel_file".into(), serde_json::json!(path));
-            }
-            job.params.insert("model".into(), serde_json::json!(model));
-            let method =
-                method.unwrap_or_else(|| if bootstrap > 0 { "sorted" } else { "njstar" }.into());
-            job.params
-                .insert("method".into(), serde_json::json!(method));
-            job.params
-                .insert("min_overlap".into(), serde_json::json!(min_overlap));
-            if let Some(v) = threads {
-                job.params.insert("threads".into(), serde_json::json!(v));
-            }
-            if let Some(v) = tree_threads {
-                job.params
-                    .insert("tree_threads".into(), serde_json::json!(v));
-            }
-            if let Some(v) = cache {
-                job.params.insert("cache".into(), serde_json::json!(v));
-            }
-            if let Some(v) = groups {
-                job.params.insert(
-                    "groups_data".into(),
-                    serde_json::from_reader(std::fs::File::open(v)?)?,
-                );
-            }
-            let started = Instant::now();
-            let outcome = job.run();
-            job.record_terminal(&mut session, doc, &outcome, started.elapsed().as_secs_f64())?;
-            let result = outcome?;
-            job.record(&mut session, doc, &result)?;
+            let result = tools::run_operation(
+                &registry,
+                &mut session,
+                doc,
+                &format!("basecraft.distance/{operation}@1"),
+                output,
+                params,
+                host,
+            )?;
             println!(
                 "{}",
                 result
@@ -509,6 +506,10 @@ fn run_plugin(
         map.insert(k.to_string(), value);
     }
     let manifest = basecraft_plugin_host::Manifest::load(dir)?;
+    if manifest.schema >= 2 {
+        return run_registered_plugin(&manifest, file, operation, map, save);
+    }
+    // Schema-1 packages have no typed contract: the explicit legacy route.
     let t = Instant::now();
     let mut plugin = basecraft_plugin_host::PluginProcess::spawn(&manifest)?;
     println!(
@@ -550,5 +551,67 @@ fn run_plugin(
         println!("saved {}", file.display());
     }
     println!("total {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
+    Ok(())
+}
+
+/// `plugin` for a schema-2 package: the registered sequence operation through the
+/// same job runner as `operations run`, against the file opened in this session.
+fn run_registered_plugin(
+    manifest: &basecraft_plugin_host::Manifest,
+    file: &std::path::Path,
+    operation: &str,
+    parameters: serde_json::Map<String, serde_json::Value>,
+    save: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use basecraft_plugin_host::registry::{Registry, RegistryConfig};
+    use basecraft_protocol::operation::{ExecutionFamily, InputReference, OperationRequest};
+    let registry = Registry::load(&RegistryConfig::discover()?)?;
+    let directory = manifest.dir.canonicalize()?;
+    let registered = registry
+        .operations
+        .values()
+        .find(|op| {
+            op.package.manifest.id == manifest.id
+                && op.descriptor.name == operation
+                && op.package.manifest.dir.canonicalize().ok().as_ref() == Some(&directory)
+        })
+        .ok_or("This plugin directory is not an installed or registered package. Register it with `basecraft plugins register-editable DIR`, then run it again or use `basecraft operations run`")?;
+    if registered.descriptor.family != ExecutionFamily::SequenceProposal {
+        return Err("`plugin` applies sequence proposals only; run file analyses with `basecraft operations run`".into());
+    }
+    let binding = registered
+        .descriptor
+        .inputs
+        .keys()
+        .next()
+        .ok_or("operation declares no snapshot input")?;
+    let file = file.canonicalize()?;
+    let root = file.parent().ok_or("File has no parent")?;
+    let request = OperationRequest {
+        operation: registered.id.clone(),
+        inputs: [(
+            binding.clone(),
+            vec![InputReference::File {
+                path: file.display().to_string(),
+            }],
+        )]
+        .into(),
+        parameters: serde_json::Value::Object(parameters),
+        destinations: std::collections::BTreeMap::default(),
+        pins: None,
+        request_key: None,
+    };
+    let policy = basecraft_plugin_host::policy::SessionPolicy::new(root, true)?;
+    let mut session = basecraft_ops::Session::recoverable(root)?;
+    basecraft_platform::interrupt::install()?;
+    let (outcome, target) =
+        operations::run_foreground(&registry, &request, policy, "CLI", &mut session)?;
+    println!("{outcome}");
+    if outcome["state"] != "completed" {
+        return Err(format!("{} did not complete", registered.id).into());
+    }
+    if save {
+        session.save(target.ok_or("operation returned no target document")?, None)?;
+    }
     Ok(())
 }

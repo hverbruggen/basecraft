@@ -386,7 +386,9 @@ impl PreparedOperation {
                     )?);
                 }
                 let transformation = match binding.view {
-                    InputView::Bytes => "identity-v1",
+                    // A sequence file is frozen unchanged; its sealed snapshot
+                    // is a separate generated input recorded below.
+                    InputView::Bytes | InputView::SequenceSnapshot => "identity-v1",
                     InputView::AlignedFasta | InputView::UngappedFasta => {
                         let basecraft_ops::files::Loaded::Alignment(alignment) =
                             basecraft_ops::files::load(&path)?
@@ -411,7 +413,6 @@ impl PreparedOperation {
                         basecraft_ops::files::load_tree(&path)?;
                         "identity-v1"
                     }
-                    InputView::SequenceSnapshot => "sequence-file-v1",
                 };
                 let submitted_hash =
                     basecraft_io::hash_file(&path).map_err(basecraft_ops::Error::from)?;
@@ -1346,13 +1347,8 @@ impl PreparedOperation {
             .host_workflow
             .as_deref()
             .ok_or_else(|| Error::Protocol("missing host workflow".into()))?;
-        let fit_method = if method == "asap_alignment" {
-            "asap"
-        } else if method == "gmyc_alignment_multiple" {
-            "gmyc_multiple"
-        } else {
-            "gmyc_single"
-        };
+        let fit_method = crate::delimitation_pipeline::workflow_fit(method)
+            .ok_or_else(|| Error::Protocol("unknown host workflow".into()))?;
         let unique = self.parameters["unique_haplotypes"]
             .as_bool()
             .unwrap_or(fit_method != "asap");

@@ -251,11 +251,10 @@ impl FileJob {
         Ok(())
     }
 
+    /// Run stages from this accepted registry: the resolved package is verified
+    /// before spawning and CPU settings bind against its exact descriptor.
     #[must_use]
-    pub(crate) fn with_registry(
-        mut self,
-        registry: std::sync::Arc<crate::registry::Registry>,
-    ) -> Self {
+    pub fn with_registry(mut self, registry: std::sync::Arc<crate::registry::Registry>) -> Self {
         self.accepted_registry = Some(registry);
         self
     }

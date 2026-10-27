@@ -66,10 +66,15 @@ impl Server {
             "state":self.session.state(doc),"can_undo":self.session.can_undo(doc),"can_redo":self.session.can_redo(doc)})
     }
 
-    fn call(&mut self, name: &str, args: &Value) -> Result<Value> {
+    fn call(
+        &mut self,
+        name: &str,
+        args: &Value,
+        registry: &basecraft_plugin_host::registry::Registry,
+    ) -> Result<Value> {
         if matches!(name, "apply" | "save" | "run_tool" | "undo" | "redo") && !self.writable {
             return Err(
-                "This server is read-only; start it with --allow-writes to enable edits".into(),
+                "permission_denied: This server is read-only; start it with --allow-writes to enable edits".into(),
             );
         }
         match name {
@@ -90,6 +95,20 @@ impl Server {
             "document_record" => Ok(serde_json::to_value(
                 self.session.document_record(self.doc(args)?)?.report()?,
             )?),
+            // The same readers as `basecraft provenance inspect|verify` and `replay`.
+            "provenance_inspect" => Ok(serde_json::to_value(basecraft_ops::provenance::inspect(
+                &self.path(text(args, "path")?)?,
+            )?)?),
+            "provenance_verify" => {
+                let issues = basecraft_ops::provenance::verify(&self.path(text(args, "path")?)?)?;
+                Ok(json!({"verified":issues.is_empty(),"issues":issues}))
+            }
+            "replay" => {
+                let report = basecraft_ops::replay::replay(self.session.root())?;
+                Ok(
+                    json!({"sessions":report.sessions,"entries":report.entries,"problems":report.problems}),
+                )
+            }
             "read" => {
                 let doc = self.doc(args)?;
                 if self.session.is_tree(doc) {
@@ -127,7 +146,10 @@ impl Server {
                     .as_u64()
                     .ok_or("Provide the document version you inspected")?;
                 if self.state(doc)["version"] != version {
-                    return Err("Document version changed; inspect it again before editing".into());
+                    return Err(
+                        "stale_revision: Document version changed; inspect it again before editing"
+                            .into(),
+                    );
                 }
                 let op: Op = serde_json::from_value(args["operation"].clone())?;
                 self.session.apply(doc, op)?;
@@ -161,38 +183,21 @@ impl Server {
                     .map(|v| v.as_object().cloned().ok_or("params must be an object"))
                     .transpose()?
                     .unwrap_or_default();
-                // Executable/cache overrides are not exposed by this project-scoped tool.
-                if params.keys().any(|k| {
-                    ![
-                        "model",
-                        "method",
-                        "threads",
-                        "tree_threads",
-                        "seed",
-                        "min_overlap",
-                        "rooted",
-                        "workers",
-                        "tree_index",
-                        "candidate_budget",
-                        "reference_version",
-                        "reference_age_clamp",
-                        "unique_haplotypes",
-                        "analysis_input",
-                        "mapping",
-                        "groups_data",
-                        "replicates",
-                        "threshold",
-                    ]
-                    .contains(&k.as_str())
-                }) {
-                    return Err("Unsupported tool parameter".into());
-                }
+                // Descriptor validation rejects undeclared settings, including
+                // executable, cache and control paths. Route paths stay in the project.
                 for name in ["analysis_input", "mapping"] {
                     if let Some(path) = params.get(name).and_then(Value::as_str) {
                         params.insert(name.into(), json!(self.path(path)?));
                     }
                 }
-                crate::tools::run(&mut self.session, doc, text(args, "tool")?, output, params)
+                crate::tools::run(
+                    registry,
+                    &mut self.session,
+                    doc,
+                    text(args, "tool")?,
+                    output,
+                    params,
+                )
             }
             _ => Err("Unknown tool".into()),
         }
@@ -229,7 +234,10 @@ fn tools() -> Value {
         tool("undo","Undo one edit group.",json!({"document":doc}), &["document"]),
         tool("redo","Redo one edit group.",json!({"document":doc}), &["document"]),
         tool("save","Save a document, optionally to a new project path.",json!({"document":doc,"path":string}), &["document"]),
-        tool("run_tool","Run a bundled alignment tool, retaining output provenance.",json!({"document":doc,"tool":{"enum":["mafft","trimal","iqtree","fasttree","distance","delimitation"]},"output":string,"params":{"type":"object"}}), &["document","tool","output"])
+        tool("provenance_inspect","Read the provenance publication of a saved project result.",json!({"path":string}), &["path"]),
+        tool("provenance_verify","Check a saved result against its recorded hashes and retained inputs; runs no tools.",json!({"path":string}), &["path"]),
+        tool("replay","Replay the project's operation log in a scratch session and report problems.",json!({}), &[]),
+        tool("run_tool","Compatibility route: run a bundled tool's registered operation on a session document and write one result file. Parameters follow the operation descriptor (delimitation also takes params.method). Prefer the generated operation tools.",json!({"document":doc,"tool":{"enum":crate::tools::NAMES},"output":string,"params":{"type":"object"}}), &["document","tool","output"])
     ]})
 }
 
@@ -274,6 +282,18 @@ fn operation_tools(
         json!({}),
         &[],
     ));
+    definitions.push(tool(
+        "basecraft.host.operations_list.v1",
+        "List every installed operation with descriptor, pins, enabled state, origin and registry diagnostics, including operations this session cannot run. Same output as `basecraft operations list --json`.",
+        json!({}),
+        &[],
+    ));
+    definitions.push(tool(
+        "basecraft.host.operations_describe.v1",
+        "Describe one installed operation by ID (plugin/name@major). Same output as `basecraft operations describe`.",
+        json!({"operation":{"type":"string"}}),
+        &["operation"],
+    ));
     for operation in registry
         .operations
         .values()
@@ -290,7 +310,8 @@ fn operation_tools(
             "description":operation.descriptor.description,"inputSchema":schema,"outputSchema":operation_outcome_schema(&operation.id, &operation.descriptor.result)?,
             "annotations":{"readOnlyHint":!operation.descriptor.effects.document_write && !operation.descriptor.effects.artifact_write,
                 "destructiveHint":operation.descriptor.effects.document_write,"openWorldHint":true}});
-        metadata["_meta"] = json!({"basecraft":{"pins":operation.pins(&registry.generation),"runtime":"unverified"}});
+        metadata["_meta"] = json!({"basecraft":{"pins":operation.pins(&registry.generation),"runtime":"unverified",
+            "enabled":operation.package.enabled,"origin":operation.package.origin}});
         definitions.push(metadata);
     }
     Ok(definitions)
@@ -408,6 +429,7 @@ pub fn serve(root: &Path, writable: bool, model: &str) -> Result<()> {
                     continue;
                 } else {
                     let method = request["method"].as_str().unwrap_or("");
+                    let mut unknown = None;
                     let result: std::result::Result<Value, (i64, String)> = (|| match method {
                         "initialize" => {
                             server.initialized = true;
@@ -478,18 +500,53 @@ pub fn serve(root: &Path, writable: bool, model: &str) -> Result<()> {
                                     false,
                                 ));
                             }
+                            if let Some(metadata) = match name {
+                                "basecraft.host.operations_list.v1" => {
+                                    Some(crate::operations::list(&registry))
+                                }
+                                "basecraft.host.operations_describe.v1" => Some(
+                                    args["operation"]
+                                        .as_str()
+                                        .ok_or_else(|| "Missing string operation".into())
+                                        .and_then(|id| crate::operations::describe(&registry, id)),
+                                ),
+                                _ => None,
+                            } {
+                                return Ok(match metadata {
+                                    Ok(value) => structured(value, false),
+                                    Err(error) => structured(
+                                        basecraft_plugin_host::jobs::error_value(
+                                            "basecraft.host",
+                                            if error.to_string() == "unknown operation" {
+                                                OperationErrorCode::PluginUnavailable
+                                            } else {
+                                                OperationErrorCode::InvalidArguments
+                                            },
+                                            error.to_string(),
+                                        ),
+                                        true,
+                                    ),
+                                });
+                            }
+                            let job = || {
+                                args["job"].as_str().ok_or_else(|| {
+                                    basecraft_plugin_host::Error::Protocol(
+                                        "invalid_arguments: missing string job".into(),
+                                    )
+                                })
+                            };
                             let job_result = match name {
                                 "basecraft.host.jobs_get.v1" => {
-                                    Some(jobs.get(args["job"].as_str().unwrap_or("")))
+                                    Some(job().and_then(|j| jobs.get(j)))
                                 }
                                 "basecraft.host.jobs_result.v1" => {
-                                    Some(jobs.result(args["job"].as_str().unwrap_or("")))
+                                    Some(job().and_then(|j| jobs.result(j)))
                                 }
                                 "basecraft.host.jobs_cancel.v1" => {
-                                    Some(jobs.cancel(args["job"].as_str().unwrap_or("")))
+                                    Some(job().and_then(|j| jobs.cancel(j)))
                                 }
                                 "basecraft.host.jobs_repair.v1" => {
-                                    Some(jobs.repair(args["job"].as_str().unwrap_or("")))
+                                    Some(job().and_then(|j| jobs.repair(j)))
                                 }
                                 _ => None,
                             };
@@ -571,14 +628,41 @@ pub fn serve(root: &Path, writable: bool, model: &str) -> Result<()> {
                                 .as_array()
                                 .is_some_and(|tools| tools.iter().any(|tool| tool["name"] == name));
                             if !known {
+                                // An unknown operation-tool spelling carries the same
+                                // structured error as CLI/Python unknown operations.
+                                unknown = name
+                                    .rsplit_once(".v")
+                                    .and_then(|(rest, major)| {
+                                        let (plugin, local) = rest.rsplit_once('.')?;
+                                        major
+                                            .parse::<u16>()
+                                            .ok()
+                                            .map(|major| format!("{plugin}/{local}@{major}"))
+                                    })
+                                    .and_then(|id| {
+                                        registry.resolve(&id, None).err().map(|error| {
+                                            basecraft_plugin_host::jobs::error_value(
+                                                &id,
+                                                basecraft_plugin_host::jobs::error_code(&error),
+                                                error.to_string(),
+                                            )
+                                        })
+                                    });
                                 return Err((-32602, "Unknown tool".into()));
                             }
-                            Ok(match server.call(name, &args) {
+                            Ok(match server.call(name, &args, &registry) {
                                 Ok(value) => structured(value, false),
+                                // The shared classifier maps coded refusals such as
+                                // permission_denied and stale_revision; others are
+                                // invalid_arguments.
                                 Err(error) => structured(
                                     basecraft_plugin_host::jobs::error_value(
                                         name,
-                                        OperationErrorCode::InvalidArguments,
+                                        basecraft_plugin_host::jobs::error_code(
+                                            &basecraft_plugin_host::Error::Protocol(
+                                                error.to_string(),
+                                            ),
+                                        ),
                                         error.to_string(),
                                     ),
                                     true,
@@ -591,7 +675,11 @@ pub fn serve(root: &Path, writable: bool, model: &str) -> Result<()> {
                     match result {
                         Ok(result) => json!({"jsonrpc":"2.0","id":id,"result":result}),
                         Err((code, message)) => {
-                            json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":message}})
+                            let mut error = json!({"code":code,"message":message});
+                            if let Some(data) = unknown {
+                                error["data"] = data;
+                            }
+                            json!({"jsonrpc":"2.0","id":id,"error":error})
                         }
                     }
                 }
