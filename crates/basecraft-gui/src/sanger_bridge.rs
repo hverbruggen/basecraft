@@ -840,11 +840,28 @@ impl qobject::SangerController {
         let Ok(threshold) = u32::try_from(signal_threshold) else {
             return false;
         };
-        let source = self.rust().review_session.as_ref().and_then(|session| {
-            (session.draft.inputs.len() == 1).then(|| session.draft.inputs[0].clone())
-        });
-        let Some(source) = source else {
-            return false;
+        let source = self
+            .rust()
+            .review_session
+            .as_ref()
+            .ok_or_else(|| "No review is open".to_string())
+            .and_then(SangerReviewSession::working_draft)
+            .and_then(|draft| {
+                if draft.inputs.len() != 1 {
+                    return Err("Choose a single trace to compute calls".into());
+                }
+                draft
+                    .inputs
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| "Trace input is missing".into())
+            });
+        let source = match source {
+            Ok(source) => source,
+            Err(error) => {
+                self.call_error(&error);
+                return false;
+            }
         };
         let result = self
             .as_mut()

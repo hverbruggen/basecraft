@@ -96,10 +96,9 @@ fn main() {
         .release();
     let sanger_folder = tempfile::tempdir().expect("Sanger flow folder");
     let trace_path = sanger_folder.path().join("trace.ab1");
-    std::fs::copy(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../testdata/fixtures/compact/sanger-review/forward.ab1"),
+    std::fs::write(
         &trace_path,
+        include_bytes!("../../../testdata/fixtures/compact/sanger-review/forward.ab1"),
     )
     .unwrap();
     let saved_path = sanger_folder.path().join("saved-review.json");
