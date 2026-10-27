@@ -509,6 +509,7 @@ fn actor_note(actor: &Actor) -> String {
         Actor::Plugin { id, .. } => format!("  [plugin {id}]"),
         Actor::Tool { tool, .. } => format!("  [{tool}]"),
         Actor::Agent { model } => format!("  [agent {model}]"),
+        Actor::Script { client } => format!("  [script {client}]"),
         Actor::External => "  [changed on disk]".into(),
     }
 }

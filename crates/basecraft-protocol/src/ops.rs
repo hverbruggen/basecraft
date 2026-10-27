@@ -250,7 +250,10 @@ impl Op {
     }
 }
 
-/// Who made a change.
+/// Who made a change: a person in the GUI (`human`), a script through the
+/// CLI or Python API (`script`), an assistant over MCP (`agent`), or a tool,
+/// plugin or outside program. New kinds are additive; older records keep
+/// their kinds.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum Actor {
@@ -265,8 +268,14 @@ pub enum Actor {
         id: String,
         version: String,
     },
+    /// An assistant over MCP, named by its client's model ID.
     Agent {
         model: String,
+    },
+    /// A script driving Basecraft through the CLI or the Python API, named by
+    /// its client (for example `CLI` or `Python`).
+    Script {
+        client: String,
     },
     /// A change Basecraft detected on disk but didn't make.
     External,
@@ -362,6 +371,23 @@ mod tests {
         assert!(!json.contains("result"));
         assert!(!json.contains("rows"));
         assert_eq!(serde_json::from_str::<LogEntry>(&json).unwrap(), e);
+    }
+
+    #[test]
+    fn actor_kinds_keep_their_wire_shape() {
+        let script = Actor::Script {
+            client: "Python".into(),
+        };
+        let json = serde_json::to_string(&script).unwrap();
+        assert_eq!(json, r#"{"kind":"script","client":"Python"}"#);
+        assert_eq!(serde_json::from_str::<Actor>(&json).unwrap(), script);
+        // Records written before the script kind still read unchanged.
+        assert_eq!(
+            serde_json::from_str::<Actor>(r#"{"kind":"agent","model":"mcp-client"}"#).unwrap(),
+            Actor::Agent {
+                model: "mcp-client".into()
+            }
+        );
     }
 
     #[test]

@@ -11,6 +11,30 @@ use std::{
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
+/// Who drives this MCP session. Edits are recorded with the matching actor
+/// kind; the client name is also the initiator of operation runs.
+#[derive(Clone, Copy, Debug, Default, clap::ValueEnum)]
+pub enum ClientKind {
+    /// An assistant (the default for external MCP clients).
+    #[default]
+    Agent,
+    /// A script, such as the Python `Session`.
+    Script,
+}
+
+impl ClientKind {
+    fn actor(self, client: &str) -> Actor {
+        match self {
+            Self::Agent => Actor::Agent {
+                model: client.into(),
+            },
+            Self::Script => Actor::Script {
+                client: client.into(),
+            },
+        }
+    }
+}
+
 struct Server {
     session: Session,
     documents: HashMap<usize, DocId>,
@@ -367,7 +391,7 @@ fn read_frame(input: &mut impl std::io::BufRead) -> std::io::Result<Option<Vec<u
     Ok(Some(bytes))
 }
 
-pub fn serve(root: &Path, writable: bool, model: &str) -> Result<()> {
+pub fn serve(root: &Path, writable: bool, kind: ClientKind, model: &str) -> Result<()> {
     use basecraft_plugin_host::{
         jobs::JobManager,
         policy::SessionPolicy,
@@ -375,9 +399,7 @@ pub fn serve(root: &Path, writable: bool, model: &str) -> Result<()> {
     };
     use basecraft_protocol::operation::{OperationErrorCode, OperationRequest, RuntimeState};
     let mut session = Session::recoverable(root.canonicalize()?)?;
-    session.set_actor(Actor::Agent {
-        model: model.into(),
-    });
+    session.set_actor(kind.actor(model));
     let policy = SessionPolicy::new(root, writable)?;
     let config = RegistryConfig::discover()?;
     let mut registry = Registry::load(&config)?;

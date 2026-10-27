@@ -75,7 +75,12 @@ class RealSessionTests(unittest.TestCase):
         edited = session.apply(document["document"], document["version"],
                                {"op": "seq.replace", "params": {"start": 0, "end": 1, "residues": "T"}})
         self.assertTrue(edited["can_undo"])
-        self.assertTrue(session.document_record(document["document"])["unsaved"])
+        record = session.document_record(document["document"])
+        self.assertTrue(record["unsaved"])
+        # Python sessions are script clients, not agents.
+        details = [row["details"] for row in record["history"]]
+        self.assertTrue(any(d.startswith("Script: Python") for d in details), details)
+        self.assertFalse(any(d.startswith("Agent:") for d in details), details)
         session.save(document["document"])
         self.assertIn("TCGT", (self.project / "edit.fasta").read_text())
 

@@ -96,6 +96,116 @@ fn stdio_edits_are_version_checked_logged_and_project_scoped() {
 }
 
 #[test]
+fn script_clients_record_script_edits() {
+    use basecraft_protocol::Actor;
+    let d = tempfile::tempdir().unwrap();
+    let file = d.path().join("input.afa");
+    std::fs::write(&file, ">a\nACGT\n>b\nACGT\n").unwrap();
+    let profile = d.path().join("profile");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_basecraft"))
+        .args([
+            "mcp",
+            d.path().to_str().unwrap(),
+            "--allow-writes",
+            "--client-kind",
+            "script",
+            "--client",
+            "Python",
+        ])
+        .env("BASECRAFT_PROFILE_DIR", &profile)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+    for message in [
+        json!({"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}),
+        json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+        request(1, "open", json!({"path":"input.afa"})),
+        request(
+            2,
+            "apply",
+            json!({"document":0,"version":0,"operation":{"op":"aln.replace","params":{"row":0,"start":0,"end":1,"residues":"T"}}}),
+        ),
+        request(3, "save", json!({"document":0})),
+    ] {
+        writeln!(input, "{message}").unwrap();
+    }
+    drop(input);
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success());
+    for line in String::from_utf8(out.stdout).unwrap().lines() {
+        let reply: Value = serde_json::from_str(line).unwrap();
+        assert!(reply["result"]["isError"] != true, "{reply}");
+    }
+    // A plain CLI edit is a script edit too, by the CLI client.
+    let edited = Command::new(env!("CARGO_BIN_EXE_basecraft"))
+        .args([
+            "edit",
+            file.to_str().unwrap(),
+            r#"{"op":"aln.replace","params":{"row":1,"start":0,"end":1,"residues":"G"}}"#,
+        ])
+        .env("BASECRAFT_PROFILE_DIR", &profile)
+        .output()
+        .unwrap();
+    assert!(
+        edited.status.success(),
+        "{}",
+        String::from_utf8_lossy(&edited.stderr)
+    );
+    let events = basecraft_ops::provenance::inspect(&file).unwrap().events;
+    let actors: Vec<&Actor> = events
+        .iter()
+        .filter(|e| matches!(e.op, basecraft_protocol::Op::AlnReplace { .. }))
+        .map(|e| &e.actor)
+        .collect();
+    assert_eq!(
+        actors,
+        [
+            &Actor::Script {
+                client: "Python".into()
+            },
+            &Actor::Script {
+                client: "CLI".into()
+            }
+        ]
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e.actor, Actor::Agent { .. }))
+    );
+    assert_eq!(
+        basecraft_ops::provenance::verify(&file).unwrap(),
+        Vec::<String>::new()
+    );
+    // Read back through the history command: script edits show as script edits.
+    let history = Command::new(env!("CARGO_BIN_EXE_basecraft"))
+        .args(["history", file.to_str().unwrap(), "--json"])
+        .env("BASECRAFT_PROFILE_DIR", &profile)
+        .output()
+        .unwrap();
+    assert!(history.status.success());
+    let history: Value = serde_json::from_slice(&history.stdout).unwrap();
+    let details: Vec<&str> = history["history"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|row| row["details"].as_str())
+        .collect();
+    assert!(
+        details.iter().any(|d| d.starts_with("Script: Python")),
+        "{details:#?}"
+    );
+    assert!(
+        details.iter().any(|d| d.starts_with("Script: CLI")),
+        "{details:#?}"
+    );
+    assert!(!details.iter().any(|d| d.starts_with("Agent:")), "{details:#?}");
+    assert!(std::fs::read_to_string(&file).unwrap().contains("TCGT\n>b\nGCGT"));
+}
+
+#[test]
 fn mcp_defaults_to_read_only() {
     let d = tempfile::tempdir().unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_basecraft"))

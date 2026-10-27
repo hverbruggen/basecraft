@@ -39,8 +39,10 @@ Project files change only on `save` or when an operation you run writes its
 declared outputs.
 
 `--model-id` names the assistant in the recorded history (default
-`mcp-client`). Edits are recorded with that agent identity and operation runs
-with it as initiator.
+`mcp-client`). Edits are recorded as agent edits under that name, and
+operation runs carry it as initiator. A program that is not an assistant
+passes `--client-kind script` (and may name itself with `--client`), so its
+edits are recorded as script edits. The Python `Session` does this.
 
 ## Claude Code
 

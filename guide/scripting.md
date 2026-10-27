@@ -153,8 +153,10 @@ with Session("/path/to/project", writes=True) as session:
 is the `operation` property of the `apply` tool's input schema in `tools()`.
 A session runs at most 128 jobs.
 
-`client` (default `"Python"`) is recorded as the initiator of operation runs
-and as the agent identity on edits. `timeout` (default 60 s) bounds each
+`client` (default `"Python"`) is recorded as the initiator of operation runs,
+and edits are recorded as script edits under that name (history shows
+`Script: Python`). CLI commands that edit or run analyses record the client
+`CLI`. `timeout` (default 60 s) bounds each
 request to the server, not the jobs it starts. Closing the session cancels the
 jobs it still owns and waits for the server to exit.
 

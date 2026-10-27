@@ -62,8 +62,13 @@ enum Command {
         project: PathBuf,
         #[arg(long)]
         allow_writes: bool,
-        #[arg(long, default_value = "mcp-client")]
+        /// Client name recorded with each edit and operation run: the
+        /// assistant's model ID, or the script's name with `--client-kind script`.
+        #[arg(long, alias = "client", default_value = "mcp-client")]
         model_id: String,
+        /// Record edits as made by an assistant (`agent`) or a script (`script`).
+        #[arg(long, value_enum, default_value_t)]
+        client_kind: mcp::ClientKind,
     },
     /// Compatibility route: run a bundled tool's registered operation and write one
     /// result file, as the GUI does. Parameters are validated against the
@@ -183,6 +188,18 @@ fn main() -> ExitCode {
     }
 }
 
+/// A recoverable CLI session. Its edits are recorded as made by the CLI
+/// script client, not by a person or an assistant.
+pub(crate) fn script_session(
+    root: impl Into<PathBuf>,
+) -> Result<basecraft_ops::Session, basecraft_ops::Error> {
+    let mut session = basecraft_ops::Session::recoverable(root)?;
+    session.set_actor(basecraft_protocol::Actor::Script {
+        client: "CLI".into(),
+    });
+    Ok(session)
+}
+
 fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Command::Plugins { action } => operations::plugins(action)?,
@@ -190,7 +207,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Command::History { file, json } => {
             let file = file.canonicalize()?;
             let mut session =
-                basecraft_ops::Session::recoverable(file.parent().ok_or("File has no parent")?)?;
+                script_session(file.parent().ok_or("File has no parent")?)?;
             let doc = session.open(&file)?;
             let report = session.document_record(doc)?.report()?;
             println!(
@@ -205,7 +222,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Command::Methods { file, json, output } => {
             let file = file.canonicalize()?;
             let mut session =
-                basecraft_ops::Session::recoverable(file.parent().ok_or("File has no parent")?)?;
+                script_session(file.parent().ok_or("File has no parent")?)?;
             let doc = session.open(&file)?;
             let report = session.document_record(doc)?.report()?;
             if let Some(output) = output {
@@ -257,7 +274,8 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             project,
             allow_writes,
             model_id,
-        } => mcp::serve(&project, allow_writes, &model_id)?,
+            client_kind,
+        } => mcp::serve(&project, allow_writes, client_kind, &model_id)?,
         Command::Tool {
             tool,
             file,
@@ -266,7 +284,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         } => {
             let file = file.canonicalize()?;
             let root = file.parent().unwrap_or(std::path::Path::new("."));
-            let mut session = basecraft_ops::Session::recoverable(root)?;
+            let mut session = script_session(root)?;
             let doc = session.open(&file)?;
             let params = serde_json::from_str(&params)?;
             let registry = basecraft_plugin_host::registry::Registry::load(
@@ -278,7 +296,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Command::Edit { file, operation } => {
             let file = file.canonicalize()?;
             let root = file.parent().unwrap_or(std::path::Path::new("."));
-            let mut session = basecraft_ops::Session::recoverable(root)?;
+            let mut session = script_session(root)?;
             let doc = session.open(&file)?;
             session.apply(doc, serde_json::from_str(&operation)?)?;
             session.save(doc, None)?;
@@ -313,7 +331,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 .parent()
                 .filter(|p| !p.as_os_str().is_empty())
                 .unwrap_or(std::path::Path::new("."));
-            let mut session = basecraft_ops::Session::recoverable(root)?;
+            let mut session = script_session(root)?;
             let doc = session.open(&file)?;
             let operation = if groups.is_some() {
                 "groups"
@@ -520,7 +538,7 @@ fn run_plugin(
     );
 
     let root = file.parent().unwrap_or(std::path::Path::new("."));
-    let mut session = basecraft_ops::Session::recoverable(root)?;
+    let mut session = script_session(root)?;
     let doc = session.open(file)?;
     let t_snap = Instant::now();
     let generation = session.generation(doc);
@@ -602,7 +620,7 @@ fn run_registered_plugin(
         request_key: None,
     };
     let policy = basecraft_plugin_host::policy::SessionPolicy::new(root, true)?;
-    let mut session = basecraft_ops::Session::recoverable(root)?;
+    let mut session = script_session(root)?;
     basecraft_platform::interrupt::install()?;
     let (outcome, target) =
         operations::run_foreground(&registry, &request, policy, "CLI", &mut session)?;

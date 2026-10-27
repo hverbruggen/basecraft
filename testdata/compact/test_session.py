@@ -72,8 +72,8 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, "stale_revision")
         self.assertEqual(session.save(0, "copy.fasta")["saved"], "copy.fasta")
         session.close()
-        self.assertEqual(self.calls()[-1]["argv"][-3:], ["--model-id", "lab-script",
-                                                         "--allow-writes"])
+        self.assertEqual(self.calls()[-1]["argv"][-5:], ["--client-kind", "script", "--client",
+                                                         "lab-script", "--allow-writes"])
 
     def test_parameter_validation_error_keeps_host_code(self):
         session = self.session()

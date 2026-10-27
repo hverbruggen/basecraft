@@ -108,16 +108,17 @@ class Session:
     """One headless project session served by ``basecraft mcp``.
 
     ``writes=False`` starts the read-only server; edits, saves and operations
-    that declare writes are refused by the host. ``client`` is recorded as the
-    agent identity for edits and as the initiator of operation runs.
+    that declare writes are refused by the host. Edits are recorded as script
+    edits named ``client``, which is also the initiator of operation runs.
     ``timeout`` bounds each request, not the jobs it starts.
     Closing the session cancels jobs it still owns.
     """
 
     def __init__(self, project=".", *, writes=False, client="Python", timeout=60.0,
                  command=None):
+        # Edits from this session are recorded as script edits, not agent edits.
         arguments = [command or executable(["basecraft"], "BASECRAFT"), "mcp", str(project),
-                     "--model-id", client]
+                     "--client-kind", "script", "--client", client]
         if writes:
             arguments.append("--allow-writes")
         self.writes = writes

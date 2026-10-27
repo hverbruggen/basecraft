@@ -205,6 +205,7 @@ impl DocumentRecord {
                 Actor::Tool { tool, version } => format!("{tool} {version}"),
                 Actor::Plugin { id, version } => format!("{id} {version}"),
                 Actor::Agent { model } => format!("Agent: {model}"),
+                Actor::Script { client } => format!("Script: {client}"),
                 Actor::Human { .. } => "Manual action".into(),
                 Actor::External => "External change".into(),
             };

@@ -837,3 +837,61 @@ fn strict_sequence_proposals_stage_invalid_batches_and_replay_one_undo_group() {
     assert!(replay::replay(temp.path()).unwrap().ok());
     assert_eq!(std::fs::read(&path).unwrap(), b">sequence\nACGTACGT\n");
 }
+
+#[test]
+fn script_actor_edits_read_back_replay_and_show_as_script() {
+    use basecraft_protocol::Actor;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::write(root.join("g.fasta"), ">g\nACGTACGT\n").unwrap();
+    let script = Actor::Script {
+        client: "Python".into(),
+    };
+    let agent = Actor::Agent {
+        model: "test-agent".into(),
+    };
+    {
+        let mut s = Session::new(root);
+        s.set_actor(script.clone());
+        let d = s.open(&root.join("g.fasta")).unwrap();
+        s.apply(d, replace(0, 1, "T")).unwrap();
+        // An older-style agent edit in the same history stays an agent edit.
+        s.apply_as(d, replace(4, 5, "G"), agent.clone()).unwrap();
+        s.save(d, None).unwrap();
+    }
+    let entries = basecraft_ops::log::read_all(root).unwrap();
+    let actor_of = |start: u64| {
+        entries
+            .iter()
+            .find(|e| matches!(&e.op, Op::SeqReplace { start: s, .. } if *s == start))
+            .map(|e| e.actor.clone())
+            .unwrap()
+    };
+    assert_eq!(actor_of(0), script);
+    assert_eq!(actor_of(4), agent);
+    let report = replay::replay(root).unwrap();
+    assert!(report.ok(), "{:#?}", report.problems);
+    assert_eq!(report.entries, entries.len());
+
+    let activity = basecraft_ops::log::activity_text(&[root.to_path_buf()], "", 0).unwrap();
+    assert!(activity.contains("[script Python]"), "{activity}");
+    assert!(activity.contains("[agent test-agent]"), "{activity}");
+    let mut reader = Session::new(root);
+    let d = reader.open(&root.join("g.fasta")).unwrap();
+    let record = reader.document_record(d).unwrap().report().unwrap();
+    let details: Vec<&str> = record
+        .history
+        .iter()
+        .filter(|row| row.summary.to_lowercase().contains("replace"))
+        .map(|row| row.details.as_str())
+        .collect();
+    assert!(
+        details.iter().any(|d| d.starts_with("Script: Python")),
+        "{details:#?}"
+    );
+    assert!(
+        details.iter().any(|d| d.starts_with("Agent: test-agent")),
+        "{details:#?}"
+    );
+    assert!(!details.iter().any(|d| d.starts_with("Agent: Python")));
+}
