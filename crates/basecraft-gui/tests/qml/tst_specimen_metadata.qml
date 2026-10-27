@@ -55,7 +55,7 @@ Item {
             keyClick("2"); keyClick("0"); keyClick("2"); keyClick("0")
             keyClick(Qt.Key_Tab)
             compare(edited.count, 1)
-            compare(edited.signalArguments[0], ["HV2", "eventDate", "2020"])
+            compare(Array.from(edited.signalArguments[0]), ["HV2", "eventDate", "2020"])
             // Leaving an unchanged cell edits nothing.
             const same = findChild(dialog.body, "cell_HV1_eventDate")
             same.forceActiveFocus()
@@ -65,7 +65,7 @@ Item {
             taxon.forceActiveFocus()
             for (const c of "Ulva") keyClick(c)
             keyClick(Qt.Key_Tab)
-            compare(identified.signalArguments[0], ["HV2", "Ulva"])
+            compare(Array.from(identified.signalArguments[0]), ["HV2", "Ulva"])
             dialog.close()
         }
 
