@@ -386,7 +386,9 @@ impl PreparedOperation {
                     )?);
                 }
                 let transformation = match binding.view {
-                    InputView::Bytes => "identity-v1",
+                    // A sequence file is frozen unchanged; its sealed snapshot
+                    // is a separate generated input recorded below.
+                    InputView::Bytes | InputView::SequenceSnapshot => "identity-v1",
                     InputView::AlignedFasta | InputView::UngappedFasta => {
                         let basecraft_ops::files::Loaded::Alignment(alignment) =
                             basecraft_ops::files::load(&path)?
@@ -411,9 +413,6 @@ impl PreparedOperation {
                         basecraft_ops::files::load_tree(&path)?;
                         "identity-v1"
                     }
-                    // The file is frozen unchanged; the sealed snapshot is a
-                    // separate generated input recorded below.
-                    InputView::SequenceSnapshot => "identity-v1",
                 };
                 let submitted_hash =
                     basecraft_io::hash_file(&path).map_err(basecraft_ops::Error::from)?;
