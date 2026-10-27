@@ -1259,31 +1259,7 @@ impl PreparedOperation {
                         member.display()
                     ))
                 })?;
-                let destination_path = self.policy.root.join(destination);
-                let path = destination_path.display().to_string();
-                let recorded = outcome
-                    .artifacts
-                    .iter()
-                    .any(|a| a.path == path && &a.digest == hash);
-                if recorded {
-                    if basecraft_io::hash_file(&destination_path)
-                        .map_err(basecraft_ops::Error::from)?
-                        != *hash
-                    {
-                        return Err(Error::Protocol(
-                            "published destination changed; repair refused".into(),
-                        ));
-                    }
-                } else {
-                    let destination = self.policy.path(destination, true)?;
-                    export_member(&retained.join(member), &destination, hash)?;
-                    outcome.artifacts.push(PublishedArtifact {
-                        role: role.clone(),
-                        path,
-                        digest: hash.clone(),
-                    });
-                    self.persist(outcome)?;
-                }
+                self.publish_member(role, &retained.join(member), hash, destination, outcome)?;
             }
             collections.insert(role.clone(), retained);
         }
@@ -1407,6 +1383,81 @@ impl PreparedOperation {
         }
         Ok(())
     }
+    /// Export one member of a published collection to a new file in the
+    /// project, recording it in the outcome. Idempotent for a recorded export.
+    fn publish_member(
+        &self,
+        role: &str,
+        retained: &Path,
+        hash: &str,
+        destination: &str,
+        outcome: &mut OperationOutcome,
+    ) -> Result<()> {
+        let destination_path = self.policy.root.join(destination);
+        let path = destination_path.display().to_string();
+        if outcome
+            .artifacts
+            .iter()
+            .any(|a| a.path == path && a.digest == hash)
+        {
+            if basecraft_io::hash_file(&destination_path).map_err(basecraft_ops::Error::from)?
+                != hash
+            {
+                return Err(Error::Protocol(
+                    "published destination changed; repair refused".into(),
+                ));
+            }
+            return Ok(());
+        }
+        let destination = self.policy.path(destination, true)?;
+        export_member(retained, &destination, hash)?;
+        outcome.artifacts.push(PublishedArtifact {
+            role: role.into(),
+            path,
+            digest: hash.into(),
+        });
+        self.persist(outcome)
+    }
+
+    /// Export a member of an already published collection, such as an extra
+    /// tree a run produced, without running anything again.
+    pub fn export_published_member(
+        &self,
+        key: &str,
+        destination: &str,
+        outcome: &mut OperationOutcome,
+    ) -> Result<()> {
+        let Some((role, Some(member))) = crate::policy::destination_role(&self.operation, key)
+        else {
+            return Err(Error::Protocol(
+                "invalid_arguments: export needs role/member".into(),
+            ));
+        };
+        let validated: Vec<(String, PathBuf, String)> =
+            serde_json::from_slice(&basecraft_ops::provenance::read_record(
+                &self.run.artifact("validated-artifacts.json")?,
+            )?)?;
+        let staging = PathBuf::from(&self.context.outputs[role]);
+        let hash = validated
+            .iter()
+            .find(|(name, path, _)| {
+                name == role && path.strip_prefix(&staging).ok() == Some(member)
+            })
+            .map(|(_, _, hash)| hash.clone())
+            .ok_or_else(|| {
+                Error::Protocol(format!(
+                    "invalid_arguments: {role} has no member {}",
+                    member.display()
+                ))
+            })?;
+        let retained = if self.operation.descriptor.host_workflow.is_some() {
+            staging
+        } else {
+            self.run.artifact(role)?
+        };
+        self.publish_member(role, &retained.join(member), &hash, destination, outcome)
+    }
+
     pub fn effective_parameters(&self) -> Value {
         self.granted_parameters
             .lock()

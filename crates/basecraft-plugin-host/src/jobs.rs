@@ -424,6 +424,25 @@ impl JobManager {
         }
         self.get(id)
     }
+    /// Export a member of a completed run's collection to a new project file.
+    pub fn export(&self, id: &str, member: &str, destination: &str) -> Result<OperationOutcome> {
+        let job = self
+            .jobs
+            .get(id)
+            .ok_or_else(|| Error::Protocol("unknown job in this session".into()))?;
+        let mut outcome = job
+            .outcome
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if outcome.state != RuntimeState::Completed {
+            return Err(Error::Protocol(
+                "invalid_arguments: only a completed run can export results".into(),
+            ));
+        }
+        job.prepared
+            .export_published_member(member, destination, &mut outcome)?;
+        Ok(outcome.clone())
+    }
     pub fn result(&self, id: &str) -> Result<OperationOutcome> {
         let outcome = self.get(id)?;
         if !outcome.state.terminal() {
