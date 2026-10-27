@@ -192,6 +192,8 @@ use cxx_qt_lib::{QByteArray, QString};
 
 use crate::bridge::{css, load_theme, monospace_font, omarchy_theme_path, plugin_dir};
 
+// Independent generated QML properties describe document state and caller activity.
+#[allow(clippy::struct_excessive_bools)]
 pub struct SangerRust {
     frame: QByteArray,
     status: QString,
@@ -456,10 +458,11 @@ impl qobject::SangerController {
         })();
         match result {
             Ok(mut view) => {
-                let mut r = self.as_mut().rust_mut();
-                view.resize(r.view.width, r.view.height);
-                r.review = Some(view);
-                drop(r);
+                {
+                    let mut r = self.as_mut().rust_mut();
+                    view.resize(r.view.width, r.view.height);
+                    r.review = Some(view);
+                }
                 self.as_mut().set_dirty(true);
                 self.refresh();
                 true

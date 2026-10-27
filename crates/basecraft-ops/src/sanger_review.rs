@@ -20,19 +20,10 @@ pub enum EvidenceKind {
 
 /// Inspect JSON without creating records or treating arbitrary JSON as a trace.
 pub fn evidence_kind(path: &Path) -> Option<EvidenceKind> {
-    use std::io::Read;
     if !path.extension()?.eq_ignore_ascii_case("json") {
         return None;
     }
-    let mut bytes = Vec::new();
-    std::fs::File::open(path)
-        .ok()?
-        .take(64 * 1024 * 1024 + 1)
-        .read_to_end(&mut bytes)
-        .ok()?;
-    if bytes.len() > 64 * 1024 * 1024 {
-        return None;
-    }
+    let bytes = crate::provenance::read_record(path).ok()?;
     if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) {
         if value.get("version").is_some() {
             return SangerReviewSession::decode(&bytes, path)
