@@ -21,7 +21,6 @@ use crate::error::invalid;
 use crate::files::{self, HashingWriter, Loaded, Opened, OpenedAlignment, OpenedTree};
 use crate::log::LogWriter;
 use crate::{Error, Result};
-use fs4::fs_std::FileExt;
 
 /// Typing within this interval, at the end of the previous insertion,
 /// merges into one operation.
@@ -94,7 +93,6 @@ pub struct Session {
     storage_root: PathBuf,
     provenance_policy: basecraft_platform::settings::ProvenancePolicy,
     local_provenance_root: PathBuf,
-    lock_root: PathBuf,
     tracked: bool,
     memory_objects: Mutex<std::collections::HashMap<String, Vec<u8>>>,
     events: Vec<LogEntry>,
@@ -125,11 +123,6 @@ impl Session {
             storage_root: root.clone(),
             provenance_policy: basecraft_platform::settings::ProvenancePolicy::Portable,
             local_provenance_root: root.join(".basecraft/provenance"),
-            lock_root: std::env::temp_dir().join(format!(
-                "basecraft-save-locks-{}",
-                basecraft_io::hash_bytes(basecraft_platform::username().as_bytes())
-                    .trim_start_matches("b3:")
-            )),
             tracked: true,
             memory_objects: Mutex::new(std::collections::HashMap::new()),
             events: Vec::new(),
@@ -701,27 +694,7 @@ impl Session {
         // Cooperating Basecraft processes serialize the entire data + sidecar +
         // provenance publication. External programs still require hash checks.
         let _save_lock = if self.tracked {
-            std::fs::create_dir_all(&self.lock_root)?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&self.lock_root, std::fs::Permissions::from_mode(0o700))?;
-            }
-            let canonical = target.canonicalize().unwrap_or_else(|_| target.clone());
-            let digest = basecraft_io::hash_bytes(canonical.as_os_str().as_encoded_bytes());
-            let lock = std::fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(true)
-                .truncate(false)
-                .open(
-                    self.lock_root
-                        .join(format!("{}.lock", digest.trim_start_matches("b3:"))),
-                )?;
-            lock.try_lock_exclusive().map_err(|_| {
-                invalid("another Basecraft process is saving this target; retry shortly")
-            })?;
-            Some(lock)
+            Some(crate::save_guard::lock(&target)?)
         } else {
             None
         };
@@ -807,11 +780,7 @@ impl Session {
                 }
             }
             for (key, hash) in &self.docs[id.0].accepted_hashes {
-                if basecraft_io::hash_file(&self.resolve(key))? != *hash {
-                    return Err(invalid(
-                        "source changed on disk; save to a new path or reopen it",
-                    ));
-                }
+                crate::save_guard::check_hash(&self.resolve(key), hash)?;
             }
         }
         let format = files::Format::from_path(&target)?;

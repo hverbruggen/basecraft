@@ -470,6 +470,7 @@ impl SangerReviewSession {
             None => std::env::current_dir().map_err(|e| e.to_string())?,
         };
         self.anchor = folder.join("recovered-review.sanger-review.json");
+        self.accepted = None;
         self.recovery = Some(absolute);
         Ok(())
     }
@@ -667,7 +668,13 @@ impl SangerReviewSession {
             "diagnostics":format!("{} unresolved columns; recoverable review, not accepted consensus", self.unresolved())})).map_err(|e|e.to_string())
     }
 
-    pub(super) fn save_durable(&mut self, path: &Path) -> crate::Result<()> {
+    pub(super) fn save_durable(
+        &mut self,
+        path: &Path,
+        policy: inputs::SavePolicy,
+    ) -> crate::Result<()> {
+        let _target_lock = crate::save_guard::lock(path)?;
+        crate::save_guard::Revision::check(self.accepted.as_ref(), path)?;
         // Never replace an input, even through a symlink or alternate spelling.
         let absolute = std::path::absolute(path)?;
         let mut protected: Vec<_> = self.draft.inputs.iter().map(|r| r.path.clone()).collect();
@@ -697,6 +704,10 @@ impl SangerReviewSession {
         }
         self.ensure_sources(path)?;
         self.start_recovery().map_err(invalid)?;
+        // Registration above acquires evidence locks itself. Never nest them.
+        let _evidence_lock = inputs::lock()?;
+        crate::save_guard::Revision::check(self.accepted.as_ref(), path)?;
+        inputs::resolve(&inputs::conflicts(path)?, policy)?;
         let run = ArtifactRun::create(path, &ulid::Ulid::generate().to_string())?;
         let previous_evidence = self.evidence.clone();
         let outcome = (|| -> crate::Result<()> {
@@ -718,7 +729,13 @@ impl SangerReviewSession {
             );
             dependencies.sort();
             dependencies.dedup();
-            linked_input(&run, &dependencies, self.draft_json.as_bytes())?;
+            inputs::link_generated_input_locked(
+                &run,
+                &dependencies,
+                self.draft_json.as_bytes(),
+                "identity-v1",
+                "Sanger review/support",
+            )?;
             carry_authored(&self.evidence.runs, &run)?;
             self.evidence.runs = vec![run.directory().into()];
             let snapshot = run.artifact("review.sanger-review.json")?;
@@ -741,8 +758,9 @@ impl SangerReviewSession {
                     "Sanger review exceeds 64 MiB; previous file preserved",
                 ));
             }
-            let staged = run.staging("review")?;
+            let staged = run.artifact("visible-review.json")?;
             basecraft_io::write_atomic(&staged, |w| w.write_all(&bytes))?;
+            artifacts.push(retained(&run, &staged, artifacts.len())?);
             let mut record = publication(
                 &run,
                 "Explicit saved Sanger review; decisions and support retained",
@@ -762,8 +780,34 @@ impl SangerReviewSession {
                 reference: None,
             });
             crate::provenance::publish(run.directory(), &record)?;
-            basecraft_io::write_atomic(path, |w| w.write_all(&bytes))?;
-            run.bind(path)?;
+            let replacing = crate::save_guard::Revision::check(self.accepted.as_ref(), path)?;
+            let written = if replacing {
+                basecraft_io::write_atomic(path, |w| w.write_all(&bytes))
+                    .map_err(crate::Error::from)
+            } else {
+                run.publish_secondary("visible-review.json", path)
+            };
+            if let Err(error) = written {
+                // No-clobber publication can fail syncing the directory after
+                // visible bytes are present. Do not describe that as unsaved.
+                if basecraft_io::hash_file(path).ok().as_ref()
+                    == Some(&basecraft_io::hash_bytes(&bytes))
+                {
+                    return Err(invalid(format!(
+                        "intended review bytes are visible; publication incomplete: {error}; reopen before retrying; repair evidence: {}",
+                        run.directory().display()
+                    )));
+                }
+                return Err(error);
+            }
+            self.accepted = Some(crate::save_guard::Revision::accepted(path, &bytes).map_err(|error| invalid(format!("review data saved; target verification incomplete: {error}; repair evidence: {}", run.directory().display())))?);
+            self.anchor.clone_from(&absolute);
+            run.bind(path).map_err(|error| {
+                invalid(format!(
+                    "review data saved; binding incomplete: {error}; repair evidence: {}",
+                    run.directory().display()
+                ))
+            })?;
             Ok(())
         })();
         if let Err(error) = outcome {
@@ -777,7 +821,7 @@ impl SangerReviewSession {
             )));
         }
         self.anchor = absolute;
-        self.checkpoint().map_err(invalid)
+        self.checkpoint().map_err(|error| invalid(format!("review data and binding saved; recovery checkpoint incomplete: {error}; repair evidence: {}", run.directory().display())))
     }
 
     pub(super) fn publish_consensus(&mut self, path: &Path) -> crate::Result<()> {

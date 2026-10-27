@@ -12,6 +12,7 @@ pub mod sanger_review;
 pub mod session;
 
 mod error;
+mod save_guard;
 
 pub use error::{Error, Result};
 pub use session::{DocId, Session};
