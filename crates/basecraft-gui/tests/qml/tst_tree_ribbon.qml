@@ -102,19 +102,24 @@ Item {
         function test_link_status_change_and_routing() {
             const link = findChild(alignment, "linkTreeAlignment")
             const extract = findChild(alignment, "openCladeAlignment")
-            compare(link.text, "Link alignment")
+            compare(link.text, "Link")
             compare(link.iconName, "align")
             link.commandAction.trigger()
             compare(host.linkTarget, controller)
             controller.linked_alignment = "/view.afa"
             controller.source_alignment = "/original.afa"
             controller.alignment_link_status = "Linked to retained input snapshot"
-            compare(link.text, "Change alignment")
+            compare(link.text, "Link")
             verify(link.tip.includes("/view.afa"))
             verify(link.tip.includes("Original analysis source: /original.afa"))
             verify(link.tip.includes("retained input snapshot"))
             extract.commandAction.trigger()
             compare(controller.last, "extract")
+            controller.has_selection = false
+            verify(!extract.enabled)
+            controller.last = ""
+            extract.commandAction.trigger()
+            compare(controller.last, "")
             controller.busy = true
             verify(!link.enabled && !extract.enabled)
         }

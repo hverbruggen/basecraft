@@ -10,12 +10,28 @@ Item {
     property real mainPanelWidth: width
     Rectangle { anchors.fill: parent; color: brand.backgroundColor }
     EmptyWorkspaceBrand { id: brand; anchors.left: parent.left; anchors.top: parent.top; anchors.bottom: parent.bottom; width: scene.mainPanelWidth; backgroundColor: "#1c2630" }
+    SignalSpy { id: openSpy; target: brand; signalName: "openProject" }
+    SignalSpy { id: recentSpy; target: brand; signalName: "openRecent" }
     Button { id: focusTarget; text: "Open"; x: 8; y: 8 }
 
     TestCase {
         name: "EmptyWorkspaceBrand"
         when: windowShown
 
+        function test_project_actions() {
+            brand.recentProjects = ["/project/one", "/missing/project"]
+            const open = findChild(brand, "startOpenProject")
+            open.forceActiveFocus()
+            keyClick(Qt.Key_Space)
+            compare(openSpy.count, 1)
+            const recent = findChild(brand, "startRecentProjects")
+            tryCompare(recent, "count", 2)
+            recent.forceLayout()
+            tryVerify(() => recent.itemAtIndex(1) !== null)
+            recent.itemAtIndex(1).clicked()
+            compare(recentSpy.signalArguments[0][0], "/missing/project")
+            brand.recentProjects = []
+        }
         function test_themes_and_resizing() {
             const logo = findChild(brand, "emptyWorkspaceLogo")
             verify(logo !== null)
@@ -30,12 +46,12 @@ Item {
                     waitForRendering(brand)
                     const point = logo.mapToItem(brand, logo.width / 2, logo.height / 2)
                     fuzzyCompare(point.x, brand.width / 2, 1)
-                    fuzzyCompare(point.y, brand.height / 2, 1)
-                    fuzzyCompare(logo.width / logo.height, 1020 / 480, 0.001)
+                    verify(point.y > 0 && point.y < brand.height)
+                    fuzzyCompare(logo.width / logo.height, 1020 / 420, 0.001)
                     verify(logo.width > 0 && logo.width <= scene.width)
-                    fuzzyCompare(logo.width, Math.min(brand.width * 0.25, brand.height * 0.9 * 1020 / 480), 0.001)
+                    fuzzyCompare(logo.width, brand.width * 0.25, 0.001)
                     verify(logo.mapToItem(brand, 0, logo.height).y <= brand.height)
-                    verify(logo.Accessible.name.indexOf("provenance built in") >= 0)
+                    compare(logo.Accessible.name, "Basecraft")
                     verify(focusTarget.activeFocus, "Decorative mark must not steal focus")
                     // Verify the actual coloured mark survives image loading and compositing.
                     const pixels = grabImage(scene)

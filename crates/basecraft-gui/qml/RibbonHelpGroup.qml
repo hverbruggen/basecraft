@@ -7,6 +7,7 @@ Control {
     id: root
     required property Action shortcutsAction
     required property Action aboutAction
+    property Action methodsAction
     property Action learnAction
     property Action preferencesAction
     property Action exportSvgAction
@@ -45,6 +46,24 @@ Control {
             columns: 3
             rowSpacing: 2 * metrics.factor
             columnSpacing: 2 * metrics.factor
+            Item {
+                implicitWidth: root.buttonSide
+                implicitHeight: root.buttonSide
+                UtilityButton {
+                    id: methodsButton
+                    objectName: "ribbonMethods"
+                    anchors.fill: parent
+                    action: root.methodsAction
+                    iconName: "methods-export"
+                    description: "Methods"
+                    ToolTip.text: root.methodsAction ? root.methodsAction.tooltip : "Open a document to read its methods"
+                }
+                // The parent remains hoverable when the action is disabled.
+                HoverHandler { id: methodsHover }
+                ToolTip.visible: methodsHover.hovered && !methodsButton.enabled
+                ToolTip.text: methodsButton.ToolTip.text
+                ToolTip.delay: 400
+            }
             UtilityButton {
                 objectName: "ribbonHelpShortcuts"
                 action: root.shortcutsAction
@@ -54,21 +73,12 @@ Control {
             UtilityButton {
                 objectName: "ribbonHelpAbout"
                 action: root.aboutAction
-                iconName: "basecraft-monochrome"
+                iconName: "basecraft-colour"
+                icon.color: "transparent"
+                icon.width: 20 * metrics.factor
+                icon.height: 20 * metrics.factor
+                padding: 0
                 description: "About Basecraft"
-            }
-            UtilityButton {
-                objectName: "ribbonHelpPreferences"
-                action: root.preferencesAction
-                iconName: "settings"
-                description: "Preferences"
-            }
-            UtilityButton {
-                objectName: "ribbonHelpDocumentation"
-                action: root.learnAction
-                iconName: "book"
-                description: "Learn"
-                ToolTip.text: "Open help and learning resources"
             }
             UtilityButton {
                 id: exportButton
@@ -84,11 +94,19 @@ Control {
                     MenuItem { action: root.exportPngAction; text: "Export PNG" }
                 }
             }
-            Item {
-                objectName: "ribbonHelpReserved"
-                implicitWidth: root.buttonSide
-                implicitHeight: root.buttonSide
-                Accessible.ignored: true
+            UtilityButton {
+                objectName: "ribbonHelpDocumentation"
+                action: root.learnAction
+                iconName: "book"
+                description: "Learn"
+                ToolTip.text: "Open help and learning resources"
+            }
+            UtilityButton {
+                objectName: "ribbonHelpPreferences"
+                action: root.preferencesAction
+                iconName: "settings"
+                icon.color: root.darkBackground ? palette.buttonText : "#666666"
+                description: "Preferences"
             }
         }
     }

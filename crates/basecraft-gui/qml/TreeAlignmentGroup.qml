@@ -4,7 +4,7 @@ import QtQuick.Layouts
 
 RibbonGroup {
     id: group
-    title: "Linked alignment"
+    title: "Alignment tools"
     property var controller: null
     property var customization: ({shortcuts: {}, ribbon_hidden: []})
     readonly property string linkedPath: controller ? controller.linked_alignment : ""
@@ -17,7 +17,7 @@ RibbonGroup {
         objectName: "linkTreeAlignment"
         commandId: "ribbon.associate-an-imported-tree-with-an-alignment-after-validating"
         customization: group.customization
-        text: group.linkedPath.length ? "Change alignment" : "Link alignment"
+        text: "Link"
         iconName: "align"
         tip: (group.linkStatus.length ? group.linkStatus + "\n" : "")
             + (group.linkedPath.length ? "Linked alignment: " + group.linkedPath + "\n" : "")
@@ -31,10 +31,10 @@ RibbonGroup {
         objectName: "openCladeAlignment"
         commandId: "ribbon.extract-aligned-rows-without-realigning-ctrl-click-to-select"
         customization: group.customization
-        text: "Open selected clade(s)"
+        text: "Clade"
         iconName: "selection"
-        tip: "Extract aligned rows without realigning; Ctrl-click to select multiple clades"
-        enabled: group.controller !== null && !group.controller.busy
+        tip: "Create clade alignment from selected clades without realigning; Ctrl-click to select multiple clades"
+        enabled: group.controller !== null && !group.controller.busy && group.controller.has_selection === true
         onInvoked: group.controller.extract_clade_alignment()
     }
 }

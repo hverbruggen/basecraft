@@ -137,12 +137,12 @@ ApplicationWindow {
             recentProjectsError = "Project folder is unavailable: " + path
             return
         }
-        shell.project_dir = path
         const result = JSON.parse(preferences.remember_project(path))
         if (result.error) {
             recentProjectsError = result.error
             return
         }
+        shell.project_dir = path
         recentProjects = result.projects
         recentProjectsError = ""
     }
@@ -608,7 +608,7 @@ ApplicationWindow {
         id: historyCommand
         customization: window.customization
         commandId: "provenance.history"
-        text: "History"
+        text: "Provenance"
         iconName: "history"
         tooltip: "Sources, analyses and edits for the current document"
         enabled: window.current !== null && !provenance.busy
@@ -619,10 +619,10 @@ ApplicationWindow {
         customization: window.customization
         commandId: "provenance.methods"
         text: "Methods"
-        iconName: "text-representation"
-        tooltip: "Read methods for the current document, including unsaved changes"
+        iconName: "methods-export"
+        tooltip: window.current === null ? "Open a document to read its methods" : provenance.busy ? "Wait for the current provenance operation" : "Read methods for the current document, including unsaved changes"
         enabled: window.current !== null && !provenance.busy
-        onTriggered: documentRecord.showPage(1)
+        onTriggered: { documentRecord.savedRevision = false; documentRecord.showPage(1) }
     }
     AppCommand {
         id: showProvenanceCommand
@@ -785,6 +785,7 @@ ApplicationWindow {
         RibbonButton { commandId: "species.combine-" + speciesMethods.commandSuffix; text: "Combine"; iconName: "align"; onInvoked: combinePicker.open() }
     }
     component HelpGroup: RibbonHelpGroup {
+        methodsAction: methodsCommand
         shortcutsAction: contextShortcutsCommand
         aboutAction: aboutCommand
         learnAction: learnCommand
@@ -906,16 +907,13 @@ ApplicationWindow {
                         AppRibbonButton { action: saveAsCommand; visible: saveAsCommand.visible; iconName: "save-as"; tip: saveAsCommand.tooltip }
                     }
                     ToolSeparator { Layout.fillHeight: true }
+                    RibbonGroup { title: "Document record"; actions: [historyCommand, methodsCommand] }
+                    ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
                         title: "Recovery"
                         AppRibbonButton { action: recoverCommand; visible: recoverCommand.visible; iconName: "history"; tip: recoverCommand.tooltip }
                     }
                     Item { Layout.fillWidth: true }
-                    RibbonGroup {
-                        title: "Review files"
-                        enabled: window.traceOpen
-                    }
-                    RibbonGroup { title: "Document record"; actions: [historyCommand, methodsCommand] }
                     HelpGroup {}
                 }
 
@@ -1137,7 +1135,7 @@ ApplicationWindow {
                         title: "Rate smoothing"
                         RibbonButton {
                             commandId: "tree.rate-smoothing"
-                            text: "Sanderson"
+                            text: "PL"
                             iconName: "tree"
                             tip: "Smooth rates on the current rooted tree with Sanderson penalized likelihood"
                             enabled: window.treeOpen && window.current !== null && window.currentPath.length > 0
@@ -1265,7 +1263,7 @@ ApplicationWindow {
                     RibbonGroup {
                         title: "Tools"
                         ModeButton { commandId: "species.select-tool"; text: "Select"; tip: "Click a node to select its clade, or a bar to select a species"; iconName: "selection"; enabled: window.speciesView !== null; active: window.speciesView !== null && window.speciesView.tool === "select"; onInvoked: window.speciesView.setTool("select") }
-                        ModeButton { commandId: "species.threshold-cut"; text: "Threshold"; tip: window.speciesView !== null && !window.current.can_cut ? "Needs an ultrametric display tree (all tips the same distance from the root)" : "Drag a threshold across the tree and save the species it defines"; iconName: "trim"; enabled: window.speciesView !== null && window.current.can_cut; active: window.speciesView !== null && window.speciesView.tool === "cut"; onInvoked: window.speciesView.setTool("cut") }
+                        ModeButton { commandId: "species.threshold-cut"; text: "Threshold"; tip: window.speciesView !== null && !window.current.can_cut ? "Needs an ultrametric display tree (all tips the same distance from the root)" : "Drag a threshold across the tree and save the species it defines"; iconName: "tree-threshold"; enabled: window.speciesView !== null && window.current.can_cut; active: window.speciesView !== null && window.speciesView.tool === "cut"; onInvoked: window.speciesView.setTool("cut") }
                         RibbonButton { commandId: "species.display"; text: "Attach"; tip: window.speciesView !== null && window.current.display_path.length ? "A display tree is attached" : "Attach or build a display tree"; iconName: "tree"; enabled: window.speciesView !== null && !window.current.busy && !window.current.display_path.length; onInvoked: window.beginDelimitation("view") }
                     }
                     Item { Layout.fillWidth: true }
@@ -1770,6 +1768,9 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 backgroundColor: shell.background
+                recentProjects: window.recentProjects
+                onOpenProject: window.openProjectPicker()
+                onOpenRecent: path => window.selectProject(path)
             }
 
             Label {

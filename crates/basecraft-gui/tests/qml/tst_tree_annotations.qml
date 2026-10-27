@@ -9,6 +9,10 @@ Item {
     height: 900
     QtObject {
         id: first
+        property bool busy: false
+        property bool has_selection: true
+        property int extracts: 0
+        function extract_clade_alignment() { extracts++ }
         property string revision: "session:0:1:4"
         property string saved: ""
         property string message: ""
@@ -78,6 +82,27 @@ Item {
             tryCompare(editor, "visible", false)
         }
         function field(name) { return findChild(editor, name) }
+        function test_context_clade_alignment_guard_and_target() {
+            first.busy = false
+            first.has_selection = true
+            first.extracts = 0
+            menu.showFor(first, {node: true, tip: false})
+            const action = findChild(menu, "createCladeAlignment")
+            verify(action.visible && action.enabled)
+            action.triggered()
+            compare(first.extracts, 1)
+            first.has_selection = false
+            verify(!action.enabled)
+            first.has_selection = true
+            first.busy = true
+            verify(!action.enabled)
+            first.busy = false
+            first.revision = "changed"
+            action.triggered()
+            compare(first.extracts, 1)
+            verify(first.message.includes("tree changed"))
+            menu.close()
+        }
         function test_context_name_captures_clade_and_controller() {
             menu.showFor(first, {node: true, tip: false, annotated: false})
             tryCompare(menu, "opened", true)

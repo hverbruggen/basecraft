@@ -94,7 +94,7 @@ AppDialog {
             Layout.fillWidth: true
             currentIndex: dialog.page
             onCurrentIndexChanged: dialog.page = currentIndex
-            AppTabButton { width: pages.width / 4; text: "History" }
+            AppTabButton { width: pages.width / 4; text: "Provenance" }
             AppTabButton { width: pages.width / 4; text: "Methods" }
             AppTabButton { width: pages.width / 4; text: "Authored draft" }
             AppTabButton { width: pages.width / 4; text: "Raw record" }
@@ -195,7 +195,8 @@ AppDialog {
             Layout.fillWidth: true
             Layout.preferredHeight: childrenRect.height
             spacing: 6
-            AppButton { text: "Copy " + (dialog.page === 1 ? "methods" : "history"); onClicked: dialog.copyText(dialog.page === 1 ? dialog.report.methods || "" : dialog.report.history_text || "") }
+            AppButton { objectName: "copyRecordText"; text: "Copy " + (dialog.page === 1 ? "methods" : "history"); onClicked: dialog.copyText(dialog.page === 1 ? dialog.report.methods || "" : dialog.report.history_text || "") }
+            AppButton { objectName: "openMethodsProvenance"; text: "Open provenance"; visible: dialog.page === 1; onClicked: dialog.page = 0 }
             AppButton { text: "Export report…"; enabled: !!dialog.report.revision; onClicked: dialog.exportReport(JSON.stringify(dialog.report)) }
             AppButton { text: "Check saved files"; onClicked: dialog.verify() }
             AppButton { text: "Export reproduction package…"; onClicked: dialog.packageRecord() }

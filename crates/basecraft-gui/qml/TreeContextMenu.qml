@@ -51,6 +51,13 @@ Menu {
         visible: menu.info.annotated === true
         onTriggered: if (menu.validTarget()) menu.controller.remove_annotation(menu.info.annotation)
     }
+    TreeItem {
+        objectName: "createCladeAlignment"
+        text: "Create clade alignment"
+        visible: menu.info.node === true
+        enabled: menu.controller !== null && !menu.controller.busy && menu.controller.has_selection === true
+        onTriggered: if (menu.validTarget()) menu.controller.extract_clade_alignment()
+    }
     TreeItem { text: "Reroot here"; visible: menu.info.node === true && !menu.info.root; onTriggered: if (menu.validTarget()) menu.controller.reroot() }
     TreeItem { text: "Root position…"; visible: menu.info.rootBranch === true; onTriggered: if (menu.validTarget()) menu.rootPositionRequested() }
     TreeItem { text: "Flip subtree"; visible: menu.info.node === true; onTriggered: if (menu.validTarget()) menu.controller.rotate() }

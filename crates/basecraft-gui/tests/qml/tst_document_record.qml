@@ -7,6 +7,7 @@ import "../../qml"
 Item {
     id: root
     width: 1000; height: 760
+    property string copied: ""
     QtObject {
         id: mock
         property string revision: "one"
@@ -17,7 +18,7 @@ Item {
             {id:"b",time:"",summary:"Deleted columns",status:"Undone / not contributing",contributing:false,details:"Undone"}
         ], paragraphs: [{activity_ids:["a"],text:"Sequences were aligned.",parameters:"settings"}], raw:"{}", history_text:"Aligned sequences"}) }
     }
-    Component { id: component; DocumentRecordDialog { controller: mock } }
+    Component { id: component; DocumentRecordDialog { controller: mock; onCopyText: text => root.copied = text } }
     TestCase {
         name: "DocumentRecord"
         when: windowShown
@@ -28,7 +29,14 @@ Item {
             dialog.showPage(1)
             tryCompare(dialog, "opened", true)
             compare(dialog.report.methods, "Sequences were aligned.")
+            findChild(dialog, "copyRecordText").clicked()
+            compare(root.copied, "Sequences were aligned.")
             compare(dialog.historyRows.length, 1)
+            const provenance = findChild(dialog, "openMethodsProvenance")
+            verify(provenance.visible)
+            provenance.clicked()
+            compare(dialog.page, 0)
+            dialog.showPage(1)
             dialog.showEvidence("a")
             compare(dialog.page, 0)
             compare(dialog.selectedId, "a")

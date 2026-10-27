@@ -12,6 +12,7 @@ Item {
     property bool dark: false
     AppCommand { id: shortcuts; commandId: "test.shortcuts"; text: "Keyboard shortcuts"; onTriggered: scene.shortcutsCount++ }
     AppCommand { id: about; commandId: "test.about"; text: "About Basecraft"; onTriggered: scene.aboutCount++ }
+    AppCommand { id: methods; commandId: "test.methods"; text: "Methods"; property string tooltip: "Open a document to read its methods"; enabled: false }
     AppCommand { id: learn; commandId: "help.learn"; text: "Learn"; onTriggered: scene.ribbonTabName = "Help" }
     Rectangle { anchors.fill: parent; color: scene.dark ? "#1c2630" : "#f3eee4" }
     Ribbon {
@@ -24,6 +25,7 @@ Item {
                 id: help
                 shortcutsAction: shortcuts
                 aboutAction: about
+                methodsAction: methods
                 learnAction: learn
                 backgroundColor: scene.dark ? "#1c2630" : "#f3eee4"
             }
@@ -37,9 +39,11 @@ Item {
             const keys = findChild(help, "ribbonHelpShortcuts")
             const info = findChild(help, "ribbonHelpAbout")
             const docs = findChild(help, "ribbonHelpDocumentation")
-            const reserved = findChild(help, "ribbonHelpReserved")
+            const met = findChild(help, "ribbonMethods")
+            const figure = findChild(help, "ribbonFigureExport")
+            const gear = findChild(help, "ribbonHelpPreferences")
             const separator = findChild(help, "ribbonHelpSeparator")
-            verify(keys && info && docs && reserved && separator)
+            verify(keys && info && docs && met && figure && gear && separator)
             for (const dark of [false, true]) {
                 scene.dark = dark
                 for (const scale of [0.75, 1, 1.5, 2]) {
@@ -47,20 +51,33 @@ Item {
                     waitForRendering(help)
                     compare(keys.display, AbstractButton.IconOnly)
                     compare(info.display, AbstractButton.IconOnly)
-                    verify(info.icon.source.toString().endsWith("basecraft-monochrome.svg"))
-                    compare(info.icon.color, info.palette.buttonText)
+                    verify(info.icon.source.toString().endsWith("basecraft-colour.svg"))
+                    compare(info.icon.color, Qt.color("transparent"))
+                    verify(info.icon.width > keys.icon.width)
                     verify(info.mapToItem(help, 0, 0).x > keys.mapToItem(help, 0, 0).x)
                     verify(docs.mapToItem(help, 0, 0).y > keys.mapToItem(help, 0, 0).y)
                     fuzzyCompare(info.mapToItem(help, 0, 0).y, keys.mapToItem(help, 0, 0).y, 1)
-                    verify(reserved.mapToItem(help, 0, 0).x > info.mapToItem(help, 0, 0).x)
+                    verify(met.mapToItem(help, 0, 0).x < keys.mapToItem(help, 0, 0).x)
+                    fuzzyCompare(figure.mapToItem(help, 0, 0).x, met.mapToItem(help, 0, 0).x, 1)
+                    fuzzyCompare(docs.mapToItem(help, 0, 0).x, keys.mapToItem(help, 0, 0).x, 1)
+                    fuzzyCompare(gear.mapToItem(help, 0, 0).x, info.mapToItem(help, 0, 0).x, 1)
                     verify(separator.width > 0 && separator.height >= keys.height)
-                    verify(reserved.mapToItem(help, reserved.width, reserved.height).y <= help.height + 1)
+                    verify(gear.mapToItem(help, gear.width, gear.height).y <= help.height + 1)
                     compare(docs.enabled, true)
-                    compare(reserved.activeFocusOnTab, false)
-                    compare(reserved.children.length, 0)
+                    verify(met.visible)
+                    verify(!met.enabled)
+                    compare(met.ToolTip.text, "Open a document to read its methods")
 
                 }
             }
+        }
+        function test_disabled_methods_reason() {
+            const met = findChild(help, "ribbonMethods")
+            verify(!met.enabled)
+            mouseMove(met, met.width / 2, met.height / 2)
+            tryCompare(met.parent.ToolTip, "visible", true)
+            compare(met.parent.ToolTip.text, "Open a document to read its methods")
+            mouseMove(editor, 5, 5)
         }
         function test_learn_routes_to_help() {
             const book = findChild(help, "ribbonHelpDocumentation")
