@@ -1414,7 +1414,8 @@ pub(crate) fn ancestors(
     Ok(records)
 }
 
-pub(crate) fn verify_ancestors(bundle: &Path) -> Result<Vec<String>> {
+/// Verify the immutable upstream records using the shared bounded ancestry walk.
+pub fn verify_ancestors(bundle: &Path) -> Result<Vec<String>> {
     let mut issues = Vec::new();
     for (directory, publication) in ancestors(bundle)? {
         issues.extend(crate::provenance::verify_records(&directory, &publication)?);

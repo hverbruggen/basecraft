@@ -125,12 +125,15 @@ def submit_prepared(parameters, context, transport=post):
                    "approval_hash": plan["approval_hash"], "program": plan["program"], "database": plan["database"],
                    "submitted_residues": plan["submitted_residues"], "plan": {k: v for k, v in plan.items() if k != "fasta"},
                    "request_fields": {k: v for k, v in fields.items() if k != "QUERY"},
-                   "submitted_at": "", "message": "Cancelled before upload; nothing sent."}
+                   "submitted_at": "", "estimated_seconds": None, "message": "Cancelled before upload; nothing sent."}
     if not cancel.exists():
         # Cancellation may race after this check. It cannot undo an accepted job.
         receipt["submitted_at"] = datetime.now(UTC).isoformat()
         try:
-            status, rid, message = parse_response(transport(fields))
+            text = transport(fields)
+            status, rid, message = parse_response(text)
+            estimate = re.search(r"^\s*RTOE\s*=\s*(\d{1,5})\s*$", text, re.MULTILINE)
+            receipt["estimated_seconds"] = int(estimate[1]) if estimate else None
             receipt.update(status=status, rid=rid, message=message)
             if rid:
                 receipt["url"] = ENDPOINT + "?" + urlencode({"CMD": "Get", "RID": rid, "FORMAT_TYPE": "HTML"})

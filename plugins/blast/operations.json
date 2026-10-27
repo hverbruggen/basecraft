@@ -116,6 +116,14 @@
           },
           "request_fields": {
             "type": "object"
+          },
+          "estimated_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 99999
           }
         },
         "required": [
@@ -222,6 +230,14 @@
           },
           "request_fields": {
             "type": "object"
+          },
+          "estimated_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 99999
           }
         },
         "required": [
