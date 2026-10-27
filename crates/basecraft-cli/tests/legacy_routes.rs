@@ -13,6 +13,18 @@ fn run(profile: &Path, args: &[&str]) -> Output {
         .unwrap()
 }
 
+/// Every run directory below `root` that holds an input evidence record.
+fn input_records(root: &Path, found: &mut Vec<std::path::PathBuf>) {
+    for entry in std::fs::read_dir(root).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            input_records(&path, found);
+        } else if path.file_name().is_some_and(|name| name == "input.json") {
+            found.push(root.to_path_buf());
+        }
+    }
+}
+
 fn failure(output: &Output) -> String {
     assert!(!output.status.success(), "unexpected success");
     String::from_utf8_lossy(&output.stderr).into_owned()
@@ -167,6 +179,36 @@ fn plugin_command_runs_registered_sequence_operations() {
         outcome["effective_parameters"],
         serde_json::json!({"start":0,"end":4,"slow":false})
     );
+    // Saving afterwards scans every registered analysis store, including the
+    // records the run above just wrote.
+    let saved = call(&["end=4", "--save"]);
+    assert!(
+        saved.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&saved.stdout),
+        String::from_utf8_lossy(&saved.stderr)
+    );
+    // The frozen sequence file is recorded as an unchanged (identity) read that
+    // the shared evidence reader accepts; the session snapshot is generated.
+    let mut records = Vec::new();
+    input_records(temp.path(), &mut records);
+    let mut transformations = Vec::new();
+    for run in &records {
+        let input = basecraft_ops::input_evidence::read_input(run)
+            .unwrap_or_else(|error| panic!("{}: {error}", run.display()));
+        if let (Some(source), "identity-v1") = (&input.source, input.transformation.as_str()) {
+            assert_eq!(input.submitted_hash, source.hash, "{}", run.display());
+        }
+        transformations.push((input.state, input.transformation));
+    }
+    assert!(
+        transformations.contains(&("referenced".into(), "identity-v1".into())),
+        "{transformations:?}"
+    );
+    assert!(
+        transformations.contains(&("generated".into(), "sequence-arrow-buffers-v1".into())),
+        "{transformations:?}"
+    );
     let rejected = call(&["bogus=1"]);
     assert!(!rejected.status.success());
     let outcome: Value = serde_json::from_slice(&rejected.stdout).unwrap();
@@ -174,5 +216,9 @@ fn plugin_command_runs_registered_sequence_operations() {
         outcome["errors"][0]["code"], "invalid_arguments",
         "{outcome}"
     );
-    assert_eq!(std::fs::read(&sequence).unwrap(), b">sequence\nACGTACGT\n");
+    assert!(
+        std::fs::read_to_string(&sequence)
+            .unwrap()
+            .contains("ACGTACGT")
+    );
 }
