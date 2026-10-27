@@ -1,0 +1,160 @@
+{
+  "schema": 1,
+  "operations": [
+    {
+      "name": "submit",
+      "version": "1.0.0",
+      "implementation": "submit",
+      "title": "BLAST: submit and open results in browser",
+      "description": "Send frozen sequences once to NCBI. Returns a temporary RID link, not completed scientific results. CLI/Python/MCP never launch a browser. Oversize rejects unless truncate=true explicitly permits the documented prefix policy.",
+      "family": "file_analysis",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "alphabet": {
+            "type": "string",
+            "enum": [
+              "nucleotide",
+              "protein"
+            ]
+          },
+          "database": {
+            "type": "string",
+            "enum": [
+              "nt",
+              "nr"
+            ],
+            "default": "nt"
+          },
+          "expect": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "default": 0.05
+          },
+          "max_hits": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5000,
+            "default": 100
+          },
+          "megablast": {
+            "type": "boolean",
+            "default": false
+          },
+          "contact_email": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 254,
+            "description": "Authorized maintainer contact sent to NCBI. No default until configured."
+          },
+          "truncate": {
+            "type": "boolean",
+            "default": false
+          },
+          "approval_hash": {
+            "type": "string",
+            "maxLength": 80
+          }
+        },
+        "required": [
+          "alphabet",
+          "contact_email"
+        ]
+      },
+      "result": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "schema": {
+            "const": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "accepted",
+              "unknown",
+              "cancelled",
+              "rejected"
+            ]
+          },
+          "rid": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "url": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "query_hash": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "approval_hash": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "message": {
+            "type": "string",
+            "maxLength": 2048
+          },
+          "submitted_at": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "program": {
+            "type": "string"
+          },
+          "database": {
+            "type": "string"
+          },
+          "submitted_residues": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "plan": {
+            "type": "object"
+          },
+          "request_fields": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "schema",
+          "status",
+          "rid",
+          "url",
+          "query_hash",
+          "approval_hash",
+          "message",
+          "program",
+          "database",
+          "submitted_residues",
+          "plan",
+          "request_fields",
+          "submitted_at"
+        ]
+      },
+      "inputs": {
+        "queries": {
+          "view": "bytes",
+          "media_type": "application/octet-stream",
+          "min": 1,
+          "max": 1024
+        }
+      },
+      "outputs": {
+        "receipt": {
+          "media_type": "application/json",
+          "min": 1,
+          "max": 1,
+          "visibility": "result"
+        }
+      },
+      "effects": {
+        "document_write": false,
+        "artifact_write": true
+      }
+    }
+  ]
+}

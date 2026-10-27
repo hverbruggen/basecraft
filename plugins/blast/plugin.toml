@@ -1,0 +1,8 @@
+schema = 2
+contract = "operations.json"
+id = "basecraft.blast"
+name = "NCBI BLAST browser submission"
+version = "0.1.0"
+kinds = ["operation"]
+[entry]
+operation = "python:blast_plugin.py"

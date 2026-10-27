@@ -26,6 +26,18 @@ pub mod qobject {
         #[qinvokable]
         fn catalog(self: &AppOperations) -> QString;
         #[qinvokable]
+        fn blast_contact(self: &AppOperations) -> QString;
+        #[qinvokable]
+        fn preview_blast(self: &AppOperations, queries: &QString, parameters: &QString) -> QString;
+        #[qinvokable]
+        fn submit_blast(
+            self: Pin<&mut AppOperations>,
+            queries: &QString,
+            parameters: &QString,
+            approval: &QString,
+            truncate: bool,
+        ) -> bool;
+        #[qinvokable]
         fn submit(self: Pin<&mut AppOperations>, project: &QString, request: &QString) -> bool;
         #[qinvokable]
         fn poll(self: Pin<&mut AppOperations>);
@@ -115,7 +127,83 @@ fn catalog() -> basecraft_plugin_host::Result<Value> {
     }
     Ok(json!({"operations":rows,"diagnostics":registry.diagnostics}))
 }
+fn blast_parameters(parameters: &str) -> basecraft_plugin_host::Result<Value> {
+    let registry = Registry::load(&RegistryConfig::discover()?)?;
+    let operation = registry.resolve("basecraft.blast/submit@1", None)?;
+    basecraft_plugin_host::contract::normalize_parameters(
+        &operation.descriptor,
+        &serde_json::from_str(parameters)?,
+    )
+}
+
 impl qobject::AppOperations {
+    pub fn blast_contact(&self) -> QString {
+        QString::from(&std::env::var("BASECRAFT_BLAST_CONTACT_EMAIL").unwrap_or_default())
+    }
+    pub fn preview_blast(&self, queries: &QString, parameters: &QString) -> QString {
+        let result = (|| -> basecraft_plugin_host::Result<_> {
+            let queries: Vec<basecraft_ops::blast::Query> =
+                serde_json::from_str(&queries.to_string())?;
+            let parameters = blast_parameters(&parameters.to_string())?;
+            let mut plan =
+                serde_json::to_value(basecraft_ops::blast::prepare(&queries, &parameters)?)?;
+            plan.as_object_mut().map(|plan| plan.remove("fasta"));
+            Ok(plan)
+        })();
+        QString::from(
+            &match result {
+                Ok(plan) => plan,
+                Err(error) => json!({"error":error.to_string()}),
+            }
+            .to_string(),
+        )
+    }
+    pub fn submit_blast(
+        mut self: Pin<&mut Self>,
+        queries: &QString,
+        parameters: &QString,
+        approval: &QString,
+        truncate: bool,
+    ) -> bool {
+        if self.rust().busy {
+            return false;
+        }
+        let result = (|| -> basecraft_plugin_host::Result<_> {
+            let queries: Vec<basecraft_ops::blast::Query> =
+                serde_json::from_str(&queries.to_string())?;
+            let mut parameters = blast_parameters(&parameters.to_string())?;
+            parameters["approval_hash"] = json!(approval.to_string());
+            parameters["truncate"] = json!(truncate);
+            let plan = basecraft_ops::blast::prepare(&queries, &parameters)?;
+            basecraft_ops::blast::authorize(&plan, &parameters)?;
+            let paths = basecraft_platform::paths::AppPaths::discover()
+                .map_err(|e| basecraft_plugin_host::Error::Protocol(e.to_string()))?;
+            // The existing operation artifact store retains query evidence and
+            // receipt. This application-state root never edits the source file.
+            let root = paths
+                .state
+                .join("operation-jobs")
+                .join(ulid::Ulid::generate().to_string());
+            std::fs::create_dir_all(&root)?;
+            let input = root.join("query-source.json");
+            basecraft_ops::input_evidence::write_json(&input, &queries)?;
+            Ok((
+                root,
+                json!({"operation":"basecraft.blast/submit@1","inputs":{"queries":[{"kind":"file","path":"query-source.json"}]},"parameters":parameters}),
+            ))
+        })();
+        match result {
+            Ok((root, request)) => self.submit(
+                &QString::from(&root.display().to_string()),
+                &QString::from(&request.to_string()),
+            ),
+            Err(error) => {
+                self.set_message(QString::from(&format!("fail: {error}")));
+                false
+            }
+        }
+    }
+
     pub fn catalog(&self) -> QString {
         QString::from(
             &catalog()

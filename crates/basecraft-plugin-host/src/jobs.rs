@@ -500,6 +500,25 @@ fn execute(job: &Job) {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .effective_parameters = job.prepared.effective_parameters();
+    if job.prepared.lifecycle.external() {
+        if let Err(error) = job.prepared.submission_identity(&result) {
+            fail(
+                job,
+                OperationErrorCode::PluginProtocolViolation,
+                error.to_string(),
+            );
+            return;
+        }
+        let mut outcome = job
+            .outcome
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        outcome.data = result.data.as_deref().cloned();
+        outcome.state = RuntimeState::Finalizing;
+        if let Some(message) = &result.message {
+            outcome.warnings.push(message.clone());
+        }
+    }
     let validated = match job.prepared.validate_result(&result) {
         Ok(validated) => validated,
         Err(error) => {
@@ -522,7 +541,18 @@ fn execute(job: &Job) {
         .outcome
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if job.cancelled.load(Ordering::Acquire) {
+    if job.prepared.lifecycle.external() {
+        // Preserve the validated remote identity before local publication. Late
+        // cancellation is partial, repairable locally, never an external undo.
+        outcome.data = result.data.as_deref().cloned();
+        outcome.state = RuntimeState::Finalizing;
+        if job.cancelled.load(Ordering::Acquire) {
+            drop(outcome);
+            fail(job, OperationErrorCode::Cancelled,
+                "Cancellation cannot undo an external submission; inspect retained receipt, repair publication only".into());
+            return;
+        }
+    } else if job.cancelled.load(Ordering::Acquire) {
         drop(outcome);
         fail(
             job,
@@ -534,14 +564,14 @@ fn execute(job: &Job) {
     outcome.state = RuntimeState::Finalizing;
     let mut final_outcome = outcome.clone();
     drop(outcome);
-    let result = job.prepared.persist(&final_outcome).and_then(|()| {
+    let publication = job.prepared.persist(&final_outcome).and_then(|()| {
         job.prepared
             .finalize(&result, &validated, &mut final_outcome, false)
     });
     *job.outcome
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = final_outcome;
-    if let Err(error) = result {
+    if let Err(error) = publication {
         fail(
             job,
             OperationErrorCode::PublicationIncomplete,
@@ -553,7 +583,11 @@ fn execute(job: &Job) {
         .outcome
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    outcome.state = RuntimeState::Completed;
+    outcome.state = if job.prepared.lifecycle.external() && result.message.is_some() {
+        RuntimeState::Partial
+    } else {
+        RuntimeState::Completed
+    };
     if let Err(error) = job.prepared.persist(&outcome) {
         drop(outcome);
         fail(

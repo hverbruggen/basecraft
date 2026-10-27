@@ -457,6 +457,37 @@ impl<W: Write> Write for HashingWriter<W> {
 ///
 /// With `reverse`, the record is the reverse complement, so a reverse-
 /// strand annotation reads 5' to 3' and lies on the forward strand.
+/// Biological sequence of an annotation, in its stored segment order.
+/// Bounds are checked before the document's range reader is called.
+pub fn feature_sequence(
+    doc: &SequenceDoc,
+    feature: &basecraft_protocol::Feature,
+) -> Result<Vec<u8>> {
+    if feature.location.segments.is_empty()
+        || feature
+            .location
+            .segments
+            .iter()
+            .any(|s| s.start >= s.end || s.end > doc.len())
+    {
+        return Err(crate::error::invalid(
+            "Annotation is empty or outside the sequence",
+        ));
+    }
+    let mut sequence = Vec::new();
+    for segment in &feature.location.segments {
+        let part = extract_record(
+            doc,
+            segment.start,
+            segment.end,
+            &[],
+            segment.strand == basecraft_protocol::Strand::Reverse,
+        );
+        sequence.extend(part.sequence);
+    }
+    Ok(sequence)
+}
+
 pub fn extract_record(
     doc: &SequenceDoc,
     start: u64,

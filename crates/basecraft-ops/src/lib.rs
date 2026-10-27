@@ -2,6 +2,7 @@
 
 pub mod alignment_add;
 pub mod analysis_store;
+pub mod blast;
 pub mod files;
 pub mod input_evidence;
 pub mod links;

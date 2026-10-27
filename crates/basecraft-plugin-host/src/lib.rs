@@ -12,6 +12,7 @@ pub mod delimitation_pipeline;
 pub mod file_tool;
 pub mod installation;
 pub mod jobs;
+mod lifecycle;
 pub mod manifest;
 pub mod policy;
 pub mod process;

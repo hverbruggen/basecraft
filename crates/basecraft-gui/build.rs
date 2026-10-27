@@ -71,6 +71,7 @@ fn main() {
     let shader_dir = out_dir.join("shaders");
     let builder = CxxQtBuilder::new_qml_module(QmlModule::new("Basecraft").qml_files([
         "qml/Main.qml",
+        "qml/BlastDialog.qml",
         "qml/FileTreeDelegate.qml",
         "qml/DelimitationAnalysisDialog.qml",
         "qml/DocumentRecordDialog.qml",

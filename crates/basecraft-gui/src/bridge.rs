@@ -211,6 +211,8 @@ pub mod qobject {
         /// order, reverse-complemented on the reverse strand.
         #[qinvokable]
         fn feature_sequence(self: &GenomeController, id: i32) -> QString;
+        #[qinvokable]
+        fn blast_queries(self: &GenomeController, source: &QString, feature: i32) -> QString;
         /// Scroll the linear view to a fraction of the sequence.
         #[qinvokable]
         fn scroll_to(self: Pin<&mut GenomeController>, fraction: f64);
@@ -1832,6 +1834,43 @@ impl qobject::GenomeController {
         }
     }
 
+    pub fn blast_queries(&self, source: &QString, feature: i32) -> QString {
+        let result = self
+            .with_doc(|session, id| -> basecraft_ops::Result<_> {
+                let source = source.to_string();
+                if source == "all" {
+                    return session.blast_records(id);
+                }
+                let doc = session.checked_sequence(id)?;
+                let selected = if source == "annotation" {
+                    let fid = u32::try_from(feature).map_err(|_| {
+                        basecraft_ops::Error::Invalid("Choose an annotation".into())
+                    })?;
+                    Some(doc.feature(FeatureId(fid)).ok_or_else(|| {
+                        basecraft_ops::Error::Invalid("Annotation no longer exists".into())
+                    })?)
+                } else {
+                    None
+                };
+                let range = if source == "selection" {
+                    Some(self.rust().view.selection.ok_or_else(|| {
+                        basecraft_ops::Error::Invalid("Select a sequence range".into())
+                    })?)
+                } else {
+                    None
+                };
+                let mut query = basecraft_ops::blast::from_doc(doc, range, selected)?;
+                query.source["session"] = serde_json::json!(session.id());
+                query.source["generation"] = serde_json::json!(session.generation(id));
+                Ok(vec![query])
+            })
+            .unwrap_or_else(|| Err(basecraft_ops::Error::Invalid("Sequence closed".into())));
+        QString::from(&match result {
+            Ok(queries) => serde_json::to_string(&queries).unwrap_or_default(),
+            Err(error) => serde_json::json!({"error":error.to_string()}).to_string(),
+        })
+    }
+
     pub fn feature_sequence(&self, id: i32) -> QString {
         let Ok(fid) = u32::try_from(id) else {
             return QString::default();
@@ -1839,17 +1878,10 @@ impl qobject::GenomeController {
         let text = self
             .with_doc(|s, d| {
                 let doc = s.doc(d);
-                let f = doc.feature(FeatureId(fid))?;
-                let mut out = String::with_capacity(usize::try_from(f.location.len()).unwrap_or(0));
-                for seg in &f.location.segments {
-                    let bases = doc.read(seg.start, seg.end);
-                    if seg.strand == Strand::Reverse {
-                        out.extend(bases.iter().rev().map(|&b| char::from(complement(b))));
-                    } else {
-                        out.push_str(&String::from_utf8_lossy(&bases));
-                    }
-                }
-                Some(out)
+                let feature = doc.feature(FeatureId(fid))?;
+                basecraft_ops::files::feature_sequence(doc, feature)
+                    .ok()
+                    .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
             })
             .flatten()
             .unwrap_or_default();
@@ -2009,24 +2041,6 @@ const FEATURE_KINDS: &[&str] = &[
     "misc_difference",
     "source",
 ];
-
-fn complement(b: u8) -> u8 {
-    match b.to_ascii_uppercase() {
-        b'A' => b'T',
-        b'T' | b'U' => b'A',
-        b'C' => b'G',
-        b'G' => b'C',
-        b'R' => b'Y',
-        b'Y' => b'R',
-        b'K' => b'M',
-        b'M' => b'K',
-        b'B' => b'V',
-        b'V' => b'B',
-        b'D' => b'H',
-        b'H' => b'D',
-        other => other,
-    }
-}
 
 /// Editor JSON: `{"id", "kind", "location": "GenBank syntax, 1-based",
 /// "qualifiers": [{"key", "value", "flag"}]}`. Internal `gff:` qualifiers

@@ -1012,6 +1012,7 @@ ApplicationWindow {
                     RibbonGroup {
                         enabled: window.currentKind === "sequence"
                         title: "Find"
+                        RibbonButton { commandId: "sequence.blast"; text: "BLAST"; tip: "Submit sequence queries to NCBI and open browser results"; iconName: "search"; onInvoked: window.beginBlast("whole") }
                         RibbonButton { commandId: "ribbon.annotate-open-reading-frames";
                             text: "ORFs"
                             tip: "Annotate open reading frames"
@@ -1819,6 +1820,13 @@ ApplicationWindow {
         }
     }
 
+    BlastDialog { id: blastDialog; onCopyText: text => clipboard.put(text) }
+    function beginBlast(mode, feature) {
+        const controller = window.current
+        const annotation = feature === undefined ? controller.selected_feature() : feature
+        blastDialog.show(source => controller.blast_queries(source, annotation), mode)
+    }
+
     // Only what applies where you clicked: an annotation, or the selection.
     // Global actions (zoom, whole sequence) live in the toolbar.
     Menu {
@@ -1834,6 +1842,7 @@ ApplicationWindow {
             visible: menu.onAnnotation
             onTriggered: clipboard.put(window.current.feature_sequence(menu.info.feature))
         }
+        Item { text: "BLAST annotation at NCBI"; visible: menu.onAnnotation; onTriggered: window.beginBlast("annotation", menu.info.feature) }
         Item { text: "Extract as new sequence"; visible: menu.onAnnotation; onTriggered: window.current.extract_feature(menu.info.feature) }
         Item { text: "Zoom to annotation"; visible: menu.onAnnotation; onTriggered: window.current.zoom_to_feature(menu.info.feature) }
 
@@ -1846,6 +1855,7 @@ ApplicationWindow {
         }
         Item { text: "Extract as new sequence"; visible: !menu.onAnnotation; enabled: menu.info.selection; onTriggered: window.current.extract_selection() }
         Item { text: "Zoom to selection"; visible: !menu.onAnnotation; enabled: menu.info.selection; onTriggered: window.current.zoom_to_selection() }
+        Item { text: "BLAST selection at NCBI"; visible: !menu.onAnnotation; enabled: menu.info.selection; onTriggered: window.beginBlast("selection") }
         Item { text: "Find ORFs in selection…"; visible: !menu.onAnnotation; enabled: menu.info.selection; onTriggered: orfDialog.search(true) }
         Item { text: "Predict genes in selection…"; visible: !menu.onAnnotation; enabled: menu.info.selection; onTriggered: genesDialog.predict(true) }
     }

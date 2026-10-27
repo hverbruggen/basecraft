@@ -288,6 +288,26 @@ impl Session {
         Ok(&sequence.doc)
     }
 
+    /// Every record, with the current unsaved first record replacing its disk view.
+    pub fn blast_records(&self, id: DocId) -> Result<Vec<crate::blast::Query>> {
+        self.checked_sequence(id)?;
+        let opened = self.sequence_of(id)?;
+        let mut queries = if let Some(fasta) = &opened.fasta {
+            crate::blast::from_fasta(fasta.bytes(), self.doc_key(id))?
+        } else {
+            Vec::new()
+        };
+        let mut current = crate::blast::from_doc(&opened.doc, None, None)?;
+        current.source["session"] = serde_json::json!(self.id());
+        current.source["generation"] = serde_json::json!(self.generation(id));
+        if queries.is_empty() {
+            queries.push(current);
+        } else {
+            queries[0] = current;
+        }
+        Ok(queries)
+    }
+
     pub fn doc_key(&self, id: DocId) -> &str {
         &self.docs[id.0].key
     }

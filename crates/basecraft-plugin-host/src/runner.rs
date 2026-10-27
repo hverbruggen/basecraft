@@ -227,6 +227,7 @@ pub struct SequenceTarget {
 }
 
 pub struct PreparedOperation {
+    pub(crate) lifecycle: crate::lifecycle::Lifecycle,
     pub sequence: Option<SequenceTarget>,
     pub operation: RegisteredOperation,
     pub run: ArtifactRun,
@@ -253,6 +254,7 @@ impl PreparedOperation {
         registry: &crate::registry::Registry,
     ) -> Result<Self> {
         policy.check(&operation)?;
+        let lifecycle = crate::lifecycle::Lifecycle::for_operation(&operation)?;
         let workflow_registry = if operation.descriptor.host_workflow.is_some() {
             registry.resolve("basecraft.delimitation/haplotypes@1", None)?;
             if operation.descriptor.host_workflow.as_deref() != Some("asap_alignment") {
@@ -345,6 +347,7 @@ impl PreparedOperation {
             .tempdir()?;
         let mut frozen_inputs = BTreeMap::new();
         let mut sources = Vec::new();
+        let mut submission_queries = Vec::new();
         for (name, paths) in bindings.inputs {
             let binding = &operation.descriptor.inputs[&name];
             let mut values = Vec::new();
@@ -364,6 +367,15 @@ impl PreparedOperation {
                     }
                 ));
                 let original_hash = file_tool::freeze_file(&source, &path)?;
+                if lifecycle.external() {
+                    let mut queries = basecraft_ops::blast::from_file(&path)?;
+                    for query in &mut queries {
+                        if query.source.is_object() && query.source.get("path").is_some() {
+                            query.source["path"] = json!(source.display().to_string());
+                        }
+                    }
+                    submission_queries.extend(queries);
+                }
                 let transformation = match binding.view {
                     InputView::Bytes => "identity-v1",
                     InputView::AlignedFasta | InputView::UngappedFasta => {
@@ -405,6 +417,13 @@ impl PreparedOperation {
             }
             frozen_inputs.insert(name.clone(), values);
         }
+        let submission_plan = if lifecycle.external() {
+            let plan = basecraft_ops::blast::prepare(&submission_queries, &parameters)?;
+            basecraft_ops::blast::authorize(&plan, &parameters)?;
+            Some(plan)
+        } else {
+            None
+        };
         let run_id = ulid::Ulid::generate().to_string();
         let anchor = policy.root.join("operation");
         let anchor = if policy.artifact_write {
@@ -512,6 +531,29 @@ impl PreparedOperation {
                 reference: None,
             });
         }
+        if let Some(plan) = &submission_plan {
+            let payload = serde_json::to_vec(plan)?;
+            let path = run.artifact("query-preparation.json")?;
+            basecraft_io::write_atomic(&path, |w| std::io::Write::write_all(w, &payload))
+                .map_err(basecraft_ops::Error::from)?;
+            let dependencies = sources_from_upstream(run.directory())?;
+            input_evidence::link_generated_input(
+                &run,
+                &dependencies,
+                &payload,
+                "blast-query-preparation-v1",
+                "Frozen BLAST submission",
+            )?;
+            ledger_inputs.push(ArtifactRevision {
+                id: format!("{}:queries", run.id()),
+                logical_name: "query-preparation.json".into(),
+                hash: basecraft_io::hash_bytes(&payload),
+                size: payload.len() as u64,
+                retained: Some("query-preparation.json".into()),
+                reference: None,
+            });
+            frozen_inputs.insert("queries".into(), vec![path.display().to_string()]);
+        }
         let mut outputs = BTreeMap::new();
         for (name, binding) in &operation.descriptor.outputs {
             let path = if operation.descriptor.host_workflow.is_some() {
@@ -539,6 +581,7 @@ impl PreparedOperation {
         input_evidence::write_json(&run.artifact("descriptor.json")?, &operation.descriptor)?;
         input_evidence::write_json(&run.artifact("request.json")?, &request)?;
         Ok(Self {
+            lifecycle,
             sequence,
             operation,
             run,
@@ -566,6 +609,7 @@ impl PreparedOperation {
             return Err(Error::Protocol("cancelled before spawn".into()));
         }
         self.operation.package.verify()?;
+        let _contact = self.lifecycle.reserve(&cancelled)?;
         let mut process = PluginProcess::spawn_accepted(
             &self.operation.package.manifest,
             self.operation
@@ -575,7 +619,7 @@ impl PreparedOperation {
                 .ok_or_else(|| Error::Protocol("plugin runtime is unavailable".into()))?,
             permit.threads(),
         )?;
-        process.cancellation(cancelled);
+        self.lifecycle.configure(&mut process, cancelled.clone());
         let mut context = self.context.clone();
         context.cpu_threads = permit.threads();
         let effective = Value::Object(crate::compute::parameters_for(
@@ -592,13 +636,35 @@ impl PreparedOperation {
             .granted_parameters
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = effective.clone();
-        let result = process.invoke_context(
+        let mut result = process.invoke_context(
             &self.operation.descriptor.implementation,
             effective.clone(),
             context.clone(),
             self.sequence.as_ref().map(|target| &target.snapshot),
         );
         let teardown = process.finish();
+        if self.lifecycle.external() && result.is_err() {
+            let receipt = Path::new(&self.context.outputs["receipt"]);
+            if receipt.is_file() {
+                result = (|| -> Result<InvokeResult> {
+                    let data =
+                        serde_json::from_slice(&basecraft_ops::provenance::read_record(receipt)?)?;
+                    Ok(InvokeResult {
+                        data: Some(Box::new(data)),
+                        artifacts: vec![PluginArtifact {
+                            role: "receipt".into(),
+                            path: ".".into(),
+                        }],
+                        ..InvokeResult::default()
+                    })
+                })();
+            } else {
+                result = Err(Error::Protocol(format!(
+                    "submission status unknown: {}; no validated receipt; do not resubmit automatically",
+                    result.unwrap_err()
+                )));
+            }
+        }
         let (stdout, stderr) = process.captured_output();
         let evidence = input_evidence::write_json(
             &self.run.artifact("execution.json")?,
@@ -612,9 +678,23 @@ impl PreparedOperation {
             }),
         );
         match result {
-            Ok(result) => {
-                teardown?;
-                evidence?;
+            Ok(mut result) => {
+                if !self.lifecycle.external() {
+                    teardown?;
+                    evidence?;
+                } else {
+                    let diagnostics: Vec<_> = [teardown.err(), evidence.err()]
+                        .into_iter()
+                        .flatten()
+                        .map(|e| e.to_string())
+                        .collect();
+                    if !diagnostics.is_empty() {
+                        result.message = Some(format!(
+                            "Local execution evidence incomplete: {}",
+                            diagnostics.join("; ")
+                        ));
+                    }
+                }
                 Ok(result)
             }
             Err(error) => match evidence {
@@ -624,6 +704,20 @@ impl PreparedOperation {
                 ))),
             },
         }
+    }
+
+    /// Validate the returned identity separately from fallible artifact writes,
+    /// so an accepted external side effect remains available in a partial outcome.
+    pub(crate) fn submission_identity(&self, result: &InvokeResult) -> Result<()> {
+        if !self.lifecycle.external() {
+            return Ok(());
+        }
+        contract::BoundedSchema::compile(&self.operation.descriptor.result)?
+            .validate(result.data.as_deref().unwrap_or(&Value::Null))?;
+        let plan: Value = serde_json::from_slice(&basecraft_ops::provenance::read_record(
+            &self.run.artifact("query-preparation.json")?,
+        )?)?;
+        self.lifecycle.validate_identity(result, &plan)
     }
 
     /// Validate every member before crossing the publication boundary.
@@ -643,6 +737,16 @@ impl PreparedOperation {
         }
         if result.artifacts.len() > MAX_ARTIFACTS {
             return Err(Error::Protocol("artifact count limit exceeded".into()));
+        }
+        if self.lifecycle.external() {
+            self.submission_identity(result)?;
+            let receipt = Path::new(&self.context.outputs["receipt"]);
+            if !receipt.try_exists()? {
+                input_evidence::write_json(
+                    receipt,
+                    result.data.as_deref().unwrap_or(&Value::Null),
+                )?;
+            }
         }
         let mut paths = BTreeSet::new();
         let mut counts: BTreeMap<String, usize> = BTreeMap::new();
@@ -761,6 +865,16 @@ impl PreparedOperation {
         scan_files(&scan_root, &mut actual, 0)?;
         if actual != paths {
             return Err(Error::Protocol("undeclared extra staged outputs".into()));
+        }
+        if self.lifecycle.external() {
+            let plan: Value = serde_json::from_slice(&basecraft_ops::provenance::read_record(
+                &self.run.artifact("query-preparation.json")?,
+            )?)?;
+            self.lifecycle.validate_receipt(
+                result,
+                Path::new(&self.context.outputs["receipt"]),
+                &plan,
+            )?;
         }
         input_evidence::write_json(&self.run.artifact("validated.json")?, result)?;
         input_evidence::write_json(&self.run.artifact("validated-artifacts.json")?, &validated)?;
