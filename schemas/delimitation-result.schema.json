@@ -650,7 +650,7 @@
           "minimum": 0
         },
         "support_minimums": {
-          "description": "Per-set thresholds in percent, falling back to support_min.",
+          "description": "Per-set thresholds in percent, falling back to `support_min`.",
           "type": "object",
           "additionalProperties": {
             "type": "integer",
