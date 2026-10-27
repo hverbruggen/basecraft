@@ -445,6 +445,17 @@ def main():
         status, _ = cli("metadata", "status", str(meta_project / "rbcL.fasta"),
                         "--project", str(meta_project))
         assert status["unlinked"] == [] and status["records"] == 2, status
+        # The .ods template is a valid ZIP/OpenDocument file for other readers.
+        import zipfile
+        template = root / "template.ods"
+        subprocess.run([str(binary), "metadata", "template", str(meta_project / "rbcL.fasta"),
+                        "--output", str(template), "--project", str(meta_project)],
+                       env=env, check=True, capture_output=True, timeout=45)
+        with zipfile.ZipFile(template) as archive:
+            assert archive.testzip() is None
+            assert archive.namelist()[0] == "mimetype"
+            assert archive.read("mimetype") == b"application/vnd.oasis.opendocument.spreadsheet"
+            assert b"HV2|Caulerpa_sp._3|not" in archive.read("content.xml")
         record("specimen metadata imports agree across CLI, MCP and Python")
         assert hashlib.sha256(binary.read_bytes()).hexdigest() == receipt["sha256"]
         receipt["status"] = "passed"

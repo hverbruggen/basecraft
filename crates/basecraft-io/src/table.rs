@@ -814,6 +814,25 @@ mod tests {
     }
 
     #[test]
+    fn libreoffice_files_read_alike() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../testdata/fixtures/metadata");
+        let csv = read_spreadsheet(&dir.join("specimens.csv")).unwrap();
+        for name in ["specimens.ods", "specimens.xlsx"] {
+            let sheet = read_spreadsheet(&dir.join(name)).unwrap();
+            assert_eq!(sheet.headers, csv.headers, "{name}");
+            assert_eq!(sheet.rows[0][1], "Codium fragile", "{name}");
+            assert_eq!(sheet.rows[0][2], "2019-05-12", "{name}");
+            assert_eq!(sheet.rows[0][3], "-38.1", "{name}");
+            // The spreadsheet program made the voucher number a number.
+            assert_eq!(sheet.rows[0][4], "12", "{name}");
+            assert_eq!(sheet.rows[0][5], "Port Phillip Bay, Victoria", "{name}");
+            assert_eq!(sheet.rows[1][2], "not collected", "{name}");
+            assert_eq!(sheet.date_cells, [(0, 2)], "{name}");
+        }
+    }
+
+    #[test]
     fn ods_repeats_groups_and_dates() {
         let content = r#"<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"><office:body><office:spreadsheet><table:table><table:table-header-rows><table:table-row><table:table-cell office:value-type="string"><text:p>id</text:p></table:table-cell><table:table-cell office:value-type="string"><text:p>date</text:p></table:table-cell><table:table-cell table:number-columns-repeated="1000"/></table:table-row></table:table-header-rows><table:table-row table:number-rows-repeated="2"><table:table-cell office:value-type="string"><text:p>A<text:s text:c="2"/>B</text:p></table:table-cell><table:table-cell office:value-type="date" office:date-value="2019-05-12T00:00:00"/></table:table-row><table:table-row table:number-rows-repeated="1048570"><table:table-cell table:number-columns-repeated="1024"/></table:table-row></table:table></office:spreadsheet></office:body></office:document-content>"#;
         let mut zip = crate::archive::Writer::default();

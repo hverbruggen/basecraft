@@ -173,7 +173,8 @@ impl Writer {
         self.directory.extend_from_slice(b"PK\x01\x02");
         self.directory.extend_from_slice(&20u16.to_le_bytes());
         common(&mut self.directory);
-        self.directory.extend_from_slice(&[0; 8]);
+        // Comment length, disk number, internal attributes.
+        self.directory.extend_from_slice(&[0; 6]);
         self.directory.extend_from_slice(&0u32.to_le_bytes());
         self.directory.extend_from_slice(&offset.to_le_bytes());
         self.directory.extend_from_slice(name.as_bytes());
