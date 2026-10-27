@@ -74,6 +74,17 @@ generated transformations retain their payload in the run:
 `sequence-arrow-buffers-v1` (a sequence operation's session snapshot: residue
 length as little-endian u64, residues, then the feature buffer).
 
+A sequence-proposal run given a file reads that file and proposes edits to
+the same document. Its referenced input record carries `"proposal_target":
+true`. The record, source reference and hashes stay as written, the run's
+generated snapshot retains the residues and features the plugin was given,
+and the edited document records the run in its own history. The save guard does
+not list such a record as an affected analysis, so saving the edited document
+needs no evidence decision; after that save, verification reports the
+referenced source as changed, which is the expected state. Every other run
+that references the same file still guards it. Records without the field
+behave as before.
+
 Evidence states are `referenced`, `generated`, `preserved` and `broken`.
 Before replacement, the shared Session save guard inspects known stores and
 ancestor-folder stores, using metadata only. It lists direct and declared downstream

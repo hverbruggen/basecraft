@@ -462,6 +462,14 @@ impl PreparedOperation {
             record.submitted_hash = submitted_hash;
             record.submitted_size = std::fs::metadata(&frozen)?.len();
             record.transformation = transformation.into();
+            if sequence.is_some() {
+                // The run reads this file and proposes edits to the same
+                // document; saving them must not count as replacing an
+                // analysis input.
+                record
+                    .extra
+                    .insert(input_evidence::PROPOSAL_TARGET.into(), json!(true));
+            }
             input_evidence::write_json(&ledger.artifact("input.json")?, &record)?;
             if let Some(role) = frozen_inputs
                 .iter()

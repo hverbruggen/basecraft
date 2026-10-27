@@ -112,6 +112,12 @@ pub struct SubmittedInput {
     pub extra: BTreeMap<String, serde_json::Value>,
 }
 
+/// `input.json` field marking a referenced source that is also the document
+/// a sequence-proposal run applied its proposals to. Saving that document is
+/// the expected next step, so the source does not guard saves; the record and
+/// its hashes stay as written.
+pub const PROPOSAL_TARGET: &str = "proposal_target";
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SavePolicy {
@@ -488,7 +494,8 @@ fn scan_run(
     }
     let input = read_input(&run)?;
     let mut analysis = None;
-    if input.state == "referenced" {
+    let proposal_target = input.extra.get(PROPOSAL_TARGET) == Some(&serde_json::json!(true));
+    if input.state == "referenced" && !proposal_target {
         if let Some(reference) = &input.source {
             if same_source(&run, reference, target) {
                 let can_preserve = stamp(target).is_ok_and(|s| {
