@@ -137,6 +137,9 @@ fn main() {
         "qml/CladeEditor.qml",
         "qml/TreeStyleDialog.qml",
         "qml/ShortcutsDialog.qml",
+        "qml/SpecimenTableDialog.qml",
+        "qml/MetadataImportDialog.qml",
+        "qml/MetadataReviewDialog.qml",
     ]))
     .qrc("icons.qrc")
     .qrc("controls.qrc")
@@ -150,6 +153,7 @@ fn main() {
         "src/sanger_bridge.rs",
         "src/tree_bridge.rs",
         "src/delimitation_bridge.rs",
+        "src/metadata_bridge.rs",
         "src/application_test_bridge.rs",
     ])
     .cpp_file("cpp/instanceview.h")

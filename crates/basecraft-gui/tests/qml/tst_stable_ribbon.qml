@@ -65,7 +65,9 @@ Item {
                     property var commands: []
                     function registerRibbonCommand(c) { commands.push(c) }
                     function ribbonIconFor(id) { return "tree" }
-                    QtObject { id: shell; property color foreground: "black"; property color background: "white"; property color accent: "blue" }
+                    QtObject { id: shell; property color foreground: "black"; property color background: "white"; property color accent: "blue"; property string project_dir: "/project" }
+                    property string metadataFasta: currentKind === "alignment" ? "/project/rbcL.fasta" : ""
+                    property var metadataLinks: currentKind === "alignment" ? ({records: 3, unlinked: ["a"]}) : ({})
                     ${host.source.slice(tabsStart, tabsEnd)}
                     ${declarations}
                     ${components}
@@ -86,7 +88,7 @@ Item {
             const ribbon = findChild(scene, "applicationRibbon")
             ribbon.width = data.width
             scene.ribbonSizeFactor = data.factor
-            compare(scene.ribbonTabs, ["File", "View", "Annotations", "Alignment", "Phylogeny", "Tree", "Delimitation", "Trace", "Help"])
+            compare(scene.ribbonTabs, ["File", "View", "Annotations", "Alignment", "Phylogeny", "Tree", "Delimitation", "Trace", "Data submission", "Help"])
             scene.ribbonTabName = "Phylogeny"
             for (const kind of ["", "sequence", "alignment", "tree", "delimitation", "trace"]) {
                 scene.currentKind = kind
@@ -104,6 +106,9 @@ Item {
                         if (name === "Delimitation" && command.commandId === "species.gmyc-workspace") compare(command.enabled, ["alignment", "tree", "delimitation"].includes(kind))
                         if (name === "Delimitation" && command.commandId === "species.asap-workspace") compare(command.enabled, kind === "alignment")
                         if (name === "Trace" && command.commandId === "ribbon.choose-the-terminal-signal-percentage-for-a-new-draft") compare(command.enabled, kind === "trace")
+                        if (name === "Data submission" && command.commandId === "metadata.table") verify(command.enabled)
+                        if (name === "Data submission" && command.commandId === "metadata.import-headers") compare(command.enabled, kind === "alignment")
+                        if (name === "Data submission" && command.commandId === "metadata.template") compare(command.enabled, kind === "alignment")
                     }
                     scene.ribbonTabName = "View"
                     verify(waitForPolish(scene.Window.window))

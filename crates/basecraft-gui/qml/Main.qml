@@ -94,10 +94,10 @@ ApplicationWindow {
     readonly property bool treeOpen: currentKind === "tree"
     readonly property bool delimitationOpen: currentKind === "delimitation"
     readonly property bool traceOpen: currentKind === "trace"
-    readonly property var ribbonTabs: ["File", "View", "Annotations", "Alignment", "Phylogeny", "Tree", "Delimitation", "Trace", "Help"]
+    readonly property var ribbonTabs: ["File", "View", "Annotations", "Alignment", "Phylogeny", "Tree", "Delimitation", "Trace", "Data submission", "Help"]
     readonly property string ribbonTab: ribbonTabs.includes(ribbonTabName) ? ribbonTabName : "File"
     // Each tab's panel in the ribbon's stack.
-    readonly property var ribbonPanels: ({ "File": 0, "View": 1, "Annotations": 2, "Help": 3, "Alignment": 4, "Tree": 5, "Phylogeny": 6, "Delimitation": 7, "Trace": 8 })
+    readonly property var ribbonPanels: ({ "File": 0, "View": 1, "Annotations": 2, "Help": 3, "Alignment": 4, "Tree": 5, "Phylogeny": 6, "Delimitation": 7, "Trace": 8, "Data submission": 9 })
     // Only the wrapped layout is offered for now; files always open in it.
 
     readonly property int availableCpuThreads: shell.available_cpu_threads()
@@ -273,6 +273,12 @@ ApplicationWindow {
 
     // Open a file in a tab, or switch to its tab if it's already open.
     function openPath(path) {
+        // The specimen table is project data, edited on the Data submission tab.
+        if (shell.file_kind(path) === "metadata") {
+            ribbonTabName = "Data submission"
+            specimenTable.open()
+            return
+        }
         focusOpenedDocument = true
         for (let i = 0; i < openFiles.count; i++) {
             if (openFiles.get(i).path === path) { tabs.currentIndex = i; Qt.callLater(refreshCurrent); return }
@@ -1317,6 +1323,36 @@ ApplicationWindow {
                     Item { Layout.fillWidth: true }
                     HelpGroup {}
                 }
+
+                // Data submission: the project's specimen table and its imports.
+                RibbonPage {
+                    spacing: 6 * window.ribbonSizeFactor
+                    RibbonGroup {
+                        title: "Specimens"
+                        RibbonButton { commandId: "metadata.table"; text: "Table"; iconName: "matrix"; tip: shell.project_dir.length ? "The project's specimens, identifications and collection data" : "Choose a project folder first"; enabled: shell.project_dir.length > 0; onInvoked: specimenTable.open() }
+                    }
+                    ToolSeparator { Layout.fillHeight: true }
+                    RibbonGroup {
+                        title: "Import"
+                        RibbonButton { commandId: "metadata.import-headers"; text: "Headers"; iconName: "text-representation"; tip: window.metadataFasta.length ? "Read specimen IDs, taxa and values from this file's FASTA headers" : "Open a FASTA file first"; enabled: shell.project_dir.length > 0 && window.metadataFasta.length > 0; onInvoked: window.beginMetadataImport("headers", window.metadataFasta) }
+                        RibbonButton { commandId: "metadata.import-sheet"; text: "Spreadsheet"; iconName: "add-file"; tip: "Import specimen data from .ods, .xlsx, CSV or TSV"; enabled: shell.project_dir.length > 0; onInvoked: metadataSheetPicker.open() }
+                    }
+                    ToolSeparator { Layout.fillHeight: true }
+                    RibbonGroup {
+                        title: "Records"
+                        RibbonButton { commandId: "metadata.template"; text: "Template"; iconName: "new-file"; tip: window.metadataFasta.length ? "Save an .ods sheet with a row per record of this file, to fill in" : "Open a FASTA file first"; enabled: shell.project_dir.length > 0 && window.metadataFasta.length > 0; onInvoked: metadataTemplateDestination.open() }
+                        Label {
+                            objectName: "metadataLinkStatus"
+                            visible: window.metadataLinks.records !== undefined
+                            text: window.metadataLinks.records === undefined ? ""
+                                : window.metadataLinks.unlinked.length === 0 ? "All " + window.metadataLinks.records + " records linked"
+                                : window.metadataLinks.unlinked.length + " of " + window.metadataLinks.records + " records not linked"
+                            Accessible.name: text
+                        }
+                    }
+                    Item { Layout.fillWidth: true }
+                    HelpGroup {}
+                }
         }
     }
 
@@ -1325,6 +1361,83 @@ ApplicationWindow {
     OperationPickerDialog { id: operationPicker; onOpenResult: (path) => window.openPath(path) }
 
     ShortcutsDialog { id: shortcuts; commands: window.applicationCommands }
+
+    // The project's specimen metadata (Data submission tab). It follows the
+    // project folder; opening a project never creates metadata files.
+    MetadataController { id: specimenMetadata }
+    readonly property string metadataProject: shell.project_dir
+    onMetadataProjectChanged: specimenMetadata.use_project(metadataProject)
+    readonly property var metadataTable: JSON.parse(specimenMetadata.table)
+    // The open FASTA file whose records can be imported, linked or templated.
+    readonly property string metadataFasta: current && (alignmentOpen || currentKind === "sequence")
+        && /\.(fa|fasta|fna|fas|ffn|faa|afa)$/i.test(current.file_path || "") ? current.file_path : ""
+    // Records of that file without a stored specimen link; only reported.
+    readonly property var metadataLinks: metadataFasta.length && specimenMetadata.available && metadataTable
+        ? JSON.parse(specimenMetadata.link_status(metadataFasta)) : ({})
+    function metadataColumns() {
+        const names = metadataTable.columns.map(c => c.name)
+        for (const c of metadataTable.addable || []) names.push(c.name)
+        return names
+    }
+    function beginMetadataImport(kind, path) {
+        if (!specimenMetadata.available && !specimenMetadata.create()) { specimenTable.open(); return }
+        const data = kind === "headers" ? JSON.parse(specimenMetadata.header_preview(path, "|"))
+            : JSON.parse(specimenMetadata.sheet_preview(path))
+        metadataImport.separator = "|"
+        metadataImport.show(kind, path, data, metadataColumns(), metadataTable.patterns)
+    }
+    SpecimenTableDialog {
+        id: specimenTable
+        table: window.metadataTable
+        canUndo: specimenMetadata.can_undo
+        canRedo: specimenMetadata.can_redo
+        message: specimenMetadata.message
+        messageKind: specimenMetadata.message_kind
+        onCreateRequested: specimenMetadata.create()
+        onCellEdited: (specimen, column, text) => specimenMetadata.set_cell(specimen, column, text)
+        onTaxonEdited: (specimen, name) => specimenMetadata.identify(specimen, name)
+        onSpecimenAdded: id => specimenMetadata.add_specimen(id)
+        onSpecimenRemoved: id => specimenMetadata.remove_specimen(id)
+        onColumnAdded: name => specimenMetadata.add_column(name)
+        onUndoRequested: specimenMetadata.undo()
+        onRedoRequested: specimenMetadata.redo()
+    }
+    MetadataImportDialog {
+        id: metadataImport
+        onPreviewRequested: separator => metadataImport.setPreview(JSON.parse(specimenMetadata.header_preview(metadataImport.file, separator)))
+        onPlanRequested: (separator, roles, createSpecimens, overwrite) => {
+            const ok = metadataImport.mode === "headers"
+                ? specimenMetadata.plan_headers(metadataImport.file, separator, roles, createSpecimens, overwrite)
+                : specimenMetadata.plan_sheet(metadataImport.file, roles, metadataImport.preview.has_document ? "" : window.metadataFasta, createSpecimens, overwrite)
+            if (!ok) { metadataImport.message = specimenMetadata.message; return }
+            metadataImport.close()
+            metadataReview.show(JSON.parse(specimenMetadata.plan), metadataImport.mode === "headers" ? "pattern" : "mapping")
+        }
+    }
+    MetadataReviewDialog {
+        id: metadataReview
+        onApplyRequested: remember => specimenMetadata.apply_plan(remember)
+        onDropped: specimenMetadata.clear_plan()
+    }
+    FileDialog {
+        id: metadataSheetPicker
+        title: "Import specimen data from a spreadsheet"
+        currentFolder: window.activeFolder()
+        onVisibleChanged: if (visible) currentFolder = window.activeFolder()
+        nameFilters: ["Spreadsheets (*.ods *.xlsx *.xls *.csv *.tsv)", "All files (*)"]
+        onAccepted: window.beginMetadataImport("sheet", window.localPath(selectedFile))
+    }
+    FileDialog {
+        id: metadataTemplateDestination
+        title: "Save the specimen data template"
+        fileMode: FileDialog.SaveFile
+        defaultSuffix: "ods"
+        nameFilters: ["OpenDocument spreadsheet (*.ods)"]
+        onAccepted: {
+            if (!specimenMetadata.available) specimenMetadata.create()
+            specimenMetadata.write_template(window.metadataFasta, window.localPath(selectedFile))
+        }
+    }
 
     AppContentDialog {
         id: orfDialog
