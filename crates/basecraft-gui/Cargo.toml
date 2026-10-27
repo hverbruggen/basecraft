@@ -9,6 +9,8 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
+# 0.46+ requires Rust 1.87; keep compatibility with workspace Rust 1.85.
+resvg = { version = "=0.45.1", default-features = false, features = ["text", "system-fonts", "memmap-fonts"] }
 basecraft-delimitation = { path = "../basecraft-delimitation" }
 ulid.workspace = true
 basecraft-docs.workspace = true

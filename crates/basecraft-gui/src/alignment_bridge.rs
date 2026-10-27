@@ -140,6 +140,7 @@ pub mod qobject {
             path: &QString,
             scope: i32,
             publication: bool,
+            width: f64,
         );
         #[qinvokable]
         fn resize(self: Pin<&mut AlignmentController>, width: f64, height: f64);
@@ -575,11 +576,17 @@ impl qobject::AlignmentController {
     }
 
     pub fn export_figure(self: Pin<&mut Self>, path: &QString, scope: i32, publication: bool) {
-        self.export_figure_with(path, scope, publication, false);
+        self.export_figure_with(path, scope, publication, None);
     }
 
-    pub fn export_figure_png(self: Pin<&mut Self>, path: &QString, scope: i32, publication: bool) {
-        self.export_figure_with(path, scope, publication, true);
+    pub fn export_figure_png(
+        self: Pin<&mut Self>,
+        path: &QString,
+        scope: i32,
+        publication: bool,
+        width: f64,
+    ) {
+        self.export_figure_with(path, scope, publication, Some(width));
     }
 
     fn export_figure_with(
@@ -587,7 +594,7 @@ impl qobject::AlignmentController {
         path: &QString,
         scope: i32,
         publication: bool,
-        png: bool,
+        png_width: Option<f64>,
     ) {
         if !(0..=2).contains(&scope) {
             self.fail("Unknown figure scope");
@@ -623,9 +630,9 @@ impl qobject::AlignmentController {
                 &r.mono_font.to_string(),
                 theme.background,
             );
-            if png {
-                let bytes =
-                    crate::bridge::figure_png(&svg).map_err(basecraft_ops::Error::Invalid)?;
+            if let Some(width) = png_width {
+                let bytes = crate::figure_png::render(&svg, width)
+                    .map_err(basecraft_ops::Error::Invalid)?;
                 session.export(doc, &target, "png", |w| w.write_all(&bytes))
             } else {
                 session.export(doc, &target, "svg", |w| w.write_all(svg.as_bytes()))

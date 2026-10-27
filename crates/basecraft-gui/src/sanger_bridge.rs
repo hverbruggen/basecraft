@@ -168,6 +168,7 @@ pub mod qobject {
             path: &QString,
             scope: i32,
             publication: bool,
+            width: f64,
         );
         #[qinvokable]
         fn save(self: Pin<&mut SangerController>);
@@ -1919,7 +1920,7 @@ impl qobject::SangerController {
         scope: i32,
         publication: bool,
     ) {
-        self.export_figure_with(path, scope, publication, false);
+        self.export_figure_with(path, scope, publication, None);
     }
 
     pub fn export_figure_png(
@@ -1927,8 +1928,9 @@ impl qobject::SangerController {
         path: &QString,
         scope: i32,
         publication: bool,
+        width: f64,
     ) {
-        self.export_figure_with(path, scope, publication, true);
+        self.export_figure_with(path, scope, publication, Some(width));
     }
 
     fn export_figure_with(
@@ -1936,7 +1938,7 @@ impl qobject::SangerController {
         path: &QString,
         scope: i32,
         publication: bool,
-        png: bool,
+        png_width: Option<f64>,
     ) {
         if !(0..=2).contains(&scope) {
             self.as_mut().set_message_kind(QString::from("error"));
@@ -2002,8 +2004,8 @@ impl qobject::SangerController {
                 &r.mono_font.to_string(),
                 theme.background,
             );
-            if png {
-                let bytes = crate::bridge::figure_png(&xml)?;
+            if let Some(width) = png_width {
+                let bytes = crate::figure_png::render(&xml, width)?;
                 basecraft_io::write_atomic(Path::new(&path.to_string()), |out| {
                     out.write_all(&bytes)
                 })?;
@@ -2015,11 +2017,13 @@ impl qobject::SangerController {
             Ok(())
         })();
         match result {
-            Ok(()) => self.as_mut().set_message(QString::from(if png {
-                "Exported PNG"
-            } else {
-                "Exported SVG"
-            })),
+            Ok(()) => self
+                .as_mut()
+                .set_message(QString::from(if png_width.is_some() {
+                    "Exported PNG"
+                } else {
+                    "Exported SVG"
+                })),
             Err(error) => {
                 self.as_mut().set_message_kind(QString::from("error"));
                 self.as_mut().set_message(QString::from(&error.to_string()));

@@ -15,10 +15,6 @@
 // Configure the minimum OpenGL context needed by the instanced RHI canvas.
 void configure_canvas_graphics();
 
-// Render an editable figure SVG through Qt's SVG image format plugin.
-// Throws on missing plugin, invalid dimensions, or failed rendering.
-QByteArray render_figure_png(const QString &svg, int width);
-
 class InstanceView : public QQuickRhiItem
 {
     Q_OBJECT
