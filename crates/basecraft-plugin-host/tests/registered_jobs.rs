@@ -621,13 +621,9 @@ fn document_inputs_read_the_session_revision_and_record_history() {
     let mut manager = JobManager::default();
     let document = |session: &Session| json!([{"kind":"document","doc":doc.0.to_string(),"generation":session.generation(doc),"revision":session.revision(doc)}]);
     // A clean document is submitted as its saved file.
-    let clean = run_in_session(
-        &mut manager,
-        &registry,
-        &mut session,
-        json!({"operation":"org.example.registry-fixture/count@1","inputs":{"sources":document(&session)},
-            "parameters":{"mode":"normal"},"destinations":{"report":"clean.json"}}),
-    );
+    let request = json!({"operation":"org.example.registry-fixture/count@1","inputs":{"sources":document(&session)},
+            "parameters":{"mode":"normal"},"destinations":{"report":"clean.json"}});
+    let clean = run_in_session(&mut manager, &registry, &mut session, request);
     assert_eq!(clean.state, RuntimeState::Completed, "{clean:?}");
     assert_eq!(
         basecraft_ops::provenance::verify(&temp.path().join("clean.json")).unwrap(),
@@ -645,13 +641,9 @@ fn document_inputs_read_the_session_revision_and_record_history() {
             },
         )
         .unwrap();
-    let edited = run_in_session(
-        &mut manager,
-        &registry,
-        &mut session,
-        json!({"operation":"org.example.registry-fixture/count@1","inputs":{"sources":document(&session)},
-            "parameters":{"mode":"normal"},"destinations":{"report":"edited.json"}}),
-    );
+    let request = json!({"operation":"org.example.registry-fixture/count@1","inputs":{"sources":document(&session)},
+            "parameters":{"mode":"normal"},"destinations":{"report":"edited.json"}});
+    let edited = run_in_session(&mut manager, &registry, &mut session, request);
     assert_eq!(edited.state, RuntimeState::Completed, "{edited:?}");
     let evidence = Path::new(edited.evidence.as_ref().unwrap());
     let input: serde_json::Value =
