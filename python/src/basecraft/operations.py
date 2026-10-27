@@ -1,39 +1,29 @@
 """Installed operations through the shared host, using independent headless sessions.
 
 Schemas, defaults, permissions, execution and provenance belong to the host.
-Closing a live handle cancels its owned job session; it never attaches to a GUI.
+``submit`` and ``run`` start their own writable MCP session (``basecraft mcp
+--allow-writes``), matching ``basecraft operations run``. Closing a handle
+cancels its unfinished job and ends that session; it never attaches to a GUI.
+Use ``basecraft.session.Session`` to run several operations and document edits
+in one session.
 """
 from __future__ import annotations
 
 import json
 import subprocess
-import threading
-import time
 
+from .session import Job, OperationError, Session
 from .tools import executable
 
-_MAX_FRAME = 8 * 1024 * 1024
-_TERMINAL = {"completed", "failed", "cancelled", "interrupted", "partial"}
-
-
-class OperationError(RuntimeError):
-    def __init__(self, outcome):
-        self.outcome = outcome
-        self.run_id = outcome.get("run_id")
-        errors = outcome.get("errors") or [{"code": "tool_failure", "message": str(outcome)}]
-        self.code = errors[0]["code"]
-        super().__init__(errors[0]["message"])
-
-
-def _command():
-    return executable(["basecraft"], "BASECRAFT")
+__all__ = ["OperationError", "RunHandle", "describe", "list", "run", "submit"]
 
 
 def _metadata(arguments):
-    result = subprocess.run([_command(), "operations", *arguments, "--json"],
-                            capture_output=True, text=True, check=False)
+    result = subprocess.run([executable(["basecraft"], "BASECRAFT"), "operations", *arguments,
+                             "--json"], capture_output=True, text=True, check=False)
     if result.returncode:
-        raise OperationError({"errors": [{"code": "plugin_unavailable", "message": result.stderr.strip()}]})
+        raise OperationError({"errors": [{"code": "plugin_unavailable",
+                                          "message": result.stderr.strip()}]})
     return json.loads(result.stdout)
 
 
@@ -46,76 +36,20 @@ def describe(operation):
     return _metadata(["describe", operation])
 
 
-class RunHandle:
-    """Own one foreground CLI session and its job; explicit status/cancel/repair."""
-    def __init__(self, project, request):
-        self._lock = threading.Lock()
-        self._process = subprocess.Popen(
-            [_command(), "operations", "serve", "--project", str(project)],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        )
-        self.job = None
+class RunHandle(Job):
+    """One job in its own writable session; explicit status/cancel/repair/result."""
+
+    def __init__(self, project, operation, **arguments):
+        session = Session(project, writes=True)
         try:
-            accepted = self._call({"method": "submit", "request": request})
-            if "run_id" not in accepted:
-                raise OperationError(accepted)
-            self.job = accepted["run_id"]
+            job = session.submit(operation, **arguments)
         except BaseException:
-            self.close()
+            session.close()
             raise
-
-    def _call(self, request):
-        with self._lock:
-            try:
-                frame = json.dumps(request).encode() + b"\n"
-                if len(frame) > _MAX_FRAME:
-                    raise ValueError("Host request exceeded its frame limit")
-                self._process.stdin.write(frame)
-                self._process.stdin.flush()
-                line = self._process.stdout.readline(_MAX_FRAME + 1)
-                if not line or len(line) > _MAX_FRAME:
-                    raise ValueError("Host job session closed or exceeded its frame limit")
-                response = json.loads(line)
-                if not isinstance(response, dict):
-                    raise TypeError("Host job response must be an object")
-                return response
-            except (OSError, ValueError, TypeError) as error:
-                raise OperationError({"run_id": self.job, "errors": [{
-                    "code": "plugin_protocol_violation", "message": str(error),
-                }]}) from error
-
-    def status(self):
-        return self._call({"method": "status", "job": self.job})
-
-    def cancel(self):
-        return self._call({"method": "cancel", "job": self.job})
-
-    def repair(self):
-        return self._call({"method": "repair", "job": self.job})
-
-    def result(self, timeout=None):
-        """Wait for the owned result. A wait timeout does not cancel the job."""
-        started = time.monotonic()
-        while True:
-            outcome = self.status()
-            if outcome.get("state") in _TERMINAL:
-                if outcome["state"] != "completed":
-                    raise OperationError(outcome)
-                return outcome
-            if timeout is not None and time.monotonic() - started >= timeout:
-                raise TimeoutError("Operation wait timed out; the handle still owns the job")
-            time.sleep(0.025)
+        super().__init__(session, job.accepted)
 
     def close(self):
-        process = self._process
-        if process.stdin and not process.stdin.closed:
-            process.stdin.close()
-        # EOF asks the host to cancel, kill/reap owned workers and flush receipts.
-        process.wait()
-        if process.stdout:
-            process.stdout.close()
-        if process.stderr:
-            process.stderr.close()
+        self.session.close()
 
     def __enter__(self):
         return self
@@ -126,13 +60,8 @@ class RunHandle:
 
 def submit(operation, *, project, inputs=None, parameters=None, destinations=None,
            pins=None, request_key=None):
-    request = {"operation": operation, "inputs": {} if inputs is None else inputs, "parameters": {} if parameters is None else parameters,
-               "destinations": {} if destinations is None else destinations}
-    if pins is not None:
-        request["pins"] = pins
-    if request_key is not None:
-        request["request_key"] = request_key
-    return RunHandle(project, request)
+    return RunHandle(project, operation, inputs=inputs, parameters=parameters,
+                     destinations=destinations, pins=pins, request_key=request_key)
 
 
 def run(operation, **arguments):

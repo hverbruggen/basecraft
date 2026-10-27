@@ -11,7 +11,7 @@ def document_record(path):
     """Return structured history, methods and evidence for a file's current bytes.
 
     This reads saved evidence and never attaches to an unsaved GUI document.
-    Use the MCP document_record tool for an active headless session instead.
+    Use ``Session.document_record`` for a document open in a headless session.
     """
     result = subprocess.run(
         [executable(["basecraft"], "BASECRAFT"), "history", str(Path(path)), "--json"],
