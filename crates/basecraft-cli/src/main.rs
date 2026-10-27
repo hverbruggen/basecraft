@@ -146,8 +146,8 @@ enum Command {
         #[arg(long)]
         save: bool,
         /// If saving would replace a file that other analyses recorded as
-        /// their input: cancel, preserve_copy, remove_analysis or
-        /// break_evidence. The same decision the application asks for.
+        /// their input: `cancel`, `preserve_copy`, `remove_analysis` or
+        /// `break_evidence`. The same decision the application asks for.
         #[arg(long, requires = "save", value_parser = save_policy, default_value = "cancel")]
         input_conflict: basecraft_ops::input_evidence::SavePolicy,
     },
