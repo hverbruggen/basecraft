@@ -13,12 +13,14 @@ finishes before opening the existing atomic export writer. Controller, source
 filename, region, colours and width stay attached to the pending export when
 another document becomes current.
 
-resvg 0.45.1 is pinned for the workspace's Rust 1.85 minimum (resvg MSRV 1.67.1;
-0.46+ requires 1.87). Only text and system/mapped-font support are enabled;
+resvg 0.49.0 is pinned; its published resvg/usvg crates declare Rust 1.85.
+Text shaping uses maintained harfrust/skrifa/fontdb dependencies instead of
+rustybuzz/ttf-parser. Newly resolved dependencies with a declared minimum
+require at most Rust 1.85. Only text and system/mapped-font support are enabled;
 figures do not embed bitmap images. Fontconfig/system fonts resolve explicit
 families and generic fallbacks; unavailable Unicode glyphs produce an error
 instead of a PNG with missing text. Font discovery is cached until restart.
-`licenses/png-renderer.txt` retains notices for the added locked dependencies
+`licenses/png-renderer.txt` retains notices for the resolved renderer dependencies
 and is included in the packaged GUI bundle's `share/licenses/basecraft-gui`.
 
 This is a presentation export change to the existing five GUI controllers;
