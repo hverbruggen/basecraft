@@ -74,7 +74,7 @@ impl Server {
     ) -> Result<Value> {
         if matches!(name, "apply" | "save" | "run_tool" | "undo" | "redo") && !self.writable {
             return Err(
-                "This server is read-only; start it with --allow-writes to enable edits".into(),
+                "permission_denied: This server is read-only; start it with --allow-writes to enable edits".into(),
             );
         }
         match name {
@@ -146,7 +146,10 @@ impl Server {
                     .as_u64()
                     .ok_or("Provide the document version you inspected")?;
                 if self.state(doc)["version"] != version {
-                    return Err("Document version changed; inspect it again before editing".into());
+                    return Err(
+                        "stale_revision: Document version changed; inspect it again before editing"
+                            .into(),
+                    );
                 }
                 let op: Op = serde_json::from_value(args["operation"].clone())?;
                 self.session.apply(doc, op)?;
@@ -279,6 +282,18 @@ fn operation_tools(
         json!({}),
         &[],
     ));
+    definitions.push(tool(
+        "basecraft.host.operations_list.v1",
+        "List every installed operation with descriptor, pins, enabled state, origin and registry diagnostics, including operations this session cannot run. Same output as `basecraft operations list --json`.",
+        json!({}),
+        &[],
+    ));
+    definitions.push(tool(
+        "basecraft.host.operations_describe.v1",
+        "Describe one installed operation by ID (plugin/name@major). Same output as `basecraft operations describe`.",
+        json!({"operation":{"type":"string"}}),
+        &["operation"],
+    ));
     for operation in registry
         .operations
         .values()
@@ -295,7 +310,8 @@ fn operation_tools(
             "description":operation.descriptor.description,"inputSchema":schema,"outputSchema":operation_outcome_schema(&operation.id, &operation.descriptor.result)?,
             "annotations":{"readOnlyHint":!operation.descriptor.effects.document_write && !operation.descriptor.effects.artifact_write,
                 "destructiveHint":operation.descriptor.effects.document_write,"openWorldHint":true}});
-        metadata["_meta"] = json!({"basecraft":{"pins":operation.pins(&registry.generation),"runtime":"unverified"}});
+        metadata["_meta"] = json!({"basecraft":{"pins":operation.pins(&registry.generation),"runtime":"unverified",
+            "enabled":operation.package.enabled,"origin":operation.package.origin}});
         definitions.push(metadata);
     }
     Ok(definitions)
@@ -484,18 +500,53 @@ pub fn serve(root: &Path, writable: bool, model: &str) -> Result<()> {
                                     false,
                                 ));
                             }
+                            if let Some(metadata) = match name {
+                                "basecraft.host.operations_list.v1" => {
+                                    Some(crate::operations::list(&registry))
+                                }
+                                "basecraft.host.operations_describe.v1" => Some(
+                                    args["operation"]
+                                        .as_str()
+                                        .ok_or_else(|| "Missing string operation".into())
+                                        .and_then(|id| crate::operations::describe(&registry, id)),
+                                ),
+                                _ => None,
+                            } {
+                                return Ok(match metadata {
+                                    Ok(value) => structured(value, false),
+                                    Err(error) => structured(
+                                        basecraft_plugin_host::jobs::error_value(
+                                            "basecraft.host",
+                                            if error.to_string() == "unknown operation" {
+                                                OperationErrorCode::PluginUnavailable
+                                            } else {
+                                                OperationErrorCode::InvalidArguments
+                                            },
+                                            error.to_string(),
+                                        ),
+                                        true,
+                                    ),
+                                });
+                            }
+                            let job = || {
+                                args["job"].as_str().ok_or_else(|| {
+                                    basecraft_plugin_host::Error::Protocol(
+                                        "invalid_arguments: missing string job".into(),
+                                    )
+                                })
+                            };
                             let job_result = match name {
                                 "basecraft.host.jobs_get.v1" => {
-                                    Some(jobs.get(args["job"].as_str().unwrap_or("")))
+                                    Some(job().and_then(|j| jobs.get(j)))
                                 }
                                 "basecraft.host.jobs_result.v1" => {
-                                    Some(jobs.result(args["job"].as_str().unwrap_or("")))
+                                    Some(job().and_then(|j| jobs.result(j)))
                                 }
                                 "basecraft.host.jobs_cancel.v1" => {
-                                    Some(jobs.cancel(args["job"].as_str().unwrap_or("")))
+                                    Some(job().and_then(|j| jobs.cancel(j)))
                                 }
                                 "basecraft.host.jobs_repair.v1" => {
-                                    Some(jobs.repair(args["job"].as_str().unwrap_or("")))
+                                    Some(job().and_then(|j| jobs.repair(j)))
                                 }
                                 _ => None,
                             };
@@ -601,10 +652,17 @@ pub fn serve(root: &Path, writable: bool, model: &str) -> Result<()> {
                             }
                             Ok(match server.call(name, &args, &registry) {
                                 Ok(value) => structured(value, false),
+                                // The shared classifier maps coded refusals such as
+                                // permission_denied and stale_revision; others are
+                                // invalid_arguments.
                                 Err(error) => structured(
                                     basecraft_plugin_host::jobs::error_value(
                                         name,
-                                        OperationErrorCode::InvalidArguments,
+                                        basecraft_plugin_host::jobs::error_code(
+                                            &basecraft_plugin_host::Error::Protocol(
+                                                error.to_string(),
+                                            ),
+                                        ),
                                         error.to_string(),
                                     ),
                                     true,

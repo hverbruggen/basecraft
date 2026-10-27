@@ -66,6 +66,10 @@ fn stdio_edits_are_version_checked_logged_and_project_scoped() {
     assert_eq!(replies[0]["result"]["protocolVersion"], "2025-11-25");
     assert_eq!(replies[2]["result"]["isError"], false);
     assert_eq!(replies[3]["result"]["isError"], true);
+    assert_eq!(
+        replies[3]["result"]["structuredContent"]["errors"][0]["code"],
+        "stale_revision"
+    );
     assert!(
         replies[4]["result"]["content"][0]["text"]
             .as_str()
@@ -109,10 +113,68 @@ fn mcp_defaults_to_read_only() {
     )
     .unwrap();
     writeln!(input, "{}", request(1, "apply", json!({}))).unwrap();
+    writeln!(
+        input,
+        "{}",
+        request(2, "basecraft.host.jobs_get.v1", json!({}))
+    )
+    .unwrap();
+    writeln!(
+        input,
+        "{}",
+        request(3, "basecraft.host.operations_list.v1", json!({}))
+    )
+    .unwrap();
+    writeln!(
+        input,
+        "{}",
+        request(
+            4,
+            "basecraft.host.operations_describe.v1",
+            json!({"operation":"basecraft.distance/tree@1"})
+        )
+    )
+    .unwrap();
+    writeln!(
+        input,
+        "{}",
+        request(
+            5,
+            "basecraft.host.operations_describe.v1",
+            json!({"operation":"basecraft.distance/missing@1"})
+        )
+    )
+    .unwrap();
     drop(input);
     let out = child.wait_with_output().unwrap();
     assert!(out.status.success());
-    assert!(String::from_utf8(out.stdout).unwrap().contains("read-only"));
+    let replies: Vec<Value> = String::from_utf8(out.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let error = |index: usize| replies[index]["result"]["structuredContent"]["errors"][0].clone();
+    assert!(error(1)["message"].as_str().unwrap().contains("read-only"));
+    assert_eq!(error(1)["code"], "permission_denied");
+    assert_eq!(error(2)["code"], "invalid_arguments");
+    assert!(
+        error(2)["message"]
+            .as_str()
+            .unwrap()
+            .contains("missing string job")
+    );
+    // Read-only sessions still see writing operations in registry metadata.
+    let listed = &replies[3]["result"]["structuredContent"];
+    let distance = listed["operations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["operation"] == "basecraft.distance/tree@1")
+        .unwrap();
+    assert_eq!(distance["enabled"], true);
+    assert_eq!(distance["origin"], "bundled");
+    assert_eq!(&replies[4]["result"]["structuredContent"], distance);
+    assert_eq!(error(5)["code"], "plugin_unavailable");
 }
 
 #[test]

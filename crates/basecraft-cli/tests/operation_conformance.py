@@ -237,6 +237,7 @@ def main():
                 assert tool["inputSchema"]["properties"]["operation"] == {"const": item["operation"]}
                 assert tool["inputSchema"]["properties"]["parameters"] == item["descriptor"]["parameters"]
                 assert tool["_meta"]["basecraft"]["pins"] == item["pins"]
+                assert tool["_meta"]["basecraft"]["origin"] == item["origin"]
                 assert tool["description"] == item["descriptor"]["description"]
             record("CLI operations list and MCP tools/list agree on permitted operations, schemas and pins")
             metadata = next(tool for tool in tools if tool["name"] == name)
@@ -289,14 +290,17 @@ def main():
             unknown = request("missing.json", operation=missing)
             rejected = run_request(request_path, unknown)
             assert rejected["errors"][0]["code"] == "plugin_unavailable", rejected
-            assert python_error(operation=missing, project=project, inputs=unknown["inputs"],
-                                parameters=unknown["parameters"],
-                                destinations=unknown["destinations"]) == rejected
+            # Compare Python by code: an MCP-based client may phrase its own message
+            # until it surfaces the host's error.data.
+            via_python = python_error(operation=missing, project=project, inputs=unknown["inputs"],
+                                      parameters=unknown["parameters"],
+                                      destinations=unknown["destinations"])
+            assert via_python["errors"][0]["code"] == "plugin_unavailable", via_python
             error = mcp.call("tools/call", {"name": mcp_name(missing), "arguments": unknown},
                              error=True)
             assert error["code"] == -32602 and error["data"] == rejected, error
             assert not (project / "missing.json").exists()
-            record("unknown operation: identical structured error from CLI/Python and MCP error data")
+            record("unknown operation: identical structured error from CLI and MCP error data; same Python code")
 
             first_page = mcp.call("tools/list")
             old_cursor = first_page["nextCursor"]
