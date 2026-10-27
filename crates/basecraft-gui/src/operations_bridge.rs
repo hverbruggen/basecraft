@@ -159,7 +159,7 @@ impl qobject::AppOperations {
         )
     }
     pub fn submit_blast(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         queries: &QString,
         parameters: &QString,
         approval: &QString,
