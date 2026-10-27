@@ -516,6 +516,12 @@ impl PreparedOperation {
         if let Some(mut input) = first_input {
             input.extra.insert("upstream".into(), json!(upstream));
             input_evidence::write_json(&run.artifact("input.json")?, &input)?;
+            // The save guard names a registered run by its run.json and treats a
+            // missing one as damage, as for every other registered run.
+            input_evidence::write_json(
+                &run.artifact("run.json")?,
+                &json!({"schema_version":1,"id":run.id(),"result":operation.id,"status":"prepared"}),
+            )?;
             let _guard = input_evidence::lock()?;
             input_evidence::register(&run)?;
         }
