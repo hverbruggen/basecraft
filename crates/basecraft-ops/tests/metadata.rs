@@ -149,7 +149,7 @@ fn header_import_links_identifies_saves_and_replays() {
     );
     let mut s = Session::unlogged(root);
     let doc = metadata::open(&mut s, false).unwrap().unwrap();
-    assert!(s.metadata_notices(doc).is_empty());
+    assert_eq!(s.metadata_notices(doc), Vec::<String>::new());
     let meta = s.metadata(doc);
     assert_eq!(
         meta.specimens.rows[0].cells["eventDate"],
@@ -332,7 +332,7 @@ fn outside_edits_future_versions_and_unknown_fields() {
     assert_eq!(saved["later_feature"]["kept"], true);
     let mut s = Session::unlogged(root);
     let doc = s.open(&manifest).unwrap();
-    assert!(s.metadata_notices(doc).is_empty());
+    assert_eq!(s.metadata_notices(doc), Vec::<String>::new());
     drop(s);
     // An undeclared column or a bad value is refused with its location.
     std::fs::write(
