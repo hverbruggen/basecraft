@@ -242,7 +242,7 @@ mod tests {
                 operation: OPERATION.into(),
                 pins: pins.clone(),
                 effective_parameters: parameters.clone(),
-                inputs: Default::default(),
+                inputs: std::collections::BTreeMap::default(),
             },
         };
         let mut draft = basecraft_ops::sanger_review::instrument_review(&source)

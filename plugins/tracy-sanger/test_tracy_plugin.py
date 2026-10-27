@@ -4,8 +4,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from tracy_plugin import consensus
 from consensus import file_hash
+from tracy_plugin import consensus
 
 
 class ExecutedIdentityTests(unittest.TestCase):
@@ -21,9 +21,12 @@ class ExecutedIdentityTests(unittest.TestCase):
                 caller.write_bytes(b"replaced during execution")
                 return {"engine_sha256": engine_hash, "inputs": [{"sha256": file_hash(source)}]}
 
-            with patch("tracy_plugin.executable", return_value=str(caller)), patch("tracy_plugin.merge", side_effect=changed):
-                with self.assertRaisesRegex(ValueError, "Tracy changed during"):
-                    consensus(None, {"reads": [str(source)], "output": str(Path(folder) / "output"), "engine_sha256": engine_hash})
+            with (
+                patch("tracy_plugin.executable", return_value=str(caller)),
+                patch("tracy_plugin.merge", side_effect=changed),
+                self.assertRaisesRegex(ValueError, "Tracy changed during"),
+            ):
+                consensus(None, {"reads": [str(source)], "output": str(Path(folder) / "output"), "engine_sha256": engine_hash})
 
     def test_changed_input_is_not_accepted(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -37,6 +40,9 @@ class ExecutedIdentityTests(unittest.TestCase):
                 source.write_bytes(b"ABIF replaced during execution")
                 return {"engine_sha256": file_hash(caller), "inputs": [{"sha256": source_hash}]}
 
-            with patch("tracy_plugin.executable", return_value=str(caller)), patch("tracy_plugin.merge", side_effect=changed):
-                with self.assertRaisesRegex(ValueError, "input changed during"):
-                    consensus(None, {"reads": [str(source)], "output": str(Path(folder) / "output")})
+            with (
+                patch("tracy_plugin.executable", return_value=str(caller)),
+                patch("tracy_plugin.merge", side_effect=changed),
+                self.assertRaisesRegex(ValueError, "input changed during"),
+            ):
+                consensus(None, {"reads": [str(source)], "output": str(Path(folder) / "output")})

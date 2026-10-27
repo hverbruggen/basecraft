@@ -1242,7 +1242,7 @@ mod completed_result_tests {
                 descriptor_digest: "d".into(),
             },
             effective_parameters: json!({}),
-            inputs: Default::default(),
+            inputs: std::collections::BTreeMap::default(),
         };
         assert!(lookup_completed_result(&anchor, &query).result.is_none());
         assert!(!tmp.path().join(".basecraft").exists());
