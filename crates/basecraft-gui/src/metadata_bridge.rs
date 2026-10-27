@@ -111,6 +111,8 @@ enum PlanSource {
     Sheet(BTreeMap<String, FieldTarget>),
 }
 
+// Each bool is a QML property.
+#[allow(clippy::struct_excessive_bools)]
 pub struct MetadataRust {
     project_dir: QString,
     available: bool,
@@ -328,7 +330,6 @@ impl qobject::MetadataController {
                 let mut rust = self.as_mut().rust_mut();
                 rust.session = Some(session);
                 rust.doc = doc;
-                drop(rust);
                 self.as_mut().report("", "");
             }
             Err(error) => self.as_mut().report(
@@ -365,7 +366,6 @@ impl qobject::MetadataController {
         let result = {
             let mut rust = self.as_mut().rust_mut();
             let Some(doc) = rust.doc else {
-                drop(rust);
                 self.report("error", "There is no specimen table yet");
                 return false;
             };

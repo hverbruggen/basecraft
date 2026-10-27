@@ -114,7 +114,7 @@ AppContentDialog {
         Label {
             text: dialog.mode === "headers"
                 ? (dialog.preview.records || 0) + " records. Each header line is split at the separator; say what each field holds."
-                : (dialog.preview.count || 0) + " rows" + (dialog.preview.remembered ? ", using the saved mapping “" + dialog.preview.remembered + "”" : "") + ". Say what each column holds."
+                : (dialog.preview.count || 0) + " rows" + (dialog.preview.remembered ? ", using the saved mapping \"" + dialog.preview.remembered + "\"" : "") + ". Say what each column holds."
             wrapMode: Text.Wrap
             Layout.fillWidth: true
         }

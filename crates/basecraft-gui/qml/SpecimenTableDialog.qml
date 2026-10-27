@@ -106,7 +106,7 @@ AppContentDialog {
         Label {
             visible: dialog.table.available
             text: dialog.table.rows.length + " specimens · " + (dialog.table.taxa || 0) + " taxa · "
-                + (dialog.table.links || 0) + " linked records. Enter values as text: dates as YYYY, YYYY-MM or YYYY-MM-DD, coordinates in decimal degrees, or an INSDC reason such as “not collected”."
+                + (dialog.table.links || 0) + " linked records. Enter values as text: dates as YYYY, YYYY-MM or YYYY-MM-DD, coordinates in decimal degrees, or an INSDC reason such as \"not collected\"."
             wrapMode: Text.Wrap
             Layout.fillWidth: true
         }
