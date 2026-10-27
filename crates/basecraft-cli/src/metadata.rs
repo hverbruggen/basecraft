@@ -112,7 +112,7 @@ fn target(name: &str) -> Result<FieldTarget> {
         "record" => FieldTarget::Record,
         "taxon" | "organism" => FieldTarget::Taxon,
         "ignore" | "-" | "" => FieldTarget::Ignore,
-        column if basecraft_docs::metadata::valid_column_name(column) => FieldTarget::Column {
+        column if metadata::valid_column_name(column) => FieldTarget::Column {
             column: column.into(),
         },
         other => return Err(format!("{other:?} is not a field target").into()),

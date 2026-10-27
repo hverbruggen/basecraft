@@ -627,14 +627,14 @@ pub struct InsdcSource {
 ///
 /// | INSDC | from |
 /// | --- | --- |
-/// | organism | taxon `submitted_name`, else `name`, of the current identification |
-/// | specimen_voucher | `institutionCode:collectionCode:catalogNumber` (codes optional) |
-/// | isolate, strain | `isolate`, `strain` |
-/// | collection_date | `eventDate` at its precision (ISO 8601) |
-/// | geo_loc_name | `country`, then `: locality` |
-/// | lat_lon | `decimalLatitude`, `decimalLongitude` as `d.dddd N d.dddd W` |
-/// | collected_by | `recordedBy` |
-/// | identified_by | the current identification's `identified_by` |
+/// | `organism` | taxon `submitted_name`, else `name`, of the current identification |
+/// | `specimen_voucher` | `institutionCode:collectionCode:catalogNumber` (codes optional) |
+/// | `isolate`, `strain` | `isolate`, `strain` |
+/// | `collection_date` | `eventDate` at its precision (ISO 8601) |
+/// | `geo_loc_name` | `country`, then `: locality` |
+/// | `lat_lon` | `decimalLatitude`, `decimalLongitude` as `d.dddd N d.dddd W` |
+/// | `collected_by` | `recordedBy` |
+/// | `identified_by` | the current identification's `identified_by` |
 ///
 /// A missing-value reason is passed through as the qualifier value.
 pub fn insdc_source(meta: &ProjectMetadata, specimen: &str) -> Result<InsdcSource, EditError> {

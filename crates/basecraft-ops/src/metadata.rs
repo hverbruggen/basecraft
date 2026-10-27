@@ -19,7 +19,11 @@ use basecraft_protocol::metadata::{
 use serde::{Deserialize, Serialize};
 
 use crate::error::invalid;
+
 use crate::{Result, Session};
+pub use basecraft_docs::metadata::{
+    InsdcSource, KNOWN_COLUMNS, KnownColumn, insdc_source, valid_column_name,
+};
 
 /// The project folder holding the metadata tables.
 pub const DIRECTORY: &str = "metadata";
