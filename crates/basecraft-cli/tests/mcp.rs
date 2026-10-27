@@ -543,3 +543,93 @@ fn tree_mcp_routes_share_hidden_storage() {
         );
     }
 }
+
+fn session(dir: &std::path::Path, writes: bool, messages: &[Value]) -> Vec<Value> {
+    let mut args = vec!["mcp".to_string(), dir.to_string_lossy().into_owned()];
+    if writes {
+        args.push("--allow-writes".into());
+    }
+    let mut child = Command::new(env!("CARGO_BIN_EXE_basecraft"))
+        .args(&args)
+        .env("BASECRAFT_PROFILE_DIR", dir.join("profile"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+    writeln!(
+        input,
+        "{}",
+        json!({"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1"}}})
+    )
+    .unwrap();
+    writeln!(
+        input,
+        "{}",
+        json!({"jsonrpc":"2.0","method":"notifications/initialized"})
+    )
+    .unwrap();
+    for message in messages {
+        writeln!(input, "{message}").unwrap();
+    }
+    drop(input);
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success());
+    String::from_utf8(out.stdout)
+        .unwrap()
+        .lines()
+        .skip(1)
+        .map(|s| serde_json::from_str(s).unwrap())
+        .collect()
+}
+
+#[test]
+fn metadata_tools_respect_write_permission_and_plan_before_applying() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("rbcL.fasta"), ">HV1|Codium_fragile\nACGT\n").unwrap();
+    let readonly = session(
+        d.path(),
+        false,
+        &[
+            request(1, "metadata_open", json!({})),
+            request(2, "metadata_open", json!({"create":true})),
+        ],
+    );
+    assert_eq!(readonly[0]["result"]["isError"], true);
+    let text = readonly[1]["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap();
+    assert!(text.contains("permission_denied"), "{text}");
+    assert!(!d.path().join("metadata").exists());
+    let pattern =
+        json!({"name":"p","separator":"|","fields":[{"role":"specimen"},{"role":"taxon"}]});
+    let replies = session(
+        d.path(),
+        true,
+        &[
+            request(1, "metadata_open", json!({"create":true})),
+            request(
+                2,
+                "metadata_plan_headers",
+                json!({"document":0,"request":{"document":"rbcL.fasta","pattern":pattern}}),
+            ),
+            request(3, "read", json!({"document":0})),
+            request(
+                4,
+                "metadata_plan_headers",
+                json!({"document":0,"request":{"document":"../outside.fasta","pattern":pattern}}),
+            ),
+        ],
+    );
+    assert_eq!(
+        replies[0]["result"]["structuredContent"]["kind"],
+        "metadata"
+    );
+    let plan = &replies[1]["result"]["structuredContent"];
+    assert_eq!(plan["changes"]["specimens"], json!(["HV1"]));
+    assert_eq!(plan["changes"]["taxa"][0]["name"], "Codium fragile");
+    // Planning applies nothing.
+    let read = &replies[2]["result"]["structuredContent"];
+    assert_eq!(read["metadata"]["specimens"]["rows"], json!([]));
+    assert_eq!(replies[3]["result"]["isError"], true);
+}

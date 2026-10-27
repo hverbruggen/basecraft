@@ -66,6 +66,15 @@ def request(operation, *, inputs=None, parameters=None, destinations=None, pins=
     return value
 
 
+def _field(role):
+    """A field role by name, or a column name, as the host's FieldTarget."""
+    if isinstance(role, dict):
+        return role
+    if role in ("specimen", "taxon", "record", "ignore"):
+        return {"role": role}
+    return {"role": "column", "column": role}
+
+
 class Job:
     """An operation job owned by one session. Waiting never cancels it."""
 
@@ -336,6 +345,46 @@ class Session:
     def document_record(self, document):
         """History and methods for this session's current revision, including unsaved edits."""
         return self.call("document_record", {"document": document})
+
+    # Project specimen metadata
+
+    def open_metadata(self, create=False):
+        """Open the project's specimen metadata document; ``create`` writes empty tables first."""
+        return self.call("metadata_open", {"create": bool(create)})
+
+    def plan_header_import(self, document, fasta, separator, fields, *, name="Python",
+                           create_specimens=True, overwrite=False):
+        """Plan an import from structured FASTA headers without applying it.
+
+        ``fields`` lists each header field's role: ``"specimen"``, ``"taxon"``,
+        ``"record"``, ``"ignore"`` or a column name such as ``"eventDate"``.
+        """
+        request = {"document": str(fasta),
+                   "pattern": {"name": name, "separator": separator,
+                               "fields": [_field(f) for f in fields]},
+                   "options": {"create_specimens": create_specimens, "overwrite": overwrite}}
+        return self.call("metadata_plan_headers", {"document": document, "request": request})
+
+    def plan_sheet_import(self, document, path, *, mapping=None, fasta=None,
+                          create_specimens=True, overwrite=False):
+        """Plan a spreadsheet import; ``mapping`` maps headers to roles as in headers."""
+        request = {"path": str(path),
+                   "options": {"create_specimens": create_specimens, "overwrite": overwrite}}
+        if mapping is not None:
+            request["mapping"] = {header: _field(role) for header, role in mapping.items()}
+        if fasta is not None:
+            request["document"] = str(fasta)
+        return self.call("metadata_plan_sheet", {"document": document, "request": request})
+
+    def apply_metadata(self, document, changes):
+        """Apply a reviewed plan's ``changes`` as one undoable metadata edit."""
+        version = self.state(document)["version"]
+        return self.apply(document, version, {"op": "metadata.edit", "params": {
+            "edit": {"action": "apply", "changes": changes}}})
+
+    def insdc_source(self, document, specimen):
+        """INSDC source qualifiers derived for a specimen."""
+        return self.call("metadata_insdc", {"document": document, "specimen": specimen})
 
     # Operations
 

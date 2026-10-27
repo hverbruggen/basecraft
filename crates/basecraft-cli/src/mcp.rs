@@ -83,6 +83,8 @@ impl Server {
             ("tree", self.session.tree(doc).version())
         } else if self.session.is_delimitation(doc) {
             ("delimitation", self.session.generation(doc))
+        } else if self.session.is_metadata(doc) {
+            ("metadata", self.session.generation(doc))
         } else {
             ("sequence", self.session.doc(doc).version())
         };
@@ -96,7 +98,13 @@ impl Server {
         args: &Value,
         registry: &basecraft_plugin_host::registry::Registry,
     ) -> Result<Value> {
-        if matches!(name, "apply" | "save" | "run_tool" | "undo" | "redo") && !self.writable {
+        let creates = name == "metadata_open" && args["create"].as_bool() == Some(true);
+        if (matches!(
+            name,
+            "apply" | "save" | "run_tool" | "undo" | "redo" | "metadata_template"
+        ) || creates)
+            && !self.writable
+        {
             return Err(
                 "permission_denied: This server is read-only; start it with --allow-writes to enable edits".into(),
             );
@@ -142,6 +150,11 @@ impl Server {
                 }
                 if self.session.is_delimitation(doc) {
                     return Ok(serde_json::to_value(self.session.delimitation(doc))?);
+                }
+                if self.session.is_metadata(doc) {
+                    return Ok(
+                        json!({"metadata":self.session.metadata(doc),"notices":self.session.metadata_notices(doc)}),
+                    );
                 }
                 let start = args["start"].as_u64().unwrap_or(0);
                 let end = args["end"]
@@ -223,8 +236,84 @@ impl Server {
                     params,
                 )
             }
+            // Project specimen metadata: the same planners as `basecraft metadata`.
+            "metadata_open" => {
+                let create = args["create"].as_bool().unwrap_or(false);
+                if let Some(doc) = self
+                    .documents
+                    .values()
+                    .copied()
+                    .find(|d| self.session.is_metadata(*d))
+                {
+                    return Ok(self.state(doc));
+                }
+                let doc = basecraft_ops::metadata::open(&mut self.session, create)?.ok_or(
+                    "no_metadata: This project has no metadata yet; call metadata_open with create",
+                )?;
+                self.documents.insert(doc.0, doc);
+                let mut state = self.state(doc);
+                state["notices"] = json!(self.session.metadata_notices(doc));
+                Ok(state)
+            }
+            "metadata_plan_headers" => {
+                let doc = self.doc(args)?;
+                let mut request: basecraft_ops::metadata::HeaderImport =
+                    serde_json::from_value(args["request"].clone())?;
+                request.document = self.relative(&request.document)?;
+                Ok(serde_json::to_value(
+                    basecraft_ops::metadata::plan_header_import(&self.session, doc, &request)?,
+                )?)
+            }
+            "metadata_plan_sheet" => {
+                let doc = self.doc(args)?;
+                let mut request: basecraft_ops::metadata::SheetImport =
+                    serde_json::from_value(args["request"].clone())?;
+                request.path = self.path(&request.path)?.to_string_lossy().into_owned();
+                request.document = request
+                    .document
+                    .as_deref()
+                    .map(|d| self.relative(d))
+                    .transpose()?;
+                Ok(serde_json::to_value(
+                    basecraft_ops::metadata::plan_sheet_import(&self.session, doc, &request)?,
+                )?)
+            }
+            "metadata_template" => {
+                let doc = self.doc(args)?;
+                let file = self.relative(text(args, "file")?)?;
+                let output = self.path(text(args, "output")?)?;
+                let records =
+                    basecraft_ops::metadata::template_for(&self.session, doc, &file, &output)?;
+                Ok(json!({"records":records,"output":output}))
+            }
+            "metadata_status" => {
+                let doc = self.doc(args)?;
+                let file = self.relative(text(args, "file")?)?;
+                Ok(serde_json::to_value(basecraft_ops::metadata::link_status(
+                    &self.session,
+                    doc,
+                    &file,
+                )?)?)
+            }
+            "metadata_insdc" => {
+                let doc = self.doc(args)?;
+                Ok(basecraft_ops::metadata::insdc(
+                    &self.session,
+                    doc,
+                    text(args, "specimen")?,
+                )?)
+            }
             _ => Err("Unknown tool".into()),
         }
+    }
+
+    /// A project file's project-relative key, refusing paths outside it.
+    fn relative(&self, path: &str) -> Result<String> {
+        let path = self.path(path)?;
+        Ok(basecraft_ops::metadata::document_key(
+            self.session.root(),
+            &path,
+        )?)
     }
 }
 
@@ -261,6 +350,12 @@ fn tools() -> Value {
         tool("provenance_inspect","Read the provenance publication of a saved project result.",json!({"path":string}), &["path"]),
         tool("provenance_verify","Check a saved result against its recorded hashes and retained inputs; runs no tools.",json!({"path":string}), &["path"]),
         tool("replay","Replay the project's operation log in a scratch session and report problems.",json!({}), &[]),
+        tool("metadata_open","Open the project's specimen metadata (roster, taxa, identifications, record links, typed collection columns) as a document. With create, write empty tables first if the project has none. Edit it with apply and metadata.edit operations; save it with save.",json!({"create":{"type":"boolean"}}), &[]),
+        tool("metadata_plan_headers","Plan, without applying, an import from structured FASTA headers. request: {document: project FASTA path, pattern: {name, separator, fields: [{role: specimen|taxon|record|ignore|column, column?}]}, options?: {create_specimens, overwrite}}. Returns {changes, issues, rows, matched}; apply the reviewed changes with apply {op: metadata.edit, params: {edit: {action: apply, changes}}}.",json!({"document":doc,"request":{"type":"object"}}), &["document","request"]),
+        tool("metadata_plan_sheet","Plan, without applying, an import from a spreadsheet (.ods, .xlsx, .csv, .tsv). request: {path, mapping?: {header: {role, column?}} (guessed when omitted), document?: FASTA whose records the record column names, options?}. Returns the plan with the mapping used.",json!({"document":doc,"request":{"type":"object"}}), &["document","request"]),
+        tool("metadata_template","Write an .ods template, every cell text, pre-filled for each record of a project FASTA file.",json!({"document":doc,"file":string,"output":string}), &["document","file","output"]),
+        tool("metadata_status","List a FASTA file's records that have no stored link to a specimen.",json!({"document":doc,"file":string}), &["document","file"]),
+        tool("metadata_insdc","Derive a specimen's INSDC source qualifiers from its Darwin Core columns and current identification, with the required ones still missing.",json!({"document":doc,"specimen":string}), &["document","specimen"]),
         tool("run_tool","Compatibility route: run a bundled tool's registered operation on a session document and write one result file. Parameters follow the operation descriptor (delimitation also takes params.method). Prefer the generated operation tools.",json!({"document":doc,"tool":{"enum":crate::tools::NAMES},"output":string,"params":{"type":"object"}}), &["document","tool","output"])
     ]})
 }

@@ -1,6 +1,7 @@
 //! The `basecraft` command-line tool.
 
 mod mcp;
+mod metadata;
 mod operations;
 mod tools;
 
@@ -85,6 +86,12 @@ enum Command {
     },
     /// Apply a typed JSON operation to a document and save it.
     Edit { file: PathBuf, operation: String },
+    /// The project's specimen metadata: roster, identifications, record
+    /// links and collection columns; imports and the .ods template.
+    Metadata {
+        #[command(subcommand)]
+        action: metadata::MetadataCommand,
+    },
     /// Calculate DNA distances or infer a tree with the registered
     /// basecraft.distance operations. Omitted settings take the descriptor
     /// defaults shown by `operations describe basecraft.distance/tree@1`.
@@ -216,6 +223,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Command::Plugins { action } => operations::plugins(action)?,
         Command::Operations { action } => operations::operations(action)?,
+        Command::Metadata { action } => metadata::run(action)?,
         Command::History { file, json } => {
             let file = file.canonicalize()?;
             let mut session = script_session(file.parent().ok_or("File has no parent")?)?;
@@ -491,6 +499,14 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 (
                     "job-record",
                     schemars::schema_for!(basecraft_protocol::delimitation::JobRecord),
+                ),
+                (
+                    "project-metadata",
+                    schemars::schema_for!(basecraft_protocol::metadata::ProjectMetadata),
+                ),
+                (
+                    "metadata-edit",
+                    schemars::schema_for!(basecraft_protocol::metadata::MetadataEdit),
                 ),
                 (
                     "log-entry",

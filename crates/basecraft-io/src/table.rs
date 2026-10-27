@@ -291,7 +291,7 @@ fn read_workbook(path: &Path) -> Result<Sheet> {
         .take_while(|r| r.iter().all(|f| f.trim().is_empty()))
         .count();
     let records: Vec<Vec<String>> = records.into_iter().skip(skipped).collect();
-    let date_cells = date_cells
+    let date_cells: Vec<(usize, usize)> = date_cells
         .into_iter()
         .filter(|(r, _)| *r > skipped)
         .map(|(r, c)| (r - skipped - 1, c))

@@ -369,6 +369,83 @@ def main():
                             parameters=disabled_request["parameters"],
                             destinations=disabled_request["destinations"]) == denied
         record("read-only denial and explicit disable survives update")
+
+        # Project specimen metadata: the CLI, MCP and Python routes share one
+        # planner and one typed edit, so they produce the same tables.
+        fasta = ">HV1|Caulerpa_taxifolia|2019-05\nACGT\n>HV2|Caulerpa_sp._3|not collected\nACGA\n"
+        sheet = "specimen_id,country,decimalLatitude\nHV1,Australia,-38.1\nHV1,Fiji,1\nHV2,Fiji,95\n"
+        fields = ["specimen", "taxon", "eventDate"]
+        projects = {}
+        for route in ("cli", "mcp", "python"):
+            projects[route] = root / f"metadata-{route}"
+            projects[route].mkdir()
+            (projects[route] / "rbcL.fasta").write_text(fasta)
+            (projects[route] / "sheet.csv").write_text(sheet)
+        plans = {}
+        meta_project = projects["cli"]
+        subprocess.run([str(binary), "metadata", "init", "--project", str(meta_project)],
+                       env=env, check=True, capture_output=True, timeout=45)
+        headers_plan, _ = cli("metadata", "import-headers", str(meta_project / "rbcL.fasta"),
+                              "--separator", "|", "--fields", ",".join(fields),
+                              "--project", str(meta_project), "--apply")
+        sheet_plan, _ = cli("metadata", "import-sheet", str(meta_project / "sheet.csv"),
+                            "--project", str(meta_project), "--apply")
+        plans["cli"] = (headers_plan, sheet_plan)
+        mcp_meta = Mcp(binary, projects["mcp"], env)
+        try:
+            opened = mcp_meta.tool("metadata_open", {"create": True})["structuredContent"]
+            doc = opened["document"]
+            pattern = {"name": "CLI", "separator": "|", "fields": [
+                {"role": "specimen"}, {"role": "taxon"}, {"role": "column", "column": "eventDate"}]}
+            first = mcp_meta.tool("metadata_plan_headers", {"document": doc, "request": {
+                "document": "rbcL.fasta", "pattern": pattern}})["structuredContent"]
+            state = mcp_meta.tool("state", {"document": doc})["structuredContent"]
+            mcp_meta.tool("apply", {"document": doc, "version": state["version"], "operation": {
+                "op": "metadata.edit", "params": {"edit": {"action": "apply",
+                                                           "changes": first["changes"]}}}})
+            second = mcp_meta.tool("metadata_plan_sheet", {"document": doc, "request": {
+                "path": "sheet.csv"}})["structuredContent"]
+            state = mcp_meta.tool("state", {"document": doc})["structuredContent"]
+            mcp_meta.tool("apply", {"document": doc, "version": state["version"], "operation": {
+                "op": "metadata.edit", "params": {"edit": {"action": "apply",
+                                                           "changes": second["changes"]}}}})
+            mcp_meta.tool("save", {"document": doc})
+            plans["mcp"] = (first, second)
+        finally:
+            mcp_meta.close()
+        from basecraft.session import Session as PythonSession
+        with PythonSession(projects["python"], writes=True, command=str(binary)) as py:
+            doc = py.open_metadata(create=True)["document"]
+            first = py.plan_header_import(doc, "rbcL.fasta", "|", fields)
+            py.apply_metadata(doc, first["changes"])
+            second = py.plan_sheet_import(doc, "sheet.csv")
+            py.apply_metadata(doc, second["changes"])
+            py.save(doc)
+            insdc = py.insdc_source(doc, "HV1")
+            plans["python"] = (first, second)
+        assert insdc["qualifiers"]["geo_loc_name"] == "Australia", insdc
+        assert insdc["qualifiers"]["collection_date"] == "2019-05", insdc
+
+        def comparable(plan):
+            changes = copy.deepcopy(plan["changes"])
+            taxa = {t["id"]: t["name"] for t in changes.pop("taxa", [])}
+            identifications = sorted((i["specimen"], taxa.get(i["taxon"], i["taxon"]))
+                                     for i in changes.pop("identifications", []))
+            return changes, sorted(taxa.values()), identifications, plan["issues"]
+
+        for route in ("mcp", "python"):
+            for ours, theirs in zip(plans["cli"], plans[route]):
+                assert comparable(ours) == comparable(theirs), (route, ours, theirs)
+            for table in ("specimens.tsv", "records.tsv"):
+                assert (projects["cli"] / "metadata" / table).read_bytes() == \
+                    (projects[route] / "metadata" / table).read_bytes(), (route, table)
+        kinds = sorted({i["kind"] for i in plans["cli"][1]["issues"]})
+        assert kinds == ["duplicate", "invalid"], kinds
+        assert "HV2\tnot collected" in (projects["cli"] / "metadata/specimens.tsv").read_text()
+        status, _ = cli("metadata", "status", str(meta_project / "rbcL.fasta"),
+                        "--project", str(meta_project))
+        assert status["unlinked"] == [] and status["records"] == 2, status
+        record("specimen metadata imports agree across CLI, MCP and Python")
         assert hashlib.sha256(binary.read_bytes()).hexdigest() == receipt["sha256"]
         receipt["status"] = "passed"
     finally:
