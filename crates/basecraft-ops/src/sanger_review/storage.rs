@@ -631,7 +631,13 @@ impl SangerReviewSession {
     }
 
     fn write_embedded(&self, path: &Path) -> crate::Result<()> {
-        inputs::write_json(path, &self.stored_at(path)?)
+        let value = self.stored_at(path)?;
+        if serde_json::to_vec_pretty(&value)?.len() > 64 * 1024 * 1024 {
+            return Err(invalid(
+                "Sanger review exceeds 64 MiB; previous file preserved",
+            ));
+        }
+        inputs::write_json(path, &value)
     }
 
     /// Recovery lives in application state and is discoverable through the existing
@@ -730,6 +736,11 @@ impl SangerReviewSession {
                 artifacts.push(retained(&run, &previous, 2)?);
             }
             let bytes = serde_json::to_vec_pretty(&self.stored_at(path)?)?;
+            if bytes.len() > 64 * 1024 * 1024 {
+                return Err(invalid(
+                    "Sanger review exceeds 64 MiB; previous file preserved",
+                ));
+            }
             let staged = run.staging("review")?;
             basecraft_io::write_atomic(&staged, |w| w.write_all(&bytes))?;
             let mut record = publication(

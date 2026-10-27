@@ -474,8 +474,9 @@ impl qobject::SangerController {
     pub fn record_revision(&self) -> QString {
         QString::from(
             format!(
-                "{}:{}:{}",
+                "{}:{}:{}:{}",
                 self.rust().file_path,
+                self.rust().selected_call_set,
                 self.rust()
                     .review_session
                     .as_ref()
@@ -780,7 +781,35 @@ impl qobject::SangerController {
             Ok((run.finish(&outputs).map_err(|e| e.to_string())?, evidence))
         })();
         match result {
-            Ok((run, Some(path))) => self.install_draft_run(&run, &path),
+            Ok((run, Some(path))) => {
+                if self
+                    .rust()
+                    .review_session
+                    .as_ref()
+                    .is_some_and(|session| session.draft.inputs.len() > 1)
+                {
+                    return self.install_draft_run(&run, &path);
+                }
+                let result = (|| -> Result<String, String> {
+                    let mut oriented = SangerReviewSession::new(&path)?;
+                    oriented.attach_run(&run)?;
+                    let id = oriented.draft_sha256.clone();
+                    self.as_mut()
+                        .rust_mut()
+                        .review_session
+                        .as_mut()
+                        .ok_or("No review is open")?
+                        .retain_call_set(oriented)?;
+                    Ok(id)
+                })();
+                match result {
+                    Ok(id) => self.select_calls(&QString::from(id)),
+                    Err(error) => {
+                        self.call_error(&error);
+                        false
+                    }
+                }
+            }
             Ok((run, None)) => {
                 let result = self
                     .as_mut()
@@ -828,7 +857,7 @@ impl qobject::SangerController {
                 self.as_mut().set_calling(true);
                 self.as_mut().set_message_kind(QString::from("notify"));
                 self.as_mut().set_message(QString::from(
-                    "Computing alternative calls in background; current calls remain selected",
+                    "No valid cached calls; computing in background. Current calls remain selected",
                 ));
             }
             Err(error) => {
@@ -1038,10 +1067,17 @@ impl qobject::SangerController {
             if !(1..=90).contains(&signal_threshold) {
                 return Err("Signal cutoff must be between 1 and 90 percent".into());
             }
-            let mut paths = vec![self.rust().file_path.to_string()];
-            if self.rust().trace.is_none() {
-                return Err("Open an AB1 trace before drafting a consensus".into());
-            }
+            let source = self
+                .rust()
+                .review_session
+                .as_ref()
+                .filter(|session| session.draft.inputs.len() == 1)
+                .ok_or("Open one AB1 trace before drafting a consensus")?
+                .working_draft()?
+                .inputs[0]
+                .path
+                .clone();
+            let mut paths = vec![source.to_string_lossy().into_owned()];
             let additional: Vec<String> = serde_json::from_str(&additional_paths_json.to_string())
                 .map_err(|e| e.to_string())?;
             paths.extend(additional);

@@ -125,7 +125,7 @@ fn main() {
         serde_json::to_string(&saved_path).unwrap()
     );
     engine.pin_mut().load_data(
-        &QByteArray::from(format!(
+        &QByteArray::from(&format!(
             "import QtQuick; import Basecraft; Item {{ width: 800; height: 600; \
              OperationPickerDialog {{}} \
              OperationParameters {{ schema: ({{type: 'object', properties: {{age: {{type: 'number'}}}}, required: ['age']}}) }} \

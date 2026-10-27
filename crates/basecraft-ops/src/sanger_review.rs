@@ -1214,3 +1214,51 @@ mod call_set_tests {
         assert!(!tmp.path().join("review.json").exists());
     }
 }
+
+#[cfg(all(test, unix))]
+mod readonly_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+    struct Restore(PathBuf);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755));
+        }
+    }
+    #[test]
+    fn readonly_source_folder_keeps_instrument_editing_and_previous_save() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("source.ab1");
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../testdata/fixtures/compact/sanger-review/forward.ab1"),
+            &path,
+        )
+        .unwrap();
+        let mut review = instrument_review(&path).unwrap();
+        let saved = tmp.path().join("review.json");
+        review.save(&saved).unwrap();
+        let previous = std::fs::read(&saved).unwrap();
+        let original = std::fs::read(&path).unwrap();
+        let _restore = Restore(tmp.path().into());
+        std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+        let mut fresh = instrument_review(&path).unwrap();
+        fresh
+            .apply(ReviewOp::Set {
+                columns: vec![0],
+                choice: ReviewChoice::Edit('C'),
+            })
+            .unwrap();
+        review
+            .apply(ReviewOp::Set {
+                columns: vec![0],
+                choice: ReviewChoice::Edit('G'),
+            })
+            .unwrap();
+        assert!(review.save(&saved).is_err());
+        assert_eq!(std::fs::read(&saved).unwrap(), previous);
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        assert_eq!(review.decision(0), Some(&ReviewChoice::Edit('G')));
+        assert_eq!(fresh.decision(0), Some(&ReviewChoice::Edit('C')));
+    }
+}
