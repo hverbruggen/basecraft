@@ -220,6 +220,7 @@ pub fn read_input(run: &Path) -> Result<SubmittedInput> {
             | "canonical-newick-v1"
             | "identity-v1"
             | "blast-query-preparation-v1"
+            | "sequence-arrow-buffers-v1"
     ) || matches!(record.state.as_str(), "referenced" | "preserved") && record.source.is_none()
         || record.state == "generated" && record.source.is_some()
     {

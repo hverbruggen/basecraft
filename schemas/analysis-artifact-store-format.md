@@ -68,6 +68,12 @@ claim: `generated` retains one exact `submitted.fasta`. A verified clean source
 may be reconstructed into a disposable canonical cache on explicit tree extraction;
 the cache is never substituted for missing/changed original evidence.
 
+`identity-v1` means the submitted bytes are the source bytes unchanged. Two
+generated transformations retain their payload in the run:
+`blast-query-preparation-v1` (the frozen BLAST submission) and
+`sequence-arrow-buffers-v1` (a sequence operation's session snapshot: residue
+length as little-endian u64, residues, then the feature buffer).
+
 Evidence states are `referenced`, `generated`, `preserved` and `broken`.
 Before replacement, the shared Session save guard inspects known stores and
 ancestor-folder stores, using metadata only. It lists direct and declared downstream
