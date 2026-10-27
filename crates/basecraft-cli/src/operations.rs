@@ -166,7 +166,7 @@ pub fn operations(command: OperationsCommand) -> Result<()> {
             let policy = basecraft_plugin_host::policy::SessionPolicy::new(&project, true)?;
             let mut session = basecraft_ops::Session::recoverable(project.canonicalize()?)?;
             basecraft_platform::interrupt::install()?;
-            run_foreground(&registry, request, policy, "CLI", &mut session)?.0
+            run_foreground(&registry, &request, policy, "CLI", &mut session)?.0
         }
         OperationsCommand::Serve { .. } => return Err("invalid session dispatch".into()),
         OperationsCommand::List { .. } => list(&registry)?,
@@ -181,7 +181,7 @@ pub fn operations(command: OperationsCommand) -> Result<()> {
 /// the session document that received sequence proposals, if any.
 pub fn run_foreground(
     registry: &Registry,
-    request: basecraft_protocol::operation::OperationRequest,
+    request: &basecraft_protocol::operation::OperationRequest,
     policy: basecraft_plugin_host::policy::SessionPolicy,
     initiator: &str,
     session: &mut basecraft_ops::Session,

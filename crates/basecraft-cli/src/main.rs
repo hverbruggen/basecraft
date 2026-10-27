@@ -597,7 +597,7 @@ fn run_registered_plugin(
         )]
         .into(),
         parameters: serde_json::Value::Object(parameters),
-        destinations: Default::default(),
+        destinations: std::collections::BTreeMap::default(),
         pins: None,
         request_key: None,
     };
@@ -605,7 +605,7 @@ fn run_registered_plugin(
     let mut session = basecraft_ops::Session::recoverable(root)?;
     basecraft_platform::interrupt::install()?;
     let (outcome, target) =
-        operations::run_foreground(&registry, request, policy, "CLI", &mut session)?;
+        operations::run_foreground(&registry, &request, policy, "CLI", &mut session)?;
     println!("{outcome}");
     if outcome["state"] != "completed" {
         return Err(format!("{} did not complete", registered.id).into());
