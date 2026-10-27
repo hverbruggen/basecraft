@@ -7,6 +7,7 @@ pub mod files;
 pub mod input_evidence;
 pub mod links;
 pub mod log;
+pub mod metadata;
 pub mod provenance;
 pub mod replay;
 pub mod sanger_review;

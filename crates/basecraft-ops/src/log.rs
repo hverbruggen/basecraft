@@ -473,6 +473,7 @@ pub fn describe(op: &Op) -> String {
         Op::Undo { .. } => "Undo".into(),
         Op::Redo { .. } => "Redo".into(),
         Op::DelimitationEdit { .. } => "Edited species hypothesis".into(),
+        Op::MetadataEdit { edit } => crate::metadata::describe(edit),
         Op::JobFinished { report } => format!("{} {:?}", report.method, report.status),
     }
 }
