@@ -259,13 +259,33 @@ fn tree_mcp_routes_share_hidden_storage() {
         request(
             4,
             "run_tool",
-            json!({"document":0,"tool":"fasttree","output":"fasttree.nwk","params":{"threads":1}}),
+            json!({"document":0,"tool":"fasttree","output":"fasttree.nwk","params":{}}),
         ),
         request(
             5,
             "run_tool",
             json!({"document":0,"tool":"iqtree","output":"iqtree.nwk","params":{"model":"JC","threads":1,"seed":71}}),
         ),
+        request(6, "provenance_inspect", json!({"path":"nj.nwk"})),
+        request(7, "provenance_verify", json!({"path":"nj.nwk"})),
+        request(8, "replay", json!({})),
+        // The descriptor, not a CLI list, decides accepted settings.
+        request(
+            9,
+            "run_tool",
+            json!({"document":0,"tool":"fasttree","output":"rejected.nwk","params":{"threads":1}}),
+        ),
+        request(
+            10,
+            "run_tool",
+            json!({"document":0,"tool":"distance","output":"rejected.nwk","params":{"cache":"x.json"}}),
+        ),
+        request(
+            11,
+            "run_tool",
+            json!({"document":0,"tool":"delimitation","output":"rejected.json","params":{}}),
+        ),
+        request(12, "basecraft.distance.missing.v1", json!({})),
     ];
     let mut input = child.stdin.take().unwrap();
     for message in messages {
@@ -279,10 +299,41 @@ fn tree_mcp_routes_share_hidden_storage() {
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
-    assert_eq!(replies.len(), 6);
-    for reply in &replies[1..] {
+    assert_eq!(replies.len(), 13);
+    for reply in &replies[1..9] {
         assert_eq!(reply["result"]["isError"], false, "{reply}");
     }
+    for reply in &replies[9..12] {
+        assert_eq!(reply["result"]["isError"], true, "{reply}");
+    }
+    let unknown = &replies[12]["error"];
+    assert_eq!(unknown["code"], -32602, "{unknown}");
+    assert_eq!(unknown["data"]["errors"][0]["code"], "plugin_unavailable");
+    assert_eq!(unknown["data"]["operation"], "basecraft.distance/missing@1");
+    // MCP document-level readers match the CLI commands.
+    let cli = |args: &[&str]| {
+        let output = Command::new(env!("CARGO_BIN_EXE_basecraft"))
+            .args(args)
+            .env("BASECRAFT_PROFILE_DIR", parent.path().join("profile"))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let nj = root.join("nj.nwk");
+    let inspected: Value =
+        serde_json::from_str(&cli(&["provenance", "inspect", nj.to_str().unwrap()])).unwrap();
+    assert_eq!(replies[6]["result"]["structuredContent"], inspected);
+    assert_eq!(
+        replies[7]["result"]["structuredContent"],
+        json!({"verified":true,"issues":[]})
+    );
+    assert!(cli(&["provenance", "verify", nj.to_str().unwrap()]).starts_with("done"));
+    assert!(replies[8]["result"]["structuredContent"]["problems"].is_array());
     let mut visible: Vec<_> = std::fs::read_dir(&root)
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())

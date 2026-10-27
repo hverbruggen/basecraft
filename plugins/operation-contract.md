@@ -303,6 +303,16 @@ Read-only MCP sessions omit writing operations and recheck policy at invocation.
 Request cancellation does not cancel an already accepted job; disconnect does.
 Native MCP Tasks and live GUI attachment are not advertised.
 
+MCP also offers read-only `provenance_inspect` and `provenance_verify` (a
+project path) and `replay`, using the same readers as the CLI commands. An
+unknown operation-tool name returns JSON-RPC error `-32602` whose `data` is the
+structured error CLI and Python return for that operation ID.
+
+CLI `tool`, `distance` and `plugin` and MCP `run_tool` are compatibility routes
+(ADR 0022). They resolve the registered operation and validate parameters
+against its descriptor, then write one named result file as the GUI does.
+Use `operations run`, Python or the generated tools for new automation.
+
 CLI/Python and MCP use the same normalized request and terminal outcome. Outcomes
 include requested/effective parameters, pins, validated data, published artifacts,
 proposal receipt, warnings, errors and evidence path. Errors distinguish invalid

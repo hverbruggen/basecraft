@@ -66,7 +66,12 @@ impl Server {
             "state":self.session.state(doc),"can_undo":self.session.can_undo(doc),"can_redo":self.session.can_redo(doc)})
     }
 
-    fn call(&mut self, name: &str, args: &Value) -> Result<Value> {
+    fn call(
+        &mut self,
+        name: &str,
+        args: &Value,
+        registry: &basecraft_plugin_host::registry::Registry,
+    ) -> Result<Value> {
         if matches!(name, "apply" | "save" | "run_tool" | "undo" | "redo") && !self.writable {
             return Err(
                 "This server is read-only; start it with --allow-writes to enable edits".into(),
@@ -90,6 +95,20 @@ impl Server {
             "document_record" => Ok(serde_json::to_value(
                 self.session.document_record(self.doc(args)?)?.report()?,
             )?),
+            // The same readers as `basecraft provenance inspect|verify` and `replay`.
+            "provenance_inspect" => Ok(serde_json::to_value(basecraft_ops::provenance::inspect(
+                &self.path(text(args, "path")?)?,
+            )?)?),
+            "provenance_verify" => {
+                let issues = basecraft_ops::provenance::verify(&self.path(text(args, "path")?)?)?;
+                Ok(json!({"verified":issues.is_empty(),"issues":issues}))
+            }
+            "replay" => {
+                let report = basecraft_ops::replay::replay(self.session.root())?;
+                Ok(
+                    json!({"sessions":report.sessions,"entries":report.entries,"problems":report.problems}),
+                )
+            }
             "read" => {
                 let doc = self.doc(args)?;
                 if self.session.is_tree(doc) {
@@ -161,38 +180,21 @@ impl Server {
                     .map(|v| v.as_object().cloned().ok_or("params must be an object"))
                     .transpose()?
                     .unwrap_or_default();
-                // Executable/cache overrides are not exposed by this project-scoped tool.
-                if params.keys().any(|k| {
-                    ![
-                        "model",
-                        "method",
-                        "threads",
-                        "tree_threads",
-                        "seed",
-                        "min_overlap",
-                        "rooted",
-                        "workers",
-                        "tree_index",
-                        "candidate_budget",
-                        "reference_version",
-                        "reference_age_clamp",
-                        "unique_haplotypes",
-                        "analysis_input",
-                        "mapping",
-                        "groups_data",
-                        "replicates",
-                        "threshold",
-                    ]
-                    .contains(&k.as_str())
-                }) {
-                    return Err("Unsupported tool parameter".into());
-                }
+                // Descriptor validation rejects undeclared settings, including
+                // executable, cache and control paths. Route paths stay in the project.
                 for name in ["analysis_input", "mapping"] {
                     if let Some(path) = params.get(name).and_then(Value::as_str) {
                         params.insert(name.into(), json!(self.path(path)?));
                     }
                 }
-                crate::tools::run(&mut self.session, doc, text(args, "tool")?, output, params)
+                crate::tools::run(
+                    registry,
+                    &mut self.session,
+                    doc,
+                    text(args, "tool")?,
+                    output,
+                    params,
+                )
             }
             _ => Err("Unknown tool".into()),
         }
@@ -229,7 +231,10 @@ fn tools() -> Value {
         tool("undo","Undo one edit group.",json!({"document":doc}), &["document"]),
         tool("redo","Redo one edit group.",json!({"document":doc}), &["document"]),
         tool("save","Save a document, optionally to a new project path.",json!({"document":doc,"path":string}), &["document"]),
-        tool("run_tool","Run a bundled alignment tool, retaining output provenance.",json!({"document":doc,"tool":{"enum":["mafft","trimal","iqtree","fasttree","distance","delimitation"]},"output":string,"params":{"type":"object"}}), &["document","tool","output"])
+        tool("provenance_inspect","Read the provenance publication of a saved project result.",json!({"path":string}), &["path"]),
+        tool("provenance_verify","Check a saved result against its recorded hashes and retained inputs; runs no tools.",json!({"path":string}), &["path"]),
+        tool("replay","Replay the project's operation log in a scratch session and report problems.",json!({}), &[]),
+        tool("run_tool","Compatibility route: run a bundled tool's registered operation on a session document and write one result file. Parameters follow the operation descriptor (delimitation also takes params.method). Prefer the generated operation tools.",json!({"document":doc,"tool":{"enum":crate::tools::NAMES},"output":string,"params":{"type":"object"}}), &["document","tool","output"])
     ]})
 }
 
@@ -408,6 +413,7 @@ pub fn serve(root: &Path, writable: bool, model: &str) -> Result<()> {
                     continue;
                 } else {
                     let method = request["method"].as_str().unwrap_or("");
+                    let mut unknown = None;
                     let result: std::result::Result<Value, (i64, String)> = (|| match method {
                         "initialize" => {
                             server.initialized = true;
@@ -571,9 +577,29 @@ pub fn serve(root: &Path, writable: bool, model: &str) -> Result<()> {
                                 .as_array()
                                 .is_some_and(|tools| tools.iter().any(|tool| tool["name"] == name));
                             if !known {
+                                // An unknown operation-tool spelling carries the same
+                                // structured error as CLI/Python unknown operations.
+                                unknown = name
+                                    .rsplit_once(".v")
+                                    .and_then(|(rest, major)| {
+                                        let (plugin, local) = rest.rsplit_once('.')?;
+                                        major
+                                            .parse::<u16>()
+                                            .ok()
+                                            .map(|major| format!("{plugin}/{local}@{major}"))
+                                    })
+                                    .and_then(|id| {
+                                        registry.resolve(&id, None).err().map(|error| {
+                                            basecraft_plugin_host::jobs::error_value(
+                                                &id,
+                                                basecraft_plugin_host::jobs::error_code(&error),
+                                                error.to_string(),
+                                            )
+                                        })
+                                    });
                                 return Err((-32602, "Unknown tool".into()));
                             }
-                            Ok(match server.call(name, &args) {
+                            Ok(match server.call(name, &args, &registry) {
                                 Ok(value) => structured(value, false),
                                 Err(error) => structured(
                                     basecraft_plugin_host::jobs::error_value(
@@ -591,7 +617,11 @@ pub fn serve(root: &Path, writable: bool, model: &str) -> Result<()> {
                     match result {
                         Ok(result) => json!({"jsonrpc":"2.0","id":id,"result":result}),
                         Err((code, message)) => {
-                            json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":message}})
+                            let mut error = json!({"code":code,"message":message});
+                            if let Some(data) = unknown {
+                                error["data"] = data;
+                            }
+                            json!({"jsonrpc":"2.0","id":id,"error":error})
                         }
                     }
                 }

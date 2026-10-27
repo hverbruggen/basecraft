@@ -1346,13 +1346,8 @@ impl PreparedOperation {
             .host_workflow
             .as_deref()
             .ok_or_else(|| Error::Protocol("missing host workflow".into()))?;
-        let fit_method = if method == "asap_alignment" {
-            "asap"
-        } else if method == "gmyc_alignment_multiple" {
-            "gmyc_multiple"
-        } else {
-            "gmyc_single"
-        };
+        let fit_method = crate::delimitation_pipeline::workflow_fit(method)
+            .ok_or_else(|| Error::Protocol("unknown host workflow".into()))?;
         let unique = self.parameters["unique_haplotypes"]
             .as_bool()
             .unwrap_or(fit_method != "asap");

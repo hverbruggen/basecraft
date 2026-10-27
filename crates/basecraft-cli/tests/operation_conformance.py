@@ -167,6 +167,38 @@ def main():
         assert Path(outcome["evidence"]).is_dir(), outcome
         return outcome["effective_parameters"], outcome["data"]
 
+    def mcp_name(operation):
+        plugin, rest = operation.split("/")
+        local, major = rest.split("@")
+        return f"{plugin}.{local}.v{major}"
+
+    def identity(outcome, publication):
+        """Route-independent outcome and provenance content. Paths, run IDs and
+        the recorded initiator legitimately differ between routes."""
+        return {
+            "operation": outcome["operation"], "state": outcome["state"],
+            "pins": outcome["pins"], "data": outcome["data"],
+            "requested": outcome["requested_parameters"],
+            "effective": outcome["effective_parameters"],
+            "artifacts": sorted((a["role"], a["digest"]) for a in outcome["artifacts"]),
+            "inputs": sorted((i["logical_name"], i["hash"], i["size"]) for i in publication["inputs"]),
+            "outputs": sorted((o["hash"], o["size"]) for o in publication["outputs"]),
+            "completeness": publication["completeness"],
+        }
+
+    def run_request(path, value):
+        path.write_text(json.dumps(value))
+        outcome, _ = cli("operations", "run", value["operation"], "--project", str(project),
+                         "--request", str(path), "--json")
+        return outcome
+
+    def python_error(**arguments):
+        try:
+            operations.run(**arguments)
+        except operations.OperationError as error:
+            return error.outcome
+        raise AssertionError("Python accepted a request the host must refuse")
+
     try:
         _, warning = cli("plugins", "install", str(package))
         assert "user account" in warning and "responsib" in warning
@@ -181,20 +213,50 @@ def main():
         outcome, _ = cli("operations", "run", op, "--project", str(project),
                          "--request", str(request_path), "--json")
         expected = check_result(outcome, "cli.json")
+        routes = {"cli": (outcome, cli("provenance", "inspect", str(project / "cli.json"))[0])}
         with operations.submit(op, project=project, inputs=request("python.json")["inputs"],
                                parameters={"mode": "normal"},
                                destinations={"report": "python.json"}) as handle:
-            assert check_result(handle.result(timeout=30), "python.json") == expected
+            python_outcome = handle.result(timeout=30)
+            assert check_result(python_outcome, "python.json") == expected
+        routes["python"] = (python_outcome,
+                            cli("provenance", "inspect", str(project / "python.json"))[0])
         record("CLI/Python execute installed multi-input package with identical normalized data")
 
         mcp = Mcp(binary, project, env)
         try:
             tools = mcp.tools()
+            # Discovery: the permitted CLI set and its schemas/pins are what MCP lists.
+            listing, _ = cli("operations", "list", "--json")
+            listed = {mcp_name(item["operation"]): item for item in listing["operations"]
+                      if item["enabled"]}
+            generated = {tool["name"]: tool for tool in tools if "basecraft" in tool.get("_meta", {})}
+            assert set(generated) == set(listed), (set(generated) ^ set(listed))
+            for tool_name, item in listed.items():
+                tool = generated[tool_name]
+                assert tool["inputSchema"]["properties"]["operation"] == {"const": item["operation"]}
+                assert tool["inputSchema"]["properties"]["parameters"] == item["descriptor"]["parameters"]
+                assert tool["_meta"]["basecraft"]["pins"] == item["pins"]
+                assert tool["description"] == item["descriptor"]["description"]
+            record("CLI operations list and MCP tools/list agree on permitted operations, schemas and pins")
             metadata = next(tool for tool in tools if tool["name"] == name)
             assert metadata["inputSchema"]["properties"]["parameters"]["additionalProperties"] is False
             assert metadata["outputSchema"]["allOf"][1]["then"]["properties"]["data"]["required"] == ["bytes"]
             accepted = mcp.tool(name, request("mcp.json"))["structuredContent"]
-            assert check_result(mcp.wait(accepted["run_id"]), "mcp.json") == expected
+            mcp_outcome = mcp.wait(accepted["run_id"])
+            assert check_result(mcp_outcome, "mcp.json") == expected
+            inspected = mcp.tool("provenance_inspect", {"path": "mcp.json"})
+            assert not inspected["isError"], inspected
+            routes["mcp"] = (mcp_outcome, inspected["structuredContent"])
+            identities = {route: identity(*value) for route, value in routes.items()}
+            assert identities["cli"] == identities["python"] == identities["mcp"], identities
+            assert identities["cli"]["inputs"] and identities["cli"]["outputs"]
+            for route, (outcome, publication) in routes.items():
+                initiator = {"cli": "CLI", "python": "Python", "mcp": "mcp-client"}[route]
+                assert publication["origin"].endswith("initiated by " + initiator), publication
+            verified = mcp.tool("provenance_verify", {"path": "mcp.json"})["structuredContent"]
+            assert verified == {"verified": True, "issues": []}, verified
+            record("CLI/Python/MCP outcomes agree: pins, parameters, data, artifact digests, input hashes and provenance")
             unknown = mcp.tool("basecraft.host.jobs_get.v1", {"job": "guessed-job-id"})
             assert unknown["isError"]
             slow = mcp.tool(name, request("slow.json", "slow"))["structuredContent"]
@@ -205,22 +267,36 @@ def main():
             assert mcp.wait(slow["run_id"])["state"] == "cancelled"
             assert not (project / "slow.json").exists()
             record("MCP parity, declared schemas, scoped IDs, responsive ping and cancellation")
-            invalid = request("invalid.json")
-            invalid["parameters"]["unknown_setting"] = True
-            request_path.write_text(json.dumps(invalid))
-            rejected, _ = cli("operations", "run", op, "--project", str(project),
-                              "--request", str(request_path), "--json")
-            assert rejected["state"] == "failed"
-            try:
-                operations.run(op, project=project, inputs=invalid["inputs"],
-                               parameters=invalid["parameters"], destinations=invalid["destinations"])
-            except operations.OperationError:
-                pass
-            else:
-                raise AssertionError("Python accepted unknown scientific setting")
-            assert mcp.tool(name, invalid)["isError"]
+            invalid_corpus = []
+            for parameters in ({"mode": "normal", "unknown_setting": True},
+                               {"mode": "not-a-mode"}, {"include_newlines": "yes"}):
+                invalid = request("invalid.json")
+                invalid["parameters"] = parameters
+                rejected = run_request(request_path, invalid)
+                assert rejected["state"] == "failed", rejected
+                assert rejected["errors"][0]["code"] == "invalid_arguments", rejected
+                assert python_error(operation=op, project=project, inputs=invalid["inputs"],
+                                    parameters=parameters,
+                                    destinations=invalid["destinations"]) == rejected
+                via_mcp = mcp.tool(name, invalid)
+                assert via_mcp["isError"] and via_mcp["structuredContent"] == rejected, via_mcp
+                invalid_corpus.append(rejected["errors"][0]["message"])
+            assert len(set(invalid_corpus)) == 3, invalid_corpus
             assert not (project / "invalid.json").exists()
-            record("same invalid-parameter corpus rejected by CLI/Python/MCP")
+            record("invalid-parameter corpus: identical structured errors from CLI/Python/MCP")
+
+            missing = "org.example.registry-fixture/missing@1"
+            unknown = request("missing.json", operation=missing)
+            rejected = run_request(request_path, unknown)
+            assert rejected["errors"][0]["code"] == "plugin_unavailable", rejected
+            assert python_error(operation=missing, project=project, inputs=unknown["inputs"],
+                                parameters=unknown["parameters"],
+                                destinations=unknown["destinations"]) == rejected
+            error = mcp.call("tools/call", {"name": mcp_name(missing), "arguments": unknown},
+                             error=True)
+            assert error["code"] == -32602 and error["data"] == rejected, error
+            assert not (project / "missing.json").exists()
+            record("unknown operation: identical structured error from CLI/Python and MCP error data")
 
             first_page = mcp.call("tools/list")
             old_cursor = first_page["nextCursor"]
@@ -266,7 +342,12 @@ def main():
         readonly = Mcp(binary, project, env, writable=False)
         try:
             assert not any(tool["name"] == name for tool in readonly.tools())
-            assert readonly.tool(name, request("denied.json"))["isError"]
+            denied = readonly.tool(name, request("denied.json"))
+            assert denied["isError"], denied
+            denial = denied["structuredContent"]
+            assert denial["state"] == "failed" and denial["operation"] == op, denial
+            assert [e["code"] for e in denial["errors"]] == ["permission_denied"], denial
+            assert "run_id" not in denial or denial["run_id"] is None
             assert not (project / "denied.json").exists()
         finally:
             readonly.close()
@@ -278,6 +359,11 @@ def main():
         denied, _ = cli("operations", "run", op, "--project", str(project),
                         "--request", str(request_path), "--json")
         assert denied["state"] == "failed" and not (project / "disabled.json").exists()
+        assert denied["errors"][0]["code"] == "plugin_disabled", denied
+        disabled_request = request("disabled.json")
+        assert python_error(operation=op, project=project, inputs=disabled_request["inputs"],
+                            parameters=disabled_request["parameters"],
+                            destinations=disabled_request["destinations"]) == denied
         record("read-only denial and explicit disable survives update")
         assert hashlib.sha256(binary.read_bytes()).hexdigest() == receipt["sha256"]
         receipt["status"] = "passed"

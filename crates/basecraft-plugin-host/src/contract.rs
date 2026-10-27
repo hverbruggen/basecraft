@@ -358,12 +358,7 @@ pub fn validate_contract(plugin: &str, contract: &OperationContract) -> Result<(
         }
         if let Some(workflow) = &descriptor.host_workflow {
             if plugin != "basecraft.host"
-                || ![
-                    "gmyc_alignment_single",
-                    "gmyc_alignment_multiple",
-                    "asap_alignment",
-                ]
-                .contains(&workflow.as_str())
+                || crate::delimitation_pipeline::workflow_fit(workflow).is_none()
             {
                 return Err(invalid("unsupported or unreserved host workflow"));
             }

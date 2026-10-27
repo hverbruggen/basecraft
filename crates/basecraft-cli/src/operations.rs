@@ -164,40 +164,9 @@ pub fn operations(command: OperationsCommand) -> Result<()> {
             }
             request.operation = operation;
             let policy = basecraft_plugin_host::policy::SessionPolicy::new(&project, true)?;
-            let mut jobs = basecraft_plugin_host::jobs::JobManager::default();
             let mut session = basecraft_ops::Session::recoverable(project.canonicalize()?)?;
             basecraft_platform::interrupt::install()?;
-            let accepted = match jobs.submit_in_session(
-                &registry,
-                request.clone(),
-                policy,
-                "CLI",
-                &mut session,
-            ) {
-                Ok(accepted) => accepted,
-                Err(error) => {
-                    println!(
-                        "{}",
-                        basecraft_plugin_host::jobs::error_value(
-                            &request.operation,
-                            basecraft_plugin_host::jobs::error_code(&error),
-                            error.to_string()
-                        )
-                    );
-                    return Ok(());
-                }
-            };
-            loop {
-                jobs.poll_proposals(&mut session);
-                if basecraft_platform::interrupt::interrupted() {
-                    jobs.cancel(&accepted.run_id)?;
-                }
-                let outcome = jobs.get(&accepted.run_id)?;
-                if outcome.state.terminal() {
-                    break serde_json::to_value(outcome)?;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(25));
-            }
+            run_foreground(&registry, request, policy, "CLI", &mut session)?.0
         }
         OperationsCommand::Serve { .. } => return Err("invalid session dispatch".into()),
         OperationsCommand::List { .. } => list(&registry)?,
@@ -205,6 +174,46 @@ pub fn operations(command: OperationsCommand) -> Result<()> {
     };
     println!("{}", serde_json::to_string(&value)?);
     Ok(())
+}
+
+/// Submit one request in this process and wait for its terminal outcome.
+/// A refused submission returns the shared structured error value. Also returns
+/// the session document that received sequence proposals, if any.
+pub fn run_foreground(
+    registry: &Registry,
+    request: basecraft_protocol::operation::OperationRequest,
+    policy: basecraft_plugin_host::policy::SessionPolicy,
+    initiator: &str,
+    session: &mut basecraft_ops::Session,
+) -> Result<(Value, Option<basecraft_ops::DocId>)> {
+    use basecraft_plugin_host::jobs;
+    let mut manager = jobs::JobManager::default();
+    let accepted =
+        match manager.submit_in_session(registry, request.clone(), policy, initiator, session) {
+            Ok(accepted) => accepted,
+            Err(error) => {
+                return Ok((
+                    jobs::error_value(
+                        &request.operation,
+                        jobs::error_code(&error),
+                        error.to_string(),
+                    ),
+                    None,
+                ));
+            }
+        };
+    loop {
+        manager.poll_proposals(session);
+        if basecraft_platform::interrupt::interrupted() {
+            manager.cancel(&accepted.run_id)?;
+        }
+        let outcome = manager.get(&accepted.run_id)?;
+        if outcome.state.terminal() {
+            let target = manager.target_document(&accepted.run_id);
+            return Ok((serde_json::to_value(outcome)?, target));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
 }
 
 /// Bounded stdio framing shared by the MCP owner and Python job session.
