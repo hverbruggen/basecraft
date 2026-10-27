@@ -5,6 +5,7 @@
 
 pub mod annotation;
 pub mod delimitation;
+pub mod metadata;
 pub mod operation;
 pub mod ops;
 pub mod plugin;
