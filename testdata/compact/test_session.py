@@ -57,7 +57,7 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(session.read(document["document"], 1, 3), {"residues": "CG"})
         with self.assertRaises(OperationError) as raised:
             session.apply(document["document"], 0, {"op": "seq.replace"})
-        self.assertEqual(raised.exception.code, "invalid_arguments")
+        self.assertEqual(raised.exception.code, "permission_denied")
         self.assertIn("read-only", str(raised.exception))
         session.close()
         self.assertNotIn("--allow-writes", self.calls()[-1]["argv"])
@@ -67,8 +67,9 @@ class SessionTests(unittest.TestCase):
         document = session.open("gene.fasta")
         edited = session.apply(0, document["version"], {"op": "seq.replace"})
         self.assertEqual(edited["version"], 1)
-        with self.assertRaises(OperationError):
+        with self.assertRaises(OperationError) as raised:
             session.apply(0, 0, {"op": "seq.replace"})  # Stale version is refused.
+        self.assertEqual(raised.exception.code, "stale_revision")
         self.assertEqual(session.save(0, "copy.fasta")["saved"], "copy.fasta")
         session.close()
         self.assertEqual(self.calls()[-1]["argv"][-3:], ["--model-id", "lab-script",
@@ -86,9 +87,20 @@ class SessionTests(unittest.TestCase):
         with self.assertRaises(OperationError) as raised:
             session.submit("org.example.fixture/missing@1")
         self.assertEqual(raised.exception.code, "plugin_unavailable")
+        # The host's structured error.data, not a locally written message.
+        self.assertEqual(raised.exception.outcome["operation"], "org.example.fixture/missing@1")
+        self.assertIn("unknown operation", str(raised.exception))
+        self.assertEqual(raised.exception.rpc_code, -32602)
         with self.assertRaises(OperationError) as raised:
             session.submit("not-an-operation")
         self.assertEqual(raised.exception.code, "invalid_arguments")
+
+    def test_unknown_operation_without_error_data(self):
+        self.environment(FAKE_MCP_MODE="bare-unknown")
+        with self.assertRaises(OperationError) as raised:
+            self.session().submit("org.example.fixture/missing@1")
+        self.assertEqual(raised.exception.code, "plugin_unavailable")
+        self.assertIn("Unknown operation", str(raised.exception))
 
     def test_job_result(self):
         session = self.session()

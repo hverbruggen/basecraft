@@ -51,15 +51,15 @@ jobs = {}
 
 def call(name, args):
     if name in ("apply", "save") and not WRITABLE:
-        return structured(failure(name, "invalid_arguments", "This server is read-only; "
-                                  "start it with --allow-writes to enable edits"), True)
+        return structured(failure(name, "permission_denied", "permission_denied: This server is "
+                                  "read-only; start it with --allow-writes to enable edits"), True)
     if name == "open":
         return structured(document, False)
     if name == "read":
         return structured({"residues": "ACGT"[args.get("start", 0):args["end"]]}, False)
     if name == "apply":
         if args["version"] != document["version"]:
-            return structured(failure(name, "invalid_arguments", "Document version changed"), True)
+            return structured(failure(name, "stale_revision", "Document version changed"), True)
         document["version"] += 1
         return structured(document, False)
     if name == "save":
@@ -91,6 +91,18 @@ def call(name, args):
             outcome["data"] = {"bytes": 7}
         return structured(outcome, job["state"] in ("failed", "cancelled", "partial"))
     return None
+
+
+def unknown_tool(name):
+    """Unknown operation-tool spellings carry the host's structured error."""
+    error = {"code": -32602, "message": "Unknown tool"}
+    rest, _, major = name.rpartition(".v")
+    plugin, _, local = rest.rpartition(".")
+    if MODE != "bare-unknown" and plugin and major.isdigit():
+        operation = f"{plugin}/{local}@{major}"
+        error["data"] = failure(operation, "plugin_unavailable",
+                                f"plugin_unavailable: unknown operation {operation}")
+    return error
 
 
 def main():
@@ -127,7 +139,7 @@ def main():
             if MODE == "late" and params["name"] == "read":
                 time.sleep(0.5)
             result = call(params["name"], params.get("arguments", {}))
-            reply = ({"error": {"code": -32602, "message": "Unknown tool"}}
+            reply = ({"error": unknown_tool(params["name"])}
                      if result is None else {"result": result})
         else:
             reply = {"error": {"code": -32601, "message": "Method not found"}}

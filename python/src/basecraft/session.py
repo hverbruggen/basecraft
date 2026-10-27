@@ -224,9 +224,15 @@ class Session:
                     continue  # Late answer to an earlier request that timed out.
                 if "error" in reply:
                     error = reply["error"] if isinstance(reply["error"], dict) else {}
-                    code = "invalid_arguments" if error.get("code") == -32602 else \
-                        "plugin_protocol_violation"
-                    failure = _failure(code, str(error.get("message", reply["error"])))
+                    data = error.get("data")
+                    if error.get("code") == -32602 and isinstance(data, dict) \
+                            and data.get("errors"):
+                        # The host's structured refusal, e.g. an unknown operation.
+                        failure = OperationError(data)
+                    else:
+                        code = "invalid_arguments" if error.get("code") == -32602 else \
+                            "plugin_protocol_violation"
+                        failure = _failure(code, str(error.get("message", reply["error"])))
                     failure.rpc_code = error.get("code")
                     raise failure
                 if not isinstance(reply.get("result"), dict):
@@ -338,6 +344,7 @@ class Session:
             name = tool_name(operation)
             accepted = self.call(name, request(operation, **arguments))
         except OperationError as error:
+            # Hosts that predate structured error.data answer only "Unknown tool".
             if getattr(error, "rpc_code", None) == -32602 and str(error) == "Unknown tool":
                 raise _failure("plugin_unavailable", f"Unknown operation {operation}") from error
             raise
