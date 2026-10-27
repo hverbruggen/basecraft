@@ -107,6 +107,7 @@ pub mod qobject {
             path: &QString,
             scope: i32,
             publication: bool,
+            width: f64,
         );
         #[qinvokable]
         fn preview_cut(self: Pin<&mut DelimitationController>, threshold: f64);
@@ -1149,9 +1150,15 @@ impl qobject::DelimitationController {
                 .map(|(theme, _)| theme)
                 .unwrap_or_default()
         };
-        self.export_with(path, &theme, false);
+        self.export_with(path, &theme, None);
     }
-    pub fn export_figure_png(self: Pin<&mut Self>, path: &QString, _scope: i32, publication: bool) {
+    pub fn export_figure_png(
+        self: Pin<&mut Self>,
+        path: &QString,
+        _scope: i32,
+        publication: bool,
+        width: f64,
+    ) {
         let theme = if publication {
             basecraft_viewmodel::Theme::publication()
         } else {
@@ -1159,7 +1166,7 @@ impl qobject::DelimitationController {
                 .map(|(theme, _)| theme)
                 .unwrap_or_default()
         };
-        self.export_with(path, &theme, true);
+        self.export_with(path, &theme, Some(width));
     }
     pub fn preview_cut(mut self: Pin<&mut Self>, threshold: f64) {
         let result = {
@@ -1358,13 +1365,13 @@ impl qobject::DelimitationController {
         let theme = crate::bridge::load_theme()
             .map(|(theme, _)| theme)
             .unwrap_or_default();
-        self.export_with(path, &theme, false);
+        self.export_with(path, &theme, None);
     }
     fn export_with(
         mut self: Pin<&mut Self>,
         path: &QString,
         theme: &basecraft_viewmodel::Theme,
-        png: bool,
+        png_width: Option<f64>,
     ) {
         let result = (|| -> Result<(), Box<dyn std::error::Error>> {
             let mut r = self.as_mut().rust_mut();
@@ -1384,8 +1391,8 @@ impl qobject::DelimitationController {
                 &tree, &columns, 900.0, 20.0, theme, &font,
             );
             let svg = delimitation::comparison_svg(work, &figure, &font);
-            if png {
-                let bytes = crate::bridge::figure_png(&svg)?;
+            if let Some(width) = png_width {
+                let bytes = crate::figure_png::render(&svg, width)?;
                 s.export(d, Path::new(&path.to_string()), "png", |w| {
                     w.write_all(&bytes)
                 })?;

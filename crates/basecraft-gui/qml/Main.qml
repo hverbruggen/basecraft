@@ -2034,6 +2034,7 @@ ApplicationWindow {
         svgOptions.format = format || "svg"
         if (!window.current) return
         svgDialog.controller = window.current
+        svgDialog.sourcePath = window.currentPath
         svgScope.currentIndex = window.treeOpen ? 2 : 0
         svgPublication.checked = false
         svgOptions.open()
@@ -2049,9 +2050,25 @@ ApplicationWindow {
             Label { id: svgScopeLabel; text: "Region" }
             AppComboBox { id: svgScope; objectName: "svgScope"; Accessible.labelledBy: svgScopeLabel; Accessible.name: svgScopeLabel.text; model: ["Visible view", "Selection", "Complete figure"] }
             AppCheckBox { id: svgPublication; text: "Publication colours (white background)" }
+            Label { id: pngWidthLabel; text: "PNG width (pixels)"; visible: svgOptions.format === "png" }
+            AppSpinBox {
+                id: pngWidth
+                objectName: "pngWidth"
+                visible: svgOptions.format === "png"
+                from: 1
+                to: 10000
+                value: 1500
+                editable: true
+                Accessible.labelledBy: pngWidthLabel
+                Accessible.name: pngWidthLabel.text
+            }
         }
         onAccepted: {
-            svgDialog.selectedFile = shell.local_file_url(window.currentPath.replace(/\.[^./]*$/, "") + "." + svgOptions.format)
+            svgDialog.format = svgOptions.format
+            svgDialog.scope = svgScope.currentIndex
+            svgDialog.publication = svgPublication.checked
+            svgDialog.rasterWidth = pngWidth.value
+            svgDialog.selectedFile = shell.local_file_url(svgDialog.sourcePath.replace(/\.[^./]*$/, "") + "." + svgDialog.format)
             svgDialog.open()
         }
     }
@@ -2060,13 +2077,18 @@ ApplicationWindow {
         currentFolder: window.activeFolder()
         onVisibleChanged: if (visible) currentFolder = window.activeFolder()
         property var controller: null
-        title: svgOptions.format === "png" ? "Export PNG" : "Export SVG"
+        property string sourcePath: ""
+        property string format: "svg"
+        property int scope: 0
+        property bool publication: false
+        property int rasterWidth: 1500
+        title: format === "png" ? "Export PNG" : "Export SVG"
         fileMode: FileDialog.SaveFile
-        nameFilters: svgOptions.format === "png" ? ["PNG images (*.png)"] : ["SVG figures (*.svg)"]
+        nameFilters: format === "png" ? ["PNG images (*.png)"] : ["SVG figures (*.svg)"]
         onAccepted: {
             if (!controller) return
-            if (svgOptions.format === "png") controller.export_figure_png(window.localPath(selectedFile), svgScope.currentIndex, svgPublication.checked)
-            else controller.export_figure(window.localPath(selectedFile), svgScope.currentIndex, svgPublication.checked)
+            if (format === "png") controller.export_figure_png(window.localPath(selectedFile), scope, publication, rasterWidth)
+            else controller.export_figure(window.localPath(selectedFile), scope, publication)
         }
     }
 

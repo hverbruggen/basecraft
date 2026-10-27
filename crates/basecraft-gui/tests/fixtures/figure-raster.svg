@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="300" height="180" viewBox="0 0 300 180">
+  <defs><clipPath id="region"><rect x="10" y="10" width="40" height="40"/></clipPath></defs>
+  <g id="clipped-region" clip-path="url(#region)">
+    <rect x="10" y="10" width="100" height="50" fill="#c02030" fill-opacity="0.5"/>
+  </g>
+  <path id="branch" d="M 120 10 V 50 H 180" fill="none" stroke="#2040c0" stroke-width="2"/>
+  <g id="labels" font-family="DejaVu Sans Mono" font-size="16" fill="#101010">
+    <text x="10" y="85">Editable Aβé</text>
+    <text x="10" y="108"><tspan x="10">First line</tspan><tspan x="10" dy="20">Second α</tspan></text>
+    <text x="0" y="0" transform="translate(240 145) rotate(-90)">Rotated Ω</text>
+  </g>
+</svg>

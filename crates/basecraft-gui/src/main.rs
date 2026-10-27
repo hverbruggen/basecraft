@@ -13,6 +13,7 @@ mod alignment_bridge;
 mod application;
 mod bridge;
 mod delimitation_bridge;
+mod figure_png;
 mod operations_bridge;
 mod provenance_bridge;
 mod sanger_bridge;

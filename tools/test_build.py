@@ -261,6 +261,9 @@ sha256sum {" ".join(BINARIES)} > SHA256SUMS
             raise RuntimeError(f"Transfer checksum mismatch: {name}")
     shutil.copytree(source / "plugins", bundle / "plugins")
     shutil.copytree(source / "python", bundle / "python")
+    shutil.copytree(
+        source / "crates/basecraft-gui/licenses", bundle / "share/licenses/basecraft-gui"
+    )
     shutil.copy2(source / "tools/basecraft-launch.py", bundle / "launcher.py")
     bundled_tools = stage_tools(bundle, root / "downloads")
     sanderson = bundle / "plugins/sanderson"
