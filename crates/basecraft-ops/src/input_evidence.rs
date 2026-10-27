@@ -1431,6 +1431,18 @@ pub fn link_generated_input(
     transformation: &str,
     result_label: &str,
 ) -> Result<()> {
+    let _lock = lock()?;
+    link_generated_input_locked(run, dependencies, payload, transformation, result_label)
+}
+
+/// Same publication while the caller already holds the evidence lock through a save.
+pub(crate) fn link_generated_input_locked(
+    run: &ArtifactRun,
+    dependencies: &[PathBuf],
+    payload: &[u8],
+    transformation: &str,
+    result_label: &str,
+) -> Result<()> {
     let mut upstream = Vec::new();
     for dependency in dependencies {
         let bytes = crate::provenance::read_record(&dependency.join("manifest.json"))?;
@@ -1454,7 +1466,6 @@ pub fn link_generated_input(
         &run.artifact("run.json")?,
         &serde_json::json!({"schema_version":1,"id":run.id(),"result":result_label,"status":"prepared"}),
     )?;
-    let _lock = crate::input_evidence::lock()?;
     crate::input_evidence::register(run)
 }
 

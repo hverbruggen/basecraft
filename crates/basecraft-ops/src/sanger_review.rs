@@ -143,6 +143,7 @@ pub struct SangerReviewSession {
     evidence: storage::ReviewEvidence,
     anchor: PathBuf,
     recovery: Option<PathBuf>,
+    accepted: Option<crate::save_guard::Revision>,
     stored_extra: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
@@ -276,6 +277,7 @@ impl SangerReviewSession {
             evidence: storage::ReviewEvidence::default(),
             anchor: std::path::absolute(draft_path).map_err(|e| e.to_string())?,
             recovery: None,
+            accepted: None,
             stored_extra: std::collections::BTreeMap::new(),
         })
     }
@@ -285,7 +287,13 @@ impl SangerReviewSession {
         if bytes.len() > 64 * 1024 * 1024 {
             return Err("Sanger review exceeds 64 MiB".into());
         }
-        Self::decode(&bytes, path)
+        let mut session = Self::decode(&bytes, path)?;
+        if session.recovery.is_none() {
+            session.accepted = Some(
+                crate::save_guard::Revision::accepted(path, &bytes).map_err(|e| e.to_string())?,
+            );
+        }
+        Ok(session)
     }
 
     fn decode(bytes: &[u8], path: &Path) -> Result<Self, String> {
@@ -378,6 +386,7 @@ impl SangerReviewSession {
             evidence,
             anchor: std::path::absolute(path).map_err(|e| e.to_string())?,
             recovery: None,
+            accepted: None,
             stored_extra: stored.extra,
         };
         for event in stored.events {
@@ -453,13 +462,23 @@ impl SangerReviewSession {
         // Recovery and save destination belong to the whole review document.
         std::mem::swap(&mut self.recovery, &mut selected.recovery);
         std::mem::swap(&mut self.anchor, &mut selected.anchor);
+        std::mem::swap(&mut self.accepted, &mut selected.accepted);
         retained.push(selected);
         self.retained = retained;
         Ok(())
     }
 
     pub fn save(&mut self, path: &Path) -> Result<(), String> {
-        self.save_durable(path).map_err(|e| e.to_string())
+        self.save_with_evidence(path, crate::input_evidence::SavePolicy::Cancel)
+    }
+
+    /// Explicit referenced-input policy, shared with ordinary document saves.
+    pub fn save_with_evidence(
+        &mut self,
+        path: &Path,
+        policy: crate::input_evidence::SavePolicy,
+    ) -> Result<(), String> {
+        self.save_durable(path, policy).map_err(|e| e.to_string())
     }
 
     pub fn decision(&self, column: usize) -> Option<&ReviewChoice> {
@@ -1003,9 +1022,10 @@ mod tests {
         assert_eq!(review.decision(issue), Some(&original));
         review.apply(ReviewOp::Redo).unwrap();
         assert_eq!(review.decision(issue), Some(&ReviewChoice::Edit('N')));
-        let store = tempfile::NamedTempFile::new().unwrap();
-        review.save(store.path()).unwrap();
-        let replayed = SangerReviewSession::load(store.path()).unwrap();
+        let store = tempfile::NamedTempFile::new().unwrap().into_temp_path();
+        std::fs::remove_file(&store).unwrap();
+        review.save(&store).unwrap();
+        let replayed = SangerReviewSession::load(&store).unwrap();
         assert_eq!(replayed.events(), review.events());
         assert_eq!(replayed.decision(issue), review.decision(issue));
         assert_eq!(replayed.unresolved(), review.unresolved());
@@ -1287,6 +1307,294 @@ mod moved_and_failed_recovery_tests {
         review.retain_call_set(alternative).unwrap();
         review
     }
+    #[test]
+    fn stale_review_save_preserves_both_call_sets_and_recovery() {
+        let tmp = tempfile::tempdir().unwrap();
+        let folder = tmp.path().join("source");
+        let mut original = pair(&folder);
+        let path = folder.join("review.json");
+        original.save(&path).unwrap();
+        let mut a = SangerReviewSession::load(&path).unwrap();
+        let mut b = SangerReviewSession::load(&path).unwrap();
+        a.apply(ReviewOp::Set {
+            columns: vec![1],
+            choice: ReviewChoice::Edit('A'),
+        })
+        .unwrap();
+        a.save(&path).unwrap();
+        let accepted = std::fs::read(&path).unwrap();
+        b.start_recovery().unwrap();
+        b.apply(ReviewOp::Set {
+            columns: vec![1],
+            choice: ReviewChoice::Edit('T'),
+        })
+        .unwrap();
+        let other = b.retained[0].draft_sha256.clone();
+        b.select_call_set(&other).unwrap();
+        b.apply(ReviewOp::Set {
+            columns: vec![1],
+            choice: ReviewChoice::Edit('G'),
+        })
+        .unwrap();
+        assert!(b.save(&path).is_err(), "stale review must not overwrite A");
+        assert_eq!(std::fs::read(&path).unwrap(), accepted);
+        assert_eq!(b.decision(1), Some(&ReviewChoice::Edit('G')));
+        let mut recovered = SangerReviewSession::load(b.recovery_path().unwrap()).unwrap();
+        assert!(recovered.save(&path).is_err());
+        assert!(recovered.save(b.recovery_path().unwrap()).is_err());
+        assert_eq!(recovered.decision(1), Some(&ReviewChoice::Edit('G')));
+        assert_eq!(
+            recovered.retained[0].decision(1),
+            Some(&ReviewChoice::Edit('T'))
+        );
+    }
+
+    #[test]
+    fn external_missing_recreated_and_save_as_targets_are_guarded() {
+        for mutation in ["external", "missing", "recreated"] {
+            let tmp = tempfile::tempdir().unwrap();
+            let folder = tmp.path().join("source");
+            let mut review = pair(&folder);
+            let path = folder.join("review.json");
+            review.save(&path).unwrap();
+            let accepted = std::fs::read(&path).unwrap();
+            let mut loaded = SangerReviewSession::load(&path).unwrap();
+            let other = loaded.retained[0].draft_sha256.clone();
+            loaded.select_call_set(&other).unwrap();
+            loaded
+                .apply(ReviewOp::Set {
+                    columns: vec![1],
+                    choice: ReviewChoice::Edit('T'),
+                })
+                .unwrap();
+            match mutation {
+                "external" => std::fs::write(&path, b"external replacement").unwrap(),
+                "missing" => std::fs::remove_file(&path).unwrap(),
+                _ => {
+                    let replacement = folder.join("replacement");
+                    std::fs::write(&replacement, &accepted).unwrap();
+                    std::fs::rename(&replacement, &path).unwrap();
+                }
+            }
+            let before = std::fs::read(&path).ok();
+            assert!(loaded.save(&path).is_err(), "{mutation}");
+            assert_eq!(std::fs::read(&path).ok(), before);
+            let unknown = folder.join("existing.json");
+            std::fs::write(&unknown, b"unrelated").unwrap();
+            assert!(
+                loaded
+                    .save(&unknown)
+                    .unwrap_err()
+                    .contains("already exists")
+            );
+            assert_eq!(std::fs::read(&unknown).unwrap(), b"unrelated");
+            let new = folder.join("new.json");
+            loaded.save(&new).unwrap();
+            let reopened = SangerReviewSession::load(&new).unwrap();
+            assert_eq!(reopened.decision(1), Some(&ReviewChoice::Edit('T')));
+            assert_eq!(
+                reopened.retained[0].decision(0),
+                Some(&ReviewChoice::Edit('G'))
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn aliases_do_not_split_saved_review_identity() {
+        let tmp = tempfile::tempdir().unwrap();
+        let folder = tmp.path().join("source");
+        let mut review = pair(&folder);
+        let path = folder.join("review.json");
+        review.save(&path).unwrap();
+        let symlink = folder.join("symlink.json");
+        std::os::unix::fs::symlink(&path, &symlink).unwrap();
+        assert!(review.save(&symlink).unwrap_err().contains("symbolic link"));
+        let hardlink = folder.join("hardlink.json");
+        std::fs::hard_link(&path, &hardlink).unwrap();
+        assert!(review.save(&hardlink).unwrap_err().contains("hard links"));
+        assert!(review.save(&path).unwrap_err().contains("hard links"));
+        std::fs::remove_file(&hardlink).unwrap();
+        let parent_alias = tmp.path().join("alias");
+        std::os::unix::fs::symlink(&folder, &parent_alias).unwrap();
+        review.save(&parent_alias.join("./review.json")).unwrap();
+        review
+            .save(&folder.join("../source/./review.json"))
+            .unwrap();
+        let reopened = SangerReviewSession::load(&path).unwrap();
+        assert_eq!(reopened.call_sets().len(), 2);
+    }
+
+    #[test]
+    fn referenced_review_uses_shared_cancel_preserve_and_break_policy() {
+        use crate::input_evidence::{self as inputs, SavePolicy};
+        for policy in [SavePolicy::PreserveCopy, SavePolicy::BreakEvidence] {
+            let tmp = tempfile::tempdir().unwrap();
+            let folder = tmp.path().join("source");
+            let mut review = pair(&folder);
+            let path = folder.join("review.json");
+            review.save(&path).unwrap();
+            let before = std::fs::read(&path).unwrap();
+            let ledger = inputs::reference_input_with_dependencies(
+                &folder.join("downstream.fa"),
+                &path,
+                &basecraft_io::hash_file(&path).unwrap(),
+                &[],
+                "test downstream review",
+            )
+            .unwrap();
+            review
+                .apply(ReviewOp::Set {
+                    columns: vec![1],
+                    choice: ReviewChoice::Edit('T'),
+                })
+                .unwrap();
+            assert!(
+                review
+                    .save(&path)
+                    .unwrap_err()
+                    .contains("analysis_input_conflict")
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), before);
+            if policy == SavePolicy::PreserveCopy {
+                // Failed preservation must not publish new visible review bytes.
+                let preserved = ledger.directory().join("preserved-input");
+                std::fs::write(&preserved, b"damaged preservation").unwrap();
+                assert!(review.save_with_evidence(&path, policy).is_err());
+                assert_eq!(std::fs::read(&path).unwrap(), before);
+                std::fs::remove_file(&preserved).unwrap();
+            }
+            review.save_with_evidence(&path, policy).unwrap();
+            let input = inputs::read_input(ledger.directory()).unwrap();
+            if policy == SavePolicy::PreserveCopy {
+                assert_eq!(input.state, "preserved");
+                assert_eq!(
+                    std::fs::read(ledger.directory().join("preserved-input")).unwrap(),
+                    before
+                );
+            } else {
+                assert_eq!(input.state, "broken");
+            }
+            assert_eq!(
+                SangerReviewSession::load(&path).unwrap().decision(1),
+                Some(&ReviewChoice::Edit('T'))
+            );
+        }
+    }
+
+    #[test]
+    fn failed_binding_reports_saved_data_and_allows_safe_retry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let folder = tmp.path().join("source");
+        let mut review = pair(&folder);
+        let path = folder.join("review.json");
+        review.save(&path).unwrap();
+        review
+            .apply(ReviewOp::Set {
+                columns: vec![1],
+                choice: ReviewChoice::Edit('T'),
+            })
+            .unwrap();
+        let key = basecraft_io::hash_bytes(b"review.json");
+        let binding = folder
+            .join(".basecraft/analyses-v1/bindings")
+            .join(key.trim_start_matches("b3:"));
+        let previous_binding = std::fs::read(&binding).unwrap();
+        std::fs::remove_file(&binding).unwrap();
+        std::fs::create_dir(&binding).unwrap();
+        let error = review.save(&path).unwrap_err();
+        assert!(error.contains("data saved; binding incomplete"), "{error}");
+        assert!(error.contains("repair evidence"));
+        assert_eq!(
+            SangerReviewSession::load(&path).unwrap().decision(1),
+            Some(&ReviewChoice::Edit('T'))
+        );
+        assert_eq!(
+            SangerReviewSession::load(review.recovery_path().unwrap())
+                .unwrap()
+                .call_sets()
+                .len(),
+            2
+        );
+        std::fs::remove_dir(&binding).unwrap();
+        std::fs::write(&binding, previous_binding).unwrap();
+        review.save(&path).unwrap();
+        assert!(
+            crate::analysis_store::ArtifactRun::for_result(&path)
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn simultaneous_review_writers_accept_only_one_revision() {
+        fn wait_for(path: &Path) {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while !path.exists() {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "writer handshake timed out: {}",
+                    path.display()
+                );
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
+        // A second OS process uses the actual load/edit/save path, with both
+        // writers loaded before either is allowed to publish.
+        if let Some(target) = std::env::var_os("BASECRAFT_SANGER_WRITER_TARGET") {
+            let path = PathBuf::from(target);
+            let mut session = SangerReviewSession::load(&path).unwrap();
+            session
+                .apply(ReviewOp::Set {
+                    columns: vec![1],
+                    choice: ReviewChoice::Edit('A'),
+                })
+                .unwrap();
+            std::fs::write(path.with_extension("ready"), b"ready").unwrap();
+            wait_for(&path.with_extension("go"));
+            let result = if session.save(&path).is_ok() {
+                "saved"
+            } else {
+                "refused"
+            };
+            std::fs::write(path.with_extension("result"), result).unwrap();
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let folder = tmp.path().join("source");
+        let mut review = pair(&folder);
+        let path = folder.join("review.json");
+        review.save(&path).unwrap();
+        let mut parent = SangerReviewSession::load(&path).unwrap();
+        parent
+            .apply(ReviewOp::Set {
+                columns: vec![1],
+                choice: ReviewChoice::Edit('T'),
+            })
+            .unwrap();
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "sanger_review::moved_and_failed_recovery_tests::simultaneous_review_writers_accept_only_one_revision"])
+            .env("BASECRAFT_SANGER_WRITER_TARGET", &path)
+            .spawn().unwrap();
+        wait_for(&path.with_extension("ready"));
+        std::fs::write(path.with_extension("go"), b"go").unwrap();
+        let parent_saved = parent.save(&path).is_ok();
+        assert!(child.wait().unwrap().success());
+        let child_saved =
+            std::fs::read_to_string(path.with_extension("result")).unwrap() == "saved";
+        assert_ne!(parent_saved, child_saved);
+        let loaded = SangerReviewSession::load(&path).unwrap();
+        assert_eq!(
+            loaded.decision(1),
+            Some(&ReviewChoice::Edit(if parent_saved { 'T' } else { 'A' }))
+        );
+        assert!(
+            crate::analysis_store::ArtifactRun::for_result(&path)
+                .unwrap()
+                .is_some()
+        );
+    }
+
     #[test]
     fn moved_folder_reopens_every_call_set_without_relying_on_cache_paths() {
         let tmp = tempfile::tempdir().unwrap();
