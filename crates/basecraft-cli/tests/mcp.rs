@@ -201,8 +201,15 @@ fn script_clients_record_script_edits() {
         details.iter().any(|d| d.starts_with("Script: CLI")),
         "{details:#?}"
     );
-    assert!(!details.iter().any(|d| d.starts_with("Agent:")), "{details:#?}");
-    assert!(std::fs::read_to_string(&file).unwrap().contains("TCGT\n>b\nGCGT"));
+    assert!(
+        !details.iter().any(|d| d.starts_with("Agent:")),
+        "{details:#?}"
+    );
+    assert!(
+        std::fs::read_to_string(&file)
+            .unwrap()
+            .contains("TCGT\n>b\nGCGT")
+    );
 }
 
 #[test]

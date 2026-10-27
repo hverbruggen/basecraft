@@ -206,8 +206,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Command::Operations { action } => operations::operations(action)?,
         Command::History { file, json } => {
             let file = file.canonicalize()?;
-            let mut session =
-                script_session(file.parent().ok_or("File has no parent")?)?;
+            let mut session = script_session(file.parent().ok_or("File has no parent")?)?;
             let doc = session.open(&file)?;
             let report = session.document_record(doc)?.report()?;
             println!(
@@ -221,8 +220,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         }
         Command::Methods { file, json, output } => {
             let file = file.canonicalize()?;
-            let mut session =
-                script_session(file.parent().ok_or("File has no parent")?)?;
+            let mut session = script_session(file.parent().ok_or("File has no parent")?)?;
             let doc = session.open(&file)?;
             let report = session.document_record(doc)?.report()?;
             if let Some(output) = output {
