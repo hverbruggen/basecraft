@@ -84,9 +84,11 @@ Control {
             objectName: "ribbonScrollBar"
             parent: ribbon
             x: viewport.x
-            y: viewport.y
+            // Keep the entire interactive strip inside the ribbon's existing
+            // top padding, clear of the top row's click targets.
+            y: 0
             width: viewport.width
-            height: Math.max(3 * ribbon.ribbonSizeFactor, implicitHeight)
+            height: ribbon.topPadding
             policy: ScrollBar.AsNeeded
             visible: ribbon.overflowing
             active: true
