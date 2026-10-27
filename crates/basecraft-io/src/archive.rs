@@ -3,7 +3,7 @@
 //! Reading looks up named members in memory only; nothing is extracted to
 //! disk. Only stored and deflated members are supported, and sizes are
 //! bounded so a crafted archive cannot exhaust memory. Writing produces
-//! stored or deflated members with CRC-32, enough for OpenDocument.
+//! stored or deflated members with CRC-32, enough for `OpenDocument`.
 use std::io::{Read, Write};
 
 use crate::{Error, Result};

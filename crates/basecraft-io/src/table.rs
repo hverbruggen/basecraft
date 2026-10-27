@@ -415,13 +415,13 @@ fn read_ods(archive: &crate::archive::Archive<'_>) -> Result<Cells> {
                     (text, false)
                 }
             };
-            if !value.is_empty() {
+            if value.is_empty() {
+                column = column.saturating_add(span);
+            } else {
                 for _ in 0..span.min(16_384) {
                     values.push((column, value.clone(), date));
                     column += 1;
                 }
-            } else {
-                column = column.saturating_add(span);
             }
         }
         if values.is_empty() {
@@ -784,7 +784,7 @@ mod tests {
         part(
             &mut zip,
             "xl/sharedStrings.xml",
-            r#"<sst><si><t>specimen_id</t></si><si><t>eventDate</t></si><si><r><t>HV</t></r><r><t>1</t></r></si></sst>"#,
+            "<sst><si><t>specimen_id</t></si><si><t>eventDate</t></si><si><r><t>HV</t></r><r><t>1</t></r></si></sst>",
         );
         part(
             &mut zip,
@@ -804,7 +804,7 @@ mod tests {
         assert_eq!(
             sheet.rows,
             [vec![
-                "".to_string(),
+                String::new(),
                 "HV1".into(),
                 "2019-05-12".into(),
                 "12.5".into()
