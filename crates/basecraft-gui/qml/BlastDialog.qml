@@ -106,7 +106,7 @@ AppFormDialog {
     }
     Label {
         Kirigami.FormData.label: "Program"
-        text: alphabet.currentIndex === 0 ? (database.currentText === "nt" ? "blastn" : "blastx") : (database.currentText === "nr" ? "blastp" : "tblastn")
+        text: alphabet.currentIndex < 0 ? "Choose a query alphabet" : alphabet.currentIndex === 0 ? (database.currentText === "nt" ? "blastn" : "blastx") : (database.currentText === "nr" ? "blastp" : "tblastn")
     }
     TextField {
         id: contact; objectName: "blastContact"; Kirigami.FormData.label: "NCBI contact email"

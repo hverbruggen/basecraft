@@ -2,6 +2,7 @@
 import hashlib
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -93,6 +94,29 @@ class Submission(unittest.TestCase):
         self.assertEqual(result["data"]["status"], "accepted")
         self.assertIn("disk full", result["data"]["message"])
         self.assertEqual(len(self.calls), 1)
+
+    def test_restart_receipt_verification_never_sends(self):
+        result = blast.submit_prepared(self.params,self.context,self.transport)
+        receipt = result["data"]
+        recovered = blast.inspect_retained(json.loads((self.root / "receipt").read_text()),self.plan)
+        self.assertEqual(recovered,receipt)
+        self.assertEqual(len(self.calls),1)
+        with self.assertRaises(ValueError):
+            blast.inspect_retained(dict(receipt,query_hash="wrong"),self.plan)
+        with self.assertRaises(ValueError):
+            blast.inspect_retained(dict(receipt,url="https://example.org"),self.plan)
+
+    def test_whole_post_deadline_interrupts_hung_read(self):
+        with patch.object(blast.http.client,"HTTPSConnection") as connection, patch.object(blast,"POST_SECONDS",0.03):
+            response = connection.return_value.getresponse.return_value
+            response.status = 200
+            response.read.side_effect = lambda size: time.sleep(1)
+            started = time.monotonic()
+            with self.assertRaises(blast.DeadlineError):
+                blast.post({"CMD":"Put"})
+            self.assertLess(time.monotonic()-started,0.5)
+            self.assertEqual(connection.return_value.request.call_count,1)
+            connection.return_value.close.assert_called_once()
 
     def test_http_wall_deadline_and_response_size_bound(self):
         class Response:

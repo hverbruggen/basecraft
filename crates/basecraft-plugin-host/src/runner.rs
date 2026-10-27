@@ -702,12 +702,15 @@ impl PreparedOperation {
                     teardown?;
                     evidence?;
                 } else {
-                    let diagnostics: Vec<_> =
-                        [teardown.err(), evidence.err(), contact_evidence.err()]
-                            .into_iter()
-                            .flatten()
-                            .map(|e| e.to_string())
-                            .collect();
+                    let diagnostics: Vec<_> = [
+                        teardown.err(),
+                        evidence.err().map(Error::from),
+                        contact_evidence.err(),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .map(|e| e.to_string())
+                    .collect();
                     if !diagnostics.is_empty() {
                         result.message = Some(format!(
                             "Local execution evidence incomplete: {}",

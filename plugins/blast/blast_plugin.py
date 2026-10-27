@@ -85,7 +85,7 @@ def fields_for(plan, parameters):
         fields["WORD_SIZE"] = "28" if parameters["megablast"] else "11"
         fields["NUCL_REWARD"] = "1" if parameters["megablast"] else "2"
         fields["NUCL_PENALTY"] = "-2" if parameters["megablast"] else "-3"
-        fields["GAPCOSTS"] = "0 0" if parameters["megablast"] else "5 2"
+        fields["GAPCOSTS"] = "0 4" if parameters["megablast"] else "5 2"
     else:
         fields.update(MATRIX="BLOSUM62", COMPOSITION_BASED_STATISTICS="2",
                       WORD_SIZE="3" if plan["program"] == "blastp" else "5", GAPCOSTS="11 2")
