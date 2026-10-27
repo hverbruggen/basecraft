@@ -179,15 +179,31 @@ fn plugin_command_runs_registered_sequence_operations() {
         outcome["effective_parameters"],
         serde_json::json!({"start":0,"end":4,"slow":false})
     );
-    // Saving afterwards scans every registered analysis store, including the
-    // records the run above just wrote.
-    let saved = call(&["end=4", "--save"]);
+    // Every later save scans the registered stores, including the records the
+    // run above wrote. An unrelated file saves normally.
+    let other = project.join("other.fa");
+    std::fs::write(&other, ">other\nACGT\n").unwrap();
+    let edited = Command::new(env!("CARGO_BIN_EXE_basecraft"))
+        .args([
+            "edit",
+            other.to_str().unwrap(),
+            r#"{"op":"seq.replace","params":{"start":0,"end":1,"residues":"T"}}"#,
+        ])
+        .env("BASECRAFT_PROFILE_DIR", &profile)
+        .output()
+        .unwrap();
     assert!(
-        saved.status.success(),
-        "{}\n{}",
-        String::from_utf8_lossy(&saved.stdout),
-        String::from_utf8_lossy(&saved.stderr)
+        edited.status.success(),
+        "{}",
+        String::from_utf8_lossy(&edited.stderr)
     );
+    assert_eq!(std::fs::read(&other).unwrap(), b">other\nTCGT\n");
+    // Replacing the run's own input asks for an evidence decision, which the
+    // CLI save cannot give; the file stays unchanged.
+    let saved = call(&["end=4", "--save"]);
+    assert!(!saved.status.success());
+    let error = String::from_utf8_lossy(&saved.stderr);
+    assert!(error.contains("analysis_input_conflict"), "{error}");
     // The frozen sequence file is recorded as an unchanged (identity) read that
     // the shared evidence reader accepts; the session snapshot is generated.
     let mut records = Vec::new();
@@ -216,9 +232,5 @@ fn plugin_command_runs_registered_sequence_operations() {
         outcome["errors"][0]["code"], "invalid_arguments",
         "{outcome}"
     );
-    assert!(
-        std::fs::read_to_string(&sequence)
-            .unwrap()
-            .contains("ACGTACGT")
-    );
+    assert_eq!(std::fs::read(&sequence).unwrap(), b">sequence\nACGTACGT\n");
 }
