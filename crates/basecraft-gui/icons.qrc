@@ -6,6 +6,9 @@
     <file>icons/settings.svg</file>
     <file>icons/figure-export.svg</file>
     <file>icons/basecraft-monochrome.svg</file>
+    <file>icons/basecraft-colour.svg</file>
+    <file>icons/methods-export.svg</file>
+    <file>icons/tree-threshold.svg</file>
 
     <file>icons/add-file.svg</file>
     <file>icons/add.svg</file>
