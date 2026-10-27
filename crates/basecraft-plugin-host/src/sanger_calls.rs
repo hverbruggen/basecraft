@@ -3,12 +3,14 @@ use crate::{
     jobs::JobManager,
     policy::SessionPolicy,
     registry::{Registry, RegistryConfig},
+    runner::{
+        CompletedResultQuery, VerifiedOperationResult, lookup_completed_result,
+        verify_completed_result,
+    },
 };
 use basecraft_docs::sanger::SangerDraft;
-use basecraft_protocol::operation::{
-    OperationOutcome, OperationPins, OperationRequest, RuntimeState,
-};
-use serde_json::{Value, json};
+use basecraft_protocol::operation::{InvocationInputEvidence, OperationRequest, RuntimeState};
+use serde_json::json;
 use std::path::{Path, PathBuf};
 
 const OPERATION: &str = "basecraft.tracy-sanger/consensus@1";
@@ -17,13 +19,13 @@ const OPERATION: &str = "basecraft.tracy-sanger/consensus@1";
 pub struct SangerCaller {
     jobs: JobManager,
     active: Option<(String, Identity)>,
+    pub lookup_diagnostics: Vec<String>,
 }
 
 struct Identity {
     source: PathBuf,
     sha256: String,
-    parameters: Value,
-    pins: OperationPins,
+    query: CompletedResultQuery,
 }
 
 pub struct CalledDraft {
@@ -53,15 +55,8 @@ fn engine(interpreter: &Path) -> Result<PathBuf, String> {
         })
 }
 
-fn checked(outcome: &OperationOutcome, identity: &Identity) -> Result<CalledDraft, String> {
-    if outcome.state != RuntimeState::Completed
-        || outcome.operation != OPERATION
-        || outcome.pins.package_digest != identity.pins.package_digest
-        || outcome.pins.descriptor_digest != identity.pins.descriptor_digest
-        || outcome.effective_parameters != identity.parameters
-    {
-        return Err("Caller receipt does not match the requested implementation/settings".into());
-    }
+fn checked(verified: VerifiedOperationResult, identity: &Identity) -> Result<CalledDraft, String> {
+    let outcome = &verified.outcome;
     let artifact = outcome
         .artifacts
         .iter()
@@ -72,25 +67,16 @@ fn checked(outcome: &OperationOutcome, identity: &Identity) -> Result<CalledDraf
         })
         .ok_or("Caller did not retain draft evidence")?;
     let path = PathBuf::from(&artifact.path);
-    if basecraft_io::hash_file(&path).map_err(|e| e.to_string())? != artifact.digest {
-        return Err("Cached caller evidence changed; recompute calls".into());
-    }
-    for artifact in &outcome.artifacts {
-        if basecraft_io::hash_file(Path::new(&artifact.path)).map_err(|e| e.to_string())?
-            != artifact.digest
-        {
-            return Err("Retained caller output changed; recompute calls".into());
-        }
-    }
     let mut draft = SangerDraft::read(&path)?;
     if draft.inputs.len() != 1
         || draft.engine != "Tracy"
         || draft.inputs[0].sha256 != identity.sha256
         || draft.engine_sha256
-            != identity.parameters["engine_sha256"]
+            != identity.query.effective_parameters["engine_sha256"]
                 .as_str()
                 .unwrap_or_default()
-        || draft.signal_threshold.map(u64::from) != identity.parameters["signal_threshold"].as_u64()
+        || draft.signal_threshold.map(u64::from)
+            != identity.query.effective_parameters["signal_threshold"].as_u64()
         || draft.minimum_overlap != 50
         || draft.minimum_identity.to_bits() != 0.8_f64.to_bits()
         || basecraft_io::sha256_file(&identity.source).map_err(|e| e.to_string())?
@@ -109,16 +95,13 @@ fn checked(outcome: &OperationOutcome, identity: &Identity) -> Result<CalledDraf
     }) {
         return Err("Caller coordinates do not fit the original trace".into());
     }
-    // Runtime outputs live under the owned run's artifacts collection.
-    let run = path
-        .ancestors()
-        .find(|ancestor| ancestor.join("runtime.json").is_file())
-        .ok_or("Caller receipt directory is missing")?
-        .to_path_buf();
+    let run = verified.directory;
     draft.inputs[0].path.clone_from(&identity.source);
     draft.limitations.push(format!(
         "Caller package {}; contract {}; effective settings {}",
-        identity.pins.package_digest, identity.pins.descriptor_digest, identity.parameters
+        identity.query.pins.package_digest,
+        identity.query.pins.descriptor_digest,
+        identity.query.effective_parameters
     ));
     draft.validate()?;
     Ok(CalledDraft { draft, run })
@@ -157,34 +140,38 @@ impl SangerCaller {
         let caller = engine(interpreter)?;
         let parameters = json!({"engine_sha256":basecraft_io::sha256_file(&caller).map_err(|e| e.to_string())?,
             "minimum_overlap":50,"minimum_identity":0.8,"signal_threshold":signal_threshold});
+        let hash = basecraft_io::hash_file(&source).map_err(|e| e.to_string())?;
         let identity = Identity {
             source: source.clone(),
             sha256: sha256.into(),
-            parameters: parameters.clone(),
-            pins: operation.pins(&registry.generation),
+            query: CompletedResultQuery {
+                operation: OPERATION.into(),
+                pins: operation.pins(&registry.generation),
+                effective_parameters: parameters.clone(),
+                inputs: std::collections::BTreeMap::from([(
+                    "reads".into(),
+                    vec![InvocationInputEvidence {
+                        original_path: None,
+                        source_hash: Some(hash.clone()),
+                        submitted_hash: hash,
+                        transformation: "identity-v1".into(),
+                        run_directory: String::new(),
+                    }],
+                )]),
+            },
         };
         let root = source.parent().ok_or("AB1 has no parent folder")?;
-        let store = root.join(".basecraft/analyses-v1");
-        if basecraft_ops::analysis_store::ArtifactRun::validate_store(&store).is_ok() {
-            // Reuse the shared run receipts; no second cache/index format.
-            if let Ok(runs) = std::fs::read_dir(store.join("runs")) {
-                for entry in runs.flatten().take(4096) {
-                    let receipt = entry.path().join("runtime.json");
-                    let Ok(bytes) = basecraft_ops::provenance::read_record(&receipt) else {
-                        continue;
-                    };
-                    let Ok(outcome) = serde_json::from_slice::<OperationOutcome>(&bytes) else {
-                        continue;
-                    };
-                    if let Ok(calls) = checked(&outcome, &identity) {
-                        return Ok(Some(calls));
-                    }
-                }
+        let lookup = lookup_completed_result(&root.join("operation"), &identity.query);
+        self.lookup_diagnostics = lookup.diagnostics;
+        if let Some(result) = lookup.result {
+            match checked(result, &identity) {
+                Ok(calls) => return Ok(Some(calls)),
+                Err(error) => self.lookup_diagnostics.push(error),
             }
         }
         let request: OperationRequest = serde_json::from_value(json!({"operation":OPERATION,
             "inputs":{"reads":[{"kind":"file","path":source}]},"parameters":parameters,
-            "pins":identity.pins}))
+            "pins":identity.query.pins}))
         .map_err(|e| e.to_string())?;
         let accepted = self
             .jobs
@@ -221,7 +208,9 @@ impl SangerCaller {
                 |error| error.message.clone(),
             ));
         }
-        checked(&outcome, &identity).map(Some)
+        let verified =
+            verify_completed_result(&outcome, &identity.query).map_err(|e| e.to_string())?;
+        checked(verified, &identity).map(Some)
     }
 }
 
@@ -229,7 +218,8 @@ impl SangerCaller {
 mod tests {
     use super::*;
     #[test]
-    fn cache_requires_complete_matching_receipt_and_unchanged_input_and_artifact() {
+    fn biological_validation_rejects_stale_source_and_wrong_coordinates() {
+        use basecraft_protocol::operation::{OperationOutcome, OperationPins, PublishedArtifact};
         let tmp = tempfile::tempdir().unwrap();
         let source = tmp.path().join("source.ab1");
         std::fs::copy(
@@ -248,8 +238,12 @@ mod tests {
         let identity = Identity {
             source: source.clone(),
             sha256: basecraft_io::sha256_file(&source).unwrap(),
-            parameters: parameters.clone(),
-            pins: pins.clone(),
+            query: CompletedResultQuery {
+                operation: OPERATION.into(),
+                pins: pins.clone(),
+                effective_parameters: parameters.clone(),
+                inputs: Default::default(),
+            },
         };
         let mut draft = basecraft_ops::sanger_review::instrument_review(&source)
             .unwrap()
@@ -260,12 +254,9 @@ mod tests {
         draft.signal_threshold = Some(20);
         draft.minimum_overlap = 50;
         draft.minimum_identity = 0.8;
-        let run = tmp.path().join("run");
-        std::fs::create_dir(&run).unwrap();
-        std::fs::write(run.join("runtime.json"), "{}").unwrap();
-        let path = run.join("evidence.json");
+        let path = tmp.path().join("evidence.json");
         std::fs::write(&path, serde_json::to_vec(&draft).unwrap()).unwrap();
-        let mut outcome = OperationOutcome {
+        let outcome = OperationOutcome {
             schema: 1,
             operation: OPERATION.into(),
             run_id: "run".into(),
@@ -274,32 +265,28 @@ mod tests {
             requested_parameters: parameters.clone(),
             effective_parameters: parameters,
             data: None,
-            artifacts: vec![basecraft_protocol::operation::PublishedArtifact {
+            artifacts: vec![PublishedArtifact {
                 role: "artifacts".into(),
                 path: path.display().to_string(),
-                digest: basecraft_io::hash_file(&path).unwrap(),
+                digest: "verified by host".into(),
             }],
             proposals: None,
             warnings: vec![],
             errors: vec![],
             evidence: None,
         };
-        assert!(checked(&outcome, &identity).is_ok());
-        outcome.state = RuntimeState::Cancelled;
-        assert!(checked(&outcome, &identity).is_err());
-        outcome.state = RuntimeState::Completed;
-        outcome.effective_parameters["signal_threshold"] = 21.into();
-        assert!(checked(&outcome, &identity).is_err());
-        outcome.effective_parameters = identity.parameters.clone();
-        outcome.pins.package_digest = "replaced".into();
-        assert!(checked(&outcome, &identity).is_err());
-        outcome.pins = identity.pins.clone();
-        let original = std::fs::read(&source).unwrap();
+        let verified = || VerifiedOperationResult {
+            outcome: outcome.clone(),
+            directory: tmp.path().into(),
+        };
+        assert!(checked(verified(), &identity).is_ok());
+        if let Some(position) = draft.inputs[0].calls.as_mut().unwrap().positions.last_mut() {
+            *position = u32::MAX;
+        }
+        std::fs::write(&path, serde_json::to_vec(&draft).unwrap()).unwrap();
+        assert!(checked(verified(), &identity).is_err());
         std::fs::write(&source, "changed source at same pathname").unwrap();
-        assert!(checked(&outcome, &identity).is_err());
-        std::fs::write(&source, original).unwrap();
-        std::fs::write(&path, "damaged evidence").unwrap();
-        assert!(checked(&outcome, &identity).is_err());
+        assert!(checked(verified(), &identity).is_err());
     }
 }
 
@@ -335,6 +322,53 @@ mod live_tests {
             assert!(started.elapsed().as_secs() < 120, "caller timeout");
             std::thread::sleep(std::time::Duration::from_millis(20));
         };
+        // Shared host verification, not Sanger, owns common receipt/input/artifact rules.
+        let receipt: basecraft_protocol::operation::OperationOutcome = serde_json::from_slice(
+            &basecraft_ops::provenance::read_record(&called.run.join("runtime.json")).unwrap(),
+        )
+        .unwrap();
+        let execution: serde_json::Value = serde_json::from_slice(
+            &basecraft_ops::provenance::read_record(&called.run.join("execution.json")).unwrap(),
+        )
+        .unwrap();
+        let context: basecraft_protocol::operation::InvocationContext =
+            serde_json::from_value(execution["context"].clone()).unwrap();
+        let mut query = CompletedResultQuery {
+            operation: receipt.operation.clone(),
+            pins: receipt.pins.clone(),
+            effective_parameters: receipt.effective_parameters.clone(),
+            inputs: context.input_evidence,
+        };
+        assert!(verify_completed_result(&receipt, &query).is_ok());
+        query.inputs.get_mut("reads").unwrap()[0].submitted_hash = "b3:changed".into();
+        assert!(verify_completed_result(&receipt, &query).is_err());
+        query.inputs.get_mut("reads").unwrap()[0].submitted_hash =
+            basecraft_io::hash_file(&source).unwrap();
+        query.pins.package_digest = "changed producer".into();
+        assert!(verify_completed_result(&receipt, &query).is_err());
+        query.pins = receipt.pins.clone();
+        let mut future = receipt.clone();
+        future.schema = 99;
+        assert!(verify_completed_result(&future, &query).is_err());
+        let fake =
+            basecraft_ops::analysis_store::ArtifactRun::create(&source, "0000-future").unwrap();
+        basecraft_ops::input_evidence::write_json(&fake.artifact("runtime.json").unwrap(), &future)
+            .unwrap();
+        let corrupt =
+            basecraft_ops::analysis_store::ArtifactRun::create(&source, "0001-corrupt").unwrap();
+        std::fs::write(
+            corrupt.artifact("runtime.json").unwrap(),
+            b"corrupt receipt",
+        )
+        .unwrap();
+        let found = lookup_completed_result(&source, &query);
+        assert!(found.result.is_some());
+        assert_eq!(found.diagnostics.len(), 2);
+        let artifact_path = Path::new(&receipt.artifacts[0].path);
+        let retained_bytes = std::fs::read(artifact_path).unwrap();
+        std::fs::write(artifact_path, b"damaged retained output").unwrap();
+        assert!(verify_completed_result(&receipt, &query).is_err());
+        std::fs::write(artifact_path, retained_bytes).unwrap();
         let mut computed = SangerReviewSession::from_draft(called.draft, &source).unwrap();
         computed.attach_operation_run(&called.run).unwrap();
         let computed_id = computed.draft_sha256.clone();
@@ -368,6 +402,18 @@ mod live_tests {
             "late completion must be detached after cancel"
         );
         assert_eq!(std::fs::read(&source).unwrap(), original);
+        assert!(caller.start(&source, &sha256, 18).unwrap().is_none());
+        std::fs::write(&source, "source replaced while caller was running").unwrap();
+        let started = std::time::Instant::now();
+        loop {
+            match caller.poll() {
+                Err(_) => break,
+                Ok(Some(_)) => panic!("stale completion must never be reusable"),
+                Ok(None) => {}
+            }
+            assert!(started.elapsed().as_secs() < 120, "stale caller timeout");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
         std::fs::write(&source, "different bytes at the same path").unwrap();
         assert!(caller.start(&source, &sha256, 20).is_err());
         assert_eq!(reopened.decision(0), Some(&ReviewChoice::Edit('G')));

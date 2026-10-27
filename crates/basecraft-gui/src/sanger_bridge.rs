@@ -876,9 +876,14 @@ impl qobject::SangerController {
             Ok(None) => {
                 self.as_mut().set_calling(true);
                 self.as_mut().set_message_kind(QString::from("notify"));
-                self.as_mut().set_message(QString::from(
-                    "No valid cached calls; computing in background. Current calls remain selected",
-                ));
+                let diagnostic = self
+                    .rust()
+                    .caller
+                    .lookup_diagnostics
+                    .first()
+                    .map_or_else(String::new, |message| format!(" Reuse lookup: {message}"));
+                self.as_mut().set_message(QString::from(format!(
+                    "No valid cached calls; computing in background. Current calls remain selected.{diagnostic}")));
             }
             Err(error) => {
                 self.call_error(&error);

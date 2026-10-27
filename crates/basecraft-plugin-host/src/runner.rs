@@ -28,6 +28,195 @@ use crate::{
     registry::RegisteredOperation,
 };
 
+/// Explicit, caller-supplied semantic identity for opt-in result reuse. The caller
+/// must include external producer identities (e.g. executable hashes) in parameters.
+/// This query never automatically changes execution policy for arbitrary operations.
+pub struct CompletedResultQuery {
+    pub operation: String,
+    pub pins: basecraft_protocol::operation::OperationPins,
+    pub effective_parameters: Value,
+    /// Match role/order/source/submitted hashes and transformation, not mutable paths.
+    pub inputs: BTreeMap<String, Vec<InvocationInputEvidence>>,
+}
+
+pub struct VerifiedOperationResult {
+    pub outcome: OperationOutcome,
+    pub directory: PathBuf,
+}
+
+#[derive(Default)]
+pub struct CompletedResultLookup {
+    pub result: Option<VerifiedOperationResult>,
+    /// Corrupt, future or bounded-out evidence is a visible miss, not a complete inventory.
+    pub diagnostics: Vec<String>,
+}
+
+impl CompletedResultQuery {
+    fn matches(&self, outcome: &OperationOutcome) -> bool {
+        outcome.operation == self.operation
+            && outcome.pins.package_digest == self.pins.package_digest
+            && outcome.pins.descriptor_digest == self.pins.descriptor_digest
+            && outcome.effective_parameters == self.effective_parameters
+    }
+}
+
+/// Verify a completed public-operation result using its existing execution record,
+/// frozen declared input evidence, and shared publication/input/artifact verification.
+pub fn verify_completed_result(
+    outcome: &OperationOutcome,
+    query: &CompletedResultQuery,
+) -> Result<VerifiedOperationResult> {
+    use basecraft_protocol::operation::RuntimeState;
+    if outcome.schema != 1
+        || outcome.state != RuntimeState::Completed
+        || !outcome.errors.is_empty()
+        || !query.matches(outcome)
+    {
+        return Err(Error::Protocol(
+            "completed receipt identity/state does not match".into(),
+        ));
+    }
+    let directory = PathBuf::from(
+        outcome
+            .evidence
+            .as_ref()
+            .ok_or_else(|| Error::Protocol("completed receipt has no owned run".into()))?,
+    );
+    if directory.file_name().and_then(|name| name.to_str()) != Some(outcome.run_id.as_str()) {
+        return Err(Error::Protocol(
+            "receipt run identity differs from its location".into(),
+        ));
+    }
+    let metadata = directory.symlink_metadata()?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(Error::Protocol("unsafe completed run directory".into()));
+    }
+    let execution: Value = serde_json::from_slice(&basecraft_ops::provenance::read_record(
+        &directory.join("execution.json"),
+    )?)?;
+    if execution["schema"] != 1
+        || execution["operation"] != query.operation
+        || execution["package_digest"] != query.pins.package_digest
+        || execution["descriptor_digest"] != query.pins.descriptor_digest
+        || execution["effective_parameters"] != query.effective_parameters
+    {
+        return Err(Error::Protocol(
+            "execution specification differs from receipt".into(),
+        ));
+    }
+    let context: InvocationContext = serde_json::from_value(execution["context"].clone())?;
+    if context.schema != 1
+        || context.operation != query.operation
+        || context.run_id != outcome.run_id
+        || context.input_evidence.len() != query.inputs.len()
+        || query.inputs.iter().any(|(role, expected)| {
+            context.input_evidence.get(role).is_none_or(|actual| {
+                actual.len() != expected.len()
+                    || actual.iter().zip(expected).any(|(a, b)| {
+                        a.source_hash != b.source_hash
+                            || a.submitted_hash != b.submitted_hash
+                            || a.transformation != b.transformation
+                    })
+            })
+        })
+    {
+        return Err(Error::Protocol(
+            "frozen declared inputs do not match reuse query".into(),
+        ));
+    }
+    if outcome.artifacts.is_empty() {
+        return Err(Error::Protocol("completed receipt has no artifacts".into()));
+    }
+    let first = Path::new(&outcome.artifacts[0].path);
+    let bundle = basecraft_ops::provenance::bundle_for_result(first);
+    if bundle.canonicalize()? != directory.canonicalize()? {
+        return Err(Error::Protocol(
+            "retained artifact is bound to a different run".into(),
+        ));
+    }
+    let issues = basecraft_ops::provenance::verify(first)?;
+    if !issues.is_empty() {
+        return Err(Error::Protocol(format!(
+            "completed publication is not reusable: {}",
+            issues.join("; ")
+        )));
+    }
+    let publication = basecraft_ops::provenance::inspect(first)?;
+    for artifact in &outcome.artifacts {
+        let path = Path::new(&artifact.path);
+        if !path.canonicalize()?.starts_with(directory.canonicalize()?)
+            || path.symlink_metadata()?.file_type().is_symlink()
+            || basecraft_io::hash_file(path).map_err(basecraft_ops::Error::from)? != artifact.digest
+            || !publication
+                .outputs
+                .iter()
+                .any(|output| output.hash == artifact.digest)
+        {
+            return Err(Error::Protocol(
+                "retained artifact differs from completed publication".into(),
+            ));
+        }
+    }
+    Ok(VerifiedOperationResult {
+        outcome: outcome.clone(),
+        directory,
+    })
+}
+
+/// Search existing owned receipts for an explicitly reusable request. No index,
+/// records, directory creation, automatic execution or publication is introduced.
+pub fn lookup_completed_result(
+    anchor: &Path,
+    query: &CompletedResultQuery,
+) -> CompletedResultLookup {
+    let mut lookup = CompletedResultLookup::default();
+    let runs = match ArtifactRun::runs_for_anchor(anchor, 4096) {
+        Ok(runs) => runs,
+        Err(error) => {
+            lookup.diagnostics.push(error.to_string());
+            return lookup;
+        }
+    };
+    for directory in runs {
+        let receipt = directory.join("runtime.json");
+        if !receipt.exists() {
+            continue;
+        } // Input ledgers and legacy domain runs have no runtime receipt.
+        let candidate = (|| -> Result<Option<VerifiedOperationResult>> {
+            let value: Value =
+                serde_json::from_slice(&basecraft_ops::provenance::read_record(&receipt)?)?;
+            if value["schema"] != 1 {
+                return Err(Error::Protocol(
+                    "unsupported operation receipt version".into(),
+                ));
+            }
+            let outcome: OperationOutcome = serde_json::from_value(value)?;
+            if !query.matches(&outcome)
+                || outcome.state != basecraft_protocol::operation::RuntimeState::Completed
+            {
+                return Ok(None);
+            }
+            if outcome.evidence.as_deref() != directory.to_str() {
+                return Err(Error::Protocol(
+                    "receipt location changed; reuse unavailable".into(),
+                ));
+            }
+            verify_completed_result(&outcome, query).map(Some)
+        })();
+        match candidate {
+            Ok(Some(result)) => {
+                lookup.result = Some(result);
+                return lookup;
+            }
+            Ok(None) => {}
+            Err(error) => lookup
+                .diagnostics
+                .push(format!("{}: {error}", receipt.display())),
+        }
+    }
+    lookup
+}
+
 pub struct SequenceTarget {
     pub doc: basecraft_ops::DocId,
     pub session: String,
@@ -1035,5 +1224,47 @@ impl PreparedOperation {
         result.outputs.clear();
         result.data = None;
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod completed_result_tests {
+    use super::*;
+    #[test]
+    fn lookup_reports_corrupt_future_and_incomplete_inventory_without_creating_a_store() {
+        let tmp = tempfile::tempdir().unwrap();
+        let anchor = tmp.path().join("operation");
+        let query = CompletedResultQuery {
+            operation: "test.operation/run@1".into(),
+            pins: basecraft_protocol::operation::OperationPins {
+                generation: "g".into(),
+                package_digest: "p".into(),
+                descriptor_digest: "d".into(),
+            },
+            effective_parameters: json!({}),
+            inputs: Default::default(),
+        };
+        assert!(lookup_completed_result(&anchor, &query).result.is_none());
+        assert!(!tmp.path().join(".basecraft").exists());
+        let run = ArtifactRun::create(&anchor, "corrupt").unwrap();
+        input_evidence::write_json(
+            &run.artifact("runtime.json").unwrap(),
+            &json!({"schema":99}),
+        )
+        .unwrap();
+        let result = lookup_completed_result(&anchor, &query);
+        assert!(result.result.is_none());
+        assert_eq!(result.diagnostics.len(), 1);
+        std::fs::write(run.artifact("runtime.json").unwrap(), b"broken JSON").unwrap();
+        assert_eq!(
+            lookup_completed_result(&anchor, &query).diagnostics.len(),
+            1
+        );
+        assert!(
+            ArtifactRun::runs_for_anchor(&anchor, 0)
+                .unwrap_err()
+                .to_string()
+                .contains("incomplete")
+        );
     }
 }

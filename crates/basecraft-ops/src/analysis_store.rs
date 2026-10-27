@@ -47,6 +47,53 @@ fn directory(path: &Path) -> Result<()> {
 }
 
 impl ArtifactRun {
+    /// Enumerate owned runs without creating storage. Exceeding the bound is an
+    /// explicit incomplete query, never a silently truncated inventory.
+    pub fn runs_for_anchor(anchor: &Path, limit: usize) -> Result<Vec<PathBuf>> {
+        let parent = anchor
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or(Path::new("."))
+            .canonicalize()?;
+        let hidden = parent.join(".basecraft");
+        match std::fs::symlink_metadata(&hidden) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error.into()),
+            Ok(metadata) if !metadata.is_dir() || metadata.file_type().is_symlink() => {
+                return Err(invalid("unsafe analysis metadata directory"));
+            }
+            Ok(_) => {}
+        }
+        let store = hidden.join("analyses-v1");
+        if !store.try_exists()? {
+            return Ok(Vec::new());
+        }
+        Self::validate_store(&store)?;
+        let runs = store.join("runs");
+        let metadata = std::fs::symlink_metadata(&runs)?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err(invalid("unsafe analysis runs directory"));
+        }
+        let mut found = Vec::new();
+        for (index, entry) in std::fs::read_dir(runs)?.enumerate() {
+            if index >= limit {
+                return Err(invalid(
+                    "analysis run lookup limit exceeded; inventory incomplete",
+                ));
+            }
+            let entry = entry?;
+            let metadata = entry.file_type()?;
+            if metadata.is_symlink() {
+                return Err(invalid("symlink in owned analysis runs"));
+            }
+            if metadata.is_dir() {
+                found.push(entry.path());
+            }
+        }
+        found.sort();
+        Ok(found)
+    }
+
     /// Reserve a run before execution. Existing IDs and foreign namespaces fail.
     /// No project marker is created. Failed/partial runs remain available here.
     pub fn create(output: &Path, id: &str) -> Result<Self> {

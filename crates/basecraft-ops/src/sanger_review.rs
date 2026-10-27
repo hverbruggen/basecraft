@@ -1253,3 +1253,94 @@ mod readonly_tests {
         assert_eq!(fresh.decision(0), Some(&ReviewChoice::Edit('C')));
     }
 }
+
+#[cfg(test)]
+mod moved_and_failed_recovery_tests {
+    use super::*;
+    fn pair(folder: &Path) -> SangerReviewSession {
+        std::fs::create_dir(folder).unwrap();
+        let source = folder.join("source.ab1");
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../testdata/fixtures/compact/sanger-review/forward.ab1"),
+            &source,
+        )
+        .unwrap();
+        let mut review = instrument_review(&source).unwrap();
+        let mut draft = review.draft.clone();
+        draft.engine = "Tracy".into();
+        draft.mode = "basecall".into();
+        draft.version_output = "caller".into();
+        let mut alternative = SangerReviewSession::from_draft(draft, &source).unwrap();
+        alternative
+            .apply(ReviewOp::Set {
+                columns: vec![0],
+                choice: ReviewChoice::Edit('C'),
+            })
+            .unwrap();
+        review
+            .apply(ReviewOp::Set {
+                columns: vec![0],
+                choice: ReviewChoice::Edit('G'),
+            })
+            .unwrap();
+        review.retain_call_set(alternative).unwrap();
+        review
+    }
+    #[test]
+    fn moved_folder_reopens_every_call_set_without_relying_on_cache_paths() {
+        let tmp = tempfile::tempdir().unwrap();
+        let original = tmp.path().join("original");
+        let mut review = pair(&original);
+        review.save(&original.join("review.json")).unwrap();
+        let moved = tmp.path().join("moved");
+        std::fs::rename(original, &moved).unwrap();
+        let mut reopened = SangerReviewSession::load(&moved.join("review.json")).unwrap();
+        assert!(reopened.working_draft().is_ok());
+        let other = reopened.retained[0].draft_sha256.clone();
+        reopened.select_call_set(&other).unwrap();
+        assert!(reopened.working_draft().is_ok());
+        assert_eq!(reopened.decision(0), Some(&ReviewChoice::Edit('C')));
+        reopened.save(&moved.join("saved-again.json")).unwrap();
+    }
+    #[test]
+    fn failed_recovery_and_save_keep_both_histories_and_previous_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let folder = tmp.path().join("source");
+        let mut review = pair(&folder);
+        let saved = folder.join("review.json");
+        review.save(&saved).unwrap();
+        let previous = std::fs::read(&saved).unwrap();
+        review.recovery = Some(tmp.path().to_path_buf()); // Cannot atomically replace a directory.
+        assert!(
+            review
+                .apply(ReviewOp::Set {
+                    columns: vec![1],
+                    choice: ReviewChoice::Edit('T')
+                })
+                .is_err()
+        );
+        assert_eq!(review.decision(0), Some(&ReviewChoice::Edit('G')));
+        assert_eq!(review.decision(1), Some(&ReviewChoice::Edit('T')));
+        assert_eq!(
+            review.retained[0].decision(0),
+            Some(&ReviewChoice::Edit('C'))
+        );
+        let other = review.retained[0].draft_sha256.clone();
+        assert!(review.select_call_set(&other).is_err());
+        assert_eq!(
+            review.draft.engine, "ABI",
+            "failed selection checkpoint rolls back selection"
+        );
+        assert!(review.save(&saved).is_err());
+        assert_eq!(std::fs::read(&saved).unwrap(), previous);
+        review.recovery = None;
+        review.save(&saved).unwrap();
+        let reopened = SangerReviewSession::load(&saved).unwrap();
+        assert_eq!(reopened.decision(1), Some(&ReviewChoice::Edit('T')));
+        assert_eq!(
+            reopened.retained[0].decision(0),
+            Some(&ReviewChoice::Edit('C'))
+        );
+    }
+}
