@@ -77,15 +77,16 @@ impl Server {
     }
 
     fn state(&self, doc: DocId) -> Value {
-        let (kind, version) = if self.session.is_alignment(doc) {
-            ("alignment", self.session.alignment(doc).version())
+        let kind = if self.session.is_alignment(doc) {
+            "alignment"
         } else if self.session.is_tree(doc) {
-            ("tree", self.session.tree(doc).version())
+            "tree"
         } else if self.session.is_delimitation(doc) {
-            ("delimitation", self.session.generation(doc))
+            "delimitation"
         } else {
-            ("sequence", self.session.doc(doc).version())
+            "sequence"
         };
+        let version = self.session.revision(doc);
         json!({"document":doc.0,"path":self.session.doc_key(doc),"kind":kind,"version":version,"generation":self.session.generation(doc),
             "state":self.session.state(doc),"can_undo":self.session.can_undo(doc),"can_redo":self.session.can_redo(doc)})
     }
@@ -432,7 +433,7 @@ pub fn serve(root: &Path, writable: bool, kind: ClientKind, model: &str) -> Resu
     });
     let mut output = std::io::stdout().lock();
     loop {
-        jobs.poll_proposals(&mut server.session);
+        jobs.poll_session(&mut server.session);
         if basecraft_platform::interrupt::interrupted() {
             break;
         }

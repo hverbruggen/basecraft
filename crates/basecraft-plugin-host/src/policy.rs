@@ -19,7 +19,17 @@ pub struct SessionPolicy {
 #[derive(Debug)]
 pub struct ResolvedBindings {
     pub inputs: BTreeMap<String, Vec<PathBuf>>,
+    /// Session documents named by an input, with their position in that input's
+    /// list. The runner snapshots them from the owning session.
+    pub documents: BTreeMap<String, Vec<(usize, DocumentBinding)>>,
     pub destinations: BTreeMap<String, PathBuf>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DocumentBinding {
+    pub doc: String,
+    pub generation: u64,
+    pub revision: u64,
 }
 
 fn denied(message: &str) -> Error {
@@ -126,13 +136,14 @@ impl SessionPolicy {
             || request
                 .destinations
                 .keys()
-                .any(|k| !operation.descriptor.outputs.contains_key(k))
+                .any(|k| destination_role(operation, k).is_none())
         {
             return Err(Error::Protocol(
                 "invalid_arguments: unknown input/destination binding".into(),
             ));
         }
         let mut inputs = BTreeMap::new();
+        let mut documents = BTreeMap::new();
         let mut identities = BTreeSet::new();
         let mut count: usize = 0;
         for (name, binding) in &operation.descriptor.inputs {
@@ -144,12 +155,25 @@ impl SessionPolicy {
                 )));
             }
             let mut files = Vec::new();
-            for value in values {
-                let InputReference::File { path } = value else {
-                    return Err(Error::Protocol(
-                        "unsupported_input: document binding requires a session snapshot adapter"
-                            .into(),
-                    ));
+            let mut bound = Vec::new();
+            for (position, value) in values.iter().enumerate() {
+                let path = match value {
+                    InputReference::File { path } => path,
+                    InputReference::Document {
+                        doc,
+                        generation,
+                        revision,
+                    } => {
+                        bound.push((
+                            position,
+                            DocumentBinding {
+                                doc: doc.clone(),
+                                generation: *generation,
+                                revision: *revision,
+                            },
+                        ));
+                        continue;
+                    }
                 };
                 let path = self.path(path, false)?;
                 let metadata = path.metadata()?;
@@ -159,6 +183,9 @@ impl SessionPolicy {
                 files.push(path);
             }
             inputs.insert(name.clone(), files);
+            if !bound.is_empty() {
+                documents.insert(name.clone(), bound);
+            }
         }
         let mut destinations = BTreeMap::new();
         let mut unique = BTreeSet::new();
@@ -183,7 +210,28 @@ impl SessionPolicy {
         }
         Ok(ResolvedBindings {
             inputs,
+            documents,
             destinations,
         })
     }
+}
+
+/// A destination names an output role, or `role/member` to export one member of
+/// a collection role as a single file. Returns the role and optional member.
+pub fn destination_role<'a>(
+    operation: &RegisteredOperation,
+    key: &'a str,
+) -> Option<(&'a str, Option<&'a Path>)> {
+    if operation.descriptor.outputs.contains_key(key) {
+        return Some((key, None));
+    }
+    let (role, member) = key.split_once('/')?;
+    let binding = operation.descriptor.outputs.get(role)?;
+    let member = Path::new(member);
+    (binding.collection
+        && !member.as_os_str().is_empty()
+        && member
+            .components()
+            .all(|component| matches!(component, Component::Normal(_))))
+    .then_some((role, Some(member)))
 }

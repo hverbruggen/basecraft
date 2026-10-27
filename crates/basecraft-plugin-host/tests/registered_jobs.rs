@@ -243,7 +243,7 @@ fn installed_snapshot_proposals_commit_in_owner_and_stale_jobs_preserve_edits() 
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
-        manager.poll_proposals(&mut session);
+        manager.poll_session(&mut session);
         if manager.get(&accepted.run_id).unwrap().state.terminal() {
             break;
         }
@@ -284,7 +284,7 @@ fn installed_snapshot_proposals_commit_in_owner_and_stale_jobs_preserve_edits() 
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
-        manager.poll_proposals(&mut session);
+        manager.poll_session(&mut session);
         if manager.get(&accepted.run_id).unwrap().state.terminal() {
             break;
         }
@@ -469,7 +469,7 @@ fn committed_proposals_stay_partial_and_repair_requires_recorded_session_activit
         }
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
-            manager.poll_proposals(&mut session);
+            manager.poll_session(&mut session);
             if manager.get(&accepted.run_id).unwrap().state.terminal() {
                 break;
             }
@@ -552,4 +552,143 @@ fn committed_proposals_stay_partial_and_repair_requires_recorded_session_activit
         assert_eq!(session.doc(doc).feature_count(), 0);
         assert_eq!(std::fs::read(source).unwrap(), original);
     }
+}
+
+/// Install the count fixture with its input view set to an aligned FASTA, so a
+/// session alignment document can be bound to it.
+fn alignment_registry(root: &Path) -> Registry {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/registry-plugin");
+    let package = root.join("package");
+    std::fs::create_dir(&package).unwrap();
+    for name in ["plugin.toml", "plugin.py", "operations.json"] {
+        std::fs::copy(fixture.join(name), package.join(name)).unwrap();
+    }
+    let mut contract: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(package.join("operations.json")).unwrap()).unwrap();
+    contract["operations"][0]["inputs"]["sources"]["view"] = json!("aligned_fasta");
+    contract["operations"][0]["inputs"]["sources"]["min"] = json!(1);
+    std::fs::write(
+        package.join("operations.json"),
+        serde_json::to_vec(&contract).unwrap(),
+    )
+    .unwrap();
+    let config = RegistryConfig {
+        bundled: root.join("no-bundle"),
+        packages: root.join("profile/plugins"),
+        index: root.join("profile/index.json"),
+    };
+    registry::install(&config, &package).unwrap();
+    Registry::load(&config).unwrap()
+}
+
+fn run_in_session(
+    manager: &mut JobManager,
+    registry: &Registry,
+    session: &mut basecraft_ops::Session,
+    request: serde_json::Value,
+) -> basecraft_protocol::operation::OperationOutcome {
+    let accepted = manager
+        .submit_in_session(
+            registry,
+            serde_json::from_value(request).unwrap(),
+            SessionPolicy::new(session.root(), true).unwrap(),
+            "test",
+            session,
+        )
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        manager.poll_session(session);
+        let outcome = manager.get(&accepted.run_id).unwrap();
+        if outcome.state.terminal() {
+            return outcome;
+        }
+        assert!(Instant::now() < deadline, "job failed to terminate");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn document_inputs_read_the_session_revision_and_record_history() {
+    use basecraft_ops::Session;
+    let temp = tempfile::tempdir().unwrap();
+    let registry = alignment_registry(temp.path());
+    let source = temp.path().join("input.afa");
+    std::fs::write(&source, ">a\nAC-T\n>b\nACGT\n").unwrap();
+    let mut session = Session::new(temp.path());
+    let doc = session.open(&source).unwrap();
+    let mut manager = JobManager::default();
+    let document = |session: &Session| json!([{"kind":"document","doc":doc.0.to_string(),"generation":session.generation(doc),"revision":session.revision(doc)}]);
+    // A clean document is submitted as its saved file.
+    let clean = run_in_session(
+        &mut manager,
+        &registry,
+        &mut session,
+        json!({"operation":"org.example.registry-fixture/count@1","inputs":{"sources":document(&session)},
+            "parameters":{"mode":"normal"},"destinations":{"report":"clean.json"}}),
+    );
+    assert_eq!(clean.state, RuntimeState::Completed, "{clean:?}");
+    assert_eq!(
+        basecraft_ops::provenance::verify(&temp.path().join("clean.json")).unwrap(),
+        Vec::<String>::new()
+    );
+    // Unsaved edits are submitted as a generated snapshot; the file is untouched.
+    session
+        .apply(
+            doc,
+            basecraft_protocol::Op::AlnReplace {
+                row: 0,
+                start: 0,
+                end: 1,
+                residues: "T".into(),
+            },
+        )
+        .unwrap();
+    let edited = run_in_session(
+        &mut manager,
+        &registry,
+        &mut session,
+        json!({"operation":"org.example.registry-fixture/count@1","inputs":{"sources":document(&session)},
+            "parameters":{"mode":"normal"},"destinations":{"report":"edited.json"}}),
+    );
+    assert_eq!(edited.state, RuntimeState::Completed, "{edited:?}");
+    let evidence = Path::new(edited.evidence.as_ref().unwrap());
+    let input: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(evidence.join("input.json")).unwrap()).unwrap();
+    assert_eq!(input["state"], "generated");
+    assert_eq!(input["transformation"], "canonical-fasta-v1");
+    assert!(
+        String::from_utf8(std::fs::read(evidence.join("document-input.afa")).unwrap())
+            .unwrap()
+            .contains("TC-T")
+    );
+    assert_eq!(
+        std::fs::read_to_string(&source).unwrap(),
+        ">a\nAC-T\n>b\nACGT\n"
+    );
+    // Both runs are in the document's history, linked by run ID.
+    let record = session.document_record(doc).unwrap();
+    let runs: Vec<_> = record
+        .events
+        .iter()
+        .filter_map(|event| match &event.op {
+            basecraft_protocol::Op::ToolRun { params, .. } => params["run_id"].as_str(),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(runs, [clean.run_id.as_str(), edited.run_id.as_str()]);
+    // A request pinned to an older revision is refused before anything runs.
+    let stale = manager.submit_in_session(
+        &registry,
+        serde_json::from_value(json!({"operation":"org.example.registry-fixture/count@1",
+            "inputs":{"sources":[{"kind":"document","doc":doc.0.to_string(),"generation":session.generation(doc),"revision":0}]},
+            "parameters":{"mode":"normal"},"destinations":{"report":"stale.json"}}))
+        .unwrap(),
+        SessionPolicy::new(temp.path(), true).unwrap(),
+        "test",
+        &mut session,
+    );
+    assert!(stale.unwrap_err().to_string().contains("stale_revision"));
+    assert!(!temp.path().join("stale.json").exists());
 }

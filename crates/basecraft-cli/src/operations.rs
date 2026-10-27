@@ -194,7 +194,7 @@ pub fn run_foreground(
             }
         };
     loop {
-        manager.poll_proposals(session);
+        manager.poll_session(session);
         if basecraft_platform::interrupt::interrupted() {
             manager.cancel(&accepted.run_id)?;
         }

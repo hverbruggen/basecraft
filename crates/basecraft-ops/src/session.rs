@@ -312,8 +312,25 @@ impl Session {
         &self.docs[id.0].key
     }
 
+    /// Whether `id` names a document in this session. Check before using an ID
+    /// that came from outside the process.
+    pub fn is_open(&self, id: DocId) -> bool {
+        id.0 < self.docs.len()
+    }
+
     pub fn generation(&self, id: DocId) -> u64 {
         self.docs[id.0].generation
+    }
+
+    /// The edit revision callers pin a request to: the document version, or the
+    /// generation for a delimitation workspace, which has no separate version.
+    pub fn revision(&self, id: DocId) -> u64 {
+        match &self.docs[id.0].content {
+            Loaded::Sequence(opened) => opened.doc.version(),
+            Loaded::Alignment(opened) => opened.doc.version(),
+            Loaded::Tree(opened) => opened.doc.version(),
+            Loaded::Delimitation(_) => self.docs[id.0].generation,
+        }
     }
 
     pub fn can_undo(&self, id: DocId) -> bool {
@@ -609,13 +626,13 @@ impl Session {
         Ok(())
     }
 
-    /// Use an accepted disk revision only for a clean, unchanged document. This
-    /// checks metadata and reuses the verified open hash, never rereads disk bytes.
-    pub fn referenced_source(
+    /// The saved file and its accepted hash when the document is clean and the
+    /// file is unchanged since opening; `None` when there are unsaved edits.
+    /// Checks metadata and reuses the verified open hash, never rereads disk bytes.
+    pub fn saved_source(
         &self,
         id: DocId,
-        bundle: &Path,
-    ) -> Result<Option<basecraft_protocol::provenance::InputReference>> {
+    ) -> Result<Option<(PathBuf, basecraft_protocol::provenance::FileStamp, String)>> {
         let slot = self
             .docs
             .get(id.0)
@@ -636,12 +653,25 @@ impl Session {
             .ok_or_else(|| invalid("source identity unavailable"))?
             .1
             .clone();
-        Ok(Some(basecraft_protocol::provenance::InputReference {
-            path: crate::input_evidence::relative(bundle, &path)?,
-            stamp: current,
-            hash,
-            extra: std::collections::BTreeMap::new(),
-        }))
+        Ok(Some((path, current, hash)))
+    }
+
+    /// Use an accepted disk revision only for a clean, unchanged document.
+    pub fn referenced_source(
+        &self,
+        id: DocId,
+        bundle: &Path,
+    ) -> Result<Option<basecraft_protocol::provenance::InputReference>> {
+        self.saved_source(id)?
+            .map(|(path, stamp, hash)| {
+                Ok(basecraft_protocol::provenance::InputReference {
+                    path: crate::input_evidence::relative(bundle, &path)?,
+                    stamp,
+                    hash,
+                    extra: std::collections::BTreeMap::new(),
+                })
+            })
+            .transpose()
     }
 
     pub fn snapshot_file(&self, path: &Path) -> Result<String> {

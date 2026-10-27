@@ -29,6 +29,9 @@ struct Job {
     // Proposal activity is an owner-session journal write, separate from file
     // publication. A publication-only repair cannot recreate a missing entry.
     proposal_activity_recorded: AtomicBool,
+    // Set once a document-bound run is published; the owning session then
+    // records it in the document's history and completes the job.
+    document_pending: AtomicBool,
     worker: Mutex<Option<JoinHandle<()>>>,
     proposals: Mutex<Option<PendingProposals>>,
 }
@@ -60,13 +63,56 @@ impl JobManager {
         self.submit_with_session(registry, request, policy, initiator, Some(session))
     }
     pub fn target_document(&self, id: &str) -> Option<basecraft_ops::DocId> {
-        self.jobs
-            .get(id)
-            .and_then(|job| job.prepared.sequence.as_ref().map(|target| target.doc))
+        self.jobs.get(id).and_then(|job| {
+            job.prepared
+                .sequence
+                .as_ref()
+                .map(|target| target.doc)
+                .or_else(|| job.prepared.document.as_ref().map(|target| target.doc))
+        })
     }
-    /// Called by the owning session thread. No session lock is held while a
-    /// plugin runs; generation/revision is checked at the actual edit boundary.
-    pub fn poll_proposals(&self, session: &mut basecraft_ops::Session) {
+    /// Called by the owning session thread: applies sequence proposals and
+    /// records document-bound runs in their document's history. No session lock
+    /// is held while a plugin runs; identity is checked at the edit boundary.
+    pub fn poll_session(&self, session: &mut basecraft_ops::Session) {
+        self.poll_proposals(session);
+        for job in self.jobs.values() {
+            let Some(target) = &job.prepared.document else {
+                continue;
+            };
+            if target.session != session.id() || !job.document_pending.swap(false, Ordering::AcqRel)
+            {
+                continue;
+            }
+            let outcome = job
+                .outcome
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
+            if let Err(error) = record_document_run(job, target, &outcome, session) {
+                fail(
+                    job,
+                    OperationErrorCode::EvidenceIncomplete,
+                    error.to_string(),
+                );
+                continue;
+            }
+            let mut outcome = job
+                .outcome
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            outcome.state = RuntimeState::Completed;
+            if let Err(error) = job.prepared.persist(&outcome) {
+                drop(outcome);
+                fail(
+                    job,
+                    OperationErrorCode::EvidenceIncomplete,
+                    error.to_string(),
+                );
+            }
+        }
+    }
+    fn poll_proposals(&self, session: &mut basecraft_ops::Session) {
         for job in self.jobs.values() {
             if job
                 .prepared
@@ -258,6 +304,7 @@ impl JobManager {
             outcome: Mutex::new(outcome.clone()),
             cancelled: Arc::new(AtomicBool::new(false)),
             proposal_activity_recorded: AtomicBool::new(false),
+            document_pending: AtomicBool::new(false),
             worker: Mutex::new(None),
             proposals: Mutex::new(None),
         });
@@ -589,6 +636,9 @@ fn execute(job: &Job) {
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     outcome.state = if job.prepared.lifecycle.external() && result.message.is_some() {
         RuntimeState::Partial
+    } else if job.prepared.document.is_some() {
+        job.document_pending.store(true, Ordering::Release);
+        RuntimeState::Finalizing
     } else {
         RuntimeState::Completed
     };
@@ -600,6 +650,45 @@ fn execute(job: &Job) {
             error.to_string(),
         );
     }
+}
+
+/// The history entry for a published run that read a session document. The
+/// run's own publication already holds the full evidence; this links the
+/// document's history to it by run ID and records the submitted input.
+fn record_document_run(
+    job: &Job,
+    target: &crate::runner::DocumentTarget,
+    outcome: &OperationOutcome,
+    session: &mut basecraft_ops::Session,
+) -> Result<()> {
+    if !session.is_open(target.doc) || session.generation(target.doc) != target.generation {
+        return Err(Error::Protocol(
+            "input document was closed or replaced before the run was recorded".into(),
+        ));
+    }
+    let manifest = &job.prepared.operation.package.manifest;
+    let actor = basecraft_protocol::Actor::Plugin {
+        id: manifest.id.clone(),
+        version: manifest.version.clone(),
+    };
+    let params = json!({"requested":job.prepared.request.parameters,"effective":outcome.effective_parameters,
+        "operation":job.prepared.operation.id,"pins":outcome.pins,"initiator":job.prepared.initiator,"run_id":outcome.run_id});
+    let outputs: Vec<_> = outcome
+        .artifacts
+        .iter()
+        .map(|artifact| std::path::PathBuf::from(&artifact.path))
+        .collect();
+    let operation = (
+        manifest.id.as_str(),
+        job.prepared.operation.descriptor.implementation.as_str(),
+    );
+    let inputs = std::slice::from_ref(&target.input);
+    if target.saved.is_some() {
+        session.log_referenced_tool_run(target.doc, actor, operation, params, inputs, &outputs)?;
+    } else {
+        session.log_tool_run(target.doc, actor, operation, params, inputs, &outputs)?;
+    }
+    Ok(())
 }
 
 /// A known-operation adapter error uses the same structured error vocabulary.

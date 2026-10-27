@@ -226,10 +226,61 @@ pub struct SequenceTarget {
     pub dependencies: Vec<PathBuf>,
 }
 
+/// A session document an analysis read. Its owning session records the
+/// completed run in that document's history.
+pub struct DocumentTarget {
+    pub doc: basecraft_ops::DocId,
+    pub session: String,
+    pub generation: u64,
+    pub revision: u64,
+    pub record: basecraft_ops::document_record::DocumentRecord,
+    /// History key and submitted hash of the document's input.
+    pub input: (String, String),
+    /// The saved file the run read, or `None` for an unsaved snapshot.
+    pub saved: Option<PathBuf>,
+}
+
+/// An unsaved document's current contents, submitted as a generated input.
+struct GeneratedInput {
+    position: usize,
+    bytes: Vec<u8>,
+    transformation: &'static str,
+    extension: &'static str,
+    dependencies: Vec<PathBuf>,
+}
+
+/// The input view of a session document's current revision.
+fn document_view(
+    session: &basecraft_ops::Session,
+    doc: basecraft_ops::DocId,
+    view: InputView,
+) -> Result<(Vec<u8>, &'static str, &'static str)> {
+    let mut bytes = Vec::new();
+    match view {
+        InputView::AlignedFasta if session.is_alignment(doc) => {
+            basecraft_ops::files::write_alignment(session.alignment(doc), &mut bytes)?;
+            Ok((bytes, "canonical-fasta-v1", "afa"))
+        }
+        InputView::UngappedFasta if session.is_alignment(doc) => {
+            basecraft_ops::files::write_ungapped(session.alignment(doc), &mut bytes)?;
+            Ok((bytes, "ungapped-fasta-v1", "afa"))
+        }
+        InputView::Newick if session.is_tree(doc) => Ok((
+            session.tree(doc).to_newick().into_bytes(),
+            "canonical-newick-v1",
+            "nwk",
+        )),
+        _ => Err(Error::Protocol(
+            "unsupported_input: document kind does not match the input view".into(),
+        )),
+    }
+}
+
 pub struct PreparedOperation {
     pub(crate) lifecycle: crate::lifecycle::Lifecycle,
     pub(crate) input_diagnostics: Vec<String>,
     pub sequence: Option<SequenceTarget>,
+    pub document: Option<DocumentTarget>,
     pub operation: RegisteredOperation,
     pub run: ArtifactRun,
     pub request: OperationRequest,
@@ -266,6 +317,9 @@ impl PreparedOperation {
             None
         };
         let mut sequence = None;
+        let mut document = None;
+        let mut generated: BTreeMap<String, Vec<GeneratedInput>> = BTreeMap::new();
+        let mut accepted_hashes: BTreeMap<PathBuf, String> = BTreeMap::new();
         let bindings = if operation.descriptor.family == ExecutionFamily::SequenceProposal {
             let session = session.ok_or_else(|| {
                 Error::Protocol(
@@ -318,6 +372,7 @@ impl PreparedOperation {
                         id,
                         crate::policy::ResolvedBindings {
                             inputs: BTreeMap::new(),
+                            documents: BTreeMap::new(),
                             destinations: BTreeMap::new(),
                         },
                     )
@@ -338,7 +393,84 @@ impl PreparedOperation {
             });
             bindings
         } else {
-            policy.resolve(&operation, &request)?
+            let mut bindings = policy.resolve(&operation, &request)?;
+            let documents = std::mem::take(&mut bindings.documents);
+            if !documents.is_empty() {
+                let session = session.ok_or_else(|| {
+                    Error::Protocol("document inputs require an owning session".into())
+                })?;
+                for (name, bound) in documents {
+                    let view = operation.descriptor.inputs[&name].view;
+                    for (position, binding) in bound {
+                        let id =
+                            basecraft_ops::DocId(binding.doc.parse().map_err(|_| {
+                                Error::Protocol("invalid session document ID".into())
+                            })?);
+                        if !session.is_open(id)
+                            || session.generation(id) != binding.generation
+                            || session.revision(id) != binding.revision
+                        {
+                            return Err(Error::Protocol(
+                                "stale_revision: input document changed".into(),
+                            ));
+                        }
+                        let saved = session.saved_source(id)?;
+                        if document.is_none() {
+                            let key = session.doc_key(id);
+                            document = Some(DocumentTarget {
+                                doc: id,
+                                session: session.id().into(),
+                                generation: binding.generation,
+                                revision: binding.revision,
+                                record: session.document_record(id)?,
+                                input: (
+                                    if view == InputView::UngappedFasta {
+                                        format!("{key} (ungapped)")
+                                    } else {
+                                        key.into()
+                                    },
+                                    String::new(),
+                                ),
+                                saved: saved.as_ref().map(|(path, _, _)| path.clone()),
+                            });
+                        }
+                        // A clean document is its saved file; unsaved edits are
+                        // submitted as a generated snapshot of the current revision.
+                        if let Some((path, _, hash)) = saved {
+                            let files = bindings.inputs.entry(name.clone()).or_default();
+                            files.insert(position.min(files.len()), path.clone());
+                            accepted_hashes.insert(path, hash);
+                        } else {
+                            let (bytes, transformation, extension) =
+                                document_view(session, id, view)?;
+                            generated
+                                .entry(name.clone())
+                                .or_default()
+                                .push(GeneratedInput {
+                                    position,
+                                    bytes,
+                                    transformation,
+                                    extension,
+                                    dependencies: session
+                                        .document_record(id)?
+                                        .origin_bundles()
+                                        .map(Path::to_path_buf)
+                                        .collect(),
+                                });
+                        }
+                    }
+                }
+                let generated_count: usize = generated.values().map(Vec::len).sum();
+                if generated_count > 1
+                    || (generated_count == 1 && bindings.inputs.values().any(|v| !v.is_empty()))
+                {
+                    return Err(Error::Protocol(
+                        "unsupported_input: save the document before combining it with other inputs"
+                            .into(),
+                    ));
+                }
+            }
+            bindings
         };
         let input_diagnostics = lifecycle.verify_retained(&bindings.inputs)?;
         let mut supplied_parameters = request.parameters.clone();
@@ -379,6 +511,14 @@ impl PreparedOperation {
                     }
                 ));
                 let original_hash = file_tool::freeze_file(&source, &path)?;
+                if accepted_hashes
+                    .get(&source)
+                    .is_some_and(|accepted| accepted != &original_hash)
+                {
+                    return Err(Error::Protocol(
+                        "source changed since opening; reopen it before analysis".into(),
+                    ));
+                }
                 if lifecycle.external() {
                     submission_queries.extend(basecraft_ops::blast::from_file_named(
                         &path,
@@ -425,7 +565,28 @@ impl PreparedOperation {
                 ));
                 values.push(path.display().to_string());
             }
+            for input in generated.get(&name).into_iter().flatten() {
+                let path = scratch
+                    .path()
+                    .join(format!("{name}-document.{}", input.extension));
+                std::fs::write(&path, &input.bytes)?;
+                values.insert(input.position.min(values.len()), path.display().to_string());
+            }
             frozen_inputs.insert(name.clone(), values);
+        }
+        if let Some(target) = &mut document {
+            target.input.1 = match &target.saved {
+                Some(saved) => sources
+                    .iter()
+                    .find(|(source, ..)| source == saved)
+                    .map(|(_, _, submitted, ..)| submitted.clone()),
+                None => generated
+                    .values()
+                    .flatten()
+                    .next()
+                    .map(|input| basecraft_io::hash_bytes(&input.bytes)),
+            }
+            .ok_or_else(|| Error::Protocol("document input was not submitted".into()))?;
         }
         let submission_plan = if lifecycle.external() {
             let plan = basecraft_ops::blast::prepare(&submission_queries, &parameters)?;
@@ -525,6 +686,41 @@ impl PreparedOperation {
             let _guard = input_evidence::lock()?;
             input_evidence::register(&run)?;
         }
+        for (name, inputs) in &generated {
+            for input in inputs {
+                input_evidence::link_generated_input(
+                    &run,
+                    &input.dependencies,
+                    &input.bytes,
+                    input.transformation,
+                    "Document snapshot",
+                )?;
+                let retained = format!("document-input.{}", input.extension);
+                basecraft_io::write_atomic(&run.artifact(&retained)?, |w| {
+                    std::io::Write::write_all(w, &input.bytes)
+                })
+                .map_err(basecraft_ops::Error::from)?;
+                let submitted_hash = basecraft_io::hash_bytes(&input.bytes);
+                evidence
+                    .entry(name.clone())
+                    .or_default()
+                    .push(InvocationInputEvidence {
+                        original_path: None,
+                        source_hash: None,
+                        submitted_hash: submitted_hash.clone(),
+                        transformation: input.transformation.into(),
+                        run_directory: run.directory().display().to_string(),
+                    });
+                ledger_inputs.push(ArtifactRevision {
+                    id: format!("{}:document", run.id()),
+                    logical_name: retained.clone(),
+                    hash: submitted_hash,
+                    size: input.bytes.len() as u64,
+                    retained: Some(retained),
+                    reference: None,
+                });
+            }
+        }
         if let Some(target) = &sequence {
             let mut payload = Vec::new();
             let residues = target.snapshot.residues.map()?;
@@ -608,6 +804,7 @@ impl PreparedOperation {
             lifecycle,
             input_diagnostics,
             sequence,
+            document,
             operation,
             run,
             request,
@@ -1047,6 +1244,47 @@ impl PreparedOperation {
                 }
                 self.persist(outcome)?;
             }
+            for (key, destination) in &self.request.destinations {
+                let Some((member_role, Some(member))) =
+                    crate::policy::destination_role(&self.operation, key)
+                else {
+                    continue;
+                };
+                if member_role != role {
+                    continue;
+                }
+                let hash = expected.get(member).ok_or_else(|| {
+                    Error::Protocol(format!(
+                        "invalid_arguments: {role} has no member {}",
+                        member.display()
+                    ))
+                })?;
+                let destination_path = self.policy.root.join(destination);
+                let path = destination_path.display().to_string();
+                let recorded = outcome
+                    .artifacts
+                    .iter()
+                    .any(|a| a.path == path && &a.digest == hash);
+                if recorded {
+                    if basecraft_io::hash_file(&destination_path)
+                        .map_err(basecraft_ops::Error::from)?
+                        != *hash
+                    {
+                        return Err(Error::Protocol(
+                            "published destination changed; repair refused".into(),
+                        ));
+                    }
+                } else {
+                    let destination = self.policy.path(destination, true)?;
+                    export_member(&retained.join(member), &destination, hash)?;
+                    outcome.artifacts.push(PublishedArtifact {
+                        role: role.clone(),
+                        path,
+                        digest: hash.clone(),
+                    });
+                    self.persist(outcome)?;
+                }
+            }
             collections.insert(role.clone(), retained);
         }
         let mut publication_outputs = Vec::new();
@@ -1247,6 +1485,30 @@ fn verify_collection(root: &Path, expected: &BTreeMap<PathBuf, String>) -> Resul
     }
     Ok(())
 }
+/// Copy one validated collection member to a new file; never replaces one.
+fn export_member(source: &Path, destination: &Path, hash: &str) -> Result<()> {
+    let parent = destination
+        .parent()
+        .ok_or_else(|| Error::Protocol("missing destination parent".into()))?;
+    let pending = tempfile::Builder::new()
+        .prefix(".basecraft-export-")
+        .tempfile_in(parent)?;
+    std::fs::copy(source, pending.path())?;
+    if basecraft_io::hash_file(pending.path()).map_err(basecraft_ops::Error::from)? != hash {
+        return Err(Error::Protocol("member changed during export".into()));
+    }
+    pending.as_file().sync_all()?;
+    basecraft_platform::atomic::rename_noreplace(pending.path(), destination).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::AlreadyExists {
+            Error::Protocol("output_conflict: destination exists".into())
+        } else {
+            error.into()
+        }
+    })?;
+    std::fs::File::open(parent)?.sync_all()?;
+    Ok(())
+}
+
 fn export_collection(
     source: &Path,
     destination: &Path,
