@@ -112,6 +112,9 @@ impl Lifecycle {
     /// host validates the declared schema, allocated ordinary file and immutable
     /// query identity. A malformed/mismatched receipt never proves acceptance.
     pub fn validate_identity(self, result: &InvokeResult, plan: &Value) -> Result<()> {
+        if !self.external() {
+            return Ok(());
+        }
         let data = result
             .data
             .as_deref()

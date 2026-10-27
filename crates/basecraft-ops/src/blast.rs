@@ -428,7 +428,7 @@ mod tests {
         let q = from_doc(&doc, Some((3, 8)), None).unwrap();
         assert_eq!(q.sequence, "ATCCC");
         let s = settings("nucleotide");
-        let p = prepare(&[q.clone()], &s).unwrap();
+        let p = prepare(std::slice::from_ref(&q), &s).unwrap();
         assert_eq!(
             p.records[0]["submitted_source_ranges"],
             json!([{"start":3,"end":8,"strand":"+"}])

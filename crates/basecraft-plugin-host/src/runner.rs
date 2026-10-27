@@ -626,7 +626,7 @@ impl PreparedOperation {
                 .ok_or_else(|| Error::Protocol("plugin runtime is unavailable".into()))?,
             permit.threads(),
         )?;
-        self.lifecycle.configure(&mut process, cancelled.clone());
+        self.lifecycle.configure(&mut process, cancelled);
         let mut context = self.context.clone();
         context.cpu_threads = permit.threads();
         let effective = Value::Object(crate::compute::parameters_for(
@@ -698,10 +698,7 @@ impl PreparedOperation {
         );
         match result {
             Ok(mut result) => {
-                if !self.lifecycle.external() {
-                    teardown?;
-                    evidence?;
-                } else {
+                if self.lifecycle.external() {
                     let diagnostics: Vec<_> = [
                         teardown.err(),
                         evidence.err().map(Error::from),
@@ -717,6 +714,9 @@ impl PreparedOperation {
                             diagnostics.join("; ")
                         ));
                     }
+                } else {
+                    teardown?;
+                    evidence?;
                 }
                 Ok(result)
             }
