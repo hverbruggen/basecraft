@@ -762,7 +762,8 @@ impl Session {
         history_only: bool,
     ) -> Result<()> {
         let target = path.map_or_else(|| self.resolve(&self.docs[id.0].key), Path::to_path_buf);
-        let clean = self.save_hashes(id)? == self.docs[id.0].saved_state_hashes;
+        let clean = (history_only || (self.log.is_some() && path.is_none()))
+            && self.save_hashes(id)? == self.docs[id.0].saved_state_hashes;
         if history_only && !clean {
             return Err(invalid("history publication requires a saved document"));
         }
