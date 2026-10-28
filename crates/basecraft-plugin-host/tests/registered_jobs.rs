@@ -966,7 +966,7 @@ fn ungapped_alignment_input_accepts_unequal_lengths_without_padding() {
         ))
         .unwrap();
         let first = if route == "edited" { "TCGT" } else { "ACGT" };
-        let submitted = format!(">a description\n{first}\n>b trailing gap\nAC\n");
+        let submitted = format!(">a\n{first}\n>b\nAC\n");
         assert_eq!(
             record.submitted_hash,
             basecraft_io::hash_bytes(submitted.as_bytes())
