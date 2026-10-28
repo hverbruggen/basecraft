@@ -73,11 +73,7 @@ fn save_as_alias_of_own_file_keeps_stale_source_protection() {
     assert!(!session.document_record(doc).unwrap().unsaved);
     session.apply(doc, replace(2, "A")).unwrap();
     session.save(doc, None).unwrap();
-    assert!(
-        std::fs::read_to_string(&other)
-            .unwrap()
-            .contains("ATAT")
-    );
+    assert!(std::fs::read_to_string(&other).unwrap().contains("ATAT"));
 }
 
 #[test]
@@ -135,7 +131,7 @@ fn failed_export_stream_keeps_previous_destination_and_records_nothing() {
             Err(std::io::Error::from(std::io::ErrorKind::StorageFull))
         })
         .unwrap_err();
-    assert!(!error.to_string().is_empty());
+    assert_ne!(error.to_string(), "");
     assert_eq!(std::fs::read_to_string(&figure).unwrap(), "previous figure");
     assert_eq!(listing(&data), before, "temporary file left behind");
     let record = session.document_record(doc).unwrap();
@@ -208,7 +204,9 @@ fn full_disk_folder(name: &str) -> Option<PathBuf> {
 
 #[test]
 fn full_disk_save_keeps_original_and_retries_after_space_returns() {
-    let _turn = FULL_DISK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _turn = FULL_DISK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some(data) = full_disk_folder("save") else {
         eprintln!("skipped: BASECRAFT_TEST_FULL_DIR is not set");
         return;
@@ -235,7 +233,9 @@ fn full_disk_save_keeps_original_and_retries_after_space_returns() {
 
 #[test]
 fn full_disk_journal_append_rolls_back_and_keeps_a_recoverable_prefix() {
-    let _turn = FULL_DISK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _turn = FULL_DISK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some(full) = full_disk_folder("journal") else {
         eprintln!("skipped: BASECRAFT_TEST_FULL_DIR is not set");
         return;
@@ -329,7 +329,12 @@ fn damaged_journal_recovery_names_the_salvage_and_never_skips_events() {
     let partial = dir.path().join("partial");
     let (outputs, problem) = replay::recover_verified_prefix(&root, &partial).unwrap();
     assert!(problem.unwrap().contains("checksum"));
-    assert!(outputs.is_empty() || !std::fs::read_to_string(&outputs[0]).unwrap().contains("ATG"));
+    assert!(
+        outputs.is_empty()
+            || !std::fs::read_to_string(&outputs[0])
+                .unwrap()
+                .contains("ATG")
+    );
     assert!(std::fs::read_to_string(&file).unwrap().contains("ACGT"));
 }
 

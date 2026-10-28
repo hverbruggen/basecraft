@@ -127,7 +127,6 @@ impl Revision {
 #[cfg(test)]
 mod tests {
     use basecraft_protocol::Op;
-    use std::io::Write;
 
     #[test]
     fn concurrent_saver_is_refused_and_edits_remain_saveable() {
@@ -150,7 +149,9 @@ mod tests {
         }
         let figure = super::lock(&dir.path().join("figure.svg")).unwrap();
         let error = session
-            .export(doc, &dir.path().join("figure.svg"), "svg", |w| w.write_all(b""))
+            .export(doc, &dir.path().join("figure.svg"), "svg", |w| {
+                w.write_all(b"")
+            })
             .unwrap_err()
             .to_string();
         assert!(error.contains("another Basecraft process"), "{error}");
