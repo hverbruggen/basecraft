@@ -176,6 +176,100 @@ fn owner_save_failure_stays_partial_and_repair_does_not_reapply_hypotheses() {
     );
     assert_eq!(common::tool_run_events(&session, target).len(), 1);
     assert!(jobs.finalized_generation(&accepted.run_id).is_some());
+    drop(jobs);
+    drop(session);
+    assert_reopened_completion(&workspace, &accepted.run_id, count);
+}
+
+/// Saved and portable history must stand on their own without the owner journal.
+fn assert_reopened_completion(workspace: &std::path::Path, run_id: &str, hypotheses: usize) {
+    let mut reopened = Session::recoverable(workspace.parent().unwrap()).unwrap();
+    let doc = reopened.open(workspace).unwrap();
+    assert_eq!(reopened.delimitation(doc).hypotheses.len(), hypotheses);
+    let record = reopened.document_record(doc).unwrap();
+    let finished: Vec<_> = record
+        .events
+        .iter()
+        .filter(|event| {
+            matches!(&event.op,
+        basecraft_protocol::Op::JobFinished { report } if report.id == run_id
+            && report.status == basecraft_protocol::delimitation::JobStatus::Completed)
+        })
+        .collect();
+    assert_eq!(
+        finished.len(),
+        1,
+        "saved workspace lost or duplicated terminal history: {run_id}"
+    );
+    let report = record.report().unwrap();
+    assert!(report.history.iter().any(|row| row.id == finished[0].id));
+    assert_eq!(
+        record
+            .events
+            .iter()
+            .filter(|event| matches!(&event.op,
+        basecraft_protocol::Op::ToolRun { params, .. } if params["run_id"] == run_id))
+            .count(),
+        1
+    );
+    let portable = workspace.parent().unwrap().join("portable-completion");
+    provenance::package(workspace, &portable).unwrap();
+    let portable_result = portable.join(workspace.file_name().unwrap());
+    assert_eq!(
+        provenance::verify(&portable_result).unwrap(),
+        Vec::<String>::new()
+    );
+    let publication = provenance::inspect(&portable_result).unwrap();
+    assert_eq!(
+        publication
+            .events
+            .iter()
+            .filter(|event| matches!(&event.op,
+        basecraft_protocol::Op::JobFinished { report } if report.id == run_id
+            && report.status == basecraft_protocol::delimitation::JobStatus::Completed))
+            .count(),
+        1
+    );
+    let portable_record =
+        basecraft_ops::document_record::DocumentRecord::from_file(&portable_result).unwrap();
+    assert!(
+        portable_record
+            .report()
+            .unwrap()
+            .history
+            .iter()
+            .any(|row| row.id == finished[0].id)
+    );
+}
+
+#[test]
+fn automatically_saved_workspace_retains_completion_after_owner_closes() {
+    let root = tempfile::tempdir().unwrap();
+    let tree = root.path().join("tree.nwk");
+    std::fs::write(&tree, "((a:0.1,b:0.1):0.9,(c:0.2,d:0.2):0.8);\n").unwrap();
+    let registry = common::bundled();
+    let mut session = Session::recoverable(root.path()).unwrap();
+    let setup = common::run_in(&registry, &mut session, |_| {
+        json!({
+            "operation":"basecraft.delimitation/workspace_tree@1",
+            "inputs":{"tree":common::file("tree.nwk")},"parameters":{},
+            "destinations":{"workspace":"species.spart"}
+        })
+    });
+    common::assert_completed(&setup);
+    let mut jobs = JobManager::default();
+    let accepted = common::submit_in(&mut jobs, &registry, &mut session, |_| json!({
+        "operation":"basecraft.delimitation/manual_cut@1", "inputs":{"tree":common::file("tree.nwk")},
+        "parameters":{"rooted":true,"threshold":0.25},"target":{"kind":"file","path":"species.spart"}
+    })).unwrap();
+    let completed = common::wait_in(&jobs, &mut session, &accepted.run_id);
+    common::assert_completed(&completed);
+    let target = jobs.target_document(&accepted.run_id).unwrap();
+    let count = session.delimitation(target).hypotheses.len();
+    assert!(count > 0);
+    drop(jobs);
+    drop(session);
+    assert_reopened_completion(&root.path().join("species.spart"), &accepted.run_id, count);
 }
 
 #[test]
