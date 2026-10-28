@@ -68,7 +68,7 @@ fn imported_source_is_referenced_verified_and_survives_a_folder_move() {
 
     // A changed source is reported, never silently accepted.
     std::fs::write(moved.join("support.nwk"), "((A:1,B:1)10:1,(C:1,D:1)20:1);").unwrap();
-    assert!(!provenance::verify(&target).unwrap().is_empty());
+    assert_ne!(provenance::verify(&target).unwrap(), Vec::<String>::new());
 }
 
 #[test]
@@ -81,12 +81,9 @@ fn a_source_without_support_or_a_clashing_name_changes_and_records_nothing() {
     let mut session = Session::recoverable_with_paths(target.parent().unwrap(), &paths).unwrap();
     let doc = session.open(&target).unwrap();
     let before = session.tree(doc).supports().to_vec();
-    assert!(
-        session
-            .import_support(doc, &plain, "")
-            .unwrap()
-            .added
-            .is_empty()
+    assert_eq!(
+        session.import_support(doc, &plain, "").unwrap().added,
+        Vec::<String>::new()
     );
     let existing = before[0].name.clone();
     assert!(

@@ -4,7 +4,7 @@ use basecraft_ops::{Session, provenance};
 use basecraft_plugin_host::{
     jobs::JobManager,
     policy::SessionPolicy,
-    registry::{self, Registry, RegistryConfig},
+    registry::{Registry, RegistryConfig},
 };
 use basecraft_protocol::{
     Op,
@@ -53,15 +53,10 @@ fn gui_annotation_keeps_its_invocation_in_the_hidden_store_and_skips_known_featu
     }
     let temp = tempfile::tempdir().unwrap();
     let config = RegistryConfig {
-        bundled: temp.path().join("no-bundle"),
+        bundled: Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins"),
         packages: temp.path().join("profile/plugins"),
         index: temp.path().join("profile/index.json"),
     };
-    registry::install(
-        &config,
-        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/orf-finder"),
-    )
-    .unwrap();
     let registry = Registry::load(&config).unwrap();
     let project = temp.path().join("project");
     std::fs::create_dir(&project).unwrap();
