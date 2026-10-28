@@ -70,7 +70,7 @@ impl Default for Submission {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ExportMapping {
     pub source: Option<SourceAlignment>,
-    /// Submitted SeqID to original biological record name.
+    /// Submitted `SeqID` to original biological record name.
     pub records: BTreeMap<String, String>,
 }
 
