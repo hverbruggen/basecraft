@@ -272,9 +272,11 @@ use std::time::{Instant, SystemTime};
 
 use basecraft_docs::AlignmentDoc;
 use basecraft_ops::{DocId, Session};
-use basecraft_plugin_host::FileJob;
-use basecraft_plugin_host::file_tool::{AlignmentInput, output_beside};
+use basecraft_plugin_host::file_tool::output_beside;
+
+use crate::document_jobs::{DocumentJob, bundled, failure, primary_member};
 use basecraft_protocol::Op;
+use basecraft_protocol::operation::OperationOutcome;
 use basecraft_viewmodel::alignment::Region;
 use basecraft_viewmodel::{AlignmentView, Frame, Theme};
 use cxx_qt::{CxxQtType, Threading};
@@ -295,7 +297,6 @@ struct Tool {
     name: String,
     plugin: String,
     operation: String,
-    input: AlignmentInput,
     /// The new file's suffix and extension: `NAME.<suffix>.<ext>`.
     output: (String, String),
     min_rows: usize,
@@ -332,7 +333,7 @@ pub struct AlignmentRust {
     bootstrap_cancelling: bool,
     bootstrap_progress: f64,
     bootstrap_status: QString,
-    bootstrap_control: Option<Arc<BootstrapControl>>,
+    tool_job: Option<ActiveTool>,
     gap_column_count: f64,
     gap_scan_running: bool,
     gap_runs: Vec<(u64, u64)>,
@@ -348,17 +349,29 @@ pub struct AlignmentRust {
 }
 
 // The worker and monitor retain this directory until the engine has finished.
-struct BootstrapControl {
-    directory: tempfile::TempDir,
-    finished: AtomicBool,
+/// A registered operation running on this alignment. Dropping it cancels the
+/// job; the ticker thread stops once `stop` is set.
+struct ActiveTool {
+    job: DocumentJob,
+    name: String,
+    output: PathBuf,
+    kind: ToolKind,
+    generation: u64,
+    stop: Arc<AtomicBool>,
 }
-impl Drop for AlignmentRust {
+
+enum ToolKind {
+    /// Open the new file, or its component trees when there are several.
+    Open,
+    /// Report the saved table; nothing to open.
+    Matrix,
+    /// Apply the placement MAFFT computed for added sequences.
+    Addition,
+}
+
+impl Drop for ActiveTool {
     fn drop(&mut self) {
-        if let Some(control) = self.bootstrap_control.take() {
-            std::thread::spawn(move || {
-                let _ = std::fs::write(control.directory.path().join("cancel"), b"");
-            });
-        }
+        self.stop.store(true, Ordering::Release);
     }
 }
 
@@ -390,7 +403,7 @@ impl Default for AlignmentRust {
             bootstrap_cancelling: false,
             bootstrap_progress: 0.,
             bootstrap_status: QString::default(),
-            bootstrap_control: None,
+            tool_job: None,
             gap_column_count: -1.0,
             gap_scan_running: false,
             gap_runs: Vec::new(),
@@ -1302,102 +1315,77 @@ impl qobject::AlignmentController {
             self.refresh();
             return;
         }
-        let result = (|| -> Result<(FileJob, tempfile::TempDir), String> {
-            let dir = tempfile::Builder::new()
-                .prefix("basecraft-add-sequences-")
-                .tempdir()
-                .map_err(|e| e.to_string())?;
-            let r = self.rust();
-            let (Some(session), Some(doc)) = (&r.session, r.doc) else {
-                return Err("No alignment open".into());
-            };
-            let mut job = FileJob::from_alignment(
-                session,
-                doc,
-                (&plugin_dir("mafft"), "add_sequences"),
-                AlignmentInput::Aligned,
-                dir.path().join("addition.json"),
-            )
-            .map_err(|e| e.to_string())?;
-            job.params.insert("rows".into(), json!(rows));
-            job.params.insert("orientation".into(), json!(orientation));
-            job.params.insert("keep".into(), json!(keep));
-            Ok((job, dir))
+        let mut params = serde_json::Map::new();
+        params.insert("rows".into(), json!(rows));
+        params.insert("orientation".into(), json!(orientation));
+        params.insert("keep".into(), json!(keep));
+        let tool = Tool {
+            name: "MAFFT".into(),
+            plugin: "mafft".into(),
+            operation: "add_sequences".into(),
+            output: (String::new(), String::new()),
+            min_rows: 0,
+            working: "Adding sequences with MAFFT…".into(),
+            params,
+        };
+        self.start_tool(&tool, ToolKind::Addition);
+    }
+
+    /// Apply MAFFT's placement of added sequences, read from the run's result.
+    fn finish_addition(mut self: Pin<&mut Self>, outcome: &OperationOutcome, generation: u64) {
+        let result = (|| -> Result<serde_json::Value, String> {
+            {
+                let r = self.rust();
+                let (Some(session), Some(doc)) = (&r.session, r.doc) else {
+                    return Err("Alignment was closed".into());
+                };
+                if session.generation(doc) != generation {
+                    return Err("Alignment changed during addition; try again".into());
+                }
+            }
+            let path = outcome
+                .artifacts
+                .iter()
+                .find(|artifact| artifact.path.ends_with("addition.json"))
+                .ok_or("MAFFT returned no placement")?;
+            let bytes = std::fs::read(&path.path).map_err(|e| e.to_string())?;
+            serde_json::from_slice(&bytes).map_err(|e| e.to_string())
         })();
-        let (job, dir) = match result {
+        let value = match result {
             Ok(value) => value,
             Err(e) => {
                 self.fail_addition(&e);
                 return;
             }
         };
-        let generation = self
-            .rust()
-            .session
-            .as_ref()
-            .zip(self.rust().doc)
-            .map(|(session, doc)| session.generation(doc));
-        self.as_mut().set_busy(true);
-        self.as_mut().notify("Adding sequences with MAFFT…");
-        let qt_thread = self.qt_thread();
-        std::thread::spawn(move || {
-            let result = job.run();
-            let _ = qt_thread.queue(move |mut this| {
-                this.as_mut().set_busy(false);
-                let result = (|| -> Result<serde_json::Value, String> {
-                    let res = result.map_err(|e| e.to_string())?;
-                    {
-                        let mut r = this.as_mut().rust_mut();
-                        let r = &mut *r;
-                        let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
-                            return Err("Alignment was closed".into());
-                        };
-                        if Some(session.generation(doc)) != generation {
-                            return Err("Alignment changed during addition; try again".into());
-                        }
-                        job.record(session, doc, &res).map_err(|e| e.to_string())?;
-                    }
-                    let bytes = std::fs::read(&job.output).map_err(|e| e.to_string())?;
-                    serde_json::from_slice(&bytes).map_err(|e| e.to_string())
-                })();
-                match result {
-                    Ok(value) => {
-                        let count = value["insertions"].as_i64().unwrap_or(0);
-                        if count > 0 {
-                            this.as_mut().notify("New bases need reference gaps");
-                            this.as_mut()
-                                .addition_needs_gaps(i32::try_from(count).unwrap_or(i32::MAX));
-                        } else {
-                            let parsed = serde_json::from_value::<Vec<(String, String)>>(
-                                value["rows"].clone(),
-                            )
-                            .and_then(|rows| {
-                                serde_json::from_value::<Vec<String>>(value["reference"].clone())
-                                    .map(|reference| (rows, reference))
-                            });
-                            match parsed {
-                                Ok((rows, reference)) => {
-                                    if this.as_mut().edit(Op::AlnAddSequences {
-                                        rows,
-                                        reference: Some(reference),
-                                    }) {
-                                        this.as_mut().done("Added sequences");
-                                        this.as_mut().sequences_added();
-                                    } else {
-                                        let message = this.rust().message.to_string();
-                                        this.as_mut().fail_addition(&message);
-                                    }
-                                    this.as_mut().refresh();
-                                }
-                                Err(e) => this.as_mut().fail_addition(&e.to_string()),
-                            }
-                        }
-                    }
-                    Err(e) => this.as_mut().fail_addition(&e),
-                }
-                drop(dir);
+        let count = value["insertions"].as_i64().unwrap_or(0);
+        if count > 0 {
+            self.as_mut().notify("New bases need reference gaps");
+            self.as_mut()
+                .addition_needs_gaps(i32::try_from(count).unwrap_or(i32::MAX));
+            return;
+        }
+        let parsed = serde_json::from_value::<Vec<(String, String)>>(value["rows"].clone())
+            .and_then(|rows| {
+                serde_json::from_value::<Vec<String>>(value["reference"].clone())
+                    .map(|reference| (rows, reference))
             });
-        });
+        match parsed {
+            Ok((rows, reference)) => {
+                if self.as_mut().edit(Op::AlnAddSequences {
+                    rows,
+                    reference: Some(reference),
+                }) {
+                    self.as_mut().done("Added sequences");
+                    self.as_mut().sequences_added();
+                } else {
+                    let message = self.rust().message.to_string();
+                    self.as_mut().fail_addition(&message);
+                }
+                self.as_mut().refresh();
+            }
+            Err(e) => self.as_mut().fail_addition(&e.to_string()),
+        }
     }
 
     pub fn align_mafft(self: Pin<&mut Self>) {
@@ -1405,7 +1393,6 @@ impl qobject::AlignmentController {
             name: "MAFFT".into(),
             plugin: "mafft".into(),
             operation: "align".into(),
-            input: AlignmentInput::Ungapped,
             output: ("mafft".into(), "fasta".into()),
             min_rows: 2,
             working: "Aligning with MAFFT…".into(),
@@ -1420,7 +1407,6 @@ impl qobject::AlignmentController {
             name: "trimAl".into(),
             plugin: "trimal".into(),
             operation: "trim".into(),
-            input: AlignmentInput::Aligned,
             output: ("trimmed".into(), "fasta".into()),
             min_rows: 2,
             working: "Trimming with trimAl…".into(),
@@ -1477,7 +1463,6 @@ impl qobject::AlignmentController {
                 name: form.title.clone(),
                 plugin,
                 operation: form.operation.clone(),
-                input: AlignmentInput::Aligned,
                 output: form.output.clone(),
                 min_rows: form.min_rows,
                 working: form.working.clone(),
@@ -1491,32 +1476,31 @@ impl qobject::AlignmentController {
     }
 
     pub fn cancel_bootstrap(mut self: Pin<&mut Self>) {
-        if let Some(control) = self.rust().bootstrap_control.clone() {
-            self.as_mut().set_bootstrap_cancelling(true);
-            self.as_mut()
-                .set_bootstrap_status(QString::from("Cancelling after the current replicate…"));
-            let qt_thread = self.qt_thread();
-            std::thread::spawn(move || {
-                if let Err(error) = std::fs::write(control.directory.path().join("cancel"), b"") {
-                    let _ = qt_thread.queue(move |mut this| {
-                        if this
-                            .rust()
-                            .bootstrap_control
-                            .as_ref()
-                            .is_some_and(|current| Arc::ptr_eq(current, &control))
-                        {
-                            this.as_mut().set_bootstrap_cancelling(false);
-                            this.fail(&format!("Could not request cancellation: {error}"));
-                        }
-                    });
-                }
-            });
+        let Some(tool) = &self.rust().tool_job else {
+            return;
+        };
+        match tool.job.cancel() {
+            Ok(()) => {
+                self.as_mut().set_bootstrap_cancelling(true);
+                self.as_mut()
+                    .set_bootstrap_status(QString::from("Cancelling after the current replicate…"));
+            }
+            Err(error) => self.fail(&format!("Could not request cancellation: {error}")),
         }
     }
 
     /// Run a plugin on this alignment in the background, writing a new file
-    /// beside it, then log the run and ask for the file to be opened.
-    fn run_tool(mut self: Pin<&mut Self>, tool: &Tool) {
+    /// beside it; the run is recorded in this alignment's history.
+    fn run_tool(self: Pin<&mut Self>, tool: &Tool) {
+        let kind = if tool.operation == "matrix" {
+            ToolKind::Matrix
+        } else {
+            ToolKind::Open
+        };
+        self.start_tool(tool, kind);
+    }
+
+    fn start_tool(mut self: Pin<&mut Self>, tool: &Tool, kind: ToolKind) {
         if self.rust().busy {
             return;
         }
@@ -1528,182 +1512,167 @@ impl qobject::AlignmentController {
             ));
             return;
         }
-        let job = {
-            let r = self.rust();
-            let (Some(session), Some(doc)) = (&r.session, r.doc) else {
-                return;
-            };
-            let (suffix, ext) = (&tool.output.0, &tool.output.1);
-            let output = output_beside(&PathBuf::from(r.file_path.to_string()), suffix, ext);
-            FileJob::from_alignment(
-                session,
-                doc,
-                (&plugin_dir(&tool.plugin), &tool.operation),
-                tool.input,
-                output,
-            )
-        };
-        let mut job = match job {
-            Ok(job) => job,
-            Err(e) => {
-                self.fail(&format!("{name}: {e}"));
-                return;
-            }
-        };
-        job.params.clone_from(&tool.params);
-        let bootstrap_control = if tool.plugin == "distance"
+        let operation = bundled(&tool.plugin, &tool.operation);
+        let bootstrap = tool.plugin == "distance"
             && tool.operation == "tree"
             && tool
                 .params
                 .get("bootstrap")
                 .and_then(serde_json::Value::as_u64)
-                .is_some_and(|n| n > 0)
-        {
-            let directory = match tempfile::Builder::new()
-                .prefix("basecraft-bootstrap-")
-                .tempdir()
-            {
-                Ok(directory) => directory,
-                Err(error) => {
-                    self.fail(&format!("Bootstrap progress: {error}"));
-                    return;
-                }
+                .is_some_and(|n| n > 0);
+        let submitted = (|| -> Result<ActiveTool, String> {
+            let mut r = self.as_mut().rust_mut();
+            let r = &mut *r;
+            let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
+                return Err("No alignment open".into());
             };
-            let control = Arc::new(BootstrapControl {
-                directory,
-                finished: AtomicBool::new(false),
-            });
-            job.params.insert(
-                "progress".into(),
-                json!(control.directory.path().join("progress.json")),
-            );
-            job.params.insert(
-                "cancel_file".into(),
-                json!(control.directory.path().join("cancel")),
-            );
-            self.as_mut().rust_mut().bootstrap_control = Some(Arc::clone(&control));
+            let (output, exports) = if matches!(kind, ToolKind::Addition) {
+                (PathBuf::new(), Vec::new())
+            } else {
+                let (suffix, ext) = (&tool.output.0, &tool.output.1);
+                let output = output_beside(&PathBuf::from(r.file_path.to_string()), suffix, ext);
+                let exports = vec![(primary_member(&operation)?, output.clone())];
+                (output, exports)
+            };
+            let job = DocumentJob::submit(
+                session,
+                doc,
+                &operation,
+                serde_json::Value::Object(tool.params.clone()),
+                &exports,
+            )?;
+            Ok(ActiveTool {
+                job,
+                name: name.clone(),
+                output,
+                kind,
+                generation: session.generation(doc),
+                stop: Arc::new(AtomicBool::new(false)),
+            })
+        })();
+        let active = match submitted {
+            Ok(active) => active,
+            Err(e) => {
+                self.fail(&format!("{name}: {e}"));
+                return;
+            }
+        };
+        let stop = Arc::clone(&active.stop);
+        self.as_mut().rust_mut().tool_job = Some(active);
+        if bootstrap {
             self.as_mut().set_bootstrap_running(true);
             self.as_mut().set_bootstrap_cancelling(false);
             self.as_mut().set_bootstrap_progress(0.);
             self.as_mut()
                 .set_bootstrap_status(QString::from("Preparing bootstrap…"));
-            let qt_thread = self.qt_thread();
-            let monitor = Arc::clone(&control);
-            std::thread::spawn(move || {
-                let mut previous = String::new();
-                while !monitor.finished.load(Ordering::Acquire) {
-                    if let Ok(text) =
-                        std::fs::read_to_string(monitor.directory.path().join("progress.json"))
-                    {
-                        if text != previous {
-                            if let Ok(progress) = serde_json::from_str::<serde_json::Value>(&text) {
-                                let attempted = progress["attempted"].as_f64().unwrap_or(0.);
-                                let requested =
-                                    progress["requested"].as_f64().unwrap_or(1.).max(1.);
-                                let completed = progress["completed"].as_u64().unwrap_or(0);
-                                let failures = progress["failed_replicates"].as_u64().unwrap_or(0);
-                                let label = format!(
-                                    "Bootstrap {attempted:.0}/{requested:.0}; {completed} complete, {failures} failed"
-                                );
-                                let generation = Arc::clone(&monitor);
-                                let _ =
-                                    qt_thread.queue(move |mut this| {
-                                        if this.rust().bootstrap_control.as_ref().is_some_and(
-                                            |current| Arc::ptr_eq(current, &generation),
-                                        ) {
-                                            this.as_mut()
-                                                .set_bootstrap_progress(attempted / requested);
-                                            if !this.rust().bootstrap_cancelling {
-                                                this.as_mut()
-                                                    .set_bootstrap_status(QString::from(&label));
-                                            }
-                                        }
-                                    });
-                            }
-                            previous = text;
-                        }
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(200));
-                }
-            });
-            Some(control)
-        } else {
-            None
-        };
+        }
         self.as_mut().set_busy(true);
         self.as_mut().notify(&tool.working);
-        let started = Instant::now();
         let qt_thread = self.qt_thread();
         std::thread::spawn(move || {
-            let result = job.run();
-            if let Some(control) = &bootstrap_control {
-                control.finished.store(true, Ordering::Release);
+            while !stop.load(Ordering::Acquire) {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                if qt_thread.queue(|this| this.poll_tool()).is_err() {
+                    break;
+                }
             }
-            let _ = qt_thread.queue(move |mut this| {
-                if let Some(control) = &bootstrap_control {
-                    if !this
-                        .rust()
-                        .bootstrap_control
-                        .as_ref()
-                        .is_some_and(|current| Arc::ptr_eq(current, control))
-                    {
-                        return;
-                    }
-                    this.as_mut().rust_mut().bootstrap_control = None;
-                    this.as_mut().set_bootstrap_running(false);
-                    this.as_mut().set_bootstrap_cancelling(false);
-                }
-                this.as_mut().set_busy(false);
-                let terminal = {
-                    let mut r = this.as_mut().rust_mut();
-                    let r = &mut *r;
-                    if let (Some(session), Some(doc)) = (&mut r.session, r.doc) {
-                        job.record_terminal(session, doc, &result, started.elapsed().as_secs_f64())
-                    } else {
-                        Ok(())
-                    }
-                };
-                let result = terminal.and(result).and_then(|res| {
-                    let mut r = this.as_mut().rust_mut();
-                    let r = &mut *r;
-                    if let (Some(session), Some(doc)) = (&mut r.session, r.doc) {
-                        job.record(session, doc, &res)?;
-                    }
-                    Ok(res)
-                });
-                match result {
-                    Ok(res) => {
-                        let msg = res.message.unwrap_or_else(|| "Done".into());
-                        this.as_mut()
-                            .done(&format!("{msg} with {name}{}", took(started)));
-                        if job.operation == "matrix" {
-                            this.as_mut()
-                                .done(&format!("{msg}; saved {}", job.output.display()));
-                            return;
-                        }
-                        let components: Vec<_> = res
-                            .outputs
-                            .iter()
-                            .filter(|p| {
-                                std::path::Path::new(p)
-                                    .extension()
-                                    .is_some_and(|e| e.eq_ignore_ascii_case("nwk"))
-                                    && p.contains(".component-")
-                            })
-                            .collect();
-                        if job.operation == "tree" && !components.is_empty() {
-                            for path in components {
-                                this.as_mut().file_created(QString::from(path));
-                            }
-                        } else {
-                            let path = job.output.to_string_lossy().into_owned();
-                            this.as_mut().file_created(QString::from(&path));
-                        }
-                    }
-                    Err(e) => this.as_mut().fail(&format!("{name}: {}", short_error(&e))),
-                }
-            });
         });
+    }
+
+    /// Called on the Qt thread while a tool runs: shows bootstrap progress and
+    /// finishes once the session has recorded the run.
+    fn poll_tool(mut self: Pin<&mut Self>) {
+        let polled = {
+            let mut r = self.as_mut().rust_mut();
+            let r = &mut *r;
+            let (Some(tool), Some(session)) = (&r.tool_job, &mut r.session) else {
+                return;
+            };
+            tool.job.poll(session)
+        };
+        let outcome = match polled {
+            Ok(Some(outcome)) => outcome,
+            Ok(None) => {
+                if self.rust().bootstrap_running && !self.rust().bootstrap_cancelling {
+                    self.show_bootstrap_progress();
+                }
+                return;
+            }
+            Err(e) => {
+                self.as_mut().rust_mut().tool_job = None;
+                self.as_mut().set_busy(false);
+                self.fail(&e);
+                return;
+            }
+        };
+        let Some(tool) = self.as_mut().rust_mut().tool_job.take() else {
+            return;
+        };
+        self.as_mut().set_busy(false);
+        self.as_mut().set_bootstrap_running(false);
+        self.as_mut().set_bootstrap_cancelling(false);
+        let name = &tool.name;
+        if outcome.state != basecraft_protocol::operation::RuntimeState::Completed {
+            let message = format!("{name}: {}", failure(&outcome));
+            if matches!(tool.kind, ToolKind::Addition) {
+                self.fail_addition(&message);
+            } else {
+                self.fail(&message);
+            }
+            return;
+        }
+        match tool.kind {
+            ToolKind::Addition => self.finish_addition(&outcome, tool.generation),
+            ToolKind::Matrix => self.as_mut().done(&format!(
+                "Done with {name}{}; saved {}",
+                took(tool.job.started),
+                tool.output.display()
+            )),
+            ToolKind::Open => {
+                self.as_mut()
+                    .done(&format!("Done with {name}{}", took(tool.job.started)));
+                match export_components(&tool, &outcome) {
+                    Ok(components) if !components.is_empty() => {
+                        for path in components {
+                            self.as_mut()
+                                .file_created(QString::from(&path.to_string_lossy()));
+                        }
+                    }
+                    Ok(_) => {
+                        let path = tool.output.to_string_lossy().into_owned();
+                        self.as_mut().file_created(QString::from(&path));
+                    }
+                    Err(e) => self.fail(&format!("{name}: {e}")),
+                }
+            }
+        }
+    }
+
+    fn show_bootstrap_progress(mut self: Pin<&mut Self>) {
+        let Some(path) = self
+            .rust()
+            .tool_job
+            .as_ref()
+            .and_then(|tool| tool.job.progress_file())
+        else {
+            return;
+        };
+        let Ok(progress) = std::fs::read(&path)
+            .map_err(|e| e.to_string())
+            .and_then(|bytes| {
+                serde_json::from_slice::<serde_json::Value>(&bytes).map_err(|e| e.to_string())
+            })
+        else {
+            return;
+        };
+        let attempted = progress["attempted"].as_f64().unwrap_or(0.);
+        let requested = progress["requested"].as_f64().unwrap_or(1.).max(1.);
+        let completed = progress["completed"].as_u64().unwrap_or(0);
+        let failures = progress["failed_replicates"].as_u64().unwrap_or(0);
+        self.as_mut().set_bootstrap_progress(attempted / requested);
+        self.as_mut().set_bootstrap_status(QString::from(&format!(
+            "Bootstrap {attempted:.0}/{requested:.0}; {completed} complete, {failures} failed"
+        )));
     }
 
     pub fn select_block(mut self: Pin<&mut Self>, r0: i32, c0: i32, r1: i32, c1: i32) {
@@ -1857,14 +1826,31 @@ impl qobject::AlignmentController {
     }
 }
 
-/// A plugin error without the transport's wrapping: "MAFFT failed: …".
-fn short_error(e: &basecraft_plugin_host::Error) -> String {
-    match e {
-        basecraft_plugin_host::Error::Remote { message, .. } => crate::bridge::error_summary(
-            message
-                .split_once(": ")
-                .map_or(message.as_str(), |(_, m)| m),
-        ),
-        other => other.to_string(),
+/// When a tree run found several unconnected components, export each
+/// component tree beside the main output and return their paths.
+fn export_components(
+    tool: &ActiveTool,
+    outcome: &OperationOutcome,
+) -> Result<Vec<PathBuf>, String> {
+    let stem = tool
+        .output
+        .file_stem()
+        .map_or_else(String::new, |stem| stem.to_string_lossy().into_owned());
+    let mut components = Vec::new();
+    for index in 1.. {
+        let member = format!("tree.component-{index}.nwk");
+        if !outcome
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.path.ends_with(&format!("/{member}")))
+        {
+            break;
+        }
+        let path = tool
+            .output
+            .with_file_name(format!("{stem}.component-{index}.nwk"));
+        tool.job.export(&format!("artifacts/{member}"), &path)?;
+        components.push(path);
     }
+    Ok(components)
 }
