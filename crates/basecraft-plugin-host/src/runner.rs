@@ -1207,6 +1207,9 @@ impl PreparedOperation {
             return Err(Error::Protocol("execution evidence unavailable; retain RID and receipt; publication-only repair cannot invent missing execution evidence".into()));
         }
         let mut collections = BTreeMap::new();
+        // Visible copies are publication outputs too, so verifying one checks
+        // its bytes; they come first, as the run's primary results.
+        let mut exports = Vec::new();
         for (role, binding) in &self.operation.descriptor.outputs {
             if !binding.collection {
                 continue;
@@ -1318,6 +1321,31 @@ impl PreparedOperation {
                     ))
                 })?;
                 self.publish_member(role, &retained.join(member), hash, destination, outcome)?;
+                exports.push((destination.clone(), retained.join(member), hash.clone()));
+                // Component trees of a forest travel with their primary tree.
+                if member == Path::new("tree.nwk") {
+                    let stem = Path::new(destination)
+                        .file_stem()
+                        .map_or_else(String::new, |stem| stem.to_string_lossy().into_owned());
+                    for index in 1.. {
+                        let component = PathBuf::from(format!("tree.component-{index}.nwk"));
+                        let Some(hash) = expected.get(&component) else {
+                            break;
+                        };
+                        let target = Path::new(destination)
+                            .with_file_name(format!("{stem}.component-{index}.nwk"))
+                            .display()
+                            .to_string();
+                        self.publish_member(
+                            role,
+                            &retained.join(&component),
+                            hash,
+                            &target,
+                            outcome,
+                        )?;
+                        exports.push((target, retained.join(&component), hash.clone()));
+                    }
+                }
             }
             collections.insert(role.clone(), retained);
         }
@@ -1429,6 +1457,13 @@ impl PreparedOperation {
                 .any(|artifact| artifact.path == path.display().to_string())
             {
                 let published = self.publish_workspace(destination)?;
+                if let Some(name) = published.file_name().and_then(|name| name.to_str()) {
+                    exports.push((
+                        destination.clone(),
+                        self.run.artifact(name)?,
+                        basecraft_io::hash_file(&published).map_err(basecraft_ops::Error::from)?,
+                    ));
+                }
                 outcome.artifacts.push(PublishedArtifact {
                     role: crate::policy::WORKSPACE_DESTINATION.into(),
                     path: published.display().to_string(),
@@ -1438,6 +1473,22 @@ impl PreparedOperation {
                 self.persist(outcome)?;
             }
         }
+        let exported = exports
+            .iter()
+            .enumerate()
+            .map(|(index, (destination, retained, hash))| {
+                let path = self.policy.root.join(destination);
+                Ok(ArtifactRevision {
+                    id: format!("{}:export-{index}", self.run.id()),
+                    logical_name: input_evidence::relative(&self.policy.root, &path)?,
+                    hash: hash.clone(),
+                    size: std::fs::metadata(&path)?.len(),
+                    retained: Some(input_evidence::relative(self.run.directory(), retained)?),
+                    reference: None,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        publication_outputs.splice(0..0, exported);
         outcome.data = result.data.as_deref().cloned();
         let publication = Publication {
             schema_version: 1,
@@ -1650,50 +1701,6 @@ impl PreparedOperation {
             &self.run,
         )?;
         Ok(())
-    }
-
-    /// Export a member of an already published collection, such as an extra
-    /// tree a run produced, without running anything again.
-    pub fn export_published_member(
-        &self,
-        key: &str,
-        destination: &str,
-        outcome: &mut OperationOutcome,
-    ) -> Result<()> {
-        let Some((role, Some(member))) = crate::policy::destination_role(&self.operation, key)
-        else {
-            return Err(Error::Protocol(
-                "invalid_arguments: export needs role/member".into(),
-            ));
-        };
-        let validated: Vec<(String, PathBuf, String)> =
-            serde_json::from_slice(&basecraft_ops::provenance::read_record(
-                &self.run.artifact("validated-artifacts.json")?,
-            )?)?;
-        let staging = PathBuf::from(
-            self.context
-                .outputs
-                .get(role)
-                .ok_or_else(|| Error::Protocol("undeclared output role".into()))?,
-        );
-        let hash = validated
-            .iter()
-            .find(|(name, path, _)| {
-                name == role && path.strip_prefix(&staging).ok() == Some(member)
-            })
-            .map(|(_, _, hash)| hash.clone())
-            .ok_or_else(|| {
-                Error::Protocol(format!(
-                    "invalid_arguments: {role} has no member {}",
-                    member.display()
-                ))
-            })?;
-        let retained = if self.operation.descriptor.host_workflow.is_some() {
-            staging
-        } else {
-            self.run.artifact(role)?
-        };
-        self.publish_member(role, &retained.join(member), &hash, destination, outcome)
     }
 
     pub fn effective_parameters(&self) -> Value {

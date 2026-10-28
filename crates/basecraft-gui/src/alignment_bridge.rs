@@ -1572,7 +1572,10 @@ impl qobject::AlignmentController {
         std::thread::spawn(move || {
             while !stop.load(Ordering::Acquire) {
                 std::thread::sleep(std::time::Duration::from_millis(100));
-                if qt_thread.queue(qobject::AlignmentController::poll_tool).is_err() {
+                if qt_thread
+                    .queue(qobject::AlignmentController::poll_tool)
+                    .is_err()
+                {
                     break;
                 }
             }
@@ -1631,18 +1634,15 @@ impl qobject::AlignmentController {
             ToolKind::Open => {
                 self.as_mut()
                     .done(&format!("Done with {name}{}", took(tool.job.started)));
-                match export_components(&tool, &outcome) {
-                    Ok(components) if !components.is_empty() => {
-                        for path in components {
-                            self.as_mut()
-                                .file_created(QString::from(&path.to_string_lossy().into_owned()));
-                        }
+                let components = component_trees(&tool, &outcome);
+                if components.is_empty() {
+                    let path = tool.output.to_string_lossy().into_owned();
+                    self.as_mut().file_created(QString::from(&path));
+                } else {
+                    for path in components {
+                        self.as_mut()
+                            .file_created(QString::from(&path.to_string_lossy().into_owned()));
                     }
-                    Ok(_) => {
-                        let path = tool.output.to_string_lossy().into_owned();
-                        self.as_mut().file_created(QString::from(&path));
-                    }
-                    Err(e) => self.fail(&format!("{name}: {e}")),
                 }
             }
         }
@@ -1826,31 +1826,24 @@ impl qobject::AlignmentController {
     }
 }
 
-/// When a tree run found several unconnected components, export each
-/// component tree beside the main output and return their paths.
-fn export_components(
-    tool: &ActiveTool,
-    outcome: &OperationOutcome,
-) -> Result<Vec<PathBuf>, String> {
+/// The component trees a forest run exported beside its main output.
+fn component_trees(tool: &ActiveTool, outcome: &OperationOutcome) -> Vec<PathBuf> {
     let stem = tool
         .output
         .file_stem()
         .map_or_else(String::new, |stem| stem.to_string_lossy().into_owned());
-    let mut components = Vec::new();
-    for index in 1.. {
-        let member = format!("tree.component-{index}.nwk");
-        if !outcome
-            .artifacts
-            .iter()
-            .any(|artifact| artifact.path.ends_with(&format!("/{member}")))
-        {
-            break;
-        }
-        let path = tool
-            .output
-            .with_file_name(format!("{stem}.component-{index}.nwk"));
-        tool.job.export(&format!("artifacts/{member}"), &path)?;
-        components.push(path);
-    }
-    Ok(components)
+    let prefix = format!("{stem}.component-");
+    outcome
+        .artifacts
+        .iter()
+        .map(|artifact| PathBuf::from(&artifact.path))
+        .filter(|path| {
+            !path
+                .components()
+                .any(|part| part.as_os_str() == ".basecraft")
+                && path
+                    .file_name()
+                    .is_some_and(|name| name.to_string_lossy().starts_with(&prefix))
+        })
+        .collect()
 }

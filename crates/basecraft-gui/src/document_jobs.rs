@@ -192,13 +192,6 @@ impl DocumentJob {
             .map_err(|error| error.to_string())
     }
 
-    /// Export another result member after completion, such as a component tree.
-    pub fn export(&self, member: &str, path: &Path) -> Result<OperationOutcome, String> {
-        self.manager
-            .export(&self.run_id, member, &destination(&self.root, path)?)
-            .map_err(|error| error.to_string())
-    }
-
     /// The progress file the plugin updates while it runs.
     pub fn progress_file(&self) -> Option<PathBuf> {
         let outcome = self.manager.get(&self.run_id).ok()?;

@@ -168,8 +168,14 @@ def main():
             if ancestor["id"] != identity:
                 raise ValueError("ancestor identity differs")
             pending.append((directory, ancestor, False))
+    # A result bound to a hidden analysis run is one of several published files;
+    # every output is named relative to the project folder, as the Rust reader does.
+    hidden = ".basecraft" in bundle.resolve(strict=True).parts
     for index, artifact in enumerate(publication["outputs"]):
-        live = args.result if index == 0 else relative(args.result.parent, artifact["logical_name"])
+        if index == 0 and not hidden:
+            live = args.result
+        else:
+            live = relative(args.result.parent, artifact["logical_name"])
         check(live, artifact)
     print(json.dumps({"publication": publication["id"], "effective_operations": [a["operation"] for a in publication["effective_edits"]], "completeness": publication["completeness"], "hashes_checked": not args.metadata_only, "records_checked": len(seen)}, indent=2))
 
