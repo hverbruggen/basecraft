@@ -339,6 +339,88 @@ fn document_record_describes_unsaved_headless_edits_and_undo() {
     assert!(!basecraft_ops::provenance::companion(&dir.path().join("gene.fasta")).exists());
 }
 
+/// A synchronous MCP client for one server process, waiting on job results.
+struct Client {
+    child: std::process::Child,
+    input: std::process::ChildStdin,
+    output: std::io::BufReader<std::process::ChildStdout>,
+    next: u32,
+}
+
+impl Client {
+    fn start(root: &std::path::Path, profile: &std::path::Path) -> Self {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_basecraft"))
+            .args(["mcp", root.to_str().unwrap(), "--allow-writes"])
+            .env("BASECRAFT_PROFILE_DIR", profile)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let input = child.stdin.take().unwrap();
+        let output = std::io::BufReader::new(child.stdout.take().unwrap());
+        let mut client = Self {
+            child,
+            input,
+            output,
+            next: 1,
+        };
+        client.send(json!({"jsonrpc":"2.0","id":0,"method":"initialize"}), 0);
+        client
+    }
+
+    /// Send one message and return the reply with its ID, skipping notifications.
+    fn send(&mut self, message: Value, id: u32) -> Value {
+        use std::io::BufRead;
+        writeln!(self.input, "{message}").unwrap();
+        loop {
+            let mut line = String::new();
+            assert_ne!(
+                self.output.read_line(&mut line).unwrap(),
+                0,
+                "server exited"
+            );
+            let reply: Value = serde_json::from_str(&line).unwrap();
+            if reply["id"] == id {
+                return reply;
+            }
+        }
+    }
+
+    fn call(&mut self, name: &str, args: Value) -> Value {
+        let id = self.next;
+        self.next += 1;
+        self.send(request(id, name, args), id)
+    }
+
+    /// Submit an operation tool call and wait for the job's terminal outcome.
+    fn run(&mut self, name: &str, args: Value) -> Value {
+        let accepted = self.call(name, args);
+        assert_eq!(accepted["result"]["isError"], false, "{accepted}");
+        let job = accepted["result"]["structuredContent"]["run_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        loop {
+            let status = self.call("basecraft.host.jobs_get.v1", json!({"job":job}));
+            let outcome = status["result"]["structuredContent"].clone();
+            if ["completed", "failed", "cancelled", "interrupted", "partial"]
+                .contains(&outcome["state"].as_str().unwrap_or(""))
+            {
+                return outcome;
+            }
+            assert!(std::time::Instant::now() < deadline, "job did not finish");
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+    }
+
+    fn close(self) {
+        drop(self.input);
+        let mut child = self.child;
+        assert!(child.wait().unwrap().success());
+    }
+}
+
 #[test]
 fn species_mcp_uses_the_canonical_workspace_contract() {
     let parent = tempfile::tempdir().unwrap();
@@ -349,49 +431,21 @@ fn species_mcp_uses_the_canonical_workspace_contract() {
         "((a:0.1,b:0.1):0.9,(c:0.2,d:0.2):0.8);\n",
     )
     .unwrap();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_basecraft"))
-        .args(["mcp", root.to_str().unwrap(), "--allow-writes"])
-        .env("BASECRAFT_PROFILE_DIR", parent.path().join("profile"))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let messages = [
-        json!({"jsonrpc":"2.0","id":0,"method":"initialize"}),
-        request(1, "open", json!({"path":"source.nwk"})),
-        request(
-            2,
-            "run_tool",
-            json!({"document":0,"tool":"delimitation","output":"species.spart","params":{"method":"workspace_tree"}}),
-        ),
-        request(3, "open", json!({"path":"species.spart"})),
-        request(
-            4,
-            "run_tool",
-            json!({"document":1,"tool":"delimitation","output":"fit.json","params":{"method":"gmyc_single","rooted":true,"analysis_input":"source.nwk"}}),
-        ),
-    ];
-    let mut input = child.stdin.take().unwrap();
-    for message in messages {
-        writeln!(input, "{message}").unwrap();
-    }
-    drop(input);
-    let output = child.wait_with_output().unwrap();
-    assert!(output.status.success());
-    let replies: Vec<Value> = String::from_utf8(output.stdout)
-        .unwrap()
-        .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect();
-    for reply in &replies[1..] {
-        assert_eq!(reply["result"]["isError"], false, "{reply}");
-    }
-    let manifest: Value =
-        serde_json::from_str(replies[4]["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
-    assert_eq!(
-        manifest["outputs"][0],
-        root.join("species.spart").to_str().unwrap()
+    let mut client = Client::start(&root, &parent.path().join("profile"));
+    let created = client.run(
+        "basecraft.delimitation.workspace_tree.v1",
+        json!({"inputs":{"tree":[{"kind":"file","path":"source.nwk"}]},"parameters":{},
+            "destinations":{"workspace":"species.spart"}}),
     );
+    assert_eq!(created["state"], "completed", "{created}");
+    // A workspace named by path is opened, receives the hypotheses and is saved.
+    let fitted = client.run(
+        "basecraft.delimitation.gmyc_single.v1",
+        json!({"inputs":{"tree":[{"kind":"file","path":"source.nwk"}]},"parameters":{"rooted":true},
+            "target":{"kind":"file","path":"species.spart"}}),
+    );
+    assert_eq!(fitted["state"], "completed", "{fitted}");
+    client.close();
     assert!(!root.join("fit.json").exists());
     // GMYC publishes each distinct partition in its support set, best first.
     let hypotheses = basecraft_ops::files::load_delimitation(&root.join("species.spart"))
@@ -415,80 +469,61 @@ fn tree_mcp_routes_share_hidden_storage() {
     let root = parent.path().join("working");
     std::fs::create_dir(&root).unwrap();
     std::fs::write(root.join("source.afa"), ">a\nACGTACGTACGTACGTACGTACGT\n>b\nACGTACGTTCGTACGTACGTACGT\n>c\nTCGTACGTACGTACGTACGTACGA\n>d\nTCGTACGTTCGTACGTACGTACGA\n").unwrap();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_basecraft"))
-        .args(["mcp", root.to_str().unwrap(), "--allow-writes"])
-        .env("BASECRAFT_PROFILE_DIR", parent.path().join("profile"))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let messages = [
-        json!({"jsonrpc":"2.0","id":0,"method":"initialize"}),
-        request(1, "open", json!({"path":"source.afa"})),
-        request(
-            2,
-            "run_tool",
-            json!({"document":0,"tool":"distance","output":"nj.nwk","params":{"method":"sorted","model":"p","threads":1}}),
+    let mut client = Client::start(&root, &parent.path().join("profile"));
+    let opened = client.call("open", json!({"path":"source.afa"}));
+    assert_eq!(opened["result"]["isError"], false, "{opened}");
+    let state = client.call("state", json!({"document":0}));
+    let state = &state["result"]["structuredContent"];
+    // The open document is the input; each run lands in its history.
+    let document = json!([{"kind":"document","doc":"0","generation":state["generation"],"revision":state["version"]}]);
+    for (tool, parameters, output) in [
+        (
+            "basecraft.distance.tree.v1",
+            json!({"method":"sorted","model":"p","threads":1}),
+            "nj.nwk",
         ),
-        request(
-            3,
-            "run_tool",
-            json!({"document":0,"tool":"distance","output":"upgma.nwk","params":{"method":"upgma","model":"p","threads":1}}),
+        (
+            "basecraft.distance.tree.v1",
+            json!({"method":"upgma","model":"p","threads":1}),
+            "upgma.nwk",
         ),
-        request(
-            4,
-            "run_tool",
-            json!({"document":0,"tool":"fasttree","output":"fasttree.nwk","params":{}}),
+        ("basecraft.fasttree.tree.v1", json!({}), "fasttree.nwk"),
+        (
+            "basecraft.iqtree.tree.v1",
+            json!({"model":"JC","threads":1,"seed":71}),
+            "iqtree.nwk",
         ),
-        request(
-            5,
-            "run_tool",
-            json!({"document":0,"tool":"iqtree","output":"iqtree.nwk","params":{"model":"JC","threads":1,"seed":71}}),
-        ),
-        request(6, "provenance_inspect", json!({"path":"nj.nwk"})),
-        request(7, "provenance_verify", json!({"path":"nj.nwk"})),
-        request(8, "replay", json!({})),
-        // The descriptor, not a CLI list, decides accepted settings.
-        request(
-            9,
-            "run_tool",
-            json!({"document":0,"tool":"fasttree","output":"rejected.nwk","params":{"threads":1}}),
-        ),
-        request(
-            10,
-            "run_tool",
-            json!({"document":0,"tool":"distance","output":"rejected.nwk","params":{"cache":"x.json"}}),
-        ),
-        request(
-            11,
-            "run_tool",
-            json!({"document":0,"tool":"delimitation","output":"rejected.json","params":{}}),
-        ),
-        request(12, "basecraft.distance.missing.v1", json!({})),
-    ];
-    let mut input = child.stdin.take().unwrap();
-    for message in messages {
-        writeln!(input, "{message}").unwrap();
+    ] {
+        let outcome = client.run(
+            tool,
+            json!({"inputs":{"alignment":document},"parameters":parameters,
+                "destinations":{"artifacts/tree.nwk":output}}),
+        );
+        assert_eq!(outcome["state"], "completed", "{tool}: {outcome}");
     }
-    drop(input);
-    let result = child.wait_with_output().unwrap();
-    assert!(result.status.success());
-    let replies: Vec<Value> = String::from_utf8(result.stdout)
-        .unwrap()
-        .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect();
-    assert_eq!(replies.len(), 13);
-    for reply in &replies[1..9] {
-        assert_eq!(reply["result"]["isError"], false, "{reply}");
+    let record = client.call("document_record", json!({"document":0}));
+    let record = record["result"]["structuredContent"].to_string();
+    assert_eq!(record.matches("\"run_id\"").count(), 4, "{record}");
+    // The descriptor, not a route-specific list, decides accepted settings.
+    for (tool, parameters) in [
+        ("basecraft.fasttree.tree.v1", json!({"threads":1})),
+        ("basecraft.distance.tree.v1", json!({"cache":"x.json"})),
+    ] {
+        let refused = client.call(
+            tool,
+            json!({"inputs":{"alignment":document},"parameters":parameters}),
+        );
+        assert_eq!(refused["result"]["isError"], true, "{refused}");
     }
-    for reply in &replies[9..12] {
-        assert_eq!(reply["result"]["isError"], true, "{reply}");
-    }
-    let unknown = &replies[12]["error"];
+    let unknown = client.call("basecraft.distance.missing.v1", json!({}));
+    let unknown = &unknown["error"];
     assert_eq!(unknown["code"], -32602, "{unknown}");
     assert_eq!(unknown["data"]["errors"][0]["code"], "plugin_unavailable");
     assert_eq!(unknown["data"]["operation"], "basecraft.distance/missing@1");
+    let inspected_mcp = client.call("provenance_inspect", json!({"path":"nj.nwk"}));
+    let verified_mcp = client.call("provenance_verify", json!({"path":"nj.nwk"}));
+    let replayed = client.call("replay", json!({}));
+    client.close();
     // MCP document-level readers match the CLI commands.
     let cli = |args: &[&str]| {
         let output = Command::new(env!("CARGO_BIN_EXE_basecraft"))
@@ -506,13 +541,13 @@ fn tree_mcp_routes_share_hidden_storage() {
     let nj = root.join("nj.nwk");
     let inspected: Value =
         serde_json::from_str(&cli(&["provenance", "inspect", nj.to_str().unwrap()])).unwrap();
-    assert_eq!(replies[6]["result"]["structuredContent"], inspected);
+    assert_eq!(inspected_mcp["result"]["structuredContent"], inspected);
     assert_eq!(
-        replies[7]["result"]["structuredContent"],
+        verified_mcp["result"]["structuredContent"],
         json!({"verified":true,"issues":[]})
     );
     assert!(cli(&["provenance", "verify", nj.to_str().unwrap()]).starts_with("done"));
-    assert!(replies[8]["result"]["structuredContent"]["problems"].is_array());
+    assert!(replayed["result"]["structuredContent"]["problems"].is_array());
     let mut visible: Vec<_> = std::fs::read_dir(&root)
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
@@ -529,14 +564,13 @@ fn tree_mcp_routes_share_hidden_storage() {
             "upgma.nwk"
         ]
     );
-    println!("MCP trees: {visible:?}");
     for name in ["fasttree.nwk", "iqtree.nwk", "nj.nwk", "upgma.nwk"] {
         let output = root.join(name);
         let run = basecraft_ops::analysis_store::ArtifactRun::for_result(&output)
             .unwrap()
             .unwrap();
-        assert!(!run.join("submitted.fasta").exists());
         assert!(run.join("execution.json").is_file());
+        assert!(basecraft_ops::links::AlignmentLink::read(&output).is_ok());
         assert_eq!(
             basecraft_ops::provenance::verify(&output).unwrap(),
             Vec::<String>::new()
