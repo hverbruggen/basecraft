@@ -371,11 +371,16 @@ fn preserved_alignment_remains_usable_by_workspace_default_input() {
     let mut old = work.clone();
     old.exchange_fields
         .remove("basecraft_alignment_evidence_run");
+    // A registered run and its input ledger each preserve the original, so
+    // the fallback may find either verified copy of the same bytes.
     assert_eq!(
-        basecraft_ops::delimitation::checked_alignment(&old, &canonical)
-            .unwrap()
-            .unwrap(),
-        linked
+        basecraft_io::hash_file(
+            &basecraft_ops::delimitation::checked_alignment(&old, &canonical)
+                .unwrap()
+                .unwrap()
+        )
+        .unwrap(),
+        basecraft_io::hash_file(&linked).unwrap()
     );
     session.save(doc, None).unwrap();
     let copied = root.path().join("copied.spart");
