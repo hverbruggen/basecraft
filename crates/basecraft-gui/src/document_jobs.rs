@@ -17,7 +17,6 @@ pub(crate) struct DocumentJob {
     manager: JobManager,
     pub run_id: String,
     pub started: Instant,
-    root: PathBuf,
 }
 
 /// The registered ID of a bundled plugin operation, e.g. `basecraft.mafft/align@1`.
@@ -114,7 +113,6 @@ impl DocumentJob {
             manager,
             run_id: accepted.run_id,
             started: Instant::now(),
-            root,
         })
     }
 
@@ -171,7 +169,6 @@ impl DocumentJob {
             manager,
             run_id: accepted.run_id,
             started: Instant::now(),
-            root,
         })
     }
 
