@@ -50,6 +50,10 @@ enum Command {
         session: PathBuf,
         #[arg(long)]
         output: PathBuf,
+        /// After a crash damaged the journal: recover only the edits before the
+        /// first damaged line. The journal itself is left unchanged.
+        #[arg(long)]
+        verified_prefix: bool,
     },
     /// Inspect, verify, report, or package readable saved-result provenance.
     Provenance {
@@ -253,8 +257,22 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 basecraft_platform::settings::SettingsStore::new(paths.preferences()).load()?;
             println!("{}", serde_json::to_string_pretty(&preferences)?);
         }
-        Command::Recover { session, output } => {
-            for restored in basecraft_ops::replay::recover(&session, &output)? {
+        Command::Recover {
+            session,
+            output,
+            verified_prefix,
+        } => {
+            let restored = if verified_prefix {
+                let (restored, problem) =
+                    basecraft_ops::replay::recover_verified_prefix(&session, &output)?;
+                if let Some(problem) = problem {
+                    eprintln!("Recovered the verified edits before damage: {problem}");
+                }
+                restored
+            } else {
+                basecraft_ops::replay::recover(&session, &output)?
+            };
+            for restored in restored {
                 println!("{}", restored.display());
             }
         }

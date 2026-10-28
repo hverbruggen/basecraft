@@ -242,9 +242,40 @@ fn safe_key(key: &str) -> bool {
 }
 
 /// Reconstruct unsaved documents into a new directory without modifying sources
-/// or executing any tools. Strict reading rejects torn/corrupt journals; callers
-/// can inspect `verified_prefix` separately before explicitly salvaging a prefix.
+/// or executing any tools. Strict reading rejects torn/corrupt journals; the
+/// error names how many events [`recover_verified_prefix`] would keep.
 pub fn recover(root: &Path, destination: &Path) -> Result<Vec<std::path::PathBuf>> {
+    recover_checked(root, destination)?;
+    let entries = log::read_all(root).map_err(|error| {
+        let kept = log::verified_session_prefix(root)
+            .ok()
+            .filter(|prefix| prefix.problem.is_some());
+        match kept {
+            Some(prefix) => crate::error::invalid(format!(
+                "the recovery journal is damaged ({}); nothing was recovered. The {} verified journal events before the damage can be recovered explicitly with `basecraft recover --verified-prefix`; the journal is left unchanged",
+                prefix.problem.unwrap_or_default(),
+                prefix.entries.len()
+            )),
+            None => error,
+        }
+    })?;
+    recover_entries(root, destination, entries)
+}
+
+/// Explicit salvage after a crash: reconstruct only the journal's verified
+/// prefix, stopping at the first torn or corrupt line. Later events are never
+/// skipped over, and the damaged journal stays as it is for inspection.
+pub fn recover_verified_prefix(
+    root: &Path,
+    destination: &Path,
+) -> Result<(Vec<std::path::PathBuf>, Option<String>)> {
+    recover_checked(root, destination)?;
+    let prefix = log::verified_session_prefix(root)?;
+    let outputs = recover_entries(root, destination, prefix.entries)?;
+    Ok((outputs, prefix.problem))
+}
+
+fn recover_checked(root: &Path, destination: &Path) -> Result<()> {
     if root.join("recovery-integrity-error.json").exists() {
         return Err(crate::error::invalid(
             "journal durability was uncertain; inspect the preserved verified prefix before recovery",
@@ -253,7 +284,14 @@ pub fn recover(root: &Path, destination: &Path) -> Result<Vec<std::path::PathBuf
     if destination.exists() {
         return Err(crate::error::invalid("recovery destination already exists"));
     }
-    let entries = log::read_all(root)?;
+    Ok(())
+}
+
+fn recover_entries(
+    root: &Path,
+    destination: &Path,
+    entries: Vec<LogEntry>,
+) -> Result<Vec<std::path::PathBuf>> {
     if entries.is_empty() {
         return Err(crate::error::invalid(
             "recovery contains no verified events",
