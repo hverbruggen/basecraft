@@ -728,10 +728,20 @@ impl PreparedOperation {
             input.extra.insert("upstream".into(), json!(upstream));
             input_evidence::write_json(&run.artifact("input.json")?, &input)?;
             // The save guard names a registered run by its run.json and treats a
-            // missing one as damage, as for every other registered run.
+            // missing one as damage, as for every other registered run. It names
+            // the run's first exported file, so a conflict says what depends on
+            // the input; a run without exports is named by its operation.
+            let result = request
+                .destinations
+                .values()
+                .find_map(|destination| Path::new(destination).file_name())
+                .map_or_else(
+                    || operation.id.clone(),
+                    |name| name.to_string_lossy().into_owned(),
+                );
             input_evidence::write_json(
                 &run.artifact("run.json")?,
-                &json!({"schema_version":1,"id":run.id(),"result":operation.id,"status":"prepared"}),
+                &json!({"schema_version":1,"id":run.id(),"result":result,"status":"prepared"}),
             )?;
             let _guard = input_evidence::lock()?;
             input_evidence::register(&run)?;
