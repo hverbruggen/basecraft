@@ -6,6 +6,7 @@ pub mod cache;
 pub mod fasta;
 pub mod genbank;
 pub mod gff3;
+pub mod ncbi;
 pub mod newick;
 pub mod source;
 pub mod spart;
