@@ -426,6 +426,11 @@ impl Session {
     // Open and save.
 
     pub fn open(&mut self, path: &Path) -> Result<DocId> {
+        if crate::sanger_review::evidence_kind(path).is_some() {
+            return Err(invalid(
+                "Saved Sanger reviews and drafts are edited only in the Basecraft application; read a saved Sanger review's history, methods and provenance with the history, methods and provenance commands",
+            ));
+        }
         self.flush()?;
         let disk_stamp = crate::input_evidence::stamp(path)?;
         let accepted_hash = basecraft_io::hash_file(path)?;

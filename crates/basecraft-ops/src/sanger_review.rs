@@ -36,6 +36,59 @@ pub fn evidence_kind(path: &Path) -> Option<EvidenceKind> {
     Some(EvidenceKind::Draft)
 }
 
+/// Read a saved review for headless inspection, recognised by content as in
+/// [`evidence_kind`]. Any other `.json` file is refused with the reason, so a
+/// damaged, unknown or future review is never mistaken for another format.
+/// `None`: not JSON, so not Sanger evidence. Creates no records.
+pub fn saved_review(path: &Path) -> Option<Result<SangerReviewSession, String>> {
+    if !path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("json"))
+    {
+        return None;
+    }
+    let name = path.display();
+    Some(match evidence_kind(path) {
+        Some(EvidenceKind::Review) => SangerReviewSession::load(path),
+        Some(EvidenceKind::Draft) => Err(format!(
+            "{name} is an unreviewed Sanger draft, not a saved Sanger review; start its review in Basecraft"
+        )),
+        None => Err(match SangerReviewSession::load(path) {
+            Err(error) => format!("{name} is not a readable saved Sanger review: {error}"),
+            Ok(_) => format!("{name} is not a readable saved Sanger review"),
+        }),
+    })
+}
+
+/// Write a review recovered from application state to `destination`, a new
+/// folder, with every retained call set. The checkpoint stays in place.
+pub fn recover(checkpoint: &Path, destination: &Path) -> crate::Result<PathBuf> {
+    use crate::error::invalid;
+    let mut review = SangerReviewSession::load(checkpoint).map_err(invalid)?;
+    let name = review
+        .recovery_path()
+        .and(review.storage_anchor().file_name())
+        .ok_or_else(|| invalid("not a Sanger review recovery checkpoint"))?
+        .to_owned();
+    // Refuses an existing destination, including a concurrent recovery.
+    std::fs::create_dir(destination).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::AlreadyExists {
+            invalid("recovery destination already exists")
+        } else {
+            error.into()
+        }
+    })?;
+    let target = destination.join(name);
+    if let Err(error) =
+        review.save_with_evidence(&target, crate::input_evidence::SavePolicy::Cancel)
+    {
+        // Nothing else is in the folder this call created.
+        let _ = std::fs::remove_dir_all(destination);
+        return Err(invalid(error));
+    }
+    Ok(target)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MaskSettings {
     /// Zero-based inclusive start, exclusive end in consensus columns.
@@ -162,12 +215,27 @@ impl SangerReviewSession {
     /// Describe the actual review state, retaining the complete decision audit separately.
     pub fn document_report(&self, unsaved: bool) -> Result<crate::document_record::Report, String> {
         use crate::document_record::{DocumentRecord, HistoryRow, MethodsParagraph};
-        let raw = serde_json::to_string_pretty(&serde_json::json!({
+        let mut state = serde_json::json!({
             "draft": self.draft, "draft_sha256": self.draft_sha256, "events": self.events,
             "settings": self.settings, "reference": self.reference, "mask": self.mask,
             "decisions": self.decisions, "manual": self.manual,
-        }))
-        .map_err(|e| e.to_string())?;
+        });
+        // Other call sets of a multi-set review are part of its revision; a
+        // single-set (v1) report is unchanged.
+        let retained: Vec<_> = self
+            .retained
+            .iter()
+            .map(|set| {
+                serde_json::json!({"draft_sha256": set.draft_sha256, "engine": set.draft.engine,
+                    "version": set.draft.version_output.trim(), "events": set.events,
+                    "decisions": set.decisions, "manual": set.manual, "mask": set.mask,
+                    "unresolved": set.unresolved()})
+            })
+            .collect();
+        if !retained.is_empty() {
+            state["call_sets"] = serde_json::Value::Array(retained.clone());
+        }
+        let raw = serde_json::to_string_pretty(&state).map_err(|e| e.to_string())?;
         let mut record = DocumentRecord::empty(&self.draft_path.display().to_string());
         record.revision = basecraft_io::hash_bytes(raw.as_bytes());
         record.unsaved = unsaved;
@@ -202,8 +270,22 @@ impl SangerReviewSession {
                 details: serde_json::to_string_pretty(event).map_err(|e| e.to_string())?,
             });
         }
+        for (set, details) in self.retained.iter().zip(&retained) {
+            report.history.push(HistoryRow {
+                id: format!("review:call-set:{}", set.draft_sha256),
+                time: String::new(),
+                summary: format!(
+                    "Retained call set from {}: {} columns unresolved",
+                    set.draft.engine,
+                    set.unresolved()
+                ),
+                status: "Retained call set".into(),
+                contributing: false,
+                details: serde_json::to_string_pretty(details).map_err(|e| e.to_string())?,
+            });
+        }
         let manual = self.manual.iter().filter(|m| **m).count();
-        let text = format!(
+        let mut text = format!(
             "Sanger consensus evidence was prepared using {} (recorded version: {}). The current review retains columns {}–{} and contains {manual} manually reviewed columns; {} columns remain unresolved. Review thresholds and primer/masking settings are retained in the supporting record. Earlier laboratory processing is not recorded.",
             self.draft.engine,
             self.draft.version_output.trim(),
@@ -211,6 +293,12 @@ impl SangerReviewSession {
             self.mask.end,
             self.unresolved()
         );
+        if !self.retained.is_empty() {
+            text = format!(
+                "{text} Other retained call sets: {}; each keeps its own decisions, and this report describes the selected set.",
+                self.retained.len()
+            );
+        }
         report.paragraphs = vec![MethodsParagraph {
             activity_ids: vec!["review:state".into()],
             text: text.clone(),

@@ -96,7 +96,11 @@ impl Server {
         args: &Value,
         registry: &basecraft_plugin_host::registry::Registry,
     ) -> Result<Value> {
-        if matches!(name, "apply" | "save" | "run_tool" | "undo" | "redo") && !self.writable {
+        if matches!(
+            name,
+            "apply" | "save" | "run_tool" | "undo" | "redo" | "import_support"
+        ) && !self.writable
+        {
             return Err(
                 "permission_denied: This server is read-only; start it with --allow-writes to enable edits".into(),
             );
@@ -118,6 +122,12 @@ impl Server {
             "state" => Ok(self.state(self.doc(args)?)),
             "document_record" => Ok(serde_json::to_value(
                 self.session.document_record(self.doc(args)?)?.report()?,
+            )?),
+            // The same report as `basecraft history --json`, including saved Sanger reviews.
+            "file_record" => Ok(serde_json::to_value(
+                basecraft_ops::document_record::DocumentRecord::saved_report(
+                    &self.path(text(args, "path")?)?,
+                )?,
             )?),
             // The same readers as `basecraft provenance inspect|verify` and `replay`.
             "provenance_inspect" => Ok(serde_json::to_value(basecraft_ops::provenance::inspect(
@@ -179,6 +189,17 @@ impl Server {
                 self.session.apply(doc, op)?;
                 self.session.flush()?;
                 Ok(self.state(doc))
+            }
+            "import_support" => {
+                let doc = self.doc(args)?;
+                let source = self.path(text(args, "path")?)?;
+                let name = args.get("name").and_then(Value::as_str).unwrap_or("");
+                let imported = self.session.import_support(doc, &source, name)?;
+                self.session.flush()?;
+                let mut state = self.state(doc);
+                state["added"] = json!(imported.added);
+                state["matched"] = json!(imported.matched);
+                Ok(state)
             }
             "undo" | "redo" => {
                 let doc = self.doc(args)?;
@@ -259,6 +280,8 @@ fn tools() -> Value {
         tool("undo","Undo one edit group.",json!({"document":doc}), &["document"]),
         tool("redo","Redo one edit group.",json!({"document":doc}), &["document"]),
         tool("save","Save a document, optionally to a new project path. An existing other file is never replaced.",json!({"document":doc,"path":string}), &["document"]),
+        tool("file_record","Read history and methods for a saved project file as it is on disk, including saved Sanger reviews. Same output as `basecraft history --json`; writes nothing.",json!({"path":string}), &["path"]),
+        tool("import_support","Add the support values of another project tree file to an open tree as one undoable edit. The source is recorded as a referenced input. An empty or omitted name keeps the source's set names.",json!({"document":doc,"path":string,"name":string}), &["document","path"]),
         tool("provenance_inspect","Read the provenance publication of a saved project result.",json!({"path":string}), &["path"]),
         tool("provenance_verify","Check a saved result against its recorded hashes and retained inputs; runs no tools.",json!({"path":string}), &["path"]),
         tool("replay","Replay the project's operation log in a scratch session and report problems.",json!({}), &[]),

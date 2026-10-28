@@ -45,7 +45,8 @@ enum Command {
     },
     /// Print the validated shared preferences as JSON without creating files.
     Preferences,
-    /// Reconstruct an unsaved session into a new directory; never overwrites inputs.
+    /// Reconstruct an unsaved session, or a Sanger review recovery checkpoint
+    /// with all its call sets, into a new directory; never overwrites inputs.
     Recover {
         session: PathBuf,
         #[arg(long)]
@@ -89,6 +90,15 @@ enum Command {
     },
     /// Apply a typed JSON operation to a document and save it.
     Edit { file: PathBuf, operation: String },
+    /// Add the support values of another tree file to a tree and save it. The
+    /// source is referenced as the values' recorded input, not copied.
+    ImportSupport {
+        tree: PathBuf,
+        source: PathBuf,
+        /// Name for the imported support set; empty keeps the source's names.
+        #[arg(long, default_value = "")]
+        name: String,
+    },
     /// Calculate DNA distances or infer a tree with the registered
     /// basecraft.distance operations. Omitted settings take the descriptor
     /// defaults shown by `operations describe basecraft.distance/tree@1`.
@@ -221,10 +231,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Command::Plugins { action } => operations::plugins(action)?,
         Command::Operations { action } => operations::operations(action)?,
         Command::History { file, json } => {
-            let file = file.canonicalize()?;
-            let mut session = script_session(file.parent().ok_or("File has no parent")?)?;
-            let doc = session.open(&file)?;
-            let report = session.document_record(doc)?.report()?;
+            let report = basecraft_ops::document_record::DocumentRecord::saved_report(&file)?;
             println!(
                 "{}",
                 if json {
@@ -235,10 +242,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         Command::Methods { file, json, output } => {
-            let file = file.canonicalize()?;
-            let mut session = script_session(file.parent().ok_or("File has no parent")?)?;
-            let doc = session.open(&file)?;
-            let report = session.document_record(doc)?.report()?;
+            let report = basecraft_ops::document_record::DocumentRecord::saved_report(&file)?;
             if let Some(output) = output {
                 report.export(&output)?;
             }
@@ -262,6 +266,18 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             output,
             verified_prefix,
         } => {
+            if basecraft_ops::sanger_review::evidence_kind(&session)
+                == Some(basecraft_ops::sanger_review::EvidenceKind::Review)
+            {
+                if verified_prefix {
+                    return Err(
+                        "--verified-prefix applies to session journals, not Sanger reviews".into(),
+                    );
+                }
+                let restored = basecraft_ops::sanger_review::recover(&session, &output)?;
+                println!("{}", restored.display());
+                return Ok(());
+            }
             let restored = if verified_prefix {
                 let (restored, problem) =
                     basecraft_ops::replay::recover_verified_prefix(&session, &output)?;
@@ -328,6 +344,20 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let doc = session.open(&file)?;
             session.apply(doc, serde_json::from_str(&operation)?)?;
             session.save(doc, None)?;
+        }
+        Command::ImportSupport { tree, source, name } => {
+            let tree = tree.canonicalize()?;
+            let mut session = script_session(tree.parent().ok_or("File has no parent")?)?;
+            let doc = session.open(&tree)?;
+            let imported = session.import_support(doc, &source, &name)?;
+            if imported.added.is_empty() {
+                return Err("The source tree has no support values".into());
+            }
+            session.save(doc, None)?;
+            println!(
+                "{}",
+                serde_json::json!({"added": imported.added, "matched": imported.matched})
+            );
         }
         Command::Distance {
             file,

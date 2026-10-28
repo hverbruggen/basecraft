@@ -337,6 +337,24 @@ class Session:
         """History and methods for this session's current revision, including unsaved edits."""
         return self.call("document_record", {"document": document})
 
+    def file_record(self, path):
+        """History and methods for a saved project file as it is on disk.
+
+        Also reads saved Sanger reviews, which do not open as documents. The
+        same report as ``basecraft history --json``; writes nothing.
+        """
+        return self.call("file_record", {"path": str(path)})
+
+    def import_support(self, document, path, name=""):
+        """Add the support values of another project tree file to an open tree.
+
+        One undoable edit; the source is recorded as a referenced input. An empty
+        name keeps the source's set names. Returns the tree state with ``added``
+        and ``matched``.
+        """
+        return self.call("import_support", {"document": document, "path": str(path),
+                                            "name": name})
+
     # Operations
 
     def submit(self, operation, **arguments):

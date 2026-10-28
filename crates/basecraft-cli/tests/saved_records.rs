@@ -1,0 +1,477 @@
+//! Headless access to saved records the GUI already reads: Sanger reviews
+//! (history, methods, verification, packaging, recovery) and support import.
+use std::io::{BufRead, BufReader, Write};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output, Stdio};
+
+use basecraft_ops::sanger_review::{ReviewChoice, ReviewOp, SangerReviewSession};
+use basecraft_protocol::Op;
+use serde_json::{Value, json};
+
+fn cli(profile: &Path, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_basecraft"))
+        .args(args)
+        .env("BASECRAFT_PROFILE_DIR", profile)
+        .output()
+        .unwrap()
+}
+
+fn ok(output: &Output) -> String {
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout.clone()).unwrap()
+}
+
+fn failure(output: &Output) -> String {
+    assert!(
+        !output.status.success(),
+        "unexpected success: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    String::from_utf8_lossy(&output.stderr).into_owned()
+}
+
+/// Every file below `root` with its size: reading must leave this unchanged.
+fn listing(root: &Path) -> Vec<(PathBuf, u64)> {
+    let mut found = Vec::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                pending.push(path);
+            } else {
+                let size = std::fs::metadata(&path).unwrap().len();
+                found.push((path, size));
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
+fn edit(review: &mut SangerReviewSession, column: usize, base: char) {
+    review
+        .apply(ReviewOp::Set {
+            columns: vec![column],
+            choice: ReviewChoice::Edit(base),
+        })
+        .unwrap();
+}
+
+/// A legacy single-set (v1) review and a multi-call-set (v2) review of the
+/// same instrument trace, the second under a generic `.json` name.
+fn reviews(project: &Path) -> (PathBuf, PathBuf) {
+    std::fs::create_dir_all(project).unwrap();
+    let trace = project.join("trace.ab1");
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../testdata/fixtures/compact/sanger-review/forward.ab1"),
+        &trace,
+    )
+    .unwrap();
+    let mut single = basecraft_ops::sanger_review::instrument_review(&trace).unwrap();
+    edit(&mut single, 0, 'G');
+    let v1 = project.join("specimen.sanger-review.json");
+    single.save(&v1).unwrap();
+
+    let mut multi = basecraft_ops::sanger_review::instrument_review(&trace).unwrap();
+    edit(&mut multi, 0, 'G');
+    let mut draft = multi.draft.clone();
+    draft.engine = "Tracy".into();
+    draft.mode = "basecall".into();
+    draft.version_output = "synthetic caller".into();
+    draft.engine_sha256 = "a".repeat(64);
+    let mut alternative = SangerReviewSession::from_draft(draft, &multi.draft_path).unwrap();
+    edit(&mut alternative, 0, 'C');
+    multi.retain_call_set(alternative).unwrap();
+    let v2 = project.join("multi.json");
+    multi.save(&v2).unwrap();
+    (v1, v2)
+}
+
+/// The report the GUI shows for a saved review it opened.
+fn gui_report(path: &Path) -> Value {
+    let review = SangerReviewSession::load(path).unwrap();
+    serde_json::to_value(
+        review
+            .document_report(review.recovery_path().is_some())
+            .unwrap(),
+    )
+    .unwrap()
+}
+
+struct Mcp {
+    child: std::process::Child,
+    output: BufReader<std::process::ChildStdout>,
+    serial: u64,
+}
+
+impl Mcp {
+    fn start(project: &Path, profile: &Path, writable: bool) -> Self {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_basecraft"));
+        command
+            .args(["mcp", project.to_str().unwrap()])
+            .env("BASECRAFT_PROFILE_DIR", profile);
+        if writable {
+            command.arg("--allow-writes");
+        }
+        let mut child = command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let output = BufReader::new(child.stdout.take().unwrap());
+        let mut mcp = Self {
+            child,
+            output,
+            serial: 0,
+        };
+        mcp.call(
+            "initialize",
+            &json!({"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1"}}),
+        );
+        mcp
+    }
+
+    fn call(&mut self, method: &str, params: &Value) -> Value {
+        self.serial += 1;
+        let stdin = self.child.stdin.as_mut().unwrap();
+        writeln!(
+            stdin,
+            "{}",
+            json!({"jsonrpc":"2.0","id":self.serial,"method":method,"params":params})
+        )
+        .unwrap();
+        stdin.flush().unwrap();
+        loop {
+            let mut line = String::new();
+            assert!(self.output.read_line(&mut line).unwrap() > 0, "MCP closed");
+            let reply: Value = serde_json::from_str(&line).unwrap();
+            if reply["id"] == json!(self.serial) {
+                return reply;
+            }
+        }
+    }
+
+    /// The tool result; JSON-RPC errors (such as an unknown tool) fail the test.
+    fn tool(&mut self, name: &str, arguments: &Value) -> Value {
+        let reply = self.call("tools/call", &json!({"name":name,"arguments":arguments}));
+        assert!(reply.get("error").is_none(), "{reply}");
+        reply["result"].clone()
+    }
+
+    fn close(mut self) {
+        drop(self.child.stdin.take());
+        assert!(self.child.wait().unwrap().success());
+    }
+}
+
+#[test]
+fn saved_reviews_report_through_cli_and_mcp_as_in_the_gui() {
+    let temp = tempfile::tempdir().unwrap();
+    let profile = temp.path().join("profile");
+    let project = temp.path().join("project");
+    let (v1, v2) = reviews(&project);
+    let before = listing(&project);
+    for path in [&v1, &v2] {
+        let expected = gui_report(path);
+        let history: Value = serde_json::from_str(&ok(&cli(
+            &profile,
+            &["history", path.to_str().unwrap(), "--json"],
+        )))
+        .unwrap();
+        assert_eq!(history, expected, "{}", path.display());
+        assert_eq!(history["unsaved"], false);
+        let methods = ok(&cli(&profile, &["methods", path.to_str().unwrap()]));
+        assert_eq!(methods.trim_end(), expected["methods"].as_str().unwrap());
+        let text = ok(&cli(&profile, &["history", path.to_str().unwrap()]));
+        assert_eq!(text.trim_end(), expected["history_text"].as_str().unwrap());
+    }
+    // The multi-set report names the other retained call set; v1 has none.
+    let multi = gui_report(&v2);
+    assert!(
+        multi["methods"]
+            .as_str()
+            .unwrap()
+            .contains("Other retained call sets: 1"),
+        "{multi}"
+    );
+    let raw: Value = serde_json::from_str(multi["raw"].as_str().unwrap()).unwrap();
+    assert_eq!(raw["call_sets"].as_array().map(Vec::len), Some(1), "{raw}");
+    let single = gui_report(&v1);
+    assert!(!single["methods"].as_str().unwrap().contains("call set"));
+
+    // Verification and packaging use the shared provenance readers and keep
+    // every retained call set.
+    ok(&cli(
+        &profile,
+        &["provenance", "verify", v2.to_str().unwrap()],
+    ));
+    let package = temp.path().join("package");
+    ok(&cli(
+        &profile,
+        &[
+            "provenance",
+            "package",
+            v2.to_str().unwrap(),
+            "--output",
+            package.to_str().unwrap(),
+        ],
+    ));
+    let packaged = package.join("multi.json");
+    assert_eq!(
+        SangerReviewSession::load(&packaged)
+            .unwrap()
+            .call_sets()
+            .len(),
+        2
+    );
+    let history: Value = serde_json::from_str(&ok(&cli(
+        &profile,
+        &["history", packaged.to_str().unwrap(), "--json"],
+    )))
+    .unwrap();
+    assert_eq!(history, gui_report(&packaged));
+
+    // MCP reads the same report from a read-only server and refuses to open
+    // the review as an editable document.
+    let mut mcp = Mcp::start(&project, &profile, false);
+    let record = mcp.tool("file_record", &json!({"path":"multi.json"}));
+    assert_eq!(record["isError"], false, "{record}");
+    assert_eq!(record["structuredContent"], gui_report(&v2));
+    let opened = mcp.tool("open", &json!({"path":"multi.json"}));
+    assert_eq!(opened["isError"], true, "{opened}");
+    let message = opened["structuredContent"]["errors"][0]["message"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(message.contains("Sanger review"), "{message}");
+    mcp.close();
+
+    // CLI editing is refused explicitly and leaves the review unchanged.
+    let bytes = std::fs::read(&v2).unwrap();
+    let error = failure(&cli(
+        &profile,
+        &[
+            "edit",
+            v2.to_str().unwrap(),
+            r#"{"op":"seq.replace","params":{"start":0,"end":1,"residues":"T"}}"#,
+        ],
+    ));
+    assert!(error.contains("Sanger review"), "{error}");
+    assert_eq!(std::fs::read(&v2).unwrap(), bytes);
+    // Reading created no records next to the reviews.
+    assert_eq!(listing(&project), before);
+}
+
+#[test]
+fn damaged_unknown_future_and_draft_files_are_refused_without_records() {
+    let temp = tempfile::tempdir().unwrap();
+    let profile = temp.path().join("profile");
+    let project = temp.path().join("project");
+    let (v1, _) = reviews(&project);
+    let bytes = std::fs::read(&v1).unwrap();
+    let mut future: Value = serde_json::from_slice(&bytes).unwrap();
+    future["version"] = json!(99);
+    let draft = SangerReviewSession::load(&v1).unwrap().draft;
+    let cases = [
+        (
+            "unrelated.sanger-review.json",
+            br#"{"other":true}"#.to_vec(),
+        ),
+        ("truncated.json", bytes[..bytes.len() / 2].to_vec()),
+        ("future.json", serde_json::to_vec(&future).unwrap()),
+        ("draft.json", serde_json::to_vec(&draft).unwrap()),
+        ("sequence.sanger-review.json", b">a\nACGT\n".to_vec()),
+    ];
+    for (name, content) in &cases {
+        std::fs::write(project.join(name), content).unwrap();
+    }
+    let before = listing(&project);
+    for (name, _) in &cases {
+        let path = project.join(name);
+        for command in ["history", "methods"] {
+            let error = failure(&cli(&profile, &[command, path.to_str().unwrap()]));
+            assert!(error.contains("Sanger"), "{name}: {error}");
+            if *name == "future.json" {
+                assert!(
+                    error.contains("Unsupported Sanger review version"),
+                    "{error}"
+                );
+            }
+            if *name == "draft.json" {
+                assert!(error.contains("draft"), "{error}");
+            }
+        }
+    }
+    assert_eq!(listing(&project), before);
+}
+
+/// Recovery writes every retained call set to a new destination only.
+#[test]
+fn review_recovery_restores_all_call_sets_into_a_new_folder() {
+    // The checkpoint lives in application state, which this process and the
+    // CLI must share; run only under an isolated validation profile.
+    if std::env::var_os("BASECRAFT_PROFILE_DIR").is_none() {
+        eprintln!("skipping: BASECRAFT_PROFILE_DIR is not set");
+        return;
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("project");
+    let (_, v2) = reviews(&project);
+    let mut review = SangerReviewSession::load(&v2).unwrap();
+    review.start_recovery().unwrap();
+    edit(&mut review, 1, 'T');
+    let checkpoint = review.recovery_path().unwrap().to_path_buf();
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_basecraft"))
+            .args(args)
+            .current_dir(&project)
+            .output()
+            .unwrap()
+    };
+    let history: Value = serde_json::from_str(&ok(&run(&[
+        "history",
+        checkpoint.to_str().unwrap(),
+        "--json",
+    ])))
+    .unwrap();
+    assert_eq!(history["unsaved"], true);
+    assert_eq!(history, gui_report(&checkpoint));
+
+    let output = temp.path().join("recovered");
+    let restored = ok(&run(&[
+        "recover",
+        checkpoint.to_str().unwrap(),
+        "--output",
+        output.to_str().unwrap(),
+    ]));
+    let restored = PathBuf::from(restored.trim());
+    assert!(restored.starts_with(&output), "{}", restored.display());
+    let reopened = SangerReviewSession::load(&restored).unwrap();
+    assert_eq!(reopened.call_sets().len(), 2);
+    assert_eq!(reopened.decision(1), Some(&ReviewChoice::Edit('T')));
+    assert!(reopened.recovery_path().is_none());
+    // The checkpoint stays; an existing destination is never replaced.
+    assert!(checkpoint.is_file());
+    let error = failure(&run(&[
+        "recover",
+        checkpoint.to_str().unwrap(),
+        "--output",
+        output.to_str().unwrap(),
+    ]));
+    assert!(error.contains("exists"), "{error}");
+}
+
+fn trees(project: &Path) -> (PathBuf, PathBuf) {
+    std::fs::create_dir_all(project).unwrap();
+    let target = project.join("target.nwk");
+    std::fs::write(&target, "((A:1,B:1)90:1,(C:1,D:1)80:1);").unwrap();
+    let source = project.join("support.nwk");
+    std::fs::write(&source, "((A:1,B:1)75:1,(C:1,D:1)60:1);").unwrap();
+    (target, source)
+}
+
+fn import_event(target: &Path) -> Value {
+    let publication = basecraft_ops::provenance::inspect(target).unwrap();
+    let params = publication
+        .events
+        .iter()
+        .find_map(|event| match &event.op {
+            Op::ToolRun {
+                plugin,
+                operation,
+                params,
+                ..
+            } if plugin == "basecraft.tree" && operation == "import_support" => {
+                Some(params.clone())
+            }
+            _ => None,
+        })
+        .expect("import activity");
+    assert!(params["input_run"]["id"].is_string(), "{params}");
+    params
+}
+
+#[test]
+fn support_import_runs_headlessly_with_the_same_reference_evidence() {
+    let temp = tempfile::tempdir().unwrap();
+    let profile = temp.path().join("profile");
+
+    // CLI: import, save, verify; a replaced source is reported.
+    let (target, source) = trees(&temp.path().join("cli"));
+    let imported: Value = serde_json::from_str(&ok(&cli(
+        &profile,
+        &[
+            "import-support",
+            target.to_str().unwrap(),
+            source.to_str().unwrap(),
+            "--name",
+            "Bootstrap",
+        ],
+    )))
+    .unwrap();
+    assert_eq!(imported, json!({"added":["Bootstrap"],"matched":2}));
+    assert_eq!(import_event(&target)["sets"], json!(["Bootstrap"]));
+    ok(&cli(
+        &profile,
+        &["provenance", "verify", target.to_str().unwrap()],
+    ));
+    let history = ok(&cli(&profile, &["history", target.to_str().unwrap()]));
+    assert!(
+        history.contains("Ran basecraft.tree import_support"),
+        "{history}"
+    );
+    assert!(!history.contains(", wrote "), "{history}");
+    let reopened = basecraft_ops::files::load_tree(&target).unwrap();
+    assert!(reopened.doc.support("Bootstrap").is_some());
+    std::fs::write(&source, "((A:1,B:1)10:1,(C:1,D:1)20:1);").unwrap();
+    failure(&cli(
+        &profile,
+        &["provenance", "verify", target.to_str().unwrap()],
+    ));
+
+    // MCP: the same import on an open tree; read-only servers refuse it.
+    let project = temp.path().join("mcp");
+    let (target, _) = trees(&project);
+    let mut readonly = Mcp::start(&project, &profile, false);
+    readonly.tool("open", &json!({"path":"target.nwk"}));
+    let denied = readonly.tool(
+        "import_support",
+        &json!({"document":0,"path":"support.nwk","name":"Bootstrap"}),
+    );
+    assert_eq!(denied["isError"], true, "{denied}");
+    assert_eq!(
+        denied["structuredContent"]["errors"][0]["code"],
+        "permission_denied"
+    );
+    readonly.close();
+    let mut mcp = Mcp::start(&project, &profile, true);
+    mcp.tool("open", &json!({"path":"target.nwk"}));
+    let outside = mcp.tool(
+        "import_support",
+        &json!({"document":0,"path":"/etc/hostname","name":"Bootstrap"}),
+    );
+    assert_eq!(outside["isError"], true, "{outside}");
+    let imported = mcp.tool(
+        "import_support",
+        &json!({"document":0,"path":"support.nwk","name":"Bootstrap"}),
+    );
+    assert_eq!(imported["isError"], false, "{imported}");
+    assert_eq!(imported["structuredContent"]["added"], json!(["Bootstrap"]));
+    assert_eq!(imported["structuredContent"]["matched"], 2);
+    let saved = mcp.tool("save", &json!({"document":0}));
+    assert_eq!(saved["isError"], false, "{saved}");
+    mcp.close();
+    let params = import_event(&target);
+    assert_eq!(params["sets"], json!(["Bootstrap"]));
+    assert_eq!(
+        basecraft_ops::provenance::verify(&target).unwrap(),
+        Vec::<String>::new()
+    );
+}
