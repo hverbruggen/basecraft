@@ -51,7 +51,6 @@ fn synthetic_large_clean_source_has_metadata_only_evidence_and_relocates() {
         input_evidence::read_input(&run).unwrap().state,
         "referenced"
     );
-    assert!(!run.join("document-input.afa").exists());
     assert!(!run.join("submitted.fasta").exists());
     assert!(!run.join("preserved-input").exists());
     assert!(!folder.join(".basecraft/project.toml").exists());
@@ -128,7 +127,7 @@ fn common_save_route_preserves_actual_original_and_dirty_submitted_input() {
     assert_eq!(input_evidence::read_input(&run).unwrap().state, "generated");
     // The unsaved bytes that were analysed are retained with the run.
     assert!(
-        std::fs::read_to_string(run.join("document-input.afa"))
+        std::fs::read_to_string(run.join("submitted.fasta"))
             .unwrap()
             .contains("TAAA")
     );
@@ -180,8 +179,9 @@ fn downstream_evidence_follows_preservation_and_complete_export_keeps_dependency
         common::align_copy(&registry, &mut session, source, output);
     }
     let conflict = input_evidence::conflicts(&source).unwrap();
-    assert_eq!(conflict.analyses.len(), 2);
-    assert_eq!(conflict.analyses.iter().filter(|a| a.direct).count(), 1);
+    let analyses = common::analyses(&conflict);
+    assert_eq!(analyses.len(), 2);
+    assert_eq!(analyses.iter().filter(|a| a.direct).count(), 1);
     input_evidence::resolve(&conflict, SavePolicy::PreserveCopy).unwrap();
     std::fs::remove_file(&source).unwrap();
     assert_eq!(
@@ -226,7 +226,7 @@ fn save_as_descendants_receive_each_explicit_evidence_decision() {
             }
         }
         let conflict = input_evidence::conflicts(&source).unwrap();
-        assert_eq!(conflict.analyses.len(), 2, "{conflict:?}");
+        assert_eq!(common::analyses(&conflict).len(), 2, "{conflict:?}");
         input_evidence::resolve(&conflict, policy).unwrap();
         std::fs::write(&source, ">a\nTTTT\n>b\nTTTA\n").unwrap();
         match policy {

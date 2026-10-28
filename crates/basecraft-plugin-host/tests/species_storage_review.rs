@@ -141,7 +141,13 @@ fn setup_tree(session: &mut Session, source: &Path, output: &Path) {
 
 /// Fit single-threshold GMYC to `tree`, a project file, in the workspace `doc`.
 fn fit_in_workspace(session: &mut Session, doc: basecraft_ops::DocId, tree: &Path) {
-    let relative = tree.strip_prefix(session.root()).unwrap().to_owned();
+    let root = session.root().canonicalize().unwrap();
+    let relative = tree
+        .canonicalize()
+        .unwrap()
+        .strip_prefix(&root)
+        .unwrap()
+        .to_owned();
     let outcome = common::run_in(&common::bundled(), session, |s| {
         json!({"operation":"basecraft.delimitation/gmyc_single@1",
             "inputs":{"tree":common::file(relative.to_str().unwrap())},
@@ -311,7 +317,6 @@ fn preserved_alignment_remains_usable_by_workspace_default_input() {
     // The clean source is referenced in place; no copy of it is retained.
     assert!(!owner.join("preserved-input").exists());
     assert!(!owner.join("submitted.fasta").exists());
-    assert!(!owner.join("document-input.afa").exists());
     assert_eq!(
         basecraft_ops::input_evidence::read_input(&owner)
             .unwrap()

@@ -193,9 +193,9 @@ class Plugin:
                     if not stable and record.get("run_directory"):
                         # Unsaved document bytes are retained with the run; name
                         # that copy, never the temporary execution input.
-                        retained = sorted(Path(record["run_directory"]).glob("document-input.*"))
-                        if len(retained) == 1:
-                            stable = str(retained[0])
+                        retained = Path(record["run_directory"]) / "submitted.fasta"
+                        if retained.is_file():
+                            stable = str(retained)
                     if stable:
                         effective.setdefault("original_source", stable)
                         effective.setdefault("input_evidence", dict(record, path=stable))

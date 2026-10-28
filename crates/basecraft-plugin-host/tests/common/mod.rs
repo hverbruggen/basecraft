@@ -308,3 +308,15 @@ pub fn align_document(
     );
     outcome
 }
+
+/// The analyses in a save conflict, without the reference ledger a registered
+/// run keeps for each of its inputs; that ledger is listed beside its run.
+pub fn analyses(
+    conflict: &basecraft_ops::input_evidence::EvidenceConflict,
+) -> Vec<&basecraft_ops::input_evidence::AffectedAnalysis> {
+    conflict
+        .analyses
+        .iter()
+        .filter(|analysis| read_json(&analysis.run.join("run.json"))["status"] != "referenced")
+        .collect()
+}

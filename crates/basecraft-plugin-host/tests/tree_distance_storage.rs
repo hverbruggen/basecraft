@@ -48,7 +48,6 @@ fn matrix_reference_generated_failure_move_and_export_use_the_common_store() {
     common::member(&clean, "distances.tsv.distances.json");
     common::member(&clean, "distances.tsv.run.json");
     // A clean document is referenced in place: no copy of its bytes is kept.
-    assert!(!run.join("document-input.afa").exists());
     assert!(!run.join("submitted.fasta").exists());
     assert!(!run.join("preserved-input").exists());
     let input = input_evidence::read_input(&run).unwrap();
@@ -81,7 +80,7 @@ fn matrix_reference_generated_failure_move_and_export_use_the_common_store() {
     let input = input_evidence::read_input(&dirty_run).unwrap();
     assert_eq!(input.state, "generated");
     assert!(input.source.is_none());
-    let generated = dirty_run.join("document-input.afa");
+    let generated = dirty_run.join("submitted.fasta");
     assert_eq!(
         input.submitted_hash,
         basecraft_io::hash_file(&generated).unwrap()
@@ -174,7 +173,7 @@ fn ordinary_tree_and_forest_routes_keep_only_scientific_results_visible() {
         });
         common::assert_completed(&outcome);
         let run = common::evidence(&outcome);
-        assert!(!run.join("document-input.afa").exists());
+        assert!(!run.join("submitted.fasta").exists());
         assert!(!run.join("preserved-input").exists());
         let execution = common::read_json(&run.join("execution.json"));
         assert!(

@@ -442,7 +442,7 @@ fn dirty_tree_submission_retains_generated_bytes_without_stale_original_claim() 
     let input = input_evidence::read_input(&run).unwrap();
     assert_eq!(input.state, "generated");
     assert!(input.source.is_none());
-    let generated = run.join("document-input.nwk");
+    let generated = run.join("submitted.fasta");
     assert!(
         std::fs::read_to_string(&generated)
             .unwrap()
@@ -674,7 +674,7 @@ fn optional_display_tree_uses_hidden_reference_first_companions() {
         input_evidence::read_input(&run).unwrap().state,
         "referenced"
     );
-    assert!(!run.join("document-input.afa").exists());
+    assert!(!run.join("submitted.fasta").exists());
     let tree = basecraft_ops::files::load_tree(&display).unwrap();
     let link = basecraft_ops::links::AlignmentLink::read(&display).unwrap();
     let snapshot = link.checked_snapshot(&display, &tree.doc).unwrap();

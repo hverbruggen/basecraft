@@ -171,7 +171,7 @@ fn bootstrap_provenance_success_and_withheld_support_replay() {
             } else {
                 // Withheld support leaves a tree without invented support values.
                 let tree = basecraft_ops::files::load_tree(&output).unwrap().doc;
-                assert!(tree.supports().is_empty());
+                assert_eq!(tree.supports().len(), 0);
             }
             let runs = common::tool_runs(&session, doc);
             let run = runs

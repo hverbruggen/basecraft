@@ -122,6 +122,7 @@ fn repeated_preserve_decision_never_replaces_verified_old_bytes() {
 fn overwrite_conflict_identifies_the_completed_result() {
     let (_dir, _session, _, source, _first) = setup();
     let conflict = input_evidence::conflicts(&source).unwrap();
-    assert_eq!(conflict.analyses.len(), 1);
-    assert_eq!(conflict.analyses[0].result, "first.afa");
+    let analyses = common::analyses(&conflict);
+    assert_eq!(analyses.len(), 1);
+    assert_eq!(analyses[0].result, "first.afa");
 }

@@ -651,7 +651,7 @@ fn document_inputs_read_the_session_revision_and_record_history() {
     assert_eq!(input["state"], "generated");
     assert_eq!(input["transformation"], "canonical-fasta-v1");
     assert!(
-        String::from_utf8(std::fs::read(evidence.join("document-input.afa")).unwrap())
+        String::from_utf8(std::fs::read(evidence.join("submitted.fasta")).unwrap())
             .unwrap()
             .contains("TC-T")
     );
