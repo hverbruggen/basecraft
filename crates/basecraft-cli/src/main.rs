@@ -44,11 +44,16 @@ enum Command {
     },
     /// Print the validated shared preferences as JSON without creating files.
     Preferences,
-    /// Reconstruct an unsaved session into a new directory; never overwrites inputs.
+    /// Reconstruct an unsaved session, or a Sanger review recovery checkpoint
+    /// with all its call sets, into a new directory; never overwrites inputs.
     Recover {
         session: PathBuf,
         #[arg(long)]
         output: PathBuf,
+        /// After a crash damaged the journal: recover only the edits before the
+        /// first damaged line. The journal itself is left unchanged.
+        #[arg(long)]
+        verified_prefix: bool,
     },
     /// Inspect, verify, report, or package readable saved-result provenance.
     Provenance {
@@ -71,6 +76,15 @@ enum Command {
     },
     /// Apply a typed JSON operation to a document and save it.
     Edit { file: PathBuf, operation: String },
+    /// Add the support values of another tree file to a tree and save it. The
+    /// source is referenced as the values' recorded input, not copied.
+    ImportSupport {
+        tree: PathBuf,
+        source: PathBuf,
+        /// Name for the imported support set; empty keeps the source's names.
+        #[arg(long, default_value = "")]
+        name: String,
+    },
     /// Index a FASTA file (or load its cached index) and print a summary.
     Index { file: PathBuf },
     /// Replay a project's operation log and check every step.
@@ -163,10 +177,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Command::Plugins { action } => operations::plugins(action)?,
         Command::Operations { action } => operations::operations(action)?,
         Command::History { file, json } => {
-            let file = file.canonicalize()?;
-            let mut session = script_session(file.parent().ok_or("File has no parent")?)?;
-            let doc = session.open(&file)?;
-            let report = session.document_record(doc)?.report()?;
+            let report = basecraft_ops::document_record::DocumentRecord::saved_report(&file)?;
             println!(
                 "{}",
                 if json {
@@ -177,10 +188,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         Command::Methods { file, json, output } => {
-            let file = file.canonicalize()?;
-            let mut session = script_session(file.parent().ok_or("File has no parent")?)?;
-            let doc = session.open(&file)?;
-            let report = session.document_record(doc)?.report()?;
+            let report = basecraft_ops::document_record::DocumentRecord::saved_report(&file)?;
             if let Some(output) = output {
                 report.export(&output)?;
             }
@@ -199,8 +207,34 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 basecraft_platform::settings::SettingsStore::new(paths.preferences()).load()?;
             println!("{}", serde_json::to_string_pretty(&preferences)?);
         }
-        Command::Recover { session, output } => {
-            for restored in basecraft_ops::replay::recover(&session, &output)? {
+        Command::Recover {
+            session,
+            output,
+            verified_prefix,
+        } => {
+            if basecraft_ops::sanger_review::evidence_kind(&session)
+                == Some(basecraft_ops::sanger_review::EvidenceKind::Review)
+            {
+                if verified_prefix {
+                    return Err(
+                        "--verified-prefix applies to session journals, not Sanger reviews".into(),
+                    );
+                }
+                let restored = basecraft_ops::sanger_review::recover(&session, &output)?;
+                println!("{}", restored.display());
+                return Ok(());
+            }
+            let restored = if verified_prefix {
+                let (restored, problem) =
+                    basecraft_ops::replay::recover_verified_prefix(&session, &output)?;
+                if let Some(problem) = problem {
+                    eprintln!("Recovered the verified edits before damage: {problem}");
+                }
+                restored
+            } else {
+                basecraft_ops::replay::recover(&session, &output)?
+            };
+            for restored in restored {
                 println!("{}", restored.display());
             }
         }
@@ -239,6 +273,20 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let doc = session.open(&file)?;
             session.apply(doc, serde_json::from_str(&operation)?)?;
             session.save(doc, None)?;
+        }
+        Command::ImportSupport { tree, source, name } => {
+            let tree = tree.canonicalize()?;
+            let mut session = script_session(tree.parent().ok_or("File has no parent")?)?;
+            let doc = session.open(&tree)?;
+            let imported = session.import_support(doc, &source, &name)?;
+            if imported.added.is_empty() {
+                return Err("The source tree has no support values".into());
+            }
+            session.save(doc, None)?;
+            println!(
+                "{}",
+                serde_json::json!({"added": imported.added, "matched": imported.matched})
+            );
         }
         Command::Index { file } => {
             let t = Instant::now();
@@ -401,7 +449,8 @@ fn run_plugin(
         basecraft_plugin_host::Snapshot::of(session.doc_key(doc), session.checked_sequence(doc)?)?;
     let snap_ms = t_snap.elapsed().as_secs_f64() * 1e3;
     let t_call = Instant::now();
-    let result = plugin.invoke(operation, serde_json::Value::Object(map), Some(&snap))?;
+    let map_value = serde_json::Value::Object(map);
+    let result = plugin.invoke(operation, map_value.clone(), Some(&snap))?;
     let call_ms = t_call.elapsed().as_secs_f64() * 1e3;
     println!(
         "snapshot of {} bp in {snap_ms:.0} ms, {operation} in {call_ms:.0} ms: {} proposals{}",
@@ -418,6 +467,13 @@ fn run_plugin(
     };
     let count = result.ops.len();
     session.apply_sequence_proposals(doc, generation, snap.version, &result.ops, &actor)?;
+    // No typed contract, so no effective settings or retained run: record what
+    // was submitted and the hash of the snapshot a registered run would retain.
+    let params = serde_json::json!({"requested": map_value, "operation": operation,
+        "contract": "schema-1", "initiator": "CLI",
+        "snapshot": {"document": snap.doc, "version": snap.version,
+            "hash": basecraft_io::hash_bytes(&snap.payload()?)}});
+    session.log_tool_run(doc, actor, (&plugin.info.id, operation), params, &[], &[])?;
     println!("applied {count} proposals");
     if let Some(policy) = save {
         session.save_with_evidence(doc, None, policy)?;

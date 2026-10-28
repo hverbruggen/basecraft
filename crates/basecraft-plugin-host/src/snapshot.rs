@@ -102,6 +102,19 @@ impl Snapshot {
         })
     }
 
+    /// The exact submitted input as registered runs retain it
+    /// (`sequence-arrow-buffers-v1`): the residue stream length, then the
+    /// residue and feature streams.
+    pub fn payload(&self) -> Result<Vec<u8>> {
+        let residues = self.residues.map()?;
+        let features = self.features.map()?;
+        let mut payload = Vec::with_capacity(8 + residues.len() + features.len());
+        payload.extend_from_slice(&(residues.len() as u64).to_le_bytes());
+        payload.extend_from_slice(&residues);
+        payload.extend_from_slice(&features);
+        Ok(payload)
+    }
+
     /// The protocol description, with buffer indices 0 and 1.
     pub fn describe(&self) -> SequenceSnapshot {
         SequenceSnapshot {

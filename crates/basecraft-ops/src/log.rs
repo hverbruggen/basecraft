@@ -190,6 +190,15 @@ pub struct VerifiedPrefix {
 }
 
 pub fn verified_prefix(path: &Path) -> Result<VerifiedPrefix> {
+    verified_segment(path, None)
+}
+
+/// With `sequences`, each session's events must continue its numbering from
+/// earlier segments, as in `read_all`.
+fn verified_segment(
+    path: &Path,
+    mut sequences: Option<&mut std::collections::HashMap<String, u64>>,
+) -> Result<VerifiedPrefix> {
     let file = File::open(path)?;
     if file.metadata()?.len() > 16 << 20 {
         return Err(crate::error::invalid(
@@ -221,6 +230,15 @@ pub fn verified_prefix(path: &Path) -> Result<VerifiedPrefix> {
                 if previous.is_some_and(|p| sequence != p + 1) {
                     return Err(crate::error::invalid("journal sequence gap"));
                 }
+                if let Some(sequences) = sequences.as_deref_mut() {
+                    let expected = sequences.entry(event.session.clone()).or_insert(0);
+                    if sequence != *expected {
+                        return Err(crate::error::invalid(
+                            "journal sequence gap or reordered segment",
+                        ));
+                    }
+                    *expected += 1;
+                }
                 previous = Some(sequence);
             }
             Ok(event)
@@ -233,6 +251,49 @@ pub fn verified_prefix(path: &Path) -> Result<VerifiedPrefix> {
             Err(error) => {
                 prefix.problem = Some(error.to_string());
                 break;
+            }
+        }
+    }
+    Ok(prefix)
+}
+
+/// The verified prefix of every journal segment under `root`, in the order
+/// `read_all` uses. Reading stops at the first damaged line or sequence gap;
+/// later segments are not read, and nothing on disk changes.
+pub fn verified_session_prefix(root: &Path) -> Result<VerifiedPrefix> {
+    let mut prefix = VerifiedPrefix {
+        entries: Vec::new(),
+        verified_bytes: 0,
+        problem: None,
+    };
+    let dir = log_dir(root);
+    if !dir.exists() {
+        return Ok(prefix);
+    }
+    let mut hosts: Vec<PathBuf> = fs::read_dir(&dir)?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|h| h.is_dir())
+        .collect();
+    hosts.sort();
+    let mut sequences = std::collections::HashMap::<String, u64>::new();
+    for host in hosts {
+        let mut files: Vec<PathBuf> = fs::read_dir(&host)?
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|f| f.extension().is_some_and(|e| e == "jsonl"))
+            .collect();
+        files.sort();
+        for file in files {
+            let segment = verified_segment(&file, Some(&mut sequences))?;
+            prefix.entries.extend(segment.entries);
+            prefix.verified_bytes += segment.verified_bytes;
+            if prefix.verified_bytes > 128 << 20 {
+                return Err(crate::error::invalid(
+                    "journal exceeds the 128 MiB session reading limit",
+                ));
+            }
+            if let Some(problem) = segment.problem {
+                prefix.problem = Some(format!("{}: {problem}", file.display()));
+                return Ok(prefix);
             }
         }
     }
@@ -388,6 +449,12 @@ pub fn describe(op: &Op) -> String {
             range(*start, *end),
             rows(r)
         ),
+        Op::ToolRun {
+            plugin,
+            operation,
+            outputs,
+            ..
+        } if outputs.is_empty() => format!("Ran {plugin} {operation}"),
         Op::ToolRun {
             plugin,
             operation,

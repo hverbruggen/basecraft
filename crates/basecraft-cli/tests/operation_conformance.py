@@ -343,6 +343,28 @@ def main():
         assert not (project / "disconnect.json").exists()
         record("MCP EOF cancels outstanding owned operation")
 
+        # Python drives the shared support import over MCP; its file report is
+        # the CLI history report (revision IDs name the reading session).
+        from basecraft.session import Session
+        (project / "target.nwk").write_text("((A:1,B:1)90:1,(C:1,D:1)80:1);")
+        (project / "support.nwk").write_text("((A:1,B:1)75:1,(C:1,D:1)60:1);")
+        with Session(project, writes=True) as session:
+            tree = session.open("target.nwk")["document"]
+            imported = session.import_support(tree, "support.nwk", "Bootstrap")
+            assert imported["added"] == ["Bootstrap"] and imported["matched"] == 2, imported
+            session.save(tree)
+            python_record = session.file_record("target.nwk")
+        cli_record, _ = cli("history", str(project / "target.nwk"), "--json")
+        for report in (python_record, cli_record):
+            assert any(row["summary"] == "Ran basecraft.tree import_support"
+                       for row in report["history"]), report["history"]
+        assert ([row["summary"] for row in python_record["history"]]
+                == [row["summary"] for row in cli_record["history"]])
+        assert python_record["methods"] == cli_record["methods"]
+        subprocess.run([str(binary), "provenance", "verify", str(project / "target.nwk")],
+                       cwd=root, env=env, capture_output=True, timeout=45, check=True)
+        record("Python support import over MCP; file_record matches CLI history")
+
         readonly = Mcp(binary, project, env, writable=False)
         try:
             assert not any(tool["name"] == name for tool in readonly.tools())

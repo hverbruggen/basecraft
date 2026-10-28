@@ -1609,7 +1609,10 @@ impl qobject::GenomeController {
     }
 
     /// Returns how many features were added and how many proposals were
-    /// already annotated.
+    /// already annotated. Runs the plugin's registered sequence operation
+    /// through the shared job runner, so the run keeps its submitted snapshot,
+    /// effective settings and package pins in the folder's hidden analysis
+    /// store and records them in the document's history.
     fn run_plugin(
         mut self: Pin<&mut Self>,
         name: &str,
@@ -1617,71 +1620,82 @@ impl qobject::GenomeController {
         mut params: serde_json::Value,
         range: Option<(u64, u64)>,
     ) -> Result<(usize, usize), String> {
-        use basecraft_plugin_host::{Manifest, PluginProcess, Snapshot};
-        let dir = plugin_dir(name);
-        let manifest = Manifest::load(&dir).map_err(|e| format!("{e} ({})", dir.display()))?;
-        let mut plugin = PluginProcess::spawn(&manifest).map_err(|e| e.to_string())?;
-        let actor = basecraft_protocol::Actor::Plugin {
-            id: plugin.info.id.clone(),
-            version: plugin.info.version.clone(),
+        use basecraft_plugin_host::{
+            jobs::JobManager,
+            policy::SessionPolicy,
+            registry::{Registry, RegistryConfig},
         };
-        let (snap, generation, doc_key, session_id) = {
-            let r = self.rust();
-            let (Some(session), Some(doc)) = (&r.session, r.doc) else {
-                return Err("no open file".into());
-            };
-            if let Some((a, b)) = range {
-                params["start"] = json!(a);
-                params["end"] = json!(b);
-            }
-            let checked = session.checked_sequence(doc).map_err(|e| e.to_string())?;
-            (
-                Snapshot::of(session.doc_key(doc), checked).map_err(|e| e.to_string())?,
-                session.generation(doc),
-                session.doc_key(doc).to_owned(),
-                session.id().to_owned(),
-            )
-        };
-        let result = plugin
-            .invoke(operation, params, Some(&snap))
+        use basecraft_protocol::operation::{InputReference, OperationRequest, RuntimeState};
+        let id = basecraft_plugin_host::Manifest::load(&plugin_dir(name))
+            .map_err(|e| e.to_string())?
+            .id;
+        let registry = RegistryConfig::discover()
+            .and_then(|config| Registry::load(&config))
             .map_err(|e| e.to_string())?;
-        let (report, known) = {
+        let registered = registry
+            .operations
+            .values()
+            .find(|op| op.package.manifest.id == id && op.descriptor.name == operation)
+            .ok_or_else(|| format!("{id} has no registered {operation} operation"))?;
+        let binding = registered
+            .descriptor
+            .inputs
+            .keys()
+            .next()
+            .ok_or("operation declares no snapshot input")?
+            .clone();
+        let operation_id = registered.id.clone();
+        if let Some((a, b)) = range {
+            params["start"] = json!(a);
+            params["end"] = json!(b);
+        }
+        let outcome = {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
             let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
-                return Err("annotation target closed; proposals were not applied".into());
+                return Err("no open file".into());
             };
-            if session.doc_key(doc) != doc_key || session.id() != session_id {
-                return Err("annotation target changed; proposals were not applied".into());
-            }
-            let found = result.ops.len();
-            let ops: Vec<Op> = result
-                .ops
-                .into_iter()
-                .filter(|op| match op {
-                    Op::FeatureAdd { feature } => !session
-                        .doc(doc)
-                        .features()
-                        .any(|(_, f)| f.kind == feature.kind && f.location == feature.location),
-                    _ => true,
-                })
-                .collect();
-            let known = found - ops.len();
-            session
-                .apply_sequence_proposals(doc, generation, snap.version, &ops, &actor)
+            let revision = session
+                .checked_sequence(doc)
+                .map_err(|e| e.to_string())?
+                .version();
+            let request = OperationRequest {
+                operation: operation_id,
+                inputs: [(
+                    binding,
+                    vec![InputReference::Document {
+                        doc: doc.0.to_string(),
+                        generation: session.generation(doc),
+                        revision,
+                    }],
+                )]
+                .into(),
+                parameters: params,
+                destinations: std::collections::BTreeMap::default(),
+                pins: None,
+                request_key: None,
+            };
+            let policy = SessionPolicy::new(session.root(), true).map_err(|e| e.to_string())?;
+            let mut jobs = JobManager::default().skipping_known_features();
+            let accepted = jobs
+                .submit_in_session(&registry, request, policy, "GUI", session)
                 .map_err(|e| e.to_string())?;
-            (
-                basecraft_plugin_host::apply::Report {
-                    applied: ops.len(),
-                    dropped: 0,
-                },
-                known,
-            )
+            jobs.wait_in_session(&accepted.run_id, session, &|| false)
+                .map_err(|e| e.to_string())?
         };
-        if report.applied > 0 {
+        if outcome.state != RuntimeState::Completed {
+            return Err(outcome.errors.first().map_or_else(
+                || format!("run ended {:?}", outcome.state),
+                |error| error.message.clone(),
+            ));
+        }
+        let (applied, known) = outcome
+            .proposals
+            .map_or((0, 0), |p| (p.applied, p.rejected.len()));
+        if applied > 0 {
             self.as_mut().set_dirty(true);
         }
-        Ok((report.applied, known))
+        Ok((applied, known))
     }
 
     /// The selected bases. A selected annotation is copied as itself:

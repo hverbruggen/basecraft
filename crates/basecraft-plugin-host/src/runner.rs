@@ -804,12 +804,7 @@ impl PreparedOperation {
             }
         }
         if let Some(target) = &sequence {
-            let mut payload = Vec::new();
-            let residues = target.snapshot.residues.map()?;
-            let features = target.snapshot.features.map()?;
-            payload.extend_from_slice(&(residues.len() as u64).to_le_bytes());
-            payload.extend_from_slice(&residues);
-            payload.extend_from_slice(&features);
+            let payload = target.snapshot.payload()?;
             let mut dependencies = sources_from_upstream(run.directory())?;
             dependencies.extend(target.dependencies.iter().cloned());
             input_evidence::link_generated_input(

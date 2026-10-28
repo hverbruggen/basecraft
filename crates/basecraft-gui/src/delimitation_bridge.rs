@@ -968,17 +968,15 @@ impl qobject::DelimitationController {
                     _ => None,
                 };
                 let mut this = self;
+                // A new hypothesis and its column undo as one step.
+                this.as_mut().set_group(created.is_some());
                 if this.as_mut().edit(edit).is_ok() {
                     if let Some(id) = created {
                         this.as_mut().activate(&QString::from(&id));
-                        let state = this.rust();
-                        if let Some((session, doc)) = state.session.as_ref().zip(state.doc) {
-                            let mut view = session.delimitation(doc).view.clone();
-                            view.visible.push(id);
-                            let _ = this.edit(DelimitationEdit::SetView { view });
-                        }
+                        this.as_mut().show_created(id);
                     }
                 }
+                this.set_group(false);
             }
             Err(e) => self.fail(&e),
         }
@@ -1289,14 +1287,29 @@ impl qobject::DelimitationController {
             DelimitationEdit::SaveCut { hypothesis, .. } => hypothesis.id.clone(),
             _ => return,
         };
+        self.as_mut().set_group(true);
         if self.as_mut().edit(edit).is_ok() {
             self.as_mut().cancel_cut();
             self.as_mut().activate(&QString::from(&created));
-            let state = self.rust();
-            if let Some((session, doc)) = state.session.as_ref().zip(state.doc) {
-                let mut view = session.delimitation(doc).view.clone();
-                view.visible.push(created);
-                let _ = self.edit(DelimitationEdit::SetView { view });
+            self.as_mut().show_created(created);
+        }
+        self.set_group(false);
+    }
+    /// Show a hypothesis just created, within the caller's undo group.
+    fn show_created(self: Pin<&mut Self>, id: String) {
+        let state = self.rust();
+        if let Some((session, doc)) = state.session.as_ref().zip(state.doc) {
+            let mut view = session.delimitation(doc).view.clone();
+            view.visible.push(id);
+            let _ = self.edit(DelimitationEdit::SetView { view });
+        }
+    }
+    fn set_group(mut self: Pin<&mut Self>, open: bool) {
+        if let Some(session) = self.as_mut().rust_mut().session.as_mut() {
+            if open {
+                session.begin_group();
+            } else {
+                session.end_group();
             }
         }
     }
@@ -1333,10 +1346,13 @@ impl qobject::DelimitationController {
         let result = {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
+            // Saving to the opened path is an ordinary save, so a workspace
+            // opened through a symbolic link updates its file, not the link.
+            let target = (path != &r.file_path).then(|| PathBuf::from(path.to_string()));
             r.session
                 .as_mut()
                 .zip(r.doc)
-                .map(|(s, d)| s.save(d, Some(Path::new(&path.to_string()))))
+                .map(|(s, d)| s.save(d, target.as_deref()))
         };
         match result {
             Some(Ok(())) => {

@@ -20,6 +20,8 @@ use basecraft_protocol::{Actor, DocState, Feature, LogEntry, Op, OpResult};
 use crate::error::invalid;
 use crate::files::{self, HashingWriter, Loaded, Opened, OpenedAlignment, OpenedTree};
 use crate::log::LogWriter;
+
+pub mod support_import;
 use crate::{Error, Result};
 
 /// Typing within this interval, at the end of the previous insertion,
@@ -86,6 +88,12 @@ struct Pending {
 pub struct Outcome {
     pub entry_id: String,
     pub feature: Option<FeatureId>,
+}
+
+/// Target-save and evidence locks held while writing an export or extract.
+struct DerivedTarget {
+    _target: Option<std::fs::File>,
+    _evidence: std::fs::File,
 }
 
 pub struct Session {
@@ -446,6 +454,11 @@ impl Session {
     // Open and save.
 
     pub fn open(&mut self, path: &Path) -> Result<DocId> {
+        if crate::sanger_review::evidence_kind(path).is_some() {
+            return Err(invalid(
+                "Saved Sanger reviews and drafts are edited only in the Basecraft application; read a saved Sanger review's history, methods and provenance with the history, methods and provenance commands",
+            ));
+        }
         self.flush()?;
         let disk_stamp = crate::input_evidence::stamp(path)?;
         let accepted_hash = basecraft_io::hash_file(path)?;
@@ -741,7 +754,7 @@ impl Session {
     /// Persist newly recorded history for an already saved document without
     /// rewriting its data or sidecars. Uses the ordinary guarded save publisher.
     pub fn save_history(&mut self, id: DocId) -> Result<()> {
-        self.save_with_evidence_mode(id, None, crate::input_evidence::SavePolicy::Cancel, true)
+        self.save_checked(id, None, crate::input_evidence::SavePolicy::Cancel, true, true)
     }
 
     /// Headless callers choose a policy explicitly; default save returns a structured conflict.
@@ -751,16 +764,31 @@ impl Session {
         path: Option<&Path>,
         policy: crate::input_evidence::SavePolicy,
     ) -> Result<()> {
-        self.save_with_evidence_mode(id, path, policy, false)
+        self.save_checked(id, path, policy, true, false)
     }
 
-    fn save_with_evidence_mode(
+    /// Save to the document's own file, or Save As to a destination that must
+    /// not exist yet. For callers without an overwrite confirmation (agents,
+    /// scripts): an existing other file is refused, never replaced.
+    pub fn save_new(&mut self, id: DocId, path: Option<&Path>) -> Result<()> {
+        self.save_checked(id, path, crate::input_evidence::SavePolicy::Cancel, false, false)
+    }
+
+    /// Any spelling of the document's own file is an ordinary save, so its
+    /// accepted-revision checks apply.
+    fn is_own_file(&self, id: DocId, path: &Path) -> bool {
+        crate::save_guard::same_target(path, &self.resolve(&self.docs[id.0].key))
+    }
+
+    fn save_checked(
         &mut self,
         id: DocId,
         path: Option<&Path>,
         policy: crate::input_evidence::SavePolicy,
+        overwrite: bool,
         history_only: bool,
     ) -> Result<()> {
+        let path = path.filter(|p| !self.is_own_file(id, p));
         let target = path.map_or_else(|| self.resolve(&self.docs[id.0].key), Path::to_path_buf);
         let clean = (history_only || (self.log.is_some() && path.is_none()))
             && self.save_hashes(id)? == self.docs[id.0].saved_state_hashes;
@@ -777,6 +805,9 @@ impl Session {
         } else {
             None
         };
+        if !overwrite && path.is_some() {
+            crate::save_guard::Revision::check(None, &target)?;
+        }
         let _evidence_lock = crate::input_evidence::lock()?;
         if !history_only {
             let conflict = crate::input_evidence::conflicts(&target)?;
@@ -1596,6 +1627,35 @@ impl Session {
         crate::provenance::publish(&bundle, &publication)
     }
 
+    /// Reserve an export/extract destination like a save target. Replacing an
+    /// open document's own file would discard its accepted revision.
+    /// Known-input conflicts are resolved first, under both locks.
+    fn derived_target(&self, path: &Path) -> Result<DerivedTarget> {
+        let target = if self.tracked {
+            Some(crate::save_guard::lock(path)?)
+        } else {
+            None
+        };
+        let evidence = crate::input_evidence::lock()?;
+        crate::input_evidence::resolve(
+            &crate::input_evidence::conflicts(path)?,
+            crate::input_evidence::SavePolicy::Cancel,
+        )?;
+        if self
+            .docs
+            .iter()
+            .any(|slot| crate::save_guard::same_target(path, &self.resolve(&slot.key)))
+        {
+            return Err(invalid(
+                "this destination is an open document; choose another file",
+            ));
+        }
+        Ok(DerivedTarget {
+            _target: target,
+            _evidence: evidence,
+        })
+    }
+
     /// Extract residues `start..end` with their annotations to a new
     /// GenBank file at `path`, and log it.
     pub fn extract(
@@ -1606,11 +1666,7 @@ impl Session {
         reverse: bool,
         path: &Path,
     ) -> Result<()> {
-        let _evidence_lock = crate::input_evidence::lock()?;
-        crate::input_evidence::resolve(
-            &crate::input_evidence::conflicts(path)?,
-            crate::input_evidence::SavePolicy::Cancel,
-        )?;
+        let _reserved = self.derived_target(path)?;
         self.track(id)?;
         self.flush()?;
         let doc = &self.sequence_of(id)?.doc;
@@ -1730,11 +1786,7 @@ impl Session {
         format: &str,
         f: impl FnOnce(&mut dyn std::io::Write) -> std::io::Result<()>,
     ) -> Result<()> {
-        let _evidence_lock = crate::input_evidence::lock()?;
-        crate::input_evidence::resolve(
-            &crate::input_evidence::conflicts(path)?,
-            crate::input_evidence::SavePolicy::Cancel,
-        )?;
+        let _reserved = self.derived_target(path)?;
         self.track(id)?;
         self.flush()?;
         let mut hash = String::new();

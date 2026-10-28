@@ -193,16 +193,11 @@ pub fn run_foreground(
                 ));
             }
         };
-    loop {
-        manager.poll_session(session);
-        if basecraft_platform::interrupt::interrupted() {
-            manager.cancel(&accepted.run_id)?;
-        }
-        let outcome = manager.get(&accepted.run_id)?;
-        if outcome.state.terminal() {
-            let target = manager.target_document(&accepted.run_id);
-            return Ok((serde_json::to_value(outcome)?, target));
-        }
-        std::thread::sleep(std::time::Duration::from_millis(25));
-    }
+    let outcome = manager.wait_in_session(
+        &accepted.run_id,
+        session,
+        &basecraft_platform::interrupt::interrupted,
+    )?;
+    let target = manager.target_document(&accepted.run_id);
+    Ok((serde_json::to_value(outcome)?, target))
 }
