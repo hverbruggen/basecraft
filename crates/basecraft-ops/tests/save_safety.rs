@@ -194,6 +194,9 @@ fn fill(folder: &Path) -> PathBuf {
     filler
 }
 
+/// Tests filling the shared small file system take turns.
+static FULL_DISK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Real ENOSPC on a small dedicated file system. The focused build-host runner
 /// mounts one and sets this variable; without it there is nothing to fill.
 fn full_disk_folder(name: &str) -> Option<PathBuf> {
@@ -205,6 +208,7 @@ fn full_disk_folder(name: &str) -> Option<PathBuf> {
 
 #[test]
 fn full_disk_save_keeps_original_and_retries_after_space_returns() {
+    let _turn = FULL_DISK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some(data) = full_disk_folder("save") else {
         eprintln!("skipped: BASECRAFT_TEST_FULL_DIR is not set");
         return;
@@ -231,6 +235,7 @@ fn full_disk_save_keeps_original_and_retries_after_space_returns() {
 
 #[test]
 fn full_disk_journal_append_rolls_back_and_keeps_a_recoverable_prefix() {
+    let _turn = FULL_DISK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some(full) = full_disk_folder("journal") else {
         eprintln!("skipped: BASECRAFT_TEST_FULL_DIR is not set");
         return;
