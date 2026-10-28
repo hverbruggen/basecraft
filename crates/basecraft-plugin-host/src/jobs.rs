@@ -32,6 +32,9 @@ struct Job {
     // Set once a document-bound run is published; the owning session then
     // records it in the document's history and completes the job.
     document_pending: AtomicBool,
+    // A document-bound run logs its terminal state in that document's history once.
+    document_finished: AtomicBool,
+    started: std::time::Instant,
     worker: Mutex<Option<JoinHandle<()>>>,
     proposals: Mutex<Option<PendingProposals>>,
 }
@@ -80,35 +83,55 @@ impl JobManager {
             let Some(target) = &job.prepared.document else {
                 continue;
             };
-            if target.session != session.id() || !job.document_pending.swap(false, Ordering::AcqRel)
-            {
+            if target.session != session.id() {
                 continue;
+            }
+            if job.document_pending.swap(false, Ordering::AcqRel) {
+                let outcome = job
+                    .outcome
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone();
+                match record_document_run(job, target, &outcome, session) {
+                    Ok(()) => {
+                        let mut outcome = job
+                            .outcome
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        outcome.state = RuntimeState::Completed;
+                        if let Err(error) = job.prepared.persist(&outcome) {
+                            drop(outcome);
+                            fail(
+                                job,
+                                OperationErrorCode::EvidenceIncomplete,
+                                error.to_string(),
+                            );
+                        }
+                    }
+                    Err(error) => fail(
+                        job,
+                        OperationErrorCode::EvidenceIncomplete,
+                        error.to_string(),
+                    ),
+                }
             }
             let outcome = job
                 .outcome
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .clone();
-            if let Err(error) = record_document_run(job, target, &outcome, session) {
-                fail(
-                    job,
-                    OperationErrorCode::EvidenceIncomplete,
-                    error.to_string(),
-                );
-                continue;
-            }
-            let mut outcome = job
-                .outcome
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            outcome.state = RuntimeState::Completed;
-            if let Err(error) = job.prepared.persist(&outcome) {
-                drop(outcome);
-                fail(
-                    job,
-                    OperationErrorCode::EvidenceIncomplete,
-                    error.to_string(),
-                );
+            if outcome.state.terminal() && !job.document_finished.swap(true, Ordering::AcqRel) {
+                if let Err(error) = record_document_finished(job, target, &outcome, session) {
+                    // The run's own evidence is complete; only the history entry is missing.
+                    let mut outcome = job
+                        .outcome
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    outcome
+                        .warnings
+                        .push(format!("Run not recorded in document history: {error}"));
+                    let _ = job.prepared.persist(&outcome);
+                }
             }
         }
     }
@@ -305,6 +328,8 @@ impl JobManager {
             cancelled: Arc::new(AtomicBool::new(false)),
             proposal_activity_recorded: AtomicBool::new(false),
             document_pending: AtomicBool::new(false),
+            document_finished: AtomicBool::new(false),
+            started: std::time::Instant::now(),
             worker: Mutex::new(None),
             proposals: Mutex::new(None),
         });
@@ -706,6 +731,50 @@ fn record_document_run(
         session.log_referenced_tool_run(target.doc, actor, operation, params, inputs, &outputs)?;
     } else {
         session.log_tool_run(target.doc, actor, operation, params, inputs, &outputs)?;
+    }
+    Ok(())
+}
+
+/// The terminal state of a run that read a session document, with its outputs
+/// and diagnostics, as the document history records every analysis attempt.
+fn record_document_finished(
+    job: &Job,
+    target: &crate::runner::DocumentTarget,
+    outcome: &OperationOutcome,
+    session: &mut basecraft_ops::Session,
+) -> Result<()> {
+    use basecraft_protocol::delimitation::{JobRecord, JobStatus};
+    if !session.is_open(target.doc) || session.generation(target.doc) != target.generation {
+        return Err(Error::Protocol(
+            "input document was closed or replaced".into(),
+        ));
+    }
+    let report = JobRecord {
+        id: outcome.run_id.clone(),
+        generation: target.generation,
+        status: match outcome.state {
+            RuntimeState::Completed => JobStatus::Completed,
+            RuntimeState::Cancelled => JobStatus::Cancelled,
+            _ => JobStatus::Failed,
+        },
+        method: job.prepared.operation.descriptor.implementation.clone(),
+        inputs: std::iter::once(target.input.clone()).collect(),
+        outputs: outcome
+            .artifacts
+            .iter()
+            .map(|artifact| (artifact.path.clone(), artifact.digest.clone()))
+            .collect(),
+        diagnostics: outcome
+            .errors
+            .iter()
+            .map(|error| error.message.clone())
+            .collect(),
+        elapsed_seconds: job.started.elapsed().as_secs_f64(),
+    };
+    if target.saved.is_some() {
+        session.log_referenced_job_finished(target.doc, report)?;
+    } else {
+        session.log_job_finished(target.doc, report)?;
     }
     Ok(())
 }

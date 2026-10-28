@@ -670,6 +670,39 @@ fn document_inputs_read_the_session_revision_and_record_history() {
         })
         .collect();
     assert_eq!(runs, [clean.run_id.as_str(), edited.run_id.as_str()]);
+    let finished: Vec<_> = record
+        .events
+        .iter()
+        .filter_map(|event| match &event.op {
+            basecraft_protocol::Op::JobFinished { report } => {
+                Some((report.id.as_str(), report.status.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        finished,
+        [
+            (
+                clean.run_id.as_str(),
+                basecraft_protocol::delimitation::JobStatus::Completed
+            ),
+            (
+                edited.run_id.as_str(),
+                basecraft_protocol::delimitation::JobStatus::Completed
+            )
+        ]
+    );
+    // A failed document-bound run is recorded as an attempt, without a result.
+    let request = json!({"operation":"org.example.registry-fixture/count@1","inputs":{"sources":document(&session)},
+            "parameters":{"mode":"fail"},"destinations":{"report":"failed.json"}});
+    let failed = run_in_session(&mut manager, &registry, &mut session, request);
+    assert_eq!(failed.state, RuntimeState::Failed, "{failed:?}");
+    let record = session.document_record(doc).unwrap();
+    assert!(record.events.iter().any(|event| matches!(&event.op,
+        basecraft_protocol::Op::JobFinished { report }
+            if report.id == failed.run_id
+                && report.status == basecraft_protocol::delimitation::JobStatus::Failed)));
     // A request pinned to an older revision is refused before anything runs.
     let stale = manager.submit_in_session(
         &registry,
