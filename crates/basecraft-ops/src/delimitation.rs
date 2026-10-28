@@ -245,14 +245,20 @@ pub fn add_analysis_result(
     for edit in &edits {
         basecraft_docs::delimitation::apply(&mut checked, edit).map_err(|e| invalid(e.0))?;
     }
-    for edit in edits {
-        session.apply(
-            doc,
-            Op::DelimitationEdit {
-                edit: Box::new(edit),
-            },
-        )?;
-    }
+    // One analysis result is one undo step: its hypotheses and their columns.
+    session.begin_group();
+    let applied = edits.into_iter().try_for_each(|edit| {
+        session
+            .apply(
+                doc,
+                Op::DelimitationEdit {
+                    edit: Box::new(edit),
+                },
+            )
+            .map(|_| ())
+    });
+    session.end_group();
+    applied?;
     Ok(value)
 }
 
