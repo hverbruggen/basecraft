@@ -208,9 +208,14 @@ impl Registry {
                 let digest = package_digest(&path)?;
                 let enabled = !index.disabled.contains(&manifest.id);
                 let interpreter = if manifest.runtime.is_some() {
-                    let directory = index.active.get(&manifest.id);
+                    let key = runtime_key(&manifest.id, &digest);
+                    let directory = if origin == Origin::Bundled {
+                        Some(&key)
+                    } else {
+                        index.active.get(&manifest.id)
+                    };
                     let runtime = directory.and_then(|d| index.runtimes.get(d)).filter(|r| {
-                        origin == Origin::Managed && r.package_digest == digest
+                        matches!(origin, Origin::Managed | Origin::Bundled) && r.package_digest == digest
                     }).ok_or_else(|| Error::Protocol("managed plugin runtime unavailable; install or reinstall this package to provision dependencies".into()))?;
                     runtime.verify()?;
                     manifest.managed_runtime = Some(runtime.clone());
@@ -403,6 +408,69 @@ fn write_index(
     basecraft_io::write_atomic(&config.index, |out| std::io::Write::write_all(out, &bytes))
         .map_err(basecraft_ops::Error::from)?;
     Ok(())
+}
+
+fn runtime_key(id: &str, digest: &str) -> String {
+    format!("{id}-{}", digest.replace(':', "-"))
+}
+
+/// Explicit deployment step for bundled dependencies, shared by GUI/CLI/MCP
+/// embedders. Registry discovery remains read-only and never accesses a network.
+/// The digest key retains side-by-side selections for older bundles/jobs.
+pub fn provision_bundled(config: &RegistryConfig, id: &str) -> Result<()> {
+    provision_bundled_with_pixi(config, id, &crate::runtime::pixi())
+}
+
+pub fn provision_bundled_with_pixi(config: &RegistryConfig, id: &str, pixi: &Path) -> Result<()> {
+    contract::validate_plugin_id(id)?;
+    let source = std::fs::read_dir(&config.bundled)?
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| entry.path().is_dir())
+        .filter_map(|entry| Manifest::load(&entry.path()).ok())
+        .filter(|manifest| manifest.id == id)
+        .collect::<Vec<_>>();
+    if source.len() != 1 {
+        return Err(Error::Protocol(
+            "expected one bundled package with this identity".into(),
+        ));
+    }
+    let manifest = &source[0];
+    let spec = manifest
+        .runtime
+        .as_ref()
+        .ok_or_else(|| Error::Protocol("bundled package has no declared runtime".into()))?;
+    if spec.lock.is_none() {
+        return Err(Error::Protocol(
+            "bundled dependencies require a frozen runtime lock; no latest fallback".into(),
+        ));
+    }
+    let digest = package_digest(&manifest.dir)?;
+    let key = runtime_key(id, &digest);
+    if let Some(runtime) = load_index(config)?.runtimes.get(&key) {
+        if runtime.package_digest != digest {
+            return Err(Error::Protocol(
+                "bundled runtime package digest mismatch".into(),
+            ));
+        }
+        runtime.verify()?;
+        return Ok(());
+    }
+    let root = config
+        .packages
+        .parent()
+        .ok_or_else(|| Error::Protocol("packages need parent directory".into()))?
+        .join("plugin-runtimes");
+    let runtime = crate::runtime::provision_with(manifest, &digest, &root, pixi)?
+        .ok_or_else(|| Error::Protocol("bundled runtime missing".into()))?;
+    if package_digest(&manifest.dir)? != digest {
+        return Err(Error::Protocol(
+            "plugin_changed: bundled package changed during provisioning".into(),
+        ));
+    }
+    write_index(config, |index| {
+        index.runtimes.insert(key, runtime);
+        Ok(())
+    })
 }
 
 /// The caller displays `INSTALL_WARNING` during the explicit install action.

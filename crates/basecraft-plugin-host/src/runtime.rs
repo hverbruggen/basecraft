@@ -1,5 +1,6 @@
 //! Install-time Pixi provisioning. Discovery only reads retained receipts/locks.
 use std::collections::BTreeMap;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -22,7 +23,20 @@ pub struct RuntimeSpec {
     /// Commands checked within the selected environment, never on ambient PATH.
     #[serde(default)]
     pub executables: Vec<String>,
+    /// Package-relative frozen Pixi lock. Install never updates this selection.
+    #[serde(default)]
+    pub lock: Option<String>,
+    /// Exact trimmed stdout+stderr, captured on the selected native build.
+    #[serde(default)]
+    pub version_checks: BTreeMap<String, VersionCheck>,
 }
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct VersionCheck {
+    pub args: Vec<String>,
+    pub expected: String,
+}
+
 fn channels() -> Vec<String> {
     vec!["conda-forge".into()]
 }
@@ -57,6 +71,31 @@ impl RuntimeSpec {
                 ));
             }
         }
+        if self.version_checks.len() > 128
+            || self.version_checks.iter().any(|(command, check)| {
+                !self.executables.contains(command)
+                    || check.args.len() > 16
+                    || check
+                        .args
+                        .iter()
+                        .any(|a| a.len() > 256 || a.chars().any(char::is_control))
+                    || check.expected.is_empty()
+                    || check.expected.len() > 8192
+            })
+        {
+            return Err(Error::Protocol("invalid runtime version checks".into()));
+        }
+        if let Some(lock) = &self.lock
+            && (lock.is_empty()
+                || lock.len() > 256
+                || Path::new(lock)
+                    .components()
+                    .any(|c| !matches!(c, std::path::Component::Normal(_))))
+        {
+            return Err(Error::Protocol(
+                "runtime lock must be a package-relative path".into(),
+            ));
+        }
         // These are shared SDK dependencies. Mixing conda and PyPI ownership of
         // them can overwrite the solver's Python/Arrow ABI choices.
         if self.pypi_dependencies.keys().any(|p| {
@@ -89,6 +128,7 @@ impl RuntimeSpec {
             ("linux", "aarch64") => "linux-aarch64",
             ("macos", "aarch64") => "osx-arm64",
             ("macos", "x86_64") => "osx-64",
+            ("windows", "x86_64") => "win-64",
             _ => {
                 return Err(Error::Protocol(
                     "managed plugin runtime unsupported on this platform".into(),
@@ -116,6 +156,10 @@ pub struct Runtime {
     pub lock_digest: String,
     pub manifest_digest: String,
     pub package_digest: String,
+    #[serde(default)]
+    pub reported_versions: BTreeMap<String, String>,
+    #[serde(default)]
+    pub executable_digests: BTreeMap<String, String>,
 }
 impl Runtime {
     pub fn verify(&self) -> Result<()> {
@@ -127,7 +171,7 @@ impl Runtime {
         if self.schema != 1
             || self.executables.iter().any(|n| !name(n))
             || !self.root.is_absolute()
-            || self.interpreter != self.root.join(".pixi/envs/default/bin/python")
+            || self.interpreter != interpreter_path(&self.root)
         {
             return Err(Error::Protocol(
                 "invalid managed runtime prefix; reinstall the plugin".into(),
@@ -136,16 +180,22 @@ impl Runtime {
         for executable in std::iter::once(self.interpreter.clone()).chain(
             self.executables
                 .iter()
-                .map(|n| self.root.join(".pixi/envs/default/bin").join(n)),
+                .map(|n| executable_path(&self.root, n)),
         ) {
-            if !executable
-                .metadata()
-                .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-            {
+            if !executable.metadata().is_ok_and(|m| is_executable(&m)) {
                 return Err(Error::Protocol(format!(
                     "managed plugin runtime executable missing or not executable: {}; reinstall the plugin",
                     executable.display()
                 )));
+            }
+        }
+        for (command, digest) in &self.executable_digests {
+            if !self.executables.contains(command)
+                || hash(executable_path(&self.root, command))? != *digest
+            {
+                return Err(Error::Protocol(
+                    "managed runtime executable changed; reinstall the plugin".into(),
+                ));
             }
         }
         if !self.interpreter.is_file()
@@ -165,6 +215,56 @@ impl Runtime {
             ));
         }
         Ok(())
+    }
+}
+
+fn environment_paths(root: &Path) -> Vec<PathBuf> {
+    let prefix = root.join(".pixi/envs/default");
+    if cfg!(windows) {
+        vec![
+            prefix.clone(),
+            prefix.join("Scripts"),
+            prefix.join("Library/bin"),
+        ]
+    } else {
+        vec![prefix.join("bin")]
+    }
+}
+fn interpreter_path(root: &Path) -> PathBuf {
+    if cfg!(windows) {
+        root.join(".pixi/envs/default/python.exe")
+    } else {
+        root.join(".pixi/envs/default/bin/python")
+    }
+}
+fn executable_path(root: &Path, name: &str) -> PathBuf {
+    let file = if cfg!(windows) && !name.ends_with(".exe") {
+        format!("{name}.exe")
+    } else {
+        name.to_owned()
+    };
+    let paths = environment_paths(root);
+    paths
+        .iter()
+        .map(|p| p.join(&file))
+        .find(|p| p.is_file())
+        .unwrap_or_else(|| {
+            let prefix = root.join(".pixi/envs/default");
+            if cfg!(windows) {
+                prefix.join(file)
+            } else {
+                prefix.join("bin").join(file)
+            }
+        })
+}
+fn is_executable(metadata: &std::fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        metadata.is_file()
     }
 }
 
@@ -213,6 +313,21 @@ pub fn provision_with(
         .tempdir_in(root)?;
     let project = pending.path().join("pixi.toml");
     std::fs::write(&project, spec.manifest()?)?;
+    let frozen_lock_digest = if let Some(lock) = &spec.lock {
+        let source = manifest.dir.join(lock).canonicalize()?;
+        if !source.starts_with(manifest.dir.canonicalize()?) {
+            return Err(Error::Protocol(
+                "runtime lock escapes plugin package".into(),
+            ));
+        }
+        std::fs::copy(source, pending.path().join("pixi.lock"))?;
+        Some(
+            basecraft_io::hash_file(&pending.path().join("pixi.lock"))
+                .map_err(basecraft_ops::Error::from)?,
+        )
+    } else {
+        None
+    };
     // Override detached user environments. No source-provided Pixi config,
     // tasks, activation hooks, global pip or shell commands are accepted.
     std::fs::create_dir(pending.path().join(".pixi"))?;
@@ -233,12 +348,24 @@ pub fn provision_with(
             "disabled",
         ])
         .current_dir(pending.path());
+    if spec.lock.is_some() {
+        install.arg("--locked");
+    }
     checked(
         &mut install,
         Duration::from_secs(1800),
         "plugin dependency installation (Pixi must be included in the Basecraft installation)",
     )?;
-    let interpreter = pending.path().join(".pixi/envs/default/bin/python");
+    if let Some(digest) = frozen_lock_digest
+        && digest
+            != basecraft_io::hash_file(&pending.path().join("pixi.lock"))
+                .map_err(basecraft_ops::Error::from)?
+    {
+        return Err(Error::Protocol(
+            "frozen runtime lock changed during installation".into(),
+        ));
+    }
+    let interpreter = interpreter_path(pending.path());
     if !interpreter.is_file() {
         return Err(Error::Protocol(
             "Pixi did not install the declared plugin interpreter".into(),
@@ -251,15 +378,38 @@ pub fn provision_with(
     // Verification cannot satisfy commands from ambient PATH.
     verify.env(
         "PATH",
-        interpreter
-            .parent()
-            .ok_or_else(|| Error::Protocol("runtime interpreter needs bin directory".into()))?,
+        std::env::join_paths(environment_paths(pending.path()))
+            .map_err(|e| Error::Protocol(e.to_string()))?,
     );
     checked(
         &mut verify,
         Duration::from_secs(60),
         "plugin dependency verification",
     )?;
+    let mut reported_versions = BTreeMap::new();
+    let mut executable_digests = BTreeMap::new();
+    for command in &spec.executables {
+        let path = executable_path(pending.path(), command);
+        executable_digests.insert(
+            command.clone(),
+            basecraft_io::hash_file(&path).map_err(basecraft_ops::Error::from)?,
+        );
+        if let Some(check) = spec.version_checks.get(command) {
+            // No shell or ambient executable resolution. The Python subprocess
+            // enforces a deadline; the shared owner also bounds the outer job.
+            let mut verify = Command::new(&interpreter);
+            verify.args(["-I", "-c", "import subprocess,sys,json; p=subprocess.run([sys.argv[1]]+json.loads(sys.argv[2]),capture_output=True,text=True,timeout=30); actual=(p.stdout+p.stderr).strip(); assert p.returncode==0 and actual==sys.argv[3], 'runtime version mismatch: '+actual[:8192]"])
+                .arg(path).arg(serde_json::to_string(&check.args)?).arg(&check.expected)
+                .env("PATH", std::env::join_paths(environment_paths(pending.path()))
+                    .map_err(|e| Error::Protocol(e.to_string()))?);
+            checked(
+                &mut verify,
+                Duration::from_secs(40),
+                "plugin exact version verification",
+            )?;
+            reported_versions.insert(command.clone(), check.expected.clone());
+        }
+    }
     let runtime = Runtime {
         schema: 1,
         executables: spec.executables.clone(),
@@ -269,6 +419,8 @@ pub fn provision_with(
             .map_err(basecraft_ops::Error::from)?,
         manifest_digest: basecraft_io::hash_file(&project).map_err(basecraft_ops::Error::from)?,
         package_digest: digest.into(),
+        reported_versions,
+        executable_digests,
     };
     runtime.verify()?;
     basecraft_io::write_atomic(&pending.path().join("runtime.json"), |out| {
@@ -342,7 +494,10 @@ fn checked(command: &mut Command, timeout: Duration, label: &str) -> Result<()> 
 /// Selected environment commands win over package artifacts and ambient tools.
 /// The bundled interpreter follows the same rule as a managed interpreter.
 pub fn configure_command(command: &mut Command, manifest: &Manifest, python: &Path) -> Result<()> {
-    let mut paths = Vec::new();
+    let mut paths = manifest
+        .managed_runtime
+        .as_ref()
+        .map_or_else(Vec::new, |runtime| environment_paths(&runtime.root));
     if python.is_absolute()
         && let Some(bin) = python.parent()
     {

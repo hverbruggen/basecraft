@@ -8,11 +8,12 @@ kinds = ["operation"]
 [entry]
 operation = "python:table2asn_plugin.py"
 
-# Software the plugin needs, as conda specs (ADR 0003). bioconda builds
-# table2asn for linux-64 and osx-64. Until Basecraft builds environments
-# from these, table2asn comes from $BASECRAFT_TABLE2ASN, the Python
-# environment's bin folder, or the PATH. On Windows and arm64 macOS, use
-# NCBI's binary (https://ftp.ncbi.nlm.nih.gov/asn1-converters/by_program/table2asn/)
-# and point BASECRAFT_TABLE2ASN at it.
+# Informational legacy declaration; this does not provision a runtime.
+# Matching-source cross-platform packages are staged in packaging/table2asn.
+# Activate [runtime] only with retained native artifacts, a frozen Pixi lock
+# and exact native version checks. Never turn this into an unpinned solve or
+# silently substitute a mutable upstream download for a requested version.
+# Until activation, the existing explicit override/environment/PATH behaviour
+# remains available; automatic pinned installation is not delivered yet.
 [environment]
 conda = ["bioconda::table2asn"]

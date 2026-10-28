@@ -1,0 +1,11 @@
+# One immutable source candidate for every native target. Not a binary release.
+schema = 1
+toolkit_release = "30.8.0"
+source_commit = "01ab652af9da9d557b1553504d4dcd4db12f5b86"
+source_url = "https://codeload.github.com/ncbi/ncbi-cxx-toolkit-public/tar.gz/01ab652af9da9d557b1553504d4dcd4db12f5b86"
+source_sha256 = "de56c4be23c50d93edf0014e310471be03bb2c8f114b8b414f99149518201d95"
+source_bytes = 62349873
+targets = ["linux-64", "osx-64", "osx-arm64", "win-64"]
+# No target has a validated native artifact yet. Never treat missing artifacts
+# as permission to select a different release or the mutable NCBI downloads.
+validated_targets = []

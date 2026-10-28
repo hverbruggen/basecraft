@@ -47,6 +47,7 @@ fn fake_pixi(root: &Path) -> PathBuf {
             r#"#!/bin/sh
 if [ "$1" = --version ]; then echo 'pixi controlled-test'; exit 0; fi
 if /usr/bin/grep -q impossible pixi.toml; then echo 'solve failed: impossible' >&2; exit 9; fi
+printf '%s\n' "$@" > pixi-args.txt
 mkdir -p .pixi/envs/default/bin
 printf '#!/bin/sh\nexec "{}" "$@"\n' > .pixi/envs/default/bin/python
 printf '#!/bin/sh\necho managed-native\n' > .pixi/envs/default/bin/nativecheck
@@ -291,4 +292,106 @@ fn actual_pixi_installs_and_invokes_declared_runtime() {
     );
     println!("{}", String::from_utf8_lossy(&output.stdout));
     println!("retained disposable profile: {}", temp.keep().display());
+}
+
+#[test]
+fn bundled_frozen_runtime_retains_old_selection_and_rejects_changed_lock_or_version() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut config = config(temp.path());
+    let runtime = DECLARED.replace("[runtime]\n", "[runtime]\nlock = \"runtime.lock\"\n")
+        + "\n[runtime.version-checks.nativecheck]\nargs = [\"--version\"]\nexpected = \"managed-native\"\n";
+    let source = source(temp.path(), &runtime);
+    config.bundled = temp.path().to_owned();
+    std::fs::write(source.join("runtime.lock"), "controlled lock\n").unwrap();
+    let id = Manifest::load(&source).unwrap().id;
+    let before = Registry::load(&config).unwrap();
+    assert!(!before.packages.contains_key(&id));
+    assert!(!config.index.exists());
+    let pixi = fake_pixi(temp.path());
+    registry::provision_bundled_with_pixi(&config, &id, &pixi).unwrap();
+    let first = Registry::load(&config).unwrap();
+    let package = first.packages[&id].clone();
+    let selected = package.manifest.managed_runtime.as_ref().unwrap();
+    assert_eq!(selected.reported_versions["nativecheck"], "managed-native");
+    assert!(selected.executable_digests.contains_key("nativecheck"));
+    assert!(
+        std::fs::read_to_string(selected.root.join("pixi-args.txt"))
+            .unwrap()
+            .lines()
+            .any(|arg| arg == "--locked")
+    );
+    // Reopening an already provisioned bundle does not need Pixi/network.
+    registry::provision_bundled_with_pixi(&config, &id, Path::new("/missing-pixi")).unwrap();
+    let index = std::fs::read(&config.index).unwrap();
+    let manifest = std::fs::read_to_string(source.join("plugin.toml")).unwrap();
+    std::fs::write(
+        source.join("plugin.toml"),
+        manifest.replace("managed-native", "wrong-version"),
+    )
+    .unwrap();
+    let error = registry::provision_bundled_with_pixi(&config, &id, &pixi)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("version mismatch"), "{error}");
+    assert_eq!(index, std::fs::read(&config.index).unwrap());
+    std::fs::write(source.join("plugin.toml"), &manifest).unwrap();
+    std::fs::write(source.join("runtime.lock"), "different frozen lock\n").unwrap();
+    let error = registry::provision_bundled_with_pixi(&config, &id, &pixi)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("frozen runtime lock changed"), "{error}");
+    assert_eq!(index, std::fs::read(&config.index).unwrap());
+    std::fs::write(source.join("runtime.lock"), "controlled lock\n").unwrap();
+    std::fs::write(
+        source.join("plugin.toml"),
+        format!("{manifest}\n# new package revision\n"),
+    )
+    .unwrap();
+    registry::provision_bundled_with_pixi(&config, &id, &pixi).unwrap();
+    let updated = Registry::load(&config).unwrap();
+    let next = updated.packages[&id]
+        .manifest
+        .managed_runtime
+        .as_ref()
+        .unwrap();
+    assert_ne!(selected.root, next.root);
+    selected.verify().unwrap();
+    executable(
+        &selected.root.join(".pixi/envs/default/bin/nativecheck"),
+        "#!/bin/sh\necho changed\n",
+    );
+    assert!(
+        selected
+            .verify()
+            .unwrap_err()
+            .to_string()
+            .contains("executable changed")
+    );
+}
+
+#[test]
+fn bundled_runtime_requires_frozen_lock_and_rejects_traversal() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut config = config(temp.path());
+    let source = source(temp.path(), DECLARED);
+    config.bundled = temp.path().to_owned();
+    let id = Manifest::load(&source).unwrap().id;
+    let error = registry::provision_bundled_with_pixi(&config, &id, Path::new("/missing-pixi"))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("frozen runtime lock"), "{error}");
+    assert!(!config.index.exists());
+    let path = source.join("plugin.toml");
+    let manifest = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(
+        &path,
+        manifest.replace("[runtime]\n", "[runtime]\nlock = \"../outside.lock\"\n"),
+    )
+    .unwrap();
+    assert!(
+        Manifest::load(&source)
+            .unwrap_err()
+            .to_string()
+            .contains("package-relative")
+    );
 }
