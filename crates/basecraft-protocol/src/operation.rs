@@ -144,6 +144,11 @@ pub struct OperationRequest {
     pub pins: Option<OperationPins>,
     #[serde(default)]
     pub request_key: Option<String>,
+    /// A document that records this run in its history and receives its
+    /// results when it is not itself an input, such as a species workspace
+    /// analysing a file it references. Needs an owning session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<InputReference>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

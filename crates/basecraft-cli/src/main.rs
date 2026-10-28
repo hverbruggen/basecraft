@@ -635,6 +635,7 @@ fn run_registered_plugin(
         destinations: std::collections::BTreeMap::default(),
         pins: None,
         request_key: None,
+        target: None,
     };
     let policy = basecraft_plugin_host::policy::SessionPolicy::new(root, true)?;
     let mut session = script_session(root)?;

@@ -104,6 +104,7 @@ impl DocumentJob {
             destinations,
             pins: None,
             request_key: None,
+            target: None,
         };
         let mut manager = JobManager::default();
         let accepted = manager
@@ -117,8 +118,9 @@ impl DocumentJob {
         })
     }
 
-    /// Submit `operation` on project files, recording the run in `target`'s
-    /// history: a species workspace analysing a file it references.
+    /// Submit `operation` on project files with `target` as the request's
+    /// target: a species workspace analysing a file it references receives
+    /// the run in its history and its hypotheses.
     pub fn submit_files(
         session: &mut Session,
         target: DocId,
@@ -155,10 +157,15 @@ impl DocumentJob {
             destinations,
             pins: None,
             request_key: None,
+            target: Some(InputReference::Document {
+                doc: target.0.to_string(),
+                generation: session.generation(target),
+                revision: session.revision(target),
+            }),
         };
         let mut manager = JobManager::default();
         let accepted = manager
-            .submit_for_document(&registry, request, policy, "GUI", session, target)
+            .submit_in_session(&registry, request, policy, "GUI", session)
             .map_err(|error| error.to_string())?;
         Ok(Self {
             manager,

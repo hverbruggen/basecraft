@@ -65,26 +65,6 @@ impl JobManager {
     ) -> Result<OperationOutcome> {
         self.submit_with_session(registry, request, policy, initiator, Some(session))
     }
-    /// Like `submit_in_session`, also recording the run in `target`'s history
-    /// when that document is not itself an input, such as a species workspace.
-    pub fn submit_for_document(
-        &mut self,
-        registry: &Registry,
-        request: OperationRequest,
-        policy: SessionPolicy,
-        initiator: &str,
-        session: &mut basecraft_ops::Session,
-        target: basecraft_ops::DocId,
-    ) -> Result<OperationOutcome> {
-        self.submit_with_target(
-            registry,
-            request,
-            policy,
-            initiator,
-            Some(session),
-            Some(target),
-        )
-    }
     /// Publish the species workspace of a completed run as a new SPART file.
     pub fn publish_workspace(&self, id: &str, destination: &str) -> Result<std::path::PathBuf> {
         let job = self
@@ -131,13 +111,16 @@ impl JobManager {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .clone();
-                match record_document_run(job, target, &outcome, session) {
-                    Ok(()) => {
+                match record_document_run(job, target, &outcome, session)
+                    .and_then(|()| apply_target_results(job, target, &outcome, session))
+                {
+                    Ok(warning) => {
                         let mut outcome = job
                             .outcome
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
                         outcome.state = RuntimeState::Completed;
+                        outcome.warnings.extend(warning);
                         if let Err(error) = job.prepared.persist(&outcome) {
                             drop(outcome);
                             fail(
@@ -301,17 +284,6 @@ impl JobManager {
         initiator: &str,
         session: Option<&mut basecraft_ops::Session>,
     ) -> Result<OperationOutcome> {
-        self.submit_with_target(registry, request, policy, initiator, session, None)
-    }
-    fn submit_with_target(
-        &mut self,
-        registry: &Registry,
-        request: OperationRequest,
-        policy: SessionPolicy,
-        initiator: &str,
-        mut session: Option<&mut basecraft_ops::Session>,
-        target: Option<basecraft_ops::DocId>,
-    ) -> Result<OperationOutcome> {
         let descriptor = request
             .request_key
             .as_ref()
@@ -348,20 +320,14 @@ impl JobManager {
             .clone();
         let pins = operation.pins(&registry.generation);
         let key = request.request_key.clone();
-        let mut prepared = PreparedOperation::prepare(
+        let prepared = PreparedOperation::prepare(
             operation,
             request,
             policy,
             initiator.into(),
-            session.as_deref_mut(),
+            session,
             registry,
         )?;
-        if let Some(target) = target {
-            let session = session.ok_or_else(|| {
-                Error::Protocol("a target document needs its owning session".into())
-            })?;
-            prepared.bind_target(session, target)?;
-        }
         let outcome = OperationOutcome {
             schema: 1,
             operation: prepared.operation.id.clone(),
@@ -789,6 +755,35 @@ fn record_document_run(
         session.log_tool_run(target.doc, actor, operation, params, inputs, &outputs)?;
     }
     Ok(())
+}
+
+/// A species workspace named as the run's target receives its hypotheses,
+/// unless it changed while the run worked; then the result stays an artifact.
+fn apply_target_results(
+    job: &Job,
+    target: &crate::runner::DocumentTarget,
+    outcome: &OperationOutcome,
+    session: &mut basecraft_ops::Session,
+) -> Result<Option<String>> {
+    if !target.receives_results || !session.is_delimitation(target.doc) {
+        return Ok(None);
+    }
+    if session.revision(target.doc) != target.revision {
+        return Ok(Some(
+            "Workspace changed during the run; its result remains an artifact".into(),
+        ));
+    }
+    let name = job.prepared.species_result_name();
+    let Some(result) = outcome
+        .artifacts
+        .iter()
+        .map(|artifact| std::path::PathBuf::from(&artifact.path))
+        .find(|path| path.file_name().is_some_and(|file| file == name.as_str()))
+    else {
+        return Ok(None);
+    };
+    basecraft_ops::delimitation::add_analysis_result(session, target.doc, &result)?;
+    Ok(None)
 }
 
 /// The terminal state of a run that read a session document, with its outputs

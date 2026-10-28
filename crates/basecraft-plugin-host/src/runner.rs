@@ -240,6 +240,9 @@ pub struct DocumentTarget {
     pub saved: Option<PathBuf>,
     /// The document's location, saved or not, for links back to it.
     pub path: PathBuf,
+    /// Named by the request as its target rather than read as an input: a
+    /// species workspace receives the run's hypotheses.
+    pub receives_results: bool,
 }
 
 /// An unsaved document's current contents, submitted as a generated input.
@@ -304,7 +307,7 @@ impl PreparedOperation {
         request: OperationRequest,
         policy: SessionPolicy,
         initiator: String,
-        session: Option<&mut basecraft_ops::Session>,
+        mut session: Option<&mut basecraft_ops::Session>,
         registry: &crate::registry::Registry,
     ) -> Result<Self> {
         policy.check(&operation)?;
@@ -323,7 +326,7 @@ impl PreparedOperation {
         let mut generated: BTreeMap<String, Vec<GeneratedInput>> = BTreeMap::new();
         let mut accepted_hashes: BTreeMap<PathBuf, String> = BTreeMap::new();
         let bindings = if operation.descriptor.family == ExecutionFamily::SequenceProposal {
-            let session = session.ok_or_else(|| {
+            let session = session.as_deref_mut().ok_or_else(|| {
                 Error::Protocol(
                     "sequence operation requires an owning headless/document session".into(),
                 )
@@ -398,7 +401,7 @@ impl PreparedOperation {
             let mut bindings = policy.resolve(&operation, &request)?;
             let documents = std::mem::take(&mut bindings.documents);
             if !documents.is_empty() {
-                let session = session.ok_or_else(|| {
+                let session = session.as_deref().ok_or_else(|| {
                     Error::Protocol("document inputs require an owning session".into())
                 })?;
                 for (name, bound) in documents {
@@ -435,6 +438,7 @@ impl PreparedOperation {
                                 ),
                                 saved: saved.as_ref().map(|(path, _, _)| path.clone()),
                                 path: session.root().join(session.doc_key(id)),
+                                receives_results: false,
                             });
                         }
                         // A clean document is its saved file; unsaved edits are
@@ -474,6 +478,36 @@ impl PreparedOperation {
                 }
             }
             bindings
+        };
+        let target = match &request.target {
+            None => None,
+            Some(reference) => {
+                let session = session.as_deref_mut().ok_or_else(|| {
+                    Error::Protocol("a target document needs an owning session".into())
+                })?;
+                Some(match reference {
+                    InputReference::File { path } => session.open(&policy.path(path, false)?)?,
+                    InputReference::Document {
+                        doc,
+                        generation,
+                        revision,
+                    } => {
+                        let id =
+                            basecraft_ops::DocId(doc.parse().map_err(|_| {
+                                Error::Protocol("invalid session document ID".into())
+                            })?);
+                        if !session.is_open(id)
+                            || session.generation(id) != *generation
+                            || session.revision(id) != *revision
+                        {
+                            return Err(Error::Protocol(
+                                "stale_revision: target document changed".into(),
+                            ));
+                        }
+                        id
+                    }
+                })
+            }
         };
         let input_diagnostics = lifecycle.verify_retained(&bindings.inputs)?;
         let mut supplied_parameters = request.parameters.clone();
@@ -803,7 +837,7 @@ impl PreparedOperation {
         };
         input_evidence::write_json(&run.artifact("descriptor.json")?, &operation.descriptor)?;
         input_evidence::write_json(&run.artifact("request.json")?, &request)?;
-        Ok(Self {
+        let mut prepared = Self {
             lifecycle,
             input_diagnostics,
             sequence,
@@ -819,7 +853,14 @@ impl PreparedOperation {
             initiator,
             workflow_registry,
             _scratch: scratch,
-        })
+        };
+        if let Some(target) = target {
+            let session = session.as_deref().ok_or_else(|| {
+                Error::Protocol("a target document needs an owning session".into())
+            })?;
+            prepared.bind_target(session, target)?;
+        }
+        Ok(prepared)
     }
 
     pub fn execute(&self, cancelled: Arc<AtomicBool>) -> Result<InvokeResult> {
@@ -1431,7 +1472,7 @@ impl PreparedOperation {
 
     /// Record this run in `doc`'s history although `doc` is not one of its
     /// inputs, as for a species workspace analysing a file it references.
-    pub fn bind_target(
+    fn bind_target(
         &mut self,
         session: &basecraft_ops::Session,
         doc: basecraft_ops::DocId,
@@ -1465,6 +1506,7 @@ impl PreparedOperation {
             input: (key, evidence.submitted_hash.clone()),
             saved: session.saved_source(doc)?.map(|(path, _, _)| path),
             path,
+            receives_results: true,
         });
         Ok(())
     }

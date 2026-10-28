@@ -1828,8 +1828,10 @@ impl qobject::DelimitationController {
                 "result.json"
             };
             let result = result_file(&outcome, name).ok_or("Analysis returned no result")?;
-            let value = basecraft_ops::delimitation::add_analysis_result(session, doc, &result)
-                .map_err(|e| e.to_string())?;
+            // The session already added its hypotheses when it recorded the run.
+            let value: Value = std::fs::read(&result)
+                .map_err(|e| e.to_string())
+                .and_then(|bytes| serde_json::from_slice(&bytes).map_err(|e| e.to_string()))?;
             let relative = outcome
                 .artifacts
                 .iter()
