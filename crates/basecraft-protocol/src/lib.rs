@@ -10,6 +10,7 @@ pub mod operation;
 pub mod ops;
 pub mod plugin;
 pub mod provenance;
+pub mod submission;
 pub mod tree;
 
 pub use annotation::{Feature, Location, Qualifier, Segment, Strand};

@@ -4,10 +4,12 @@
 pub mod alignment;
 pub mod coord;
 pub mod delimitation;
+pub mod genetic_code;
 pub mod metadata;
 pub mod piece;
 pub mod sanger;
 pub mod sequence;
+pub mod submission;
 pub mod tree;
 
 pub use alignment::AlignmentDoc;

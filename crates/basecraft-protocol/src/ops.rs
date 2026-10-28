@@ -200,6 +200,11 @@ pub enum Op {
     MetadataEdit {
         edit: Box<crate::metadata::MetadataEdit>,
     },
+    /// An atomic edit to a GenBank marker submission document.
+    #[serde(rename = "submission.edit")]
+    SubmissionEdit {
+        edit: Box<crate::submission::SubmissionEdit>,
+    },
     /// A terminal job record, including failures and cancellation.
     #[serde(rename = "job.finished")]
     JobFinished {
@@ -249,6 +254,7 @@ impl Op {
             Op::TreeStyle { .. } => "tree.style",
             Op::DelimitationEdit { .. } => "delimitation.edit",
             Op::MetadataEdit { .. } => "metadata.edit",
+            Op::SubmissionEdit { .. } => "submission.edit",
             Op::JobFinished { .. } => "job.finished",
             Op::Undo { .. } => "history.undo",
             Op::Redo { .. } => "history.redo",
