@@ -967,6 +967,8 @@ impl PreparedOperation {
                 "initiator":self.initiator,"executor":self.operation.package.manifest.id,
                 "process_instance":basecraft_platform::process_instance(),"context":context,
                 "requested_parameters":self.request.parameters,"effective_parameters":effective,"stdout":stdout,"stderr":stderr,
+                "tool":result.as_ref().ok().and_then(|r| r.tool.as_ref()),
+                "execution":result.as_ref().ok().and_then(|r| r.execution.as_ref()),
             }),
         );
         match result {

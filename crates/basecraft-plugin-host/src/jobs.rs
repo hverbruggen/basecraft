@@ -695,12 +695,33 @@ fn record_document_run(
         ));
     }
     let manifest = &job.prepared.operation.package.manifest;
-    let actor = basecraft_protocol::Actor::Plugin {
-        id: manifest.id.clone(),
-        version: manifest.version.clone(),
-    };
-    let params = json!({"requested":job.prepared.request.parameters,"effective":outcome.effective_parameters,
+    // The external program and its process evidence, when the plugin reported
+    // them, name the software in history and methods text.
+    let execution: serde_json::Value = std::fs::read(job.prepared.run.artifact("execution.json")?)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default();
+    let tool =
+        serde_json::from_value::<basecraft_protocol::plugin::ToolInfo>(execution["tool"].clone())
+            .ok();
+    let actor = tool.as_ref().map_or_else(
+        || basecraft_protocol::Actor::Plugin {
+            id: manifest.id.clone(),
+            version: manifest.version.clone(),
+        },
+        |tool| basecraft_protocol::Actor::Tool {
+            tool: tool.name.clone(),
+            version: tool.version.clone(),
+        },
+    );
+    let mut params = json!({"requested":job.prepared.request.parameters,"effective":outcome.effective_parameters,
         "operation":job.prepared.operation.id,"pins":outcome.pins,"initiator":job.prepared.initiator,"run_id":outcome.run_id});
+    if !execution["execution"].is_null() {
+        params["_execution"] = execution["execution"].clone();
+    }
+    if !execution["tool"].is_null() {
+        params["_observed_tool"] = execution["tool"].clone();
+    }
     let outputs: Vec<_> = outcome
         .artifacts
         .iter()
