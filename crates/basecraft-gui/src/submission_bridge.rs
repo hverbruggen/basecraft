@@ -237,23 +237,21 @@ impl qobject::SubmissionController {
             )),
             _ => None,
         };
-        match state {
-            Some((mut document, authors, key, undo, redo)) => {
-                document["authors_text"] = json!(authors);
-                self.as_mut().set_document(qs(&document));
-                self.as_mut().set_path(QString::from(key.as_str()));
-                self.as_mut().set_available(true);
-                self.as_mut().set_can_undo(undo);
-                self.as_mut().set_can_redo(redo);
-            }
-            None => {
-                self.as_mut().set_document(QString::from("null"));
-                self.as_mut().set_path(QString::default());
-                self.as_mut().set_available(false);
-                self.as_mut().set_can_undo(false);
-                self.as_mut().set_can_redo(false);
-            }
+        if let Some((mut document, authors, key, undo, redo)) = state {
+            document["authors_text"] = json!(authors);
+            self.as_mut().set_document(qs(&document));
+            self.as_mut().set_path(QString::from(key.as_str()));
+            self.as_mut().set_available(true);
+            self.as_mut().set_can_undo(undo);
+            self.as_mut().set_can_redo(redo);
+        } else {
+            self.as_mut().set_document(QString::from("null"));
+            self.as_mut().set_path(QString::default());
+            self.as_mut().set_available(false);
+            self.as_mut().set_can_undo(false);
+            self.as_mut().set_can_redo(false);
         }
+
         self.refresh_review();
     }
 
@@ -590,7 +588,7 @@ impl qobject::SubmissionController {
 
     /// The table2asn operation request for the exported package, as JSON,
     /// or empty with a message when there is none.
-    pub fn validation_request(mut self: Pin<&mut Self>) -> QString {
+    pub fn validation_request(self: Pin<&mut Self>) -> QString {
         let result = match (&self.rust().session, self.rust().package_path()) {
             (Some(session), Some(package)) => {
                 submission::validation_request(session.root(), &package).map_err(|e| e.to_string())
@@ -654,7 +652,7 @@ impl qobject::SubmissionController {
         ok
     }
 
-    pub fn plan_accessions(mut self: Pin<&mut Self>, text: &QString) -> QString {
+    pub fn plan_accessions(self: Pin<&mut Self>, text: &QString) -> QString {
         let result = match (&self.rust().session, self.rust().doc) {
             (Some(session), Some(doc)) => submission::submitter_preference()
                 .and_then(|submitter| {
@@ -685,7 +683,7 @@ impl qobject::SubmissionController {
         }
     }
 
-    pub fn write_accession_table(mut self: Pin<&mut Self>, output: &QString) -> bool {
+    pub fn write_accession_table(self: Pin<&mut Self>, output: &QString) -> bool {
         let result = match (&self.rust().session, self.rust().doc) {
             (Some(session), Some(doc)) => submission::submitter_preference()
                 .and_then(|submitter| submission::accession_table(session, doc, &submitter))
