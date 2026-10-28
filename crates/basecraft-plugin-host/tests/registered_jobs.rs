@@ -1017,7 +1017,7 @@ fn tasks_cancel_registered_document_run_through_owner_without_success_history() 
         assert!(!can_cancel_run(id));
         let outcome = wait(&manager, id);
         assert_eq!(outcome.state, RuntimeState::Cancelled, "{outcome:?}");
-        assert!(outcome.artifacts.is_empty());
+        assert_eq!(outcome.artifacts, Vec::new());
         assert!(!temp.path().join("cancelled.json").exists());
         manager.poll_session(&mut session);
         let record = session.document_record(doc).unwrap();
@@ -1037,7 +1037,7 @@ fn tasks_cancel_registered_document_run_through_owner_without_success_history() 
             .collect();
         assert_eq!(finished.len(), 1);
         assert_eq!(finished[0].status, JobStatus::Cancelled);
-        assert!(finished[0].outputs.is_empty());
+        assert_eq!(finished[0].outputs, std::collections::BTreeMap::new());
         assert!(!can_cancel_run(id));
         assert!(cancel_run(id).is_err());
         drop(manager);

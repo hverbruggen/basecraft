@@ -511,7 +511,7 @@ mod tests {
             let outcome = manager.get(id).unwrap();
             if outcome.state.terminal() {
                 assert_eq!(outcome.state, RuntimeState::Cancelled);
-                assert!(outcome.artifacts.is_empty());
+                assert_eq!(outcome.artifacts, Vec::new());
                 break;
             }
             assert!(Instant::now() < deadline);
