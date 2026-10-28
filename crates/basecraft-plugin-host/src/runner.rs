@@ -298,6 +298,7 @@ pub struct PreparedOperation {
     pub policy: SessionPolicy,
     pub ledger_inputs: Vec<ArtifactRevision>,
     pub initiator: String,
+    started: String,
     workflow_registry: Option<Arc<crate::registry::Registry>>,
     _scratch: tempfile::TempDir,
 }
@@ -862,6 +863,7 @@ impl PreparedOperation {
             policy,
             ledger_inputs,
             initiator,
+            started: basecraft_platform::now_rfc3339(),
             workflow_registry,
             _scratch: scratch,
         };
@@ -1701,7 +1703,58 @@ impl PreparedOperation {
             .clone()
     }
     pub fn persist(&self, outcome: &OperationOutcome) -> Result<()> {
-        input_evidence::write_json(&self.run.artifact("runtime.json")?, outcome)?;
+        let runtime = self.run.artifact("runtime.json")?;
+        input_evidence::write_json(&runtime, outcome)?;
+        self.write_task_index(outcome, &runtime)
+    }
+
+    /// The Tasks view lists runs from small index records in application
+    /// state. This one only points at the run's own `runtime.json`, which
+    /// stays the authoritative record.
+    fn write_task_index(&self, outcome: &OperationOutcome, runtime: &Path) -> Result<()> {
+        use basecraft_protocol::operation::RuntimeState;
+        let paths = basecraft_platform::paths::AppPaths::discover()
+            .map_err(|error| Error::Protocol(error.to_string()))?;
+        let directory = paths.state.join("jobs").join(self.run.id());
+        std::fs::create_dir_all(&directory)?;
+        let status = match outcome.state {
+            RuntimeState::Completed => "completed",
+            RuntimeState::Failed => "failed",
+            RuntimeState::Cancelled => "cancelled",
+            RuntimeState::Partial => "partial",
+            RuntimeState::Interrupted => "interrupted",
+            _ => "running",
+        };
+        let source = self.document.as_ref().map_or_else(
+            || {
+                self.context
+                    .input_evidence
+                    .values()
+                    .flatten()
+                    .find_map(|evidence| evidence.original_path.clone())
+                    .unwrap_or_default()
+            },
+            |target| target.path.display().to_string(),
+        );
+        let outputs: serde_json::Map<String, Value> = outcome
+            .artifacts
+            .iter()
+            .map(|artifact| (artifact.path.clone(), json!(artifact.digest)))
+            .collect();
+        let index = json!({
+            "schema_version": 1, "id": self.run.id(), "status": status,
+            "owner_instance": basecraft_platform::process_instance(),
+            "started": self.started,
+            "ended": outcome.state.terminal().then(basecraft_platform::now_rfc3339),
+            "plugin": {"id": self.operation.package.manifest.id, "version": self.operation.package.manifest.version},
+            "operation": self.operation.id, "effective_parameters": outcome.effective_parameters,
+            "initiator": self.initiator,
+            "source": {"path": source},
+            "outputs": outputs,
+            "diagnostics": outcome.errors.first().map(|error| error.message.clone()),
+            "runtime_record": runtime,
+        });
+        input_evidence::write_json(&directory.join("manifest.json"), &index)?;
         Ok(())
     }
 }
