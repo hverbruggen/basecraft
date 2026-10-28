@@ -718,7 +718,12 @@ fn optional_display_tree_uses_hidden_reference_first_companions() {
 #[test]
 fn alignment_workflows_use_frozen_unsaved_inputs() {
     require_engine();
-    for operation in ["asap_alignment", "gmyc_alignment_single"] {
+    for (operation, dirty) in [
+        ("asap_alignment", true),
+        ("gmyc_alignment_single", true),
+        ("asap_alignment", false),
+        ("gmyc_alignment_single", false),
+    ] {
         let root = tempfile::tempdir().unwrap();
         let source = root.path().join("input.afa");
         let original = ">a first specimen\nACGTACGTACGTACGTACGT\n>b second specimen\nACGTACGTACGTACGTACGA\n>c\nTGCATGCATGCATGCAACGT\n>d\nTGCATGCATGCATGCAACGA\n";
@@ -726,17 +731,19 @@ fn alignment_workflows_use_frozen_unsaved_inputs() {
         let registry = common::bundled();
         let mut session = Session::new(root.path());
         let doc = session.open(&source).unwrap();
-        session
-            .apply(
-                doc,
-                basecraft_protocol::Op::AlnReplace {
-                    row: 0,
-                    start: 0,
-                    end: 1,
-                    residues: "T".into(),
-                },
-            )
-            .unwrap();
+        if dirty {
+            session
+                .apply(
+                    doc,
+                    basecraft_protocol::Op::AlnReplace {
+                        row: 0,
+                        start: 0,
+                        end: 1,
+                        residues: "T".into(),
+                    },
+                )
+                .unwrap();
+        }
         let mut manager = JobManager::default();
         let accepted = common::submit_in(&mut manager, &registry, &mut session, |s| {
             json!({
@@ -751,17 +758,19 @@ fn alignment_workflows_use_frozen_unsaved_inputs() {
         let outcome = common::wait_in(&manager, &mut session, &accepted.run_id);
         common::assert_completed(&outcome);
         let input = input_evidence::read_input(&common::evidence(&outcome)).unwrap();
-        assert_eq!(input.state, "generated");
+        assert_eq!(input.state, if dirty { "generated" } else { "referenced" });
         let submitted = common::evidence(&outcome).join("submitted.fasta");
-        assert_eq!(
-            input.submitted_hash,
-            basecraft_io::hash_file(&submitted).unwrap()
-        );
-        assert!(
-            std::fs::read_to_string(submitted)
-                .unwrap()
-                .contains("TCGTACGT")
-        );
+        if dirty {
+            assert_eq!(
+                input.submitted_hash,
+                basecraft_io::hash_file(&submitted).unwrap()
+            );
+            assert!(
+                std::fs::read_to_string(submitted)
+                    .unwrap()
+                    .contains("TCGTACGT")
+            );
+        }
         let result = common::read_json(&common::artifact(&outcome, "fit.json"));
         assert_eq!(
             result["workspace"]["specimens"].as_array().unwrap().len(),

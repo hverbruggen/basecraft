@@ -83,6 +83,39 @@ fn realigns_with_mafft_and_logs_the_run() {
     };
     assert_eq!(params["run_id"], outcome.run_id.as_str());
     assert_eq!(params["operation"], "basecraft.mafft/align@1");
+    // The opened result inherits the producing activity, including tool
+    // version, execution arguments and citations; reopen/export must retain it.
+    let result_record = session.document_record(out).unwrap();
+    let producing = result_record
+        .events
+        .iter()
+        .find(|event| {
+            matches!(&event.op,
+        Op::ToolRun { params, .. } if params["run_id"] == outcome.run_id)
+        })
+        .unwrap();
+    assert_eq!(producing.actor, runs[0].actor);
+    let methods = result_record.report().unwrap();
+    assert!(methods.methods.to_lowercase().contains("mafft"));
+    assert!(!methods.citations.is_empty());
+    let bundle = common::evidence(&outcome);
+    let methods_path = bundle.join("methods.md");
+    std::fs::write(&methods_path, "User-authored explanation.\n").unwrap();
+    let publication = basecraft_ops::provenance::inspect(&output).unwrap();
+    basecraft_ops::provenance::publish_operation(&bundle, &publication).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&methods_path).unwrap(),
+        "User-authored explanation.\n"
+    );
+    let reopened = basecraft_ops::document_record::DocumentRecord::from_file(&output).unwrap();
+    assert!(
+        reopened
+            .report()
+            .unwrap()
+            .methods
+            .to_lowercase()
+            .contains("mafft")
+    );
     drop(session);
 
     let report = basecraft_ops::replay::replay(root).unwrap();

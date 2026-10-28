@@ -6,7 +6,7 @@ use basecraft_plugin_host::{jobs::JobManager, policy::SessionPolicy};
 use basecraft_protocol::operation::RuntimeState;
 use serde_json::json;
 
-const ALIGNMENT: &str = ">a first\nACGT\n>b second\nAC-T\n";
+const ALIGNMENT: &str = ">a first\nACGT\n>b second\nAC-T\n>c third\nTCGT\n";
 const TREE_FIXTURE: &str = r#"
 import time
 from pathlib import Path
@@ -16,7 +16,7 @@ plugin = Plugin("basecraft.fasttree", "test")
 def tree(_snapshot, _parameters, context):
     time.sleep(0.3)
     root = Path(context["outputs"]["artifacts"])
-    (root / "tree.nwk").write_text("(a:0.1,b:0.2);\n")
+    (root / "tree.nwk").write_text("((a:0.1,b:0.2)0.9:0.1,c:0.3);\n")
     return {"artifacts":[{"role":"artifacts","path":"tree.nwk"}]}
 plugin.run()
 "#;
@@ -118,4 +118,64 @@ fn workspace_inventory_survives_repair_and_rejects_changed_export() {
             assert!(provenance::verify(&output).unwrap().is_empty());
         }
     }
+}
+
+#[test]
+fn owner_save_failure_stays_partial_and_repair_does_not_reapply_hypotheses() {
+    let root = tempfile::tempdir().unwrap();
+    let tree = root.path().join("tree.nwk");
+    std::fs::write(&tree, "((a:0.1,b:0.1):0.9,(c:0.2,d:0.2):0.8);\n").unwrap();
+    let registry = common::bundled();
+    let mut session = Session::new(root.path());
+    let input = session.open(&tree).unwrap();
+    let setup = common::run_in(&registry, &mut session, |s| {
+        json!({
+            "operation":"basecraft.delimitation/workspace_tree@1",
+            "inputs":{"tree":common::document(s, input)},"parameters":{},
+            "destinations":{"workspace":"species.spart"}
+        })
+    });
+    common::assert_completed(&setup);
+    let workspace = root.path().join("species.spart");
+    let mut jobs = JobManager::default();
+    let accepted = common::submit_in(&mut jobs, &registry, &mut session, |_| json!({
+        "operation":"basecraft.delimitation/manual_cut@1",
+        "inputs":{"tree":common::file("tree.nwk")},"parameters":{"rooted":true,"threshold":0.25},
+        "target":{"kind":"file","path":"species.spart"}
+    })).unwrap();
+    let target = jobs.target_document(&accepted.run_id).unwrap();
+    // Wait only for worker publication; owner-thread application is still pending.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !common::evidence(&accepted).join("manifest.json").is_file() {
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    // A changed saved target prevents saving after the hypotheses were applied.
+    let before = std::fs::read(&workspace).unwrap();
+    std::fs::write(&workspace, b"foreign concurrent edit").unwrap();
+    let partial = common::wait_in(&jobs, &mut session, &accepted.run_id);
+    assert_eq!(partial.state, RuntimeState::Partial, "{partial:#?}");
+    let count = session.delimitation(target).hypotheses.len();
+    assert!(count > 0, "save failed after hypotheses were committed");
+    assert_eq!(
+        std::fs::read(&workspace).unwrap(),
+        b"foreign concurrent edit"
+    );
+    std::fs::write(&workspace, before).unwrap();
+    assert_eq!(
+        jobs.repair(&accepted.run_id).unwrap().state,
+        RuntimeState::Finalizing
+    );
+    let completed = common::wait_in(&jobs, &mut session, &accepted.run_id);
+    common::assert_completed(&completed);
+    assert_eq!(session.delimitation(target).hypotheses.len(), count);
+    assert_eq!(
+        basecraft_ops::files::load_delimitation(&workspace)
+            .unwrap()
+            .hypotheses
+            .len(),
+        count
+    );
+    assert_eq!(common::tool_run_events(&session, target).len(), 1);
+    assert!(jobs.finalized_generation(&accepted.run_id).is_some());
 }
