@@ -290,6 +290,7 @@ pub struct PreparedOperation {
     pub(crate) input_diagnostics: Vec<String>,
     pub sequence: Option<SequenceTarget>,
     pub document: Option<DocumentTarget>,
+    pub(crate) input_record: basecraft_ops::document_record::DocumentRecord,
     pub operation: RegisteredOperation,
     pub run: ArtifactRun,
     pub request: OperationRequest,
@@ -328,6 +329,7 @@ impl PreparedOperation {
         };
         let mut sequence = None;
         let mut document = None;
+        let mut input_record = basecraft_ops::document_record::DocumentRecord::empty("Inputs");
         let mut generated: BTreeMap<String, Vec<GeneratedInput>> = BTreeMap::new();
         let mut accepted_hashes: BTreeMap<PathBuf, String> = BTreeMap::new();
         let bindings = if operation.descriptor.family == ExecutionFamily::SequenceProposal {
@@ -424,6 +426,7 @@ impl PreparedOperation {
                                 "stale_revision: input document changed".into(),
                             ));
                         }
+                        input_record.include_input(&session.document_record(id)?);
                         let saved = session.saved_source(id)?;
                         if document.is_none() {
                             let key = session.doc_key(id);
@@ -604,6 +607,20 @@ impl PreparedOperation {
                         "identity-v1"
                     }
                 };
+                if !accepted_hashes.contains_key(&source) {
+                    if let Ok(record) =
+                        basecraft_ops::document_record::DocumentRecord::from_file(&source)
+                    {
+                        input_record.include_input(&record);
+                        if basecraft_io::hash_file(&source).map_err(basecraft_ops::Error::from)?
+                            != original_hash
+                        {
+                            return Err(Error::Protocol(
+                                "source changed while capturing its history".into(),
+                            ));
+                        }
+                    }
+                }
                 let submitted_hash =
                     basecraft_io::hash_file(&path).map_err(basecraft_ops::Error::from)?;
                 sources.push((
@@ -868,6 +885,7 @@ impl PreparedOperation {
         let mut prepared = Self {
             lifecycle,
             input_diagnostics,
+            input_record,
             sequence,
             document,
             operation,
@@ -1576,6 +1594,49 @@ impl PreparedOperation {
             report_template_version: 2,
         };
         basecraft_ops::provenance::publish_operation(self.run.directory(), &publication)?;
+        if self.document.is_none() && self.sequence.is_none() {
+            let (actor, params) = self.tool_activity(outcome)?;
+            let activity = basecraft_protocol::LogEntry {
+                v: basecraft_protocol::ops::LOG_VERSION,
+                id: self.run.id().into(),
+                t: self.started.clone(),
+                host: String::new(),
+                session: publication.session.clone(),
+                actor,
+                doc: self.operation.id.clone(),
+                op: basecraft_protocol::Op::ToolRun {
+                    plugin: self.operation.package.manifest.id.clone(),
+                    operation: self.operation.descriptor.implementation.clone(),
+                    params,
+                    inputs: self
+                        .ledger_inputs
+                        .iter()
+                        .map(|input| input.logical_name.clone())
+                        .collect(),
+                    outputs: publication
+                        .outputs
+                        .iter()
+                        .map(|output| output.logical_name.clone())
+                        .collect(),
+                },
+                result: basecraft_protocol::OpResult {
+                    hashes: self
+                        .ledger_inputs
+                        .iter()
+                        .chain(&publication.outputs)
+                        .map(|artifact| (artifact.logical_name.clone(), artifact.hash.clone()))
+                        .collect(),
+                    feature: None,
+                },
+                state: basecraft_protocol::DocState {
+                    len: 0,
+                    features: 0,
+                    rows: None,
+                },
+            };
+            self.input_record
+                .publish_operation_activity(&self.run, &activity)?;
+        }
         for artifact in &outcome.artifacts {
             self.run.bind(Path::new(&artifact.path))?;
         }
@@ -1773,6 +1834,42 @@ impl PreparedOperation {
             &self.run,
         )?;
         Ok(())
+    }
+
+    pub(crate) fn tool_activity(
+        &self,
+        outcome: &OperationOutcome,
+    ) -> Result<(basecraft_protocol::Actor, Value)> {
+        let manifest = &self.operation.package.manifest;
+        // The external program and its process evidence, when the plugin reported
+        // them, name the software in history and methods text.
+        let execution: serde_json::Value = std::fs::read(self.run.artifact("execution.json")?)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default();
+        let tool = serde_json::from_value::<basecraft_protocol::plugin::ToolInfo>(
+            execution["tool"].clone(),
+        )
+        .ok();
+        let actor = tool.as_ref().map_or_else(
+            || basecraft_protocol::Actor::Plugin {
+                id: manifest.id.clone(),
+                version: manifest.version.clone(),
+            },
+            |tool| basecraft_protocol::Actor::Tool {
+                tool: tool.name.clone(),
+                version: tool.version.clone(),
+            },
+        );
+        let mut params = json!({"requested":self.request.parameters,"effective":outcome.effective_parameters,
+        "operation":self.operation.id,"pins":outcome.pins,"initiator":self.initiator,"run_id":outcome.run_id});
+        if !execution["execution"].is_null() {
+            params["_execution"] = execution["execution"].clone();
+        }
+        if !execution["tool"].is_null() {
+            params["_observed_tool"] = execution["tool"].clone();
+        }
+        Ok((actor, params))
     }
 
     pub fn effective_parameters(&self) -> Value {
@@ -2020,6 +2117,11 @@ impl PreparedOperation {
             doc,
             (&preparation_plugin, "haplotypes"),
             root.join("preparation.json"),
+            self.context
+                .input_evidence
+                .get("alignment")
+                .and_then(|values| values.first())
+                .ok_or_else(|| Error::Protocol("workflow requires alignment evidence".into()))?,
         )?
         .with_cpu_budget(self.context.cpu_threads)
         .with_registry(registry.clone());

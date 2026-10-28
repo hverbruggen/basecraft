@@ -77,6 +77,44 @@ pub fn read_origin(
 }
 
 impl DocumentRecord {
+    /// Complete an operation's existing inventory with the submitted input's
+    /// chronological history and producing activity. Retry preserves user Methods.
+    pub fn publish_operation_activity(
+        &self,
+        run: &crate::analysis_store::ArtifactRun,
+        activity: &LogEntry,
+    ) -> crate::Result<()> {
+        let manifest = run.directory().join("manifest.json");
+        let mut publication: Publication =
+            serde_json::from_slice(&crate::provenance::read_record(&manifest)?)?;
+        let (events, effective) = crate::session::portable_analysis_activity(self, activity);
+        publication.events = events;
+        publication.effective_edits = effective;
+        // Preserve upstream bundles used by the submitted revision for packaging.
+        let mut input = crate::input_evidence::read_input(run.directory())?;
+        let mut upstream = input
+            .extra
+            .get("upstream")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        for (bundle, origin) in &self.origins {
+            let mut bytes = serde_json::to_vec_pretty(origin)?;
+            bytes.push(b'\n');
+            let reference = serde_json::json!({"bundle":crate::input_evidence::relative(run.directory(), &bundle.canonicalize()?)?,"id":origin.id,"hash":basecraft_io::hash_bytes(&bytes)});
+            if !upstream.contains(&reference) {
+                upstream.push(reference);
+            }
+        }
+        if !upstream.is_empty() {
+            input
+                .extra
+                .insert("upstream".into(), serde_json::json!(upstream));
+            crate::input_evidence::write_json(&run.directory().join("input.json"), &input)?;
+        }
+        crate::provenance::publish_operation(run.directory(), &publication)
+    }
+
     /// In-memory locations of contributing publication bundles. Reading them
     /// creates no records and does not expose mutable ancestry internals.
     pub fn origin_bundles(&self) -> impl Iterator<Item = &Path> {

@@ -159,17 +159,6 @@ struct SpeciesStorage {
 }
 
 impl FileJob {
-    fn prepare_species(
-        &mut self,
-        document: Option<(&Session, DocId)>,
-        file: Option<(&Path, &basecraft_protocol::provenance::FileStamp)>,
-        transformation: &str,
-    ) -> Result<()> {
-        let anchor = self.output.clone();
-        let standalone = document.is_none_or(|(s, d)| !s.is_delimitation(d));
-        self.prepare_species_at(document, file, transformation, &anchor, standalone)
-    }
-
     fn prepare_species_at(
         &mut self,
         document: Option<(&Session, DocId)>,
@@ -177,6 +166,7 @@ impl FileJob {
         transformation: &str,
         anchor: &Path,
         standalone: bool,
+        accepted: Option<&basecraft_protocol::operation::InvocationInputEvidence>,
     ) -> Result<()> {
         use basecraft_ops::{analysis_store::ArtifactRun, input_evidence};
         let plugin = Manifest::load(&self.plugin)?.id;
@@ -187,7 +177,23 @@ impl FileJob {
         }
         let _lock = input_evidence::lock()?;
         let run = ArtifactRun::create(anchor, &self.run_id)?;
-        let source = if let Some((file, accepted_stamp)) = file {
+        let source = if let Some(evidence) = accepted {
+            let parent = Path::new(&evidence.run_directory);
+            let input = input_evidence::read_input(parent)?;
+            if input.submitted_hash != self.input_key.1 {
+                return Err(Error::Protocol(
+                    "workflow stage differs from accepted input".into(),
+                ));
+            }
+            input
+                .source
+                .map(|mut reference| {
+                    reference.path =
+                        input_evidence::relative(run.directory(), &parent.join(&reference.path))?;
+                    Ok::<_, Error>(reference)
+                })
+                .transpose()?
+        } else if let Some((file, accepted_stamp)) = file {
             let path = file.canonicalize()?;
             let stamp = input_evidence::stamp(&path)?;
             if &stamp != accepted_stamp || stamp.size != std::fs::metadata(&self.input)?.len() {
@@ -337,6 +343,7 @@ impl FileJob {
         doc: DocId,
         (plugin, operation): (&Path, &str),
         output: PathBuf,
+        accepted: &basecraft_protocol::operation::InvocationInputEvidence,
     ) -> Result<Self> {
         if !session.is_alignment(doc) {
             return Err(Error::Protocol(
@@ -384,7 +391,28 @@ impl FileJob {
             submitted_copy_bytes: std::sync::atomic::AtomicU64::new(0),
             scratch_dir: dir,
         };
-        job.prepare_species(Some((session, doc)), None, "canonical-fasta-v1")?;
+        let anchor = job.output.clone();
+        job.prepare_species_at(
+            None,
+            None,
+            &accepted.transformation,
+            &anchor,
+            true,
+            Some(accepted),
+        )?;
+        job.source_path = accepted.original_path.as_ref().map_or_else(
+            || {
+                job.artifacts.as_ref().map_or_else(
+                    || job.source_path.clone(),
+                    |run| run.directory().join("submitted.fasta"),
+                )
+            },
+            PathBuf::from,
+        );
+        job.input_key.0 = accepted
+            .original_path
+            .clone()
+            .unwrap_or_else(|| "generated alignment".into());
         Ok(job)
     }
 
@@ -448,6 +476,7 @@ impl FileJob {
                 },
                 &storage.anchor,
                 false,
+                None,
             )?;
             if let (Some(parent), Some(run), Some(next)) =
                 (&self.artifacts, &job.artifacts, &mut job.species)

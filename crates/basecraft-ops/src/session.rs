@@ -2399,7 +2399,7 @@ fn execute_tree(doc: &mut TreeDoc, op: &Op) -> Result<Box<TreeDoc>> {
     Ok(before)
 }
 
-fn portable_analysis_activity(
+pub(crate) fn portable_analysis_activity(
     snapshot: &crate::document_record::DocumentRecord,
     activity: &LogEntry,
 ) -> (
@@ -2738,9 +2738,6 @@ impl Session {
         snapshot: &crate::document_record::DocumentRecord,
         run: &crate::analysis_store::ArtifactRun,
     ) -> Result<()> {
-        let manifest = run.directory().join("manifest.json");
-        let mut publication: basecraft_protocol::provenance::Publication =
-            serde_json::from_slice(&crate::provenance::read_record(&manifest)?)?;
         let activity = self
             .events
             .iter()
@@ -2752,32 +2749,7 @@ impl Session {
             })
             .ok_or_else(|| invalid("analysis has no recorded activity"))?
             .clone();
-        let (events, effective) = portable_analysis_activity(snapshot, &activity);
-        publication.events = events;
-        publication.effective_edits = effective;
-        // Preserve upstream bundles used by the submitted revision for packaging.
-        let mut input = crate::input_evidence::read_input(run.directory())?;
-        let mut upstream = input
-            .extra
-            .get("upstream")
-            .and_then(serde_json::Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        for (bundle, origin) in &snapshot.origins {
-            let mut bytes = serde_json::to_vec_pretty(origin)?;
-            bytes.push(b'\n');
-            let reference = serde_json::json!({"bundle":crate::input_evidence::relative(run.directory(), &bundle.canonicalize()?)?,"id":origin.id,"hash":basecraft_io::hash_bytes(&bytes)});
-            if !upstream.contains(&reference) {
-                upstream.push(reference);
-            }
-        }
-        if !upstream.is_empty() {
-            input
-                .extra
-                .insert("upstream".into(), serde_json::json!(upstream));
-            crate::input_evidence::write_json(&run.directory().join("input.json"), &input)?;
-        }
-        crate::provenance::publish_operation(run.directory(), &publication)
+        snapshot.publish_operation_activity(run, &activity)
     }
 
     /// Reference-first publication: actual submitted input identity and the

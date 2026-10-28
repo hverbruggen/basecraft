@@ -797,3 +797,61 @@ fn document_repair_waits_for_owner_history_and_does_not_repeat_activity() {
     assert!(publication.events.iter().any(|event| matches!(&event.op,
         basecraft_protocol::Op::ToolRun { params, .. } if params["run_id"] == accepted.run_id)));
 }
+
+#[test]
+fn canonical_alignment_evidence_preserves_order_headers_and_residues_and_records_padding() {
+    let root = tempfile::tempdir().unwrap();
+    let registry = alignment_registry(root.path());
+    let source = root.path().join("input.afa");
+    let long = "aCgT-".repeat(13);
+    let original = format!(
+        ">second description with spaces\r\n{}\r\n{}\r\n>first another description\r\naC--\r\n",
+        &long[..17],
+        &long[17..]
+    );
+    std::fs::write(&source, &original).unwrap();
+    let mut manager = JobManager::default();
+    let accepted = manager
+        .submit(
+            &registry,
+            serde_json::from_value(json!({
+                "operation":"org.example.registry-fixture/count@1",
+                "inputs":{"sources":[{"kind":"file","path":"input.afa"}]},
+                "parameters":{"mode":"normal"},"destinations":{"report":"result.json"}
+            }))
+            .unwrap(),
+            SessionPolicy::new(root.path(), true).unwrap(),
+            "test",
+        )
+        .unwrap();
+    let outcome = wait(&manager, &accepted.run_id);
+    assert_eq!(outcome.state, RuntimeState::Completed, "{outcome:#?}");
+    let run = Path::new(outcome.evidence.as_ref().unwrap());
+    let record = basecraft_ops::input_evidence::read_input(run).unwrap();
+    assert_eq!(record.transformation, "canonical-fasta-v1");
+    assert_eq!(
+        record.source.unwrap().hash,
+        basecraft_io::hash_bytes(original.as_bytes())
+    );
+    let padded = format!("aC--{}", "-".repeat(61));
+    let canonical = format!(
+        ">second description with spaces\n{}\n{}\n>first another description\n{}\n{}\n",
+        &long[..60],
+        &long[60..],
+        &padded[..60],
+        &padded[60..]
+    );
+    assert_eq!(
+        record.submitted_hash,
+        basecraft_io::hash_bytes(canonical.as_bytes())
+    );
+    assert_ne!(
+        record.submitted_hash,
+        basecraft_io::hash_bytes(original.as_bytes())
+    );
+    assert_eq!(outcome.data, Some(json!({"bytes":canonical.len()})));
+    assert_eq!(std::fs::read_to_string(&source).unwrap(), original);
+    let publication = basecraft_ops::provenance::inspect(&root.path().join("result.json")).unwrap();
+    assert!(publication.events.iter().any(|event| matches!(&event.op,
+        basecraft_protocol::Op::ToolRun { params, .. } if params["run_id"] == outcome.run_id)));
+}
