@@ -1,5 +1,7 @@
 //! GenBank marker submissions: the document, review, package, validation
 //! records, accessions, undo and replay.
+#[path = "support/submission_run.rs"]
+mod submission_run;
 use std::path::{Path, PathBuf};
 
 use basecraft_docs::submission::Severity;
@@ -348,7 +350,8 @@ fn package_is_deterministic_and_validation_is_tied_to_its_inputs() {
     .iter()
     .map(|n| json!({"role":"reports","path":reports.join(n).display().to_string(),"digest":"b3:x"}))
     .collect();
-    let outcome = json!({"state":"completed","run_id":"run1","data":{"status":"completed","version":"1.28.1094","exit_code":0,"message":"ok"},"artifacts":artifacts});
+    let mut outcome = json!({"state":"completed","run_id":"run1","data":{"status":"completed","version":"1.28.1094","exit_code":0,"message":"ok"},"artifacts":artifacts});
+    submission_run::retain(root, &request, &mut outcome);
     let summary = submission::record_validation(root, &package, &outcome).unwrap();
     assert_eq!(summary.status, "errors");
     assert_eq!((summary.errors, summary.warnings), (1, 1));
@@ -389,7 +392,11 @@ fn package_is_deterministic_and_validation_is_tied_to_its_inputs() {
             .is_none()
     );
     // A missing tool is an unavailable check, not a sequence error.
-    let unavailable = json!({"state":"completed","run_id":"run2","data":{"status":"unavailable","version":"unknown","message":"table2asn is not installed"},"artifacts":[]});
+    let mut unavailable = json!({"state":"completed","run_id":"run2","data":{"status":"unavailable","version":"unknown","message":"table2asn is not installed"},"artifacts":[]});
+    let request = submission::validation_request(root, &package).unwrap();
+    std::fs::create_dir_all(root.join(request["destinations"]["reports"].as_str().unwrap()))
+        .unwrap();
+    submission_run::retain(root, &request, &mut unavailable);
     let summary = submission::record_validation(root, &package, &unavailable).unwrap();
     assert_eq!(summary.status, "unavailable");
     assert_eq!(summary.issues[0].severity, Severity::Unavailable);

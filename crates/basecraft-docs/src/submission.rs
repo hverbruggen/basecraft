@@ -187,6 +187,7 @@ pub fn apply(sub: &mut Submission, edit: &SubmissionEdit) -> Result<(), EditErro
         }
         SubmissionEdit::SetExport { export } => next.export = export.clone(),
         SubmissionEdit::SetPublication { publication } => next.publication = publication.clone(),
+        SubmissionEdit::RecordExport { mapping } => next.exported = Some(mapping.clone()),
         SubmissionEdit::SetAccessions { accessions } => {
             upsert(&mut next.accessions, accessions, |a: &AccessionEntry| {
                 &a.record

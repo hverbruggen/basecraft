@@ -914,8 +914,20 @@ impl Session {
                     std::fs::create_dir_all(parent)?;
                 }
                 // Tables first, manifest last: the manifest records their hashes.
+                let mut replaced = Vec::new();
                 for (path, bytes) in paths.iter().zip(&encoded).rev() {
-                    basecraft_io::write_atomic(path, |w| w.write_all(bytes))?;
+                    if let Err(error) = basecraft_io::write_atomic(path, |w| w.write_all(bytes)) {
+                        if replaced.is_empty() {
+                            return Err(error.into());
+                        }
+                        return Err(invalid(format!(
+                            "partial metadata save: replaced {}; failed at {}: {error}. Metadata generation is incomplete. Keep the open document and retry saving after fixing the destination, or save to a new folder. Recovery remains at {}",
+                            replaced.join(", "),
+                            path.display(),
+                            self.storage_root.display()
+                        )));
+                    }
+                    replaced.push(path.display().to_string());
                 }
                 for (path, bytes) in paths.iter().zip(&encoded) {
                     hashes.push((self.relative(path), basecraft_io::hash_bytes(bytes)));

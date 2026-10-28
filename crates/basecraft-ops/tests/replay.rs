@@ -927,6 +927,12 @@ fn submission_edits_undo_save_and_replay() {
                     decision: Decision::Exclude,
                 }],
             },
+            SubmissionEdit::RecordExport {
+                mapping: basecraft_protocol::submission::ExportMapping {
+                    source: s.submission(doc).source.clone(),
+                    records: [("a".into(), "a".into())].into(),
+                },
+            },
             SubmissionEdit::SetFrames {
                 frames: vec![FrameChoice {
                     record: "a".into(),

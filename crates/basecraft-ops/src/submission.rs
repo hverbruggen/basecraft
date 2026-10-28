@@ -133,6 +133,7 @@ pub fn describe(edit: &SubmissionEdit) -> String {
         ),
         SubmissionEdit::SetExport { .. } => "Submission export settings".into(),
         SubmissionEdit::SetPublication { .. } => "Submission authors and title".into(),
+        SubmissionEdit::RecordExport { .. } => "Recorded submission export identities".into(),
         SubmissionEdit::SetAccessions { accessions } => {
             format!("Recorded {} accessions", accessions.len())
         }
@@ -936,6 +937,21 @@ pub fn export(
     session.export(doc, &manifest, "genbank-submission-package", |w| {
         w.write_all(&bytes)
     })?;
+    edit(
+        session,
+        doc,
+        SubmissionEdit::RecordExport {
+            mapping: basecraft_protocol::submission::ExportMapping {
+                source: sub.source.clone(),
+                records: review
+                    .prepared
+                    .exported()
+                    .filter_map(|r| Some((r.export_id.clone()?, r.record.clone())))
+                    .collect(),
+            },
+        },
+    )?;
+    session.save(doc, None).map_err(|error| invalid(format!("package written but export identities were not saved: {error}; keep this document open and retry saving before importing accessions")))?;
     Ok(summary)
 }
 
@@ -1037,6 +1053,137 @@ pub fn validation_request(project: &Path, package: &Path) -> Result<Value> {
     }))
 }
 
+// The ops layer cannot depend on plugin-host. Consume its existing execution,
+// input ledgers and publication verifier here, without introducing a run store.
+fn verified_reports(
+    root: &Path,
+    package: &Path,
+    hash: &str,
+    outcome: &Value,
+) -> Result<Option<PathBuf>> {
+    let read = |path: &Path| -> Result<Value> {
+        Ok(serde_json::from_slice(&crate::provenance::read_record(
+            path,
+        )?)?)
+    };
+    let run = Path::new(
+        outcome["evidence"]
+            .as_str()
+            .ok_or_else(|| invalid("validation has no registered run evidence"))?,
+    );
+    let run_id = outcome["run_id"].as_str().unwrap_or_default();
+    if run_id.is_empty()
+        || run.file_name().and_then(|n| n.to_str()) != Some(run_id)
+        || outcome["operation"] != VALIDATE_OPERATION
+        || read(&run.join("runtime.json"))? != *outcome
+    {
+        return Err(invalid(
+            "validation outcome differs from its registered run",
+        ));
+    }
+    let execution = read(&run.join("execution.json"))?;
+    let context: basecraft_protocol::operation::InvocationContext =
+        serde_json::from_value(execution["context"].clone())?;
+    if execution["schema"] != 1
+        || execution["operation"] != VALIDATE_OPERATION
+        || context.schema != 1
+        || context.operation != VALIDATE_OPERATION
+        || context.run_id != run_id
+        || execution["package_digest"] != outcome["pins"]["package_digest"]
+        || execution["descriptor_digest"] != outcome["pins"]["descriptor_digest"]
+        || execution["effective_parameters"] != outcome["effective_parameters"]
+        || context.input_evidence.len() != 4
+    {
+        return Err(invalid("validation execution identity does not match"));
+    }
+    let request = read(&run.join("request.json"))?;
+    for (role, ext) in [
+        ("sequences", "fsa"),
+        ("sources", "src"),
+        ("features", "tbl"),
+        ("template", "sbt"),
+    ] {
+        let current = package.join("genbank").join(format!("{BASE}.{ext}"));
+        let evidence = context
+            .input_evidence
+            .get(role)
+            .filter(|e| e.len() == 1)
+            .ok_or_else(|| invalid("validation has incomplete submitted input evidence"))?;
+        let evidence = &evidence[0];
+        let expected = basecraft_io::hash_file(&current)?;
+        let original = evidence
+            .original_path
+            .as_deref()
+            .ok_or_else(|| invalid("validation input has no source path"))?;
+        let ledger = crate::input_evidence::read_input(Path::new(&evidence.run_directory))?;
+        if Path::new(original).canonicalize()? != current.canonicalize()?
+            || evidence.source_hash.as_deref() != Some(expected.as_str())
+            || evidence.submitted_hash != expected
+            || evidence.transformation != "identity-v1"
+            || ledger.state == "broken"
+            || ledger.submitted_hash != expected
+            || ledger.transformation != "identity-v1"
+        {
+            return Err(invalid(
+                "stale or unrelated validation inputs; validate the exported package again",
+            ));
+        }
+    }
+    let destination = request["destinations"]["reports"]
+        .as_str()
+        .ok_or_else(|| invalid("validation has no reports destination"))?;
+    let destination = root.join(destination);
+    if destination.parent().and_then(|p| p.canonicalize().ok())
+        != Some(validation_dir(package, hash).canonicalize()?)
+    {
+        return Err(invalid(
+            "validation belongs to a different package generation",
+        ));
+    }
+    let artifacts = outcome["artifacts"]
+        .as_array()
+        .ok_or_else(|| invalid("missing validation artifacts"))?;
+    if artifacts.is_empty() {
+        return Ok(None);
+    }
+    let reports = destination.canonicalize()?;
+    for artifact in artifacts {
+        let path = root.join(
+            artifact["path"]
+                .as_str()
+                .ok_or_else(|| invalid("missing validation artifact path"))?,
+        );
+        if artifact["role"] != "reports"
+            || basecraft_io::hash_file(&path)? != artifact["digest"].as_str().unwrap_or_default()
+            || crate::provenance::bundle_for_result(&path).canonicalize()? != run.canonicalize()?
+            || !crate::provenance::verify(&path)?.is_empty()
+        {
+            return Err(invalid(
+                "validation artifact or publication evidence differs",
+            ));
+        }
+    }
+    // Only read files actually published by this run, including optional reports.
+    for name in [
+        "table2asn.log",
+        "submission.val",
+        "submission.sqn",
+        "submission.gbf",
+    ] {
+        let path = reports.join(name);
+        if path.exists()
+            && !artifacts.iter().any(|a| {
+                a["path"]
+                    .as_str()
+                    .is_some_and(|p| root.join(p).canonicalize().ok() == path.canonicalize().ok())
+            })
+        {
+            return Err(invalid("validation folder contains an unpublished output"));
+        }
+    }
+    Ok(Some(reports))
+}
+
 /// Read a finished table2asn job's reports into the package: issues mapped
 /// to records and specimens, the summary, the `.sqn` and `.gbf` copied
 /// into `genbank/`, and the package manifest and README updated.
@@ -1057,29 +1204,7 @@ pub fn record_validation(
     let (mut manifest, hash) = package_inputs(&package)?;
     let dir = validation_dir(&package, &hash);
     let data = &outcome["data"];
-    // Collection members are listed one by one, in the hidden store and at
-    // the destination; prefer the copy inside this package.
-    let folders: Vec<PathBuf> = outcome["artifacts"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|a| a["role"] == "reports")
-        .filter_map(|a| a["path"].as_str())
-        .map(|p| {
-            if Path::new(p).is_absolute() {
-                PathBuf::from(p)
-            } else {
-                root.join(p)
-            }
-        })
-        .filter(|p| p.file_name().is_some_and(|n| n == "table2asn.log"))
-        .filter_map(|p| p.parent().map(Path::to_path_buf))
-        .collect();
-    let reports = folders
-        .iter()
-        .find(|p| p.starts_with(&package))
-        .or_else(|| folders.first())
-        .cloned();
+    let reports = verified_reports(&root, &package, &hash, outcome)?;
     let mut summary = ValidationSummary {
         input_hash: hash.clone(),
         status: "failed".into(),
@@ -1114,7 +1239,7 @@ pub fn record_validation(
         // counts only when it exited cleanly and wrote the .sqn and the
         // flatfile preview, which it makes after validating.
         let quiet = !val.is_file() && data["exit_code"] == 0 && gbf.is_file();
-        if !sqn.is_file() || !(val.is_file() || quiet) {
+        if !val.is_file() && !quiet {
             summary.message =
                 "table2asn produced no validation report or .sqn; the run is not a pass".into();
         } else {
@@ -1163,7 +1288,21 @@ pub fn record_validation(
                     tool_severity: Some(message.severity),
                 });
             }
-            summary.status = if summary.errors == 0 {
+            let complete = data["exit_code"] == 0
+                && sqn.is_file()
+                && gbf.is_file()
+                && report
+                    .lines()
+                    .filter(|line| !line.trim().is_empty())
+                    .next()
+                    .is_none_or(|line| {
+                        ["Error: ", "Reject: ", "Fatal: ", "Warning: ", "Info: "]
+                            .iter()
+                            .any(|prefix| line.starts_with(prefix))
+                    });
+            summary.status = if !complete {
+                "failed"
+            } else if summary.errors == 0 {
                 "passed"
             } else {
                 "errors"
@@ -1173,7 +1312,13 @@ pub fn record_validation(
                 "table2asn {}: {} errors, {} warnings",
                 summary.tool_version, summary.errors, summary.warnings
             );
-            for ext in ["sqn", "gbf"] {
+            if !complete {
+                summary.message = format!(
+                    "table2asn did not exit successfully with complete recognized outputs (exit {}); retain reports and retry validation",
+                    data["exit_code"]
+                );
+            }
+            for ext in ["sqn", "gbf"].into_iter().filter(|_| complete) {
                 let from = reports.join(format!("{BASE}.{ext}"));
                 if from.is_file() {
                     let bytes = std::fs::read(&from)?;
@@ -1288,14 +1433,26 @@ pub fn plan_accessions(
     text: &str,
     submitter: &Submitter,
 ) -> Result<AccessionPlan> {
-    let review = review(session, doc, submitter)?;
-    let mut ids: BTreeMap<String, String> = BTreeMap::new();
-    for r in &review.prepared.records {
-        ids.insert(r.record.clone(), r.record.clone());
-        if let Some(id) = &r.export_id {
-            ids.insert(id.clone(), r.record.clone());
+    let sub = checked(session, doc)?;
+    let fallback;
+    let ids = if let Some(mapping) = &sub.exported {
+        if mapping.source != sub.source {
+            return Err(invalid(
+                "the submission source changed since export; use the original submission for returned accessions",
+            ));
         }
-    }
+        &mapping.records
+    } else {
+        // Compatibility for documents made before export mappings were retained.
+        fallback = review(session, doc, submitter)?
+            .prepared
+            .records
+            .iter()
+            .filter_map(|r| Some((r.export_id.clone()?, r.record.clone())))
+            .collect();
+        &fallback
+    };
+    let originals: BTreeSet<&String> = ids.values().collect();
     let mut plan = AccessionPlan::default();
     let mut seen = BTreeSet::new();
     for line in text.lines() {
@@ -1306,7 +1463,21 @@ pub fn plan_accessions(
         if fields.is_empty() {
             continue;
         }
-        let record = fields.iter().find_map(|f| ids.get(*f));
+        // Archive SeqIDs take precedence over original-name fallback. Never
+        // combine the namespaces in a map: original names can equal another ID.
+        let exported: BTreeSet<&String> = fields.iter().filter_map(|f| ids.get(*f)).collect();
+        let named: BTreeSet<&String> = fields
+            .iter()
+            .filter_map(|f| originals.iter().find(|r| r.as_str() == *f).copied())
+            .collect();
+        let candidates = if exported.is_empty() {
+            &named
+        } else {
+            &exported
+        };
+        let record = (candidates.len() == 1)
+            .then(|| candidates.first().copied())
+            .flatten();
         let accession = fields.iter().find(|f| model::valid_accession(f));
         match (record, accession) {
             (Some(record), Some(accession)) if seen.insert(record.clone()) => {

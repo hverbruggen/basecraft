@@ -28,6 +28,9 @@ pub struct Submission {
     /// Fingerprint of the reviewed source, effective decisions and accession evidence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selection_confirmation: Option<String>,
+    /// Identity mapping from the last successfully written package; independent of row selection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exported: Option<ExportMapping>,
     pub batch: BatchSettings,
     /// Reading frames the user confirmed or chose, by record name.
     #[serde(default)]
@@ -52,6 +55,7 @@ impl Default for Submission {
             source: None,
             rows: Vec::new(),
             selection_confirmation: None,
+            exported: None,
             batch: BatchSettings::default(),
             frames: Vec::new(),
             export: ExportSettings::default(),
@@ -60,6 +64,14 @@ impl Default for Submission {
             extra: BTreeMap::new(),
         }
     }
+}
+
+/// Retained identities for interpreting archive returns after later selection edits.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ExportMapping {
+    pub source: Option<SourceAlignment>,
+    /// Submitted SeqID to original biological record name.
+    pub records: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -337,6 +349,10 @@ pub enum SubmissionEdit {
     },
     SetPublication {
         publication: Publication,
+    },
+    /// Retain the mapping after writing a submission package.
+    RecordExport {
+        mapping: ExportMapping,
     },
     /// Record accessions returned by the archive.
     SetAccessions {
