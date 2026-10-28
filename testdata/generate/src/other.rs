@@ -20,7 +20,7 @@ pub fn write_big_fasta(w: &mut impl Write, target_bytes: u64, rng: &mut Rng) -> 
             2 => rng.range(100_000, 1_000_000),
             _ => rng.range(1_000_000, 5_000_000),
         };
-        let width = if i % 7 == 0 { 80 } else { 60 };
+        let width = if i.is_multiple_of(7) { 80 } else { 60 };
         buf.clear();
         buf.extend((0..len).map(|_| rng.base(0.45)));
         let header = format!(">seq{i:06} len={len}\n");

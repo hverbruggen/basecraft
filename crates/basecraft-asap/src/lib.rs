@@ -560,10 +560,10 @@ impl Components {
             self.altered.push(aa as u32);
             self.is_altered[aa] = true;
         }
-        if self.is_altered[bb] {
-            if let Some(at) = self.altered.iter().position(|&c| c as usize == bb) {
-                self.altered.remove(at);
-            }
+        if self.is_altered[bb]
+            && let Some(at) = self.altered.iter().position(|&c| c as usize == bb)
+        {
+            self.altered.remove(at);
         }
         let moved = std::mem::take(&mut self.parts[bb]);
         self.parts[aa].extend(moved);
