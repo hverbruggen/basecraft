@@ -358,7 +358,7 @@ fn terminal_report_publication_failure_repairs_without_duplicate_completion_or_d
     let accepted = common::submit_in(&mut jobs, &registry, &mut session, |_| {
         json!({
             "operation":"basecraft.delimitation/inspect_tree@1",
-            "inputs":{"tree":common::file("tree.nwk")},"parameters":{},
+            "inputs":{"tree":common::file("tree.nwk")},"parameters":{"rooted":true},
             "target":{"kind":"file","path":"species.spart"}
         })
     })
