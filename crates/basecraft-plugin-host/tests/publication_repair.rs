@@ -150,18 +150,16 @@ fn owner_save_failure_stays_partial_and_repair_does_not_reapply_hypotheses() {
         assert!(std::time::Instant::now() < deadline);
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
-    // A changed saved target prevents saving after the hypotheses were applied.
+    // Fail the save intent after typed application; earlier journal writes work.
     let before = std::fs::read(&workspace).unwrap();
-    std::fs::write(&workspace, b"foreign concurrent edit").unwrap();
+    let fault = session.recovery_root().join("pending-save.json");
+    std::fs::create_dir(&fault).unwrap();
     let partial = common::wait_in(&jobs, &mut session, &accepted.run_id);
     assert_eq!(partial.state, RuntimeState::Partial, "{partial:#?}");
     let count = session.delimitation(target).hypotheses.len();
     assert!(count > 0, "save failed after hypotheses were committed");
-    assert_eq!(
-        std::fs::read(&workspace).unwrap(),
-        b"foreign concurrent edit"
-    );
-    std::fs::write(&workspace, before).unwrap();
+    assert_eq!(std::fs::read(&workspace).unwrap(), before);
+    std::fs::remove_dir(&fault).unwrap();
     assert_eq!(
         jobs.repair(&accepted.run_id).unwrap().state,
         RuntimeState::Finalizing
@@ -178,4 +176,59 @@ fn owner_save_failure_stays_partial_and_repair_does_not_reapply_hypotheses() {
     );
     assert_eq!(common::tool_run_events(&session, target).len(), 1);
     assert!(jobs.finalized_generation(&accepted.run_id).is_some());
+}
+
+#[test]
+fn genuine_workspace_edit_keeps_new_results_as_artifacts_and_records_completion() {
+    let root = tempfile::tempdir().unwrap();
+    let tree = root.path().join("tree.nwk");
+    std::fs::write(&tree, "((a:0.1,b:0.1):0.9,(c:0.2,d:0.2):0.8);\n").unwrap();
+    let registry = common::bundled();
+    let mut session = Session::new(root.path());
+    let input = session.open(&tree).unwrap();
+    let setup = common::run_in(&registry, &mut session, |s| {
+        json!({
+            "operation":"basecraft.delimitation/workspace_tree@1", "inputs":{"tree":common::document(s, input)},
+            "parameters":{},"destinations":{"workspace":"species.spart"}
+        })
+    });
+    common::assert_completed(&setup);
+    let doc = session.open(&root.path().join("species.spart")).unwrap();
+    let mut jobs = JobManager::default();
+    let accepted = common::submit_in(&mut jobs, &registry, &mut session, |s| json!({
+        "operation":"basecraft.delimitation/manual_cut@1", "inputs":{"tree":common::file("tree.nwk")},
+        "parameters":{"rooted":true,"threshold":0.25},"target":common::document(s, doc)[0]
+    })).unwrap();
+    let view = session.delimitation(doc).view.clone();
+    session
+        .apply(
+            doc,
+            basecraft_protocol::Op::DelimitationEdit {
+                edit: Box::new(
+                    basecraft_protocol::delimitation::DelimitationEdit::SetView { view },
+                ),
+            },
+        )
+        .unwrap();
+    let outcome = common::wait_in(&jobs, &mut session, &accepted.run_id);
+    common::assert_completed(&outcome);
+    assert!(
+        outcome
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("Workspace changed"))
+    );
+    assert!(session.delimitation(doc).hypotheses.is_empty());
+    assert!(jobs.finalized_generation(&accepted.run_id).is_none());
+    assert!(common::artifact(&outcome, "result.json").is_file());
+    assert!(
+        session
+            .document_record(doc)
+            .unwrap()
+            .events
+            .iter()
+            .any(|event| matches!(&event.op,
+        basecraft_protocol::Op::JobFinished { report } if report.id == outcome.run_id
+            && report.status == basecraft_protocol::delimitation::JobStatus::Completed))
+    );
 }

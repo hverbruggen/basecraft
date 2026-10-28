@@ -28,6 +28,9 @@ struct DocumentFinalization {
     applied: bool,
     saved: bool,
     generation: Option<u64>,
+    edits: Option<Vec<basecraft_protocol::delimitation::DelimitationEdit>>,
+    next_edit: usize,
+    expected_revision: Option<u64>,
 }
 
 struct Job {
@@ -744,9 +747,13 @@ fn finalize_document(
     snapshot.include_input(&target.record);
     session.complete_operation_publication(target.doc, &snapshot, &job.prepared.run)?;
     if !progress.applied {
-        let unchanged = session.generation(target.doc) == target.generation
-            && session.revision(target.doc) == target.revision;
-        let warning = apply_target_results(job, target, outcome, session)?;
+        let unchanged = if let Some(revision) = progress.expected_revision {
+            session.revision(target.doc) == revision
+        } else {
+            session.generation(target.doc) == target.generation
+                && session.revision(target.doc) == target.revision
+        };
+        let warning = apply_target_results(job, target, outcome, session, &mut progress)?;
         progress.applied = true;
         if unchanged {
             progress.generation = Some(session.generation(target.doc));
@@ -807,6 +814,7 @@ fn apply_target_results(
     target: &crate::runner::DocumentTarget,
     outcome: &OperationOutcome,
     session: &mut basecraft_ops::Session,
+    progress: &mut DocumentFinalization,
 ) -> Result<Option<String>> {
     if !target.receives_results {
         return Ok(None);
@@ -819,7 +827,7 @@ fn apply_target_results(
         "basecraft.delimitation" | "basecraft.host"
     );
     if species && session.is_delimitation(target.doc) {
-        if session.revision(target.doc) == target.revision {
+        if session.revision(target.doc) == progress.expected_revision.unwrap_or(target.revision) {
             let name = job.prepared.species_result_name();
             if let Some(result) = outcome
                 .artifacts
@@ -827,7 +835,24 @@ fn apply_target_results(
                 .map(|artifact| std::path::PathBuf::from(&artifact.path))
                 .find(|path| path.file_name().is_some_and(|file| file == name.as_str()))
             {
-                basecraft_ops::delimitation::add_analysis_result(session, target.doc, &result)?;
+                if progress.edits.is_none() {
+                    let (_, edits) = basecraft_ops::delimitation::analysis_result_edits(
+                        session, target.doc, &result,
+                    )?;
+                    progress.edits = Some(edits);
+                }
+                if let Some(edits) = &progress.edits {
+                    for edit in &edits[progress.next_edit..] {
+                        session.apply(
+                            target.doc,
+                            basecraft_protocol::Op::DelimitationEdit {
+                                edit: Box::new(edit.clone()),
+                            },
+                        )?;
+                        progress.next_edit += 1;
+                        progress.expected_revision = Some(session.revision(target.doc));
+                    }
+                }
             }
         } else {
             warning =

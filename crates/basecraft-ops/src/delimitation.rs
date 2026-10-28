@@ -228,12 +228,31 @@ pub fn add_analysis_result(
     doc: DocId,
     output: &std::path::Path,
 ) -> Result<serde_json::Value> {
+    let (value, edits) = analysis_result_edits(session, doc, output)?;
+    for edit in edits {
+        session.apply(
+            doc,
+            Op::DelimitationEdit {
+                edit: Box::new(edit),
+            },
+        )?;
+    }
+    Ok(value)
+}
+
+/// Validate and plan result attachment before any typed changes. Job owners
+/// retain this plan and advance one edit at a time across repair attempts.
+pub fn analysis_result_edits(
+    session: &Session,
+    doc: DocId,
+    output: &std::path::Path,
+) -> Result<(serde_json::Value, Vec<DelimitationEdit>)> {
     let value: serde_json::Value = serde_json::from_slice(&std::fs::read(output)?)?;
     if value
         .get("workspace")
         .is_none_or(serde_json::Value::is_null)
     {
-        return Ok(value);
+        return Ok((value, Vec::new()));
     }
     let work: basecraft_protocol::delimitation::DelimitationWorkspace =
         serde_json::from_value(value["workspace"].clone())?;
@@ -261,22 +280,14 @@ pub fn add_analysis_result(
         edits.push(DelimitationEdit::Add { hypothesis });
     }
     if edits.is_empty() {
-        return Ok(value);
+        return Ok((value, Vec::new()));
     }
     edits.push(DelimitationEdit::SetView { view });
     let mut checked = current.clone();
     for edit in &edits {
         basecraft_docs::delimitation::apply(&mut checked, edit).map_err(|e| invalid(e.0))?;
     }
-    for edit in edits {
-        session.apply(
-            doc,
-            Op::DelimitationEdit {
-                edit: Box::new(edit),
-            },
-        )?;
-    }
-    Ok(value)
+    Ok((value, edits))
 }
 
 pub fn combine(session: &mut Session, doc: DocId, paths: &[PathBuf]) -> Result<()> {
