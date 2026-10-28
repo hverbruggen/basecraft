@@ -267,6 +267,10 @@ fn document_view(
     let mut bytes = Vec::new();
     match view {
         InputView::AlignedFasta if session.is_alignment(doc) => {
+            session
+                .alignment(doc)
+                .validate_aligned_input()
+                .map_err(|error| Error::Protocol(error.to_string()))?;
             basecraft_ops::files::write_alignment(session.alignment(doc), &mut bytes)?;
             Ok((bytes, "canonical-fasta-v1", "afa"))
         }
@@ -425,6 +429,12 @@ impl PreparedOperation {
                             return Err(Error::Protocol(
                                 "stale_revision: input document changed".into(),
                             ));
+                        }
+                        if view == InputView::AlignedFasta && session.is_alignment(id) {
+                            session
+                                .alignment(id)
+                                .validate_aligned_input()
+                                .map_err(|error| Error::Protocol(error.to_string()))?;
                         }
                         input_record.include_input(&session.document_record(id)?);
                         let saved = session.saved_source(id)?;
@@ -590,6 +600,10 @@ impl PreparedOperation {
                         };
                         let mut output = Vec::new();
                         if binding.view == InputView::AlignedFasta {
+                            alignment
+                                .doc
+                                .validate_aligned_input()
+                                .map_err(|error| Error::Protocol(error.to_string()))?;
                             basecraft_ops::files::write_alignment(&alignment.doc, &mut output)?;
                         } else {
                             basecraft_ops::files::write_ungapped(&alignment.doc, &mut output)?;

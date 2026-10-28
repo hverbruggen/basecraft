@@ -226,6 +226,9 @@ pub struct AlignmentDoc {
     pub name: String,
     rows: Vec<AlnRow>,
     width: u64,
+    /// Original row lengths when construction required synthetic padding.
+    /// Retained through edits and snapshots: rectangular editing is not alignment.
+    unequal_input_lengths: Option<Vec<u64>>,
     version: u64,
     protein: bool,
     consensus: Mutex<ConsensusCache>,
@@ -236,10 +239,16 @@ impl AlignmentDoc {
     /// An alignment from rows. Rows shorter than the longest are padded with
     /// trailing gaps, as reading a ragged alignment file does.
     pub fn new(name: impl Into<String>, rows: Vec<AlnRow>) -> Self {
+        let lengths: Vec<_> = rows.iter().map(AlnRow::len).collect();
+        let unequal = lengths
+            .first()
+            .is_some_and(|first| lengths.iter().any(|length| length != first));
+        let unequal_input_lengths = unequal.then_some(lengths);
         let mut doc = Self {
             name: name.into(),
             rows,
             width: 0,
+            unequal_input_lengths,
             version: 0,
             protein: false,
             consensus: Mutex::new(ConsensusCache::default()),
@@ -274,6 +283,18 @@ impl AlignmentDoc {
             })
             .collect();
         Self::new(name, rows)
+    }
+
+    /// Require equal lengths before construction added any trailing gaps.
+    /// Equal lengths alone do not establish biological alignment. Run an aligner
+    /// on ungapped input to create a new alignment from unequal-length rows.
+    pub fn validate_aligned_input(&self) -> Result<(), EditError> {
+        if self.unequal_input_lengths.is_some() {
+            return err(
+                "This operation requires aligned sequences of equal length. These sequences have different lengths; align them first.",
+            );
+        }
+        Ok(())
     }
 
     pub fn width(&self) -> u64 {
@@ -713,6 +734,7 @@ impl AlignmentDoc {
             name: self.name.clone(),
             rows: self.rows.clone(),
             width: self.width,
+            unequal_input_lengths: self.unequal_input_lengths.clone(),
             version: self.version,
             protein: self.protein,
             consensus: Mutex::new(ConsensusCache::default()),
