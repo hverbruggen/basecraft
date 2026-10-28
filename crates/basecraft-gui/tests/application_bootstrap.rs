@@ -37,6 +37,9 @@ mod sanger_bridge;
 #[path = "../src/settings_bridge.rs"]
 #[allow(unused_imports)] // harness=false omits the included module's #[test] bodies.
 mod settings_bridge;
+#[path = "../src/submission_bridge.rs"]
+#[allow(unused_imports, dead_code)] // harness=false omits the included module's test bodies.
+mod submission_bridge;
 #[path = "../src/tree_bridge.rs"]
 #[allow(unused_imports)] // harness=false omits the included module's #[test] bodies.
 mod tree_bridge;

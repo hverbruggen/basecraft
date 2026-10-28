@@ -19,6 +19,7 @@ mod operations_bridge;
 mod provenance_bridge;
 mod sanger_bridge;
 mod settings_bridge;
+mod submission_bridge;
 mod tree_bridge;
 
 use cxx_qt_lib::{QQmlApplicationEngine, QUrl};

@@ -68,6 +68,9 @@ Item {
                     QtObject { id: shell; property color foreground: "black"; property color background: "white"; property color accent: "blue"; property string project_dir: "/project" }
                     property string metadataFasta: currentKind === "alignment" ? "/project/rbcL.fasta" : ""
                     property var metadataLinks: currentKind === "alignment" ? ({records: 3, unlinked: ["a"]}) : ({})
+                    property string submissionAlignment: currentKind === "alignment" ? "/project/rbcL.afa" : ""
+                    QtObject { id: submissions; property bool available: currentKind === "alignment" }
+                    QtObject { id: submissionJobs; property bool busy: false }
                     ${host.source.slice(tabsStart, tabsEnd)}
                     ${declarations}
                     ${components}
@@ -109,6 +112,9 @@ Item {
                         if (name === "Data submission" && command.commandId === "metadata.table") verify(command.enabled)
                         if (name === "Data submission" && command.commandId === "metadata.import-headers") compare(command.enabled, kind === "alignment")
                         if (name === "Data submission" && command.commandId === "metadata.template") compare(command.enabled, kind === "alignment")
+                        if (name === "Data submission" && command.commandId === "submission.new") compare(command.enabled, kind === "alignment")
+                        if (name === "Data submission" && command.commandId === "submission.open") verify(command.enabled)
+                        if (name === "Data submission" && command.commandId === "submission.validate") compare(command.enabled, kind === "alignment")
                     }
                     scene.ribbonTabName = "View"
                     verify(waitForPolish(scene.Window.window))

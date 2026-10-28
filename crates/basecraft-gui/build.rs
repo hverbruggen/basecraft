@@ -140,6 +140,8 @@ fn main() {
         "qml/SpecimenTableDialog.qml",
         "qml/MetadataImportDialog.qml",
         "qml/MetadataReviewDialog.qml",
+        "qml/SubmissionDialog.qml",
+        "qml/SubmitterDialog.qml",
     ]))
     .qrc("icons.qrc")
     .qrc("controls.qrc")
@@ -154,6 +156,7 @@ fn main() {
         "src/tree_bridge.rs",
         "src/delimitation_bridge.rs",
         "src/metadata_bridge.rs",
+        "src/submission_bridge.rs",
         "src/application_test_bridge.rs",
     ])
     .cpp_file("cpp/instanceview.h")

@@ -279,6 +279,12 @@ ApplicationWindow {
             specimenTable.open()
             return
         }
+        // Submissions are project documents edited on the Data submission tab.
+        if (shell.file_kind(path) === "submission") {
+            ribbonTabName = "Data submission"
+            window.openSubmission(path)
+            return
+        }
         focusOpenedDocument = true
         for (let i = 0; i < openFiles.count; i++) {
             if (openFiles.get(i).path === path) { tabs.currentIndex = i; Qt.callLater(refreshCurrent); return }
@@ -1350,6 +1356,15 @@ ApplicationWindow {
                             Accessible.name: text
                         }
                     }
+                    ToolSeparator { Layout.fillHeight: true }
+                    RibbonGroup {
+                        title: "GenBank"
+                        RibbonButton { commandId: "submission.new"; text: "Start"; iconName: "new-file"; tip: window.submissionAlignment.length ? "Prepare a GenBank submission from this alignment" : "Open the marker alignment first"; enabled: shell.project_dir.length > 0 && window.submissionAlignment.length > 0; onInvoked: window.startSubmission() }
+                        RibbonButton { commandId: "submission.open"; text: "Open"; iconName: "open"; tip: "Open a GenBank submission of this project"; enabled: shell.project_dir.length > 0; onInvoked: submissionPicker.open() }
+                        RibbonButton { commandId: "submission.prepare"; text: "Prepare"; iconName: "edit"; tip: submissions.available ? "Rows, batch settings, reading frames, issues, package and accessions" : "Start or open a submission first"; enabled: submissions.available; onInvoked: window.showSubmission() }
+                        RibbonButton { commandId: "submission.validate"; text: "Validate"; iconName: "accept"; tip: "Export the package and check it with table2asn on this computer"; enabled: submissions.available && !submissionJobs.busy; onInvoked: window.validateSubmission() }
+                        RibbonButton { commandId: "submission.submitter"; text: "Submitter"; iconName: "project"; tip: "Your contact details for submission templates"; onInvoked: submitterDialog.show(JSON.parse(preferences.snapshot || "{}").submitter) }
+                    }
                     Item { Layout.fillWidth: true }
                     HelpGroup {}
                 }
@@ -1366,7 +1381,10 @@ ApplicationWindow {
     // project folder; opening a project never creates metadata files.
     MetadataController { id: specimenMetadata }
     readonly property string metadataProject: shell.project_dir
-    onMetadataProjectChanged: specimenMetadata.use_project(metadataProject)
+    onMetadataProjectChanged: {
+        specimenMetadata.use_project(metadataProject)
+        submissions.use_project(metadataProject)
+    }
     readonly property var metadataTable: JSON.parse(specimenMetadata.table)
     // The open FASTA file whose records can be imported, linked or templated.
     readonly property string metadataFasta: current && (alignmentOpen || currentKind === "sequence")
@@ -1413,6 +1431,92 @@ ApplicationWindow {
             metadataImport.close()
             metadataReview.show(JSON.parse(specimenMetadata.plan), metadataImport.mode === "headers" ? "pattern" : "mapping")
         }
+    }
+    // GenBank marker submissions (Data submission tab). table2asn runs as a
+    // registered operation on its own job runner, like BLAST.
+    SubmissionController { id: submissions }
+    Connections {
+        target: specimenMetadata
+        function onTableChanged() { if (submissions.available) submissions.refresh_review() }
+    }
+    // The open alignment a submission can start from.
+    readonly property string submissionAlignment: alignmentOpen ? metadataFasta : ""
+    AppOperations { id: submissionJobs }
+    Timer { interval: 200; repeat: true; running: submissionJobs.busy; onTriggered: {
+        submissionJobs.poll()
+        if (!submissionJobs.busy) submissions.record_validation(submissionJobs.outcome)
+    } }
+    function startSubmission() {
+        const file = submissionAlignment.split("/").pop()
+        submissionName.ask("Start a GenBank submission", "Submission name", file.replace(/\.[^.]*$/, ""), name => {
+            if (!submissions.create(submissionAlignment, name)) return submissions.message
+            showSubmission()
+            return ""
+        })
+    }
+    function openSubmission(path) { if (submissions.open(path)) showSubmission() }
+    function showSubmission() {
+        submissions.refresh_review()
+        submissionDialog.open()
+    }
+    function validateSubmission() {
+        if (!submissions.export_package()) { showSubmission(); return }
+        const request = submissions.validation_request()
+        if (request.length) submissionJobs.submit(shell.project_dir, request)
+        if (!submissionDialog.opened) showSubmission()
+    }
+    TextPromptDialog { id: submissionName }
+    SubmissionDialog {
+        id: submissionDialog
+        document: JSON.parse(submissions.document || "null")
+        review: JSON.parse(submissions.review || '{"rows":[],"issues":[]}')
+        pkg: JSON.parse(submissions.package || "null")
+        geneticCodes: JSON.parse(submissions.genetic_codes())
+        path: submissions.path
+        message: submissionJobs.busy ? "Validating with table2asn" : submissions.message
+        messageKind: submissions.message_kind
+        canUndo: submissions.can_undo
+        canRedo: submissions.can_redo
+        validating: submissionJobs.busy
+        onEditRequested: edit => submissions.edit(edit)
+        onPublicationRequested: (title, authors) => submissions.set_publication(title, authors)
+        onDecisionRequested: (record, decision, accession) => submissions.set_decision(record, decision, accession)
+        onFrameRequested: (record, codonStart) => submissions.set_frame(record, codonStart)
+        onConfirmDetectedRequested: submissions.confirm_detected()
+        onUndoRequested: submissions.undo()
+        onRedoRequested: submissions.redo()
+        onExportRequested: submissions.export_package()
+        onValidateRequested: window.validateSubmission()
+        onCancelValidationRequested: submissionJobs.cancel()
+        onAccessionsMatchRequested: text => {
+            const plan = submissions.plan_accessions(text)
+            submissionDialog.accessionPlan = plan.length ? JSON.parse(plan) : null
+        }
+        onAccessionsRecordRequested: accessions => submissions.record_accessions(accessions)
+        onAccessionTableRequested: accessionTableDestination.open()
+    }
+    SubmitterDialog {
+        id: submitterDialog
+        onSaved: value => {
+            preferences.update("submitter", JSON.stringify(value))
+            if (submissions.available) submissions.refresh_review()
+        }
+    }
+    FileDialog {
+        id: submissionPicker
+        title: "Open a GenBank submission"
+        currentFolder: window.activeFolder()
+        onVisibleChanged: if (visible) currentFolder = window.activeFolder()
+        nameFilters: ["Submissions (*.submission.json)"]
+        onAccepted: window.openSubmission(window.localPath(selectedFile))
+    }
+    FileDialog {
+        id: accessionTableDestination
+        title: "Save the accession table"
+        fileMode: FileDialog.SaveFile
+        defaultSuffix: "tsv"
+        nameFilters: ["Tab-separated table (*.tsv)"]
+        onAccepted: submissions.write_accession_table(window.localPath(selectedFile))
     }
     MetadataReviewDialog {
         id: metadataReview

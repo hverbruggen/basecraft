@@ -1307,6 +1307,7 @@ impl qobject::GenomeController {
             Ok(basecraft_ops::files::Kind::Tree) => "tree",
             Ok(basecraft_ops::files::Kind::Delimitation) => "delimitation",
             Ok(basecraft_ops::files::Kind::Metadata) => "metadata",
+            Ok(basecraft_ops::files::Kind::Submission) => "submission",
             _ => "sequence",
         })
     }
