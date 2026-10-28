@@ -229,14 +229,19 @@ pub fn add_analysis_result(
     output: &std::path::Path,
 ) -> Result<serde_json::Value> {
     let (value, edits) = analysis_result_edits(session, doc, output)?;
-    for edit in edits {
-        session.apply(
-            doc,
-            Op::DelimitationEdit {
-                edit: Box::new(edit),
-            },
-        )?;
-    }
+    session.begin_group();
+    let applied = edits.into_iter().try_for_each(|edit| {
+        session
+            .apply(
+                doc,
+                Op::DelimitationEdit {
+                    edit: Box::new(edit),
+                },
+            )
+            .map(|_| ())
+    });
+    session.end_group();
+    applied?;
     Ok(value)
 }
 

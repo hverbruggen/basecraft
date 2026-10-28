@@ -936,16 +936,22 @@ fn apply_target_results(
                     progress.edits = Some(edits);
                 }
                 if let Some(edits) = &progress.edits {
-                    for edit in &edits[progress.next_edit..] {
-                        session.apply(
-                            target.doc,
-                            basecraft_protocol::Op::DelimitationEdit {
-                                edit: Box::new(edit.clone()),
-                            },
-                        )?;
-                        progress.next_edit += 1;
-                        progress.expected_revision = Some(session.revision(target.doc));
-                    }
+                    session.begin_group();
+                    let applied = (|| -> Result<()> {
+                        for edit in &edits[progress.next_edit..] {
+                            session.apply(
+                                target.doc,
+                                basecraft_protocol::Op::DelimitationEdit {
+                                    edit: Box::new(edit.clone()),
+                                },
+                            )?;
+                            progress.next_edit += 1;
+                            progress.expected_revision = Some(session.revision(target.doc));
+                        }
+                        Ok(())
+                    })();
+                    session.end_group();
+                    applied?;
                 }
             }
         } else {

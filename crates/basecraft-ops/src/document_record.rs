@@ -146,9 +146,12 @@ impl DocumentRecord {
 
     /// The report for a saved file as it is on disk. A saved Sanger review is
     /// read by its own reader and report adapter, exactly as the application
-    /// shows it; any other `.json` file is refused with the reason. Other
+    /// shows it. Metadata and submission JSON use their own readers. Other
     /// documents open through [`Self::from_file`].
     pub fn saved_report(path: &Path) -> crate::Result<Report> {
+        if crate::metadata::is_manifest(path) || crate::submission::is_submission(path) {
+            return Self::from_file(path)?.report();
+        }
         if let Some(review) = crate::sanger_review::saved_review(path) {
             let review = review.map_err(crate::error::invalid)?;
             // A checkpoint recovered from application state is unsaved work.

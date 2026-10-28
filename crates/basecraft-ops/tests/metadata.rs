@@ -357,3 +357,28 @@ fn outside_edits_future_versions_and_unknown_fields() {
         .to_string();
     assert!(error.contains("newer Basecraft"), "{error}");
 }
+
+#[test]
+fn saved_metadata_and_submission_reports_use_their_document_readers() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = Session::new(dir.path());
+    let metadata = metadata::open(&mut session, true).unwrap().unwrap();
+    session.save(metadata, None).unwrap();
+    let alignment = dir.path().join("input.afa");
+    std::fs::write(&alignment, ">a\nACGT\n>b\nACGT\n").unwrap();
+    let submission_path = dir.path().join("input.submission.json");
+    let submission =
+        basecraft_ops::submission::create(&mut session, &submission_path, &alignment).unwrap();
+    session.save(submission, None).unwrap();
+    for path in [metadata::manifest_path(dir.path()), submission_path] {
+        let saved = basecraft_ops::document_record::DocumentRecord::saved_report(&path).unwrap();
+        let ordinary = basecraft_ops::document_record::DocumentRecord::from_file(&path)
+            .unwrap()
+            .report()
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(saved).unwrap(),
+            serde_json::to_value(ordinary).unwrap()
+        );
+    }
+}
