@@ -197,7 +197,7 @@ pub struct Review {
     pub source_hash: Option<String>,
     /// Hash of the metadata manifest used.
     pub metadata_hash: Option<String>,
-    /// Pass this fingerprint to the ConfirmSelection edit after review.
+    /// Pass this fingerprint to the `ConfirmSelection` edit after review.
     pub selection_hash: Option<String>,
     pub selection_confirmed: bool,
 }
@@ -301,11 +301,11 @@ pub fn review_submission(
         ));
     }
     Ok(Review {
-        selection_hash,
-        selection_confirmed,
         prepared,
         source_hash,
         metadata_hash,
+        selection_hash,
+        selection_confirmed,
     })
 }
 

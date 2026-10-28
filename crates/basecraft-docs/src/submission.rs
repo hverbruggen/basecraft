@@ -238,7 +238,7 @@ pub struct AccessionCandidate {
 }
 
 /// Find candidate tokens without remote lookups. In addition to marker
-/// accessions, recognize RefSeq and WGS-shaped identifiers conservatively.
+/// accessions, recognize `RefSeq` and WGS-shaped identifiers conservatively.
 pub fn accession_candidates(text: &str) -> BTreeSet<String> {
     fn shaped(text: &str) -> bool {
         if valid_accession(text) {
@@ -1146,7 +1146,7 @@ mod tests {
             let (decision, reason, candidates) = selection(&sub, id, &meta, "aln.fasta");
             assert_eq!(decision, Decision::Exclude, "{id}");
             assert!(reason.contains("unverified"));
-            assert!(!candidates.is_empty());
+            assert_ne!(candidates, Vec::new());
         }
         assert!(accession_candidates("ordinary protein NP_012345.1 MZ123x56").is_empty());
         meta.specimens.rows[0].cells.insert(

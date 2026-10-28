@@ -276,6 +276,6 @@ fn reexported_seqid_with_two_record_meanings_is_ambiguous() {
     submission::export(&mut session, doc, &folder, &Submitter::default()).unwrap();
     let plan =
         submission::plan_accessions(&session, doc, "a_b PX123456", &Submitter::default()).unwrap();
-    assert!(plan.accessions.is_empty());
+    assert_eq!(plan.accessions, Vec::new());
     assert_eq!(plan.unmatched, ["a_b PX123456"]);
 }
