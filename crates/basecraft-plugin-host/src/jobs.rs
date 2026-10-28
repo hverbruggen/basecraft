@@ -744,7 +744,12 @@ fn finalize_document(
         progress.activity = true;
     }
     let mut snapshot = job.prepared.input_record.clone();
-    snapshot.include_input(&target.record);
+    // A receiving workspace is an edit destination, not an analysis input.
+    // Making the result depend on it would cycle when that workspace records
+    // the newly attached result as one of its own dependencies.
+    if !target.receives_results {
+        snapshot.include_input(&target.record);
+    }
     session.complete_operation_publication(target.doc, &snapshot, &job.prepared.run)?;
     if !progress.applied {
         let unchanged = if let Some(revision) = progress.expected_revision {
