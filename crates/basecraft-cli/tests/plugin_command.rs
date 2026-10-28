@@ -5,14 +5,6 @@ use std::process::{Command, Output};
 
 use serde_json::Value;
 
-fn run(profile: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_basecraft"))
-        .args(args)
-        .env("BASECRAFT_PROFILE_DIR", profile)
-        .output()
-        .unwrap()
-}
-
 /// Every run directory below `root` that holds an input evidence record.
 fn input_records(root: &Path, found: &mut Vec<std::path::PathBuf>) {
     for entry in std::fs::read_dir(root).unwrap() {

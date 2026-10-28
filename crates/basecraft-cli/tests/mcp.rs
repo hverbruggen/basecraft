@@ -364,12 +364,12 @@ impl Client {
             output,
             next: 1,
         };
-        client.send(json!({"jsonrpc":"2.0","id":0,"method":"initialize"}), 0);
+        client.send(&json!({"jsonrpc":"2.0","id":0,"method":"initialize"}), 0);
         client
     }
 
     /// Send one message and return the reply with its ID, skipping notifications.
-    fn send(&mut self, message: Value, id: u32) -> Value {
+    fn send(&mut self, message: &Value, id: u32) -> Value {
         use std::io::BufRead;
         writeln!(self.input, "{message}").unwrap();
         loop {
@@ -389,7 +389,7 @@ impl Client {
     fn call(&mut self, name: &str, args: Value) -> Value {
         let id = self.next;
         self.next += 1;
-        self.send(request(id, name, args), id)
+        self.send(&request(id, name, args), id)
     }
 
     /// Submit an operation tool call and wait for the job's terminal outcome.
