@@ -276,7 +276,10 @@ impl FileJob {
     /// Run stages from this accepted registry: the resolved package is verified
     /// before spawning and CPU settings bind against its exact descriptor.
     #[must_use]
-    pub(crate) fn with_registry(mut self, registry: std::sync::Arc<crate::registry::Registry>) -> Self {
+    pub(crate) fn with_registry(
+        mut self,
+        registry: std::sync::Arc<crate::registry::Registry>,
+    ) -> Self {
         self.accepted_registry = Some(registry);
         self
     }
@@ -1344,7 +1347,12 @@ impl FileJob {
     }
 
     /// Log the run against the document its input came from.
-    pub(crate) fn record(&self, session: &mut Session, doc: DocId, result: &InvokeResult) -> Result<()> {
+    pub(crate) fn record(
+        &self,
+        session: &mut Session,
+        doc: DocId,
+        result: &InvokeResult,
+    ) -> Result<()> {
         let manifest = Manifest::load(&self.plugin)?;
         let actor = result.tool.as_ref().map_or_else(
             || Actor::Plugin {
