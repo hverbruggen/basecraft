@@ -32,6 +32,8 @@ pub struct AlnRow {
     /// The header after the name, kept for saving.
     pub description: String,
     seq: PieceTable,
+    /// Explicit row extent, excluding only synthetic rectangular suffix padding.
+    content_len: u64,
 }
 
 impl AlnRow {
@@ -39,6 +41,7 @@ impl AlnRow {
         Self {
             name: name.into(),
             description: String::new(),
+            content_len: residues.len(),
             seq: PieceTable::new(residues),
         }
     }
@@ -62,6 +65,7 @@ pub enum Undo {
         pos: u64,
         len: u64,
         residues: Vec<u8>,
+        content_len: u64,
     },
     InsertRow {
         index: usize,
@@ -226,9 +230,9 @@ pub struct AlignmentDoc {
     pub name: String,
     rows: Vec<AlnRow>,
     width: u64,
-    /// Original row lengths when construction required synthetic padding.
-    /// Retained through edits and snapshots: rectangular editing is not alignment.
-    unequal_input_lengths: Option<Vec<u64>>,
+    /// Ragged input keeps its explicit row extents through editing and saving.
+    /// Already rectangular alignments retain their established gap-edit semantics.
+    preserve_unpadded_lengths: bool,
     version: u64,
     protein: bool,
     consensus: Mutex<ConsensusCache>,
@@ -239,16 +243,14 @@ impl AlignmentDoc {
     /// An alignment from rows. Rows shorter than the longest are padded with
     /// trailing gaps, as reading a ragged alignment file does.
     pub fn new(name: impl Into<String>, rows: Vec<AlnRow>) -> Self {
-        let lengths: Vec<_> = rows.iter().map(AlnRow::len).collect();
-        let unequal = lengths
+        let preserve_unpadded_lengths = rows
             .first()
-            .is_some_and(|first| lengths.iter().any(|length| length != first));
-        let unequal_input_lengths = unequal.then_some(lengths);
+            .is_some_and(|first| rows.iter().any(|row| row.content_len != first.content_len));
         let mut doc = Self {
             name: name.into(),
             rows,
             width: 0,
-            unequal_input_lengths,
+            preserve_unpadded_lengths,
             version: 0,
             protein: false,
             consensus: Mutex::new(ConsensusCache::default()),
@@ -275,6 +277,7 @@ impl AlignmentDoc {
                 AlnRow {
                     name: r.name.clone(),
                     description,
+                    content_len: r.len,
                     seq: PieceTable::new(Arc::new(FastaResidues {
                         file: Arc::clone(file),
                         record: i,
@@ -285,16 +288,26 @@ impl AlignmentDoc {
         Self::new(name, rows)
     }
 
-    /// Require equal lengths before construction added any trailing gaps.
+    /// Require equal explicit row lengths, excluding synthetic suffix padding.
     /// Equal lengths alone do not establish biological alignment. Run an aligner
     /// on ungapped input to create a new alignment from unequal-length rows.
     pub fn validate_aligned_input(&self) -> Result<(), EditError> {
-        if self.unequal_input_lengths.is_some() {
+        if (0..self.rows.len()).any(|row| self.saved_row_len(row) != self.saved_row_len(0)) {
             return err(
                 "This operation requires aligned sequences of equal length. These sequences have different lengths; align them first.",
             );
         }
         Ok(())
+    }
+
+    /// Row extent to serialize. Literal and explicitly edited gaps are retained;
+    /// only synthetic suffix padding of originally ragged input is omitted.
+    pub fn saved_row_len(&self, row: usize) -> u64 {
+        if self.preserve_unpadded_lengths {
+            self.rows[row].content_len
+        } else {
+            self.rows[row].len()
+        }
     }
 
     pub fn width(&self) -> u64 {
@@ -375,14 +388,25 @@ impl AlignmentDoc {
     // Primitive steps. Each records its own undo step.
 
     fn splice(&mut self, row: usize, start: u64, end: u64, residues: &[u8], undo: &mut Vec<Undo>) {
-        let seq = &mut self.rows[row].seq;
-        let removed = seq.delete(start, end);
-        seq.insert(start, residues);
+        let row_data = &mut self.rows[row];
+        let content_len = row_data.content_len;
+        let removed = row_data.seq.delete(start, end);
+        row_data.seq.insert(start, residues);
+        // Explicit edits extend/shorten the meaningful extent even when their
+        // bytes are gaps. Do not inspect residue values to infer alignment.
+        row_data.content_len = if start < content_len {
+            content_len - (end.min(content_len) - start) + residues.len() as u64
+        } else if residues.is_empty() {
+            content_len
+        } else {
+            start + residues.len() as u64
+        };
         undo.push(Undo::Splice {
             row,
             pos: start,
             len: residues.len() as u64,
             residues: removed,
+            content_len,
         });
     }
 
@@ -392,7 +416,11 @@ impl AlignmentDoc {
         for i in 0..self.rows.len() {
             let len = self.rows[i].len();
             if len < width {
+                let content_len = self.rows[i].content_len;
                 self.splice(i, len, len, &gaps(width - len), undo);
+                if self.preserve_unpadded_lengths {
+                    self.rows[i].content_len = content_len;
+                }
             }
         }
         self.width = width;
@@ -734,7 +762,7 @@ impl AlignmentDoc {
             name: self.name.clone(),
             rows: self.rows.clone(),
             width: self.width,
-            unequal_input_lengths: self.unequal_input_lengths.clone(),
+            preserve_unpadded_lengths: self.preserve_unpadded_lengths,
             version: self.version,
             protein: self.protein,
             consensus: Mutex::new(ConsensusCache::default()),
@@ -873,10 +901,12 @@ impl AlignmentDoc {
                     pos,
                     len,
                     residues,
+                    content_len,
                 } => {
-                    let seq = &mut self.rows[*row].seq;
-                    seq.delete(*pos, pos + len);
-                    seq.insert(*pos, residues);
+                    let row = &mut self.rows[*row];
+                    row.seq.delete(*pos, pos + len);
+                    row.seq.insert(*pos, residues);
+                    row.content_len = *content_len;
                 }
                 Undo::InsertRow { index, row } => self.rows.insert(*index, (**row).clone()),
                 Undo::RemoveRow { index } => {

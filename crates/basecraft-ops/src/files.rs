@@ -136,7 +136,8 @@ pub fn load(path: &Path) -> Result<Loaded> {
     open(path).map(Loaded::Sequence)
 }
 
-/// Write an alignment as FASTA, 60 columns a line, streamed row by row.
+/// Write explicit alignment contents as FASTA, 60 columns a line.
+/// Synthetic suffix padding used to display ragged input is never materialised.
 pub fn write_alignment(doc: &AlignmentDoc, w: &mut dyn Write) -> io::Result<()> {
     let mut buf = Vec::new();
     let chunk = 60 * 16_384;
@@ -149,8 +150,9 @@ pub fn write_alignment(doc: &AlignmentDoc, w: &mut dyn Write) -> io::Result<()> 
         }
         w.write_all(b"\n")?;
         let mut pos = 0;
-        while pos < doc.width() {
-            let end = (pos + chunk).min(doc.width());
+        let len = doc.saved_row_len(i);
+        while pos < len {
+            let end = (pos + chunk).min(len);
             buf.clear();
             doc.read_into(i, pos, end, &mut buf);
             for line in buf.chunks(60) {
