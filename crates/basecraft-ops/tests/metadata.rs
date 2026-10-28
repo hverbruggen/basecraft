@@ -376,9 +376,22 @@ fn saved_metadata_and_submission_reports_use_their_document_readers() {
             .unwrap()
             .report()
             .unwrap();
-        assert_eq!(
-            serde_json::to_value(saved).unwrap(),
-            serde_json::to_value(ordinary).unwrap()
-        );
+        // Passive readers create separate ephemeral sessions/open events.
+        // Compare the scientific report and event contents, not their IDs/time.
+        assert_eq!(saved.document, ordinary.document);
+        assert_eq!(saved.methods, ordinary.methods);
+        assert_eq!(saved.citations, ordinary.citations);
+        assert_eq!(saved.warnings, ordinary.warnings);
+        let normalize = |raw: &str| {
+            let mut value: serde_json::Value = serde_json::from_str(raw).unwrap();
+            value.as_object_mut().unwrap().remove("revision");
+            for event in value["events"].as_array_mut().unwrap() {
+                for key in ["id", "t", "session"] {
+                    event.as_object_mut().unwrap().remove(key);
+                }
+            }
+            value
+        };
+        assert_eq!(normalize(&saved.raw), normalize(&ordinary.raw));
     }
 }
