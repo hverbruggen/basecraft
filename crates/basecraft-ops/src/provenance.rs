@@ -310,9 +310,12 @@ fn atomic_json(path: &Path, value: &impl serde::Serialize) -> Result<()> {
     Ok(())
 }
 
-// Carry explicitly selected Sanger review inputs into ordinary saved alignment
-// ancestry. The event remains a ToolRun; the row edit/undo/replay is unchanged.
-fn link_sanger_inputs(bundle: &Path, publication: &Publication) -> Result<()> {
+// Carry explicitly selected input runs into ordinary saved ancestry: a Sanger
+// review chosen for an alignment (`sanger_input`) or any other `ToolRun` that
+// names a registered reference ledger (`input_run`), such as imported support
+// values. The event remains a ToolRun; edits, undo and replay are unchanged.
+// Processed events stay listed under the original `sanger_input_events` key.
+fn link_selected_inputs(bundle: &Path, publication: &Publication) -> Result<()> {
     let dependencies: Vec<_> = publication
         .events
         .iter()
@@ -326,6 +329,9 @@ fn link_sanger_inputs(bundle: &Path, publication: &Publication) -> Result<()> {
             {
                 if plugin == "basecraft.sanger-review" && operation == "reviewed_consensus_input" {
                     return Some((&event.id, &params["sanger_input"]));
+                }
+                if let Some(run) = params.get("input_run") {
+                    return Some((&event.id, run));
                 }
             }
             None
@@ -341,7 +347,7 @@ fn link_sanger_inputs(bundle: &Path, publication: &Publication) -> Result<()> {
         let output = publication
             .outputs
             .first()
-            .ok_or_else(|| invalid("Sanger input publication has no result"))?;
+            .ok_or_else(|| invalid("input publication has no result"))?;
         crate::input_evidence::SubmittedInput {
             schema_version: 1,
             source: None,
@@ -387,24 +393,24 @@ fn link_sanger_inputs(bundle: &Path, publication: &Publication) -> Result<()> {
             continue;
         }
         if dependency["schema_version"] != 1 {
-            return Err(invalid("Unsupported Sanger input dependency"));
+            return Err(invalid("Unsupported selected input dependency"));
         }
         let id = dependency["id"]
             .as_str()
-            .ok_or_else(|| invalid("Sanger input has no identity"))?;
+            .ok_or_else(|| invalid("Selected input has no identity"))?;
         if id.is_empty() || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
-            return Err(invalid("Unsafe Sanger input identity"));
+            return Err(invalid("Unsafe selected input identity"));
         }
         let expected = dependency["hash"]
             .as_str()
-            .ok_or_else(|| invalid("Sanger input has no checksum"))?;
+            .ok_or_else(|| invalid("Selected input has no checksum"))?;
         // An existing relative ancestor remains valid after moving the folder;
         // never replace it with an obsolete absolute path from historical events.
         if let Some((directory, _)) = inherited.iter().find(|(_, p)| p.id == id) {
             if basecraft_io::hash_file(&directory.join("records").join(format!("{id}.json")))?
                 != expected
             {
-                return Err(invalid("Inherited Sanger input identity differs"));
+                return Err(invalid("Inherited selected input identity differs"));
             }
         } else {
             let directory = crate::input_evidence::registered_run(id, expected)?;
@@ -430,7 +436,7 @@ pub fn publish_operation(bundle: &Path, publication: &Publication) -> Result<()>
 /// Artifacts must already be durable before this final manifest publication.
 pub(crate) fn publish(bundle: &Path, publication: &Publication) -> Result<()> {
     std::fs::create_dir_all(bundle.join("records"))?;
-    link_sanger_inputs(bundle, publication)?;
+    link_selected_inputs(bundle, publication)?;
     atomic_json(
         &bundle
             .join("records")

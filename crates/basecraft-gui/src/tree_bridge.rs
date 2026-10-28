@@ -1590,75 +1590,40 @@ impl qobject::TreeController {
     pub fn add_support_from(mut self: Pin<&mut Self>, path: &QString, name: &QString) {
         let started = Instant::now();
         let path = PathBuf::from(path.to_string());
-        let other = match basecraft_ops::files::load_tree(&path) {
-            Ok(t) => t,
-            Err(e) => {
-                self.fail(&format!("Can't read {}: {e}", path.display()));
-                return;
-            }
-        };
-        let sets = match self.with_doc(|d| d.support_from(&other.doc)) {
-            Some(Ok(sets)) => sets,
-            Some(Err(e)) => {
-                self.fail(&e.0);
-                return;
-            }
-            None => return,
-        };
-        if sets.is_empty() {
-            self.notify(&format!("{} has no support values", file_name(&path)));
+        if self.rust().display_only {
+            self.fail("This tree is drawn for another document. Open its file to edit it");
             return;
         }
-        let base = name.to_string().trim().to_string();
-        let source = file_name(&path);
-        let many = sets.len() > 1;
-        let matched: usize = sets
-            .iter()
-            .map(|(_, v)| v.iter().filter(|x| x.is_some()).count())
-            .max()
-            .unwrap_or(0);
-        if let Some(s) = &mut self.as_mut().rust_mut().session {
-            s.begin_group();
-        }
-        let mut added = Vec::new();
-        for (set, values) in sets {
-            let kind = other
-                .doc
-                .support(&set)
-                .map_or(basecraft_protocol::SupportKind::Unknown, |s| s.kind);
-            let source = other
-                .doc
-                .support(&set)
-                .filter(|s| !s.source.is_empty())
-                .map_or_else(|| source.clone(), |s| s.source.clone());
-            let name = match (base.is_empty(), many) {
-                (true, _) => set,
-                (false, false) => base.clone(),
-                (false, true) => format!("{base} {set}"),
+        // Shared with headless routes: values replay from typed edits and the
+        // source tree is referenced as input evidence, not copied.
+        let result = {
+            let mut r = self.as_mut().rust_mut();
+            let r = &mut *r;
+            let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
+                return;
             };
-            if self
-                .as_mut()
-                .edit(Op::TreeAddSupport {
-                    name: name.clone(),
-                    source: source.clone(),
-                    values,
-                    kind,
-                })
-                .is_err()
-            {
-                break;
+            let result = session.import_support(doc, &path, &name.to_string());
+            r.view.sync(session.tree(doc));
+            result
+        };
+        match result {
+            Ok(imported) if imported.added.is_empty() => {
+                self.notify(&format!("{} has no support values", file_name(&path)));
             }
-            added.push(name);
-        }
-        if let Some(s) = &mut self.as_mut().rust_mut().session {
-            s.end_group();
-        }
-        if !added.is_empty() {
-            self.done(&format!(
-                "Added {} on {matched} branches{}",
-                added.join(", "),
-                took(started)
-            ));
+            Ok(imported) => {
+                self.as_mut().set_dirty(true);
+                self.as_mut().refresh();
+                self.done(&format!(
+                    "Added {} on {} branches{}",
+                    imported.added.join(", "),
+                    imported.matched,
+                    took(started)
+                ));
+            }
+            Err(e) => self.fail(&format!(
+                "Can't import support from {}: {e}",
+                file_name(&path)
+            )),
         }
     }
 

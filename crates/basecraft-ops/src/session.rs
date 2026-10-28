@@ -20,6 +20,8 @@ use basecraft_protocol::{Actor, DocState, Feature, LogEntry, Op, OpResult};
 use crate::error::invalid;
 use crate::files::{self, HashingWriter, Loaded, Opened, OpenedAlignment, OpenedTree};
 use crate::log::LogWriter;
+
+pub mod support_import;
 use crate::{Error, Result};
 
 /// Typing within this interval, at the end of the previous insertion,
