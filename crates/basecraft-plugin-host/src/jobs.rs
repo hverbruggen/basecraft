@@ -22,13 +22,20 @@ struct PendingProposals {
     validated: Vec<(String, std::path::PathBuf, String)>,
 }
 
+#[derive(Default, PartialEq)]
+enum TerminalHistory {
+    #[default]
+    Pending,
+    Recorded,
+    Published,
+}
+
 #[derive(Default)]
 struct DocumentFinalization {
     activity: bool,
     applied: bool,
     saved: bool,
-    completed_recorded: bool,
-    history_saved: bool,
+    terminal_history: TerminalHistory,
     generation: Option<u64>,
     edits: Option<Vec<basecraft_protocol::delimitation::DelimitationEdit>>,
     next_edit: usize,
@@ -781,23 +788,26 @@ fn finalize_document(
         }
         progress.saved = true;
     }
-    if !progress.completed_recorded {
+    if progress.terminal_history == TerminalHistory::Pending {
         let mut completed = outcome.clone();
         completed.state = RuntimeState::Completed;
         record_document_finished(job, target, &completed, session)?;
-        progress.completed_recorded = true;
+        progress.terminal_history = TerminalHistory::Recorded;
     }
     // A successful append is retried only as publication, never as another
     // terminal activity, even if its saved report could not be written yet.
     job.document_finished.store(true, Ordering::Release);
-    if target.save && progress.generation.is_some() && !progress.history_saved {
+    if target.save
+        && progress.generation.is_some()
+        && progress.terminal_history != TerminalHistory::Published
+    {
         if progress.generation != Some(session.generation(target.doc)) {
             return Err(Error::Protocol(
                 "stale_revision: target changed before terminal history publication".into(),
             ));
         }
         session.save_history(target.doc)?;
-        progress.history_saved = true;
+        progress.terminal_history = TerminalHistory::Published;
     }
     Ok(())
 }
