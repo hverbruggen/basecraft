@@ -158,7 +158,16 @@ pub fn operations(command: OperationsCommand) -> Result<()> {
             let policy = basecraft_plugin_host::policy::SessionPolicy::new(&project, true)?;
             let mut session = crate::script_session(project.canonicalize()?)?;
             basecraft_platform::interrupt::install()?;
-            run_foreground(&registry, &request, policy, "CLI", &mut session)?.0
+            let (outcome, target) =
+                run_foreground(&registry, &request, policy, "CLI", &mut session)?;
+            // A named target, such as a species workspace, keeps what the run
+            // added to it; a one-shot command has no later save.
+            if request.target.is_some() && outcome["state"] == "completed" {
+                if let Some(target) = target {
+                    session.save(target, None)?;
+                }
+            }
+            outcome
         }
         OperationsCommand::List { .. } => list(&registry)?,
         OperationsCommand::Describe { operation, .. } => describe(&registry, &operation)?,
