@@ -9,9 +9,10 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
-# ZIP members of .ods and .xlsx spreadsheets (already used through png).
-crc32fast = "1.5"
-flate2 = "1.1"
+# Spreadsheet parsing and ZIP template/container handling.
+calamine = { version = "0.37", features = ["chrono"] }
+zip = { version = "9.1", default-features = false, features = ["deflate"] }
+# Only used to preflight ODS expansion before calamine allocates its ranges.
 roxmltree = { path = "../../vendor/roxmltree" }
 basecraft-protocol.workspace = true
 blake3.workspace = true

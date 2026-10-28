@@ -212,7 +212,7 @@ fn sheet_from_records(records: Vec<Vec<String>>, date_cells: &[(usize, usize)]) 
     })
 }
 
-/// The first worksheet of an `.ods`, `.xlsx`, `.xls` or `.xlsb` file, or
+/// The first worksheet of an `.ods`, `.xlsx` or `.xlsm` file, or
 /// a CSV or TSV file, as text cells.
 pub fn read_spreadsheet(path: &Path) -> Result<Sheet> {
     let ext = path
@@ -242,6 +242,8 @@ pub fn read_spreadsheet(path: &Path) -> Result<Sheet> {
 struct Cells {
     rows: Vec<Vec<String>>,
     dates: Vec<(usize, usize)>,
+    width: usize,
+    text_bytes: u64,
 }
 
 impl Cells {
@@ -251,9 +253,16 @@ impl Cells {
         if text.is_empty() {
             return Ok(());
         }
-        if row.saturating_mul(column.max(1)) > Self::LIMIT || column > 16_384 {
+        let width = self.width.max(column.saturating_add(1));
+        let height = self.rows.len().max(row.saturating_add(1));
+        self.text_bytes = self.text_bytes.saturating_add(text.len() as u64);
+        if height.saturating_mul(width) > Self::LIMIT
+            || column >= 16_384
+            || self.text_bytes > crate::archive::MEMBER_LIMIT
+        {
             return Err(invalid("the spreadsheet is too large to import"));
         }
+        self.width = width;
         if self.rows.len() <= row {
             self.rows.resize(row + 1, Vec::new());
         }
@@ -286,358 +295,206 @@ impl Cells {
     }
 }
 
-fn xml_document(bytes: &[u8], part: &str) -> Result<String> {
-    String::from_utf8(bytes.to_vec()).map_err(|_| invalid(format!("{part} is not UTF-8")))
+/// Calamine owns workbook relationships, strings, styles and cell decoding.
+/// The adapter retains Basecraft's first-sheet/header and date-warning rules.
+fn read_workbook(path: &Path, ext: &str) -> Result<Sheet> {
+    use calamine::{Ods, Reader, Xlsx};
+    use std::io::{Cursor, Read};
+
+    let result = || -> Result<Sheet> {
+        let mut bytes = Vec::new();
+        std::fs::File::open(path)?
+            .take(crate::archive::MEMBER_LIMIT + 1)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > crate::archive::MEMBER_LIMIT {
+            return Err(invalid("the spreadsheet file is too large to import"));
+        }
+        let mut archive = crate::archive::Archive::new(&bytes)?;
+        archive.validate()?;
+        let mut cells = Cells::default();
+        if ext == "ods" {
+            let content = archive
+                .read("content.xml")?
+                .ok_or_else(|| invalid("the .ods file has no content.xml"))?;
+            preflight_ods(&content)?;
+            let mut workbook = Ods::new(Cursor::new(&bytes)).map_err(workbook_error)?;
+            let name = workbook
+                .sheet_names()
+                .first()
+                .cloned()
+                .ok_or_else(|| invalid("the workbook has no sheets"))?;
+            let range = workbook.worksheet_range(&name).map_err(workbook_error)?;
+            if let Some((row, column)) = range.start() {
+                for (r, c, value) in range.used_cells() {
+                    let (text, date) = cell_text(value.clone())?;
+                    cells.set(row as usize + r, column as usize + c, text, date)?;
+                }
+            }
+        } else {
+            let mut workbook = Xlsx::new(Cursor::new(&bytes)).map_err(workbook_error)?;
+            let name = workbook
+                .sheet_names()
+                .first()
+                .cloned()
+                .ok_or_else(|| invalid("the workbook has no sheets"))?;
+            let mut reader = workbook
+                .worksheet_cells_reader(&name)
+                .map_err(workbook_error)?;
+            while let Some(cell) = reader.next_cell().map_err(workbook_error)? {
+                let (row, column) = cell.get_position();
+                let (text, date) = cell_text(calamine::Data::from(cell.get_value().clone()))?;
+                cells.set(row as usize, column as usize, text, date)?;
+            }
+        }
+        cells.into_sheet()
+    };
+    result().map_err(|e| invalid(format!("could not read {}: {e}", path.display())))
 }
 
-fn parse_xml<'a>(text: &'a str, part: &str) -> Result<roxmltree::Document<'a>> {
-    roxmltree::Document::parse_with_options(
+fn workbook_error(error: impl std::fmt::Display) -> Error {
+    invalid(format!("spreadsheet could not be decoded: {error}"))
+}
+
+fn cell_text(value: calamine::Data) -> Result<(String, bool)> {
+    use calamine::Data;
+    Ok(match value {
+        Data::Empty => (String::new(), false),
+        Data::String(text) | Data::DurationIso(text) => (text, false),
+        Data::DateTimeIso(mut text) => {
+            if text.ends_with("T00:00:00") {
+                text.truncate(text.len() - "T00:00:00".len());
+            }
+            (text, true)
+        }
+        Data::DateTime(value) => {
+            let serial = value.as_f64();
+            if !serial.is_finite() || !(0.0..3_000_000.0).contains(&serial) {
+                return Err(invalid("a spreadsheet date is outside the supported range"));
+            }
+            let date = value
+                .as_datetime()
+                .ok_or_else(|| invalid("a spreadsheet date cannot be represented"))?;
+            let text = date.format("%Y-%m-%dT%H:%M:%S%.f").to_string();
+            (
+                text.strip_suffix("T00:00:00").unwrap_or(&text).to_string(),
+                true,
+            )
+        }
+        // Calamine's error display already includes Excel's leading '#'.
+        other => (other.to_string(), false),
+    })
+}
+
+/// ODS is eager in calamine. Bound every sheet (including formulas), repeated
+/// text and whitespace before handing it over. This inspects allocation sizes;
+/// cell values and workbook semantics are decoded only by calamine.
+fn preflight_ods(bytes: &[u8]) -> Result<()> {
+    let text = std::str::from_utf8(bytes).map_err(|_| invalid("content.xml is not UTF-8"))?;
+    let doc = roxmltree::Document::parse_with_options(
         text,
         roxmltree::ParsingOptions {
             nodes_limit: 20_000_000,
             ..Default::default()
         },
     )
-    .map_err(|e| invalid(format!("{part} could not be read: {e}")))
+    .map_err(|e| invalid(format!("content.xml could not be read: {e}")))?;
+    let mut total_cells = 0usize;
+    let mut total_text = 0u64;
+    let mut stored_cells = 0usize;
+    for table in doc
+        .descendants()
+        .filter(|n| n.is_element() && n.tag_name().name() == "table")
+    {
+        let mut rows = 0usize;
+        let mut width = 0usize;
+        let mut used_rows = 0usize;
+        for row in table
+            .descendants()
+            .filter(|n| n.is_element() && n.tag_name().name() == "table-row")
+        {
+            let repeat = ods_repeat(row, "number-rows-repeated")?;
+            rows = rows.saturating_add(repeat);
+            let mut column = 0usize;
+            let mut row_stored = 0usize;
+            for cell in row.children().filter(|n| {
+                n.is_element() && matches!(n.tag_name().name(), "table-cell" | "covered-table-cell")
+            }) {
+                let previous_column = column;
+                let span = ods_repeat(cell, "number-columns-repeated")?;
+                column = column.saturating_add(span);
+                let mut text_size = 0u64;
+                for node in cell.descendants() {
+                    if node.is_text() {
+                        text_size =
+                            text_size.saturating_add(node.text().unwrap_or_default().len() as u64);
+                    } else if node.is_element() && node.tag_name().name() == "s" {
+                        text_size = text_size.saturating_add(ods_repeat(node, "c")? as u64);
+                    }
+                }
+                for attribute in cell.attributes() {
+                    text_size = text_size.saturating_add(attribute.value().len() as u64);
+                }
+                // An untyped empty cell may still have style attributes.
+                let used = cell.attributes().any(|a| {
+                    matches!(
+                        a.name(),
+                        "value"
+                            | "string-value"
+                            | "date-value"
+                            | "time-value"
+                            | "boolean-value"
+                            | "formula"
+                    )
+                }) || cell
+                    .descendants()
+                    .any(|n| n.is_text() && !n.text().unwrap_or_default().is_empty())
+                    || cell
+                        .descendants()
+                        .any(|n| n.is_element() && n.tag_name().name() == "s");
+                row_stored = if used { column } else { previous_column }.min(16_384);
+                if used {
+                    if column > 16_384 || rows > 1_048_576 {
+                        return Err(invalid("the spreadsheet is too large to import"));
+                    }
+                    width = width.max(column);
+                    used_rows = rows;
+                    total_text = total_text.saturating_add(
+                        text_size
+                            .saturating_mul(span as u64)
+                            .saturating_mul(repeat as u64),
+                    );
+                }
+                if text_size > crate::archive::MEMBER_LIMIT
+                    || total_text > crate::archive::MEMBER_LIMIT
+                {
+                    return Err(invalid(
+                        "the spreadsheet's expanded text is too large to import",
+                    ));
+                }
+            }
+            stored_cells = stored_cells.saturating_add(row_stored);
+            if stored_cells > Cells::LIMIT || used_rows.saturating_mul(width) > Cells::LIMIT {
+                return Err(invalid("the spreadsheet is too large to import"));
+            }
+        }
+        total_cells = total_cells.saturating_add(used_rows.saturating_mul(width));
+        if total_cells > Cells::LIMIT {
+            return Err(invalid("the spreadsheet is too large to import"));
+        }
+    }
+    Ok(())
 }
 
-/// An attribute by local name, whatever its namespace prefix.
-fn attr<'a>(node: roxmltree::Node<'a, '_>, name: &str) -> Option<&'a str> {
+fn ods_repeat(node: roxmltree::Node<'_, '_>, name: &str) -> Result<usize> {
     node.attributes()
         .find(|a| a.name() == name)
-        .map(|a| a.value())
-}
-
-fn named<'a, 'i>(
-    node: roxmltree::Node<'a, 'i>,
-    name: &'static str,
-) -> impl Iterator<Item = roxmltree::Node<'a, 'i>> {
-    node.children()
-        .filter(move |n| n.is_element() && n.tag_name().name() == name)
-}
-
-/// The first worksheet of an `.ods` or `.xlsx` file.
-fn read_workbook(path: &Path, ext: &str) -> Result<Sheet> {
-    let bytes = std::fs::read(path)?;
-    let archive = crate::archive::Archive::new(&bytes)
-        .map_err(|e| invalid(format!("could not read {}: {e}", path.display())))?;
-    let cells = if ext == "ods" {
-        read_ods(&archive)?
-    } else {
-        read_xlsx(&archive)?
-    };
-    cells.into_sheet()
-}
-
-fn ods_text(node: roxmltree::Node<'_, '_>, out: &mut String) {
-    for child in node.children() {
-        if child.is_text() {
-            out.push_str(child.text().unwrap_or_default());
-            continue;
-        }
-        match child.tag_name().name() {
-            "s" => {
-                let count: usize = attr(child, "c").and_then(|c| c.parse().ok()).unwrap_or(1);
-                out.extend(std::iter::repeat_n(' ', count.min(1000)));
-            }
-            "tab" => out.push('\t'),
-            "line-break" => out.push('\n'),
-            "annotation" => {}
-            _ => ods_text(child, out),
-        }
-    }
-}
-
-/// A sheet's rows in order; rows can sit in row groups and header rows.
-fn ods_rows<'a, 'i>(node: roxmltree::Node<'a, 'i>, rows: &mut Vec<roxmltree::Node<'a, 'i>>) {
-    for child in node.children().filter(roxmltree::Node::is_element) {
-        match child.tag_name().name() {
-            "table-row" => rows.push(child),
-            "table-row-group" | "table-header-rows" | "table-rows" => ods_rows(child, rows),
-            _ => {}
-        }
-    }
-}
-
-fn read_ods(archive: &crate::archive::Archive<'_>) -> Result<Cells> {
-    let content = archive
-        .read("content.xml")?
-        .ok_or_else(|| invalid("the .ods file has no content.xml"))?;
-    let text = xml_document(&content, "content.xml")?;
-    let doc = parse_xml(&text, "content.xml")?;
-    let table = doc
-        .descendants()
-        .find(|n| n.is_element() && n.tag_name().name() == "table")
-        .ok_or_else(|| invalid("the .ods file has no sheet"))?;
-    let mut rows = Vec::new();
-    ods_rows(table, &mut rows);
-    let mut cells = Cells::default();
-    let mut row_index = 0usize;
-    for row in rows {
-        let repeat: usize = attr(row, "number-rows-repeated")
-            .and_then(|r| r.parse().ok())
-            .unwrap_or(1);
-        let mut values = Vec::new();
-        let mut column = 0usize;
-        for cell in row.children().filter(|n| {
-            n.is_element() && matches!(n.tag_name().name(), "table-cell" | "covered-table-cell")
-        }) {
-            let span: usize = attr(cell, "number-columns-repeated")
-                .and_then(|r| r.parse().ok())
-                .unwrap_or(1);
-            let (value, date) = match attr(cell, "value-type") {
-                Some("float" | "percentage" | "currency") => {
-                    (attr(cell, "value").unwrap_or_default().to_string(), false)
-                }
-                Some("date") => {
-                    let value = attr(cell, "date-value").unwrap_or_default();
-                    (
-                        value.strip_suffix("T00:00:00").unwrap_or(value).to_string(),
-                        true,
-                    )
-                }
-                Some("time") => (
-                    attr(cell, "time-value").unwrap_or_default().to_string(),
-                    false,
-                ),
-                Some("boolean") => (
-                    attr(cell, "boolean-value").unwrap_or_default().to_string(),
-                    false,
-                ),
-                _ => {
-                    let mut text = String::new();
-                    for (i, p) in named(cell, "p").enumerate() {
-                        if i > 0 {
-                            text.push('\n');
-                        }
-                        ods_text(p, &mut text);
-                    }
-                    (text, false)
-                }
-            };
-            if value.is_empty() {
-                column = column.saturating_add(span);
-            } else {
-                for _ in 0..span.min(16_384) {
-                    values.push((column, value.clone(), date));
-                    column += 1;
-                }
-            }
-        }
-        if values.is_empty() {
-            // Empty rows only separate content; long repeats are padding.
-            row_index = row_index.saturating_add(repeat.min(1));
-            continue;
-        }
-        for _ in 0..repeat.min(10_000) {
-            for (column, value, date) in &values {
-                cells.set(row_index, *column, value.clone(), *date)?;
-            }
-            row_index += 1;
-        }
-    }
-    Ok(cells)
-}
-
-/// Column index of an `A1` reference.
-fn column_of(reference: &str) -> Option<usize> {
-    let letters: String = reference
-        .chars()
-        .take_while(char::is_ascii_alphabetic)
-        .collect();
-    if letters.is_empty() || letters.len() > 3 {
-        return None;
-    }
-    let mut n = 0usize;
-    for c in letters.to_ascii_uppercase().bytes() {
-        n = n * 26 + usize::from(c - b'A') + 1;
-    }
-    Some(n - 1)
-}
-
-/// Days since 1970-01-01 to a civil date (proleptic Gregorian).
-fn civil(days: i64) -> (i64, u32, u32) {
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = u32::try_from(doy - (153 * mp + 2) / 5 + 1).unwrap_or(1);
-    let month = u32::try_from(if mp < 10 { mp + 3 } else { mp - 9 }).unwrap_or(1);
-    (yoe + era * 400 + i64::from(month <= 2), month, day)
-}
-
-/// An Excel serial date as ISO 8601.
-fn excel_date(serial: f64, date1904: bool) -> Option<String> {
-    if !serial.is_finite() || !(0.0..3_000_000.0).contains(&serial) {
-        return None;
-    }
-    #[allow(clippy::cast_possible_truncation)]
-    let whole = serial.floor() as i64;
-    // 1900 system: serial 25569 is 1970-01-01 (Excel's 1900 leap-day bug
-    // only affects dates before March 1900).
-    let days = if date1904 {
-        whole - 24_107
-    } else {
-        whole - 25_569
-    };
-    let (y, m, d) = civil(days);
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let seconds = ((serial - serial.floor()) * 86_400.0).round() as u32;
-    Some(if seconds == 0 {
-        format!("{y:04}-{m:02}-{d:02}")
-    } else {
-        format!(
-            "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}",
-            seconds / 3600,
-            seconds / 60 % 60,
-            seconds % 60
-        )
-    })
-}
-
-/// Whether a number format shows a date: built-in date formats, or a
-/// custom code with day, month or year outside quotes and brackets.
-fn date_format(id: u32, code: Option<&str>) -> bool {
-    if matches!(id, 14..=22 | 45..=47) {
-        return true;
-    }
-    let Some(code) = code else { return false };
-    let mut quoted = false;
-    let mut bracket = false;
-    for c in code.chars() {
-        match c {
-            '"' => quoted = !quoted,
-            '[' if !quoted => bracket = true,
-            ']' if !quoted => bracket = false,
-            'd' | 'D' | 'm' | 'M' | 'y' | 'Y' if !quoted && !bracket => return true,
-            _ => {}
-        }
-    }
-    false
-}
-
-fn xlsx_text(node: roxmltree::Node<'_, '_>) -> String {
-    let mut out = String::new();
-    for t in node
-        .descendants()
-        .filter(|n| n.is_element() && n.tag_name().name() == "t")
-    {
-        if t.ancestors().any(|a| a.tag_name().name() == "rPh") {
-            continue;
-        }
-        out.push_str(t.text().unwrap_or_default());
-    }
-    out
-}
-
-fn read_xlsx(archive: &crate::archive::Archive<'_>) -> Result<Cells> {
-    let part = |name: &str| -> Result<Option<String>> {
-        archive
-            .read(name)?
-            .map(|bytes| xml_document(&bytes, name))
-            .transpose()
-    };
-    let workbook =
-        part("xl/workbook.xml")?.ok_or_else(|| invalid("the .xlsx file has no workbook"))?;
-    let workbook = parse_xml(&workbook, "workbook.xml")?;
-    let date1904 = workbook
-        .descendants()
-        .find(|n| n.tag_name().name() == "workbookPr")
-        .and_then(|n| attr(n, "date1904"))
-        .is_some_and(|v| v == "1" || v == "true");
-    let sheet = workbook
-        .descendants()
-        .find(|n| n.is_element() && n.tag_name().name() == "sheet")
-        .ok_or_else(|| invalid("the workbook has no sheets"))?;
-    let id = attr(sheet, "id").ok_or_else(|| invalid("the first sheet has no relationship"))?;
-    let rels = part("xl/_rels/workbook.xml.rels")?
-        .ok_or_else(|| invalid("the .xlsx file has no workbook relationships"))?;
-    let rels = parse_xml(&rels, "workbook.xml.rels")?;
-    let target = rels
-        .descendants()
-        .find(|n| n.tag_name().name() == "Relationship" && attr(*n, "Id") == Some(id))
-        .and_then(|n| attr(n, "Target"))
-        .ok_or_else(|| invalid("the first sheet's part is missing"))?;
-    let target = target
-        .strip_prefix('/')
-        .map_or_else(|| format!("xl/{target}"), str::to_string);
-    let shared: Vec<String> = match part("xl/sharedStrings.xml")? {
-        Some(text) => parse_xml(&text, "sharedStrings.xml")?
-            .descendants()
-            .filter(|n| n.is_element() && n.tag_name().name() == "si")
-            .map(xlsx_text)
-            .collect(),
-        None => Vec::new(),
-    };
-    let mut date_styles = Vec::new();
-    if let Some(text) = part("xl/styles.xml")? {
-        let styles = parse_xml(&text, "styles.xml")?;
-        let custom: std::collections::BTreeMap<u32, &str> = styles
-            .descendants()
-            .filter(|n| n.tag_name().name() == "numFmt")
-            .filter_map(|n| Some((attr(n, "numFmtId")?.parse().ok()?, attr(n, "formatCode")?)))
-            .collect();
-        if let Some(xfs) = styles
-            .descendants()
-            .find(|n| n.tag_name().name() == "cellXfs")
-        {
-            for xf in named(xfs, "xf") {
-                let id: u32 = attr(xf, "numFmtId")
-                    .and_then(|i| i.parse().ok())
-                    .unwrap_or(0);
-                date_styles.push(date_format(id, custom.get(&id).copied()));
-            }
-        }
-    }
-    let sheet = part(&target)?.ok_or_else(|| invalid(format!("{target} is missing")))?;
-    let sheet = parse_xml(&sheet, &target)?;
-    let mut cells = Cells::default();
-    let mut next_row = 0usize;
-    for row in sheet
-        .descendants()
-        .filter(|n| n.is_element() && n.tag_name().name() == "row")
-    {
-        let index = attr(row, "r")
-            .and_then(|r| r.parse::<usize>().ok())
-            .map_or(next_row, |r| r.saturating_sub(1));
-        next_row = index + 1;
-        let mut next_column = 0usize;
-        for cell in named(row, "c") {
-            let column = attr(cell, "r").and_then(column_of).unwrap_or(next_column);
-            next_column = column + 1;
-            let value = named(cell, "v")
-                .next()
-                .and_then(|v| v.text())
-                .unwrap_or_default();
-            let mut date = false;
-            let text = match attr(cell, "t") {
-                Some("s") => value
-                    .parse::<usize>()
-                    .ok()
-                    .and_then(|i| shared.get(i).cloned())
-                    .unwrap_or_default(),
-                Some("inlineStr") => named(cell, "is").next().map(xlsx_text).unwrap_or_default(),
-                Some("b") => (if value == "1" { "true" } else { "false" }).to_string(),
-                Some("e") => format!("#{value}"),
-                Some("str" | "d") => value.to_string(),
-                _ => {
-                    let style: usize = attr(cell, "s").and_then(|s| s.parse().ok()).unwrap_or(0);
-                    match value.parse::<f64>() {
-                        Ok(serial) if date_styles.get(style).copied().unwrap_or(false) => {
-                            date = true;
-                            excel_date(serial, date1904).unwrap_or_else(|| value.to_string())
-                        }
-                        Ok(number) => format!("{number}"),
-                        Err(_) => value.to_string(),
-                    }
-                }
-            };
-            cells.set(index, column, text, date)?;
-        }
-    }
-    Ok(cells)
+        .map_or(Ok(1), |a| {
+            a.value()
+                .parse::<usize>()
+                .ok()
+                .filter(|n| *n > 0)
+                .ok_or_else(|| invalid(format!("invalid ODS {name}")))
+        })
 }
 
 /// A worksheet for an `.ods` file. Every cell is text, so spreadsheet
@@ -765,21 +622,28 @@ mod tests {
         assert!(read_delimited(b"a,a\n1,2", ',').is_err());
     }
 
-    #[test]
-    fn xlsx_cells_dates_and_shared_strings() {
+    fn xlsx_fixture(sheet_xml: &str, date1904: bool) -> Vec<u8> {
         let mut zip = crate::archive::Writer::default();
         let part = |zip: &mut crate::archive::Writer, name: &str, xml: &str| {
             zip.add(name, xml.as_bytes(), false).unwrap();
         };
         part(
             &mut zip,
+            "_rels/.rels",
+            r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId0" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#,
+        );
+        part(
+            &mut zip,
             "xl/workbook.xml",
-            r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets></workbook>"#,
+            &format!(
+                r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><workbookPr date1904="{}"/><sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets></workbook>"#,
+                u8::from(date1904)
+            ),
         );
         part(
             &mut zip,
             "xl/_rels/workbook.xml.rels",
-            r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>"#,
+            r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#,
         );
         part(
             &mut zip,
@@ -791,15 +655,26 @@ mod tests {
             "xl/styles.xml",
             r#"<styleSheet><cellXfs><xf numFmtId="0"/><xf numFmtId="14"/></cellXfs></styleSheet>"#,
         );
-        part(
-            &mut zip,
-            "xl/worksheets/sheet1.xml",
-            r#"<worksheet><sheetData><row r="2"><c r="B2" t="s"><v>0</v></c><c r="C2" t="s"><v>1</v></c><c r="D2" t="inlineStr"><is><t>n</t></is></c></row><row r="3"><c r="B3" t="s"><v>2</v></c><c r="C3" s="1"><v>43597</v></c><c r="D3"><v>12.5</v></c></row></sheetData></worksheet>"#,
-        );
+        part(&mut zip, "xl/worksheets/sheet1.xml", sheet_xml);
+        zip.finish().unwrap()
+    }
+
+    fn read_fixture(bytes: &[u8], extension: &str) -> Result<Sheet> {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("t.xlsx");
-        std::fs::write(&path, zip.finish().unwrap()).unwrap();
-        let sheet = read_spreadsheet(&path).unwrap();
+        let path = dir.path().join(format!("import.{extension}"));
+        std::fs::write(&path, bytes).unwrap();
+        let result = read_spreadsheet(&path);
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        result
+    }
+
+    #[test]
+    fn xlsx_cells_dates_and_shared_strings() {
+        let bytes = xlsx_fixture(
+            r#"<worksheet><sheetData><row r="2"><c r="B2" t="s"><v>0</v></c><c r="C2" t="s"><v>1</v></c><c r="D2" t="inlineStr"><is><t>n</t></is></c></row><row r="3"><c r="B3" t="s"><v>2</v></c><c r="C3" s="1"><v>43597</v></c><c r="D3"><v>12.5</v></c></row></sheetData></worksheet>"#,
+            false,
+        );
+        let sheet = read_fixture(&bytes, "xlsx").unwrap();
         assert_eq!(sheet.headers, ["", "specimen_id", "eventDate", "n"]);
         assert_eq!(
             sheet.rows,
@@ -834,7 +709,7 @@ mod tests {
 
     #[test]
     fn ods_repeats_groups_and_dates() {
-        let content = r#"<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"><office:body><office:spreadsheet><table:table><table:table-header-rows><table:table-row><table:table-cell office:value-type="string"><text:p>id</text:p></table:table-cell><table:table-cell office:value-type="string"><text:p>date</text:p></table:table-cell><table:table-cell table:number-columns-repeated="1000"/></table:table-row></table:table-header-rows><table:table-row table:number-rows-repeated="2"><table:table-cell office:value-type="string"><text:p>A<text:s text:c="2"/>B</text:p></table:table-cell><table:table-cell office:value-type="date" office:date-value="2019-05-12T00:00:00"/></table:table-row><table:table-row table:number-rows-repeated="1048570"><table:table-cell table:number-columns-repeated="1024"/></table:table-row></table:table></office:spreadsheet></office:body></office:document-content>"#;
+        let content = r#"<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"><office:body><office:spreadsheet><table:table table:name="S"><table:table-header-rows><table:table-row><table:table-cell office:value-type="string"><text:p>id</text:p></table:table-cell><table:table-cell office:value-type="string"><text:p>date</text:p></table:table-cell><table:table-cell table:number-columns-repeated="1000"/></table:table-row></table:table-header-rows><table:table-row table:number-rows-repeated="2"><table:table-cell office:value-type="string"><text:p>A<text:s text:c="2"/>B</text:p></table:table-cell><table:table-cell office:value-type="date" office:date-value="2019-05-12T00:00:00"/></table:table-row><table:table-row table:number-rows-repeated="1048570"><table:table-cell table:number-columns-repeated="1024"/></table:table-row></table:table></office:spreadsheet></office:body></office:document-content>"#;
         let mut zip = crate::archive::Writer::default();
         zip.add(
             "mimetype",
@@ -843,6 +718,7 @@ mod tests {
         )
         .unwrap();
         zip.add("content.xml", content.as_bytes(), false).unwrap();
+        zip.add("META-INF/manifest.xml", b"<manifest:manifest xmlns:manifest=\"urn:oasis:names:tc:opendocument:xmlns:manifest:1.0\"/>", false).unwrap();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("t.ods");
         std::fs::write(&path, zip.finish().unwrap()).unwrap();
@@ -879,5 +755,108 @@ mod tests {
         assert_eq!(sheet.headers, headers);
         assert_eq!(sheet.rows, rows);
         assert_eq!(sheet.date_cells, Vec::<(usize, usize)>::new());
+    }
+
+    #[test]
+    fn xlsx_keeps_text_ids_holes_and_date_positions_after_blank_rows() {
+        let bytes = xlsx_fixture(
+            r#"<worksheet><dimension ref="A1:XFD1048576"/><sheetData>
+            <row r="1"><c r="A1" t="s"><v>0</v></c><c r="C1" t="s"><v>1</v></c></row>
+            <row r="2"><c r="A2" t="inlineStr"><is><t>0012</t></is></c><c r="C2" t="d"><v>2019-05-12T00:00:00</v></c></row>
+            <row r="4"><c r="A4" t="inlineStr"><is><t>0003</t></is></c><c r="C4" s="1"><v>43597.5</v></c></row>
+            </sheetData></worksheet>"#,
+            false,
+        );
+        let sheet = read_fixture(&bytes, "xlsx").unwrap();
+        assert_eq!(sheet.headers, ["specimen_id", "", "eventDate"]);
+        assert_eq!(
+            sheet.rows,
+            [
+                vec!["0012".to_string(), String::new(), "2019-05-12".into()],
+                vec![
+                    "0003".to_string(),
+                    String::new(),
+                    "2019-05-12T12:00:00".into()
+                ],
+            ]
+        );
+        assert_eq!(sheet.date_cells, [(0, 2), (1, 2)]);
+    }
+
+    #[test]
+    fn xlsx_1904_epoch_is_respected() {
+        let bytes = xlsx_fixture(
+            r#"<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>1</v></c></row><row r="2"><c r="A2" s="1"><v>42135</v></c></row></sheetData></worksheet>"#,
+            true,
+        );
+        let sheet = read_fixture(&bytes, "xlsx").unwrap();
+        assert_eq!(sheet.rows, [vec!["2019-05-12".to_string()]]);
+        assert_eq!(sheet.date_cells, [(0, 0)]);
+    }
+
+    #[test]
+    fn malformed_and_oversized_workbooks_give_contextual_errors() {
+        let error = read_fixture(b"not a zip", "xlsx").unwrap_err().to_string();
+        assert!(error.contains("import.xlsx"), "{error}");
+        let bytes = xlsx_fixture(
+            r#"<worksheet><sheetData><row r="1"><c r="XFD1" t="s"><v>0</v></c></row><row r="1048576"><c r="A1048576" t="s"><v>2</v></c></row></sheetData></worksheet>"#,
+            false,
+        );
+        let error = read_fixture(&bytes, "xlsx").unwrap_err().to_string();
+        assert!(error.contains("too large"), "{error}");
+        assert!(read_fixture(&xlsx_fixture("<worksheet>", false), "xlsx").is_err());
+        // Library support for other Excel formats does not expand the API.
+        assert!(read_fixture(b"", "xls").is_err());
+    }
+
+    #[test]
+    fn ods_preflight_rejects_expansion_before_library_allocation() {
+        let wrap = |body: &str| {
+            format!(
+                r#"<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"><table:table table:name="S">{body}</table:table></office:document-content>"#
+            )
+        };
+        for body in [
+            r#"<table:table-row table:number-rows-repeated="1000"><table:table-cell table:number-columns-repeated="10001" office:value="1"/></table:table-row>"#,
+            r#"<table:table-row><table:table-cell office:value-type="string"><text:p><text:s text:c="268435457"/></text:p></table:table-cell></table:table-row>"#,
+            r#"<table:table-row><table:table-cell table:number-columns-repeated="16385" office:value="1"/></table:table-row>"#,
+            r#"<table:table-row table:number-rows-repeated="0"/>"#,
+            r#"<table:table-row table:number-rows-repeated="18446744073709551616"/>"#,
+        ] {
+            assert!(preflight_ods(wrap(body).as_bytes()).is_err(), "{body}");
+        }
+        assert!(preflight_ods(b"<broken>").is_err());
+        // A later sheet is read eagerly too: limits must include it.
+        let body = r#"<table:table-row table:number-rows-repeated="1000"><table:table-cell table:number-columns-repeated="6000" office:value="1"/></table:table-row>"#;
+        let mut two_sheets = wrap(body);
+        two_sheets = two_sheets.replace(
+            "</office:document-content>",
+            &format!(
+                "<table:table table:name=\"Second\">{body}</table:table></office:document-content>"
+            ),
+        );
+        assert!(preflight_ods(two_sheets.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn ods_imports_first_sheet_and_preserves_text_and_empty_columns() {
+        let headers = vec!["id".into(), "empty".into(), "notes".into()];
+        let rows = vec![vec!["0007".into(), String::new(), "a & b\nnext".into()]];
+        let first = OdsSheet {
+            name: "Z first",
+            headers: &headers,
+            rows: &rows,
+        };
+        let second_headers = vec!["other".into()];
+        let second = OdsSheet {
+            name: "A second",
+            headers: &second_headers,
+            rows: &[],
+        };
+        let bytes = write_ods(&[first, second]).unwrap();
+        let sheet = read_fixture(&bytes, "ods").unwrap();
+        assert_eq!(sheet.headers, headers);
+        assert_eq!(sheet.rows, rows);
+        assert!(sheet.date_cells.is_empty());
     }
 }
