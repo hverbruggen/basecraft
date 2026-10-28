@@ -196,7 +196,8 @@ impl Server {
                     .and_then(Value::as_str)
                     .map(|p| self.path(p))
                     .transpose()?;
-                self.session.save(doc, path.as_deref())?;
+                // No overwrite confirmation exists here: refuse existing files.
+                self.session.save_new(doc, path.as_deref())?;
                 Ok(self.state(doc))
             }
             "run_tool" => {
@@ -257,7 +258,7 @@ fn tools() -> Value {
         apply,
         tool("undo","Undo one edit group.",json!({"document":doc}), &["document"]),
         tool("redo","Redo one edit group.",json!({"document":doc}), &["document"]),
-        tool("save","Save a document, optionally to a new project path.",json!({"document":doc,"path":string}), &["document"]),
+        tool("save","Save a document, optionally to a new project path. An existing other file is never replaced.",json!({"document":doc,"path":string}), &["document"]),
         tool("provenance_inspect","Read the provenance publication of a saved project result.",json!({"path":string}), &["path"]),
         tool("provenance_verify","Check a saved result against its recorded hashes and retained inputs; runs no tools.",json!({"path":string}), &["path"]),
         tool("replay","Replay the project's operation log in a scratch session and report problems.",json!({}), &[]),

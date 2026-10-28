@@ -543,3 +543,56 @@ fn tree_mcp_routes_share_hidden_storage() {
         );
     }
 }
+
+#[test]
+fn agent_save_as_never_replaces_an_existing_other_file() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("input.afa"), ">a\nACGT\n>b\nACGT\n").unwrap();
+    std::fs::write(d.path().join("other.afa"), ">user\nGGGG\n").unwrap();
+    std::fs::create_dir(d.path().join("sub")).unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_basecraft"))
+        .args(["mcp", d.path().to_str().unwrap(), "--allow-writes"])
+        .env("BASECRAFT_PROFILE_DIR", d.path().join("profile"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+    for message in [
+        json!({"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}),
+        json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+        request(1, "open", json!({"path":"input.afa"})),
+        request(
+            2,
+            "apply",
+            json!({"document":0,"version":0,"operation":{"op":"aln.replace","params":{"row":0,"start":0,"end":1,"residues":"T"}}}),
+        ),
+        request(3, "save", json!({"document":0,"path":"other.afa"})),
+        request(4, "save", json!({"document":0,"path":"copy.afa"})),
+        request(5, "save", json!({"document":0,"path":"sub/../input.afa"})),
+    ] {
+        writeln!(input, "{message}").unwrap();
+    }
+    drop(input);
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success());
+    let replies: Vec<Value> = String::from_utf8(out.stdout)
+        .unwrap()
+        .lines()
+        .map(|s| serde_json::from_str(s).unwrap())
+        .collect();
+    assert_eq!(replies[3]["result"]["isError"], true, "{}", replies[3]);
+    assert_eq!(replies[4]["result"]["isError"], false, "{}", replies[4]);
+    assert_eq!(replies[5]["result"]["isError"], false, "{}", replies[5]);
+    assert_eq!(
+        std::fs::read_to_string(d.path().join("other.afa")).unwrap(),
+        ">user\nGGGG\n"
+    );
+    for saved in ["copy.afa", "input.afa"] {
+        assert!(
+            std::fs::read_to_string(d.path().join(saved))
+                .unwrap()
+                .contains("TCGT")
+        );
+    }
+}

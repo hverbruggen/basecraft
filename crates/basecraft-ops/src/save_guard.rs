@@ -18,6 +18,12 @@ pub(crate) fn target_path(path: &Path) -> Result<PathBuf> {
     ))
 }
 
+/// Whether two spellings name the same directory entry. Parent aliases and
+/// `..` resolve; a final symbolic link stays its own entry.
+pub(crate) fn same_target(a: &Path, b: &Path) -> bool {
+    a == b || matches!((target_path(a), target_path(b)), (Ok(a), Ok(b)) if a == b)
+}
+
 /// Cooperating processes hold this through data, binding and provenance writes.
 /// The evidence lock must be acquired afterwards; neither locks external editors.
 pub(crate) fn lock(target: &Path) -> Result<std::fs::File> {
@@ -110,5 +116,44 @@ impl Revision {
             ));
         }
         Ok(false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use basecraft_protocol::Op;
+    use std::io::Write;
+
+    #[test]
+    fn concurrent_saver_is_refused_and_edits_remain_saveable() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("gene.fasta");
+        std::fs::write(&file, ">gene\nACGT\n").unwrap();
+        let mut session = crate::Session::new(dir.path());
+        let doc = session.open(&file).unwrap();
+        let edit = Op::SeqReplace {
+            start: 1,
+            end: 2,
+            residues: "T".into(),
+        };
+        session.apply(doc, edit).unwrap();
+        // Another Basecraft process holds the target through its whole save.
+        let held = super::lock(&dir.path().join("./gene.fasta")).unwrap();
+        for target in [None, Some(file.as_path())] {
+            let error = session.save(doc, target).unwrap_err().to_string();
+            assert!(error.contains("another Basecraft process"), "{error}");
+        }
+        let figure = super::lock(&dir.path().join("figure.svg")).unwrap();
+        let error = session
+            .export(doc, &dir.path().join("figure.svg"), "svg", |w| w.write_all(b""))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("another Basecraft process"), "{error}");
+        assert!(!dir.path().join("figure.svg").exists());
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), ">gene\nACGT\n");
+        assert!(session.can_undo(doc));
+        drop((held, figure));
+        session.save(doc, None).unwrap();
+        assert!(std::fs::read_to_string(&file).unwrap().contains("ATGT"));
     }
 }

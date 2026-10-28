@@ -88,6 +88,12 @@ pub struct Outcome {
     pub feature: Option<FeatureId>,
 }
 
+/// Target-save and evidence locks held while writing an export or extract.
+struct DerivedTarget {
+    _target: Option<std::fs::File>,
+    _evidence: std::fs::File,
+}
+
 pub struct Session {
     root: PathBuf,
     storage_root: PathBuf,
@@ -704,6 +710,30 @@ impl Session {
         path: Option<&Path>,
         policy: crate::input_evidence::SavePolicy,
     ) -> Result<()> {
+        self.save_checked(id, path, policy, true)
+    }
+
+    /// Save to the document's own file, or Save As to a destination that must
+    /// not exist yet. For callers without an overwrite confirmation (agents,
+    /// scripts): an existing other file is refused, never replaced.
+    pub fn save_new(&mut self, id: DocId, path: Option<&Path>) -> Result<()> {
+        self.save_checked(id, path, crate::input_evidence::SavePolicy::Cancel, false)
+    }
+
+    /// Any spelling of the document's own file is an ordinary save, so its
+    /// accepted-revision checks apply.
+    fn is_own_file(&self, id: DocId, path: &Path) -> bool {
+        crate::save_guard::same_target(path, &self.resolve(&self.docs[id.0].key))
+    }
+
+    fn save_checked(
+        &mut self,
+        id: DocId,
+        path: Option<&Path>,
+        policy: crate::input_evidence::SavePolicy,
+        overwrite: bool,
+    ) -> Result<()> {
+        let path = path.filter(|p| !self.is_own_file(id, p));
         let target = path.map_or_else(|| self.resolve(&self.docs[id.0].key), Path::to_path_buf);
         if self.log.is_some()
             && path.is_none()
@@ -718,6 +748,9 @@ impl Session {
         } else {
             None
         };
+        if !overwrite && path.is_some() {
+            crate::save_guard::Revision::check(None, &target)?;
+        }
         let _evidence_lock = crate::input_evidence::lock()?;
         let conflict = crate::input_evidence::conflicts(&target)?;
         crate::input_evidence::resolve(&conflict, policy)?;
@@ -1535,6 +1568,35 @@ impl Session {
         crate::provenance::publish(&bundle, &publication)
     }
 
+    /// Reserve an export/extract destination like a save target. Replacing an
+    /// open document's own file would discard its accepted revision.
+    /// Known-input conflicts are resolved first, under both locks.
+    fn derived_target(&self, path: &Path) -> Result<DerivedTarget> {
+        let target = if self.tracked {
+            Some(crate::save_guard::lock(path)?)
+        } else {
+            None
+        };
+        let evidence = crate::input_evidence::lock()?;
+        crate::input_evidence::resolve(
+            &crate::input_evidence::conflicts(path)?,
+            crate::input_evidence::SavePolicy::Cancel,
+        )?;
+        if self
+            .docs
+            .iter()
+            .any(|slot| crate::save_guard::same_target(path, &self.resolve(&slot.key)))
+        {
+            return Err(invalid(
+                "this destination is an open document; choose another file",
+            ));
+        }
+        Ok(DerivedTarget {
+            _target: target,
+            _evidence: evidence,
+        })
+    }
+
     /// Extract residues `start..end` with their annotations to a new
     /// GenBank file at `path`, and log it.
     pub fn extract(
@@ -1545,11 +1607,7 @@ impl Session {
         reverse: bool,
         path: &Path,
     ) -> Result<()> {
-        let _evidence_lock = crate::input_evidence::lock()?;
-        crate::input_evidence::resolve(
-            &crate::input_evidence::conflicts(path)?,
-            crate::input_evidence::SavePolicy::Cancel,
-        )?;
+        let _reserved = self.derived_target(path)?;
         self.track(id)?;
         self.flush()?;
         let doc = &self.sequence_of(id)?.doc;
@@ -1669,11 +1727,7 @@ impl Session {
         format: &str,
         f: impl FnOnce(&mut dyn std::io::Write) -> std::io::Result<()>,
     ) -> Result<()> {
-        let _evidence_lock = crate::input_evidence::lock()?;
-        crate::input_evidence::resolve(
-            &crate::input_evidence::conflicts(path)?,
-            crate::input_evidence::SavePolicy::Cancel,
-        )?;
+        let _reserved = self.derived_target(path)?;
         self.track(id)?;
         self.flush()?;
         let mut hash = String::new();
