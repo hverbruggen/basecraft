@@ -1721,7 +1721,13 @@ impl PreparedOperation {
         else {
             return Ok(());
         };
-        let (source, version) = match &self.document {
+        // A target that only receives the run, such as a species workspace,
+        // is not the alignment; the tree then links to the alignment input.
+        let (source, version) = match self
+            .document
+            .as_ref()
+            .filter(|target| !target.receives_results)
+        {
             Some(target) => (target.path.clone(), target.generation),
             None => (
                 self.context
