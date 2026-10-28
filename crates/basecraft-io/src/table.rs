@@ -374,7 +374,7 @@ fn cell_text(value: calamine::Data) -> Result<(String, bool)> {
             let date = value
                 .as_datetime()
                 .ok_or_else(|| invalid("a spreadsheet date cannot be represented"))?;
-            let text = date.format("%Y-%m-%dT%H:%M:%S%.f").to_string();
+            let text = format!("{date:?}");
             (
                 text.strip_suffix("T00:00:00").unwrap_or(&text).to_string(),
                 true,

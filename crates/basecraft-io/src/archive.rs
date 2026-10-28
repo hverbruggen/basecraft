@@ -34,6 +34,7 @@ impl<'a> Archive<'a> {
         let mut total = 0u64;
         for index in 0..self.inner.len() {
             let mut member = self.inner.by_index(index).map_err(zip_error)?;
+            let name = member.name().map_err(zip_error)?.into_owned();
             let size = member.size();
             total = total.saturating_add(size);
             if size > MEMBER_LIMIT
@@ -44,17 +45,13 @@ impl<'a> Archive<'a> {
                     "the spreadsheet's ZIP contents are too large to import",
                 ));
             }
-            let actual = std::io::copy(&mut member.by_ref().take(size + 1), &mut std::io::sink())
-                .map_err(|e| {
-                invalid(format!(
-                    "spreadsheet part {} is damaged: {e}",
-                    member.name()
-                ))
-            })?;
+            let actual =
+                std::io::copy(&mut member.by_ref().take(size + 1), &mut std::io::sink())
+                    .map_err(|e| invalid(format!("spreadsheet part {} is damaged: {e}", name)))?;
             if actual != size {
                 return Err(invalid(format!(
                     "spreadsheet part {} has an incorrect size",
-                    member.name()
+                    name
                 )));
             }
         }
