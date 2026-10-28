@@ -581,7 +581,8 @@ fn run_plugin(
         basecraft_plugin_host::Snapshot::of(session.doc_key(doc), session.checked_sequence(doc)?)?;
     let snap_ms = t_snap.elapsed().as_secs_f64() * 1e3;
     let t_call = Instant::now();
-    let result = plugin.invoke(operation, serde_json::Value::Object(map), Some(&snap))?;
+    let map_value = serde_json::Value::Object(map);
+    let result = plugin.invoke(operation, map_value.clone(), Some(&snap))?;
     let call_ms = t_call.elapsed().as_secs_f64() * 1e3;
     println!(
         "snapshot of {} bp in {snap_ms:.0} ms, {operation} in {call_ms:.0} ms: {} proposals{}",
@@ -598,6 +599,13 @@ fn run_plugin(
     };
     let count = result.ops.len();
     session.apply_sequence_proposals(doc, generation, snap.version, &result.ops, &actor)?;
+    // No typed contract, so no effective settings or retained run: record what
+    // was submitted and the hash of the snapshot a registered run would retain.
+    let params = serde_json::json!({"requested": map_value, "operation": operation,
+        "contract": "schema-1", "initiator": "CLI",
+        "snapshot": {"document": snap.doc, "version": snap.version,
+            "hash": basecraft_io::hash_bytes(&snap.payload()?)}});
+    session.log_tool_run(doc, actor, (&plugin.info.id, operation), params, &[], &[])?;
     println!("applied {count} proposals");
     if let Some(policy) = save {
         session.save_with_evidence(doc, None, policy)?;
