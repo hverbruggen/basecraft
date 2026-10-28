@@ -1635,7 +1635,7 @@ impl qobject::AlignmentController {
                     Ok(components) if !components.is_empty() => {
                         for path in components {
                             self.as_mut()
-                                .file_created(QString::from(&path.to_string_lossy()));
+                                .file_created(QString::from(&path.to_string_lossy().into_owned()));
                         }
                     }
                     Ok(_) => {

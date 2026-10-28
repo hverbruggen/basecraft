@@ -21,6 +21,8 @@ mod bridge;
 #[path = "../src/delimitation_bridge.rs"]
 #[allow(unused_imports, dead_code)] // harness=false omits test bodies but retains their helpers.
 mod delimitation_bridge;
+#[path = "../src/document_jobs.rs"]
+mod document_jobs;
 #[path = "../src/figure_png.rs"]
 #[allow(unused_imports, dead_code)] // harness=false omits the included module's test bodies.
 mod figure_png;
