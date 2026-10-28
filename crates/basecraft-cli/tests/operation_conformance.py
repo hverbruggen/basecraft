@@ -541,6 +541,15 @@ def main():
             for edit in edits:
                 sub_cli("submission", "edit", document, json.dumps(edit), "--project", str(cli_project))
             reviews["cli"] = sub_cli("submission", "review", document, "--project", str(cli_project))
+            refused = subprocess.run([str(binary), "submission", "export", document,
+                                      "--output", str(cli_project / "unconfirmed"),
+                                      "--project", str(cli_project)], cwd=root, env=sub_env,
+                                     capture_output=True, text=True, timeout=90)
+            assert refused.returncode != 0 and "confirm" in refused.stderr.lower(), refused.stderr
+            assert not (cli_project / "unconfirmed").exists()
+            sub_cli("submission", "edit", document, json.dumps({
+                "action": "confirm_selection", "selection_hash": reviews["cli"]["selection_hash"]}),
+                "--project", str(cli_project))
             sub_cli("submission", "export", document, "--output", str(cli_project / "package"),
                     "--project", str(cli_project))
             summaries["cli"] = sub_cli("submission", "validate", str(cli_project / "package"),
@@ -557,6 +566,10 @@ def main():
                         "op": "submission.edit", "params": {"edit": edit}}})
                 mcp_sub.tool("save", {"document": doc})
                 reviews["mcp"] = mcp_sub.tool("submission_review", {"document": doc})["structuredContent"]
+                state = mcp_sub.tool("state", {"document": doc})["structuredContent"]
+                mcp_sub.tool("apply", {"document": doc, "version": state["version"], "operation": {
+                    "op": "submission.edit", "params": {"edit": {
+                        "action": "confirm_selection", "selection_hash": reviews["mcp"]["selection_hash"]}}}})
                 mcp_sub.tool("submission_export", {"document": doc, "output": "package"})
                 validation = mcp_sub.tool("submission_validation_request",
                                           {"package": "package"})["structuredContent"]
@@ -574,11 +587,15 @@ def main():
                     py.edit_submission(doc, edit)
                 py.save(doc)
                 reviews["python"] = py.review_submission(doc)
+                py.edit_submission(doc, {"action": "confirm_selection",
+                                         "selection_hash": reviews["python"]["selection_hash"]})
                 py.export_submission(doc, "package")
                 summaries["python"] = py.validate_submission("package", timeout=60)
             # Each project's metadata manifest has its own generated IDs.
             for review in reviews.values():
                 review.pop("metadata_hash")
+                # The fingerprint incorporates each project's metadata identity.
+                review.pop("selection_hash")
             codes = sorted({(i["code"], i.get("record")) for i in reviews["cli"]["issues"]})
             assert ("duplicate_record", "HV403_ITS") in codes, codes
             for route in ("mcp", "python"):
