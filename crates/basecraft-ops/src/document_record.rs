@@ -372,8 +372,59 @@ fn presentation(op: &Op) -> bool {
     }
 }
 
+/// Files a report export writes. Authored `methods.md` is never among them.
+const REPORT_FILES: [&str; 8] = [
+    "methods.generated.md",
+    "history.md",
+    "record.json",
+    "parameters.tsv",
+    "source-map.json",
+    "citations.json",
+    "manifest.json",
+    "report.json",
+];
+
+/// An earlier export may be refreshed; another program's files of the same
+/// names may not be replaced.
+fn check_report_folder(directory: &Path) -> crate::Result<()> {
+    let present: Vec<_> = REPORT_FILES
+        .iter()
+        .filter(|name| directory.join(name).symlink_metadata().is_ok())
+        .copied()
+        .collect();
+    if present.is_empty() {
+        return Ok(());
+    }
+    let earlier = std::fs::read(directory.join("manifest.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .is_some_and(|m| {
+            m["schema_version"] == 1
+                && m.get("template_version").is_some()
+                && m.get("coordinates").is_some()
+        });
+    if earlier {
+        return Ok(());
+    }
+    Err(crate::error::invalid(format!(
+        "{} already holds {} that is not from a Basecraft report export; choose an empty or new folder",
+        directory.display(),
+        present.join(", ")
+    )))
+}
+
 impl Report {
     pub fn export(&self, directory: &Path) -> crate::Result<()> {
+        check_report_folder(directory)?;
+        self.write_files(directory).map_err(|error| {
+            crate::error::invalid(format!(
+                "report export to {} is incomplete ({error}); files there may mix this report with an earlier one",
+                directory.display()
+            ))
+        })
+    }
+
+    fn write_files(&self, directory: &Path) -> crate::Result<()> {
         std::fs::create_dir_all(directory)?;
         for (name, text) in [
             ("methods.generated.md", self.methods.as_str()),
