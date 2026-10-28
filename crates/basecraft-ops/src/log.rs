@@ -454,6 +454,12 @@ pub fn describe(op: &Op) -> String {
             operation,
             outputs,
             ..
+        } if outputs.is_empty() => format!("Ran {plugin} {operation}"),
+        Op::ToolRun {
+            plugin,
+            operation,
+            outputs,
+            ..
         } => format!("Ran {plugin} {operation}, wrote {}", outputs.join(", ")),
         Op::AlnInsertGaps {
             rows: r,

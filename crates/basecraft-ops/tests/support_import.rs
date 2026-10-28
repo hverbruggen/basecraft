@@ -32,6 +32,16 @@ fn imported_source_is_referenced_verified_and_survives_a_folder_move() {
     assert_eq!(imported.matched, 2);
     let set = session.tree(doc).support("Bootstrap").unwrap().clone();
     assert_eq!(set.source, "support.nwk");
+    // The activity wrote no file, so its history row names none.
+    let report = session.document_record(doc).unwrap().report().unwrap();
+    assert!(
+        report
+            .history
+            .iter()
+            .any(|row| row.summary == "Ran basecraft.tree import_support"),
+        "{:?}",
+        report.history
+    );
     // Values and recorded activity form one undo step; redo restores them.
     session.undo(doc).unwrap();
     assert!(session.tree(doc).support("Bootstrap").is_none());
