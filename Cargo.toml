@@ -6,7 +6,7 @@ exclude = ["vendor/roxmltree"]
 [workspace.package]
 version = "0.0.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 license = "GPL-3.0-or-later"
 # Nothing is published to crates.io yet.
 publish = false
