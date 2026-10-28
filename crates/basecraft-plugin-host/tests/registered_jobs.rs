@@ -557,6 +557,10 @@ fn committed_proposals_stay_partial_and_repair_requires_recorded_session_activit
 /// Install the count fixture with its input view set to an aligned FASTA, so a
 /// session alignment document can be bound to it.
 fn alignment_registry(root: &Path) -> Registry {
+    fasta_registry(root, "aligned_fasta")
+}
+
+fn fasta_registry(root: &Path, view: &str) -> Registry {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/registry-plugin");
     let package = root.join("package");
@@ -566,7 +570,7 @@ fn alignment_registry(root: &Path) -> Registry {
     }
     let mut contract: serde_json::Value =
         serde_json::from_slice(&std::fs::read(package.join("operations.json")).unwrap()).unwrap();
-    contract["operations"][0]["inputs"]["sources"]["view"] = json!("aligned_fasta");
+    contract["operations"][0]["inputs"]["sources"]["view"] = json!(view);
     contract["operations"][0]["inputs"]["sources"]["min"] = json!(1);
     std::fs::write(
         package.join("operations.json"),
@@ -799,15 +803,16 @@ fn document_repair_waits_for_owner_history_and_does_not_repeat_activity() {
 }
 
 #[test]
-fn canonical_alignment_evidence_preserves_order_headers_and_residues_and_records_padding() {
+fn canonical_alignment_evidence_preserves_order_headers_and_residues() {
     let root = tempfile::tempdir().unwrap();
     let registry = alignment_registry(root.path());
     let source = root.path().join("input.afa");
     let long = "aCgT-".repeat(13);
     let original = format!(
-        ">second description with spaces\r\n{}\r\n{}\r\n>first another description\r\naC--\r\n",
+        ">second description with spaces\r\n{}\r\n{}\r\n>first another description\r\n{}\r\n",
         &long[..17],
-        &long[17..]
+        &long[17..],
+        "aC--.".repeat(13)
     );
     std::fs::write(&source, &original).unwrap();
     let mut manager = JobManager::default();
@@ -833,13 +838,13 @@ fn canonical_alignment_evidence_preserves_order_headers_and_residues_and_records
         record.source.unwrap().hash,
         basecraft_io::hash_bytes(original.as_bytes())
     );
-    let padded = format!("aC--{}", "-".repeat(61));
+    let second = "aC--.".repeat(13);
     let canonical = format!(
         ">second description with spaces\n{}\n{}\n>first another description\n{}\n{}\n",
         &long[..60],
         &long[60..],
-        &padded[..60],
-        &padded[60..]
+        &second[..60],
+        &second[60..]
     );
     assert_eq!(
         record.submitted_hash,
@@ -854,4 +859,118 @@ fn canonical_alignment_evidence_preserves_order_headers_and_residues_and_records
     let publication = basecraft_ops::provenance::inspect(&root.path().join("result.json")).unwrap();
     assert!(publication.events.iter().any(|event| matches!(&event.op,
         basecraft_protocol::Op::ToolRun { params, .. } if params["run_id"] == outcome.run_id)));
+}
+
+#[test]
+fn unequal_alignment_inputs_are_refused_before_execution_for_files_and_documents() {
+    let root = tempfile::tempdir().unwrap();
+    let registry = alignment_registry(root.path());
+    let source = root.path().join("input.afa");
+    let original = ">a description\nAC-GT\n>b trailing gap\nAC-\n";
+    std::fs::write(&source, original).unwrap();
+    let mut session = basecraft_ops::Session::new(root.path());
+    let doc = session.open(&source).unwrap();
+    // Loading still supports the rectangular editor, but cannot erase evidence.
+    assert_eq!(session.alignment(doc).read(1, 0, 5), b"AC---");
+    assert!(
+        session
+            .alignment(doc)
+            .snapshot()
+            .validate_aligned_input()
+            .is_err()
+    );
+    let mut manager = JobManager::default();
+    let expected = "plugin protocol: This operation requires aligned sequences of equal length. These sequences have different lengths; align them first.";
+    for route in ["file", "clean", "edited", "undo"] {
+        if route == "edited" {
+            session
+                .apply(
+                    doc,
+                    basecraft_protocol::Op::AlnReplace {
+                        row: 0,
+                        start: 0,
+                        end: 1,
+                        residues: "T".into(),
+                    },
+                )
+                .unwrap();
+        } else if route == "undo" {
+            session.undo(doc).unwrap();
+        }
+        let input = if route == "file" {
+            json!({"kind":"file","path":"input.afa"})
+        } else {
+            json!({"kind":"document","doc":doc.0.to_string(),
+                "generation":session.generation(doc),"revision":session.revision(doc)})
+        };
+        let request = serde_json::from_value(json!({
+            "operation":"org.example.registry-fixture/count@1", "inputs":{"sources":[input]},
+            "parameters":{"mode":"normal"},"destinations":{"report":"result.json"}
+        }))
+        .unwrap();
+        let result = manager.submit_in_session(
+            &registry,
+            request,
+            SessionPolicy::new(root.path(), true).unwrap(),
+            "test",
+            &mut session,
+        );
+        assert_eq!(result.unwrap_err().to_string(), expected, "{route}");
+        assert!(!root.path().join("result.json").exists());
+        assert_eq!(std::fs::read_to_string(&source).unwrap(), original);
+    }
+}
+
+#[test]
+fn ungapped_alignment_input_accepts_unequal_lengths_without_padding() {
+    let root = tempfile::tempdir().unwrap();
+    let registry = fasta_registry(root.path(), "ungapped_fasta");
+    let source = root.path().join("input.afa");
+    let original = ">a description\nAC-GT\n>b trailing gap\nAC-\n";
+    std::fs::write(&source, original).unwrap();
+    let mut session = basecraft_ops::Session::new(root.path());
+    let doc = session.open(&source).unwrap();
+    let mut manager = JobManager::default();
+    for route in ["file", "clean", "edited"] {
+        if route == "edited" {
+            session
+                .apply(
+                    doc,
+                    basecraft_protocol::Op::AlnReplace {
+                        row: 0,
+                        start: 0,
+                        end: 1,
+                        residues: "T".into(),
+                    },
+                )
+                .unwrap();
+        }
+        let input = if route == "file" {
+            json!({"kind":"file","path":"input.afa"})
+        } else {
+            json!({"kind":"document","doc":doc.0.to_string(),
+                "generation":session.generation(doc),"revision":session.revision(doc)})
+        };
+        let outcome = run_in_session(
+            &mut manager,
+            &registry,
+            &mut session,
+            json!({
+                "operation":"org.example.registry-fixture/count@1", "inputs":{"sources":[input]},
+                "parameters":{"mode":"normal"},"destinations":{"report":format!("{route}.json")}
+            }),
+        );
+        assert_eq!(outcome.state, RuntimeState::Completed, "{outcome:?}");
+        let record = basecraft_ops::input_evidence::read_input(Path::new(
+            outcome.evidence.as_ref().unwrap(),
+        ))
+        .unwrap();
+        let first = if route == "edited" { "TCGT" } else { "ACGT" };
+        let submitted = format!(">a\n{first}\n>b\nAC\n");
+        assert_eq!(
+            record.submitted_hash,
+            basecraft_io::hash_bytes(submitted.as_bytes())
+        );
+        assert_eq!(std::fs::read_to_string(&source).unwrap(), original);
+    }
 }
