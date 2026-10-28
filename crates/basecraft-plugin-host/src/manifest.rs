@@ -180,10 +180,12 @@ impl Form {
                 .choices
                 .iter()
                 .any(|c| Some(c.value.as_str()) == field.default.as_str());
-            if field.kind == FieldKind::Choice && !kept
-                && let Some(first) = field.choices.first() {
-                    field.default = Value::String(first.value.clone());
-                }
+            if field.kind == FieldKind::Choice
+                && !kept
+                && let Some(first) = field.choices.first()
+            {
+                field.default = Value::String(first.value.clone());
+            }
         }
         form
     }

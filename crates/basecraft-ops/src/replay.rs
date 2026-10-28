@@ -212,17 +212,17 @@ fn materialise(
         if let Some((main, _)) = inputs.first()
             && crate::files::Format::from_path(Path::new(main)).ok()
                 == Some(crate::files::Format::Delimitation)
-                && Path::new(rel)
-                    .components()
-                    .any(|c| c.as_os_str() == "analyses-v1")
-                && Path::new(rel).file_name()
-                    == crate::files::tree_sidecar(&work.join(main)).file_name()
-            {
-                // The replay namespace contains no live store bindings. Restore
-                // the checked baseline as a standalone companion, not a partial
-                // hidden namespace that could be mistaken for a real store.
-                dest = crate::files::tree_sidecar(&work.join(main));
-            }
+            && Path::new(rel)
+                .components()
+                .any(|c| c.as_os_str() == "analyses-v1")
+            && Path::new(rel).file_name()
+                == crate::files::tree_sidecar(&work.join(main)).file_name()
+        {
+            // The replay namespace contains no live store bindings. Restore
+            // the checked baseline as a standalone companion, not a partial
+            // hidden namespace that could be mistaken for a real store.
+            dest = crate::files::tree_sidecar(&work.join(main));
+        }
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }

@@ -197,9 +197,9 @@ impl SangerDraft {
                         .bytes()
                         .all(|b| b"ACGTNRYKMSWBDHV".contains(&b))
                     || calls.positions.windows(2).any(|p| p[0] >= p[1]))
-                {
-                    return Err("Invalid Tracy signal coordinates".into());
-                }
+            {
+                return Err("Invalid Tracy signal coordinates".into());
+            }
         }
         if self.aligned_columns == 0
             || self.aligned_columns > 100_000

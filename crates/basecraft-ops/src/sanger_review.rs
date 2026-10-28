@@ -25,11 +25,12 @@ pub fn evidence_kind(path: &Path) -> Option<EvidenceKind> {
     }
     let bytes = crate::provenance::read_record(path).ok()?;
     if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes)
-        && value.get("version").is_some() {
-            return SangerReviewSession::decode(&bytes, path)
-                .ok()
-                .map(|_| EvidenceKind::Review);
-        }
+        && value.get("version").is_some()
+    {
+        return SangerReviewSession::decode(&bytes, path)
+            .ok()
+            .map(|_| EvidenceKind::Review);
+    }
     let draft: SangerDraft = serde_json::from_slice(&bytes).ok()?;
     draft.validate().ok()?;
     Some(EvidenceKind::Draft)

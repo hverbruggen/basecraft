@@ -359,9 +359,9 @@ pub fn validate_contract(plugin: &str, contract: &OperationContract) -> Result<(
         if let Some(workflow) = &descriptor.host_workflow
             && (plugin != "basecraft.host"
                 || crate::delimitation_pipeline::workflow_fit(workflow).is_none())
-            {
-                return Err(invalid("unsupported or unreserved host workflow"));
-            }
+        {
+            return Err(invalid("unsupported or unreserved host workflow"));
+        }
         if let Some(adapter) = &descriptor.legacy_adapter {
             if adapter
                 .inputs

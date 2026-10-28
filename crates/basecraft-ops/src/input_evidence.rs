@@ -495,22 +495,24 @@ fn scan_run(
     let input = read_input(&run)?;
     let mut analysis = None;
     let proposal_target = input.extra.get(PROPOSAL_TARGET) == Some(&serde_json::json!(true));
-    if input.state == "referenced" && !proposal_target
+    if input.state == "referenced"
+        && !proposal_target
         && let Some(reference) = &input.source
-            && same_source(&run, reference, target) {
-                let can_preserve = stamp(target).is_ok_and(|s| {
-                    s.size == reference.stamp.size
-                        && s.modified_seconds == reference.stamp.modified_seconds
-                        && s.modified_nanos == reference.stamp.modified_nanos
-                });
-                analysis = Some(AffectedAnalysis {
-                    result: result_name(&run)?,
-                    run,
-                    source_hash: reference.hash.clone(),
-                    can_preserve,
-                    direct: true,
-                });
-            }
+        && same_source(&run, reference, target)
+    {
+        let can_preserve = stamp(target).is_ok_and(|s| {
+            s.size == reference.stamp.size
+                && s.modified_seconds == reference.stamp.modified_seconds
+                && s.modified_nanos == reference.stamp.modified_nanos
+        });
+        analysis = Some(AffectedAnalysis {
+            result: result_name(&run)?,
+            run,
+            source_hash: reference.hash.clone(),
+            can_preserve,
+            direct: true,
+        });
+    }
     Ok(Some((input, analysis, bytes)))
 }
 
@@ -1103,55 +1105,56 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
     // Complete tree exports deliberately materialize the legacy exchange
     // association, so extraction still works with the original store absent.
     if let Ok(tree) = crate::files::load_tree(result)
-        && crate::links::metadata_present(&crate::links::sidecar(result))? {
-            let link = crate::links::AlignmentLink::read(result)?;
-            let input_path = link.checked_snapshot(result, &tree.doc)?;
-            let indexed = std::sync::Arc::new(basecraft_io::cache::open_fasta(&input_path)?);
-            let alignment = basecraft_docs::AlignmentDoc::from_fasta("Exported input", &indexed);
-            let mut canonical = tempfile::Builder::new()
-                .suffix(".afa")
-                .tempfile_in(staging.path())?;
-            crate::files::write_alignment(&alignment, canonical.as_file_mut())?;
-            canonical.as_file().sync_all()?;
-            let source_artifact = publication
-                .inputs
-                .first()
-                .ok_or_else(|| invalid("tree export has no source"))?;
-            let source_path = target_bundle.join(
-                source_artifact
-                    .retained
-                    .as_ref()
-                    .ok_or_else(|| invalid("exported source is not retained"))?,
-            );
-            let paths = crate::links::AlignmentLink::create(
-                &copied,
-                &source_path,
-                canonical.path(),
-                link.alignment_version,
-                link.inferred,
-                None,
-            )?;
-            for path in paths {
-                publication
-                    .outputs
-                    .push(basecraft_protocol::provenance::ArtifactRevision {
-                        id: format!(
-                            "{}:package-link:{}",
-                            publication.id,
-                            publication.outputs.len()
-                        ),
-                        logical_name: path
-                            .file_name()
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                            .into_owned(),
-                        hash: basecraft_io::hash_file(&path)?,
-                        size: std::fs::metadata(&path)?.len(),
-                        retained: None,
-                        reference: None,
-                    });
-            }
+        && crate::links::metadata_present(&crate::links::sidecar(result))?
+    {
+        let link = crate::links::AlignmentLink::read(result)?;
+        let input_path = link.checked_snapshot(result, &tree.doc)?;
+        let indexed = std::sync::Arc::new(basecraft_io::cache::open_fasta(&input_path)?);
+        let alignment = basecraft_docs::AlignmentDoc::from_fasta("Exported input", &indexed);
+        let mut canonical = tempfile::Builder::new()
+            .suffix(".afa")
+            .tempfile_in(staging.path())?;
+        crate::files::write_alignment(&alignment, canonical.as_file_mut())?;
+        canonical.as_file().sync_all()?;
+        let source_artifact = publication
+            .inputs
+            .first()
+            .ok_or_else(|| invalid("tree export has no source"))?;
+        let source_path = target_bundle.join(
+            source_artifact
+                .retained
+                .as_ref()
+                .ok_or_else(|| invalid("exported source is not retained"))?,
+        );
+        let paths = crate::links::AlignmentLink::create(
+            &copied,
+            &source_path,
+            canonical.path(),
+            link.alignment_version,
+            link.inferred,
+            None,
+        )?;
+        for path in paths {
+            publication
+                .outputs
+                .push(basecraft_protocol::provenance::ArtifactRevision {
+                    id: format!(
+                        "{}:package-link:{}",
+                        publication.id,
+                        publication.outputs.len()
+                    ),
+                    logical_name: path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned(),
+                    hash: basecraft_io::hash_file(&path)?,
+                    size: std::fs::metadata(&path)?.len(),
+                    retained: None,
+                    reference: None,
+                });
         }
+    }
     publication.origin = format!(
         "Portable export of revision {}. {}",
         original_id, publication.origin

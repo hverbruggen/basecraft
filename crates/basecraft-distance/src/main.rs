@@ -195,9 +195,10 @@ fn run(a: &Args) -> Result<()> {
             })
             .transpose()?;
         if let Some(path) = &a.cache
-            && !cached {
-                matrix.write(path)?;
-            }
+            && !cached
+        {
+            matrix.write(path)?;
+        }
         if let Some(path) = &a.matrix {
             matrix.export_tsv(path)?;
         }
@@ -220,9 +221,10 @@ fn run(a: &Args) -> Result<()> {
     })();
     let mut result = json!({"tool":"basecraft-distance","version":env!("CARGO_PKG_VERSION"),"model":matrix.model,"method":a.method,"min_overlap":matrix.min_overlap,"gap_policy":matrix.gap_policy,"input_hash":matrix.input_hash,"cache_reused":cached,"sequences":matrix.names.len(),"columns":matrix.columns,"distance_threads":threads,"tree_threads":tt,"distance_s":distance_s,"total_s":start.elapsed().as_secs_f64(),"zero_overlap_pairs":matrix.shared_sites.iter().filter(|&&n|n==0).count(),"short_overlap_pairs":matrix.shared_sites.iter().filter(|&&n|n>0&&n<matrix.min_overlap).count(),"saturated_pairs":matrix.distances.iter().zip(&matrix.shared_sites).filter(|(d,s)|!d.is_finite()&&**s>=matrix.min_overlap).count(),"tree":tree,"bootstrap":bootstrap_report});
     if let Some(report) = &bootstrap_report
-        && report.support_withheld {
-            eprintln!("Bootstrap support withheld: {}", report.failures.join("; "));
-        }
+        && report.support_withheld
+    {
+        eprintln!("Bootstrap support withheld: {}", report.failures.join("; "));
+    }
     finish_report(a, &mut result, publication)
 }
 
@@ -235,15 +237,16 @@ fn finish_report(a: &Args, result: &mut serde_json::Value, publication: Result<(
         result["error"] = json!(error.to_string());
     }
     if let Some(path) = &a.report
-        && let Err(report_error) = write_json(path, result) {
-            let diagnostic = error.as_ref().map_or_else(
-                || format!("run report write failed: {report_error}"),
-                |error| format!("{error}; run report write failed: {report_error}"),
-            );
-            result["output_status"] = json!("failed");
-            result["error"] = json!(diagnostic);
-            error = Some(diagnostic.into());
-        }
+        && let Err(report_error) = write_json(path, result)
+    {
+        let diagnostic = error.as_ref().map_or_else(
+            || format!("run report write failed: {report_error}"),
+            |error| format!("{error}; run report write failed: {report_error}"),
+        );
+        result["output_status"] = json!("failed");
+        result["error"] = json!(diagnostic);
+        error = Some(diagnostic.into());
+    }
     println!("{result}");
     match error {
         Some(error) => Err(error),

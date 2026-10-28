@@ -278,11 +278,11 @@ impl qobject::AppOperations {
         }
     }
     pub fn cancel(mut self: Pin<&mut Self>) {
-        if let Some(id) = self.rust().active.clone() {
-            if let Err(error) = self.rust().jobs.cancel(&id) {
-                self.as_mut()
-                    .set_message(QString::from(&format!("fail: {error}")));
-            }
+        if let Some(id) = self.rust().active.clone()
+            && let Err(error) = self.rust().jobs.cancel(&id)
+        {
+            self.as_mut()
+                .set_message(QString::from(&format!("fail: {error}")));
         }
         self.poll();
     }

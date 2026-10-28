@@ -358,9 +358,9 @@ impl PipelineOutcome {
             && let Some(index) = outputs
                 .iter()
                 .position(|p| std::path::Path::new(p) == primary)
-            {
-                outputs.swap(0, index);
-            }
+        {
+            outputs.swap(0, index);
+        }
         result.outputs = outputs;
         Ok(result)
     }

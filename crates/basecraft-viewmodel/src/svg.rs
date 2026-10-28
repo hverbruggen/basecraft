@@ -65,7 +65,9 @@ pub fn frame_svg(frame: &Frame, width: f32, height: f32, font: &str, background:
     );
     let mut quads = frame
         .floats()
-        .as_chunks::<FLOATS_PER_INSTANCE>().0.iter()
+        .as_chunks::<FLOATS_PER_INSTANCE>()
+        .0
+        .iter()
         .enumerate()
         .peekable();
     let mut runs = frame.text_runs().iter().peekable();

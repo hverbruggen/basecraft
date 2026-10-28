@@ -740,25 +740,25 @@ impl qobject::MetadataController {
             });
         }
         let name = remember.to_string().trim().to_string();
-        if !name.is_empty() {
-            if let Ok((session, doc)) = self.rust().current() {
-                let mut settings = session.metadata(doc).import.clone();
-                match source {
-                    PlanSource::Headers(mut pattern) => {
-                        pattern.name.clone_from(&name);
-                        settings.header_patterns.retain(|p| p.name != name);
-                        settings.header_patterns.push(pattern);
-                    }
-                    PlanSource::Sheet(columns) => {
-                        settings.spreadsheet_mappings.retain(|m| m.name != name);
-                        settings.spreadsheet_mappings.push(SpreadsheetMapping {
-                            name: name.clone(),
-                            columns,
-                        });
-                    }
+        if !name.is_empty()
+            && let Ok((session, doc)) = self.rust().current()
+        {
+            let mut settings = session.metadata(doc).import.clone();
+            match source {
+                PlanSource::Headers(mut pattern) => {
+                    pattern.name.clone_from(&name);
+                    settings.header_patterns.retain(|p| p.name != name);
+                    settings.header_patterns.push(pattern);
                 }
-                edits.push(MetadataEdit::SetImportSettings { settings });
+                PlanSource::Sheet(columns) => {
+                    settings.spreadsheet_mappings.retain(|m| m.name != name);
+                    settings.spreadsheet_mappings.push(SpreadsheetMapping {
+                        name: name.clone(),
+                        columns,
+                    });
+                }
             }
+            edits.push(MetadataEdit::SetImportSettings { settings });
         }
         if edits.is_empty() {
             self.as_mut().set_plan(QString::default());

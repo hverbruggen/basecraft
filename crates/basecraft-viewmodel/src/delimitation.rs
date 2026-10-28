@@ -188,9 +188,9 @@ pub fn tree_mapping(
             .iter()
             .map(|h| &h.provenance.haplotypes)
             .find(|m| !m.is_empty() && m.keys().cloned().collect::<BTreeSet<_>>() == *names)
-        {
-            return mapping.clone();
-        }
+    {
+        return mapping.clone();
+    }
     names
         .iter()
         .filter(|id| roster.contains(*id))

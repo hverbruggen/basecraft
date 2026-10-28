@@ -653,22 +653,22 @@ fn neighbors(tree: &TreeDoc, roots: &[usize]) -> Vec<Vec<usize>> {
     for &root in roots {
         if let Some(parent) = tree.node(root).parent
             && parent != tree.root()
-                && tree
-                    .node(parent)
-                    .children
-                    .iter()
-                    .all(|&c| tree.node(c).is_tip() || roots.contains(&c))
-            {
-                let fused: Vec<_> = roots
-                    .iter()
-                    .copied()
-                    .filter(|i| !tree.node(parent).children.contains(i))
-                    .chain(std::iter::once(parent))
-                    .collect();
-                if !out.contains(&fused) {
-                    out.push(fused);
-                }
+            && tree
+                .node(parent)
+                .children
+                .iter()
+                .all(|&c| tree.node(c).is_tip() || roots.contains(&c))
+        {
+            let fused: Vec<_> = roots
+                .iter()
+                .copied()
+                .filter(|i| !tree.node(parent).children.contains(i))
+                .chain(std::iter::once(parent))
+                .collect();
+            if !out.contains(&fused) {
+                out.push(fused);
             }
+        }
     }
     for &root in roots {
         if tree

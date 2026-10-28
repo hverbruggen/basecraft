@@ -305,20 +305,21 @@ pub fn verified_session_prefix(root: &Path) -> Result<VerifiedPrefix> {
 pub fn parse_entry(line: &str) -> serde_json::Result<LogEntry> {
     let mut v: serde_json::Value = serde_json::from_str(line)?;
     if let Some(object) = v.as_object_mut()
-        && let Some(checksum) = object.remove("_checksum") {
-            let sequence = object.remove("_sequence");
-            if sequence
-                .as_ref()
-                .and_then(serde_json::Value::as_u64)
-                .is_none()
-                || checksum.as_str()
-                    != Some(basecraft_io::hash_bytes(&serde_json::to_vec(&v)?).as_str())
-            {
-                return Err(<serde_json::Error as serde::de::Error>::custom(
-                    "journal checksum mismatch",
-                ));
-            }
+        && let Some(checksum) = object.remove("_checksum")
+    {
+        let sequence = object.remove("_sequence");
+        if sequence
+            .as_ref()
+            .and_then(serde_json::Value::as_u64)
+            .is_none()
+            || checksum.as_str()
+                != Some(basecraft_io::hash_bytes(&serde_json::to_vec(&v)?).as_str())
+        {
+            return Err(<serde_json::Error as serde::de::Error>::custom(
+                "journal checksum mismatch",
+            ));
         }
+    }
     // aln.insert named one row before it took row ranges.
     if v["op"] == "aln.insert"
         && let Some(params) = v["params"].as_object_mut()

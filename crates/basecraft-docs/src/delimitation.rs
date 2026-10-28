@@ -21,9 +21,10 @@ pub fn validate(work: &DelimitationWorkspace) -> Result<(), EditError> {
     }
     for h in &work.hypotheses {
         if let Some(parent) = &h.parent
-            && (!ids.contains(parent) || parent == &h.id) {
-                return fail("unknown or self-referencing parent");
-            }
+            && (!ids.contains(parent) || parent == &h.id)
+        {
+            return fail("unknown or self-referencing parent");
+        }
         let mut ancestors = BTreeSet::new();
         let mut current = h;
         while let Some(parent) = &current.parent {

@@ -696,10 +696,8 @@ impl qobject::DelimitationController {
                 self.as_mut().set_display_revision(revision);
                 self.as_mut().update_tree_edits();
                 self.as_mut().update_bar_columns();
-                if rooted {
-                    if let Some(warning) = warning {
-                        self.fail(&warning);
-                    }
+                if rooted && let Some(warning) = warning {
+                    self.fail(&warning);
                 }
                 true
             }
@@ -970,11 +968,11 @@ impl qobject::DelimitationController {
                 let mut this = self;
                 // A new hypothesis and its column undo as one step.
                 this.as_mut().set_group(created.is_some());
-                if this.as_mut().edit(edit).is_ok() {
-                    if let Some(id) = created {
-                        this.as_mut().activate(&QString::from(&id));
-                        this.as_mut().show_created(id);
-                    }
+                if this.as_mut().edit(edit).is_ok()
+                    && let Some(id) = created
+                {
+                    this.as_mut().activate(&QString::from(&id));
+                    this.as_mut().show_created(id);
                 }
                 this.set_group(false);
             }
@@ -1055,10 +1053,10 @@ impl qobject::DelimitationController {
                     .collect(),
             )
         })();
-        if let Some(mapped) = mapped {
-            if self.as_mut().rust_mut().selection.receive(mapped, "tree") {
-                self.emit_selection();
-            }
+        if let Some(mapped) = mapped
+            && self.as_mut().rust_mut().selection.receive(mapped, "tree")
+        {
+            self.emit_selection();
         }
     }
     pub fn coverage_json(&self, geometry: &QString) -> QString {
@@ -1204,14 +1202,12 @@ impl qobject::DelimitationController {
     }
     pub fn preview_position(self: Pin<&mut Self>, geometry: &QString, x: f64) {
         let value = serde_json::from_str::<Value>(&geometry.to_string()).ok();
-        if let Some(value) = value {
-            if let Some((root, tips)) = value["root"][0].as_f64().zip(value["tips_x"].as_f64()) {
-                if tips > root {
-                    let threshold =
-                        self.rust().root_height * ((tips - x) / (tips - root)).clamp(0.0, 1.0);
-                    self.preview_cut(threshold);
-                }
-            }
+        if let Some(value) = value
+            && let Some((root, tips)) = value["root"][0].as_f64().zip(value["tips_x"].as_f64())
+            && tips > root
+        {
+            let threshold = self.rust().root_height * ((tips - x) / (tips - root)).clamp(0.0, 1.0);
+            self.preview_cut(threshold);
         }
     }
     pub fn cancel_cut(mut self: Pin<&mut Self>) {
@@ -1882,13 +1878,13 @@ impl qobject::DelimitationController {
                             .get("tree_inference")
                             .is_some()
                     });
-                    if self.rust().display_path.to_string().is_empty() || inferred_alignment {
-                        if let Some(path) = value["workspace"]["view"]["display_tree"].as_str() {
-                            self.as_mut().attach_tree(
-                                &QString::from(path),
-                                value["metrics"].get("gmyc").is_some(),
-                            );
-                        }
+                    if (self.rust().display_path.to_string().is_empty() || inferred_alignment)
+                        && let Some(path) = value["workspace"]["view"]["display_tree"].as_str()
+                    {
+                        self.as_mut().attach_tree(
+                            &QString::from(path),
+                            value["metrics"].get("gmyc").is_some(),
+                        );
                     }
                 }
                 if let Some(path) = relative.first() {

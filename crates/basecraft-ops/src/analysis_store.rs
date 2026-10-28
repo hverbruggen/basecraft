@@ -240,18 +240,19 @@ impl ArtifactRun {
             .parent()
             .is_some_and(|p| p.file_name().is_some_and(|n| n == "runs"))
             && let Some(store) = parent.parent().and_then(Path::parent)
-                && store.file_name().is_some_and(|n| n == "analyses-v1") {
-                    Self::validate_store(store)?;
-                    let input = crate::input_evidence::read_input(&parent)?;
-                    if input
-                        .extra
-                        .get("species_result")
-                        .and_then(serde_json::Value::as_str)
-                        == result.file_name().and_then(|n| n.to_str())
-                    {
-                        return Ok(Some(parent));
-                    }
-                }
+            && store.file_name().is_some_and(|n| n == "analyses-v1")
+        {
+            Self::validate_store(store)?;
+            let input = crate::input_evidence::read_input(&parent)?;
+            if input
+                .extra
+                .get("species_result")
+                .and_then(serde_json::Value::as_str)
+                == result.file_name().and_then(|n| n.to_str())
+            {
+                return Ok(Some(parent));
+            }
+        }
         let absolute = parent.join(
             result
                 .file_name()

@@ -107,9 +107,10 @@ pub(crate) fn dependencies(
             }
         }
         if let Some(source) = hypothesis.provenance.parameters.get("combined_source")
-            && let Some(run) = source["evidence_run"].as_str() {
-                runs.insert(PathBuf::from(run));
-            }
+            && let Some(run) = source["evidence_run"].as_str()
+        {
+            runs.insert(PathBuf::from(run));
+        }
     }
     Ok(runs.into_iter().collect())
 }
@@ -189,11 +190,12 @@ pub fn checked_display_tree(
     };
     let Some(run) = work.exchange_fields.get("basecraft_display_evidence_run") else {
         if let Some(hash) = work.exchange_fields.get("basecraft_display_hash")
-            && &basecraft_io::hash_file(std::path::Path::new(path))? != hash {
-                return Err(invalid(
-                    "Display tree changed; select an unchanged tree explicitly",
-                ));
-            }
+            && &basecraft_io::hash_file(std::path::Path::new(path))? != hash
+        {
+            return Err(invalid(
+                "Display tree changed; select an unchanged tree explicitly",
+            ));
+        }
         return Ok(Some(PathBuf::from(path)));
     };
     let run = std::path::Path::new(run);

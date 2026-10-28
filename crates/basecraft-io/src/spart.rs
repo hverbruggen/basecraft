@@ -187,9 +187,10 @@ pub fn parse_text(text: &str) -> Result<DelimitationWorkspace> {
         for j in 0..n {
             let mut g = group(format!("group-{}", j + 1), (j + 1).to_string());
             if let Some(value) = values.get(j)
-                && let Some(s) = score(value, types("subset_score_type", i))? {
-                    g.scores.push(s);
-                }
+                && let Some(s) = score(value, types("subset_score_type", i))?
+            {
+                g.scores.push(s);
+            }
             h.groups.push(g);
         }
         work.hypotheses.push(h);
@@ -573,9 +574,10 @@ pub fn parse_xml(text: &str) -> Result<DelimitationWorkspace> {
             && let Some(s) = score(
                 value,
                 n.attribute("spartitionScoreType").unwrap_or("unspecified"),
-            )? {
-                h.scores.push(s);
-            }
+            )?
+        {
+            h.scores.push(s);
+        }
         let subsets = n
             .children()
             .find(|n| n.has_tag_name("subsets"))
@@ -601,9 +603,10 @@ pub fn parse_xml(text: &str) -> Result<DelimitationWorkspace> {
                 && let Some(sc) = score(
                     value,
                     n.attribute("subsetScoreType").unwrap_or("unspecified"),
-                )? {
-                    g.scores.push(sc);
-                }
+                )?
+            {
+                g.scores.push(sc);
+            }
             for m in s.children().filter(|n| n.has_tag_name("individual")) {
                 let id = m
                     .attribute("ref")
@@ -617,9 +620,10 @@ pub fn parse_xml(text: &str) -> Result<DelimitationWorkspace> {
                     && let Some(sc) = score(
                         value,
                         n.attribute("individualScoreType").unwrap_or("unspecified"),
-                    )? {
-                        g.individual_scores.insert(id, vec![sc]);
-                    }
+                    )?
+                {
+                    g.individual_scores.insert(id, vec![sc]);
+                }
             }
             h.groups.push(g);
         }

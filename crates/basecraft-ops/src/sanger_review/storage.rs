@@ -954,9 +954,10 @@ fn same_file(a: &Path, b: &Path) -> crate::Result<bool> {
         return Ok(true);
     }
     if let (Ok(a), Ok(b)) = (a.canonicalize(), b.canonicalize())
-        && a == b {
-            return Ok(true);
-        }
+        && a == b
+    {
+        return Ok(true);
+    }
     #[cfg(unix)]
     if let (Ok(a), Ok(b)) = (std::fs::metadata(a), std::fs::metadata(b)) {
         use std::os::unix::fs::MetadataExt;

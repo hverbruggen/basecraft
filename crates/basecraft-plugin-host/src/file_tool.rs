@@ -728,21 +728,21 @@ impl FileJob {
                 .insert(path.display().to_string(), session.snapshot_file(&path)?);
             if let Ok(value) = std::fs::read(&path).and_then(|bytes| {
                 serde_json::from_slice::<serde_json::Value>(&bytes).map_err(std::io::Error::other)
-            })
-                && let Ok(native) = serde_json::from_value::<JobRecord>(value["job"].clone())
-                    && native.id == self.run_id && native.method == self.operation {
-                        report.status = native.status;
-                        report.diagnostics.extend(native.diagnostics);
-                        for path in native.outputs.keys() {
-                            let path = Path::new(path);
-                            if path.is_file() {
-                                report.outputs.insert(
-                                    path.display().to_string(),
-                                    session.snapshot_file(path)?,
-                                );
-                            }
-                        }
+            }) && let Ok(native) = serde_json::from_value::<JobRecord>(value["job"].clone())
+                && native.id == self.run_id
+                && native.method == self.operation
+            {
+                report.status = native.status;
+                report.diagnostics.extend(native.diagnostics);
+                for path in native.outputs.keys() {
+                    let path = Path::new(path);
+                    if path.is_file() {
+                        report
+                            .outputs
+                            .insert(path.display().to_string(), session.snapshot_file(path)?);
                     }
+                }
+            }
         }
         if self.artifacts.is_some() {
             session.log_referenced_job_finished(doc, report)?;
@@ -999,9 +999,10 @@ impl FileJob {
         }
         if let Some(collection) = Self::diagnostic_artifact(failure)
             && self.valid_bootstrap_artifact(run, &collection)?
-                && let Some(path) = collection["path"].as_str() {
-                    paths.push(PathBuf::from(path));
-                }
+            && let Some(path) = collection["path"].as_str()
+        {
+            paths.push(PathBuf::from(path));
+        }
         let mut outputs = std::collections::BTreeMap::new();
         for path in paths {
             if std::fs::symlink_metadata(&path)?.file_type().is_symlink() {
@@ -1151,11 +1152,12 @@ impl FileJob {
                 return Err(Error::Protocol("host-managed allocation cannot be combined with caller analysis_artifacts or bootstrap_trees; use bootstrap_destination".into()));
             }
             if let Some(destination) = params.get("bootstrap_destination")
-                && !matches!(destination.as_str(), Some("metadata" | "working")) {
-                    return Err(Error::Protocol(
-                        "bootstrap_destination must be metadata or working".into(),
-                    ));
-                }
+                && !matches!(destination.as_str(), Some("metadata" | "working"))
+            {
+                return Err(Error::Protocol(
+                    "bootstrap_destination must be metadata or working".into(),
+                ));
+            }
             params.insert("analysis_artifacts".into(), json!({
                 "metadata_directory": run.directory(),
                 "working_directory": self.output.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new(".")).canonicalize()?,
@@ -1290,26 +1292,26 @@ impl FileJob {
             }
         }
         if let Some(storage) = &self.species
-            && let Some(primary) = &storage.primary {
-                let value: serde_json::Value =
-                    serde_json::from_slice(&std::fs::read(&self.output)?)?;
-                if !value["workspace"].is_null() {
-                    let work = serde_json::from_value(value["workspace"].clone())?;
-                    basecraft_ops::delimitation::publish_workspace(
-                        primary,
-                        &work,
-                        self.artifacts
-                            .as_ref()
-                            .ok_or_else(|| Error::Protocol("Missing species run".into()))?,
-                    )?;
-                    result.outputs.insert(0, primary.display().to_string());
-                    result.outputs.push(
-                        basecraft_ops::files::tree_sidecar(primary)
-                            .display()
-                            .to_string(),
-                    );
-                }
+            && let Some(primary) = &storage.primary
+        {
+            let value: serde_json::Value = serde_json::from_slice(&std::fs::read(&self.output)?)?;
+            if !value["workspace"].is_null() {
+                let work = serde_json::from_value(value["workspace"].clone())?;
+                basecraft_ops::delimitation::publish_workspace(
+                    primary,
+                    &work,
+                    self.artifacts
+                        .as_ref()
+                        .ok_or_else(|| Error::Protocol("Missing species run".into()))?,
+                )?;
+                result.outputs.insert(0, primary.display().to_string());
+                result.outputs.push(
+                    basecraft_ops::files::tree_sidecar(primary)
+                        .display()
+                        .to_string(),
+                );
             }
+        }
         if self.operation == "tree" {
             let mut trees = vec![self.output.canonicalize()?];
             for path in &result.outputs {

@@ -176,12 +176,13 @@ pub fn run(command: SubmissionCommand) -> Result<()> {
                 let review = submission::review(&session, doc, &submitter)?;
                 for record in &review.prepared.records {
                     if let Some(frame) = &record.frame
-                        && let (None, Some(detected)) = (frame.chosen, frame.detected) {
-                            frames.push(FrameChoice {
-                                record: record.record.clone(),
-                                codon_start: detected,
-                            });
-                        }
+                        && let (None, Some(detected)) = (frame.chosen, frame.detected)
+                    {
+                        frames.push(FrameChoice {
+                            record: record.record.clone(),
+                            codon_start: detected,
+                        });
+                    }
                 }
             }
             for item in set {

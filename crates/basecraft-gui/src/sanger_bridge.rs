@@ -1334,18 +1334,18 @@ impl qobject::SangerController {
             {
                 let mut r = self.as_mut().rust_mut();
                 let r = &mut *r;
-                if let (Some(view), Some(session)) = (&mut r.review, &r.review_session) {
-                    if session.masked(view.selected) {
-                        let target = (session.mask.start..session.mask.end)
-                            .find(|&i| {
-                                matches!(
-                                    session.decision(i),
-                                    Some(ReviewChoice::Pending | ReviewChoice::Reject)
-                                )
-                            })
-                            .unwrap_or(session.mask.start);
-                        view.select_column(target);
-                    }
+                if let (Some(view), Some(session)) = (&mut r.review, &r.review_session)
+                    && session.masked(view.selected)
+                {
+                    let target = (session.mask.start..session.mask.end)
+                        .find(|&i| {
+                            matches!(
+                                session.decision(i),
+                                Some(ReviewChoice::Pending | ReviewChoice::Reject)
+                            )
+                        })
+                        .unwrap_or(session.mask.start);
+                    view.select_column(target);
                 }
             }
             self.refresh();

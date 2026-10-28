@@ -624,16 +624,16 @@ impl PreparedOperation {
                 if !accepted_hashes.contains_key(&source)
                     && let Ok(record) =
                         basecraft_ops::document_record::DocumentRecord::from_file(&source)
+                {
+                    input_record.include_input(&record);
+                    if basecraft_io::hash_file(&source).map_err(basecraft_ops::Error::from)?
+                        != original_hash
                     {
-                        input_record.include_input(&record);
-                        if basecraft_io::hash_file(&source).map_err(basecraft_ops::Error::from)?
-                            != original_hash
-                        {
-                            return Err(Error::Protocol(
-                                "source changed while capturing its history".into(),
-                            ));
-                        }
+                        return Err(Error::Protocol(
+                            "source changed while capturing its history".into(),
+                        ));
                     }
+                }
                 let submitted_hash =
                     basecraft_io::hash_file(&path).map_err(basecraft_ops::Error::from)?;
                 sources.push((
