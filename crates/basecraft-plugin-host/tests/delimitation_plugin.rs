@@ -677,10 +677,24 @@ fn optional_display_tree_uses_hidden_reference_first_companions() {
     assert!(!run.join("submitted.fasta").exists());
     let tree = basecraft_ops::files::load_tree(&display).unwrap();
     let link = basecraft_ops::links::AlignmentLink::read(&display).unwrap();
+    // The link resolves to exactly the alignment the run read: the referenced
+    // source in the canonical FASTA the descriptor's view submits.
+    assert_eq!(link.source, source);
     let snapshot = link.checked_snapshot(&display, &tree.doc).unwrap();
+    let basecraft_ops::files::Loaded::Alignment(alignment) =
+        basecraft_ops::files::load(&source).unwrap()
+    else {
+        panic!("source is not an alignment")
+    };
+    let mut canonical = Vec::new();
+    basecraft_ops::files::write_alignment(&alignment.doc, &mut canonical).unwrap();
     assert_eq!(
         basecraft_io::hash_file(&snapshot).unwrap(),
-        basecraft_io::hash_file(&source).unwrap()
+        basecraft_io::hash_bytes(&canonical)
+    );
+    assert_eq!(
+        basecraft_io::hash_file(&snapshot).unwrap(),
+        link.snapshot_hash
     );
     assert_eq!(
         basecraft_ops::provenance::verify(&display).unwrap(),
