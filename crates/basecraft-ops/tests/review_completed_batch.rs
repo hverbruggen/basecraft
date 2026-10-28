@@ -279,3 +279,82 @@ fn reexported_seqid_with_two_record_meanings_is_ambiguous() {
     assert_eq!(plan.accessions, Vec::new());
     assert_eq!(plan.unmatched, ["a_b PX123456"]);
 }
+
+#[test]
+fn accession_shaped_submitted_id_is_identity_and_multiple_returns_are_ambiguous() {
+    use basecraft_protocol::submission::{Decision, RowDecision, SubmissionEdit};
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::write(root.join("batch.afa"), ">AB123456\nACGT\n>a@b\nACGT\n").unwrap();
+    let mut session = Session::unlogged(root);
+    let doc = submission::create(
+        &mut session,
+        Path::new("batch.submission.json"),
+        Path::new("batch.afa"),
+    )
+    .unwrap();
+    submission::edit(
+        &mut session,
+        doc,
+        SubmissionEdit::SetRows {
+            rows: vec![RowDecision {
+                record: "AB123456".into(),
+                decision: Decision::New,
+            }],
+        },
+    )
+    .unwrap();
+    let selection_hash = submission::review(&session, doc, &Submitter::default())
+        .unwrap()
+        .selection_hash
+        .unwrap();
+    submission::edit(
+        &mut session,
+        doc,
+        SubmissionEdit::ConfirmSelection { selection_hash },
+    )
+    .unwrap();
+    submission::export(
+        &mut session,
+        doc,
+        Path::new("package"),
+        &Submitter::default(),
+    )
+    .unwrap();
+    let mut reopened = Session::unlogged(root);
+    let doc = reopened.open(&root.join("batch.submission.json")).unwrap();
+    for text in [
+        "AB123456\tPX123456",
+        "AB123456,PX123456",
+        "PX123456 AB123456",
+        "a_b PX123456",
+        "a@b PX123456",
+    ] {
+        let plan =
+            submission::plan_accessions(&reopened, doc, text, &Submitter::default()).unwrap();
+        assert_eq!(plan.accessions.len(), 1, "{text}: {plan:?}");
+        assert_eq!(plan.accessions[0].accession, "PX123456", "{text}");
+        assert_eq!(
+            plan.accessions[0].record,
+            if text.contains("AB123456") {
+                "AB123456"
+            } else {
+                "a@b"
+            }
+        );
+        assert_eq!(plan.unmatched, Vec::<String>::new());
+    }
+    for text in [
+        "AB123456",
+        "AB123456 PX123456 PX123457",
+        "AB123456 PX123456 PX123456",
+        "a_b PX123456 PX123457",
+        "AB123456 a_b PX123456",
+        "AB123456 AB123456 PX123456",
+    ] {
+        let plan =
+            submission::plan_accessions(&reopened, doc, text, &Submitter::default()).unwrap();
+        assert_eq!(plan.accessions, Vec::new(), "{text}");
+        assert_eq!(plan.unmatched, [text], "{text}");
+    }
+}

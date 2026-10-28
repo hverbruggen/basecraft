@@ -1487,18 +1487,44 @@ pub fn plan_accessions(
         } else {
             &exported
         };
-        let record = (candidates.len() == 1)
+        // Assign field roles before interpreting accession-shaped text: an
+        // explicitly included submitted ID can itself look like an accession.
+        let identity_fields: BTreeSet<usize> = fields
+            .iter()
+            .enumerate()
+            .filter_map(|(index, field)| {
+                let matches = if exported.is_empty() {
+                    originals.iter().any(|name| name.as_str() == *field)
+                } else {
+                    ids.contains_key(*field)
+                };
+                matches.then_some(index)
+            })
+            .collect();
+        let record = (identity_fields.len() == 1 && candidates.len() == 1)
             .then(|| candidates.first().copied())
             .flatten();
-        let accession = fields.iter().find(|f| model::valid_accession(f));
+        let returned: Vec<&str> = fields
+            .iter()
+            .enumerate()
+            .filter(|(index, field)| {
+                !identity_fields.contains(index) && model::valid_accession(field)
+            })
+            .map(|(_, field)| *field)
+            .collect();
+        let accession = (returned.len() == 1).then(|| returned[0]);
         match (record, accession) {
             (Some(record), Some(accession)) if seen.insert(record.clone()) => {
                 plan.accessions.push(AccessionEntry {
                     record: record.clone(),
-                    accession: (*accession).to_string(),
+                    accession: accession.to_string(),
                 });
             }
-            (None, None) if plan.accessions.is_empty() && plan.unmatched.is_empty() => {}
+            (None, None)
+                if identity_fields.is_empty()
+                    && returned.is_empty()
+                    && plan.accessions.is_empty()
+                    && plan.unmatched.is_empty() => {}
             _ => plan.unmatched.push(line.trim().to_string()),
         }
     }
