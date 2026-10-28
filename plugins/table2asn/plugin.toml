@@ -1,0 +1,18 @@
+schema = 2
+contract = "operations.json"
+id = "basecraft.table2asn"
+name = "NCBI table2asn"
+version = "0.1.0"
+kinds = ["operation"]
+
+[entry]
+operation = "python:table2asn_plugin.py"
+
+# Software the plugin needs, as conda specs (ADR 0003). bioconda builds
+# table2asn for linux-64 and osx-64. Until Basecraft builds environments
+# from these, table2asn comes from $BASECRAFT_TABLE2ASN, the Python
+# environment's bin folder, or the PATH. On Windows and arm64 macOS, use
+# NCBI's binary (https://ftp.ncbi.nlm.nih.gov/asn1-converters/by_program/table2asn/)
+# and point BASECRAFT_TABLE2ASN at it.
+[environment]
+conda = ["bioconda::table2asn"]

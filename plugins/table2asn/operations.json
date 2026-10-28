@@ -1,0 +1,53 @@
+{
+  "schema": 1,
+  "operations": [
+    {
+      "name": "validate",
+      "version": "1.0.0",
+      "implementation": "validate",
+      "title": "Validate a GenBank submission with table2asn",
+      "description": "Run NCBI table2asn on a submission's FASTA, source table, feature table and template, offline (no taxonomy or publication lookup), with validation and a GenBank flatfile preview (-V vb). Publishes the .sqn, .val, .stats, .gbf and a run log. A missing table2asn is reported as status unavailable, not as a sequence error. Creating a .sqn is not a pass: read the .val report.",
+      "family": "file_analysis",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "discrepancy_report": {
+            "type": "boolean",
+            "default": false,
+            "description": "Also write table2asn's discrepancy report (-Z), meant for genomes."
+          }
+        }
+      },
+      "result": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "status": {"type": "string", "enum": ["completed", "unavailable"]},
+          "version": {"type": "string", "maxLength": 200},
+          "exit_code": {"type": ["integer", "null"]},
+          "argv": {"type": "array", "items": {"type": "string"}, "maxItems": 64},
+          "message": {"type": "string", "maxLength": 4096},
+          "files": {"type": "array", "items": {"type": "string"}, "maxItems": 64}
+        },
+        "required": ["status", "version", "message"]
+      },
+      "inputs": {
+        "sequences": {"view": "bytes", "media_type": "text/x-fasta", "min": 1, "max": 1},
+        "sources": {"view": "bytes", "media_type": "text/tab-separated-values", "min": 1, "max": 1},
+        "features": {"view": "bytes", "media_type": "text/plain", "min": 1, "max": 1},
+        "template": {"view": "bytes", "media_type": "text/plain", "min": 1, "max": 1}
+      },
+      "outputs": {
+        "reports": {
+          "media_type": "application/vnd.basecraft.artifact-collection",
+          "min": 0,
+          "max": 64,
+          "visibility": "result",
+          "collection": true
+        }
+      },
+      "effects": {"document_write": false, "artifact_write": true}
+    }
+  ]
+}
