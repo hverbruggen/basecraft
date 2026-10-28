@@ -1193,23 +1193,11 @@ impl Session {
         // references into the source's companion.
         if previous.is_some() && previous_bundle != &bundle {
             for subdirectory in ["artifacts", "records"] {
-                let directory = previous_bundle.join(subdirectory);
-                std::fs::create_dir_all(bundle.join(subdirectory))?;
-                if directory.exists() {
-                    for entry in std::fs::read_dir(directory)? {
-                        let entry = entry?;
-                        if !entry.file_type()?.is_file() {
-                            return Err(invalid("parent bundle contains non-file ancestry"));
-                        }
-                        let destination = bundle.join(subdirectory).join(entry.file_name());
-                        if !destination.exists() {
-                            basecraft_io::write_atomic(&destination, |w| {
-                                std::io::copy(&mut std::fs::File::open(entry.path())?, w)?;
-                                Ok(())
-                            })?;
-                        }
-                    }
-                }
+                copy_ancestry(
+                    &previous_bundle.join(subdirectory),
+                    &bundle.join(subdirectory),
+                    0,
+                )?;
             }
             if self.is_delimitation(id) {
                 // Species publications retain immutable generated files in their
@@ -2638,6 +2626,35 @@ fn merge_alignment(prev: &Op, next: &Op) -> Option<Op> {
         }
         _ => None,
     }
+}
+
+/// Copy a parent bundle's ancestry folder into a new bundle, keeping existing
+/// files. A registered run's retained collection lives under `artifacts/` and
+/// may hold folders; anything other than files and folders is refused.
+fn copy_ancestry(from: &Path, to: &Path, depth: usize) -> Result<()> {
+    if depth > 16 {
+        return Err(invalid("parent bundle ancestry is nested too deeply"));
+    }
+    std::fs::create_dir_all(to)?;
+    if !from.exists() {
+        return Ok(());
+    }
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let kind = entry.file_type()?;
+        let destination = to.join(entry.file_name());
+        if kind.is_dir() {
+            copy_ancestry(&entry.path(), &destination, depth + 1)?;
+        } else if !kind.is_file() {
+            return Err(invalid("parent bundle contains non-file ancestry"));
+        } else if !destination.exists() {
+            basecraft_io::write_atomic(&destination, |w| {
+                std::io::copy(&mut std::fs::File::open(entry.path())?, w)?;
+                Ok(())
+            })?;
+        }
+    }
+    Ok(())
 }
 
 pub fn objects_dir(root: &Path) -> PathBuf {
