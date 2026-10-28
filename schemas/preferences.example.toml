@@ -31,3 +31,18 @@ ribbon_hidden = []
 
 [migration]
 qsettings_imported = false
+
+# Contact details for GenBank submission templates (.sbt). Empty is unset.
+[submitter]
+first_name = ""
+middle_initials = ""
+last_name = ""
+email = ""
+phone = ""
+institution = ""
+department = ""
+street = ""
+city = ""
+state = ""
+postal_code = ""
+country = ""

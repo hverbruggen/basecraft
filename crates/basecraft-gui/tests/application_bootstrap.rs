@@ -26,6 +26,9 @@ mod document_jobs;
 #[path = "../src/figure_png.rs"]
 #[allow(unused_imports, dead_code)] // harness=false omits the included module's test bodies.
 mod figure_png;
+#[path = "../src/metadata_bridge.rs"]
+#[allow(unused_imports, dead_code)] // harness=false omits the included module's test bodies.
+mod metadata_bridge;
 #[path = "../src/operations_bridge.rs"]
 mod operations_bridge;
 #[path = "../src/provenance_bridge.rs"]
@@ -36,6 +39,9 @@ mod sanger_bridge;
 #[path = "../src/settings_bridge.rs"]
 #[allow(unused_imports)] // harness=false omits the included module's #[test] bodies.
 mod settings_bridge;
+#[path = "../src/submission_bridge.rs"]
+#[allow(unused_imports, dead_code)] // harness=false omits the included module's test bodies.
+mod submission_bridge;
 #[path = "../src/tree_bridge.rs"]
 #[allow(unused_imports)] // harness=false omits the included module's #[test] bodies.
 mod tree_bridge;

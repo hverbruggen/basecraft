@@ -83,6 +83,10 @@ impl Server {
             "tree"
         } else if self.session.is_delimitation(doc) {
             "delimitation"
+        } else if self.session.is_metadata(doc) {
+            "metadata"
+        } else if self.session.is_submission(doc) {
+            "submission"
         } else {
             "sequence"
         };
@@ -92,7 +96,24 @@ impl Server {
     }
 
     fn call(&mut self, name: &str, args: &Value) -> Result<Value> {
-        if matches!(name, "apply" | "save" | "undo" | "redo" | "import_support") && !self.writable {
+        let creates = (name == "metadata_open" && args["create"].as_bool() == Some(true))
+            || (name == "submission_submitter" && args.get("set").is_some());
+        if (matches!(
+            name,
+            "apply"
+                | "save"
+                | "import_support"
+                | "undo"
+                | "redo"
+                | "metadata_template"
+                | "submission_create"
+                | "submission_export"
+                | "submission_validation_request"
+                | "submission_record_validation"
+                | "submission_accession_table"
+        ) || creates)
+            && !self.writable
+        {
             return Err(
                 "permission_denied: This server is read-only; start it with --allow-writes to enable edits".into(),
             );
@@ -144,6 +165,14 @@ impl Server {
                 }
                 if self.session.is_delimitation(doc) {
                     return Ok(serde_json::to_value(self.session.delimitation(doc))?);
+                }
+                if self.session.is_metadata(doc) {
+                    return Ok(
+                        json!({"metadata":self.session.metadata(doc),"notices":self.session.metadata_notices(doc)}),
+                    );
+                }
+                if self.session.is_submission(doc) {
+                    return Ok(serde_json::to_value(self.session.submission(doc))?);
                 }
                 let start = args["start"].as_u64().unwrap_or(0);
                 let end = args["end"]
@@ -213,8 +242,166 @@ impl Server {
                 self.session.save_new(doc, path.as_deref())?;
                 Ok(self.state(doc))
             }
+            // Project specimen metadata: the same planners as `basecraft metadata`.
+            "metadata_open" => {
+                let create = args["create"].as_bool().unwrap_or(false);
+                if let Some(doc) = self
+                    .documents
+                    .values()
+                    .copied()
+                    .find(|d| self.session.is_metadata(*d))
+                {
+                    return Ok(self.state(doc));
+                }
+                let doc = basecraft_ops::metadata::open(&mut self.session, create)?.ok_or(
+                    "no_metadata: This project has no metadata yet; call metadata_open with create",
+                )?;
+                self.documents.insert(doc.0, doc);
+                let mut state = self.state(doc);
+                state["notices"] = json!(self.session.metadata_notices(doc));
+                Ok(state)
+            }
+            "metadata_plan_headers" => {
+                let doc = self.doc(args)?;
+                let mut request: basecraft_ops::metadata::HeaderImport =
+                    serde_json::from_value(args["request"].clone())?;
+                request.document = self.relative(&request.document)?;
+                Ok(serde_json::to_value(
+                    basecraft_ops::metadata::plan_header_import(&self.session, doc, &request)?,
+                )?)
+            }
+            "metadata_plan_sheet" => {
+                let doc = self.doc(args)?;
+                let mut request: basecraft_ops::metadata::SheetImport =
+                    serde_json::from_value(args["request"].clone())?;
+                request.path = self.path(&request.path)?.to_string_lossy().into_owned();
+                request.document = request
+                    .document
+                    .as_deref()
+                    .map(|d| self.relative(d))
+                    .transpose()?;
+                Ok(serde_json::to_value(
+                    basecraft_ops::metadata::plan_sheet_import(&self.session, doc, &request)?,
+                )?)
+            }
+            "metadata_template" => {
+                let doc = self.doc(args)?;
+                let file = self.relative(text(args, "file")?)?;
+                let output = self.path(text(args, "output")?)?;
+                let records =
+                    basecraft_ops::metadata::template_for(&self.session, doc, &file, &output)?;
+                Ok(json!({"records":records,"output":output}))
+            }
+            "metadata_status" => {
+                let doc = self.doc(args)?;
+                let file = self.relative(text(args, "file")?)?;
+                Ok(serde_json::to_value(basecraft_ops::metadata::link_status(
+                    &self.session,
+                    doc,
+                    &file,
+                )?)?)
+            }
+            "metadata_insdc" => {
+                let doc = self.doc(args)?;
+                Ok(basecraft_ops::metadata::insdc(
+                    &self.session,
+                    doc,
+                    text(args, "specimen")?,
+                )?)
+            }
+            // GenBank marker submissions: the same functions as `basecraft submission`.
+            "submission_create" => {
+                let path = self.path(text(args, "path")?)?;
+                let alignment = self.path(text(args, "alignment")?)?;
+                let doc = basecraft_ops::submission::create(&mut self.session, &path, &alignment)?;
+                self.documents.insert(doc.0, doc);
+                Ok(self.state(doc))
+            }
+            "submission_review" => {
+                let doc = self.doc(args)?;
+                let submitter = basecraft_ops::submission::submitter_preference()?;
+                Ok(serde_json::to_value(basecraft_ops::submission::review(
+                    &self.session,
+                    doc,
+                    &submitter,
+                )?)?)
+            }
+            "submission_export" => {
+                let doc = self.doc(args)?;
+                let output = self.path(text(args, "output")?)?;
+                let submitter = basecraft_ops::submission::submitter_preference()?;
+                let summary =
+                    basecraft_ops::submission::export(&mut self.session, doc, &output, &submitter)?;
+                Ok(serde_json::to_value(summary)?)
+            }
+            "submission_validation_request" => {
+                let package = self.path(text(args, "package")?)?;
+                Ok(basecraft_ops::submission::validation_request(
+                    self.session.root(),
+                    &package,
+                )?)
+            }
+            "submission_record_validation" => {
+                let package = self.path(text(args, "package")?)?;
+                Ok(serde_json::to_value(
+                    basecraft_ops::submission::record_validation(
+                        self.session.root(),
+                        &package,
+                        &args["outcome"],
+                    )?,
+                )?)
+            }
+            "submission_plan_accessions" => {
+                let doc = self.doc(args)?;
+                let submitter = basecraft_ops::submission::submitter_preference()?;
+                Ok(serde_json::to_value(
+                    basecraft_ops::submission::plan_accessions(
+                        &self.session,
+                        doc,
+                        text(args, "text")?,
+                        &submitter,
+                    )?,
+                )?)
+            }
+            "submission_accession_table" => {
+                let doc = self.doc(args)?;
+                let output = self.path(text(args, "output")?)?;
+                let submitter = basecraft_ops::submission::submitter_preference()?;
+                let table =
+                    basecraft_ops::submission::accession_table(&self.session, doc, &submitter)?;
+                basecraft_io::write_atomic(&output, |w| w.write_all(&table))?;
+                Ok(json!({"output":output}))
+            }
+            "submission_submitter" => {
+                let paths = basecraft_platform::paths::AppPaths::discover()?;
+                let store = basecraft_platform::settings::SettingsStore::new(paths.preferences());
+                let mut submitter = store.load()?.submitter;
+                if let Some(set) = args.get("set") {
+                    let mut value = serde_json::to_value(&submitter)?;
+                    for (name, field) in set.as_object().ok_or("set must be an object")? {
+                        if value.get(name).is_none() {
+                            return Err(format!("{name} is not a submitter field").into());
+                        }
+                        value[name] = field.clone();
+                    }
+                    submitter = serde_json::from_value(value)?;
+                    store.update(basecraft_platform::settings::Change::Submitter(Box::new(
+                        submitter.clone(),
+                    )))?;
+                }
+                Ok(json!({"submitter":submitter,"missing":submitter.missing()}))
+            }
             _ => Err("Unknown tool".into()),
         }
+    }
+
+    /// A project file's project-relative key, refusing paths outside it.
+    fn relative(&self, path: &str) -> Result<String> {
+        let path = self.path(path)?;
+        Ok(basecraft_ops::metadata::document_key(
+            self.session.root(),
+            &path,
+        )?)
     }
 }
 
@@ -253,6 +440,20 @@ fn tools() -> Value {
         tool("provenance_inspect","Read the provenance publication of a saved project result.",json!({"path":string}), &["path"]),
         tool("provenance_verify","Check a saved result against its recorded hashes and retained inputs; runs no tools.",json!({"path":string}), &["path"]),
         tool("replay","Replay the project's operation log in a scratch session and report problems.",json!({}), &[]),
+        tool("metadata_open","Open the project's specimen metadata (roster, taxa, identifications, record links, typed collection columns) as a document. With create, write empty tables first if the project has none. Edit it with apply and metadata.edit operations; save it with save.",json!({"create":{"type":"boolean"}}), &[]),
+        tool("metadata_plan_headers","Plan, without applying, an import from structured FASTA headers. request: {document: project FASTA path, pattern: {name, separator, fields: [{role: specimen|taxon|record|ignore|column, column?}]}, options?: {create_specimens, overwrite}}. Returns {changes, issues, rows, matched}; apply the reviewed changes with apply {op: metadata.edit, params: {edit: {action: apply, changes}}}.",json!({"document":doc,"request":{"type":"object"}}), &["document","request"]),
+        tool("metadata_plan_sheet","Plan, without applying, an import from a spreadsheet (.ods, .xlsx, .csv, .tsv). request: {path, mapping?: {header: {role, column?}} (guessed when omitted), document?: FASTA whose records the record column names, options?}. Returns the plan with the mapping used.",json!({"document":doc,"request":{"type":"object"}}), &["document","request"]),
+        tool("metadata_template","Write an .ods template, every cell text, pre-filled for each record of a project FASTA file.",json!({"document":doc,"file":string,"output":string}), &["document","file","output"]),
+        tool("metadata_status","List a FASTA file's records that have no stored link to a specimen.",json!({"document":doc,"file":string}), &["document","file"]),
+        tool("metadata_insdc","Derive a specimen's INSDC source qualifiers from its Darwin Core columns and current identification, with the required ones still missing.",json!({"document":doc,"specimen":string}), &["document","specimen"]),
+        tool("submission_create","Create a GenBank marker submission document (path ending .submission.json) for an aligned FASTA inside the project, and open it. Edit it with apply and submission.edit operations ({action: set_rows | set_batch | set_frames | set_export | set_publication | set_source | set_accessions | confirm_selection, ...}; see schemas/submission-edit.schema.json) and save it with save.",json!({"path":string,"alignment":string}), &["path","alignment"]),
+        tool("submission_review","Prepare a submission's records from its source alignment and the project metadata and list every local issue: extraction (ungapped, ambiguity kept, terminal unknowns, masked columns, export IDs), specimen source qualifiers, organism names, features, and reading frames detected per record for review (confirm them with set_frames). Accession-aware row choices and evidence are local unverified heuristics. Review included/excluded rows, then apply submission.edit with {action: confirm_selection, selection_hash: <returned selection_hash>} before export. Bulk include/exclude uses set_rows. Source/selection/evidence changes require confirmation again. Blocking issues keep the package from being ready.",json!({"document":doc}), &["document"]),
+        tool("submission_export","Write the submission package (genbank/ .fsa .src .tbl .sbt, records, specimens, coordinate map, README, package.json) to a folder in the project. Requires confirmation of the current selection fingerprint from submission_review (apply submission.edit confirm_selection). Same inputs give identical files. Returns the input hash and status.",json!({"document":doc,"output":string}), &["document","output"]),
+        tool("submission_validation_request","The OperationRequest that validates an exported package with table2asn. Submit it with the basecraft.table2asn.validate.v1 tool, wait with jobs_result, then pass the outcome to submission_record_validation.",json!({"package":string}), &["package"]),
+        tool("submission_record_validation","Read a finished table2asn job's reports into the package: issues mapped to records and specimens, status (passed, errors, unavailable, failed), .sqn and .gbf copied to genbank/. Local validation only, not archive acceptance.",json!({"package":string,"outcome":{"type":"object"}}), &["package","outcome"]),
+        tool("submission_plan_accessions","Match an accession list returned by NCBI (lines with a sequence ID and an accession) to the submission's records. Record the result with apply {op: submission.edit, params: {edit: {action: set_accessions, accessions}}}.",json!({"document":doc,"text":string}), &["document","text"]),
+        tool("submission_accession_table","Write a publication table of records, specimens, organisms and accessions.",json!({"document":doc,"output":string}), &["document","output"]),
+        tool("submission_submitter","Read the submitter contact preference used for .sbt files and the required fields still missing; with set (an object of fields such as first_name, last_name, email, institution, city, country), update it.",json!({"set":{"type":"object"}}), &[]),
     ]})
 }
 

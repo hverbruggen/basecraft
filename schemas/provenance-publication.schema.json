@@ -84,6 +84,22 @@
     "report_template_version"
   ],
   "$defs": {
+    "AccessionEntry": {
+      "type": "object",
+      "properties": {
+        "accession": {
+          "description": "Accession, with its version when the archive gave one.",
+          "type": "string"
+        },
+        "record": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "record",
+        "accession"
+      ]
+    },
     "Actor": {
       "description": "Who made a change: a person in the GUI (`human`), a script through the\nCLI or Python API (`script`), an assistant over MCP (`agent`), or a tool,\nplugin or outside program. New kinds are additive; older records keep\ntheir kinds.",
       "oneOf": [
@@ -236,6 +252,217 @@
         "size"
       ]
     },
+    "Author": {
+      "type": "object",
+      "properties": {
+        "first": {
+          "type": "string"
+        },
+        "last": {
+          "type": "string"
+        },
+        "middle": {
+          "description": "Middle initials, without the first name's, such as `M.`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "first",
+        "last"
+      ]
+    },
+    "BatchSettings": {
+      "description": "Settings shared by every record of the batch.",
+      "type": "object",
+      "properties": {
+        "ends": {
+          "$ref": "#/$defs/EndPolicy",
+          "default": "auto"
+        },
+        "genetic_code": {
+          "description": "NCBI genetic code (translation table) number.",
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        },
+        "marker": {
+          "$ref": "#/$defs/Marker"
+        },
+        "mol_type": {
+          "$ref": "#/$defs/MolType",
+          "default": "genomic_dna"
+        },
+        "organelle": {
+          "description": "The organelle the marker is from; none for nuclear markers.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Organelle"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "marker",
+        "genetic_code"
+      ]
+    },
+    "Cell": {
+      "description": "One value. The variant must match its column's kind; any column may hold\na missing-value reason instead.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "text"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "date": {
+              "$ref": "#/$defs/PartialDate"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "date"
+          ]
+        },
+        {
+          "description": "Latitude or longitude in decimal degrees.",
+          "type": "object",
+          "properties": {
+            "degrees": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "degrees"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "number": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "number"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "category": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "category"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "missing": {
+              "$ref": "#/$defs/MissingReason"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "missing"
+          ]
+        }
+      ]
+    },
+    "CellChange": {
+      "description": "One value to set, or with no value, to clear.",
+      "type": "object",
+      "properties": {
+        "column": {
+          "type": "string"
+        },
+        "specimen": {
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Cell"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "specimen",
+        "column"
+      ]
+    },
+    "ChangeSet": {
+      "description": "Additions and updates applied together: one undo step. Every import\nroute produces one, reviewed before it is applied.",
+      "type": "object",
+      "properties": {
+        "cells": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CellChange"
+          }
+        },
+        "columns": {
+          "description": "New specimen columns.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Column"
+          }
+        },
+        "identifications": {
+          "description": "Appended identifications.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Identification"
+          }
+        },
+        "links": {
+          "description": "New links, or replacements for a record's existing link.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RecordLink"
+          }
+        },
+        "specimens": {
+          "description": "New specimen IDs, appended to the roster.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "taxa": {
+          "description": "New taxa, or replacements for taxa with the same ID.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Taxon"
+          }
+        }
+      }
+    },
     "CladeAnnotation": {
       "description": "A highlighted clade: a name on its stem branch, a bar along its tips, a\nfield of colour behind it, or any mix of these.",
       "type": "object",
@@ -295,6 +522,120 @@
       },
       "required": [
         "clade"
+      ]
+    },
+    "Column": {
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ColumnKind"
+        },
+        "name": {
+          "description": "A Darwin Core term (`catalogNumber`, `eventDate`, ...) or a user name:\nan ASCII letter followed by letters, digits or underscores.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "kind"
+      ]
+    },
+    "ColumnKind": {
+      "description": "What a column holds. Every kind also accepts an INSDC missing-value reason.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "text"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "A calendar date at its true precision: year, year and month, or day.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "date"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "WGS84 decimal degrees, -90 to 90.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "latitude"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "WGS84 decimal degrees, -180 to 180.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "longitude"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "A number, in `unit` when given.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "number"
+            },
+            "unit": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "One of `levels`.",
+          "type": "object",
+          "properties": {
+            "levels": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "categorical"
+            }
+          },
+          "required": [
+            "type",
+            "levels"
+          ]
+        }
       ]
     },
     "ColumnStyle": {
@@ -732,6 +1073,62 @@
         "operation"
       ]
     },
+    "EndPolicy": {
+      "description": "How the feature's ends are marked.",
+      "oneOf": [
+        {
+          "description": "Coding markers: an end is complete when it has a start (5') or stop\n(3') codon in frame. Other markers: both ends partial.",
+          "type": "string",
+          "const": "auto"
+        },
+        {
+          "description": "Both ends partial.",
+          "type": "string",
+          "const": "partial"
+        },
+        {
+          "description": "Both ends complete.",
+          "type": "string",
+          "const": "complete"
+        }
+      ]
+    },
+    "ExportMapping": {
+      "description": "Retained identities for interpreting archive returns after later selection edits.",
+      "type": "object",
+      "properties": {
+        "records": {
+          "description": "Submitted `SeqID` to original biological record name.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceAlignment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "records"
+      ]
+    },
+    "ExportSettings": {
+      "type": "object",
+      "properties": {
+        "trim_terminal_unknown": {
+          "description": "Remove runs of unknown bases (N, ?) at the ends of each record.\nThe trimmed lengths are recorded in the coordinate map.",
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
     "Feature": {
       "description": "A feature: a type, a location and qualifiers. GFF3 attributes map to\nqualifiers too, with `ID` and `Parent` kept as ordinary qualifiers.",
       "type": "object",
@@ -753,6 +1150,79 @@
         "kind",
         "location",
         "qualifiers"
+      ]
+    },
+    "FieldTarget": {
+      "description": "What an imported field holds.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "role": {
+              "type": "string",
+              "const": "ignore"
+            }
+          },
+          "required": [
+            "role"
+          ]
+        },
+        {
+          "description": "The specimen's local ID: the key that rows are matched on.",
+          "type": "object",
+          "properties": {
+            "role": {
+              "type": "string",
+              "const": "specimen"
+            }
+          },
+          "required": [
+            "role"
+          ]
+        },
+        {
+          "description": "A sequence record ID to link to the row's specimen.",
+          "type": "object",
+          "properties": {
+            "role": {
+              "type": "string",
+              "const": "record"
+            }
+          },
+          "required": [
+            "role"
+          ]
+        },
+        {
+          "description": "A taxon name; the specimen is identified as that taxon.",
+          "type": "object",
+          "properties": {
+            "role": {
+              "type": "string",
+              "const": "taxon"
+            }
+          },
+          "required": [
+            "role"
+          ]
+        },
+        {
+          "description": "A value for a specimen column.",
+          "type": "object",
+          "properties": {
+            "column": {
+              "type": "string"
+            },
+            "role": {
+              "type": "string",
+              "const": "column"
+            }
+          },
+          "required": [
+            "role",
+            "column"
+          ]
+        }
       ]
     },
     "FileStamp": {
@@ -795,6 +1265,26 @@
         "size",
         "modified_seconds",
         "modified_nanos"
+      ]
+    },
+    "FrameChoice": {
+      "description": "A reading frame the user reviewed for one record.",
+      "type": "object",
+      "properties": {
+        "codon_start": {
+          "description": "1, 2 or 3: the first base of the first complete codon.",
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        },
+        "record": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "record",
+        "codon_start"
       ]
     },
     "Group": {
@@ -846,6 +1336,31 @@
         "label",
         "color",
         "members"
+      ]
+    },
+    "HeaderPattern": {
+      "description": "How to read fields from structured FASTA headers, such as\n`HV1234|Caulerpa taxifolia|2019-05-12`.",
+      "type": "object",
+      "properties": {
+        "fields": {
+          "description": "What each field holds, in order. Fields past the end are ignored.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FieldTarget"
+          }
+        },
+        "name": {
+          "type": "string"
+        },
+        "separator": {
+          "description": "Splits the header line (without `>`). Must not be empty.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "separator",
+        "fields"
       ]
     },
     "Hypothesis": {
@@ -916,6 +1431,66 @@
         "manual_cut"
       ]
     },
+    "Identification": {
+      "description": "A recorded assignment of a specimen to a taxon. Re-identification adds\nanother; it never overwrites the earlier one.",
+      "type": "object",
+      "properties": {
+        "date": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PartialDate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "identified_by": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "remarks": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "specimen": {
+          "type": "string"
+        },
+        "taxon": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "specimen",
+        "taxon"
+      ]
+    },
+    "ImportSettings": {
+      "description": "Saved import settings, so a project's next import repeats its last one.",
+      "type": "object",
+      "properties": {
+        "header_patterns": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HeaderPattern"
+          }
+        },
+        "spreadsheet_mappings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SpreadsheetMapping"
+          }
+        }
+      }
+    },
     "InputReference": {
       "type": "object",
       "properties": {
@@ -935,6 +1510,28 @@
         "path",
         "stamp",
         "hash"
+      ]
+    },
+    "ItsComponent": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "ITS1",
+            "5.8S",
+            "ITS2"
+          ]
+        },
+        {
+          "description": "Small subunit (18S) ribosomal RNA.",
+          "type": "string",
+          "const": "SSU"
+        },
+        {
+          "description": "Large subunit (28S) ribosomal RNA.",
+          "type": "string",
+          "const": "LSU"
+        }
       ]
     },
     "JobRecord": {
@@ -2200,6 +2797,56 @@
           ]
         },
         {
+          "description": "An atomic edit to the project's specimen and taxon metadata.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "metadata.edit"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "edit": {
+                  "$ref": "#/$defs/MetadataEdit"
+                }
+              },
+              "required": [
+                "edit"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "An atomic edit to a GenBank marker submission document.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "submission.edit"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "edit": {
+                  "$ref": "#/$defs/SubmissionEdit"
+                }
+              },
+              "required": [
+                "edit"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
           "description": "A terminal job record, including failures and cancellation.",
           "type": "object",
           "properties": {
@@ -2284,6 +2931,228 @@
         "actor",
         "doc",
         "state"
+      ]
+    },
+    "Marker": {
+      "description": "The marker type, which decides the one feature each record gets.",
+      "oneOf": [
+        {
+          "description": "A protein-coding gene: a `gene` and a `CDS` feature.",
+          "type": "object",
+          "properties": {
+            "gene": {
+              "description": "Gene symbol, such as `rbcL`; may be empty.",
+              "type": "string",
+              "default": ""
+            },
+            "kind": {
+              "type": "string",
+              "const": "coding"
+            },
+            "product": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "product"
+          ]
+        },
+        {
+          "description": "A ribosomal RNA gene, such as `18S ribosomal RNA`.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "rrna"
+            },
+            "product": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "product"
+          ]
+        },
+        {
+          "description": "The ITS region: one `misc_RNA` with a note listing the components\npresent. Internal boundaries are not annotated.",
+          "type": "object",
+          "properties": {
+            "components": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ItsComponent"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "its"
+            }
+          },
+          "required": [
+            "kind",
+            "components"
+          ]
+        },
+        {
+          "description": "A non-coding region, such as an intergenic spacer: one\n`misc_feature` with this description as its note.",
+          "type": "object",
+          "properties": {
+            "description": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "spacer"
+            }
+          },
+          "required": [
+            "kind",
+            "description"
+          ]
+        }
+      ]
+    },
+    "MetadataEdit": {
+      "description": "One atomic metadata edit.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "apply"
+            },
+            "changes": {
+              "$ref": "#/$defs/ChangeSet"
+            }
+          },
+          "required": [
+            "action",
+            "changes"
+          ]
+        },
+        {
+          "description": "Refused while a removed specimen has identifications or links.",
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "remove_specimens"
+            },
+            "specimens": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "uniqueItems": true
+            }
+          },
+          "required": [
+            "action",
+            "specimens"
+          ]
+        },
+        {
+          "description": "Remove a column and its values.",
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "remove_column"
+            },
+            "column": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "action",
+            "column"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "unlink"
+            },
+            "records": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/RecordRef"
+              }
+            }
+          },
+          "required": [
+            "action",
+            "records"
+          ]
+        },
+        {
+          "description": "Withdraw identifications recorded in error. Re-identification adds a\nnew identification instead.",
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "remove_identifications"
+            },
+            "identifications": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "uniqueItems": true
+            }
+          },
+          "required": [
+            "action",
+            "identifications"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "set_import_settings"
+            },
+            "settings": {
+              "$ref": "#/$defs/ImportSettings"
+            }
+          },
+          "required": [
+            "action",
+            "settings"
+          ]
+        }
+      ]
+    },
+    "MissingReason": {
+      "description": "Why a value is missing: the INSDC missing-value vocabulary, written as\nINSDC writes it.",
+      "type": "string",
+      "enum": [
+        "not applicable",
+        "missing",
+        "not collected",
+        "not provided",
+        "restricted access",
+        "missing: control sample",
+        "missing: sample group",
+        "missing: synthetic construct",
+        "missing: lab stock",
+        "missing: third party data",
+        "missing: data agreement established pre-2023",
+        "missing: endangered species",
+        "missing: human-identifiable"
+      ]
+    },
+    "MolType": {
+      "type": "string",
+      "enum": [
+        "genomic_dna",
+        "genomic_rna"
       ]
     },
     "Op": {
@@ -3435,6 +4304,56 @@
           ]
         },
         {
+          "description": "An atomic edit to the project's specimen and taxon metadata.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "metadata.edit"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "edit": {
+                  "$ref": "#/$defs/MetadataEdit"
+                }
+              },
+              "required": [
+                "edit"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
+          "description": "An atomic edit to a GenBank marker submission document.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "submission.edit"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "edit": {
+                  "$ref": "#/$defs/SubmissionEdit"
+                }
+              },
+              "required": [
+                "edit"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
           "description": "A terminal job record, including failures and cancellation.",
           "type": "object",
           "properties": {
@@ -3542,6 +4461,24 @@
         }
       }
     },
+    "Organelle": {
+      "type": "string",
+      "enum": [
+        "mitochondrion",
+        "chloroplast",
+        "plastid",
+        "apicoplast",
+        "chromoplast",
+        "cyanelle",
+        "kinetoplast",
+        "nucleomorph"
+      ]
+    },
+    "PartialDate": {
+      "description": "A date at year, month or day precision",
+      "type": "string",
+      "pattern": "^[0-9]{4}(-[0-9]{2}(-[0-9]{2})?)?$"
+    },
     "Provenance": {
       "type": "object",
       "properties": {
@@ -3620,6 +4557,23 @@
         "version"
       ]
     },
+    "Publication": {
+      "description": "The publication the sequences belong to, written to the `.sbt`.",
+      "type": "object",
+      "properties": {
+        "authors": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Author"
+          }
+        },
+        "title": {
+          "type": "string",
+          "default": ""
+        }
+      }
+    },
     "Qualifier": {
       "type": "object",
       "properties": {
@@ -3636,6 +4590,102 @@
       },
       "required": [
         "key"
+      ]
+    },
+    "RecordLink": {
+      "description": "A stored link from a sequence record to the specimen it came from. Many\nrecords may link to one specimen. Links are made at import and never\nre-derived from names.",
+      "type": "object",
+      "properties": {
+        "document": {
+          "type": "string"
+        },
+        "record": {
+          "type": "string"
+        },
+        "specimen": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "document",
+        "record",
+        "specimen"
+      ]
+    },
+    "RecordRef": {
+      "description": "A sequence record in a project document.",
+      "type": "object",
+      "properties": {
+        "document": {
+          "description": "Project-relative path of the sequence file.",
+          "type": "string"
+        },
+        "record": {
+          "description": "The record's ID: its FASTA header up to the first whitespace, or its\nalignment row name.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "document",
+        "record"
+      ]
+    },
+    "RowDecision": {
+      "description": "What to do with a row.",
+      "type": "object",
+      "properties": {
+        "record": {
+          "description": "The alignment row name (FASTA ID).",
+          "type": "string"
+        }
+      },
+      "oneOf": [
+        {
+          "description": "A newly generated sequence, exported for submission.",
+          "type": "object",
+          "properties": {
+            "decision": {
+              "type": "string",
+              "const": "new"
+            }
+          },
+          "required": [
+            "decision"
+          ]
+        },
+        {
+          "description": "Already in an archive (a downloaded reference, or submitted\nbefore); not exported.",
+          "type": "object",
+          "properties": {
+            "accession": {
+              "type": "string"
+            },
+            "decision": {
+              "type": "string",
+              "const": "existing"
+            }
+          },
+          "required": [
+            "decision",
+            "accession"
+          ]
+        },
+        {
+          "description": "Left out of the submission.",
+          "type": "object",
+          "properties": {
+            "decision": {
+              "type": "string",
+              "const": "exclude"
+            }
+          },
+          "required": [
+            "decision"
+          ]
+        }
+      ],
+      "required": [
+        "record"
       ]
     },
     "Score": {
@@ -3694,12 +4744,220 @@
         "strand"
       ]
     },
+    "SourceAlignment": {
+      "description": "An alignment file inside the project and the BLAKE3 hash of the bytes\nthe submission was prepared from. A different file content is refused\nuntil the source is selected again.",
+      "type": "object",
+      "properties": {
+        "document": {
+          "description": "Project-relative path.",
+          "type": "string"
+        },
+        "hash": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "document",
+        "hash"
+      ]
+    },
+    "SpreadsheetMapping": {
+      "description": "Remembered spreadsheet column mapping.",
+      "type": "object",
+      "properties": {
+        "columns": {
+          "description": "Source column header to what it holds. Unmapped columns are ignored.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/FieldTarget"
+          }
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "columns"
+      ]
+    },
     "Strand": {
       "type": "string",
       "enum": [
         "forward",
         "reverse",
         "unstranded"
+      ]
+    },
+    "SubmissionEdit": {
+      "description": "One atomic submission edit.",
+      "oneOf": [
+        {
+          "description": "Select the source alignment (or accept a changed one).",
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "set_source"
+            },
+            "source": {
+              "$ref": "#/$defs/SourceAlignment"
+            }
+          },
+          "required": [
+            "action",
+            "source"
+          ]
+        },
+        {
+          "description": "Set the decision of these rows.",
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "set_rows"
+            },
+            "rows": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/RowDecision"
+              }
+            }
+          },
+          "required": [
+            "action",
+            "rows"
+          ]
+        },
+        {
+          "description": "Confirm the selection fingerprint returned by submission review.",
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "confirm_selection"
+            },
+            "selection_hash": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "action",
+            "selection_hash"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "set_batch"
+            },
+            "batch": {
+              "$ref": "#/$defs/BatchSettings"
+            }
+          },
+          "required": [
+            "action",
+            "batch"
+          ]
+        },
+        {
+          "description": "Confirm or choose reading frames; `clear` forgets choices.",
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "set_frames"
+            },
+            "clear": {
+              "type": "array",
+              "default": [],
+              "items": {
+                "type": "string"
+              }
+            },
+            "frames": {
+              "type": "array",
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/FrameChoice"
+              }
+            }
+          },
+          "required": [
+            "action"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "set_export"
+            },
+            "export": {
+              "$ref": "#/$defs/ExportSettings"
+            }
+          },
+          "required": [
+            "action",
+            "export"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "set_publication"
+            },
+            "publication": {
+              "$ref": "#/$defs/Publication"
+            }
+          },
+          "required": [
+            "action",
+            "publication"
+          ]
+        },
+        {
+          "description": "Retain the mapping after writing a submission package.",
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "record_export"
+            },
+            "mapping": {
+              "$ref": "#/$defs/ExportMapping"
+            }
+          },
+          "required": [
+            "action",
+            "mapping"
+          ]
+        },
+        {
+          "description": "Record accessions returned by the archive.",
+          "type": "object",
+          "properties": {
+            "accessions": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/AccessionEntry"
+              }
+            },
+            "action": {
+              "type": "string",
+              "const": "set_accessions"
+            }
+          },
+          "required": [
+            "action",
+            "accessions"
+          ]
+        }
       ]
     },
     "SupportKind": {
@@ -3760,6 +5018,39 @@
         "set",
         "high",
         "low"
+      ]
+    },
+    "Taxon": {
+      "description": "A taxon that specimens can be identified as.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "description": "The name used in this project's research.",
+          "type": "string"
+        },
+        "submitted_name": {
+          "description": "The name to submit when it differs, such as an informal name for an\nundescribed species (`Caulerpa sp. 3 HV-2026`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "taxid": {
+          "description": "NCBI Taxonomy ID, when known.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "id",
+        "name"
       ]
     },
     "TreeDrawingEdit": {

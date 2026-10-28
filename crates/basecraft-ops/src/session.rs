@@ -48,6 +48,9 @@ enum Inverse {
     /// The whole tree as it was: trees are small.
     Tree(Box<TreeDoc>),
     Delimitation(Box<basecraft_protocol::delimitation::DelimitationWorkspace>),
+    /// The whole metadata as it was: one edit can touch every table.
+    Metadata(Box<basecraft_protocol::metadata::ProjectMetadata>),
+    Submission(Box<basecraft_protocol::submission::Submission>),
 }
 
 struct Applied {
@@ -256,6 +259,43 @@ impl Session {
         matches!(self.docs[id.0].content, Loaded::Delimitation(_))
     }
 
+    /// The project's specimen metadata. Panics if `id` is another kind.
+    pub fn metadata(&self, id: DocId) -> &basecraft_protocol::metadata::ProjectMetadata {
+        match &self.docs[id.0].content {
+            Loaded::Metadata(opened) => &opened.metadata,
+            _ => panic!("not the project metadata"),
+        }
+    }
+
+    /// What was noticed when the metadata was opened, such as tables edited
+    /// outside Basecraft.
+    pub fn metadata_notices(&self, id: DocId) -> &[String] {
+        match &self.docs[id.0].content {
+            Loaded::Metadata(opened) => &opened.notices,
+            _ => &[],
+        }
+    }
+
+    /// A GenBank submission document. Panics if `id` is another kind.
+    pub fn submission(&self, id: DocId) -> &basecraft_protocol::submission::Submission {
+        match &self.docs[id.0].content {
+            Loaded::Submission(sub) => sub,
+            _ => panic!("not a submission"),
+        }
+    }
+
+    pub fn is_submission(&self, id: DocId) -> bool {
+        self.docs
+            .get(id.0)
+            .is_some_and(|slot| matches!(slot.content, Loaded::Submission(_)))
+    }
+
+    pub fn is_metadata(&self, id: DocId) -> bool {
+        self.docs
+            .get(id.0)
+            .is_some_and(|slot| matches!(slot.content, Loaded::Metadata(_)))
+    }
+
     pub(crate) fn restore_replay_paths(&mut self, id: DocId, from: &Path, to: &Path) {
         if let Loaded::Delimitation(work) = &mut self.docs[id.0].content {
             files::rebase_delimitation_paths(work, from, to);
@@ -289,7 +329,9 @@ impl Session {
     fn sequence_of(&self, id: DocId) -> Result<&Opened> {
         match &self.docs[id.0].content {
             Loaded::Sequence(o) => Ok(o),
-            Loaded::Delimitation(_) => Err(invalid("this needs a sequence")),
+            Loaded::Delimitation(_) | Loaded::Metadata(_) | Loaded::Submission(_) => {
+                Err(invalid("this needs a sequence"))
+            }
             Loaded::Alignment(_) => Err(invalid("this needs a sequence, not an alignment")),
             Loaded::Tree(_) => Err(invalid("this needs a sequence, not a tree")),
         }
@@ -397,6 +439,16 @@ impl Session {
                 features: work.hypotheses.len() as u64,
                 rows: None,
             },
+            Loaded::Metadata(opened) => DocState {
+                len: opened.metadata.specimens.rows.len() as u64,
+                features: opened.metadata.identifications.len() as u64,
+                rows: Some(opened.metadata.links.len() as u64),
+            },
+            Loaded::Submission(sub) => DocState {
+                len: sub.rows.len() as u64,
+                features: sub.frames.len() as u64,
+                rows: Some(sub.accessions.len() as u64),
+            },
             Loaded::Tree(o) => DocState {
                 len: o.doc.tip_count() as u64,
                 features: o.doc.annotations().len() as u64,
@@ -463,24 +515,29 @@ impl Session {
         let disk_stamp = crate::input_evidence::stamp(path)?;
         let accepted_hash = basecraft_io::hash_file(path)?;
         let format = files::Format::from_path(path)?;
-        let sidecar = if matches!(format, files::Format::Tree | files::Format::Delimitation) {
-            files::tree_sidecar(path)
-        } else {
-            files::gff_sidecar(path)
+        // Files read with the main one: a sidecar, or a metadata manifest's tables.
+        let companions = match format {
+            files::Format::Metadata => crate::metadata::files(path).split_off(1),
+            files::Format::Tree | files::Format::Delimitation => vec![files::tree_sidecar(path)],
+            files::Format::GenBank | files::Format::Fasta => vec![files::gff_sidecar(path)],
+            files::Format::Submission => Vec::new(),
         };
-        let sidecar_hash = if sidecar.exists() {
-            Some(basecraft_io::hash_file(&sidecar)?)
-        } else {
-            None
+        let hash_companions = || -> Result<Vec<Option<String>>> {
+            companions
+                .iter()
+                .map(|c| {
+                    if c.exists() {
+                        basecraft_io::hash_file(c).map(Some).map_err(Into::into)
+                    } else {
+                        Ok(None)
+                    }
+                })
+                .collect()
         };
+        let companion_hashes = hash_companions()?;
         let content = files::load(path)?;
-        let after_sidecar = if sidecar.exists() {
-            Some(basecraft_io::hash_file(&sidecar)?)
-        } else {
-            None
-        };
         if basecraft_io::hash_file(path)? != accepted_hash
-            || after_sidecar != sidecar_hash
+            || hash_companions()? != companion_hashes
             || crate::input_evidence::stamp(path)? != disk_stamp
         {
             return Err(invalid(
@@ -489,16 +546,25 @@ impl Session {
         }
         let key = self.relative(path);
         let mut hashes = vec![(key.clone(), accepted_hash)];
-        let absent_sidecars = if sidecar.exists() {
-            Vec::new()
-        } else {
-            vec![self.relative(&sidecar)]
-        };
+        let absent_sidecars = companions
+            .iter()
+            .zip(&companion_hashes)
+            .filter(|(_, hash)| hash.is_none())
+            .map(|(c, _)| self.relative(c))
+            .collect();
         if matches!(&content, Loaded::Sequence(o) if o.format == files::Format::Fasta)
-            || matches!(content, Loaded::Tree(_) | Loaded::Delimitation(_))
+            || matches!(
+                content,
+                Loaded::Tree(_)
+                    | Loaded::Delimitation(_)
+                    | Loaded::Metadata(_)
+                    | Loaded::Submission(_)
+            )
         {
-            if let Some(hash) = sidecar_hash {
-                hashes.push((self.relative(&sidecar), hash));
+            for (companion, hash) in companions.iter().zip(companion_hashes) {
+                if let Some(hash) = hash {
+                    hashes.push((self.relative(companion), hash));
+                }
             }
         }
         let (origin, origin_issue) = crate::document_record::read_origin(path, &hashes);
@@ -754,7 +820,13 @@ impl Session {
     /// Persist newly recorded history for an already saved document without
     /// rewriting its data or sidecars. Uses the ordinary guarded save publisher.
     pub fn save_history(&mut self, id: DocId) -> Result<()> {
-        self.save_checked(id, None, crate::input_evidence::SavePolicy::Cancel, true, true)
+        self.save_checked(
+            id,
+            None,
+            crate::input_evidence::SavePolicy::Cancel,
+            true,
+            true,
+        )
     }
 
     /// Headless callers choose a policy explicitly; default save returns a structured conflict.
@@ -771,7 +843,13 @@ impl Session {
     /// not exist yet. For callers without an overwrite confirmation (agents,
     /// scripts): an existing other file is refused, never replaced.
     pub fn save_new(&mut self, id: DocId, path: Option<&Path>) -> Result<()> {
-        self.save_checked(id, path, crate::input_evidence::SavePolicy::Cancel, false, false)
+        self.save_checked(
+            id,
+            path,
+            crate::input_evidence::SavePolicy::Cancel,
+            false,
+            false,
+        )
     }
 
     /// Any spelling of the document's own file is an ordinary save, so its
@@ -847,6 +925,20 @@ impl Session {
             }
         }
         outcome.map_err(|error| {
+            if self.is_metadata(id) && target == self.resolve(&self.docs[id.0].key) {
+                // Tables are replaced one by one before the manifest. Accept
+                // those already written, so a retry isn't refused as a
+                // conflicting outside change.
+                for (path, hash) in crate::metadata::files(&target).iter().zip(&expected) {
+                    if basecraft_io::hash_file(path).ok().as_ref() == Some(hash) {
+                        let key = self.relative(path);
+                        let slot = &mut self.docs[id.0];
+                        slot.absent_sidecars.retain(|p| *p != key);
+                        slot.accepted_hashes.retain(|(p, _)| *p != key);
+                        slot.accepted_hashes.push((key, hash.clone()));
+                    }
+                }
+            }
             let now = basecraft_io::hash_file(&target).ok();
             if now != before && now.as_ref() == expected.first() {
                 // Our main-file replacement completed. Accept precisely that
@@ -858,7 +950,9 @@ impl Session {
                             hash.clone_from(&expected[0]);
                         }
                     }
-                    if let Some(expected_sidecar) = expected.get(1) {
+                    if let Some(expected_sidecar) =
+                        expected.get(1).filter(|_| !self.is_metadata(id))
+                    {
                         let sidecar = if self.is_tree(id) || self.is_delimitation(id) {
                             files::tree_sidecar(&target)
                         } else {
@@ -911,6 +1005,51 @@ impl Session {
         let mut hashes = Vec::new();
         let mut main_hash = String::new();
         let opened = match &self.docs[id.0].content {
+            Loaded::Submission(sub) => {
+                if format != files::Format::Submission {
+                    return Err(invalid(format!(
+                        "a submission is saved as *{}",
+                        crate::submission::SUFFIX
+                    )));
+                }
+                let bytes = crate::submission::encode(sub)?;
+                basecraft_io::write_atomic(&target, |w| w.write_all(&bytes))?;
+                hashes.push((self.relative(&target), basecraft_io::hash_bytes(&bytes)));
+                return self.log_save(id, &target, hashes);
+            }
+            Loaded::Metadata(opened) => {
+                if format != files::Format::Metadata {
+                    return Err(invalid(format!(
+                        "project metadata is saved as {}",
+                        crate::metadata::MANIFEST
+                    )));
+                }
+                let encoded = crate::metadata::encode(&opened.metadata)?;
+                let paths = crate::metadata::files(&target);
+                if let Some(parent) = target.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                // Tables first, manifest last: the manifest records their hashes.
+                let mut replaced = Vec::new();
+                for (path, bytes) in paths.iter().zip(&encoded).rev() {
+                    if let Err(error) = basecraft_io::write_atomic(path, |w| w.write_all(bytes)) {
+                        if replaced.is_empty() {
+                            return Err(error.into());
+                        }
+                        return Err(invalid(format!(
+                            "partial metadata save: replaced {}; failed at {}: {error}. Metadata generation is incomplete. Keep the open document and retry saving after fixing the destination, or save to a new folder. Temporary recovery, when enabled, is at {}",
+                            replaced.join(", "),
+                            path.display(),
+                            self.storage_root.display()
+                        )));
+                    }
+                    replaced.push(path.display().to_string());
+                }
+                for (path, bytes) in paths.iter().zip(&encoded) {
+                    hashes.push((self.relative(path), basecraft_io::hash_bytes(bytes)));
+                }
+                return self.log_save(id, &target, hashes);
+            }
             Loaded::Delimitation(work) => {
                 if format != files::Format::Delimitation {
                     return Err(invalid(
@@ -1834,6 +1973,17 @@ impl Session {
     /// Replay a save using its actual exchange format, including Save As.
     pub fn save_hashes_at(&self, id: DocId, target: &Path) -> Result<Vec<String>> {
         let opened = match &self.docs[id.0].content {
+            Loaded::Submission(sub) => {
+                return Ok(vec![basecraft_io::hash_bytes(&crate::submission::encode(
+                    sub,
+                )?)]);
+            }
+            Loaded::Metadata(opened) => {
+                return Ok(crate::metadata::encode(&opened.metadata)?
+                    .iter()
+                    .map(|bytes| basecraft_io::hash_bytes(bytes))
+                    .collect());
+            }
             Loaded::Delimitation(work) => {
                 let mut main = HashingWriter::new(std::io::sink());
                 files::write_delimitation(work, files::delimitation_xml(target), &mut main)?;
@@ -2101,6 +2251,29 @@ impl Session {
                 basecraft_docs::delimitation::apply(work, edit).map_err(|e| invalid(e.0))?;
                 return Ok((Inverse::Delimitation(before), None));
             }
+            Loaded::Metadata(opened) => {
+                let Op::MetadataEdit { edit } = op else {
+                    return Err(invalid(format!(
+                        "{} can't be applied to the project metadata",
+                        op.name()
+                    )));
+                };
+                let before = Box::new(opened.metadata.clone());
+                basecraft_docs::metadata::apply(&mut opened.metadata, edit)
+                    .map_err(|e| invalid(e.0))?;
+                return Ok((Inverse::Metadata(before), None));
+            }
+            Loaded::Submission(sub) => {
+                let Op::SubmissionEdit { edit } = op else {
+                    return Err(invalid(format!(
+                        "{} can't be applied to a submission",
+                        op.name()
+                    )));
+                };
+                let before = Box::new(sub.clone());
+                basecraft_docs::submission::apply(sub, edit).map_err(|e| invalid(e.0))?;
+                return Ok((Inverse::Submission(before), None));
+            }
             Loaded::Alignment(a) => {
                 return execute_alignment(a, op).map(|u| (Inverse::Alignment(u), None));
             }
@@ -2250,8 +2423,21 @@ impl Session {
             (Loaded::Delimitation(work), Inverse::Delimitation(before)) => {
                 *work = (**before).clone();
             }
+            (Loaded::Metadata(opened), Inverse::Metadata(before)) => {
+                opened.metadata = (**before).clone();
+            }
+            (Loaded::Submission(sub), Inverse::Submission(before)) => {
+                *sub = (**before).clone();
+            }
             (Loaded::Sequence(o), inverse) => undo_sequence(&mut o.doc, inverse),
-            (Loaded::Alignment(_) | Loaded::Tree(_) | Loaded::Delimitation(_), _) => {
+            (
+                Loaded::Alignment(_)
+                | Loaded::Tree(_)
+                | Loaded::Delimitation(_)
+                | Loaded::Metadata(_)
+                | Loaded::Submission(_),
+                _,
+            ) => {
                 return Err(invalid("undo of the wrong kind of edit"));
             }
         }
@@ -2420,6 +2606,8 @@ fn execute_sequence(doc: &mut SequenceDoc, op: &Op) -> Result<(Inverse, Option<F
         | Op::TreeRemoveSupport { .. }
         | Op::TreeStyle { .. } => Err(invalid(format!("{} needs a tree", op.name()))),
         Op::DelimitationEdit { .. } => Err(invalid("this needs a delimitation workspace")),
+        Op::MetadataEdit { .. } => Err(invalid("this needs the project metadata")),
+        Op::SubmissionEdit { .. } => Err(invalid("this needs a submission document")),
         Op::JobFinished { .. } => Err(invalid("use log_job_finished")),
         Op::Open { .. }
         | Op::Save { .. }
@@ -2572,6 +2760,10 @@ fn restore_inverse(content: &mut Loaded, inverse: &Inverse) -> Result<()> {
         (Loaded::Alignment(opened), Inverse::Alignment(steps)) => opened.doc.undo(steps),
         (Loaded::Tree(opened), Inverse::Tree(before)) => opened.doc = (**before).clone(),
         (Loaded::Delimitation(work), Inverse::Delimitation(before)) => *work = (**before).clone(),
+        (Loaded::Metadata(opened), Inverse::Metadata(before)) => {
+            opened.metadata = (**before).clone();
+        }
+        (Loaded::Submission(sub), Inverse::Submission(before)) => *sub = (**before).clone(),
         _ => return Err(invalid("edit rollback has incompatible document type")),
     }
     Ok(())
@@ -2587,7 +2779,11 @@ fn undo_sequence(doc: &mut SequenceDoc, inverse: &Inverse) {
             }
         }
         Inverse::Feature { id: fid, before } => doc.restore_feature(*fid, before.clone()),
-        Inverse::Alignment(_) | Inverse::Tree(_) | Inverse::Delimitation(_) => {}
+        Inverse::Alignment(_)
+        | Inverse::Tree(_)
+        | Inverse::Delimitation(_)
+        | Inverse::Metadata(_)
+        | Inverse::Submission(_) => {}
     }
 }
 

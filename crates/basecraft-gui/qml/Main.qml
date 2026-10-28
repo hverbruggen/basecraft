@@ -94,10 +94,10 @@ ApplicationWindow {
     readonly property bool treeOpen: currentKind === "tree"
     readonly property bool delimitationOpen: currentKind === "delimitation"
     readonly property bool traceOpen: currentKind === "trace"
-    readonly property var ribbonTabs: ["File", "View", "Annotations", "Alignment", "Phylogeny", "Tree", "Delimitation", "Trace", "Help"]
+    readonly property var ribbonTabs: ["File", "View", "Annotations", "Alignment", "Phylogeny", "Tree", "Delimitation", "Trace", "Data submission", "Help"]
     readonly property string ribbonTab: ribbonTabs.includes(ribbonTabName) ? ribbonTabName : "File"
     // Each tab's panel in the ribbon's stack.
-    readonly property var ribbonPanels: ({ "File": 0, "View": 1, "Annotations": 2, "Help": 3, "Alignment": 4, "Tree": 5, "Phylogeny": 6, "Delimitation": 7, "Trace": 8 })
+    readonly property var ribbonPanels: ({ "File": 0, "View": 1, "Annotations": 2, "Help": 3, "Alignment": 4, "Tree": 5, "Phylogeny": 6, "Delimitation": 7, "Trace": 8, "Data submission": 9 })
     // Only the wrapped layout is offered for now; files always open in it.
 
     readonly property int availableCpuThreads: shell.available_cpu_threads()
@@ -273,6 +273,18 @@ ApplicationWindow {
 
     // Open a file in a tab, or switch to its tab if it's already open.
     function openPath(path) {
+        // The specimen table is project data, edited on the Data submission tab.
+        if (shell.file_kind(path) === "metadata") {
+            ribbonTabName = "Data submission"
+            specimenTable.open()
+            return
+        }
+        // Submissions are project documents edited on the Data submission tab.
+        if (shell.file_kind(path) === "submission") {
+            ribbonTabName = "Data submission"
+            window.openSubmission(path)
+            return
+        }
         focusOpenedDocument = true
         for (let i = 0; i < openFiles.count; i++) {
             if (openFiles.get(i).path === path) { tabs.currentIndex = i; Qt.callLater(refreshCurrent); return }
@@ -1317,6 +1329,45 @@ ApplicationWindow {
                     Item { Layout.fillWidth: true }
                     HelpGroup {}
                 }
+
+                // Data submission: the project's specimen table and its imports.
+                RibbonPage {
+                    spacing: 6 * window.ribbonSizeFactor
+                    RibbonGroup {
+                        title: "Specimens"
+                        RibbonButton { commandId: "metadata.table"; text: "Table"; iconName: "matrix"; tip: shell.project_dir.length ? "The project's specimens, identifications and collection data" : "Choose a project folder first"; enabled: shell.project_dir.length > 0; onInvoked: specimenTable.open() }
+                    }
+                    ToolSeparator { Layout.fillHeight: true }
+                    RibbonGroup {
+                        title: "Import"
+                        RibbonButton { commandId: "metadata.import-headers"; text: "Headers"; iconName: "text-representation"; tip: window.metadataFasta.length ? "Read specimen IDs, taxa and values from this file's FASTA headers" : "Open a FASTA file first"; enabled: shell.project_dir.length > 0 && window.metadataFasta.length > 0; onInvoked: window.beginMetadataImport("headers", window.metadataFasta) }
+                        RibbonButton { commandId: "metadata.import-sheet"; text: "Spreadsheet"; iconName: "add-file"; tip: "Import specimen data from .ods, .xlsx, CSV or TSV"; enabled: shell.project_dir.length > 0; onInvoked: metadataSheetPicker.open() }
+                    }
+                    ToolSeparator { Layout.fillHeight: true }
+                    RibbonGroup {
+                        title: "Records"
+                        RibbonButton { commandId: "metadata.template"; text: "Template"; iconName: "new-file"; tip: window.metadataFasta.length ? "Save an .ods sheet with a row per record of this file, to fill in" : "Open a FASTA file first"; enabled: shell.project_dir.length > 0 && window.metadataFasta.length > 0; onInvoked: metadataTemplateDestination.open() }
+                        Label {
+                            objectName: "metadataLinkStatus"
+                            visible: window.metadataLinks.records !== undefined
+                            text: window.metadataLinks.records === undefined ? ""
+                                : window.metadataLinks.unlinked.length === 0 ? "All " + window.metadataLinks.records + " records linked"
+                                : window.metadataLinks.unlinked.length + " of " + window.metadataLinks.records + " records not linked"
+                            Accessible.name: text
+                        }
+                    }
+                    ToolSeparator { Layout.fillHeight: true }
+                    RibbonGroup {
+                        title: "GenBank"
+                        RibbonButton { commandId: "submission.new"; text: "Start"; iconName: "new-file"; tip: window.submissionAlignment.length ? "Prepare a GenBank submission from this alignment" : "Open the marker alignment first"; enabled: shell.project_dir.length > 0 && window.submissionAlignment.length > 0; onInvoked: window.startSubmission() }
+                        RibbonButton { commandId: "submission.open"; text: "Open"; iconName: "open"; tip: "Open a GenBank submission of this project"; enabled: shell.project_dir.length > 0; onInvoked: submissionPicker.open() }
+                        RibbonButton { commandId: "submission.prepare"; text: "Prepare"; iconName: "edit"; tip: submissions.available ? "Rows, batch settings, reading frames, issues, package and accessions" : "Start or open a submission first"; enabled: submissions.available; onInvoked: window.showSubmission() }
+                        RibbonButton { commandId: "submission.validate"; text: "Validate"; iconName: "accept"; tip: "Export the package and check it with table2asn on this computer"; enabled: submissions.available && !submissionJobs.busy; onInvoked: window.validateSubmission() }
+                        RibbonButton { commandId: "submission.submitter"; text: "Submitter"; iconName: "project"; tip: "Your contact details for submission templates"; onInvoked: submitterDialog.show(JSON.parse(preferences.snapshot || "{}").submitter) }
+                    }
+                    Item { Layout.fillWidth: true }
+                    HelpGroup {}
+                }
         }
     }
 
@@ -1325,6 +1376,172 @@ ApplicationWindow {
     OperationPickerDialog { id: operationPicker; onOpenResult: (path) => window.openPath(path) }
 
     ShortcutsDialog { id: shortcuts; commands: window.applicationCommands }
+
+    // The project's specimen metadata (Data submission tab). It follows the
+    // project folder; opening a project never creates metadata files.
+    MetadataController { id: specimenMetadata }
+    readonly property string metadataProject: shell.project_dir
+    onMetadataProjectChanged: {
+        specimenMetadata.use_project(metadataProject)
+        submissions.use_project(metadataProject)
+    }
+    readonly property var metadataTable: JSON.parse(specimenMetadata.table)
+    // The open FASTA file whose records can be imported, linked or templated.
+    readonly property string metadataFasta: current && (alignmentOpen || currentKind === "sequence")
+        && /\.(fa|fasta|fna|fas|ffn|faa|afa)$/i.test(current.file_path || "") ? current.file_path : ""
+    // Records of that file without a stored specimen link; only reported.
+    readonly property var metadataLinks: metadataFasta.length && specimenMetadata.available && metadataTable
+        ? JSON.parse(specimenMetadata.link_status(metadataFasta)) : ({})
+    function metadataColumns() {
+        const names = metadataTable.columns.map(c => c.name)
+        for (const c of metadataTable.addable || []) names.push(c.name)
+        return names
+    }
+    function beginMetadataImport(kind, path) {
+        if (!specimenMetadata.available && !specimenMetadata.create()) { specimenTable.open(); return }
+        const data = kind === "headers" ? JSON.parse(specimenMetadata.header_preview(path, "|"))
+            : JSON.parse(specimenMetadata.sheet_preview(path))
+        metadataImport.separator = "|"
+        metadataImport.show(kind, path, data, metadataColumns(), metadataTable.patterns)
+    }
+    SpecimenTableDialog {
+        id: specimenTable
+        table: window.metadataTable
+        canUndo: specimenMetadata.can_undo
+        canRedo: specimenMetadata.can_redo
+        message: specimenMetadata.message
+        messageKind: specimenMetadata.message_kind
+        onCreateRequested: specimenMetadata.create()
+        onCellEdited: (specimen, column, text) => specimenMetadata.set_cell(specimen, column, text)
+        onTaxonEdited: (specimen, name) => specimenMetadata.identify(specimen, name)
+        onSpecimenAdded: id => specimenMetadata.add_specimen(id)
+        onSpecimenRemoved: id => specimenMetadata.remove_specimen(id)
+        onColumnAdded: name => specimenMetadata.add_column(name)
+        onUndoRequested: specimenMetadata.undo()
+        onRedoRequested: specimenMetadata.redo()
+    }
+    MetadataImportDialog {
+        id: metadataImport
+        onPreviewRequested: separator => metadataImport.setPreview(JSON.parse(specimenMetadata.header_preview(metadataImport.file, separator)))
+        onPlanRequested: (separator, roles, createSpecimens, overwrite) => {
+            const ok = metadataImport.mode === "headers"
+                ? specimenMetadata.plan_headers(metadataImport.file, separator, roles, createSpecimens, overwrite)
+                : specimenMetadata.plan_sheet(metadataImport.file, roles, metadataImport.preview.has_document ? "" : window.metadataFasta, createSpecimens, overwrite)
+            if (!ok) { metadataImport.message = specimenMetadata.message; return }
+            metadataImport.close()
+            metadataReview.show(JSON.parse(specimenMetadata.plan), metadataImport.mode === "headers" ? "pattern" : "mapping")
+        }
+    }
+    // GenBank marker submissions (Data submission tab). table2asn runs as a
+    // registered operation on its own job runner, like BLAST.
+    SubmissionController { id: submissions }
+    Connections {
+        target: specimenMetadata
+        function onTableChanged() { if (submissions.available) submissions.refresh_review() }
+    }
+    // The open alignment a submission can start from.
+    readonly property string submissionAlignment: alignmentOpen ? metadataFasta : ""
+    AppOperations { id: submissionJobs }
+    Timer { interval: 200; repeat: true; running: submissionJobs.busy; onTriggered: {
+        submissionJobs.poll()
+        if (!submissionJobs.busy) submissions.record_validation(submissionJobs.outcome)
+    } }
+    function startSubmission() {
+        const file = submissionAlignment.split("/").pop()
+        submissionName.ask("Start a GenBank submission", "Submission name", file.replace(/\.[^.]*$/, ""), name => {
+            if (!submissions.create(submissionAlignment, name)) return submissions.message
+            showSubmission()
+            return ""
+        })
+    }
+    function openSubmission(path) { if (submissions.open(path)) showSubmission() }
+    function showSubmission() {
+        submissions.refresh_review()
+        submissionDialog.open()
+    }
+    function validateSubmission() {
+        if (!submissions.export_package()) { showSubmission(); return }
+        const request = submissions.validation_request()
+        if (request.length) submissionJobs.submit(shell.project_dir, request)
+        if (!submissionDialog.opened) showSubmission()
+    }
+    TextPromptDialog { id: submissionName }
+    SubmissionDialog {
+        id: submissionDialog
+        document: JSON.parse(submissions.document || "null")
+        review: JSON.parse(submissions.review || '{"rows":[],"issues":[]}')
+        pkg: JSON.parse(submissions.package || "null")
+        geneticCodes: JSON.parse(submissions.genetic_codes())
+        path: submissions.path
+        message: submissionJobs.busy ? "Validating with table2asn" : submissions.message
+        messageKind: submissions.message_kind
+        canUndo: submissions.can_undo
+        canRedo: submissions.can_redo
+        validating: submissionJobs.busy
+        onEditRequested: edit => submissions.edit(edit)
+        onPublicationRequested: (title, authors) => submissions.set_publication(title, authors)
+        onDecisionRequested: (record, decision, accession) => submissions.set_decision(record, decision, accession)
+        onFrameRequested: (record, codonStart) => submissions.set_frame(record, codonStart)
+        onConfirmDetectedRequested: submissions.confirm_detected()
+        onUndoRequested: submissions.undo()
+        onRedoRequested: submissions.redo()
+        onExportRequested: submissions.export_package()
+        onValidateRequested: window.validateSubmission()
+        onCancelValidationRequested: submissionJobs.cancel()
+        onAccessionsMatchRequested: text => {
+            const plan = submissions.plan_accessions(text)
+            submissionDialog.accessionPlan = plan.length ? JSON.parse(plan) : null
+        }
+        onAccessionsRecordRequested: accessions => submissions.record_accessions(accessions)
+        onAccessionTableRequested: accessionTableDestination.open()
+    }
+    SubmitterDialog {
+        id: submitterDialog
+        onSaved: value => {
+            preferences.update("submitter", JSON.stringify(value))
+            if (submissions.available) submissions.refresh_review()
+        }
+    }
+    FileDialog {
+        id: submissionPicker
+        title: "Open a GenBank submission"
+        currentFolder: window.activeFolder()
+        onVisibleChanged: if (visible) currentFolder = window.activeFolder()
+        nameFilters: ["Submissions (*.submission.json)"]
+        onAccepted: window.openSubmission(window.localPath(selectedFile))
+    }
+    FileDialog {
+        id: accessionTableDestination
+        title: "Save the accession table"
+        fileMode: FileDialog.SaveFile
+        defaultSuffix: "tsv"
+        nameFilters: ["Tab-separated table (*.tsv)"]
+        onAccepted: submissions.write_accession_table(window.localPath(selectedFile))
+    }
+    MetadataReviewDialog {
+        id: metadataReview
+        onApplyRequested: remember => specimenMetadata.apply_plan(remember)
+        onDropped: specimenMetadata.clear_plan()
+    }
+    FileDialog {
+        id: metadataSheetPicker
+        title: "Import specimen data from a spreadsheet"
+        currentFolder: window.activeFolder()
+        onVisibleChanged: if (visible) currentFolder = window.activeFolder()
+        nameFilters: ["Spreadsheets (*.ods *.xlsx *.xls *.csv *.tsv)", "All files (*)"]
+        onAccepted: window.beginMetadataImport("sheet", window.localPath(selectedFile))
+    }
+    FileDialog {
+        id: metadataTemplateDestination
+        title: "Save the specimen data template"
+        fileMode: FileDialog.SaveFile
+        defaultSuffix: "ods"
+        nameFilters: ["OpenDocument spreadsheet (*.ods)"]
+        onAccepted: {
+            if (!specimenMetadata.available) specimenMetadata.create()
+            specimenMetadata.write_template(window.metadataFasta, window.localPath(selectedFile))
+        }
+    }
 
     AppContentDialog {
         id: orfDialog

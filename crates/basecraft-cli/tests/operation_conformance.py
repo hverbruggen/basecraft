@@ -21,6 +21,20 @@ import sys
 import time
 
 
+FAKE_TABLE2ASN = r"""#!/bin/sh
+if [ "$1" = "-version" ]; then echo "table2asn: 0.0.test"; exit 0; fi
+out=""
+while [ $# -gt 0 ]; do
+  if [ "$1" = "-outdir" ]; then out="$2"; shift; fi
+  shift
+done
+id=$(grep -m1 '^>' submission.fsa | cut -c2- | cut -d' ' -f1)
+echo "Seq-submit ::= {}" > "$out/submission.sqn"
+printf 'Error: valid [SEQ_DESCR.BadGeoLocNameCode] Bad geo_loc_name BIOSEQ: lcl|%s: raw\n' "$id" > "$out/submission.val"
+echo "LOCUS $id" > "$out/submission.gbf"
+"""
+
+
 class Mcp:
     def __init__(self, binary, project, env, writable=True):
         command = [str(binary), "mcp", str(project)]
@@ -391,6 +405,211 @@ def main():
                             parameters=disabled_request["parameters"],
                             destinations=disabled_request["destinations"]) == denied
         record("read-only denial and explicit disable survives update")
+
+        # Project specimen metadata: the CLI, MCP and Python routes share one
+        # planner and one typed edit, so they produce the same tables.
+        fasta = ">HV1|Caulerpa_taxifolia|2019-05\nACGT\n>HV2|Caulerpa_sp._3|not collected\nACGA\n"
+        sheet = "specimen_id,country,decimalLatitude\nHV1,Australia,-38.1\nHV1,Fiji,1\nHV2,Fiji,95\n"
+        fields = ["specimen", "taxon", "eventDate"]
+        projects = {}
+        for route in ("cli", "mcp", "python"):
+            projects[route] = root / f"metadata-{route}"
+            projects[route].mkdir()
+            (projects[route] / "rbcL.fasta").write_text(fasta)
+            (projects[route] / "sheet.csv").write_text(sheet)
+        plans = {}
+        meta_project = projects["cli"]
+        subprocess.run([str(binary), "metadata", "init", "--project", str(meta_project)],
+                       env=env, check=True, capture_output=True, timeout=45)
+        headers_plan, _ = cli("metadata", "import-headers", str(meta_project / "rbcL.fasta"),
+                              "--separator", "|", "--fields", ",".join(fields),
+                              "--project", str(meta_project), "--apply")
+        sheet_plan, _ = cli("metadata", "import-sheet", str(meta_project / "sheet.csv"),
+                            "--project", str(meta_project), "--apply")
+        plans["cli"] = (headers_plan, sheet_plan)
+        mcp_meta = Mcp(binary, projects["mcp"], env)
+        try:
+            opened = mcp_meta.tool("metadata_open", {"create": True})["structuredContent"]
+            doc = opened["document"]
+            pattern = {"name": "CLI", "separator": "|", "fields": [
+                {"role": "specimen"}, {"role": "taxon"}, {"role": "column", "column": "eventDate"}]}
+            first = mcp_meta.tool("metadata_plan_headers", {"document": doc, "request": {
+                "document": "rbcL.fasta", "pattern": pattern}})["structuredContent"]
+            state = mcp_meta.tool("state", {"document": doc})["structuredContent"]
+            mcp_meta.tool("apply", {"document": doc, "version": state["version"], "operation": {
+                "op": "metadata.edit", "params": {"edit": {"action": "apply",
+                                                           "changes": first["changes"]}}}})
+            second = mcp_meta.tool("metadata_plan_sheet", {"document": doc, "request": {
+                "path": "sheet.csv"}})["structuredContent"]
+            state = mcp_meta.tool("state", {"document": doc})["structuredContent"]
+            mcp_meta.tool("apply", {"document": doc, "version": state["version"], "operation": {
+                "op": "metadata.edit", "params": {"edit": {"action": "apply",
+                                                           "changes": second["changes"]}}}})
+            mcp_meta.tool("save", {"document": doc})
+            plans["mcp"] = (first, second)
+        finally:
+            mcp_meta.close()
+        from basecraft.session import Session as PythonSession
+        with PythonSession(projects["python"], writes=True, command=str(binary)) as py:
+            doc = py.open_metadata(create=True)["document"]
+            first = py.plan_header_import(doc, "rbcL.fasta", "|", fields)
+            py.apply_metadata(doc, first["changes"])
+            second = py.plan_sheet_import(doc, "sheet.csv")
+            py.apply_metadata(doc, second["changes"])
+            py.save(doc)
+            insdc = py.insdc_source(doc, "HV1")
+            plans["python"] = (first, second)
+        assert insdc["qualifiers"]["geo_loc_name"] == "Australia", insdc
+        assert insdc["qualifiers"]["collection_date"] == "2019-05", insdc
+
+        def comparable(plan):
+            changes = copy.deepcopy(plan["changes"])
+            taxa = {t["id"]: t["name"] for t in changes.pop("taxa", [])}
+            identifications = sorted((i["specimen"], taxa.get(i["taxon"], i["taxon"]))
+                                     for i in changes.pop("identifications", []))
+            return changes, sorted(taxa.values()), identifications, plan["issues"]
+
+        for route in ("mcp", "python"):
+            for ours, theirs in zip(plans["cli"], plans[route]):
+                assert comparable(ours) == comparable(theirs), (route, ours, theirs)
+            for table in ("specimens.tsv", "records.tsv"):
+                assert (projects["cli"] / "metadata" / table).read_bytes() == \
+                    (projects[route] / "metadata" / table).read_bytes(), (route, table)
+        kinds = sorted({i["kind"] for i in plans["cli"][1]["issues"]})
+        assert kinds == ["duplicate", "invalid"], kinds
+        assert "HV2\tnot collected" in (projects["cli"] / "metadata/specimens.tsv").read_text()
+        status, _ = cli("metadata", "status", str(meta_project / "rbcL.fasta"),
+                        "--project", str(meta_project))
+        assert status["unlinked"] == [] and status["records"] == 2, status
+        # The .ods template is a valid ZIP/OpenDocument file for other readers.
+        import zipfile
+        template = root / "template.ods"
+        subprocess.run([str(binary), "metadata", "template", str(meta_project / "rbcL.fasta"),
+                        "--output", str(template), "--project", str(meta_project)],
+                       env=env, check=True, capture_output=True, timeout=45)
+        with zipfile.ZipFile(template) as archive:
+            assert archive.testzip() is None
+            assert archive.namelist()[0] == "mimetype"
+            assert archive.read("mimetype") == b"application/vnd.oasis.opendocument.spreadsheet"
+            assert b"HV2|Caulerpa_sp._3|not" in archive.read("content.xml")
+        record("specimen metadata imports agree across CLI, MCP and Python")
+
+        # GenBank marker submissions: the CLI, MCP and Python routes share one
+        # review, one package writer and the registered table2asn operation,
+        # run here against a stand-in table2asn.
+        checkout = Path(__file__).resolve().parents[3]
+        bundle = root / "table2asn-bundle"
+        shutil.copytree(checkout / "plugins/table2asn", bundle / "table2asn")
+        fake = root / "fake-table2asn"
+        fake.write_text(FAKE_TABLE2ASN)
+        fake.chmod(0o755)
+        sub_env = dict(env, BASECRAFT_PLUGINS=str(bundle), BASECRAFT_TABLE2ASN=str(fake))
+        saved_environment = dict(os.environ)
+        os.environ.update(sub_env)
+        try:
+            def sub_cli(*arguments):
+                completed = subprocess.run([str(binary), *arguments], cwd=root, env=sub_env,
+                                           capture_output=True, text=True, timeout=90, check=True)
+                return json.loads(completed.stdout)
+
+            person = {"first_name": "Jane", "last_name": "Doe", "email": "jane@example.org",
+                      "institution": "University of Melbourne", "city": "Melbourne",
+                      "country": "Australia"}
+            assert sub_cli("submission", "submitter", "--set", json.dumps(person))["missing"] == []
+            edits = [
+                {"action": "set_batch", "batch": {"marker": {"kind": "its", "components": [
+                    "SSU", "ITS1", "5.8S", "ITS2"]}, "genetic_code": 1}},
+                {"action": "set_publication", "publication": {"title": "ITS markers", "authors": [
+                    {"first": "Jane", "last": "Doe"}]}},
+                {"action": "set_rows", "rows": [{"record": "orphan_ITS", "decision": "exclude"}]},
+            ]
+            projects = {}
+            for route in ("cli", "mcp", "python"):
+                projects[route] = root / f"submission-{route}"
+                projects[route].mkdir()
+                for name in ("ITS.afa", "specimens.csv"):
+                    shutil.copy(checkout / "testdata/fixtures/submission" / name, projects[route])
+                subprocess.run([str(binary), "metadata", "init", "--project", str(projects[route])],
+                               env=sub_env, check=True, capture_output=True, timeout=45)
+                sub_cli("metadata", "import-sheet", str(projects[route] / "specimens.csv"),
+                        "--project", str(projects[route]), "--apply")
+            reviews, summaries = {}, {}
+            cli_project = projects["cli"]
+            document = str(cli_project / "its.submission.json")
+            sub_cli("submission", "new", document, "--alignment", str(cli_project / "ITS.afa"),
+                    "--project", str(cli_project))
+            for edit in edits:
+                sub_cli("submission", "edit", document, json.dumps(edit), "--project", str(cli_project))
+            reviews["cli"] = sub_cli("submission", "review", document, "--project", str(cli_project))
+            sub_cli("submission", "export", document, "--output", str(cli_project / "package"),
+                    "--project", str(cli_project))
+            summaries["cli"] = sub_cli("submission", "validate", str(cli_project / "package"),
+                                       "--project", str(cli_project))
+            mcp_sub = Mcp(binary, projects["mcp"], sub_env)
+            try:
+                created = mcp_sub.tool("submission_create", {"path": "its.submission.json",
+                                                             "alignment": "ITS.afa"})["structuredContent"]
+                doc = created["document"]
+                assert created["kind"] == "submission", created
+                for edit in edits:
+                    state = mcp_sub.tool("state", {"document": doc})["structuredContent"]
+                    mcp_sub.tool("apply", {"document": doc, "version": state["version"], "operation": {
+                        "op": "submission.edit", "params": {"edit": edit}}})
+                mcp_sub.tool("save", {"document": doc})
+                reviews["mcp"] = mcp_sub.tool("submission_review", {"document": doc})["structuredContent"]
+                mcp_sub.tool("submission_export", {"document": doc, "output": "package"})
+                validation = mcp_sub.tool("submission_validation_request",
+                                          {"package": "package"})["structuredContent"]
+                accepted = mcp_sub.tool("basecraft.table2asn.validate.v1", validation)["structuredContent"]
+                mcp_sub.wait(accepted["run_id"])
+                outcome = mcp_sub.tool("basecraft.host.jobs_result.v1",
+                                       {"job": accepted["run_id"]})["structuredContent"]
+                summaries["mcp"] = mcp_sub.tool("submission_record_validation", {
+                    "package": "package", "outcome": outcome})["structuredContent"]
+            finally:
+                mcp_sub.close()
+            with PythonSession(projects["python"], writes=True, command=str(binary)) as py:
+                doc = py.create_submission("its.submission.json", "ITS.afa")["document"]
+                for edit in edits:
+                    py.edit_submission(doc, edit)
+                py.save(doc)
+                reviews["python"] = py.review_submission(doc)
+                py.export_submission(doc, "package")
+                summaries["python"] = py.validate_submission("package", timeout=60)
+            # Each project's metadata manifest has its own generated IDs.
+            for review in reviews.values():
+                review.pop("metadata_hash")
+            codes = sorted({(i["code"], i.get("record")) for i in reviews["cli"]["issues"]})
+            assert ("duplicate_record", "HV403_ITS") in codes, codes
+            for route in ("mcp", "python"):
+                if reviews[route] != reviews["cli"]:
+                    def first_difference(a, b, where="review"):
+                        if type(a) is not type(b) or not isinstance(a, (dict, list)):
+                            return None if a == b else (where, a, b)
+                        keys = sorted(set(a) | set(b)) if isinstance(a, dict) else range(max(len(a), len(b)))
+                        for key in keys:
+                            try:
+                                found = first_difference(a[key], b[key], f"{where}/{key}")
+                            except (KeyError, IndexError):
+                                return (f"{where}/{key}", "missing on one side", None)
+                            if found:
+                                return found
+                        return None
+                    raise AssertionError((route, first_difference(reviews["cli"], reviews[route])))
+                for name in ("genbank/submission.fsa", "genbank/submission.src",
+                             "genbank/submission.tbl", "genbank/submission.sbt",
+                             "genbank/submission.sqn", "records.tsv", "specimens.tsv",
+                             "coordinate-map.tsv"):
+                    assert (projects["cli"] / "package" / name).read_bytes() == \
+                        (projects[route] / "package" / name).read_bytes(), (route, name)
+            for route, summary in summaries.items():
+                assert summary["status"] == "errors" and summary["tool_version"] == "0.0.test", (route, summary)
+                assert summary["issues"][0]["record"] == "HV401_ITS", (route, summary)
+                assert summary["issues"][0]["specimen"] == "HV401", (route, summary)
+        finally:
+            os.environ.clear()
+            os.environ.update(saved_environment)
+        record("GenBank submissions agree across CLI, MCP and Python")
         assert hashlib.sha256(binary.read_bytes()).hexdigest() == receipt["sha256"]
         receipt["status"] = "passed"
     finally:

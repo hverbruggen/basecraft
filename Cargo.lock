@@ -315,6 +315,8 @@ version = "0.0.0"
 dependencies = [
  "basecraft-protocol",
  "blake3",
+ "crc32fast",
+ "flate2",
  "memchr",
  "memmap2",
  "roxmltree 0.21.1",

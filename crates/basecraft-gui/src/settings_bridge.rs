@@ -120,6 +120,9 @@ fn change(key: &str, value: &serde_json::Value) -> Result<Change, String> {
         "provenance" => {
             Change::Provenance(serde_json::from_value(value.clone()).map_err(|e| e.to_string())?)
         }
+        "submitter" => Change::Submitter(Box::new(
+            serde_json::from_value(value.clone()).map_err(|e| e.to_string())?,
+        )),
         _ => return Err(format!("unknown preference {key}")),
     })
 }

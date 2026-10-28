@@ -34,6 +34,8 @@ pub struct Preferences {
     pub compute: Compute,
     pub customization: Customization,
     pub migration: Migration,
+    /// Contact details written to archive submission templates.
+    pub submitter: Submitter,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -110,6 +112,70 @@ pub struct Customization {
     pub shortcuts: BTreeMap<String, String>,
     pub ribbon_hidden: Vec<String>,
 }
+/// The person submitting sequences and their affiliation, entered once
+/// and used for every submission (`.sbt` contact). Empty fields are unset.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct Submitter {
+    pub first_name: String,
+    pub middle_initials: String,
+    pub last_name: String,
+    pub email: String,
+    pub phone: String,
+    pub institution: String,
+    pub department: String,
+    pub street: String,
+    pub city: String,
+    pub state: String,
+    pub postal_code: String,
+    pub country: String,
+}
+impl Submitter {
+    /// Field names and values, in form order.
+    pub fn fields(&self) -> [(&'static str, &str); 12] {
+        [
+            ("first_name", &self.first_name),
+            ("middle_initials", &self.middle_initials),
+            ("last_name", &self.last_name),
+            ("email", &self.email),
+            ("phone", &self.phone),
+            ("institution", &self.institution),
+            ("department", &self.department),
+            ("street", &self.street),
+            ("city", &self.city),
+            ("state", &self.state),
+            ("postal_code", &self.postal_code),
+            ("country", &self.country),
+        ]
+    }
+    /// Required fields that are empty.
+    pub fn missing(&self) -> Vec<&'static str> {
+        self.fields()
+            .into_iter()
+            .filter(|(name, value)| {
+                value.is_empty()
+                    && matches!(
+                        *name,
+                        "first_name" | "last_name" | "email" | "institution" | "city" | "country"
+                    )
+            })
+            .map(|(name, _)| name)
+            .collect()
+    }
+    fn validate(&self) -> Result<(), Error> {
+        for (name, value) in self.fields() {
+            if value.len() > 200 || value.chars().any(char::is_control) || value.trim() != value {
+                return Err(Error::Invalid(format!(
+                    "submitter {name} must be at most 200 characters, without line breaks or surrounding spaces"
+                )));
+            }
+        }
+        if !self.email.is_empty() && !self.email.contains('@') {
+            return Err(Error::Invalid("submitter email needs an @".into()));
+        }
+        Ok(())
+    }
+}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct Migration {
@@ -125,6 +191,7 @@ impl Default for Preferences {
             compute: Compute::default(),
             customization: Customization::default(),
             migration: Migration::default(),
+            submitter: Submitter::default(),
         }
     }
 }
@@ -182,6 +249,7 @@ impl Preferences {
                 "CPU threads must be between 1 and 65536".into(),
             ));
         }
+        self.submitter.validate()?;
         if self.customization.shortcuts.len() > 4096
             || self.customization.ribbon_hidden.len() > 4096
         {
@@ -367,6 +435,7 @@ pub enum Change {
     RibbonHidden(Vec<String>),
     RibbonCommandHidden { id: String, hidden: bool },
     ResetCustomization,
+    Submitter(Box<Submitter>),
 }
 impl Change {
     fn validate(&self) -> Result<(), Error> {
@@ -410,6 +479,7 @@ impl Change {
                 }
             }
             Self::ResetCustomization => prefs.customization = Customization::default(),
+            Self::Submitter(v) => prefs.submitter = *v,
         }
     }
 }
@@ -552,6 +622,44 @@ fn merge(destination: &mut toml::Value, source: toml::Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn submitter_round_trips_validates_and_keeps_other_fields() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = store(&temp);
+        assert_eq!(store.load().unwrap().submitter, Submitter::default());
+        assert!(Submitter::default().missing().contains(&"email"));
+        let submitter = Submitter {
+            first_name: "Jane".into(),
+            last_name: "Doe".into(),
+            email: "jane@example.org".into(),
+            institution: "University of Melbourne".into(),
+            city: "Melbourne".into(),
+            country: "Australia".into(),
+            ..Submitter::default()
+        };
+        store.update(Change::RibbonSizePercent(150)).unwrap();
+        store
+            .update(Change::Submitter(Box::new(submitter.clone())))
+            .unwrap();
+        let prefs = SettingsStore::new(store.path.clone()).load().unwrap();
+        assert_eq!(prefs.submitter, submitter);
+        assert_eq!(prefs.submitter.missing(), Vec::<&str>::new());
+        assert_eq!(prefs.ui.ribbon_size_percent, 150);
+        let original = std::fs::read_to_string(&store.path).unwrap();
+        for bad in [
+            Submitter {
+                email: "no-at".into(),
+                ..submitter.clone()
+            },
+            Submitter {
+                city: "Two\nlines".into(),
+                ..submitter.clone()
+            },
+        ] {
+            assert!(store.update(Change::Submitter(Box::new(bad))).is_err());
+            assert_eq!(std::fs::read_to_string(&store.path).unwrap(), original);
+        }
+    }
     #[test]
     fn ribbon_size_round_trips_defaults_and_preserves_invalid_or_future_files() {
         let temp = tempfile::tempdir().unwrap();

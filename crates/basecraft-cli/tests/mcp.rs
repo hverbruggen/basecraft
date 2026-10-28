@@ -630,3 +630,214 @@ fn agent_save_as_never_replaces_an_existing_other_file() {
         );
     }
 }
+
+fn session(dir: &std::path::Path, writes: bool, messages: &[Value]) -> Vec<Value> {
+    let mut args = vec!["mcp".to_string(), dir.to_string_lossy().into_owned()];
+    if writes {
+        args.push("--allow-writes".into());
+    }
+    let mut child = Command::new(env!("CARGO_BIN_EXE_basecraft"))
+        .args(&args)
+        .env("BASECRAFT_PROFILE_DIR", dir.join("profile"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+    writeln!(
+        input,
+        "{}",
+        json!({"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1"}}})
+    )
+    .unwrap();
+    writeln!(
+        input,
+        "{}",
+        json!({"jsonrpc":"2.0","method":"notifications/initialized"})
+    )
+    .unwrap();
+    for message in messages {
+        writeln!(input, "{message}").unwrap();
+    }
+    drop(input);
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success());
+    String::from_utf8(out.stdout)
+        .unwrap()
+        .lines()
+        .skip(1)
+        .map(|s| serde_json::from_str(s).unwrap())
+        .collect()
+}
+
+#[test]
+fn metadata_tools_respect_write_permission_and_plan_before_applying() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("rbcL.fasta"), ">HV1|Codium_fragile\nACGT\n").unwrap();
+    let readonly = session(
+        d.path(),
+        false,
+        &[
+            request(1, "metadata_open", json!({})),
+            request(2, "metadata_open", json!({"create":true})),
+        ],
+    );
+    assert_eq!(readonly[0]["result"]["isError"], true);
+    let text = readonly[1]["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap();
+    assert!(text.contains("permission_denied"), "{text}");
+    assert!(!d.path().join("metadata").exists());
+    let pattern =
+        json!({"name":"p","separator":"|","fields":[{"role":"specimen"},{"role":"taxon"}]});
+    let replies = session(
+        d.path(),
+        true,
+        &[
+            request(1, "metadata_open", json!({"create":true})),
+            request(
+                2,
+                "metadata_plan_headers",
+                json!({"document":0,"request":{"document":"rbcL.fasta","pattern":pattern}}),
+            ),
+            request(3, "read", json!({"document":0})),
+            request(
+                4,
+                "metadata_plan_headers",
+                json!({"document":0,"request":{"document":"../outside.fasta","pattern":pattern}}),
+            ),
+        ],
+    );
+    assert_eq!(
+        replies[0]["result"]["structuredContent"]["kind"],
+        "metadata"
+    );
+    let plan = &replies[1]["result"]["structuredContent"];
+    assert_eq!(plan["changes"]["specimens"], json!(["HV1"]));
+    assert_eq!(plan["changes"]["taxa"][0]["name"], "Codium fragile");
+    // Planning applies nothing.
+    let read = &replies[2]["result"]["structuredContent"];
+    assert_eq!(read["metadata"]["specimens"]["rows"], json!([]));
+    assert_eq!(replies[3]["result"]["isError"], true);
+}
+
+#[test]
+fn submission_tools_respect_write_permission_and_edit_through_apply() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("its.afa"), ">a\nACGTACGT\n>b\nACGTAC--\n").unwrap();
+    let readonly = session(
+        d.path(),
+        false,
+        &[
+            request(
+                1,
+                "submission_create",
+                json!({"path":"its.submission.json","alignment":"its.afa"}),
+            ),
+            request(2, "submission_submitter", json!({"set":{"city":"Hobart"}})),
+        ],
+    );
+    for reply in &readonly {
+        let text = reply["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("permission_denied"), "{text}");
+    }
+    assert!(!d.path().join("its.submission.json").exists());
+    let edit = json!({"action":"set_rows","rows":[{"record":"b","decision":"exclude"}]});
+    let replies = session(
+        d.path(),
+        true,
+        &[
+            request(
+                1,
+                "submission_create",
+                json!({"path":"its.submission.json","alignment":"its.afa"}),
+            ),
+            request(
+                2,
+                "apply",
+                json!({"document":0,"version":0,"operation":{"op":"submission.edit","params":{"edit":edit}}}),
+            ),
+            request(3, "read", json!({"document":0})),
+            request(4, "submission_review", json!({"document":0})),
+            request(5, "submission_submitter", json!({})),
+        ],
+    );
+    assert_eq!(
+        replies[0]["result"]["structuredContent"]["kind"],
+        "submission"
+    );
+    let read = &replies[2]["result"]["structuredContent"];
+    assert_eq!(read["rows"][0]["decision"], "exclude");
+    let review = &replies[3]["result"]["structuredContent"];
+    assert_eq!(review["records"][1]["decision"]["decision"], "exclude");
+    assert!(
+        review["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|i| i["code"] == "unlinked")
+    );
+    assert!(
+        replies[4]["result"]["structuredContent"]["missing"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m == "email")
+    );
+}
+
+#[test]
+fn submission_selection_confirmation_is_shared_by_mcp_export_and_apply() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("a.afa"), ">local\nACGT\n>MZ123456.1\nACGT\n").unwrap();
+    let replies = session(
+        d.path(),
+        true,
+        &[
+            request(
+                1,
+                "submission_create",
+                json!({"path":"a.submission.json", "alignment":"a.afa"}),
+            ),
+            request(2, "submission_review", json!({"document":0})),
+            request(
+                3,
+                "submission_export",
+                json!({"document":0,"output":"package"}),
+            ),
+            request(4, "save", json!({"document":0})),
+        ],
+    );
+    let review = &replies[1]["result"]["structuredContent"];
+    assert_eq!(review["selection_confirmed"], false);
+    assert_eq!(review["records"][1]["decision"]["decision"], "exclude");
+    assert!(replies[2]["result"]["isError"].as_bool().unwrap_or(false));
+    assert!(!d.path().join("package").exists());
+    let hash = review["selection_hash"].as_str().unwrap();
+    let replies = session(
+        d.path(),
+        true,
+        &[
+            request(1, "open", json!({"path":"a.submission.json"})),
+            request(
+                2,
+                "apply",
+                json!({"document":0,"version":0,
+            "operation":{"op":"submission.edit","params":{"edit":{
+                "action":"confirm_selection","selection_hash":hash}}}}),
+            ),
+            request(3, "submission_review", json!({"document":0})),
+            request(
+                4,
+                "submission_export",
+                json!({"document":0,"output":"package"}),
+            ),
+        ],
+    );
+    assert_eq!(
+        replies[2]["result"]["structuredContent"]["selection_confirmed"],
+        true
+    );
+    assert_eq!(replies[3]["result"]["structuredContent"]["records"], 1);
+    assert!(d.path().join("package/package.json").is_file());
+}

@@ -19,6 +19,9 @@ pub enum Error {
         end: u64,
         len: u64,
     },
+    /// A table or spreadsheet that can't be read as one.
+    #[error("{0}")]
+    Table(String),
     #[error("index cache entry {0} is unreadable")]
     BadCache(PathBuf),
 }

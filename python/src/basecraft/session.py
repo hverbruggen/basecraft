@@ -72,6 +72,15 @@ def request(operation, *, inputs=None, parameters=None, destinations=None, pins=
     return value
 
 
+def _field(role):
+    """A field role by name, or a column name, as the host's FieldTarget."""
+    if isinstance(role, dict):
+        return role
+    if role in ("specimen", "taxon", "record", "ignore"):
+        return {"role": role}
+    return {"role": "column", "column": role}
+
+
 class Job:
     """An operation job owned by one session. Waiting never cancels it."""
 
@@ -360,6 +369,102 @@ class Session:
         """
         return self.call("import_support", {"document": document, "path": str(path),
                                             "name": name})
+
+    # Project specimen metadata
+
+    def open_metadata(self, create=False):
+        """Open the project's specimen metadata document; ``create`` writes empty tables first."""
+        return self.call("metadata_open", {"create": bool(create)})
+
+    def plan_header_import(self, document, fasta, separator, fields, *, name="Python",
+                           create_specimens=True, overwrite=False):
+        """Plan an import from structured FASTA headers without applying it.
+
+        ``fields`` lists each header field's role: ``"specimen"``, ``"taxon"``,
+        ``"record"``, ``"ignore"`` or a column name such as ``"eventDate"``.
+        """
+        request = {"document": str(fasta),
+                   "pattern": {"name": name, "separator": separator,
+                               "fields": [_field(f) for f in fields]},
+                   "options": {"create_specimens": create_specimens, "overwrite": overwrite}}
+        return self.call("metadata_plan_headers", {"document": document, "request": request})
+
+    def plan_sheet_import(self, document, path, *, mapping=None, fasta=None,
+                          create_specimens=True, overwrite=False):
+        """Plan a spreadsheet import; ``mapping`` maps headers to roles as in headers."""
+        request = {"path": str(path),
+                   "options": {"create_specimens": create_specimens, "overwrite": overwrite}}
+        if mapping is not None:
+            request["mapping"] = {header: _field(role) for header, role in mapping.items()}
+        if fasta is not None:
+            request["document"] = str(fasta)
+        return self.call("metadata_plan_sheet", {"document": document, "request": request})
+
+    def apply_metadata(self, document, changes):
+        """Apply a reviewed plan's ``changes`` as one undoable metadata edit."""
+        version = self.state(document)["version"]
+        return self.apply(document, version, {"op": "metadata.edit", "params": {
+            "edit": {"action": "apply", "changes": changes}}})
+
+    def insdc_source(self, document, specimen):
+        """INSDC source qualifiers derived for a specimen."""
+        return self.call("metadata_insdc", {"document": document, "specimen": specimen})
+
+    # GenBank marker submissions
+
+    def create_submission(self, path, alignment):
+        """Create and open a submission document (``*.submission.json``) for an alignment."""
+        return self.call("submission_create", {"path": str(path), "alignment": str(alignment)})
+
+    def edit_submission(self, document, edit):
+        """Apply one ``submission.edit`` (a dict with ``action``) as an undoable edit."""
+        version = self.state(document)["version"]
+        return self.apply(document, version, {"op": "submission.edit", "params": {"edit": edit}})
+
+    def review_submission(self, document):
+        """Records, accession-aware defaults, selection fingerprint and local issues.
+
+        After reviewing the choices, use ``edit_submission(document,
+        {"action": "confirm_selection", "selection_hash": review["selection_hash"]})``.
+        Bulk include/exclude uses ``set_rows``; confirmation is required before export.
+        """
+        return self.call("submission_review", {"document": document})
+
+    def export_submission(self, document, output):
+        """Write the submission package to ``output`` inside the project."""
+        return self.call("submission_export", {"document": document, "output": str(output)})
+
+    def validate_submission(self, package, *, timeout=None):
+        """Validate an exported package with table2asn and record its reports.
+
+        Runs the registered ``basecraft.table2asn/validate@1`` operation as a
+        job of this session. A run that could not start or finish is recorded
+        as unavailable or failed, never as a sequence error.
+        """
+        request = self.call("submission_validation_request", {"package": str(package)})
+        job = self.submit(request["operation"], inputs=request["inputs"],
+                          parameters=request["parameters"], destinations=request["destinations"])
+        try:
+            outcome = job.result(timeout=timeout)
+        except OperationError as error:
+            outcome = error.outcome
+        return self.call("submission_record_validation", {"package": str(package), "outcome": outcome})
+
+    def plan_accessions(self, document, text):
+        """Match an NCBI accession list to the submission's records."""
+        return self.call("submission_plan_accessions", {"document": document, "text": text})
+
+    def record_accessions(self, document, accessions):
+        """Record planned accessions as one undoable edit."""
+        return self.edit_submission(document, {"action": "set_accessions", "accessions": accessions})
+
+    def accession_table(self, document, output):
+        """Write a publication table of records and accessions."""
+        return self.call("submission_accession_table", {"document": document, "output": str(output)})
+
+    def submitter(self, **fields):
+        """The submitter contact preference; keyword fields update it."""
+        return self.call("submission_submitter", {"set": fields} if fields else {})
 
     # Operations
 

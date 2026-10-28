@@ -9,6 +9,9 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
+# ZIP members of .ods and .xlsx spreadsheets (already used through png).
+crc32fast = "1.5"
+flate2 = "1.1"
 roxmltree = { path = "../../vendor/roxmltree" }
 basecraft-protocol.workspace = true
 blake3.workspace = true

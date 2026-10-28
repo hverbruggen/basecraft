@@ -895,3 +895,67 @@ fn script_actor_edits_read_back_replay_and_show_as_script() {
     );
     assert!(!details.iter().any(|d| d.starts_with("Agent: Python")));
 }
+
+#[test]
+fn submission_edits_undo_save_and_replay() {
+    use basecraft_protocol::submission::{
+        BatchSettings, Decision, FrameChoice, ItsComponent, Marker, RowDecision, SubmissionEdit,
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::write(root.join("its.afa"), ">a\nACGTACGT\n>b\nACGTAC--\n").unwrap();
+    {
+        let mut s = Session::new(root);
+        let doc = basecraft_ops::submission::create(
+            &mut s,
+            Path::new("its.submission.json"),
+            Path::new("its.afa"),
+        )
+        .unwrap();
+        let edits = [
+            SubmissionEdit::SetBatch {
+                batch: BatchSettings {
+                    marker: Marker::Its {
+                        components: vec![ItsComponent::Its1, ItsComponent::Rrna58S],
+                    },
+                    ..BatchSettings::default()
+                },
+            },
+            SubmissionEdit::SetRows {
+                rows: vec![RowDecision {
+                    record: "b".into(),
+                    decision: Decision::Exclude,
+                }],
+            },
+            SubmissionEdit::RecordExport {
+                mapping: basecraft_protocol::submission::ExportMapping {
+                    source: s.submission(doc).source.clone(),
+                    records: [("a".into(), "a".into())].into(),
+                },
+            },
+            SubmissionEdit::SetFrames {
+                frames: vec![FrameChoice {
+                    record: "a".into(),
+                    codon_start: 3,
+                }],
+                clear: vec![],
+            },
+        ];
+        for edit in edits {
+            s.apply(
+                doc,
+                Op::SubmissionEdit {
+                    edit: Box::new(edit),
+                },
+            )
+            .unwrap();
+        }
+        s.undo(doc).unwrap();
+        assert_eq!(s.submission(doc).frames, Vec::new());
+        s.save(doc, None).unwrap();
+        s.redo(doc).unwrap();
+        s.save(doc, None).unwrap();
+    }
+    let report = replay::replay(root).unwrap();
+    assert!(report.ok(), "{:#?}", report.problems);
+}

@@ -195,6 +195,16 @@ pub enum Op {
     DelimitationEdit {
         edit: Box<crate::delimitation::DelimitationEdit>,
     },
+    /// An atomic edit to the project's specimen and taxon metadata.
+    #[serde(rename = "metadata.edit")]
+    MetadataEdit {
+        edit: Box<crate::metadata::MetadataEdit>,
+    },
+    /// An atomic edit to a GenBank marker submission document.
+    #[serde(rename = "submission.edit")]
+    SubmissionEdit {
+        edit: Box<crate::submission::SubmissionEdit>,
+    },
     /// A terminal job record, including failures and cancellation.
     #[serde(rename = "job.finished")]
     JobFinished {
@@ -243,6 +253,8 @@ impl Op {
             Op::TreeRemoveSupport { .. } => "tree.remove_support",
             Op::TreeStyle { .. } => "tree.style",
             Op::DelimitationEdit { .. } => "delimitation.edit",
+            Op::MetadataEdit { .. } => "metadata.edit",
+            Op::SubmissionEdit { .. } => "submission.edit",
             Op::JobFinished { .. } => "job.finished",
             Op::Undo { .. } => "history.undo",
             Op::Redo { .. } => "history.redo",

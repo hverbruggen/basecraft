@@ -1,7 +1,9 @@
 //! The `basecraft` command-line tool.
 
 mod mcp;
+mod metadata;
 mod operations;
+mod submission;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -76,6 +78,18 @@ enum Command {
     },
     /// Apply a typed JSON operation to a document and save it.
     Edit { file: PathBuf, operation: String },
+    /// The project's specimen metadata: roster, identifications, record
+    /// links and collection columns; imports and the .ods template.
+    Metadata {
+        #[command(subcommand)]
+        action: metadata::MetadataCommand,
+    },
+    /// GenBank marker submissions: row decisions, batch settings, reading
+    /// frames, the submission package, table2asn validation and accessions.
+    Submission {
+        #[command(subcommand)]
+        action: submission::SubmissionCommand,
+    },
     /// Add the support values of another tree file to a tree and save it. The
     /// source is referenced as the values' recorded input, not copied.
     ImportSupport {
@@ -176,6 +190,8 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Command::Plugins { action } => operations::plugins(action)?,
         Command::Operations { action } => operations::operations(action)?,
+        Command::Metadata { action } => metadata::run(action)?,
+        Command::Submission { action } => submission::run(action)?,
         Command::History { file, json } => {
             let report = basecraft_ops::document_record::DocumentRecord::saved_report(&file)?;
             println!(
@@ -377,6 +393,22 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 (
                     "job-record",
                     schemars::schema_for!(basecraft_protocol::delimitation::JobRecord),
+                ),
+                (
+                    "project-metadata",
+                    schemars::schema_for!(basecraft_protocol::metadata::ProjectMetadata),
+                ),
+                (
+                    "metadata-edit",
+                    schemars::schema_for!(basecraft_protocol::metadata::MetadataEdit),
+                ),
+                (
+                    "submission",
+                    schemars::schema_for!(basecraft_protocol::submission::Submission),
+                ),
+                (
+                    "submission-edit",
+                    schemars::schema_for!(basecraft_protocol::submission::SubmissionEdit),
                 ),
                 (
                     "log-entry",
