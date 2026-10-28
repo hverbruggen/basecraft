@@ -663,8 +663,13 @@ fn document_inputs_read_the_session_revision_and_record_history() {
     let publication = basecraft_ops::provenance::inspect(&temp.path().join("edited.json")).unwrap();
     assert!(publication.events.iter().any(|event| matches!(&event.op,
         basecraft_protocol::Op::ToolRun { params, .. } if params["run_id"] == edited.run_id)));
-    assert!(publication.effective_edits.iter().any(|edit| matches!(&edit.operation,
-        basecraft_protocol::Op::AlnReplace { residues, .. } if residues == "T")));
+    assert!(
+        publication
+            .effective_edits
+            .iter()
+            .any(|edit| matches!(&edit.operation,
+        basecraft_protocol::Op::AlnReplace { residues, .. } if residues == "T"))
+    );
     // Both runs are in the document's history, linked by run ID.
     let record = session.document_record(doc).unwrap();
     let runs: Vec<_> = record
@@ -733,4 +738,62 @@ fn document_inputs_read_the_session_revision_and_record_history() {
     );
     assert!(stale.unwrap_err().to_string().contains("stale_revision"));
     assert!(!temp.path().join("stale.json").exists());
+}
+
+#[test]
+fn document_repair_waits_for_owner_history_and_does_not_repeat_activity() {
+    use basecraft_ops::Session;
+    let root = tempfile::tempdir().unwrap();
+    let registry = alignment_registry(root.path());
+    let source = root.path().join("input.afa");
+    std::fs::write(&source, ">a\nACGT\n>b\nAC-T\n").unwrap();
+    let mut session = Session::new(root.path());
+    let doc = session.open(&source).unwrap();
+    let mut manager = JobManager::default();
+    let accepted = manager.submit_in_session(&registry, serde_json::from_value(json!({
+        "operation":"org.example.registry-fixture/count@1",
+        "inputs":{"sources":[{"kind":"document","doc":doc.0.to_string(),"generation":session.generation(doc),"revision":session.revision(doc)}]},
+        "parameters":{"mode":"delayed"},"destinations":{"report":"result.json"}
+    })).unwrap(), SessionPolicy::new(root.path(), true).unwrap(), "test", &mut session).unwrap();
+    let output = root.path().join("result.json");
+    std::fs::write(&output, b"foreign").unwrap();
+    assert_eq!(
+        wait(&manager, &accepted.run_id).state,
+        RuntimeState::Partial
+    );
+    std::fs::remove_file(&output).unwrap();
+    assert_eq!(
+        manager.repair(&accepted.run_id).unwrap().state,
+        RuntimeState::Finalizing,
+        "publication repair still owes owner-session finalisation"
+    );
+    manager.poll_session(&mut session);
+    assert_eq!(
+        manager.get(&accepted.run_id).unwrap().state,
+        RuntimeState::Completed
+    );
+    manager.poll_session(&mut session);
+    let record = session.document_record(doc).unwrap();
+    assert_eq!(
+        record
+            .events
+            .iter()
+            .filter(|event| matches!(&event.op,
+        basecraft_protocol::Op::ToolRun { params, .. } if params["run_id"] == accepted.run_id))
+            .count(),
+        1
+    );
+    assert_eq!(
+        record
+            .events
+            .iter()
+            .filter(|event| matches!(&event.op,
+        basecraft_protocol::Op::JobFinished { report } if report.id == accepted.run_id
+            && report.status == basecraft_protocol::delimitation::JobStatus::Completed))
+            .count(),
+        1
+    );
+    let publication = basecraft_ops::provenance::inspect(&output).unwrap();
+    assert!(publication.events.iter().any(|event| matches!(&event.op,
+        basecraft_protocol::Op::ToolRun { params, .. } if params["run_id"] == accepted.run_id)));
 }

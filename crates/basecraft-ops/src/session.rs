@@ -2399,6 +2399,48 @@ fn execute_tree(doc: &mut TreeDoc, op: &Op) -> Result<Box<TreeDoc>> {
     Ok(before)
 }
 
+fn portable_analysis_activity(
+    snapshot: &crate::document_record::DocumentRecord,
+    activity: &LogEntry,
+) -> (
+    Vec<LogEntry>,
+    Vec<basecraft_protocol::provenance::EditActivity>,
+) {
+    use basecraft_protocol::provenance::EditActivity;
+    let mut events = snapshot.events.clone();
+    events.push(activity.clone());
+    let mut effective = snapshot.effective.clone();
+    effective.push(EditActivity {
+        id: activity.id.clone(),
+        operation: activity.op.clone(),
+    });
+    for event in &mut events {
+        event.host.clear();
+        event.doc = Path::new(&event.doc)
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        if matches!(event.actor, Actor::Human { .. }) {
+            event.actor = Actor::Human {
+                user: "redacted".into(),
+            };
+        }
+        redact_operation_paths(&mut event.op);
+        for (key, _) in &mut event.result.hashes {
+            *key = Path::new(key)
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
+        }
+    }
+    for edit in &mut effective {
+        redact_operation_paths(&mut edit.operation);
+    }
+    (events, effective)
+}
+
 fn redact_operation_paths(operation: &mut Op) {
     fn scrub(value: &mut serde_json::Value) {
         match value {
@@ -2688,6 +2730,56 @@ fn check_location(f: &Feature, len: u64) -> Result<()> {
 }
 
 impl Session {
+    /// Add a captured input revision and its recorded producing activity to an
+    /// existing operation inventory. The caller keeps all inputs and outputs.
+    pub fn complete_operation_publication(
+        &self,
+        id: DocId,
+        snapshot: &crate::document_record::DocumentRecord,
+        run: &crate::analysis_store::ArtifactRun,
+    ) -> Result<()> {
+        let manifest = run.directory().join("manifest.json");
+        let mut publication: basecraft_protocol::provenance::Publication =
+            serde_json::from_slice(&crate::provenance::read_record(&manifest)?)?;
+        let activity = self
+            .events
+            .iter()
+            .rev()
+            .find(|event| {
+                event.doc == self.doc_key(id)
+                    && matches!(&event.op,
+                Op::ToolRun { params, .. } if params["run_id"].as_str() == Some(run.id()))
+            })
+            .ok_or_else(|| invalid("analysis has no recorded activity"))?
+            .clone();
+        let (events, effective) = portable_analysis_activity(snapshot, &activity);
+        publication.events = events;
+        publication.effective_edits = effective;
+        // Preserve upstream bundles used by the submitted revision for packaging.
+        let mut input = crate::input_evidence::read_input(run.directory())?;
+        let mut upstream = input
+            .extra
+            .get("upstream")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        for (bundle, origin) in &snapshot.origins {
+            let mut bytes = serde_json::to_vec_pretty(origin)?;
+            bytes.push(b'\n');
+            let reference = serde_json::json!({"bundle":crate::input_evidence::relative(run.directory(), &bundle.canonicalize()?)?,"id":origin.id,"hash":basecraft_io::hash_bytes(&bytes)});
+            if !upstream.contains(&reference) {
+                upstream.push(reference);
+            }
+        }
+        if !upstream.is_empty() {
+            input
+                .extra
+                .insert("upstream".into(), serde_json::json!(upstream));
+            crate::input_evidence::write_json(&run.directory().join("input.json"), &input)?;
+        }
+        crate::provenance::publish_operation(run.directory(), &publication)
+    }
+
     /// Reference-first publication: actual submitted input identity and the
     /// transformation are recorded in input.json; clean source bytes are not copied.
     pub fn publish_referenced_analysis(
@@ -2698,9 +2790,7 @@ impl Session {
         snapshot: &crate::document_record::DocumentRecord,
         run: &crate::analysis_store::ArtifactRun,
     ) -> Result<()> {
-        use basecraft_protocol::provenance::{
-            ArtifactRevision, Completeness, EditActivity, Publication,
-        };
+        use basecraft_protocol::provenance::{ArtifactRevision, Completeness, Publication};
         let mut input = crate::input_evidence::read_input(run.directory())?;
         let mut upstream = input
             .extra
@@ -2816,37 +2906,7 @@ impl Session {
                 reference: None,
             });
         }
-        let mut events = snapshot.events.clone();
-        events.push(activity.clone());
-        let mut effective = snapshot.effective.clone();
-        effective.push(EditActivity {
-            id: activity.id.clone(),
-            operation: activity.op,
-        });
-        for event in &mut events {
-            event.host.clear();
-            event.doc = Path::new(&event.doc)
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned();
-            if matches!(event.actor, Actor::Human { .. }) {
-                event.actor = Actor::Human {
-                    user: "redacted".into(),
-                };
-            }
-            redact_operation_paths(&mut event.op);
-            for (key, _) in &mut event.result.hashes {
-                *key = Path::new(key)
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into_owned();
-            }
-        }
-        for edit in &mut effective {
-            redact_operation_paths(&mut edit.operation);
-        }
+        let (events, effective) = portable_analysis_activity(snapshot, &activity);
         let publication = Publication {
             schema_version: 1, id: activity.id, session: self.id.clone(), parents: Vec::new(), parent_hashes: std::collections::BTreeMap::new(),
             created: activity.t, origin: "Referenced source; submitted transformation recorded in input.json. Declared immutable upstream records are referenced without copying input bytes. Earlier history before import remains unknown.".into(),

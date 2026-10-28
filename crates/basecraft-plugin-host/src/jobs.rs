@@ -22,6 +22,14 @@ struct PendingProposals {
     validated: Vec<(String, std::path::PathBuf, String)>,
 }
 
+#[derive(Default)]
+struct DocumentFinalization {
+    activity: bool,
+    applied: bool,
+    saved: bool,
+    generation: Option<u64>,
+}
+
 struct Job {
     prepared: PreparedOperation,
     outcome: Mutex<OperationOutcome>,
@@ -34,6 +42,7 @@ struct Job {
     document_pending: AtomicBool,
     // A document-bound run logs its terminal state in that document's history once.
     document_finished: AtomicBool,
+    document_finalization: Mutex<DocumentFinalization>,
     started: std::time::Instant,
     worker: Mutex<Option<JoinHandle<()>>>,
     proposals: Mutex<Option<PendingProposals>>,
@@ -74,6 +83,16 @@ impl JobManager {
                 .or_else(|| job.prepared.document.as_ref().map(|target| target.doc))
         })
     }
+    /// Revision after this run's own changes, only when the target still
+    /// matched its submission. A genuine intervening edit has no receipt.
+    pub fn finalized_generation(&self, id: &str) -> Option<u64> {
+        self.jobs
+            .get(id)?
+            .document_finalization
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .generation
+    }
     /// Called by the owning session thread: applies sequence proposals and
     /// records document-bound runs in their document's history. No session lock
     /// is held while a plugin runs; identity is checked at the edit boundary.
@@ -92,16 +111,13 @@ impl JobManager {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .clone();
-                match record_document_run(job, target, &outcome, session)
-                    .and_then(|()| apply_target_results(job, target, &outcome, session))
-                {
-                    Ok(warning) => {
+                match finalize_document(job, target, &outcome, session) {
+                    Ok(()) => {
                         let mut outcome = job
                             .outcome
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
                         outcome.state = RuntimeState::Completed;
-                        outcome.warnings.extend(warning);
                         if let Err(error) = job.prepared.persist(&outcome) {
                             drop(outcome);
                             fail(
@@ -123,17 +139,17 @@ impl JobManager {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .clone();
-            if outcome.state.terminal() && !job.document_finished.swap(true, Ordering::AcqRel) {
-                if let Err(error) = record_document_finished(job, target, &outcome, session) {
-                    // The run's own evidence is complete; only the history entry is missing.
-                    let mut outcome = job
-                        .outcome
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    outcome
-                        .warnings
-                        .push(format!("Run not recorded in document history: {error}"));
-                    let _ = job.prepared.persist(&outcome);
+            if outcome.state.terminal() && !job.document_finished.load(Ordering::Acquire) {
+                match record_document_finished(job, target, &outcome, session) {
+                    Ok(()) => job.document_finished.store(true, Ordering::Release),
+                    Err(error) => {
+                        job.document_finished.store(true, Ordering::Release);
+                        fail(
+                            job,
+                            OperationErrorCode::EvidenceIncomplete,
+                            error.to_string(),
+                        );
+                    }
                 }
             }
         }
@@ -332,6 +348,7 @@ impl JobManager {
             proposal_activity_recorded: AtomicBool::new(false),
             document_pending: AtomicBool::new(false),
             document_finished: AtomicBool::new(false),
+            document_finalization: Mutex::new(DocumentFinalization::default()),
             started: std::time::Instant::now(),
             worker: Mutex::new(None),
             proposals: Mutex::new(None),
@@ -429,7 +446,11 @@ impl JobManager {
         let result = job
             .prepared
             .finalize(&result, &artifacts, &mut repaired, true);
-        repaired.state = if result.is_ok() {
+        repaired.state = if result.is_ok() && job.prepared.document.is_some() {
+            job.document_finished.store(false, Ordering::Release);
+            job.document_pending.store(true, Ordering::Release);
+            RuntimeState::Finalizing
+        } else if result.is_ok() {
             RuntimeState::Completed
         } else {
             RuntimeState::Partial
@@ -680,6 +701,69 @@ fn execute(job: &Job) {
     }
 }
 
+fn same_document(session: &basecraft_ops::Session, target: &crate::runner::DocumentTarget) -> bool {
+    session.id() == target.session
+        && session.is_open(target.doc)
+        && session.root().join(session.doc_key(target.doc)) == target.path
+}
+
+/// Owner-thread continuation used by both execution and publication repair.
+/// A failed save/publication never repeats already applied typed edits.
+fn finalize_document(
+    job: &Job,
+    target: &crate::runner::DocumentTarget,
+    outcome: &OperationOutcome,
+    session: &mut basecraft_ops::Session,
+) -> Result<()> {
+    if !same_document(session, target) {
+        return Err(Error::Protocol(
+            "input document was closed or replaced".into(),
+        ));
+    }
+    let mut progress = job
+        .document_finalization
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !progress.activity {
+        // A failed receipt write after a successful journal append must not
+        // invent a second producing activity on repair.
+        let recorded = session
+            .document_record(target.doc)?
+            .events
+            .iter()
+            .any(|event| {
+                matches!(&event.op, basecraft_protocol::Op::ToolRun { params, .. }
+                if params["run_id"].as_str() == Some(outcome.run_id.as_str()))
+            });
+        if !recorded {
+            record_document_run(job, target, outcome, session)?;
+        }
+        progress.activity = true;
+    }
+    session.complete_operation_publication(target.doc, &target.record, &job.prepared.run)?;
+    if !progress.applied {
+        let unchanged = session.generation(target.doc) == target.generation
+            && session.revision(target.doc) == target.revision;
+        let warning = apply_target_results(job, target, outcome, session)?;
+        progress.applied = true;
+        if unchanged {
+            progress.generation = Some(session.generation(target.doc));
+        }
+        if let Some(warning) = warning {
+            job.outcome
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .warnings
+                .push(warning);
+        }
+    }
+    if target.save && !progress.saved {
+        session.save(target.doc, None)?;
+        progress.saved = true;
+    }
+    Ok(())
+}
+
 /// The history entry for a published run that read a session document. The
 /// run's own publication already holds the full evidence; this links the
 /// document's history to it by run ID and records the submitted input.
@@ -689,7 +773,7 @@ fn record_document_run(
     outcome: &OperationOutcome,
     session: &mut basecraft_ops::Session,
 ) -> Result<()> {
-    if !session.is_open(target.doc) || session.generation(target.doc) != target.generation {
+    if !same_document(session, target) {
         return Err(Error::Protocol(
             "input document was closed or replaced before the run was recorded".into(),
         ));
@@ -774,9 +858,6 @@ fn apply_target_results(
                 Some("Workspace changed during the run; its result remains an artifact".into());
         }
     }
-    if target.save {
-        session.save(target.doc, None)?;
-    }
     Ok(warning)
 }
 
@@ -789,7 +870,7 @@ fn record_document_finished(
     session: &mut basecraft_ops::Session,
 ) -> Result<()> {
     use basecraft_protocol::delimitation::{JobRecord, JobStatus};
-    if !session.is_open(target.doc) || session.generation(target.doc) != target.generation {
+    if !same_document(session, target) {
         return Err(Error::Protocol(
             "input document was closed or replaced".into(),
         ));

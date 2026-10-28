@@ -1816,7 +1816,12 @@ impl qobject::DelimitationController {
             if session.id() != analysis.identity.0 || session.doc_key(doc) != analysis.identity.1 {
                 return Err("Analysis completed for its original workspace; its result remains available for review".into());
             }
-            if session.generation(doc) != analysis.generation {
+            if session.generation(doc)
+                != analysis
+                    .job
+                    .finalized_generation()
+                    .unwrap_or(analysis.generation)
+            {
                 return Err("Analysis completed for its saved input; workspace changed, so result remains an artifact".into());
             }
             if display_job {

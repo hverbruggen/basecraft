@@ -182,6 +182,10 @@ impl DocumentJob {
         Ok(outcome.state.terminal().then_some(outcome))
     }
 
+    pub fn finalized_generation(&self) -> Option<u64> {
+        self.manager.finalized_generation(&self.run_id)
+    }
+
     pub fn cancel(&self) -> Result<(), String> {
         self.manager
             .cancel(&self.run_id)

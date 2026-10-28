@@ -330,9 +330,14 @@ fn tree_methods_update_one_canonical_spart_and_export_without_sources() {
                 "parameters":parameters,"target":common::document(s, doc)[0]})
         });
         common::assert_completed(&outcome);
-        assert_eq!(finished(&session, doc).iter().filter(|(id, status)|
-            id == &outcome.run_id && *status == JobStatus::Completed).count(), 1,
-            "each applied result must record one successful terminal entry");
+        assert_eq!(
+            finished(&session, doc)
+                .iter()
+                .filter(|(id, status)| id == &outcome.run_id && *status == JobStatus::Completed)
+                .count(),
+            1,
+            "each applied result must record one successful terminal entry"
+        );
         let value = common::read_json(&common::artifact(&outcome, "result.json"));
         if let Some(hypotheses) = value["workspace"]["hypotheses"].as_array() {
             count += hypotheses.len();
@@ -708,4 +713,59 @@ fn optional_display_tree_uses_hidden_reference_first_companions() {
             .iter()
             .any(|run| run["run_id"] == outcome.run_id.as_str())
     );
+}
+
+#[test]
+fn alignment_workflows_use_frozen_unsaved_inputs() {
+    require_engine();
+    for operation in ["asap_alignment", "gmyc_alignment_single"] {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("input.afa");
+        let original = ">a first specimen\nACGTACGTACGTACGTACGT\n>b second specimen\nACGTACGTACGTACGTACGA\n>c\nTGCATGCATGCATGCAACGT\n>d\nTGCATGCATGCATGCAACGA\n";
+        std::fs::write(&source, original).unwrap();
+        let registry = common::bundled();
+        let mut session = Session::new(root.path());
+        let doc = session.open(&source).unwrap();
+        session
+            .apply(
+                doc,
+                basecraft_protocol::Op::AlnReplace {
+                    row: 0,
+                    start: 0,
+                    end: 1,
+                    residues: "T".into(),
+                },
+            )
+            .unwrap();
+        let mut manager = JobManager::default();
+        let accepted = common::submit_in(&mut manager, &registry, &mut session, |s| {
+            json!({
+                "operation":format!("basecraft.host/{operation}@1"),
+                "inputs":{"alignment":common::document(s, doc)},
+                "parameters":{"model":"p","unique_haplotypes":false}
+            })
+        })
+        .unwrap();
+        // The accepted generated input is independent of its original path.
+        std::fs::write(&source, ">unrelated\nAAAA\n").unwrap();
+        let outcome = common::wait_in(&manager, &mut session, &accepted.run_id);
+        common::assert_completed(&outcome);
+        let input = input_evidence::read_input(&common::evidence(&outcome)).unwrap();
+        assert_eq!(input.state, "generated");
+        let submitted = common::evidence(&outcome).join("submitted.fasta");
+        assert_eq!(
+            input.submitted_hash,
+            basecraft_io::hash_file(&submitted).unwrap()
+        );
+        assert!(
+            std::fs::read_to_string(submitted)
+                .unwrap()
+                .contains("TCGTACGT")
+        );
+        let result = common::read_json(&common::artifact(&outcome, "fit.json"));
+        assert_eq!(
+            result["workspace"]["specimens"].as_array().unwrap().len(),
+            4
+        );
+    }
 }

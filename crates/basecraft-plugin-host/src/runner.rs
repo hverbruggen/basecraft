@@ -1469,19 +1469,20 @@ impl PreparedOperation {
             })
         {
             let path = self.policy.root.join(destination);
-            if !outcome
+            if let Some(artifact) = outcome
                 .artifacts
                 .iter()
-                .any(|artifact| artifact.path == path.display().to_string())
+                .find(|artifact| artifact.path == path.display().to_string())
             {
-                let published = self.publish_workspace(destination)?;
-                if let Some(name) = published.file_name().and_then(|name| name.to_str()) {
-                    exports.push((
-                        destination.clone(),
-                        self.run.artifact(name)?,
-                        basecraft_io::hash_file(&published).map_err(basecraft_ops::Error::from)?,
+                if basecraft_io::hash_file(&path).map_err(basecraft_ops::Error::from)?
+                    != artifact.digest
+                {
+                    return Err(Error::Protocol(
+                        "published workspace changed; repair refused".into(),
                     ));
                 }
+            } else {
+                let published = self.publish_workspace(destination)?;
                 outcome.artifacts.push(PublishedArtifact {
                     role: crate::policy::WORKSPACE_DESTINATION.into(),
                     path: published.display().to_string(),
@@ -1490,6 +1491,19 @@ impl PreparedOperation {
                 });
                 self.persist(outcome)?;
             }
+            let artifact = outcome
+                .artifacts
+                .iter()
+                .find(|artifact| artifact.path == path.display().to_string())
+                .ok_or_else(|| Error::Protocol("missing workspace publication receipt".into()))?;
+            let name = path
+                .file_name()
+                .ok_or_else(|| Error::Protocol("workspace has no name".into()))?;
+            exports.push((
+                destination.clone(),
+                self.run.artifact(&name.to_string_lossy())?,
+                artifact.digest.clone(),
+            ));
         }
         let mut exported = Vec::new();
         for (destination, retained, hash) in &exports {
@@ -1531,6 +1545,9 @@ impl PreparedOperation {
         }
         publication_outputs.splice(0..0, exported);
         outcome.data = result.data.as_deref().cloned();
+        let previous = std::fs::read(self.run.directory().join("manifest.json"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Publication>(&bytes).ok());
         let publication = Publication {
             schema_version: 1,
             id: self.run.id().into(),
@@ -1544,8 +1561,12 @@ impl PreparedOperation {
             ),
             inputs: self.ledger_inputs.clone(),
             outputs: publication_outputs,
-            events: vec![],
-            effective_edits: vec![],
+            events: previous
+                .as_ref()
+                .map_or_else(Vec::new, |p| p.events.clone()),
+            effective_edits: previous
+                .as_ref()
+                .map_or_else(Vec::new, |p| p.effective_edits.clone()),
             completeness: Completeness {
                 ancestry_known: false,
                 input_bytes_available: true,
@@ -1572,34 +1593,38 @@ impl PreparedOperation {
     ) -> Result<()> {
         let destination_path = self.policy.root.join(destination);
         let path = destination_path.display().to_string();
+        let intent = self.run.artifact(&format!(
+            "member-{}-export.json",
+            basecraft_io::hash_bytes(destination_path.as_os_str().as_encoded_bytes())
+                .trim_start_matches("b3:")
+        ))?;
         if outcome
             .artifacts
             .iter()
             .any(|a| a.path == path && a.digest == hash)
         {
-            if basecraft_io::hash_file(&destination_path).map_err(basecraft_ops::Error::from)?
-                != hash
-            {
-                return Err(Error::Protocol(
-                    "published destination changed; repair refused".into(),
-                ));
+            verify_member_receipt(&destination_path, hash, &intent)?;
+        } else {
+            if destination_path.exists() {
+                verify_member_receipt(&destination_path, hash, &intent)?;
+            } else {
+                let destination = self.policy.path(destination, true)?;
+                export_member(retained, &destination, hash, &intent)?;
             }
-            return Ok(());
+            outcome.artifacts.push(PublishedArtifact {
+                role: role.into(),
+                path,
+                digest: hash.into(),
+            });
+            self.persist(outcome)?;
         }
-        let destination = self.policy.path(destination, true)?;
-        export_member(retained, &destination, hash)?;
-        if destination
+        if destination_path
             .extension()
             .is_some_and(|extension| extension.eq_ignore_ascii_case("nwk"))
         {
-            self.finalise_exported_tree(&destination)?;
+            self.finalise_exported_tree(&destination_path)?;
         }
-        outcome.artifacts.push(PublishedArtifact {
-            role: role.into(),
-            path,
-            digest: hash.into(),
-        });
-        self.persist(outcome)
+        Ok(())
     }
 
     /// Record this run in `doc`'s history although `doc` is not one of its
@@ -1879,8 +1904,31 @@ fn verify_collection(root: &Path, expected: &BTreeMap<PathBuf, String>) -> Resul
     }
     Ok(())
 }
+/// A pre-rename inode receipt proves which file this run created. Matching
+/// bytes alone never authorize adopting somebody else's existing file.
+fn verify_member_receipt(destination: &Path, hash: &str, intent: &Path) -> Result<()> {
+    let receipt: Value = serde_json::from_slice(&basecraft_ops::provenance::read_record(intent)?)?;
+    let metadata = std::fs::symlink_metadata(destination)?;
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.nlink() != 1
+        || receipt["schema"] != 1
+        || receipt["destination"] != json!(destination)
+        || receipt["hash"] != hash
+        || receipt["device"].as_u64() != Some(metadata.dev())
+        || receipt["inode"].as_u64() != Some(metadata.ino())
+        || receipt["size"].as_u64() != Some(metadata.len())
+        || basecraft_io::hash_file(destination).map_err(basecraft_ops::Error::from)? != hash
+    {
+        return Err(Error::Protocol(
+            "output_conflict: member ownership or bytes changed; repair refused".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Copy one validated collection member to a new file; never replaces one.
-fn export_member(source: &Path, destination: &Path, hash: &str) -> Result<()> {
+fn export_member(source: &Path, destination: &Path, hash: &str, intent: &Path) -> Result<()> {
     let parent = destination
         .parent()
         .ok_or_else(|| Error::Protocol("missing destination parent".into()))?;
@@ -1892,6 +1940,12 @@ fn export_member(source: &Path, destination: &Path, hash: &str) -> Result<()> {
         return Err(Error::Protocol("member changed during export".into()));
     }
     pending.as_file().sync_all()?;
+    let metadata = pending.as_file().metadata()?;
+    input_evidence::write_json(
+        intent,
+        &json!({"schema":1,"destination":destination,
+        "hash":hash,"device":metadata.dev(),"inode":metadata.ino(),"size":metadata.len()}),
+    )?;
     basecraft_platform::atomic::rename_noreplace(pending.path(), destination).map_err(|error| {
         if error.kind() == std::io::ErrorKind::AlreadyExists {
             Error::Protocol("output_conflict: destination exists".into())
@@ -1949,25 +2003,14 @@ impl PreparedOperation {
             .manifest
             .dir
             .clone();
-        let evidence = self
-            .context
-            .input_evidence
-            .get("alignment")
-            .and_then(|values| values.first())
-            .ok_or_else(|| Error::Protocol("workflow requires named alignment evidence".into()))?;
+        // Execute the bytes accepted at submission, including unsaved edits.
         let source = PathBuf::from(
-            evidence
-                .original_path
-                .as_deref()
-                .ok_or_else(|| Error::Protocol("workflow needs a file-backed alignment".into()))?,
+            self.context
+                .inputs
+                .get("alignment")
+                .and_then(|values| values.first())
+                .ok_or_else(|| Error::Protocol("workflow requires alignment input".into()))?,
         );
-        if Some(basecraft_io::hash_file(&source).map_err(basecraft_ops::Error::from)?)
-            != evidence.source_hash
-        {
-            return Err(Error::Protocol(
-                "alignment changed before workflow preparation".into(),
-            ));
-        }
         let root = PathBuf::from(&self.context.outputs["artifacts"]);
         // Stages record into their own runs; the owner session records this one.
         let mut session = basecraft_ops::Session::detached(&self.policy.root);
