@@ -330,6 +330,9 @@ fn tree_methods_update_one_canonical_spart_and_export_without_sources() {
                 "parameters":parameters,"target":common::document(s, doc)[0]})
         });
         common::assert_completed(&outcome);
+        assert_eq!(finished(&session, doc).iter().filter(|(id, status)|
+            id == &outcome.run_id && *status == JobStatus::Completed).count(), 1,
+            "each applied result must record one successful terminal entry");
         let value = common::read_json(&common::artifact(&outcome, "result.json"));
         if let Some(hypotheses) = value["workspace"]["hypotheses"].as_array() {
             count += hypotheses.len();

@@ -659,6 +659,12 @@ fn document_inputs_read_the_session_revision_and_record_history() {
         std::fs::read_to_string(&source).unwrap(),
         ">a\nAC-T\n>b\nACGT\n"
     );
+    // The result carries the submitted revision and producing activity, too.
+    let publication = basecraft_ops::provenance::inspect(&temp.path().join("edited.json")).unwrap();
+    assert!(publication.events.iter().any(|event| matches!(&event.op,
+        basecraft_protocol::Op::ToolRun { params, .. } if params["run_id"] == edited.run_id)));
+    assert!(publication.effective_edits.iter().any(|edit| matches!(&edit.operation,
+        basecraft_protocol::Op::AlnReplace { residues, .. } if residues == "T")));
     // Both runs are in the document's history, linked by run ID.
     let record = session.document_record(doc).unwrap();
     let runs: Vec<_> = record
