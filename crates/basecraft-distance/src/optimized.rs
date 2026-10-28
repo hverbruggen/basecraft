@@ -138,7 +138,7 @@ pub(super) fn tree(
         };
         // Poor pruning (e.g. a star) is cheaper as a contiguous exhaustive scan.
         // Probe sorted search every eighth join so this decision can reverse.
-        let dense_round = dense && (n - m) % 8 != 0;
+        let dense_round = dense && !(n - m).is_multiple_of(8);
         let dense_scan = |chunk: &[usize]| {
             let mut b = seed;
             let mut count = 0;

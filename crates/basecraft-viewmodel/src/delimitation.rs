@@ -182,8 +182,8 @@ pub fn tree_mapping(
     names: &BTreeSet<String>,
 ) -> BTreeMap<String, BTreeSet<String>> {
     let roster: BTreeSet<_> = work.specimens.iter().map(|s| s.id.clone()).collect();
-    if names != &roster {
-        if let Some(mapping) = work
+    if names != &roster
+        && let Some(mapping) = work
             .hypotheses
             .iter()
             .map(|h| &h.provenance.haplotypes)
@@ -191,7 +191,6 @@ pub fn tree_mapping(
         {
             return mapping.clone();
         }
-    }
     names
         .iter()
         .filter(|id| roster.contains(*id))

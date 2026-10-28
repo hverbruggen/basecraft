@@ -857,6 +857,6 @@ mod tests {
         let sheet = read_fixture(&bytes, "ods").unwrap();
         assert_eq!(sheet.headers, headers);
         assert_eq!(sheet.rows, rows);
-        assert!(sheet.date_cells.is_empty());
+        assert_eq!(sheet.date_cells, [] as [(usize, usize); 0]);
     }
 }

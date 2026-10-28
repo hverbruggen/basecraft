@@ -578,11 +578,10 @@ pub fn bootstrap(
     if let Some(collection) = collection {
         report.replicate_trees = Some(collection.finish(&report)?);
     }
-    if let Some(path) = &options.progress {
-        if let Err(cause) = crate::write_json(path, &report) {
+    if let Some(path) = &options.progress
+        && let Err(cause) = crate::write_json(path, &report) {
             return Err(Box::new(BootstrapPublicationError { report, cause }));
         }
-    }
     Ok(BootstrapResult { tree, report })
 }
 

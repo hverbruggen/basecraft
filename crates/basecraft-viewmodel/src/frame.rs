@@ -72,7 +72,7 @@ impl Frame {
     /// Append another frame with its geometry translated by `dx, dy`.
     pub fn append_translated(&mut self, other: &Frame, dx: f32, dy: f32) {
         let start = self.len();
-        for instance in other.data.chunks_exact(FLOATS_PER_INSTANCE) {
+        for instance in other.data.as_chunks::<FLOATS_PER_INSTANCE>().0 {
             let mut translated = [0.0; FLOATS_PER_INSTANCE];
             translated.copy_from_slice(instance);
             for corner in 0..4 {

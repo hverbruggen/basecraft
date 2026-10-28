@@ -591,12 +591,12 @@ fn chi_square_tail(statistic: f64, degrees: usize) -> f64 {
     }
     let shape = degrees as f64 / 2.0;
     let x = statistic / 2.0;
-    let mut log_gamma = if degrees % 2 == 0 {
+    let mut log_gamma = if degrees.is_multiple_of(2) {
         0.0
     } else {
         std::f64::consts::PI.ln() / 2.0
     };
-    let mut term = if degrees % 2 == 0 { 1.0 } else { 0.5 };
+    let mut term = if degrees.is_multiple_of(2) { 1.0 } else { 0.5 };
     while term < shape {
         log_gamma += term.ln();
         term += 1.0;
@@ -651,8 +651,8 @@ fn neighbors(tree: &TreeDoc, roots: &[usize]) -> Vec<Vec<usize>> {
         return out;
     }
     for &root in roots {
-        if let Some(parent) = tree.node(root).parent {
-            if parent != tree.root()
+        if let Some(parent) = tree.node(root).parent
+            && parent != tree.root()
                 && tree
                     .node(parent)
                     .children
@@ -669,7 +669,6 @@ fn neighbors(tree: &TreeDoc, roots: &[usize]) -> Vec<Vec<usize>> {
                     out.push(fused);
                 }
             }
-        }
     }
     for &root in roots {
         if tree

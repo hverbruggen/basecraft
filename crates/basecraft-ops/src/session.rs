@@ -384,13 +384,15 @@ impl Session {
     }
 
     /// The edit revision callers pin a request to: the document version, or the
-    /// generation for a delimitation workspace, which has no separate version.
+    /// generation for workspace, metadata and submission documents without a separate version.
     pub fn revision(&self, id: DocId) -> u64 {
         match &self.docs[id.0].content {
             Loaded::Sequence(opened) => opened.doc.version(),
             Loaded::Alignment(opened) => opened.doc.version(),
             Loaded::Tree(opened) => opened.doc.version(),
-            Loaded::Delimitation(_) => self.docs[id.0].generation,
+            Loaded::Delimitation(_) | Loaded::Metadata(_) | Loaded::Submission(_) => {
+                self.docs[id.0].generation
+            }
         }
     }
 

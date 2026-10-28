@@ -186,11 +186,10 @@ pub fn parse_text(text: &str) -> Result<DelimitationWorkspace> {
         let values: Vec<_> = values.split(',').collect();
         for j in 0..n {
             let mut g = group(format!("group-{}", j + 1), (j + 1).to_string());
-            if let Some(value) = values.get(j) {
-                if let Some(s) = score(value, types("subset_score_type", i))? {
+            if let Some(value) = values.get(j)
+                && let Some(s) = score(value, types("subset_score_type", i))? {
                     g.scores.push(s);
                 }
-            }
             h.groups.push(g);
         }
         work.hypotheses.push(h);
@@ -570,14 +569,13 @@ pub fn parse_xml(text: &str) -> Result<DelimitationWorkspace> {
             .filter(|a| !["label", "spartitionScore", "spartitionScoreType"].contains(&a.name()))
             .map(|a| (a.name().into(), a.value().into()))
             .collect();
-        if let Some(value) = n.attribute("spartitionScore") {
-            if let Some(s) = score(
+        if let Some(value) = n.attribute("spartitionScore")
+            && let Some(s) = score(
                 value,
                 n.attribute("spartitionScoreType").unwrap_or("unspecified"),
             )? {
                 h.scores.push(s);
             }
-        }
         let subsets = n
             .children()
             .find(|n| n.has_tag_name("subsets"))
@@ -599,14 +597,13 @@ pub fn parse_xml(text: &str) -> Result<DelimitationWorkspace> {
                 .filter(|a| !["label", "score"].contains(&a.name()))
                 .map(|a| (a.name().into(), a.value().into()))
                 .collect();
-            if let Some(value) = s.attribute("score") {
-                if let Some(sc) = score(
+            if let Some(value) = s.attribute("score")
+                && let Some(sc) = score(
                     value,
                     n.attribute("subsetScoreType").unwrap_or("unspecified"),
                 )? {
                     g.scores.push(sc);
                 }
-            }
             for m in s.children().filter(|n| n.has_tag_name("individual")) {
                 let id = m
                     .attribute("ref")
@@ -616,14 +613,13 @@ pub fn parse_xml(text: &str) -> Result<DelimitationWorkspace> {
                     return Err(error("unknown or overlapping individual reference"));
                 }
                 g.members.insert(id.clone());
-                if let Some(value) = m.attribute("score") {
-                    if let Some(sc) = score(
+                if let Some(value) = m.attribute("score")
+                    && let Some(sc) = score(
                         value,
                         n.attribute("individualScoreType").unwrap_or("unspecified"),
                     )? {
                         g.individual_scores.insert(id, vec![sc]);
                     }
-                }
             }
             h.groups.push(g);
         }

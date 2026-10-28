@@ -485,14 +485,13 @@ impl SangerReviewView {
                 ));
             }
         }
-        if let (Some(context), Some(source)) = (&self.alignment, col.source) {
-            if let Some(stats) = context.alignment.column_stats(source as u64) {
+        if let (Some(context), Some(source)) = (&self.alignment, col.source)
+            && let Some(stats) = context.alignment.column_stats(source as u64) {
                 parts.push(format!(
                     "Reference A:{} C:{} G:{} T:{} gaps:{}",
                     stats.acgt[0], stats.acgt[1], stats.acgt[2], stats.acgt[3], stats.gap
                 ));
             }
-        }
         parts.join("\n")
     }
     fn x(&self, column: f64) -> f32 {
@@ -656,8 +655,8 @@ impl SangerReviewView {
         }
         // Coordinate ruler belongs to the same grid as every row and peak.
         for display in first..end {
-            if let Some(source) = self.columns[display].source {
-                if source % 10 == 0 && self.column_width >= 6.0 {
+            if let Some(source) = self.columns[display].source
+                && source % 10 == 0 && self.column_width >= 6.0 {
                     let x = self.x(display as f64 + 0.5);
                     if x >= NAMES && x < self.width - 24.0 {
                         frame.text(
@@ -669,7 +668,6 @@ impl SangerReviewView {
                         );
                     }
                 }
-            }
         }
         if let Some(display) = self.hovered {
             let x = self.x(display as f64 + 0.5);
@@ -849,13 +847,12 @@ pub fn suggested_name(paths: &[std::path::PathBuf]) -> String {
                 .unwrap_or_default()
                 .to_string_lossy()
                 .into_owned();
-            if let Some((prefix, suffix)) = name.rsplit_once(['_', '-', '.']) {
-                if ["forward", "reverse", "fwd", "rev", "f", "r"]
+            if let Some((prefix, suffix)) = name.rsplit_once(['_', '-', '.'])
+                && ["forward", "reverse", "fwd", "rev", "f", "r"]
                     .contains(&suffix.to_ascii_lowercase().as_str())
                 {
                     name = prefix.to_owned();
                 }
-            }
             name
         })
         .collect();
@@ -1045,7 +1042,7 @@ mod tests {
             // The green A peak must reach the same aligned column centre.
             let peak = frame
                 .floats()
-                .chunks_exact(crate::frame::FLOATS_PER_INSTANCE)
+                .as_chunks::<{ crate::frame::FLOATS_PER_INSTANCE }>().0.iter()
                 .find(|q| q[8..12] == base_color(b'A', &Theme::default()) && q[1] < 1.0)
                 .unwrap();
             assert!((peak[0] - view.x(0.5)).abs() < 1.0);
@@ -1159,7 +1156,7 @@ mod tests {
         assert!(
             frame
                 .floats()
-                .chunks_exact(16)
+                .as_chunks::<16>().0.iter()
                 .any(|q| q[12..16] == expected.floats()[12..16]
                     && (q[1] - view.consensus_y() - 3.0).abs() < 0.01)
         );
@@ -1168,7 +1165,7 @@ mod tests {
         view.signal(0, &view.lanes[0], 100.0, 100.0, &theme, &mut frame);
         let low = frame
             .floats()
-            .chunks_exact(16)
+            .as_chunks::<16>().0.iter()
             .flat_map(|q| [q[1], q[3], q[5], q[7]])
             .fold(f32::INFINITY, f32::min);
         assert!(low > 149.0);
@@ -1178,11 +1175,11 @@ mod tests {
         assert!(frame.len() > 10);
         let high = frame
             .floats()
-            .chunks_exact(16)
+            .as_chunks::<16>().0.iter()
             .flat_map(|q| [q[1], q[3], q[5], q[7]])
             .fold(f32::INFINITY, f32::min);
         assert!(high < 101.0);
-        for q in frame.floats().chunks_exact(16) {
+        for q in frame.floats().as_chunks::<16>().0 {
             for corner in 0..4 {
                 assert!(q[corner * 2 + 1] >= 99.0);
                 assert!(q[corner * 2 + 1] <= 201.0);

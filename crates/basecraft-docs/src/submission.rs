@@ -576,7 +576,12 @@ fn stops(code: &GeneticCode, seq: &[u8], codon_start: u8) -> Vec<usize> {
     let Some(rest) = seq.get(offset..) else {
         return Vec::new();
     };
-    let codons: Vec<&[u8]> = rest.chunks_exact(3).collect();
+    let codons: Vec<&[u8]> = rest
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .map(<[u8; 3]>::as_slice)
+        .collect();
     let ends_on_codon = rest.len() % 3 == 0;
     codons
         .iter()

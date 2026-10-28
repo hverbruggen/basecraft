@@ -322,7 +322,7 @@ mod tests {
         view.build(&trace, &Theme::default(), &mut frame);
         let segments = frame
             .floats()
-            .chunks_exact(crate::frame::FLOATS_PER_INSTANCE)
+            .as_chunks::<{ crate::frame::FLOATS_PER_INSTANCE }>().0.iter()
             .filter(|q| {
                 q[14] == 0.0
                     && (q[0] - q[2]).abs() > f32::EPSILON

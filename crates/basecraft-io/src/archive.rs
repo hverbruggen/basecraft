@@ -1,4 +1,4 @@
-//! Bounded in-memory ZIP access and deterministic OpenDocument ZIP writing.
+//! Bounded in-memory ZIP access and deterministic `OpenDocument` ZIP writing.
 //! Container parsing, compression and checksum validation belong to `zip`.
 use std::io::{Cursor, Read, Write};
 
@@ -11,7 +11,7 @@ fn invalid(message: impl Into<String>) -> Error {
     Error::Table(message.into())
 }
 
-fn zip_error(error: zip::result::ZipError) -> Error {
+fn zip_error(error: impl std::fmt::Display) -> Error {
     invalid(format!("spreadsheet ZIP container: {error}"))
 }
 
@@ -47,11 +47,10 @@ impl<'a> Archive<'a> {
             }
             let actual =
                 std::io::copy(&mut member.by_ref().take(size + 1), &mut std::io::sink())
-                    .map_err(|e| invalid(format!("spreadsheet part {} is damaged: {e}", name)))?;
+                    .map_err(|e| invalid(format!("spreadsheet part {name} is damaged: {e}")))?;
             if actual != size {
                 return Err(invalid(format!(
-                    "spreadsheet part {} has an incorrect size",
-                    name
+                    "spreadsheet part {name} has an incorrect size"
                 )));
             }
         }
@@ -110,7 +109,7 @@ impl Writer {
     pub fn finish(self) -> Result<Vec<u8>> {
         self.inner
             .finish()
-            .map(|cursor| cursor.into_inner())
+            .map(std::io::Cursor::into_inner)
             .map_err(zip_error)
     }
 }

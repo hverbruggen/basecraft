@@ -293,12 +293,11 @@ impl DistanceMatrix {
                 for ((d, v), s) in ds.iter_mut().zip(vs).zip(ss) {
                     let (valid, ts, tv) = counts(&packed[i], &packed[j]);
                     *s = valid;
-                    if valid >= min_overlap {
-                        if let Some((dd, vv)) = estimate(model, valid, ts, tv) {
+                    if valid >= min_overlap
+                        && let Some((dd, vv)) = estimate(model, valid, ts, tv) {
                             *d = dd;
                             *v = vv;
                         }
-                    }
                     j += 1;
                     if j == i {
                         i += 1;
