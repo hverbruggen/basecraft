@@ -93,6 +93,14 @@ fn codes(review: &Review, record: &str) -> Vec<String> {
         .collect()
 }
 
+fn confirm_selection(s: &mut Session, doc: DocId) {
+    let selection_hash = submission::review(s, doc, &submitter())
+        .unwrap()
+        .selection_hash
+        .unwrap();
+    submission::edit(s, doc, SubmissionEdit::ConfirmSelection { selection_hash }).unwrap();
+}
+
 fn rbcl(s: &mut Session) -> DocId {
     let doc = submission::create(
         s,
@@ -114,6 +122,21 @@ fn rbcl(s: &mut Session) -> DocId {
     ] {
         submission::edit(s, doc, edit).unwrap();
     }
+    submission::edit(
+        s,
+        doc,
+        SubmissionEdit::SetRows {
+            rows: ["HV101_rbcL", "HV102_rbcL", "HV103_rbcL"]
+                .iter()
+                .map(|r| RowDecision {
+                    record: (*r).into(),
+                    decision: Decision::New,
+                })
+                .collect(),
+        },
+    )
+    .unwrap();
+    confirm_selection(s, doc);
     doc
 }
 
@@ -526,8 +549,206 @@ fn rrna_its_and_coi_batches() {
     )
     .unwrap();
     submission::edit(&mut s, coi, publication()).unwrap();
+    confirm_selection(&mut s, coi);
     let package = submission::export(&mut s, coi, Path::new("coi"), &submitter()).unwrap();
     let fsa = std::fs::read_to_string(root.join("coi/genbank/submission.fsa")).unwrap();
     assert!(fsa.contains("[location=mitochondrion] [mgcode=5]"), "{fsa}");
     assert_eq!(package.records, 3);
+}
+
+#[test]
+fn selection_confirmation_blocks_export_and_survives_undo_reload_and_replay() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::write(
+        root.join("a.afa"),
+        ">sample\nACGT\n>gb|MZ123456.1|reference\nACGT\n",
+    )
+    .unwrap();
+    {
+        let mut s = Session::new(root);
+        let doc =
+            submission::create(&mut s, Path::new("a.submission.json"), Path::new("a.afa")).unwrap();
+        let review = submission::review(&s, doc, &submitter()).unwrap();
+        assert!(!review.selection_confirmed);
+        assert_eq!(review.prepared.records[0].decision, Decision::New);
+        assert_eq!(review.prepared.records[1].decision, Decision::Exclude);
+        assert_eq!(
+            review.prepared.records[1].accession_candidates[0].accession,
+            "MZ123456.1"
+        );
+        assert!(submission::export(&mut s, doc, Path::new("package"), &submitter()).is_err());
+        assert!(
+            !root.join("package").exists(),
+            "unconfirmed export writes nothing"
+        );
+        confirm_selection(&mut s, doc);
+        assert!(
+            submission::review(&s, doc, &submitter())
+                .unwrap()
+                .selection_confirmed
+        );
+        s.undo(doc).unwrap();
+        assert!(
+            !submission::review(&s, doc, &submitter())
+                .unwrap()
+                .selection_confirmed
+        );
+        s.redo(doc).unwrap();
+        assert!(
+            submission::review(&s, doc, &submitter())
+                .unwrap()
+                .selection_confirmed
+        );
+        submission::edit(&mut s, doc, publication()).unwrap();
+        assert!(
+            submission::review(&s, doc, &Submitter::default())
+                .unwrap()
+                .selection_confirmed,
+            "unrelated publication/contact edits retain confirmation"
+        );
+        submission::edit(
+            &mut s,
+            doc,
+            SubmissionEdit::SetRows {
+                rows: vec![RowDecision {
+                    record: "gb|MZ123456.1|reference".into(),
+                    decision: Decision::New,
+                }],
+            },
+        )
+        .unwrap();
+        assert!(
+            !submission::review(&s, doc, &submitter())
+                .unwrap()
+                .selection_confirmed
+        );
+        s.undo(doc).unwrap();
+        assert!(
+            submission::review(&s, doc, &submitter())
+                .unwrap()
+                .selection_confirmed
+        );
+        s.redo(doc).unwrap();
+        assert!(
+            !submission::review(&s, doc, &submitter())
+                .unwrap()
+                .selection_confirmed
+        );
+        // A stale review fingerprint cannot authorize this changed selection.
+        submission::edit(
+            &mut s,
+            doc,
+            SubmissionEdit::ConfirmSelection {
+                selection_hash: review.selection_hash.unwrap(),
+            },
+        )
+        .unwrap();
+        assert!(submission::export(&mut s, doc, Path::new("package"), &submitter()).is_err());
+        confirm_selection(&mut s, doc);
+        let package = submission::export(&mut s, doc, Path::new("package"), &submitter()).unwrap();
+        assert_eq!(
+            package.records, 2,
+            "explicit inclusion overrides accession default"
+        );
+        s.save(doc, None).unwrap();
+    }
+    let mut s = Session::unlogged(root);
+    let doc = s.open(&root.join("a.submission.json")).unwrap();
+    assert!(
+        submission::review(&s, doc, &submitter())
+            .unwrap()
+            .selection_confirmed
+    );
+    let replay = replay::replay(root).unwrap();
+    assert!(replay.ok(), "{:#?}", replay.problems);
+    std::fs::write(
+        root.join("a.afa"),
+        ">sample\nACGA\n>gb|MZ123456.1|reference\nACGT\n",
+    )
+    .unwrap();
+    assert!(
+        !submission::review(&s, doc, &submitter())
+            .unwrap()
+            .selection_confirmed
+    );
+    assert!(submission::export(&mut s, doc, Path::new("package"), &submitter()).is_err());
+    let source = submission::source_for(root, Path::new("a.afa")).unwrap();
+    submission::edit(&mut s, doc, SubmissionEdit::SetSource { source }).unwrap();
+    assert!(
+        !submission::review(&s, doc, &submitter())
+            .unwrap()
+            .selection_confirmed
+    );
+    assert_eq!(
+        submission::review(&s, doc, &submitter())
+            .unwrap()
+            .prepared
+            .records[1]
+            .decision,
+        Decision::New
+    );
+}
+
+#[test]
+fn stored_accession_changes_invalidate_confirmation_but_preserve_explicit_choices() {
+    use basecraft_protocol::metadata::{Cell, CellChange, ChangeSet};
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    project(root);
+    let mut s = Session::new(root);
+    let doc = rbcl(&mut s);
+    let metadata_doc = metadata::open(&mut s, false).unwrap().unwrap();
+    metadata::apply_plan(
+        &mut s,
+        metadata_doc,
+        ChangeSet {
+            cells: vec![CellChange {
+                specimen: "HV101".into(),
+                column: "catalogNumber".into(),
+                value: Some(Cell::Text("MZ123456.1".into())),
+            }],
+            ..ChangeSet::default()
+        },
+    )
+    .unwrap();
+    s.save(metadata_doc, None).unwrap();
+    let review = submission::review(&s, doc, &submitter()).unwrap();
+    assert!(!review.selection_confirmed);
+    let row = &review.prepared.records[0];
+    assert_eq!(
+        row.decision,
+        Decision::New,
+        "keep the explicit user inclusion"
+    );
+    assert!(
+        row.accession_candidates
+            .iter()
+            .any(|c| c.source == "specimen HV101, catalogNumber")
+    );
+    confirm_selection(&mut s, doc);
+    submission::edit(
+        &mut s,
+        doc,
+        SubmissionEdit::SetAccessions {
+            accessions: vec![basecraft_protocol::submission::AccessionEntry {
+                record: "HV102_rbcL".into(),
+                accession: "PX123457".into(),
+            }],
+        },
+    )
+    .unwrap();
+    assert!(
+        !submission::review(&s, doc, &submitter())
+            .unwrap()
+            .selection_confirmed
+    );
+    assert_eq!(
+        submission::review(&s, doc, &submitter())
+            .unwrap()
+            .prepared
+            .records[1]
+            .decision,
+        Decision::New
+    );
 }

@@ -124,6 +124,7 @@ pub fn describe(edit: &SubmissionEdit) -> String {
     match edit {
         SubmissionEdit::SetSource { source } => format!("Submission source {}", source.document),
         SubmissionEdit::SetRows { rows } => format!("Submission decisions for {} rows", rows.len()),
+        SubmissionEdit::ConfirmSelection { .. } => "Confirmed submission row selection".into(),
         SubmissionEdit::SetBatch { .. } => "Submission batch settings".into(),
         SubmissionEdit::SetFrames { frames, clear } => format!(
             "Reading frames: {} set, {} cleared",
@@ -195,6 +196,9 @@ pub struct Review {
     pub source_hash: Option<String>,
     /// Hash of the metadata manifest used.
     pub metadata_hash: Option<String>,
+    /// Pass this fingerprint to the ConfirmSelection edit after review.
+    pub selection_hash: Option<String>,
+    pub selection_confirmed: bool,
 }
 
 /// Review a submission: extraction, specimen data, features, frames and
@@ -258,7 +262,46 @@ pub fn review_submission(
     ascii_issues(sub, &prepared, submitter, &mut issues);
     issues.append(&mut prepared.issues);
     prepared.issues = issues;
+    // Bind confirmation to the exact source plus effective selection and
+    // evidence, not unrelated batch/contact changes. Version the hash input.
+    let selection_hash = if sub
+        .source
+        .as_ref()
+        .is_some_and(|s| Some(&s.hash) == source_hash.as_ref())
+        && !rows.is_empty()
+    {
+        let selection: Vec<_> = prepared
+            .records
+            .iter()
+            .map(|r| {
+                (
+                    &r.record,
+                    &r.decision,
+                    &r.selection_reason,
+                    &r.accession_candidates,
+                )
+            })
+            .collect();
+        Some(basecraft_io::hash_bytes(&serde_json::to_vec(&(
+            "submission-selection-v1",
+            &sub.source,
+            selection,
+        ))?))
+    } else {
+        None
+    };
+    let selection_confirmed =
+        selection_hash.is_some() && selection_hash == sub.selection_confirmation;
+    if !selection_confirmed {
+        prepared.issues.push(local(
+            Severity::Blocking,
+            "selection_unconfirmed",
+            "Review the included and excluded rows, then confirm the selection before export",
+        ));
+    }
     Ok(Review {
+        selection_hash,
+        selection_confirmed,
         prepared,
         source_hash,
         metadata_hash,
@@ -794,6 +837,12 @@ pub fn export(
         session.root().join(directory)
     };
     let root = session.root().canonicalize()?;
+    let review = review_submission(&root, &sub, submitter)?;
+    if !review.selection_confirmed {
+        return Err(invalid(
+            "review and confirm the current row selection before export",
+        ));
+    }
     std::fs::create_dir_all(&directory)?;
     let directory = directory.canonicalize()?;
     if !directory.starts_with(&root) {
@@ -816,7 +865,6 @@ pub fn export(
             )));
         }
     }
-    let review = review_submission(&root, &sub, submitter)?;
     let genbank = genbank_files(&sub, &review.prepared, submitter)?;
     let hash = input_hash(&genbank);
     let mut files = BTreeMap::new();

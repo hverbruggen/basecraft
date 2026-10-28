@@ -169,6 +169,7 @@ pub(crate) fn review_view(review: &Review) -> Value {
                 Decision::Exclude => ("exclude", String::new()),
             };
             json!({"record": r.record, "row": r.row, "decision": decision, "accession": accession,
+                "selection_reason": r.selection_reason, "accession_candidates": r.accession_candidates,
                 "export_id": r.export_id, "specimen": r.specimen.clone().unwrap_or_default(),
                 "organism": r.organism.clone().unwrap_or_default(),
                 "research_name": r.research_name.clone().unwrap_or_default(),
@@ -192,7 +193,8 @@ pub(crate) fn review_view(review: &Review) -> Value {
         })
         .collect();
     json!({"rows": rows, "issues": issues, "blocking": p.blocking(),
-        "exported": p.exported().count(), "source_hash": review.source_hash})
+        "exported": p.exported().count(), "source_hash": review.source_hash,
+        "selection_hash": review.selection_hash, "selection_confirmed": review.selection_confirmed})
 }
 
 fn qs(value: &Value) -> QString {

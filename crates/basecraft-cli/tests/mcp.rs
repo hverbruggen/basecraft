@@ -698,3 +698,59 @@ fn submission_tools_respect_write_permission_and_edit_through_apply() {
             .any(|m| m == "email")
     );
 }
+
+#[test]
+fn submission_selection_confirmation_is_shared_by_mcp_export_and_apply() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("a.afa"), ">local\nACGT\n>MZ123456.1\nACGT\n").unwrap();
+    let replies = session(
+        d.path(),
+        true,
+        &[
+            request(
+                1,
+                "submission_create",
+                json!({"path":"a.submission.json", "alignment":"a.afa"}),
+            ),
+            request(2, "submission_review", json!({"document":0})),
+            request(
+                3,
+                "submission_export",
+                json!({"document":0,"output":"package"}),
+            ),
+            request(4, "save", json!({"document":0})),
+        ],
+    );
+    let review = &replies[1]["result"]["structuredContent"];
+    assert_eq!(review["selection_confirmed"], false);
+    assert_eq!(review["records"][1]["decision"]["decision"], "exclude");
+    assert!(replies[2]["result"]["isError"].as_bool().unwrap_or(false));
+    assert!(!d.path().join("package").exists());
+    let hash = review["selection_hash"].as_str().unwrap();
+    let replies = session(
+        d.path(),
+        true,
+        &[
+            request(1, "open", json!({"path":"a.submission.json"})),
+            request(
+                2,
+                "apply",
+                json!({"document":0,"version":0,
+            "operation":{"op":"submission.edit","params":{"edit":{
+                "action":"confirm_selection","selection_hash":hash}}}}),
+            ),
+            request(3, "submission_review", json!({"document":0})),
+            request(
+                4,
+                "submission_export",
+                json!({"document":0,"output":"package"}),
+            ),
+        ],
+    );
+    assert_eq!(
+        replies[2]["result"]["structuredContent"]["selection_confirmed"],
+        true
+    );
+    assert_eq!(replies[3]["result"]["structuredContent"]["records"], 1);
+    assert!(d.path().join("package/package.json").is_file());
+}

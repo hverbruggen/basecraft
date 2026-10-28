@@ -30,7 +30,9 @@ pub enum SubmissionCommand {
         project: PathBuf,
     },
     /// Prepare the records and print them with every local issue as JSON:
-    /// extraction, specimen data, features and reading frames.
+    /// extraction, accession-aware defaults, selection_hash, specimen data, features
+    /// and reading frames. Confirm with edit {"action":"confirm_selection",
+    /// "selection_hash":"<review fingerprint>"} before exporting.
     Review {
         file: PathBuf,
         #[arg(long, default_value = ".")]

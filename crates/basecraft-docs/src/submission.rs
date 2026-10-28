@@ -174,6 +174,12 @@ pub fn apply(sub: &mut Submission, edit: &SubmissionEdit) -> Result<(), EditErro
         SubmissionEdit::SetRows { rows } => {
             upsert(&mut next.rows, rows, |r: &RowDecision| &r.record);
         }
+        SubmissionEdit::ConfirmSelection { selection_hash } => {
+            if selection_hash.is_empty() {
+                return Err(err("review the row selection before confirming it"));
+            }
+            next.selection_confirmation = Some(selection_hash.clone());
+        }
         SubmissionEdit::SetBatch { batch } => next.batch = batch.clone(),
         SubmissionEdit::SetFrames { frames, clear } => {
             next.frames.retain(|f| !clear.contains(&f.record));
@@ -187,12 +193,16 @@ pub fn apply(sub: &mut Submission, edit: &SubmissionEdit) -> Result<(), EditErro
             });
         }
     }
+    if next.source != sub.source || next.rows != sub.rows || next.accessions != sub.accessions {
+        next.selection_confirmation = None;
+    }
     validate(&next)?;
     *sub = next;
     Ok(())
 }
 
-/// A row's decision; rows without one are new.
+/// An explicit row decision, falling back to New without source/metadata context.
+/// Preparation uses [`selection`] for accession-aware defaults.
 pub fn decision<'a>(sub: &'a Submission, record: &str) -> &'a Decision {
     static NEW: Decision = Decision::New;
     sub.rows
@@ -212,6 +222,113 @@ pub fn accession<'a>(sub: &'a Submission, record: &str) -> Option<&'a str> {
             Decision::Existing { accession } => Some(accession),
             _ => None,
         })
+}
+
+/// An accession-shaped token and the local field where it was found.
+/// Candidates are heuristics, never verified archive identities.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccessionCandidate {
+    pub accession: String,
+    pub source: String,
+}
+
+/// Find candidate tokens without remote lookups. In addition to marker
+/// accessions, recognize RefSeq and WGS-shaped identifiers conservatively.
+pub fn accession_candidates(text: &str) -> BTreeSet<String> {
+    fn shaped(text: &str) -> bool {
+        if valid_accession(text) {
+            return true;
+        }
+        let base = text.split_once('.').map_or(text, |(b, _)| b);
+        if let Some((_, version)) = text.split_once('.') {
+            if version.is_empty() || !version.bytes().all(|b| b.is_ascii_digit()) {
+                return false;
+            }
+        }
+        let base = base.strip_prefix("NZ_").unwrap_or(base);
+        if valid_accession(base) {
+            return true;
+        }
+        if let Some((prefix, digits)) = base.split_once('_') {
+            return matches!(
+                prefix,
+                "NC" | "NG" | "NM" | "NR" | "NT" | "NW" | "XM" | "XR"
+            ) && matches!(digits.len(), 6 | 9)
+                && digits.bytes().all(|b| b.is_ascii_digit());
+        }
+        let letters = base.bytes().take_while(u8::is_ascii_uppercase).count();
+        matches!(letters, 4 | 6)
+            && matches!(base.len() - letters, 8..=11)
+            && base[letters..].bytes().all(|b| b.is_ascii_digit())
+    }
+    let mut found = BTreeSet::new();
+    for token in text.split(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '.') {
+        let token = token.trim_matches('.').to_ascii_uppercase();
+        if shaped(&token) {
+            found.insert(token);
+        } else {
+            for part in token.split('_') {
+                if shaped(part) {
+                    found.insert(part.to_string());
+                }
+            }
+        }
+    }
+    found
+}
+
+/// Effective decision, explanation and evidence for one source record.
+/// Explicit choices always override suggested defaults, including after
+/// metadata changes. Metadata is scoped by the stored document/record link.
+pub fn selection(
+    sub: &Submission,
+    record: &str,
+    meta: &ProjectMetadata,
+    document: &str,
+) -> (Decision, String, Vec<AccessionCandidate>) {
+    let mut candidates = Vec::new();
+    let mut add = |text: &str, source: String| {
+        for accession in accession_candidates(text) {
+            candidates.push(AccessionCandidate {
+                accession,
+                source: source.clone(),
+            });
+        }
+    };
+    add(record, "sequence ID".into());
+    if let Some(accession) = accession(sub, record) {
+        add(accession, "submission accession".into());
+    }
+    if let Some(specimen) = linked_specimen(meta, document, record) {
+        if let Some(row) = meta.specimens.rows.iter().find(|r| r.id == specimen) {
+            for (column, cell) in &row.cells {
+                if let basecraft_protocol::metadata::Cell::Text(text)
+                | basecraft_protocol::metadata::Cell::Category(text) = cell
+                {
+                    add(text, format!("specimen {specimen}, {column}"));
+                }
+            }
+        }
+    }
+    let explicit = sub.rows.iter().find(|r| r.record == record);
+    let decision = explicit.map_or_else(
+        || {
+            if candidates.is_empty() {
+                Decision::New
+            } else {
+                Decision::Exclude
+            }
+        },
+        |r| r.decision.clone(),
+    );
+    let reason = if explicit.is_some() {
+        "Explicit user decision".to_string()
+    } else if candidates.is_empty() {
+        "Suggested include: no accession candidate found".to_string()
+    } else {
+        "Suggested exclude: accession candidate found (unverified)".to_string()
+    };
+    (decision, reason, candidates)
 }
 
 /// The note an ITS feature carries, such as
@@ -343,6 +460,8 @@ pub struct PreparedRecord {
     pub row: usize,
     pub record: String,
     pub decision: Decision,
+    pub selection_reason: String,
+    pub accession_candidates: Vec<AccessionCandidate>,
     /// The ID in submission files; only new records have one.
     pub export_id: Option<String>,
     pub specimen: Option<String>,
@@ -498,7 +617,7 @@ pub fn prepare(
     // unknown: masked in the alignment.
     let new_rows: Vec<&SourceRow> = rows
         .iter()
-        .filter(|r| matches!(decision(sub, &r.name), Decision::New))
+        .filter(|r| matches!(selection(sub, &r.name, meta, document).0, Decision::New))
         .collect();
     let width = rows.iter().map(|r| r.residues.len()).max().unwrap_or(0);
     let masked: BTreeSet<u64> = (0..width)
@@ -592,12 +711,15 @@ fn prepare_row(
     taken: &mut BTreeSet<String>,
     issues: &mut Vec<Issue>,
 ) -> PreparedRecord {
-    let decision = decision(cx.sub, &row.name).clone();
+    let (decision, selection_reason, accession_candidates) =
+        selection(cx.sub, &row.name, cx.meta, cx.document);
     let specimen = linked_specimen(cx.meta, cx.document, &row.name).map(str::to_string);
     let mut record = PreparedRecord {
         row: index,
         record: row.name.clone(),
         decision: decision.clone(),
+        selection_reason,
+        accession_candidates,
         export_id: None,
         specimen: specimen.clone(),
         organism: None,
@@ -999,6 +1121,73 @@ mod tests {
         )
         .unwrap();
         meta
+    }
+
+    #[test]
+    fn accession_defaults_use_ids_stored_links_and_returned_accessions() {
+        let mut meta = meta();
+        let mut sub = Submission::default();
+        assert_eq!(
+            selection(&sub, "local", &meta, "aln.fasta").0,
+            Decision::New
+        );
+        for id in [
+            "gb|MZ123456.1|reference",
+            "sample_AB123456",
+            "NC_012345.1",
+            "NZ_CP012345.1",
+            "ABCD01000001",
+        ] {
+            let (decision, reason, candidates) = selection(&sub, id, &meta, "aln.fasta");
+            assert_eq!(decision, Decision::Exclude, "{id}");
+            assert!(reason.contains("unverified"));
+            assert!(!candidates.is_empty());
+        }
+        assert!(accession_candidates("ordinary protein NP_012345.1 MZ123x56").is_empty());
+        meta.specimens.rows[0].cells.insert(
+            "associatedSequences".into(),
+            Cell::Text("https://archive.invalid/MZ123456.1; AB123456".into()),
+        );
+        let record = meta
+            .links
+            .iter()
+            .find(|l| l.specimen == meta.specimens.rows[0].id)
+            .unwrap()
+            .record
+            .clone();
+        let (decision, _, candidates) = selection(&sub, &record, &meta, "aln.fasta");
+        assert_eq!(decision, Decision::Exclude);
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(
+            selection(&sub, &record, &meta, "other.fasta").0,
+            Decision::New,
+            "do not borrow another document's specimen link"
+        );
+        sub.rows.push(RowDecision {
+            record: record.clone(),
+            decision: Decision::New,
+        });
+        assert_eq!(
+            selection(&sub, &record, &meta, "aln.fasta").0,
+            Decision::New
+        );
+        sub.accessions.push(AccessionEntry {
+            record: "local".into(),
+            accession: "PX123456".into(),
+        });
+        assert_eq!(
+            selection(&sub, "local", &meta, "aln.fasta").0,
+            Decision::Exclude
+        );
+        sub.rows.push(RowDecision {
+            record: "local".into(),
+            decision: Decision::Exclude,
+        });
+        assert!(
+            selection(&sub, "local", &meta, "aln.fasta")
+                .1
+                .contains("Explicit")
+        );
     }
 
     fn submission(marker: Marker, code: u8) -> Submission {

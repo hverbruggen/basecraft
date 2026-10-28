@@ -21,7 +21,7 @@ Item {
             authors_text: ""}
     }
     readonly property var review: ({
-        exported: 2, blocking: 2,
+        exported: 2, blocking: 2, selection_hash: "b3:review", selection_confirmed: false,
         rows: [
             {record: "HV101_rbcL", row: 0, decision: "new", accession: "", specimen: "HV101", organism: "Caulerpa taxifolia",
              research_name: "", length: 307, frame: {candidates: [2], detected: 2, chosen: null, effective: 2, translation: "GVGFKAG", internal_stops: []},
@@ -30,6 +30,7 @@ Item {
              research_name: "", length: 306, frame: {candidates: [], detected: null, chosen: null, effective: null, translation: "", internal_stops: []},
              blocking: 1, review: 0},
             {record: "REF_rbcL", row: 2, decision: "existing", accession: "AB123456.1", specimen: "", organism: "",
+             selection_reason: "Explicit user decision", accession_candidates: [{accession: "AB123456.1", source: "submission accession"}],
              research_name: "", length: 0, frame: null, blocking: 0, review: 0}
         ],
         issues: [
@@ -124,6 +125,42 @@ Item {
             compare(edit.batch.marker, {kind: "its", components: ["ITS1", "5.8S"]})
             compare(edit.batch.organelle, "chloroplast")
             compare(edit.batch.genetic_code, 11)
+            dialog.close()
+        }
+
+        function test_bulk_selection_and_confirmation_gate_export() {
+            const dialog = open({kind: "rrna", product: "18S ribosomal RNA"})
+            const exportButton = findChild(dialog.body, "exportPackage")
+            const confirmButton = findChild(dialog.body, "confirmSelection")
+            verify(!exportButton.enabled)
+            verify(confirmButton.enabled)
+            verify(findChild(dialog.body, "selectionReason_REF_rbcL").text.includes("AB123456.1"))
+            verify(findChild(dialog.body, "selectionReason_REF_rbcL").text.includes("unverified"))
+            // Bulk actions are typed edits, never implicit confirmation.
+            findChild(dialog.body, "includeAllRows").forceActiveFocus()
+            keyClick(Qt.Key_Space)
+            compare(edits.count, 1)
+            const included = JSON.parse(edits.signalArguments[0][0])
+            compare(included.action, "set_rows")
+            compare(included.rows.length, 3)
+            verify(included.rows.every(r => r.decision === "new"))
+            findChild(dialog.body, "excludeAllRows").clicked()
+            const excluded = JSON.parse(edits.signalArguments[1][0])
+            verify(excluded.rows.every(r => r.decision === "exclude"))
+            confirmButton.forceActiveFocus()
+            keyClick(Qt.Key_Space)
+            compare(JSON.parse(edits.signalArguments[2][0]),
+                {action: "confirm_selection", selection_hash: "b3:review"})
+            verify(!exportButton.enabled)
+            dialog.review = Object.assign({}, root.review, {selection_confirmed: true})
+            verify(exportButton.enabled)
+            verify(!confirmButton.enabled)
+            dialog.review = Object.assign({}, root.review, {selection_hash: "b3:changed", selection_confirmed: false})
+            verify(!exportButton.enabled)
+            verify(confirmButton.enabled)
+            dialog.review = {rows: [], issues: [], selection_hash: null, selection_confirmed: false}
+            verify(!confirmButton.enabled)
+            verify(!findChild(dialog.body, "includeAllRows").enabled)
             dialog.close()
         }
 

@@ -82,6 +82,10 @@ AppContentDialog {
         if (JSON.stringify(next) !== JSON.stringify(batch))
             editRequested(JSON.stringify({ action: "set_batch", batch: next }))
     }
+    function setAllDecisions(decision) {
+        editRequested(JSON.stringify({action: "set_rows",
+            rows: review.rows.map(r => ({record: r.record, decision: decision}))}))
+    }
     function selectRow(row) {
         selectedRow = row
         const item = rowsRepeater.itemAt(row)
@@ -250,6 +254,35 @@ AppContentDialog {
                 onClicked: dialog.confirmDetectedRequested()
             }
         }
+        Label {
+            objectName: "selectionStatus"
+            text: dialog.review.selection_confirmed ? "Row selection confirmed."
+                : "Review the suggested choices, then confirm the row selection before export. Accession candidates are unverified heuristics; no archive lookup is performed."
+            wrapMode: Text.Wrap
+            Layout.fillWidth: true
+        }
+        RowLayout {
+            spacing: 6
+            AppButton {
+                objectName: "includeAllRows"
+                text: "Include all"
+                enabled: !!dialog.review.selection_hash && !dialog.validating
+                onClicked: dialog.setAllDecisions("new")
+            }
+            AppButton {
+                objectName: "excludeAllRows"
+                text: "Exclude all"
+                enabled: !!dialog.review.selection_hash && !dialog.validating
+                onClicked: dialog.setAllDecisions("exclude")
+            }
+            AppButton {
+                objectName: "confirmSelection"
+                text: "Confirm row selection"
+                enabled: !!dialog.review.selection_hash && !dialog.review.selection_confirmed && !dialog.validating
+                onClicked: dialog.editRequested(JSON.stringify({action: "confirm_selection",
+                    selection_hash: dialog.review.selection_hash}))
+            }
+        }
         ScrollView {
             Layout.fillWidth: true
             implicitHeight: rowsColumn.implicitHeight + 16
@@ -263,6 +296,7 @@ AppContentDialog {
                     Label { text: "Record"; font.bold: true; Layout.preferredWidth: dialog.nameWidth }
                     Label { text: "Specimen and organism"; font.bold: true; Layout.preferredWidth: dialog.cellWidth * 1.5 }
                     Label { text: "Decision"; font.bold: true; Layout.preferredWidth: dialog.cellWidth }
+                    Label { text: "Selection reason / evidence"; font.bold: true; Layout.preferredWidth: dialog.cellWidth * 2 }
                     Label { text: "Reading frame"; font.bold: true; visible: dialog.coding; Layout.preferredWidth: dialog.cellWidth * 1.5 }
                     Label { text: "Issues"; font.bold: true }
                 }
@@ -312,6 +346,14 @@ AppContentDialog {
                             Layout.preferredWidth: dialog.cellWidth * 0.7
                             onEditingFinished: if (text.trim().length && text.trim() !== row.modelData.accession)
                                 dialog.decisionRequested(row.modelData.record, "existing", text.trim())
+                        }
+                        Label {
+                            objectName: "selectionReason_" + row.modelData.record
+                            text: (row.modelData.selection_reason || "")
+                                + (row.modelData.accession_candidates || []).map(c => "\n" + c.accession + " · " + c.source + " (unverified)").join("")
+                            Accessible.name: "Selection reason for " + row.modelData.record
+                            wrapMode: Text.Wrap
+                            Layout.preferredWidth: dialog.cellWidth * 2
                         }
                         RowLayout {
                             visible: dialog.coding && row.modelData.frame !== null && row.modelData.frame !== undefined
@@ -406,7 +448,7 @@ AppContentDialog {
         }
         RowLayout {
             spacing: 6
-            AppButton { objectName: "exportPackage"; text: "Export package"; enabled: !!dialog.document && !dialog.validating; onClicked: dialog.exportRequested() }
+            AppButton { objectName: "exportPackage"; text: "Export package"; enabled: !!dialog.document && !!dialog.review.selection_confirmed && !dialog.validating; onClicked: dialog.exportRequested() }
             AppButton { objectName: "validatePackage"; text: "Validate"; enabled: !!dialog.pkg && dialog.pkg.exported && !dialog.validating; onClicked: dialog.validateRequested() }
             AppButton { text: "Stop validation"; visible: dialog.validating; onClicked: dialog.cancelValidationRequested() }
         }

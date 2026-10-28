@@ -398,7 +398,12 @@ class Session:
         return self.apply(document, version, {"op": "submission.edit", "params": {"edit": edit}})
 
     def review_submission(self, document):
-        """Prepared records, detected reading frames and every local issue."""
+        """Records, accession-aware defaults, selection fingerprint and local issues.
+
+        After reviewing the choices, use ``edit_submission(document,
+        {"action": "confirm_selection", "selection_hash": review["selection_hash"]})``.
+        Bulk include/exclude uses ``set_rows``; confirmation is required before export.
+        """
         return self.call("submission_review", {"document": document})
 
     def export_submission(self, document, output):

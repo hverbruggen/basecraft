@@ -22,9 +22,12 @@ pub struct Submission {
     /// The alignment the records are extracted from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<SourceAlignment>,
-    /// Decisions for rows, by record name. Rows without one are new.
+    /// Explicit decisions by record name; absent rows use accession-aware defaults.
     #[serde(default)]
     pub rows: Vec<RowDecision>,
+    /// Fingerprint of the reviewed source, effective decisions and accession evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection_confirmation: Option<String>,
     pub batch: BatchSettings,
     /// Reading frames the user confirmed or chose, by record name.
     #[serde(default)]
@@ -48,6 +51,7 @@ impl Default for Submission {
             destination: Destination::Genbank,
             source: None,
             rows: Vec::new(),
+            selection_confirmation: None,
             batch: BatchSettings::default(),
             frames: Vec::new(),
             export: ExportSettings::default(),
@@ -313,6 +317,10 @@ pub enum SubmissionEdit {
     /// Set the decision of these rows.
     SetRows {
         rows: Vec<RowDecision>,
+    },
+    /// Confirm the selection fingerprint returned by submission review.
+    ConfirmSelection {
+        selection_hash: String,
     },
     SetBatch {
         batch: BatchSettings,

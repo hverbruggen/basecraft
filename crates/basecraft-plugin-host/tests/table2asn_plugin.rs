@@ -135,6 +135,16 @@ fn validate(
     for edit in std::iter::once(publication).chain(edits) {
         submission::edit(&mut s, doc, edit).unwrap();
     }
+    let selection_hash = submission::review(&s, doc, &submitter())
+        .unwrap()
+        .selection_hash
+        .unwrap();
+    submission::edit(
+        &mut s,
+        doc,
+        SubmissionEdit::ConfirmSelection { selection_hash },
+    )
+    .unwrap();
     submission::export(&mut s, doc, Path::new(name), &submitter()).unwrap();
     let request: OperationRequest =
         serde_json::from_value(submission::validation_request(root, Path::new(name)).unwrap())
