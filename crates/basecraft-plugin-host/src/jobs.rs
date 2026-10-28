@@ -37,6 +37,7 @@ struct Job {
 pub struct JobManager {
     jobs: BTreeMap<String, Arc<Job>>,
     requests: BTreeMap<String, (String, String)>,
+    skip_known_features: bool,
 }
 
 impl JobManager {
@@ -58,6 +59,35 @@ impl JobManager {
         session: &mut basecraft_ops::Session,
     ) -> Result<OperationOutcome> {
         self.submit_with_session(registry, request, policy, initiator, Some(session))
+    }
+    /// Leave out proposed features whose kind and location the target document
+    /// already has, reporting each as rejected. The GUI annotation tools rerun
+    /// on annotated sequences; headless routes apply every proposal.
+    #[must_use]
+    pub fn skipping_known_features(mut self) -> Self {
+        self.skip_known_features = true;
+        self
+    }
+    /// Drive one accepted job from its owning session thread until it is
+    /// terminal: proposals are applied here, between waits. `interrupted`
+    /// requests cancellation, for example on Ctrl-C.
+    pub fn wait_in_session(
+        &self,
+        id: &str,
+        session: &mut basecraft_ops::Session,
+        interrupted: &dyn Fn() -> bool,
+    ) -> Result<OperationOutcome> {
+        loop {
+            self.poll_proposals(session);
+            if interrupted() {
+                self.cancel(id)?;
+            }
+            let outcome = self.get(id)?;
+            if outcome.state.terminal() {
+                return Ok(outcome);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
     }
     pub fn target_document(&self, id: &str) -> Option<basecraft_ops::DocId> {
         self.jobs
@@ -106,11 +136,36 @@ impl JobManager {
                 id: job.prepared.operation.package.manifest.id.clone(),
                 version: job.prepared.operation.package.manifest.version.clone(),
             };
+            let mut rejected = Vec::new();
+            let known = session
+                .checked_sequence(target.doc)
+                .ok()
+                .filter(|_| self.skip_known_features);
+            let ops: Vec<_> = if let Some(document) = known {
+                result
+                    .ops
+                    .iter()
+                    .filter(|op| match op {
+                        basecraft_protocol::Op::FeatureAdd { feature }
+                            if document.features().any(|(_, known)| {
+                                known.kind == feature.kind && known.location == feature.location
+                            }) =>
+                        {
+                            rejected.push(format!("already annotated: {}", feature.kind));
+                            false
+                        }
+                        _ => true,
+                    })
+                    .cloned()
+                    .collect()
+            } else {
+                result.ops.clone()
+            };
             if let Err(error) = session.apply_sequence_proposals(
                 target.doc,
                 target.generation,
                 target.revision,
-                &result.ops,
+                &ops,
                 &actor,
             ) {
                 job.outcome
@@ -134,8 +189,8 @@ impl JobManager {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             outcome.proposals = Some(ProposalOutcome {
                 document: Some(target.doc.0.to_string()),
-                applied: result.ops.len(),
-                rejected: vec![],
+                applied: ops.len(),
+                rejected,
             });
             outcome.warnings.push(format!(
                 "Proposals attached to session document {} at generation {}",
