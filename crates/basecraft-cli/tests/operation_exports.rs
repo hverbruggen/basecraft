@@ -11,16 +11,21 @@ fn member_destinations_export_one_file_and_never_replace() {
     std::fs::create_dir(&project).unwrap();
     std::fs::write(
         project.join("input.afa"),
-        ">a\nACGTACGT\n>b\nACGTACGA\n>c\nTCGTACGA\n",
+        ">a\nACGTACGTACGTACGT\n>b\nACGTACGAACGTACGT\n>c\nTCGTACGAACGTTCGT\n>d\nTCGTACGATCGTTCGA\n>e\nTCGAACGATCGTTCGA\n",
     )
     .unwrap();
     let run = |destinations: Value, name: &str| {
+        let parameters = if name == "bootstrap" {
+            json!({"model":"p","bootstrap":10,"seed":3})
+        } else {
+            json!({"model":"p"})
+        };
         let request = temp.path().join(format!("{name}.json"));
         std::fs::write(
             &request,
             json!({"operation":"basecraft.distance/tree@1",
                 "inputs":{"alignment":[{"kind":"file","path":"input.afa"}]},
-                "parameters":{"model":"p"},"destinations":destinations})
+                "parameters":parameters,"destinations":destinations})
             .to_string(),
         )
         .unwrap();
@@ -64,6 +69,25 @@ fn member_destinations_export_one_file_and_never_replace() {
             .iter()
             .filter(|a| a["path"].as_str().unwrap().ends_with("tree.nwk"))
             .all(|a| a["digest"] == digest)
+    );
+    // The exported tree is linked to its alignment and bound to the run.
+    let link = basecraft_ops::links::AlignmentLink::read(&exported).unwrap();
+    assert_eq!(
+        link.source.canonicalize().unwrap(),
+        project.join("input.afa").canonicalize().unwrap()
+    );
+    // Producer support semantics travel with an exported tree.
+    let bootstrap = run(json!({"artifacts/tree.nwk":"bootstrap.nwk"}), "bootstrap");
+    assert_eq!(bootstrap["state"], "completed", "{bootstrap}");
+    let tree = basecraft_ops::files::load_tree(&project.join("bootstrap.nwk"))
+        .unwrap()
+        .doc;
+    assert_eq!(
+        tree.supports()
+            .iter()
+            .map(|support| support.name.as_str())
+            .collect::<Vec<_>>(),
+        ["Bootstrap"]
     );
     // An existing destination is never replaced.
     std::fs::write(project.join("taken.nwk"), "foreign").unwrap();
