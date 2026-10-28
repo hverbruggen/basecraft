@@ -326,3 +326,71 @@ fn genuine_workspace_edit_keeps_new_results_as_artifacts_and_records_completion(
             && report.status == basecraft_protocol::delimitation::JobStatus::Completed))
     );
 }
+
+#[test]
+fn terminal_report_publication_failure_repairs_without_duplicate_completion_or_data_write() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(
+        root.path().join("tree.nwk"),
+        "((a:0.1,b:0.1):0.9,(c:0.2,d:0.2):0.8);\n",
+    )
+    .unwrap();
+    let registry = common::bundled();
+    let mut session = Session::recoverable(root.path()).unwrap();
+    let setup = common::run_in(&registry, &mut session, |_| {
+        json!({
+            "operation":"basecraft.delimitation/workspace_tree@1",
+            "inputs":{"tree":common::file("tree.nwk")},"parameters":{},
+            "destinations":{"workspace":"species.spart"}
+        })
+    });
+    common::assert_completed(&setup);
+    let workspace = root.path().join("species.spart");
+    let before = std::fs::read(&workspace).unwrap();
+    let metadata = std::fs::metadata(&workspace).unwrap();
+    let bundle = provenance::bundle_for_result(&workspace);
+    let authored = bundle.join("methods.md");
+    std::fs::write(&authored, "User-authored Methods.\n").unwrap();
+    let fault = bundle.join("reports/history.md");
+    std::fs::remove_file(&fault).unwrap();
+    std::fs::create_dir(&fault).unwrap();
+    let mut jobs = JobManager::default();
+    let accepted = common::submit_in(&mut jobs, &registry, &mut session, |_| {
+        json!({
+            "operation":"basecraft.delimitation/inspect_tree@1",
+            "inputs":{"tree":common::file("tree.nwk")},"parameters":{},
+            "target":{"kind":"file","path":"species.spart"}
+        })
+    })
+    .unwrap();
+    let partial = common::wait_in(&jobs, &mut session, &accepted.run_id);
+    assert_eq!(partial.state, RuntimeState::Partial, "{partial:#?}");
+    let recovery = session.recovery_root().to_path_buf();
+    assert!(recovery.join("pending-save.json").is_file());
+    assert_eq!(std::fs::read(&workspace).unwrap(), before);
+    std::fs::remove_dir(&fault).unwrap();
+    assert_eq!(
+        jobs.repair(&accepted.run_id).unwrap().state,
+        RuntimeState::Finalizing
+    );
+    common::assert_completed(&common::wait_in(&jobs, &mut session, &accepted.run_id));
+    let target = jobs.target_document(&accepted.run_id).unwrap();
+    assert_eq!(common::tool_run_events(&session, target).len(), 1);
+    assert_eq!(std::fs::read(&workspace).unwrap(), before);
+    assert_eq!(
+        std::fs::metadata(&workspace).unwrap().modified().unwrap(),
+        metadata.modified().unwrap(),
+        "history-only save must not rewrite unchanged workspace bytes"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&authored).unwrap(),
+        "User-authored Methods.\n"
+    );
+    drop(jobs);
+    drop(session);
+    assert!(
+        !recovery.exists(),
+        "success clears completed temporary recovery"
+    );
+    assert_reopened_completion(&workspace, &accepted.run_id, 0);
+}

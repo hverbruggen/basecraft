@@ -738,6 +738,12 @@ impl Session {
         self.save_with_evidence(id, path, crate::input_evidence::SavePolicy::Cancel)
     }
 
+    /// Persist newly recorded history for an already saved document without
+    /// rewriting its data or sidecars. Uses the ordinary guarded save publisher.
+    pub fn save_history(&mut self, id: DocId) -> Result<()> {
+        self.save_with_evidence_mode(id, None, crate::input_evidence::SavePolicy::Cancel, true)
+    }
+
     /// Headless callers choose a policy explicitly; default save returns a structured conflict.
     pub fn save_with_evidence(
         &mut self,
@@ -745,11 +751,22 @@ impl Session {
         path: Option<&Path>,
         policy: crate::input_evidence::SavePolicy,
     ) -> Result<()> {
+        self.save_with_evidence_mode(id, path, policy, false)
+    }
+
+    fn save_with_evidence_mode(
+        &mut self,
+        id: DocId,
+        path: Option<&Path>,
+        policy: crate::input_evidence::SavePolicy,
+        history_only: bool,
+    ) -> Result<()> {
         let target = path.map_or_else(|| self.resolve(&self.docs[id.0].key), Path::to_path_buf);
-        if self.log.is_some()
-            && path.is_none()
-            && self.save_hashes(id)? == self.docs[id.0].saved_state_hashes
-        {
+        let clean = self.save_hashes(id)? == self.docs[id.0].saved_state_hashes;
+        if history_only && !clean {
+            return Err(invalid("history publication requires a saved document"));
+        }
+        if !history_only && self.log.is_some() && path.is_none() && clean {
             return Ok(());
         }
         // Cooperating Basecraft processes serialize the entire data + sidecar +
@@ -760,8 +777,13 @@ impl Session {
             None
         };
         let _evidence_lock = crate::input_evidence::lock()?;
-        let conflict = crate::input_evidence::conflicts(&target)?;
-        crate::input_evidence::resolve(&conflict, policy)?;
+        if !history_only {
+            let conflict = crate::input_evidence::conflicts(&target)?;
+            crate::input_evidence::resolve(&conflict, policy)?;
+        }
+        if history_only {
+            self.check_save_source(id)?;
+        }
         self.track(id)?;
         self.flush()?;
         let before = basecraft_io::hash_file(&target).ok();
@@ -778,7 +800,11 @@ impl Session {
                 w.write_all(&intent)
             })?;
         }
-        let outcome = self.save_inner(id, path);
+        let outcome = if history_only {
+            self.log_save(id, &target, self.docs[id.0].accepted_hashes.clone())
+        } else {
+            self.save_inner(id, path)
+        };
         if outcome.is_ok() {
             if target == self.resolve(&self.docs[id.0].key) {
                 self.docs[id.0].saved_state_hashes = self.save_hashes_at(id, &target)?;
@@ -827,22 +853,27 @@ impl Session {
         })
     }
 
+    fn check_save_source(&self, id: DocId) -> Result<()> {
+        for key in &self.docs[id.0].absent_sidecars {
+            if self.resolve(key).exists() {
+                return Err(invalid(
+                    "a source sidecar appeared since opening; reopen before saving",
+                ));
+            }
+        }
+        for (key, hash) in &self.docs[id.0].accepted_hashes {
+            crate::save_guard::check_hash(&self.resolve(key), hash)?;
+        }
+        Ok(())
+    }
+
     fn save_inner(&mut self, id: DocId, path: Option<&Path>) -> Result<()> {
         self.flush()?;
         let target = path.map_or_else(|| self.resolve(&self.docs[id.0].key), Path::to_path_buf);
         // An unchanged ordinary save neither rewrites data nor creates history.
         self.track(id)?;
         if target == self.resolve(&self.docs[id.0].key) {
-            for key in &self.docs[id.0].absent_sidecars {
-                if self.resolve(key).exists() {
-                    return Err(invalid(
-                        "a source sidecar appeared since opening; reopen before saving",
-                    ));
-                }
-            }
-            for (key, hash) in &self.docs[id.0].accepted_hashes {
-                crate::save_guard::check_hash(&self.resolve(key), hash)?;
-            }
+            self.check_save_source(id)?;
         }
         let format = files::Format::from_path(&target)?;
         let mut hashes = Vec::new();

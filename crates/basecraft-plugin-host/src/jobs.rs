@@ -27,6 +27,8 @@ struct DocumentFinalization {
     activity: bool,
     applied: bool,
     saved: bool,
+    completed_recorded: bool,
+    history_saved: bool,
     generation: Option<u64>,
     edits: Option<Vec<basecraft_protocol::delimitation::DelimitationEdit>>,
     next_edit: usize,
@@ -450,7 +452,6 @@ impl JobManager {
             .prepared
             .finalize(&result, &artifacts, &mut repaired, true);
         repaired.state = if result.is_ok() && job.prepared.document.is_some() {
-            job.document_finished.store(false, Ordering::Release);
             job.document_pending.store(true, Ordering::Release);
             RuntimeState::Finalizing
         } else if result.is_ok() {
@@ -779,6 +780,24 @@ fn finalize_document(
             session.save(target.doc, None)?;
         }
         progress.saved = true;
+    }
+    if !progress.completed_recorded {
+        let mut completed = outcome.clone();
+        completed.state = RuntimeState::Completed;
+        record_document_finished(job, target, &completed, session)?;
+        progress.completed_recorded = true;
+    }
+    // A successful append is retried only as publication, never as another
+    // terminal activity, even if its saved report could not be written yet.
+    job.document_finished.store(true, Ordering::Release);
+    if target.save && progress.generation.is_some() && !progress.history_saved {
+        if progress.generation != Some(session.generation(target.doc)) {
+            return Err(Error::Protocol(
+                "stale_revision: target changed before terminal history publication".into(),
+            ));
+        }
+        session.save_history(target.doc)?;
+        progress.history_saved = true;
     }
     Ok(())
 }
