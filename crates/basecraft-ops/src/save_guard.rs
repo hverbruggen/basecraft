@@ -46,9 +46,14 @@ pub(crate) fn lock(target: &Path) -> Result<std::fs::File> {
         .create(true)
         .truncate(false)
         .open(root.join(format!("{}.lock", digest.trim_start_matches("b3:"))))?;
-    file.try_lock_exclusive()
-        .map_err(|_| invalid("another Basecraft process is saving this target; retry shortly"))?;
-    Ok(file)
+    // `Ok(false)` means another holder has it; only `Ok(true)` is a lock.
+    if file.try_lock_exclusive()? {
+        Ok(file)
+    } else {
+        Err(invalid(
+            "another Basecraft process is saving this target; retry shortly",
+        ))
+    }
 }
 
 pub(crate) fn check_hash(path: &Path, expected: &str) -> Result<()> {
