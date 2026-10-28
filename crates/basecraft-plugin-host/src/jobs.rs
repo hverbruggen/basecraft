@@ -65,25 +65,6 @@ impl JobManager {
     ) -> Result<OperationOutcome> {
         self.submit_with_session(registry, request, policy, initiator, Some(session))
     }
-    /// Publish the species workspace of a completed run as a new SPART file.
-    pub fn publish_workspace(&self, id: &str, destination: &str) -> Result<std::path::PathBuf> {
-        let job = self
-            .jobs
-            .get(id)
-            .ok_or_else(|| Error::Protocol("unknown job in this session".into()))?;
-        if job
-            .outcome
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .state
-            != RuntimeState::Completed
-        {
-            return Err(Error::Protocol(
-                "invalid_arguments: only a completed run can publish results".into(),
-            ));
-        }
-        job.prepared.publish_workspace(destination)
-    }
     pub fn target_document(&self, id: &str) -> Option<basecraft_ops::DocId> {
         self.jobs.get(id).and_then(|job| {
             job.prepared
@@ -765,25 +746,30 @@ fn apply_target_results(
     outcome: &OperationOutcome,
     session: &mut basecraft_ops::Session,
 ) -> Result<Option<String>> {
-    if !target.receives_results || !session.is_delimitation(target.doc) {
+    if !target.receives_results {
         return Ok(None);
     }
-    if session.revision(target.doc) != target.revision {
-        return Ok(Some(
-            "Workspace changed during the run; its result remains an artifact".into(),
-        ));
+    let mut warning = None;
+    if session.is_delimitation(target.doc) {
+        if session.revision(target.doc) == target.revision {
+            let name = job.prepared.species_result_name();
+            if let Some(result) = outcome
+                .artifacts
+                .iter()
+                .map(|artifact| std::path::PathBuf::from(&artifact.path))
+                .find(|path| path.file_name().is_some_and(|file| file == name.as_str()))
+            {
+                basecraft_ops::delimitation::add_analysis_result(session, target.doc, &result)?;
+            }
+        } else {
+            warning =
+                Some("Workspace changed during the run; its result remains an artifact".into());
+        }
     }
-    let name = job.prepared.species_result_name();
-    let Some(result) = outcome
-        .artifacts
-        .iter()
-        .map(|artifact| std::path::PathBuf::from(&artifact.path))
-        .find(|path| path.file_name().is_some_and(|file| file == name.as_str()))
-    else {
-        return Ok(None);
-    };
-    basecraft_ops::delimitation::add_analysis_result(session, target.doc, &result)?;
-    Ok(None)
+    if target.save {
+        session.save(target.doc, None)?;
+    }
+    Ok(warning)
 }
 
 /// The terminal state of a run that read a session document, with its outputs

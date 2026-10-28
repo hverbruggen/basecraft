@@ -2122,7 +2122,13 @@ pub(crate) fn create_workspace(
             "workspace_alignment"
         },
     );
-    let job = DocumentJob::submit(session, doc, &operation, json!({}), &[])?;
+    let job = DocumentJob::submit(
+        session,
+        doc,
+        &operation,
+        json!({}),
+        &[("workspace".into(), output.clone())],
+    )?;
     let outcome = loop {
         if let Some(outcome) = job.poll(session)? {
             break outcome;
@@ -2132,8 +2138,7 @@ pub(crate) fn create_workspace(
     if outcome.state != basecraft_protocol::operation::RuntimeState::Completed {
         return Err(failure(&outcome));
     }
-    job.publish_workspace(&output)
-        .map(|path| path.display().to_string())
+    Ok(output.display().to_string())
 }
 
 fn tip_names(tree: &TreeDoc) -> BTreeSet<String> {

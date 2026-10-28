@@ -59,9 +59,10 @@ class RunHandle(Job):
 
 
 def submit(operation, *, project, inputs=None, parameters=None, destinations=None,
-           pins=None, request_key=None):
+           pins=None, request_key=None, target=None):
     return RunHandle(project, operation, inputs=inputs, parameters=parameters,
-                     destinations=destinations, pins=pins, request_key=request_key)
+                     destinations=destinations, pins=pins, request_key=request_key,
+                     target=target)
 
 
 def run(operation, **arguments):

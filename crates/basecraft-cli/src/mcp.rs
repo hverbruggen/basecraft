@@ -91,13 +91,8 @@ impl Server {
             "state":self.session.state(doc),"can_undo":self.session.can_undo(doc),"can_redo":self.session.can_redo(doc)})
     }
 
-    fn call(
-        &mut self,
-        name: &str,
-        args: &Value,
-        registry: &basecraft_plugin_host::registry::Registry,
-    ) -> Result<Value> {
-        if matches!(name, "apply" | "save" | "run_tool" | "undo" | "redo") && !self.writable {
+    fn call(&mut self, name: &str, args: &Value) -> Result<Value> {
+        if matches!(name, "apply" | "save" | "undo" | "redo") && !self.writable {
             return Err(
                 "permission_denied: This server is read-only; start it with --allow-writes to enable edits".into(),
             );
@@ -200,30 +195,6 @@ impl Server {
                 self.session.save(doc, path.as_deref())?;
                 Ok(self.state(doc))
             }
-            "run_tool" => {
-                let doc = self.doc(args)?;
-                let output = self.path(text(args, "output")?)?;
-                let mut params = args
-                    .get("params")
-                    .map(|v| v.as_object().cloned().ok_or("params must be an object"))
-                    .transpose()?
-                    .unwrap_or_default();
-                // Descriptor validation rejects undeclared settings, including
-                // executable, cache and control paths. Route paths stay in the project.
-                for name in ["analysis_input", "mapping"] {
-                    if let Some(path) = params.get(name).and_then(Value::as_str) {
-                        params.insert(name.into(), json!(self.path(path)?));
-                    }
-                }
-                crate::tools::run(
-                    registry,
-                    &mut self.session,
-                    doc,
-                    text(args, "tool")?,
-                    output,
-                    params,
-                )
-            }
             _ => Err("Unknown tool".into()),
         }
     }
@@ -262,7 +233,6 @@ fn tools() -> Value {
         tool("provenance_inspect","Read the provenance publication of a saved project result.",json!({"path":string}), &["path"]),
         tool("provenance_verify","Check a saved result against its recorded hashes and retained inputs; runs no tools.",json!({"path":string}), &["path"]),
         tool("replay","Replay the project's operation log in a scratch session and report problems.",json!({}), &[]),
-        tool("run_tool","Compatibility route: run a bundled tool's registered operation on a session document and write one result file. Parameters follow the operation descriptor (delimitation also takes params.method). Prefer the generated operation tools.",json!({"document":doc,"tool":{"enum":crate::tools::NAMES},"output":string,"params":{"type":"object"}}), &["document","tool","output"])
     ]})
 }
 
@@ -690,7 +660,7 @@ pub fn serve(root: &Path, writable: bool, kind: ClientKind, model: &str) -> Resu
                                     });
                                 return Err((-32602, "Unknown tool".into()));
                             }
-                            Ok(match server.call(name, &args, &registry) {
+                            Ok(match server.call(name, &args) {
                                 Ok(value) => structured(value, false),
                                 // The shared classifier maps coded refusals such as
                                 // permission_denied and stale_revision; others are

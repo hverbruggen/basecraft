@@ -54,8 +54,12 @@ def tool_name(operation):
 
 
 def request(operation, *, inputs=None, parameters=None, destinations=None, pins=None,
-            request_key=None):
-    """Build an OperationRequest. The host fills defaults and validates it."""
+            request_key=None, target=None):
+    """Build an OperationRequest. The host fills defaults and validates it.
+
+    ``target`` names a document that records the run and receives its results
+    when it is not an input, e.g. ``{"kind": "file", "path": "species.spart"}``.
+    """
     value = {"operation": operation, "inputs": {} if inputs is None else inputs,
              "parameters": {} if parameters is None else parameters,
              "destinations": {} if destinations is None else destinations}
@@ -63,6 +67,8 @@ def request(operation, *, inputs=None, parameters=None, destinations=None, pins=
         value["pins"] = pins
     if request_key is not None:
         value["request_key"] = request_key
+    if target is not None:
+        value["target"] = target
     return value
 
 

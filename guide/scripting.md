@@ -48,11 +48,23 @@ basecraft operations run org.example.registry-fixture/count@1 \
 cancels the job. Paths in `inputs` and `destinations` are relative to the
 project folder and must stay inside it. Destinations must not exist yet.
 `parameters` holds only the operation's declared settings. Unknown settings are
-an error, and the host fills declared defaults. Two optional fields exist:
-`pins` (from `describe`) refuses to run if the installed package has changed.
-`request_key` makes a submission idempotent within one session: the same key
-with the same request returns the existing job, and the same key with a
-different request is an error. The request schema is
+an error, and the host fills declared defaults. Optional fields:
+
+- `pins` (from `describe`) refuses to run if the installed package has changed.
+- `request_key` makes a submission idempotent within one session: the same key
+  with the same request returns the existing job, and the same key with a
+  different request is an error.
+- `target` names a document that records the run in its history and receives
+  its results, when it is not an input. A species workspace analysing a tree
+  or alignment it references is the main case: give the tree or alignment as
+  the input and the workspace as `{"kind": "file", "path": "species.spart"}`.
+  The new hypotheses are added and the workspace is saved, unless it changed
+  while the run worked.
+
+A destination key is an output role, or `role/member` to export one file of
+a result collection, such as `"artifacts/tree.nwk": "inferred.nwk"`. Results
+are always retained in the project's hidden store; destinations add visible
+copies. The request schema is
 `schemas/operation-request.schema.json`, and the plugin-facing rules are in
 [plugins/operation-contract.md](../plugins/operation-contract.md).
 

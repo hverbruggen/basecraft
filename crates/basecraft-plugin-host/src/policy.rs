@@ -222,7 +222,7 @@ pub fn destination_role<'a>(
     operation: &RegisteredOperation,
     key: &'a str,
 ) -> Option<(&'a str, Option<&'a Path>)> {
-    if operation.descriptor.outputs.contains_key(key) {
+    if operation.descriptor.outputs.contains_key(key) || is_workspace_destination(operation, key) {
         return Some((key, None));
     }
     let (role, member) = key.split_once('/')?;
@@ -234,4 +234,16 @@ pub fn destination_role<'a>(
             .components()
             .all(|component| matches!(component, Component::Normal(_))))
     .then_some((role, Some(member)))
+}
+
+/// `workspace` asks a species delimitation run to publish its workspace as a
+/// SPART file; it is not an output role of the plugin.
+pub const WORKSPACE_DESTINATION: &str = "workspace";
+
+pub fn is_workspace_destination(operation: &RegisteredOperation, key: &str) -> bool {
+    key == WORKSPACE_DESTINATION
+        && matches!(
+            operation.package.manifest.id.as_str(),
+            "basecraft.delimitation" | "basecraft.host"
+        )
 }

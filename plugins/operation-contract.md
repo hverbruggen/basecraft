@@ -310,10 +310,12 @@ project path) and `replay`, using the same readers as the CLI commands. An
 unknown operation-tool name returns JSON-RPC error `-32602` whose `data` is the
 structured error CLI and Python return for that operation ID.
 
-CLI `tool`, `distance` and `plugin` and MCP `run_tool` are compatibility routes
-(ADR 0022). They resolve the registered operation and validate parameters
-against its descriptor, then write one named result file as the GUI does.
-Use `operations run`, Python or the generated tools for new automation.
+Every analysis, from the GUI, CLI, Python or MCP, runs through this registered
+runner (ADR 0022). Inputs are project files or open session documents. A
+request may name a `target` document that records the run and receives its
+results, and a `role/member` destination that exports one collection member as
+a file. CLI `plugin` remains for applying an installed package's sequence
+proposals to a file.
 
 CLI/Python and MCP use the same normalized request and terminal outcome. Outcomes
 include requested/effective parameters, pins, validated data, published artifacts,

@@ -175,13 +175,6 @@ impl DocumentJob {
         })
     }
 
-    /// Publish a completed run's species workspace as a new SPART file.
-    pub fn publish_workspace(&self, path: &Path) -> Result<PathBuf, String> {
-        self.manager
-            .publish_workspace(&self.run_id, &destination(&self.root, path)?)
-            .map_err(|error| error.to_string())
-    }
-
     /// Let the session record finished work; the outcome once it is terminal.
     pub fn poll(&self, session: &mut Session) -> Result<Option<OperationOutcome>, String> {
         self.manager.poll_session(session);

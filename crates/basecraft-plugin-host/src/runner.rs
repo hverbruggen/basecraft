@@ -243,6 +243,9 @@ pub struct DocumentTarget {
     /// Named by the request as its target rather than read as an input: a
     /// species workspace receives the run's hypotheses.
     pub receives_results: bool,
+    /// Named by file path: the session opened it for this run and saves it
+    /// afterwards. A target that is already open is left for its owner to save.
+    pub save: bool,
 }
 
 /// An unsaved document's current contents, submitted as a generated input.
@@ -439,6 +442,7 @@ impl PreparedOperation {
                                 saved: saved.as_ref().map(|(path, _, _)| path.clone()),
                                 path: session.root().join(session.doc_key(id)),
                                 receives_results: false,
+                                save: false,
                             });
                         }
                         // A clean document is its saved file; unsaved edits are
@@ -486,7 +490,14 @@ impl PreparedOperation {
                     Error::Protocol("a target document needs an owning session".into())
                 })?;
                 Some(match reference {
-                    InputReference::File { path } => session.open(&policy.path(path, false)?)?,
+                    InputReference::File { path } => {
+                        if !policy.document_write {
+                            return Err(Error::Protocol(
+                                "permission_denied: saving a target document needs writes".into(),
+                            ));
+                        }
+                        (session.open(&policy.path(path, false)?)?, true)
+                    }
                     InputReference::Document {
                         doc,
                         generation,
@@ -504,7 +515,7 @@ impl PreparedOperation {
                                 "stale_revision: target document changed".into(),
                             ));
                         }
-                        id
+                        (id, false)
                     }
                 })
             }
@@ -854,11 +865,11 @@ impl PreparedOperation {
             workflow_registry,
             _scratch: scratch,
         };
-        if let Some(target) = target {
+        if let Some((target, save)) = target {
             let session = session.as_deref().ok_or_else(|| {
                 Error::Protocol("a target document needs an owning session".into())
             })?;
-            prepared.bind_target(session, target)?;
+            prepared.bind_target(session, target, save)?;
         }
         Ok(prepared)
     }
@@ -1398,6 +1409,33 @@ impl PreparedOperation {
                 reference: None,
             });
         }
+        if let Some(destination) = self
+            .request
+            .destinations
+            .get(crate::policy::WORKSPACE_DESTINATION)
+            .filter(|_| {
+                crate::policy::is_workspace_destination(
+                    &self.operation,
+                    crate::policy::WORKSPACE_DESTINATION,
+                )
+            })
+        {
+            let path = self.policy.root.join(destination);
+            if !outcome
+                .artifacts
+                .iter()
+                .any(|artifact| artifact.path == path.display().to_string())
+            {
+                let published = self.publish_workspace(destination)?;
+                outcome.artifacts.push(PublishedArtifact {
+                    role: crate::policy::WORKSPACE_DESTINATION.into(),
+                    path: published.display().to_string(),
+                    digest: basecraft_io::hash_file(&published)
+                        .map_err(basecraft_ops::Error::from)?,
+                });
+                self.persist(outcome)?;
+            }
+        }
         outcome.data = result.data.as_deref().cloned();
         let publication = Publication {
             schema_version: 1,
@@ -1476,6 +1514,7 @@ impl PreparedOperation {
         &mut self,
         session: &basecraft_ops::Session,
         doc: basecraft_ops::DocId,
+        save: bool,
     ) -> Result<()> {
         if self.document.is_some() || self.sequence.is_some() {
             return Err(Error::Protocol(
@@ -1507,13 +1546,14 @@ impl PreparedOperation {
             saved: session.saved_source(doc)?.map(|(path, _, _)| path),
             path,
             receives_results: true,
+            save,
         });
         Ok(())
     }
 
-    /// Publish the species workspace in a completed run's result as a new
+    /// Publish the species workspace in a validated run's result as a new
     /// SPART file in the project.
-    pub fn publish_workspace(&self, destination: &str) -> Result<PathBuf> {
+    fn publish_workspace(&self, destination: &str) -> Result<PathBuf> {
         let validated: Vec<(String, PathBuf, String)> =
             serde_json::from_slice(&basecraft_ops::provenance::read_record(
                 &self.run.artifact("validated-artifacts.json")?,

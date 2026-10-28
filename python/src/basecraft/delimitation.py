@@ -5,6 +5,7 @@ Numerical work is performed by the installed application's public plugins.
 """
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -16,27 +17,43 @@ def operation(action, **parameters):
     return {"op": "delimitation.edit", "params": {"edit": {"action": action, **parameters}}}
 
 
-def run(source, output, method="gmyc_single", **parameters):
-    """Run the same public plugins as the GUI and return their artifact manifest.
+_WORKFLOWS = {"gmyc_alignment_single": "gmyc_alignment_single",
+              "gmyc_alignment_multiple": "gmyc_alignment_multiple",
+              "asap_alignment": "asap_alignment"}
 
-    For an alignment, use ``gmyc_alignment_single`` or
-    ``gmyc_alignment_multiple`` and ``unique_haplotypes=True`` (the default).
-    These infer a UPGMA equal-rate tree after the chosen sampling policy.
-    Tree methods require an explicit ``rooted=True`` assertion. Failed/cancelled
-    jobs raise ``CalledProcessError`` and retain the application's reports.
+
+def run(source, method="gmyc_single", workspace=None, output=None, **parameters):
+    """Run a registered delimitation operation and return its outcome.
+
+    ``source`` is the tree or alignment to analyse. For an alignment, use
+    ``gmyc_alignment_single``, ``gmyc_alignment_multiple`` or
+    ``asap_alignment``; these infer a UPGMA equal-rate tree after the chosen
+    sampling policy. Tree methods require an explicit ``rooted=True``.
+    With ``workspace`` (a ``.spart`` file), the run is recorded in that
+    workspace and its hypotheses are added and saved. ``output`` copies the
+    result report to a new file. Raises ``OperationError`` unless completed.
     """
-    command = [
-        executable(["basecraft"], "BASECRAFT"),
-        "tool",
-        "delimitation",
-        str(Path(source).resolve()),
-        "--output",
-        str(Path(output).resolve()),
-        "--params",
-        json.dumps(dict(parameters, method=method)),
-    ]
-    process = subprocess.run(command, capture_output=True, text=True, check=True)
-    return json.loads(process.stdout)
+    from .operations import run as run_operation
+
+    source = Path(source).resolve()
+    paths = [source] + [Path(p).resolve() for p in (workspace, output) if p is not None]
+    project = Path(os.path.commonpath(paths))
+    if project == source:
+        project = source.parent
+    package = "basecraft.host" if method in _WORKFLOWS else "basecraft.delimitation"
+    operation = f"{package}/{method}@1"
+    tree = source.suffix.lower() in (".nwk", ".newick", ".tre", ".tree", ".nex", ".nexus")
+    role = "tree" if tree and package == "basecraft.delimitation" else "alignment"
+    destinations = {}
+    if output is not None:
+        result = "fit.json" if package == "basecraft.host" else "result.json"
+        destinations[f"artifacts/{result}"] = str(Path(output).resolve().relative_to(project))
+    request = {"inputs": {role: [{"kind": "file", "path": str(source.relative_to(project))}]},
+               "parameters": parameters, "destinations": destinations}
+    if workspace is not None:
+        request["target"] = {"kind": "file",
+                             "path": str(Path(workspace).resolve().relative_to(project))}
+    return run_operation(operation, project=project, **request)
 
 
 def apply(workspace, action, **parameters):

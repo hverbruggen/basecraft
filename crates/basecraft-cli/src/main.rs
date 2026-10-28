@@ -2,7 +2,6 @@
 
 mod mcp;
 mod operations;
-mod tools;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -70,61 +69,8 @@ enum Command {
         #[arg(long, value_enum, default_value_t)]
         client_kind: mcp::ClientKind,
     },
-    /// Compatibility route: run a bundled tool's registered operation and write one
-    /// result file, as the GUI does. Parameters are validated against the
-    /// operation descriptor; prefer `operations run` for new scripts.
-    Tool {
-        #[arg(value_parser = clap::builder::PossibleValuesParser::new(tools::NAMES))]
-        tool: String,
-        file: PathBuf,
-        #[arg(long)]
-        output: PathBuf,
-        /// Tool parameters as a JSON object.
-        #[arg(long, default_value = "{}")]
-        params: String,
-    },
     /// Apply a typed JSON operation to a document and save it.
     Edit { file: PathBuf, operation: String },
-    /// Calculate DNA distances or infer a tree with the registered
-    /// basecraft.distance operations. Omitted settings take the descriptor
-    /// defaults shown by `operations describe basecraft.distance/tree@1`.
-    Distance {
-        file: PathBuf,
-        #[arg(long)]
-        output: PathBuf,
-        /// p, jc69 or k2p.
-        #[arg(long)]
-        model: Option<String>,
-        /// sorted, fourpoint, njstar, mvrstar or upgma.
-        #[arg(long)]
-        method: Option<String>,
-        #[arg(long)]
-        min_overlap: Option<u64>,
-        #[arg(long)]
-        threads: Option<usize>,
-        #[arg(long)]
-        tree_threads: Option<usize>,
-        /// Exact ordinary site bootstrap for sorted NJ/UPGMA (off by default).
-        #[arg(long)]
-        bootstrap: Option<usize>,
-        /// Where to retain bootstrap replicate trees: metadata or working.
-        #[arg(long)]
-        bootstrap_destination: Option<String>,
-        #[arg(long)]
-        seed: Option<u64>,
-        #[arg(long)]
-        progress: Option<PathBuf>,
-        #[arg(long)]
-        cancel_file: Option<PathBuf>,
-        #[arg(long)]
-        cache: Option<PathBuf>,
-        /// Produce an observed-distance TSV instead of a tree.
-        #[arg(long, conflicts_with = "groups")]
-        matrix: bool,
-        /// JSON specimen-to-group assignments; produce a summary table.
-        #[arg(long)]
-        groups: Option<PathBuf>,
-    },
     /// Index a FASTA file (or load its cached index) and print a summary.
     Index { file: PathBuf },
     /// Replay a project's operation log and check every step.
@@ -286,23 +232,6 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             model_id,
             client_kind,
         } => mcp::serve(&project, allow_writes, client_kind, &model_id)?,
-        Command::Tool {
-            tool,
-            file,
-            output,
-            params,
-        } => {
-            let file = file.canonicalize()?;
-            let root = file.parent().unwrap_or(std::path::Path::new("."));
-            let mut session = script_session(root)?;
-            let doc = session.open(&file)?;
-            let params = serde_json::from_str(&params)?;
-            let registry = basecraft_plugin_host::registry::Registry::load(
-                &basecraft_plugin_host::registry::RegistryConfig::discover()?,
-            )?;
-            let result = tools::run(&registry, &mut session, doc, &tool, output, params)?;
-            println!("{result}");
-        }
         Command::Edit { file, operation } => {
             let file = file.canonicalize()?;
             let root = file.parent().unwrap_or(std::path::Path::new("."));
@@ -310,97 +239,6 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let doc = session.open(&file)?;
             session.apply(doc, serde_json::from_str(&operation)?)?;
             session.save(doc, None)?;
-        }
-        Command::Distance {
-            file,
-            output,
-            model,
-            method,
-            min_overlap,
-            threads,
-            tree_threads,
-            bootstrap,
-            bootstrap_destination,
-            seed,
-            progress,
-            cancel_file,
-            cache,
-            matrix,
-            groups,
-        } => {
-            if progress.is_some() || cancel_file.is_some() {
-                return Err(
-                    "Control paths are host-managed; use operations run and owned job cancellation"
-                        .into(),
-                );
-            }
-            // The explicit CLI cache option remains a compatibility route.
-            // FileJob validates aliases, freezes reused bytes and retains the
-            // managed cache evidence before publishing any secondary copy.
-            let root = file
-                .parent()
-                .filter(|p| !p.as_os_str().is_empty())
-                .unwrap_or(std::path::Path::new("."));
-            let mut session = script_session(root)?;
-            let doc = session.open(&file)?;
-            let operation = if groups.is_some() {
-                "groups"
-            } else if matrix {
-                "matrix"
-            } else {
-                "tree"
-            };
-            // Only explicit flags; the operation descriptor supplies defaults.
-            let mut params = serde_json::Map::new();
-            for (name, value) in [
-                ("model", model.map(serde_json::Value::from)),
-                ("method", method.map(serde_json::Value::from)),
-                ("min_overlap", min_overlap.map(serde_json::Value::from)),
-                ("threads", threads.map(serde_json::Value::from)),
-                ("tree_threads", tree_threads.map(serde_json::Value::from)),
-                ("bootstrap", bootstrap.map(serde_json::Value::from)),
-                (
-                    "bootstrap_destination",
-                    bootstrap_destination.map(serde_json::Value::from),
-                ),
-                ("seed", seed.map(serde_json::Value::from)),
-                (
-                    "groups_data",
-                    groups
-                        .map(
-                            |path| -> Result<serde_json::Value, Box<dyn std::error::Error>> {
-                                Ok(serde_json::from_reader(std::fs::File::open(path)?)?)
-                            },
-                        )
-                        .transpose()?,
-                ),
-            ] {
-                if let Some(value) = value {
-                    params.insert(name.into(), value);
-                }
-            }
-            let mut host = serde_json::Map::new();
-            if let Some(path) = cache {
-                host.insert("cache".into(), serde_json::json!(path));
-            }
-            let registry = basecraft_plugin_host::registry::Registry::load(
-                &basecraft_plugin_host::registry::RegistryConfig::discover()?,
-            )?;
-            let result = tools::run_operation(
-                &registry,
-                &mut session,
-                doc,
-                &format!("basecraft.distance/{operation}@1"),
-                output,
-                params,
-                host,
-            )?;
-            println!(
-                "{}",
-                result
-                    .message
-                    .unwrap_or_else(|| "Calculated distances".into())
-            );
         }
         Command::Index { file } => {
             let t = Instant::now();

@@ -104,5 +104,8 @@ Jobs belong to the server process that started them. Cancelling an MCP request
 does not cancel a job it started; `jobs_cancel` does. When the client
 disconnects, the server cancels its unfinished jobs and exits.
 
-`run_tool` is an older route for bundled tools and may change. Use the
-operation tools.
+An operation tool can read an open document directly: give it as
+`{"kind": "document", "doc": "0", "generation": 1, "revision": 3}` with the
+values `state` reports. A clean document is read from its saved file; unsaved
+edits are submitted as a snapshot of the current revision, and the run appears
+in the document's history. A request pinned to an older revision is refused.
