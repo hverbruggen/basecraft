@@ -60,6 +60,10 @@
               "working"
             ],
             "default": "metadata"
+          },
+          "tree_role": {
+            "type": "string",
+            "default": "phylogenetic inference"
           }
         },
         "if": {

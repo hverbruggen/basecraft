@@ -1476,9 +1476,10 @@ impl PreparedOperation {
             serde_json::from_slice(&basecraft_ops::provenance::read_record(
                 &self.run.artifact("validated-artifacts.json")?,
             )?)?;
+        let name = self.species_result_name();
         let (role, staged, hash) = validated
             .iter()
-            .find(|(_, path, _)| path.file_name().is_some_and(|name| name == "result.json"))
+            .find(|(_, path, _)| path.file_name().is_some_and(|file| file == name.as_str()))
             .ok_or_else(|| Error::Protocol("run returned no species result".into()))?;
         let retained = if self.operation.descriptor.host_workflow.is_some() {
             staged.clone()
@@ -1505,6 +1506,24 @@ impl PreparedOperation {
         let target = self.policy.path(destination, true)?;
         basecraft_ops::delimitation::publish_workspace_to(&target, &work, &self.run)?;
         Ok(target)
+    }
+
+    /// The file holding a delimitation run's result: the descriptor's primary
+    /// output, or the fit stage's report for a host alignment workflow.
+    pub fn species_result_name(&self) -> String {
+        self.operation
+            .descriptor
+            .legacy_adapter
+            .as_ref()
+            .and_then(|adapter| adapter.outputs.get("output"))
+            .map_or_else(
+                || "fit.json".into(),
+                |output| {
+                    Path::new(&output.path)
+                        .file_name()
+                        .map_or_else(String::new, |name| name.to_string_lossy().into_owned())
+                },
+            )
     }
 
     /// An exported tree gets what the retained member has: its run binding,

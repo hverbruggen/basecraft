@@ -117,6 +117,64 @@ impl DocumentJob {
         })
     }
 
+    /// Submit `operation` on project files, recording the run in `target`'s
+    /// history: a species workspace analysing a file it references.
+    pub fn submit_files(
+        session: &mut Session,
+        target: DocId,
+        operation: &str,
+        inputs: BTreeMap<String, Vec<PathBuf>>,
+        parameters: serde_json::Value,
+        exports: &[(String, PathBuf)],
+    ) -> Result<Self, String> {
+        let registry = registry()?;
+        let policy = SessionPolicy::new(session.root(), true).map_err(|error| error.to_string())?;
+        let root = policy.root.clone();
+        let destinations = exports
+            .iter()
+            .map(|(member, path)| Ok((member.clone(), destination(&root, path)?)))
+            .collect::<Result<BTreeMap<_, _>, String>>()?;
+        let inputs = inputs
+            .into_iter()
+            .map(|(role, paths)| {
+                let paths = paths
+                    .iter()
+                    .map(|path| {
+                        Ok(InputReference::File {
+                            path: destination(&root, path)?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, String>>()?;
+                Ok((role, paths))
+            })
+            .collect::<Result<BTreeMap<_, _>, String>>()?;
+        let request = OperationRequest {
+            operation: operation.into(),
+            inputs,
+            parameters,
+            destinations,
+            pins: None,
+            request_key: None,
+        };
+        let mut manager = JobManager::default();
+        let accepted = manager
+            .submit_for_document(&registry, request, policy, "GUI", session, target)
+            .map_err(|error| error.to_string())?;
+        Ok(Self {
+            manager,
+            run_id: accepted.run_id,
+            started: Instant::now(),
+            root,
+        })
+    }
+
+    /// Publish a completed run's species workspace as a new SPART file.
+    pub fn publish_workspace(&self, path: &Path) -> Result<PathBuf, String> {
+        self.manager
+            .publish_workspace(&self.run_id, &destination(&self.root, path)?)
+            .map_err(|error| error.to_string())
+    }
+
     /// Let the session record finished work; the outcome once it is terminal.
     pub fn poll(&self, session: &mut Session) -> Result<Option<OperationOutcome>, String> {
         self.manager.poll_session(session);
@@ -148,6 +206,55 @@ impl DocumentJob {
             .evidence
             .map(|evidence| PathBuf::from(evidence).join("progress"))
     }
+}
+
+/// The parameters an operation's descriptor declares; others are refused.
+pub(crate) fn declared_parameters(
+    operation: &str,
+) -> Result<std::collections::BTreeSet<String>, String> {
+    let registry = registry()?;
+    let descriptor = &registry
+        .resolve(operation, None)
+        .map_err(|error| error.to_string())?
+        .descriptor;
+    Ok(descriptor
+        .parameters
+        .get("properties")
+        .and_then(serde_json::Value::as_object)
+        .map(|properties| properties.keys().cloned().collect())
+        .unwrap_or_default())
+}
+
+/// The input an operation reads `path` through: its only input, or the one
+/// whose view matches a tree or an alignment file.
+pub(crate) fn input_role(operation: &str, path: &Path) -> Result<String, String> {
+    use basecraft_protocol::operation::InputView;
+    let registry = registry()?;
+    let inputs = &registry
+        .resolve(operation, None)
+        .map_err(|error| error.to_string())?
+        .descriptor
+        .inputs;
+    let tree = basecraft_ops::files::Format::from_path(path).ok()
+        == Some(basecraft_ops::files::Format::Tree);
+    inputs
+        .iter()
+        .find(|(_, binding)| {
+            inputs.len() == 1
+                || (tree && binding.view == InputView::Newick)
+                || (!tree && binding.view == InputView::AlignedFasta)
+        })
+        .map(|(role, _)| role.clone())
+        .ok_or_else(|| format!("{operation} cannot read {}", path.display()))
+}
+
+/// A retained result file of a completed run, by file name.
+pub(crate) fn result_file(outcome: &OperationOutcome, name: &str) -> Option<PathBuf> {
+    outcome
+        .artifacts
+        .iter()
+        .map(|artifact| PathBuf::from(&artifact.path))
+        .find(|path| path.file_name().is_some_and(|file| file == name))
 }
 
 /// The first error message of a terminal outcome that did not complete.

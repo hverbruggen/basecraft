@@ -168,6 +168,20 @@ use basecraft_protocol::{
     },
 };
 use basecraft_viewmodel::delimitation::{self, Selection};
+
+use crate::document_jobs::{
+    DocumentJob, bundled, declared_parameters, failure, input_role, primary_member, result_file,
+};
+
+/// A registered analysis running for this workspace; dropping it cancels it.
+struct RunningAnalysis {
+    job: DocumentJob,
+    display_job: bool,
+    display_rooted: bool,
+    display_output: PathBuf,
+    generation: u64,
+    identity: (String, String),
+}
 use cxx_qt::{CxxQtType, Threading};
 use cxx_qt_lib::QString;
 use serde_json::{Value, json};
@@ -209,7 +223,7 @@ pub struct DelimitationRust {
     display_tree: Option<TreeDoc>,
     time_tree: Option<(TreeDoc, basecraft_delimitation::time_tree::TimeTree, String)>,
     preview: Vec<BTreeSet<String>>,
-    job_paths: Option<(PathBuf, PathBuf, String)>,
+    analysis: Option<RunningAnalysis>,
 }
 impl Default for DelimitationRust {
     fn default() -> Self {
@@ -244,7 +258,7 @@ impl Default for DelimitationRust {
             display_tree: None,
             time_tree: None,
             preview: vec![],
-            job_paths: None,
+            analysis: None,
         }
     }
 }
@@ -1575,52 +1589,39 @@ impl qobject::DelimitationController {
             } else {
                 requested_input
             };
-            let mut job = basecraft_plugin_host::FileJob::from_file(
-                session,
-                doc,
-                &analysis_input,
-                (
-                    &crate::bridge::plugin_dir(if method == "display_iqtree" {
-                        "iqtree"
-                    } else if display_job {
-                        "distance"
-                    } else {
-                        "delimitation"
-                    }),
-                    if display_job {
-                        "tree"
-                    } else if alignment_pipeline {
-                        "haplotypes"
+            if let Some(expected) = expected_alignment {
+                let actual = basecraft_io::hash_file(&analysis_input).map_err(|e| e.to_string())?;
+                if &actual != expected {
+                    return Err(
+                        "The retained alignment changed; select an intact input explicitly".into(),
+                    );
+                }
+            }
+            let operation = if method == "display_iqtree" {
+                bundled("iqtree", "tree")
+            } else if display_job {
+                bundled("distance", "tree")
+            } else if alignment_pipeline {
+                format!(
+                    "basecraft.host/{}@1",
+                    if method == "asap" {
+                        "asap_alignment"
                     } else {
                         &method
-                    },
-                ),
-                if alignment_pipeline {
-                    PathBuf::from(format!("{}.preparation.json", output.display()))
-                } else {
-                    output.clone()
-                },
-            )
-            .map_err(|e| e.to_string())?;
-            if expected_alignment.is_some_and(|hash| hash != &job.input_key.1) {
-                return Err(
-                    "The retained alignment changed; select an intact input explicitly".into(),
-                );
-            }
-            let (progress, cancel) = job.control_paths();
-            job.params.extend([
-                ("rooted".into(), json!(rooted)),
-                ("generation".into(), json!(session.generation(doc))),
-                ("workers".into(), json!(1)),
-                ("seed".into(), json!(1)),
-                ("progress".into(), json!(progress)),
-                ("cancel_file".into(), json!(cancel)),
-            ]);
+                    }
+                )
+            } else {
+                bundled("delimitation", &method)
+            };
+            let declared = declared_parameters(&operation)?;
+            let mut params = serde_json::Map::new();
+            params.insert("rooted".into(), json!(rooted));
+            params.insert("workers".into(), json!(1));
+            params.insert("seed".into(), json!(1));
             let settings: serde_json::Map<String, Value> =
                 serde_json::from_str(&settings.to_string()).map_err(|e| e.to_string())?;
             for (key, value) in settings {
                 if [
-                    "cache",
                     "mapping",
                     "workers",
                     "seed",
@@ -1638,43 +1639,29 @@ impl qobject::DelimitationController {
                 .contains(&key.as_str())
                     && !value.as_str().is_some_and(str::is_empty)
                 {
-                    job.params.insert(key, value);
+                    params.insert(key, value);
                 }
             }
             if !alignment_pipeline
                 && !display_job
-                && job.params.get("deduplicate").and_then(Value::as_bool) == Some(true)
+                && params.get("deduplicate").and_then(Value::as_bool) == Some(true)
             {
                 return Err("Exact sequence deduplication requires a verified alignment and representative tree. Tree-only preprocessing is unavailable; use alignment GMYC/ASAP, or prepare and root a representative tree with its mapping before fitting. No tips were removed.".into());
             }
+            if alignment_pipeline {
+                let unique = params
+                    .get("deduplicate")
+                    .or_else(|| params.get("unique_haplotypes"))
+                    .and_then(Value::as_bool)
+                    .unwrap_or(method.starts_with("gmyc_alignment_"));
+                params.insert("unique_haplotypes".into(), json!(unique));
+            }
             if display_job {
-                // Analysis sampling is independent of the all-specimen display.
-                for key in [
-                    "deduplicate",
-                    "unique_haplotypes",
-                    "mapping",
-                    "replicates",
-                    "candidate_budget",
-                ] {
-                    job.params.remove(key);
-                }
-                job.params.insert(
+                params.insert(
                     "tree_role".into(),
                     json!("display only; does not change species assignments"),
                 );
-                job.params.insert(
-                    "sequence_sampling".into(),
-                    json!("all specimens; analysis deduplication does not remove display tips"),
-                );
-                job.params.insert(
-                    "units".into(),
-                    json!(if method == "display_upgma" {
-                        "equal-rate relative distance"
-                    } else {
-                        "substitutions per site"
-                    }),
-                );
-                job.params.insert(
+                params.insert(
                     "method".into(),
                     json!(if method == "display_upgma" {
                         "upgma"
@@ -1684,11 +1671,9 @@ impl qobject::DelimitationController {
                 );
             }
             if method == "display_iqtree" {
-                let model = job.params.remove("iqtree_model").unwrap_or(json!("MFP"));
-                job.params.insert("model".into(), model);
-                job.params.insert("keep_identical".into(), json!(true));
-                job.params.remove("method");
-                job.params.remove("min_overlap");
+                let model = params.remove("iqtree_model").unwrap_or(json!("MFP"));
+                params.insert("model".into(), model);
+                params.insert("keep_identical".into(), json!(true));
             }
             if method == "group_statistics" {
                 let h = session
@@ -1697,7 +1682,7 @@ impl qobject::DelimitationController {
                     .iter()
                     .find(|h| h.id == r.active_hypothesis.to_string())
                     .ok_or("Choose a hypothesis")?;
-                job.params.insert(
+                params.insert(
                     "groups_data".into(),
                     json!(
                         h.groups
@@ -1710,42 +1695,54 @@ impl qobject::DelimitationController {
                     ),
                 );
             }
-            let id = job.params["job_id"].as_str().unwrap().to_string();
-            job.params.insert("progress_job_id".into(), json!(id));
-            let (workflow, progress_id) = if alignment_pipeline {
-                let unique_haplotypes = job
-                    .params
-                    .get("deduplicate")
-                    .or_else(|| job.params.get("unique_haplotypes"))
-                    .and_then(Value::as_bool)
-                    .unwrap_or(method.starts_with("gmyc_alignment_"));
-                (
-                    basecraft_plugin_host::delimitation_pipeline::FileWorkflow::Alignment(
-                        basecraft_plugin_host::delimitation_pipeline::AlignmentJob {
-                            preparation: job,
-                            unique_haplotypes,
-                            fit_method: method.replace("_alignment", ""),
-                            output,
-                        },
-                    ),
-                    id,
-                )
+            // Only declared settings reach the plugin; the descriptor decides.
+            params.retain(|key, _| declared.contains(key));
+            let role = input_role(&operation, &analysis_input)?;
+            let exports = if display_job {
+                vec![(primary_member(&operation)?, output.clone())]
             } else {
-                (
-                    basecraft_plugin_host::delimitation_pipeline::FileWorkflow::Single(job),
-                    id,
-                )
+                Vec::new()
             };
             Ok((
-                workflow,
+                operation,
+                role,
+                analysis_input,
+                Value::Object(params),
+                exports,
+                output,
                 session.generation(doc),
                 (session.id().to_owned(), session.doc_key(doc).to_owned()),
-                progress,
-                cancel,
-                progress_id,
             ))
         })();
-        let (workflow, generation, identity, progress, cancel, id) = match result {
+        let (operation, role, analysis_input, params, exports, output, generation, identity) =
+            match result {
+                Ok(job) => job,
+                Err(e) => {
+                    self.as_mut().fail(&e);
+                    if display_job {
+                        self.display_tree_ready(false);
+                    } else {
+                        self.analysis_finished(false);
+                    }
+                    return;
+                }
+            };
+        let submitted = {
+            let mut state = self.as_mut().rust_mut();
+            let state = &mut *state;
+            match state.session.as_mut().zip(state.doc) {
+                Some((session, doc)) => DocumentJob::submit_files(
+                    session,
+                    doc,
+                    &operation,
+                    [(role, vec![analysis_input])].into(),
+                    params,
+                    &exports,
+                ),
+                None => Err("No workspace open".into()),
+            }
+        };
+        let job = match submitted {
             Ok(job) => job,
             Err(e) => {
                 self.as_mut().fail(&e);
@@ -1757,71 +1754,168 @@ impl qobject::DelimitationController {
                 return;
             }
         };
-        self.as_mut().rust_mut().job_paths = Some((progress, cancel, id));
+        self.as_mut().rust_mut().analysis = Some(RunningAnalysis {
+            job,
+            display_job,
+            display_rooted,
+            display_output: output,
+            generation,
+            identity,
+        });
         self.as_mut().set_busy(true);
         self.as_mut()
             .set_message(QString::from("Running analysis…"));
-        let thread = self.qt_thread();
-        std::thread::spawn(move || {
-            let finished = workflow.run();
-            let _ = thread.queue(move |mut ctl| {
-                let applied = (|| -> Result<Value, String> {
-                    let mut state = ctl.as_mut().rust_mut();
-                    let state = &mut *state;
-                    let (session, doc) = state.session.as_mut().zip(state.doc).ok_or("Workspace closed")?;
-                    let output = finished.output().to_owned();
-                    if session.id() != identity.0 || session.doc_key(doc) != identity.1 {
-                        return Err("Analysis completed for its original workspace; its result remains available for review".into());
-                    }
-                    finished.record(session,doc).map_err(|e|e.to_string())?;
-                    if session.generation(doc) != generation {
-                        return Err("Analysis completed for its saved input; workspace changed, so result remains an artifact".into());
-                    }
-                    if display_job { return Ok(json!({"display_tree":output})); }
-                    let value = basecraft_ops::delimitation::add_analysis_result(session, doc, &output).map_err(|e| e.to_string())?;
-                    Ok(value)
-                })();
-                ctl.as_mut().set_busy(false);
-                ctl.as_mut().rust_mut().job_paths = None;
-                match applied {
-                    Ok(value) => {
-                        if display_job {
-                            if let Some(path) = value["display_tree"].as_str() {
-                                let success = ctl.as_mut().attach_tree(&QString::from(path), display_rooted);
-                                ctl.as_mut().display_tree_ready(success);
-                            }
-                            return;
-                        }
-                        if let Some(hypotheses)=value["workspace"]["hypotheses"].as_array() {
-                            if let Some(first)=hypotheses.first().and_then(|h|h["id"].as_str()) {ctl.as_mut().activate(&QString::from(first));}
-                            let inferred_alignment=hypotheses.first().is_some_and(|h|h["provenance"]["parameters"].get("tree_inference").is_some());
-                            if ctl.rust().display_path.to_string().is_empty() || inferred_alignment {
-                                if let Some(path)=value["workspace"]["view"]["display_tree"].as_str() {ctl.as_mut().attach_tree(&QString::from(path),value["metrics"].get("gmyc").is_some());}
-                            }
-                        }
-                        if let Some(path)=value["job"]["outputs"].as_object().and_then(|outputs|outputs.keys().find(|path|path.ends_with(".relative.nwk"))) {ctl.as_mut().attach_tree(&QString::from(path),true);}
-                        if value.get("groups").is_some() {ctl.as_mut().set_statistics_json(QString::from(value.to_string()));}
-                        else {ctl.as_mut().set_dirty(true);}
-                        if let Some(counts) = value["metrics"]["haplotypes"].as_object() {
-                            let original = counts.get("original_count").and_then(Value::as_u64).unwrap_or(0);
-                            let unique = counts.get("unique").and_then(Value::as_array).map_or(0,Vec::len);
-                            ctl.as_mut().set_sampling_summary(QString::from(format!("{original} specimens · {unique} exact haplotypes")));
-                        } else if let Some(hypothesis) = value["workspace"]["hypotheses"].as_array().and_then(|h|h.first()) {
-                            let counts=&hypothesis["provenance"]["parameters"];
-                            if let Some(original)=counts["original_count"].as_u64() {ctl.as_mut().set_sampling_summary(QString::from(format!("{original} specimens · {} retained tree tips",counts["retained_count"])));}
-                        }
-                        ctl.as_mut().set_message_kind(QString::from("ok"));
-                        ctl.as_mut().set_message(QString::from("Analysis completed"));
-                        ctl.as_mut().refresh();
-                        ctl.analysis_finished(true);
-                    }
-                    Err(error) => {
-                        ctl.as_mut().fail(&error);
-                        if display_job { ctl.display_tree_ready(false); } else { ctl.analysis_finished(false); }
-                    },
+    }
+
+    /// Called from the poll timer: records a finished run in the workspace's
+    /// history, then adds its hypotheses or attaches its display tree.
+    fn finish_analysis(mut self: Pin<&mut Self>) {
+        let polled = {
+            let mut state = self.as_mut().rust_mut();
+            let state = &mut *state;
+            let (Some(analysis), Some(session)) = (&state.analysis, &mut state.session) else {
+                return;
+            };
+            analysis.job.poll(session)
+        };
+        let outcome = match polled {
+            Ok(Some(outcome)) => outcome,
+            Ok(None) => return,
+            Err(error) => {
+                let display_job = self
+                    .as_mut()
+                    .rust_mut()
+                    .analysis
+                    .take()
+                    .is_some_and(|analysis| analysis.display_job);
+                self.as_mut().set_busy(false);
+                self.as_mut().fail(&error);
+                if display_job {
+                    self.display_tree_ready(false);
+                } else {
+                    self.analysis_finished(false);
                 }
-            });
-        });
+                return;
+            }
+        };
+        let Some(analysis) = self.as_mut().rust_mut().analysis.take() else {
+            return;
+        };
+        let display_job = analysis.display_job;
+        let applied = (|| -> Result<(Value, Vec<String>), String> {
+            if outcome.state != basecraft_protocol::operation::RuntimeState::Completed {
+                return Err(failure(&outcome));
+            }
+            let mut state = self.as_mut().rust_mut();
+            let state = &mut *state;
+            let (session, doc) = state
+                .session
+                .as_mut()
+                .zip(state.doc)
+                .ok_or("Workspace closed")?;
+            if session.id() != analysis.identity.0 || session.doc_key(doc) != analysis.identity.1 {
+                return Err("Analysis completed for its original workspace; its result remains available for review".into());
+            }
+            if session.generation(doc) != analysis.generation {
+                return Err("Analysis completed for its saved input; workspace changed, so result remains an artifact".into());
+            }
+            if display_job {
+                return Ok((json!({"display_tree":analysis.display_output}), Vec::new()));
+            }
+            let name = if outcome.operation.starts_with("basecraft.host/") {
+                "fit.json"
+            } else {
+                "result.json"
+            };
+            let result = result_file(&outcome, name).ok_or("Analysis returned no result")?;
+            let value = basecraft_ops::delimitation::add_analysis_result(session, doc, &result)
+                .map_err(|e| e.to_string())?;
+            let relative = outcome
+                .artifacts
+                .iter()
+                .filter(|artifact| artifact.path.ends_with(".relative.nwk"))
+                .map(|artifact| artifact.path.clone())
+                .collect();
+            Ok((value, relative))
+        })();
+        self.as_mut().set_busy(false);
+        match applied {
+            Ok((value, relative)) => {
+                if display_job {
+                    if let Some(path) = value["display_tree"].as_str() {
+                        let success = self
+                            .as_mut()
+                            .attach_tree(&QString::from(path), analysis.display_rooted);
+                        self.as_mut().display_tree_ready(success);
+                    }
+                    return;
+                }
+                if let Some(hypotheses) = value["workspace"]["hypotheses"].as_array() {
+                    if let Some(first) = hypotheses.first().and_then(|h| h["id"].as_str()) {
+                        self.as_mut().activate(&QString::from(first));
+                    }
+                    let inferred_alignment = hypotheses.first().is_some_and(|h| {
+                        h["provenance"]["parameters"]
+                            .get("tree_inference")
+                            .is_some()
+                    });
+                    if self.rust().display_path.to_string().is_empty() || inferred_alignment {
+                        if let Some(path) = value["workspace"]["view"]["display_tree"].as_str() {
+                            self.as_mut().attach_tree(
+                                &QString::from(path),
+                                value["metrics"].get("gmyc").is_some(),
+                            );
+                        }
+                    }
+                }
+                if let Some(path) = relative.first() {
+                    self.as_mut().attach_tree(&QString::from(path), true);
+                }
+                if value.get("groups").is_some() {
+                    self.as_mut()
+                        .set_statistics_json(QString::from(value.to_string()));
+                } else {
+                    self.as_mut().set_dirty(true);
+                }
+                if let Some(counts) = value["metrics"]["haplotypes"].as_object() {
+                    let original = counts
+                        .get("original_count")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0);
+                    let unique = counts
+                        .get("unique")
+                        .and_then(Value::as_array)
+                        .map_or(0, Vec::len);
+                    self.as_mut().set_sampling_summary(QString::from(format!(
+                        "{original} specimens · {unique} exact haplotypes"
+                    )));
+                } else if let Some(hypothesis) = value["workspace"]["hypotheses"]
+                    .as_array()
+                    .and_then(|h| h.first())
+                {
+                    let counts = &hypothesis["provenance"]["parameters"];
+                    if let Some(original) = counts["original_count"].as_u64() {
+                        self.as_mut().set_sampling_summary(QString::from(format!(
+                            "{original} specimens · {} retained tree tips",
+                            counts["retained_count"]
+                        )));
+                    }
+                }
+                self.as_mut().set_message_kind(QString::from("ok"));
+                self.as_mut()
+                    .set_message(QString::from("Analysis completed"));
+                self.as_mut().refresh();
+                self.analysis_finished(true);
+            }
+            Err(error) => {
+                self.as_mut().fail(&error);
+                if display_job {
+                    self.display_tree_ready(false);
+                } else {
+                    self.analysis_finished(false);
+                }
+            }
+        }
     }
     /// Remove a generated workspace whose first analysis produced nothing, so a
     /// failed run does not leave an empty SPART beside the user's data. Run
@@ -1853,19 +1947,19 @@ impl qobject::DelimitationController {
     pub fn cancel_job(self: Pin<&mut Self>) {
         let result = self
             .rust()
-            .job_paths
+            .analysis
             .as_ref()
-            .map(|(_, cancel, _)| std::fs::write(cancel, b"cancel\n"));
+            .map(|analysis| analysis.job.cancel());
         if let Some(Err(e)) = result {
-            self.fail(&e.to_string());
+            self.fail(&e);
         }
     }
-    pub fn poll_job(self: Pin<&mut Self>) {
-        let progress = self.rust().job_paths.as_ref().and_then(|(path, _, id)| {
+    pub fn poll_job(mut self: Pin<&mut Self>) {
+        let progress = self.rust().analysis.as_ref().and_then(|analysis| {
+            let path = analysis.job.progress_file()?;
             std::fs::read(path)
                 .ok()
                 .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-                .filter(|v| v["job_id"].as_str() == Some(id))
                 .map(|v| {
                     format!(
                         "{} · {} / {}",
@@ -1876,8 +1970,9 @@ impl qobject::DelimitationController {
                 })
         });
         if let Some(text) = progress {
-            self.set_message(QString::from(&text));
+            self.as_mut().set_message(QString::from(&text));
         }
+        self.finish_analysis();
     }
     pub fn flush(mut self: Pin<&mut Self>) {
         let result = self
@@ -2009,44 +2104,34 @@ fn generated_workspace(name: &str) -> bool {
     })
 }
 
-/// Entry actions use the same public snapshot/plugin/artifact boundary as CLI.
+/// Entry actions run the same registered operation as the CLI, Python and MCP.
 pub(crate) fn create_workspace(
     session: &mut Session,
     doc: DocId,
     method: &str,
 ) -> Result<String, String> {
-    use basecraft_plugin_host::{FileJob, file_tool::AlignmentInput};
     let source_path = session.root().join(session.doc_key(doc));
     let output = workspace_path(&source_path, method);
-    let plugin = crate::bridge::plugin_dir("delimitation");
-    let job = if session.is_tree(doc) {
-        FileJob::from_tree(session, doc, (&plugin, "workspace_tree"), output)
-    } else {
-        FileJob::from_alignment(
-            session,
-            doc,
-            (&plugin, "workspace_alignment"),
-            AlignmentInput::Aligned,
-            output,
-        )
+    let operation = bundled(
+        "delimitation",
+        if session.is_tree(doc) {
+            "workspace_tree"
+        } else {
+            "workspace_alignment"
+        },
+    );
+    let job = DocumentJob::submit(session, doc, &operation, json!({}), &[])?;
+    let outcome = loop {
+        if let Some(outcome) = job.poll(session)? {
+            break outcome;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    if outcome.state != basecraft_protocol::operation::RuntimeState::Completed {
+        return Err(failure(&outcome));
     }
-    .map_err(|e| e.to_string())?;
-    let started = std::time::Instant::now();
-    let result = job.run();
-    job.record_terminal(session, doc, &result, started.elapsed().as_secs_f64())
-        .map_err(|e| e.to_string())?;
-    let result = result.map_err(|e| e.to_string())?;
-    job.record(session, doc, &result)
-        .map_err(|e| e.to_string())?;
-    result
-        .outputs
-        .into_iter()
-        .find(|p| {
-            Path::new(p)
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("spart"))
-        })
-        .ok_or_else(|| "No workspace artifact returned".into())
+    job.publish_workspace(&output)
+        .map(|path| path.display().to_string())
 }
 
 fn tip_names(tree: &TreeDoc) -> BTreeSet<String> {
