@@ -39,6 +39,7 @@ struct DocumentFinalization {
     generation: Option<u64>,
     edits: Option<Vec<basecraft_protocol::delimitation::DelimitationEdit>>,
     next_edit: usize,
+    undo_group: Option<u64>,
     expected_revision: Option<u64>,
 }
 
@@ -366,15 +367,15 @@ impl JobManager {
                 crate::contract::normalize_parameters(descriptor, &request.parameters)?;
         }
         let digest = basecraft_io::hash_bytes(&serde_json::to_vec(&normalized)?);
-        if let Some(key) = &request.request_key {
-            if let Some((existing, id)) = self.requests.get(key) {
-                if existing != &digest {
-                    return Err(Error::Protocol(
-                        "invalid_arguments: request key reused with different inputs".into(),
-                    ));
-                }
-                return self.get(id);
+        if let Some(key) = &request.request_key
+            && let Some((existing, id)) = self.requests.get(key)
+        {
+            if existing != &digest {
+                return Err(Error::Protocol(
+                    "invalid_arguments: request key reused with different inputs".into(),
+                ));
             }
+            return self.get(id);
         }
         if self.jobs.len() >= 128 {
             return Err(Error::Protocol("session job limit reached".into()));
@@ -936,7 +937,13 @@ fn apply_target_results(
                     progress.edits = Some(edits);
                 }
                 if let Some(edits) = &progress.edits {
-                    session.begin_group();
+                    if progress.next_edit == 0 {
+                        progress.undo_group = Some(session.begin_group());
+                    } else if let Some(group) = progress.undo_group {
+                        session.resume_group(target.doc, group)?;
+                    } else {
+                        return Err(Error::Protocol("missing result undo group".into()));
+                    }
                     let applied = (|| -> Result<()> {
                         for edit in &edits[progress.next_edit..] {
                             session.apply(

@@ -621,8 +621,8 @@ impl PreparedOperation {
                         "identity-v1"
                     }
                 };
-                if !accepted_hashes.contains_key(&source) {
-                    if let Ok(record) =
+                if !accepted_hashes.contains_key(&source)
+                    && let Ok(record) =
                         basecraft_ops::document_record::DocumentRecord::from_file(&source)
                     {
                         input_record.include_input(&record);
@@ -634,7 +634,6 @@ impl PreparedOperation {
                             ));
                         }
                     }
-                }
                 let submitted_hash =
                     basecraft_io::hash_file(&path).map_err(basecraft_ops::Error::from)?;
                 sources.push((

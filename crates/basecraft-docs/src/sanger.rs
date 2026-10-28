@@ -188,19 +188,18 @@ impl SangerDraft {
             return Err("Invalid read identity or hash".into());
         }
         for read in &self.inputs {
-            if let Some(calls) = &read.calls {
-                if calls.sequence.is_empty()
+            if let Some(calls) = &read.calls
+                && (calls.sequence.is_empty()
                     || calls.sequence.len() != calls.positions.len()
                     || calls.sequence.len() != calls.scores.len()
                     || !calls
                         .sequence
                         .bytes()
                         .all(|b| b"ACGTNRYKMSWBDHV".contains(&b))
-                    || calls.positions.windows(2).any(|p| p[0] >= p[1])
+                    || calls.positions.windows(2).any(|p| p[0] >= p[1]))
                 {
                     return Err("Invalid Tracy signal coordinates".into());
                 }
-            }
         }
         if self.aligned_columns == 0
             || self.aligned_columns > 100_000

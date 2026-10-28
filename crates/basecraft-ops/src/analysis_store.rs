@@ -239,9 +239,8 @@ impl ArtifactRun {
         if parent
             .parent()
             .is_some_and(|p| p.file_name().is_some_and(|n| n == "runs"))
-        {
-            if let Some(store) = parent.parent().and_then(Path::parent) {
-                if store.file_name().is_some_and(|n| n == "analyses-v1") {
+            && let Some(store) = parent.parent().and_then(Path::parent)
+                && store.file_name().is_some_and(|n| n == "analyses-v1") {
                     Self::validate_store(store)?;
                     let input = crate::input_evidence::read_input(&parent)?;
                     if input
@@ -253,8 +252,6 @@ impl ArtifactRun {
                         return Ok(Some(parent));
                     }
                 }
-            }
-        }
         let absolute = parent.join(
             result
                 .file_name()

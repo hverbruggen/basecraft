@@ -20,11 +20,10 @@ pub fn validate(work: &DelimitationWorkspace) -> Result<(), EditError> {
         return fail("duplicate or empty hypothesis IDs");
     }
     for h in &work.hypotheses {
-        if let Some(parent) = &h.parent {
-            if !ids.contains(parent) || parent == &h.id {
+        if let Some(parent) = &h.parent
+            && (!ids.contains(parent) || parent == &h.id) {
                 return fail("unknown or self-referencing parent");
             }
-        }
         let mut ancestors = BTreeSet::new();
         let mut current = h;
         while let Some(parent) = &current.parent {

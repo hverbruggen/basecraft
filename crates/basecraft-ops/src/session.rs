@@ -496,11 +496,11 @@ impl Session {
 
     /// Write out a pending typing burst.
     pub fn flush(&mut self) -> Result<()> {
-        if let Some(p) = self.pending.take() {
-            if let Err(error) = self.write(&p.entry) {
-                self.pending = Some(p);
-                return Err(error);
-            }
+        if let Some(p) = self.pending.take()
+            && let Err(error) = self.write(&p.entry)
+        {
+            self.pending = Some(p);
+            return Err(error);
         }
         Ok(())
     }
@@ -685,18 +685,18 @@ impl Session {
         if let Some(issue) = &slot.origin_issue {
             record.warnings.push(issue.clone());
         }
-        if !slot.baseline_logged {
-            if let Some(baseline) = &slot.baseline {
-                record.events.push(baseline.clone());
-            }
+        if !slot.baseline_logged
+            && let Some(baseline) = &slot.baseline
+        {
+            record.events.push(baseline.clone());
         }
         record
             .events
             .extend(self.events.iter().filter(|e| e.doc == slot.key).cloned());
-        if let Some(pending) = &self.pending {
-            if pending.doc == id {
-                record.events.push(pending.entry.clone());
-            }
+        if let Some(pending) = &self.pending
+            && pending.doc == id
+        {
+            record.events.push(pending.entry.clone());
         }
         record
             .effective
@@ -1662,18 +1662,18 @@ impl Session {
         } else {
             self.docs[id.0].origin.clone().or(previous)
         };
-        if let Some(previous) = inherited {
-            if previous.session != self.id {
-                let mut inherited = previous.effective_edits;
-                inherited.extend(effective_edits);
-                effective_edits = inherited;
-                let mut inherited_events = previous.events;
-                inherited_events.extend(events);
-                events = inherited_events;
-                for input in previous.inputs {
-                    if !inputs.iter().any(|a| a.id == input.id) {
-                        inputs.push(input);
-                    }
+        if let Some(previous) = inherited
+            && previous.session != self.id
+        {
+            let mut inherited = previous.effective_edits;
+            inherited.extend(effective_edits);
+            effective_edits = inherited;
+            let mut inherited_events = previous.events;
+            inherited_events.extend(events);
+            events = inherited_events;
+            for input in previous.inputs {
+                if !inputs.iter().any(|a| a.id == input.id) {
+                    inputs.push(input);
                 }
             }
         }
@@ -2119,12 +2119,12 @@ impl Session {
         let entry = self.entry(doc, actor, op.clone(), result);
         let entry_id = entry.id.clone();
         let mergeable = mergeable(&op);
-        if !(self.merge && mergeable) {
-            if let Err(error) = self.write(&entry) {
-                restore_inverse(&mut self.docs[doc.0].content, &inverse)?;
-                self.docs[doc.0].generation -= 1;
-                return Err(error);
-            }
+        if !(self.merge && mergeable)
+            && let Err(error) = self.write(&entry)
+        {
+            restore_inverse(&mut self.docs[doc.0].content, &inverse)?;
+            self.docs[doc.0].generation -= 1;
+            return Err(error);
         }
         let slot = &mut self.docs[doc.0];
         slot.redo.clear();
@@ -2376,9 +2376,28 @@ impl Session {
     /// Start an undo group: operations applied until [`Session::end_group`]
     /// undo and redo as one step. Each is still logged on its own, so the
     /// log replays exactly.
-    pub fn begin_group(&mut self) {
-        self.group = Some(self.next_group);
+    pub fn begin_group(&mut self) -> u64 {
+        let group = self.next_group;
+        self.group = Some(group);
         self.next_group += 1;
+        group
+    }
+
+    /// Resume an interrupted group only while it remains the last undo step.
+    /// The caller must also pin the document revision before retrying its edits.
+    pub fn resume_group(&mut self, id: DocId, group: u64) -> Result<()> {
+        let slot = self
+            .docs
+            .get(id.0)
+            .ok_or_else(|| invalid("unknown document"))?;
+        if self.group.is_some()
+            || slot.undo.last().and_then(|edit| edit.group) != Some(group)
+            || !slot.redo.is_empty()
+        {
+            return Err(invalid("cannot resume undo group after intervening edits"));
+        }
+        self.group = Some(group);
+        Ok(())
     }
 
     pub fn end_group(&mut self) {

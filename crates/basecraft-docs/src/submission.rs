@@ -83,11 +83,10 @@ pub fn validate(sub: &Submission) -> Result<(), EditError> {
             sub.version
         )));
     }
-    if let Some(source) = &sub.source {
-        if source.document.is_empty() || source.hash.is_empty() {
+    if let Some(source) = &sub.source
+        && (source.document.is_empty() || source.hash.is_empty()) {
             return Err(err("the source alignment needs a path and a hash"));
         }
-    }
     let batch = &sub.batch;
     if genetic_code::code(batch.genetic_code).is_none() {
         return Err(err(format!(
@@ -115,11 +114,10 @@ pub fn validate(sub: &Submission) -> Result<(), EditError> {
         if !seen.insert(&row.record) {
             return Err(err(format!("row {} has two decisions", row.record)));
         }
-        if let Decision::Existing { accession } = &row.decision {
-            if !valid_accession(accession) {
+        if let Decision::Existing { accession } = &row.decision
+            && !valid_accession(accession) {
                 return Err(err(format!("{accession:?} is not an accession")));
             }
-        }
     }
     let mut seen = BTreeSet::new();
     for frame in &sub.frames {
@@ -245,11 +243,10 @@ pub fn accession_candidates(text: &str) -> BTreeSet<String> {
             return true;
         }
         let base = text.split_once('.').map_or(text, |(b, _)| b);
-        if let Some((_, version)) = text.split_once('.') {
-            if version.is_empty() || !version.bytes().all(|b| b.is_ascii_digit()) {
+        if let Some((_, version)) = text.split_once('.')
+            && (version.is_empty() || !version.bytes().all(|b| b.is_ascii_digit())) {
                 return false;
             }
-        }
         let base = base.strip_prefix("NZ_").unwrap_or(base);
         if valid_accession(base) {
             return true;
@@ -304,8 +301,8 @@ pub fn selection(
     if let Some(accession) = accession(sub, record) {
         add(accession, "submission accession".into());
     }
-    if let Some(specimen) = linked_specimen(meta, document, record) {
-        if let Some(row) = meta.specimens.rows.iter().find(|r| r.id == specimen) {
+    if let Some(specimen) = linked_specimen(meta, document, record)
+        && let Some(row) = meta.specimens.rows.iter().find(|r| r.id == specimen) {
             for (column, cell) in &row.cells {
                 if let basecraft_protocol::metadata::Cell::Text(text)
                 | basecraft_protocol::metadata::Cell::Category(text) = cell
@@ -314,7 +311,6 @@ pub fn selection(
                 }
             }
         }
-    }
     let explicit = sub.rows.iter().find(|r| r.record == record);
     let decision = explicit.map_or_else(
         || {
@@ -925,7 +921,7 @@ fn feature(cx: &Context<'_>, record: &mut PreparedRecord, seq: &[u8], issues: &m
             let rest = &seq[offset.min(seq.len())..];
             let starts = rest.get(..3).is_some_and(|c| cx.code.is_start(c));
             let stops =
-                rest.len() % 3 == 0 && rest.len() >= 3 && cx.code.is_stop(&rest[rest.len() - 3..]);
+                rest.len().is_multiple_of(3) && rest.len() >= 3 && cx.code.is_stop(&rest[rest.len() - 3..]);
             let (partial5, partial3) = match policy {
                 EndPolicy::Auto => (!(start == 1 && starts), !stops),
                 EndPolicy::Partial => (true, true),

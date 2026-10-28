@@ -209,8 +209,8 @@ fn materialise(
             return Err(format!("retained input {rel} hash differs"));
         }
         let mut dest = work.join(rel);
-        if let Some((main, _)) = inputs.first() {
-            if crate::files::Format::from_path(Path::new(main)).ok()
+        if let Some((main, _)) = inputs.first()
+            && crate::files::Format::from_path(Path::new(main)).ok()
                 == Some(crate::files::Format::Delimitation)
                 && Path::new(rel)
                     .components()
@@ -223,7 +223,6 @@ fn materialise(
                 // hidden namespace that could be mistaken for a real store.
                 dest = crate::files::tree_sidecar(&work.join(main));
             }
-        }
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }

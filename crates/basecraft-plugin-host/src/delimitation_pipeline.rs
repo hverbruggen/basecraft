@@ -354,14 +354,13 @@ impl PipelineOutcome {
             last.ok_or_else(|| Error::Protocol("pipeline produced no stages".into()))?;
         outputs.sort();
         outputs.dedup();
-        if let Some(primary) = self.primary {
-            if let Some(index) = outputs
+        if let Some(primary) = self.primary
+            && let Some(index) = outputs
                 .iter()
                 .position(|p| std::path::Path::new(p) == primary)
             {
                 outputs.swap(0, index);
             }
-        }
         result.outputs = outputs;
         Ok(result)
     }

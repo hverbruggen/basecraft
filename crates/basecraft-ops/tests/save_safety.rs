@@ -462,3 +462,77 @@ fn report_export_refreshes_its_own_files_but_never_replaces_unrelated_ones() {
         serde_json::from_slice(&std::fs::read(export.join("manifest.json")).unwrap()).unwrap();
     assert_eq!(manifest["revision"], newer.revision);
 }
+
+#[test]
+fn interrupted_result_group_resumes_after_journal_failure_as_one_undo_step() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut session, doc) = open_species(dir.path());
+    let initial = session.delimitation(doc).clone();
+    let mut result = basecraft_io::spart::parse_text(SPART).unwrap();
+    let template = result.hypotheses[0].clone();
+    result.hypotheses = ["repair-1", "repair-2"]
+        .into_iter()
+        .map(|id| {
+            let mut h = template.clone();
+            h.id = id.into();
+            h.name = id.into();
+            h
+        })
+        .collect();
+    let report = dir.path().join("result.json");
+    std::fs::write(
+        &report,
+        serde_json::to_vec(&serde_json::json!({"workspace": result})).unwrap(),
+    )
+    .unwrap();
+    let (_, edits) = delimitation::analysis_result_edits(&session, doc, &report).unwrap();
+    let op = |edit: &DelimitationEdit| Op::DelimitationEdit {
+        edit: Box::new(edit.clone()),
+    };
+    let group = session.begin_group();
+    session.apply(doc, op(&edits[0])).unwrap();
+    let revision = session.revision(doc);
+    // Force journal rotation, then make its parent unavailable for the second
+    // attachment. This is a real append failure after the first edit committed.
+    let host = listing(&log::log_dir(dir.path())).remove(0);
+    let journal = listing(&host)
+        .into_iter()
+        .find(|p| p.extension().is_some_and(|e| e == "jsonl"))
+        .unwrap();
+    let length = std::fs::metadata(&journal).unwrap().len();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&journal)
+        .unwrap()
+        .set_len(8 << 20)
+        .unwrap();
+    let backup = dir.path().join("journal-backup");
+    std::fs::rename(&host, &backup).unwrap();
+    std::fs::write(&host, b"fault").unwrap();
+    assert!(session.apply(doc, op(&edits[1])).is_err());
+    session.end_group();
+    assert_eq!(session.revision(doc), revision);
+    std::fs::remove_file(&host).unwrap();
+    std::fs::rename(&backup, &host).unwrap();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&journal)
+        .unwrap()
+        .set_len(length)
+        .unwrap();
+    session.resume_group(doc, group).unwrap();
+    for edit in &edits[1..] {
+        session.apply(doc, op(edit)).unwrap();
+    }
+    session.end_group();
+    let completed = session.delimitation(doc).clone();
+    assert_eq!(completed.hypotheses.len(), initial.hypotheses.len() + 2);
+    session.undo(doc).unwrap();
+    assert_eq!(session.delimitation(doc), &initial);
+    assert!(session.resume_group(doc, group).is_err());
+    session.redo(doc).unwrap();
+    assert_eq!(session.delimitation(doc), &completed);
+    drop(session);
+    let replay = replay::replay(dir.path()).unwrap();
+    assert!(replay.ok(), "{:?}", replay.problems);
+}

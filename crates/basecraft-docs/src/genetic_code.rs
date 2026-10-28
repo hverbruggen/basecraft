@@ -233,7 +233,7 @@ impl GeneticCode {
     /// Translate `seq` from its first base, codon by codon; a trailing
     /// incomplete codon is left out.
     pub fn translate(&self, seq: &[u8]) -> Vec<u8> {
-        seq.chunks_exact(3)
+        seq.as_chunks::<3>().0.iter()
             .map(|codon| self.translate_codon(codon))
             .collect()
     }

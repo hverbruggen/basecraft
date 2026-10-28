@@ -122,11 +122,10 @@ fn same_file(first: &Path, second: &Path) -> bool {
     if first == second {
         return true;
     }
-    if let (Ok(left), Ok(right)) = (first.canonicalize(), second.canonicalize()) {
-        if left == right {
+    if let (Ok(left), Ok(right)) = (first.canonicalize(), second.canonicalize())
+        && left == right {
             return true;
         }
-    }
     #[cfg(unix)]
     if let (Ok(left), Ok(right)) = (std::fs::metadata(first), std::fs::metadata(second)) {
         use std::os::unix::fs::MetadataExt;

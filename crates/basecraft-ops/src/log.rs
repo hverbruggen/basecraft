@@ -304,8 +304,8 @@ pub fn verified_session_prefix(root: &Path) -> Result<VerifiedPrefix> {
 /// date.
 pub fn parse_entry(line: &str) -> serde_json::Result<LogEntry> {
     let mut v: serde_json::Value = serde_json::from_str(line)?;
-    if let Some(object) = v.as_object_mut() {
-        if let Some(checksum) = object.remove("_checksum") {
+    if let Some(object) = v.as_object_mut()
+        && let Some(checksum) = object.remove("_checksum") {
             let sequence = object.remove("_sequence");
             if sequence
                 .as_ref()
@@ -319,7 +319,6 @@ pub fn parse_entry(line: &str) -> serde_json::Result<LogEntry> {
                 ));
             }
         }
-    }
     // aln.insert named one row before it took row ranges.
     if v["op"] == "aln.insert"
         && let Some(params) = v["params"].as_object_mut()

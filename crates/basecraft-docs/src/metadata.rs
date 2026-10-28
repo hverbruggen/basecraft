@@ -270,11 +270,10 @@ pub fn validate(meta: &ProjectMetadata) -> Result<(), EditError> {
                 check_text(&format!("{} level", column.name), level)?;
             }
         }
-        if let ColumnKind::Number { unit: Some(unit) } = &column.kind {
-            if !valid_id(unit) {
+        if let ColumnKind::Number { unit: Some(unit) } = &column.kind
+            && !valid_id(unit) {
                 return fail(format!("column {} has an invalid unit", column.name));
             }
-        }
     }
     let mut roster = BTreeSet::new();
     for row in &meta.specimens.rows {

@@ -1673,6 +1673,7 @@ impl qobject::GenomeController {
                 )]
                 .into(),
                 parameters: params,
+                target: None,
                 destinations: std::collections::BTreeMap::default(),
                 pins: None,
                 request_key: None,

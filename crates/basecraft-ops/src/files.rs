@@ -933,11 +933,10 @@ pub(crate) fn map_delimitation_paths(
             .map(|(key, value)| (rebase(&key), value))
             .collect();
         for name in ["alignment_snapshot", "mapping", "original_source", "cache"] {
-            if let Some(value) = hypothesis.provenance.parameters.get_mut(name) {
-                if let Some(s) = value.as_str() {
+            if let Some(value) = hypothesis.provenance.parameters.get_mut(name)
+                && let Some(s) = value.as_str() {
                     *value = serde_json::json!(rebase(s));
                 }
-            }
         }
         for name in [
             "analysis_report",
@@ -950,20 +949,17 @@ pub(crate) fn map_delimitation_paths(
                 .parameters
                 .get_mut(name)
                 .and_then(|v| v.get_mut("path"))
-            {
-                if let Some(s) = value.as_str() {
+                && let Some(s) = value.as_str() {
                     *value = serde_json::json!(rebase(s));
                 }
-            }
         }
         for name in ["combined_source", "alignment_evidence", "input_evidence"] {
             if let Some(value) = hypothesis.provenance.parameters.get_mut(name) {
                 for key in ["run_directory", "evidence_run"] {
-                    if let Some(field) = value.get_mut(key) {
-                        if let Some(s) = field.as_str() {
+                    if let Some(field) = value.get_mut(key)
+                        && let Some(s) = field.as_str() {
                             *field = serde_json::json!(rebase(s));
                         }
-                    }
                 }
             }
         }

@@ -495,9 +495,9 @@ fn scan_run(
     let input = read_input(&run)?;
     let mut analysis = None;
     let proposal_target = input.extra.get(PROPOSAL_TARGET) == Some(&serde_json::json!(true));
-    if input.state == "referenced" && !proposal_target {
-        if let Some(reference) = &input.source {
-            if same_source(&run, reference, target) {
+    if input.state == "referenced" && !proposal_target
+        && let Some(reference) = &input.source
+            && same_source(&run, reference, target) {
                 let can_preserve = stamp(target).is_ok_and(|s| {
                     s.size == reference.stamp.size
                         && s.modified_seconds == reference.stamp.modified_seconds
@@ -511,8 +511,6 @@ fn scan_run(
                     direct: true,
                 });
             }
-        }
-    }
     Ok(Some((input, analysis, bytes)))
 }
 
@@ -1104,8 +1102,8 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
     }
     // Complete tree exports deliberately materialize the legacy exchange
     // association, so extraction still works with the original store absent.
-    if let Ok(tree) = crate::files::load_tree(result) {
-        if crate::links::metadata_present(&crate::links::sidecar(result))? {
+    if let Ok(tree) = crate::files::load_tree(result)
+        && crate::links::metadata_present(&crate::links::sidecar(result))? {
             let link = crate::links::AlignmentLink::read(result)?;
             let input_path = link.checked_snapshot(result, &tree.doc)?;
             let indexed = std::sync::Arc::new(basecraft_io::cache::open_fasta(&input_path)?);
@@ -1154,7 +1152,6 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
                     });
             }
         }
-    }
     publication.origin = format!(
         "Portable export of revision {}. {}",
         original_id, publication.origin

@@ -542,13 +542,12 @@ impl AlignmentLink {
             .join(name)
             .canonicalize()?;
         // Never trust an arbitrary run supplied by association metadata.
-        if let Some(bound) = crate::analysis_store::ArtifactRun::for_result(tree_path)? {
-            if bound != run {
+        if let Some(bound) = crate::analysis_store::ArtifactRun::for_result(tree_path)?
+            && bound != run {
                 return Err(invalid(
                     "reference association disagrees with result binding",
                 ));
             }
-        }
         let store = run
             .parent()
             .and_then(Path::parent)

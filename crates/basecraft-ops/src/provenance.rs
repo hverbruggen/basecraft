@@ -13,11 +13,10 @@ pub fn companion(path: &Path) -> PathBuf {
 /// Locate explicitly published project or standalone history. A missing portable
 /// bundle is an error, never reconstructed from a filename or local journal.
 pub fn bundle_for_result(result: &Path) -> PathBuf {
-    if let Ok(Some(hidden)) = crate::analysis_store::ArtifactRun::for_result(result) {
-        if hidden.join("manifest.json").is_file() {
+    if let Ok(Some(hidden)) = crate::analysis_store::ArtifactRun::for_result(result)
+        && hidden.join("manifest.json").is_file() {
             return hidden;
         }
-    }
     let standalone = companion(result);
     if standalone.join("manifest.json").is_file() {
         return standalone;
@@ -26,20 +25,18 @@ pub fn bundle_for_result(result: &Path) -> PathBuf {
         .canonicalize()
         .unwrap_or_else(|_| result.to_path_buf());
     for root in absolute.ancestors().skip(1) {
-        if root.join(".basecraft/project.toml").is_file() {
-            if let Ok(relative) = absolute.strip_prefix(root) {
+        if root.join(".basecraft/project.toml").is_file()
+            && let Ok(relative) = absolute.strip_prefix(root) {
                 let key = relative.to_string_lossy();
                 return root
                     .join(".basecraft/provenance")
                     .join(basecraft_io::hash_bytes(key.as_bytes()).trim_start_matches("b3:"));
             }
-        }
     }
-    if let Ok(paths) = basecraft_platform::paths::AppPaths::discover() {
-        if let Ok(preferences) =
+    if let Ok(paths) = basecraft_platform::paths::AppPaths::discover()
+        && let Ok(preferences) =
             basecraft_platform::settings::SettingsStore::new(paths.preferences()).load()
-        {
-            if preferences.files.provenance
+            && preferences.files.provenance
                 == basecraft_platform::settings::ProvenancePolicy::LocalOnly
             {
                 let local = paths.state.join("provenance").join(
@@ -50,8 +47,6 @@ pub fn bundle_for_result(result: &Path) -> PathBuf {
                     return local;
                 }
             }
-        }
-    }
     standalone
 }
 

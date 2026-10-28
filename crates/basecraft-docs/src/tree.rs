@@ -786,7 +786,7 @@ impl TreeDoc {
                 }
             }
         }
-        let last = if tips % 64 == 0 {
+        let last = if tips.is_multiple_of(64) {
             u64::MAX
         } else {
             (1u64 << (tips % 64)) - 1

@@ -728,9 +728,9 @@ impl FileJob {
                 .insert(path.display().to_string(), session.snapshot_file(&path)?);
             if let Ok(value) = std::fs::read(&path).and_then(|bytes| {
                 serde_json::from_slice::<serde_json::Value>(&bytes).map_err(std::io::Error::other)
-            }) {
-                if let Ok(native) = serde_json::from_value::<JobRecord>(value["job"].clone()) {
-                    if native.id == self.run_id && native.method == self.operation {
+            })
+                && let Ok(native) = serde_json::from_value::<JobRecord>(value["job"].clone())
+                    && native.id == self.run_id && native.method == self.operation {
                         report.status = native.status;
                         report.diagnostics.extend(native.diagnostics);
                         for path in native.outputs.keys() {
@@ -743,8 +743,6 @@ impl FileJob {
                             }
                         }
                     }
-                }
-            }
         }
         if self.artifacts.is_some() {
             session.log_referenced_job_finished(doc, report)?;
@@ -999,13 +997,11 @@ impl FileJob {
                 }
             }
         }
-        if let Some(collection) = Self::diagnostic_artifact(failure) {
-            if self.valid_bootstrap_artifact(run, &collection)? {
-                if let Some(path) = collection["path"].as_str() {
+        if let Some(collection) = Self::diagnostic_artifact(failure)
+            && self.valid_bootstrap_artifact(run, &collection)?
+                && let Some(path) = collection["path"].as_str() {
                     paths.push(PathBuf::from(path));
                 }
-            }
-        }
         let mut outputs = std::collections::BTreeMap::new();
         for path in paths {
             if std::fs::symlink_metadata(&path)?.file_type().is_symlink() {
@@ -1154,13 +1150,12 @@ impl FileJob {
             if params.contains_key("analysis_artifacts") || params.contains_key("bootstrap_trees") {
                 return Err(Error::Protocol("host-managed allocation cannot be combined with caller analysis_artifacts or bootstrap_trees; use bootstrap_destination".into()));
             }
-            if let Some(destination) = params.get("bootstrap_destination") {
-                if !matches!(destination.as_str(), Some("metadata" | "working")) {
+            if let Some(destination) = params.get("bootstrap_destination")
+                && !matches!(destination.as_str(), Some("metadata" | "working")) {
                     return Err(Error::Protocol(
                         "bootstrap_destination must be metadata or working".into(),
                     ));
                 }
-            }
             params.insert("analysis_artifacts".into(), json!({
                 "metadata_directory": run.directory(),
                 "working_directory": self.output.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new(".")).canonicalize()?,
@@ -1294,8 +1289,8 @@ impl FileJob {
                 run.bind(&self.output)?;
             }
         }
-        if let Some(storage) = &self.species {
-            if let Some(primary) = &storage.primary {
+        if let Some(storage) = &self.species
+            && let Some(primary) = &storage.primary {
                 let value: serde_json::Value =
                     serde_json::from_slice(&std::fs::read(&self.output)?)?;
                 if !value["workspace"].is_null() {
@@ -1315,7 +1310,6 @@ impl FileJob {
                     );
                 }
             }
-        }
         if self.operation == "tree" {
             let mut trees = vec![self.output.canonicalize()?];
             for path in &result.outputs {
