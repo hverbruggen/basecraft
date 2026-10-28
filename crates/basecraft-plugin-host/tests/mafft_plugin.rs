@@ -97,7 +97,7 @@ fn realigns_with_mafft_and_logs_the_run() {
     assert_eq!(producing.actor, runs[0].actor);
     let methods = result_record.report().unwrap();
     assert!(methods.methods.to_lowercase().contains("mafft"));
-    assert!(!methods.citations.is_empty());
+    assert_ne!(methods.citations, Vec::<String>::new());
     let bundle = common::evidence(&outcome);
     let methods_path = bundle.join("methods.md");
     std::fs::write(&methods_path, "User-authored explanation.\n").unwrap();

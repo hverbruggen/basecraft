@@ -61,7 +61,7 @@ fn member_metadata_repair_requires_owned_bytes_and_retries_companions() {
             common::assert_completed(&repaired);
             assert!(fault.is_file());
             assert!(basecraft_ops::links::sidecar(&output).is_file());
-            assert!(provenance::verify(&output).unwrap().is_empty());
+            assert_eq!(provenance::verify(&output).unwrap(), Vec::<String>::new());
         }
     }
 }
@@ -115,7 +115,7 @@ fn workspace_inventory_survives_repair_and_rejects_changed_export() {
                     .iter()
                     .any(|artifact| artifact.logical_name == "species.spart")
             );
-            assert!(provenance::verify(&output).unwrap().is_empty());
+            assert_eq!(provenance::verify(&output).unwrap(), Vec::<String>::new());
         }
     }
 }
@@ -218,7 +218,7 @@ fn genuine_workspace_edit_keeps_new_results_as_artifacts_and_records_completion(
             .iter()
             .any(|warning| warning.contains("Workspace changed"))
     );
-    assert!(session.delimitation(doc).hypotheses.is_empty());
+    assert_eq!(session.delimitation(doc).hypotheses, Vec::new());
     assert!(jobs.finalized_generation(&accepted.run_id).is_none());
     assert!(common::artifact(&outcome, "result.json").is_file());
     assert!(

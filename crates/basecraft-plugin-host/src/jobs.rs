@@ -767,7 +767,12 @@ fn finalize_document(
         }
     }
     if target.save && !progress.saved {
-        session.save(target.doc, None)?;
+        if let Some(generation) = progress.generation {
+            if session.generation(target.doc) != generation {
+                return Err(Error::Protocol("stale_revision: target changed after result attachment; save remains incomplete".into()));
+            }
+            session.save(target.doc, None)?;
+        }
         progress.saved = true;
     }
     Ok(())
