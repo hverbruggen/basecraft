@@ -182,7 +182,7 @@ struct RunningAnalysis {
     generation: u64,
     identity: (String, String),
 }
-use cxx_qt::{CxxQtType, Threading};
+use cxx_qt::CxxQtType;
 use cxx_qt_lib::QString;
 use serde_json::{Value, json};
 use std::{
