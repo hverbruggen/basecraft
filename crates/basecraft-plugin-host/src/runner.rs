@@ -1923,7 +1923,8 @@ impl PreparedOperation {
             ));
         }
         let root = PathBuf::from(&self.context.outputs["artifacts"]);
-        let mut session = basecraft_ops::Session::unlogged(&self.policy.root);
+        // Stages record into their own runs; the owner session records this one.
+        let mut session = basecraft_ops::Session::detached(&self.policy.root);
         let doc = session.open(&source)?;
         let mut preparation = crate::file_tool::FileJob::from_alignment(
             &session,
@@ -1981,7 +1982,13 @@ impl PreparedOperation {
             fit_method: fit_method.into(),
             output: root.join("analysis.spart"),
         };
-        let execution = workflow.run().record(&mut session, doc);
+        let stages = workflow.run();
+        let fit = stages.output.clone();
+        // The final stage's report is the run's result under one stable name.
+        let execution = stages.record(&mut session, doc).and_then(|result| {
+            std::fs::copy(&fit, root.join("fit.json"))?;
+            Ok(result)
+        });
         input_evidence::write_json(
             &self.run.artifact("execution.json")?,
             &json!({"schema":1,"workflow":method,"initiator":self.initiator,"executor":"basecraft.host","requested_parameters":self.request.parameters,"effective_parameters":self.effective_parameters(),"package_digest":self.operation.package.digest,"descriptor_digest":self.operation.descriptor_digest,"process_instance":basecraft_platform::process_instance()}),

@@ -187,6 +187,17 @@ impl Session {
         s
     }
 
+    /// A session that keeps its activity in memory and writes no journal.
+    /// Host workflow stages record and publish into their own analysis runs
+    /// through it; the owning session records the workflow run itself.
+    pub fn detached(root: impl Into<PathBuf>) -> Self {
+        let mut s = Self::new(root);
+        s.log = None;
+        s.store_objects = false;
+        s.merge = false;
+        s
+    }
+
     pub fn id(&self) -> &str {
         &self.id
     }
