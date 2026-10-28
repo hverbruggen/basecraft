@@ -2,7 +2,7 @@
 //! lifetime; explicit cancellation and manager drop own worker teardown.
 use std::collections::BTreeMap;
 use std::sync::{
-    Arc, Mutex,
+    Arc, Mutex, Weak,
     atomic::{AtomicBool, Ordering},
 };
 use std::thread::JoinHandle;
@@ -66,9 +66,78 @@ pub struct JobManager {
     jobs: BTreeMap<String, Arc<Job>>,
     requests: BTreeMap<String, (String, String)>,
     skip_known_features: bool,
+    task_cancellation: bool,
+    task_registrations: Vec<crate::file_tool::CancellationRegistration>,
+}
+
+/// A non-owning Tasks capability. Dropping the manager revokes it even while a
+/// worker is being reaped. All state transitions use the same lock as cancel.
+#[derive(Clone)]
+pub(crate) struct TaskCancellation(Weak<Job>);
+
+fn cancellable(state: RuntimeState) -> bool {
+    matches!(state, RuntimeState::Queued | RuntimeState::Running)
+}
+
+impl TaskCancellation {
+    pub(crate) fn can_cancel(&self) -> bool {
+        self.0.upgrade().is_some_and(|job| {
+            let outcome = job
+                .outcome
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            cancellable(outcome.state)
+        })
+    }
+
+    pub(crate) fn cancel(&self) -> Result<()> {
+        let job = self
+            .0
+            .upgrade()
+            .ok_or_else(|| Error::Protocol("Cancellation is unavailable for this run".into()))?;
+        cancel_job(&job, true).map(|_| ())
+    }
+}
+
+/// `strict` is used by Tasks: a stale click must not claim a request succeeded
+/// after the run crossed publication or reached a terminal state. The manager's
+/// existing API remains idempotent for wait loops and teardown.
+fn cancel_job(job: &Job, strict: bool) -> Result<OperationOutcome> {
+    let mut outcome = job
+        .outcome
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !outcome.state.terminal() && outcome.state != RuntimeState::Finalizing {
+        if strict && !cancellable(outcome.state) {
+            return Err(Error::Protocol(
+                "Cancellation is unavailable for this run".into(),
+            ));
+        }
+        job.cancelled.store(true, Ordering::Release);
+        basecraft_io::write_atomic(
+            std::path::Path::new(&job.prepared.context.cancel_file),
+            |w| std::io::Write::write_all(w, b"cancel\n"),
+        )
+        .map_err(basecraft_ops::Error::from)?;
+        outcome.state = RuntimeState::Cancelling;
+        job.prepared.persist(&outcome)?;
+    } else if strict {
+        return Err(Error::Protocol(
+            "Cancellation is unavailable for this run".into(),
+        ));
+    }
+    Ok(outcome.clone())
 }
 
 impl JobManager {
+    /// Expose this GUI owner's active jobs to the existing Tasks cancellation
+    /// adapter. Headless managers remain private to their own session APIs.
+    #[must_use]
+    pub fn with_task_cancellation(mut self) -> Self {
+        self.task_cancellation = true;
+        self
+    }
+
     pub fn submit(
         &mut self,
         registry: &Registry,
@@ -438,6 +507,13 @@ impl JobManager {
         *job.worker
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(worker);
+        if self.task_cancellation {
+            self.task_registrations
+                .push(crate::file_tool::register_task_cancellation(
+                    outcome.run_id.clone(),
+                    TaskCancellation(Arc::downgrade(&job)),
+                ));
+        }
         self.jobs.insert(outcome.run_id.clone(), job);
         if let Some(key) = key {
             self.requests.insert(key, (digest, outcome.run_id.clone()));
@@ -460,23 +536,7 @@ impl JobManager {
             .jobs
             .get(id)
             .ok_or_else(|| Error::Protocol("unknown job in this session".into()))?;
-        let mut outcome = job
-            .outcome
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Finalization owns the commit boundary; a late cancel cannot invent a
-        // cancelled scientific result after publication has begun.
-        if !outcome.state.terminal() && outcome.state != RuntimeState::Finalizing {
-            job.cancelled.store(true, Ordering::Release);
-            basecraft_io::write_atomic(
-                std::path::Path::new(&job.prepared.context.cancel_file),
-                |w| std::io::Write::write_all(w, b"cancel\n"),
-            )
-            .map_err(basecraft_ops::Error::from)?;
-            outcome.state = RuntimeState::Cancelling;
-            job.prepared.persist(&outcome)?;
-        }
-        Ok(outcome.clone())
+        cancel_job(job, false)
     }
     /// Explicitly retry retained publication only; never invokes plugin code.
     pub fn repair(&self, id: &str) -> Result<OperationOutcome> {
@@ -552,6 +612,7 @@ impl JobManager {
 }
 impl Drop for JobManager {
     fn drop(&mut self) {
+        self.task_registrations.clear();
         for id in self.jobs.keys() {
             let _ = self.cancel(id);
         }

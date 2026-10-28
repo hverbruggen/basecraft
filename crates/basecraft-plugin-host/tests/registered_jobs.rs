@@ -229,7 +229,7 @@ fn installed_snapshot_proposals_commit_in_owner_and_stale_jobs_preserve_edits() 
     let registry = Registry::load(&config).unwrap();
     let mut session = Session::new(temp.path());
     let doc = session.open(&source).unwrap();
-    let mut manager = JobManager::default();
+    let mut manager = JobManager::default().with_task_cancellation();
     let request: OperationRequest = serde_json::from_value(json!({"operation":"org.example.registry-sequence/annotate@1",
         "inputs":{"sequence":[{"kind":"document","doc":doc.0.to_string(),"generation":session.generation(doc),"revision":session.doc(doc).version()}]},"parameters":{}})).unwrap();
     let accepted = manager
@@ -241,6 +241,17 @@ fn installed_snapshot_proposals_commit_in_owner_and_stale_jobs_preserve_edits() 
             &mut session,
         )
         .unwrap();
+    // The worker leaves proposals pending for the owner. A Tasks click at
+    // this publication boundary must be refused without changing the outcome.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while manager.get(&accepted.run_id).unwrap().state != RuntimeState::Finalizing {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(!basecraft_plugin_host::file_tool::can_cancel_run(
+        &accepted.run_id
+    ));
+    assert!(basecraft_plugin_host::file_tool::cancel_run(&accepted.run_id).is_err());
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         manager.poll_session(&mut session);
@@ -973,4 +984,111 @@ fn ungapped_alignment_input_accepts_unequal_lengths_without_padding() {
         );
         assert_eq!(std::fs::read_to_string(&source).unwrap(), original);
     }
+}
+
+#[test]
+fn tasks_cancel_registered_document_run_through_owner_without_success_history() {
+    use basecraft_plugin_host::file_tool::{can_cancel_run, cancel_run};
+    use basecraft_protocol::delimitation::JobStatus;
+    for mode in ["slow", "hang"] {
+        let temp = tempfile::tempdir().unwrap();
+        let registry = alignment_registry(temp.path());
+        let source = temp.path().join("input.afa");
+        std::fs::write(&source, ">a\nACGT\n>b\nACGT\n").unwrap();
+        let mut session = basecraft_ops::Session::new(temp.path());
+        let doc = session.open(&source).unwrap();
+        let mut manager = JobManager::default().with_task_cancellation();
+        let request = serde_json::from_value(json!({
+            "operation":"org.example.registry-fixture/count@1",
+            "inputs":{"sources":[{"kind":"document","doc":doc.0.to_string(),
+                "generation":session.generation(doc),"revision":session.revision(doc)}]},
+            "parameters":{"mode":mode},"destinations":{"report":"cancelled.json"}
+        }))
+        .unwrap();
+        let accepted = manager
+            .submit_in_session(
+                &registry,
+                request,
+                SessionPolicy::new(temp.path(), true).unwrap(),
+                "GUI",
+                &mut session,
+            )
+            .unwrap();
+        let id = &accepted.run_id;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while manager.get(id).unwrap().state == RuntimeState::Queued {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        std::thread::sleep(Duration::from_millis(250));
+        assert!(can_cancel_run(id));
+        assert!(!can_cancel_run("unknown-run"));
+        assert!(cancel_run("unknown-run").is_err());
+        cancel_run(id).unwrap();
+        assert!(!can_cancel_run(id));
+        let outcome = wait(&manager, id);
+        assert_eq!(outcome.state, RuntimeState::Cancelled, "{outcome:?}");
+        assert!(outcome.artifacts.is_empty());
+        assert!(!temp.path().join("cancelled.json").exists());
+        manager.poll_session(&mut session);
+        let record = session.document_record(doc).unwrap();
+        assert!(
+            !record
+                .events
+                .iter()
+                .any(|event| matches!(&event.op, basecraft_protocol::Op::ToolRun { .. }))
+        );
+        let finished: Vec<_> = record
+            .events
+            .iter()
+            .filter_map(|event| match &event.op {
+                basecraft_protocol::Op::JobFinished { report } if report.id == *id => Some(report),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(finished.len(), 1);
+        assert_eq!(finished[0].status, JobStatus::Cancelled);
+        assert!(finished[0].outputs.is_empty());
+        assert!(!can_cancel_run(id));
+        assert!(cancel_run(id).is_err());
+        drop(manager);
+        assert!(!can_cancel_run(id));
+        assert!(cancel_run(id).is_err());
+    }
+}
+
+#[test]
+fn tasks_refuse_headless_completed_and_dropped_owners() {
+    use basecraft_plugin_host::file_tool::{can_cancel_run, cancel_run};
+    let temp = tempfile::tempdir().unwrap();
+    for name in ["a.txt", "b.txt"] {
+        std::fs::write(temp.path().join(name), "a").unwrap();
+    }
+    let registry = registry(temp.path());
+    let policy = || SessionPolicy::new(temp.path(), true).unwrap();
+    let mut headless = JobManager::default();
+    let private = headless
+        .submit(&registry, request("hang"), policy(), "CLI")
+        .unwrap();
+    assert!(!can_cancel_run(&private.run_id));
+    assert!(cancel_run(&private.run_id).is_err());
+    headless.cancel(&private.run_id).unwrap();
+    assert_eq!(
+        wait(&headless, &private.run_id).state,
+        RuntimeState::Cancelled
+    );
+    let mut gui = JobManager::default().with_task_cancellation();
+    let completed = gui
+        .submit(&registry, request("normal"), policy(), "GUI")
+        .unwrap();
+    assert_eq!(wait(&gui, &completed.run_id).state, RuntimeState::Completed);
+    assert!(!can_cancel_run(&completed.run_id));
+    assert!(cancel_run(&completed.run_id).is_err());
+    let active = gui
+        .submit(&registry, request("hang"), policy(), "GUI")
+        .unwrap();
+    assert!(can_cancel_run(&active.run_id));
+    drop(gui);
+    assert!(!can_cancel_run(&active.run_id));
+    assert!(cancel_run(&active.run_id).is_err());
 }

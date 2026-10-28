@@ -75,6 +75,27 @@ pub struct ProvenanceRust {
     notifications: QString,
     notices: Vec<serde_json::Value>,
 }
+fn request_task_cancellation(id: &str) -> String {
+    match basecraft_plugin_host::file_tool::cancel_run(id) {
+        Ok(()) => "notify: Cancellation requested".into(),
+        Err(error) => format!("fail: {error}"),
+    }
+}
+
+// The capability comes from the live owner, never from a retained receipt.
+fn task_capabilities(data: &mut serde_json::Value, previous: bool) {
+    if let Some(jobs) = data["jobs"].as_array_mut() {
+        for job in jobs {
+            job["cancellable"] = serde_json::json!(
+                !previous
+                    && job["id"]
+                        .as_str()
+                        .is_some_and(basecraft_plugin_host::file_tool::can_cancel_run)
+            );
+        }
+    }
+}
+
 fn run(operation: &str, result: &Path, destination: &Path) -> Result<String, String> {
     use basecraft_ops::provenance;
     let outcome = (|| -> basecraft_ops::Result<String> {
@@ -185,14 +206,7 @@ impl qobject::AppProvenance {
         success
     }
     fn cancel_run(self: Pin<&mut Self>, id: &QString) {
-        let result = basecraft_plugin_host::file_tool::cancel_run(&id.to_string());
-        self.set_message(QString::from(
-            match result {
-                Ok(()) => "notify: Cancellation requested".into(),
-                Err(e) => format!("fail: {e}"),
-            }
-            .as_str(),
-        ));
+        self.set_message(QString::from(&request_task_cancellation(&id.to_string())));
     }
     fn saved_report(&self, path: &QString) -> QString {
         report_json(
@@ -264,15 +278,7 @@ impl qobject::AppProvenance {
         report_json(
             basecraft_ops::document_record::jobs(previous)
                 .map(|mut data| {
-                    if let Some(jobs) = data["jobs"].as_array_mut() {
-                        for job in jobs {
-                            job["cancellable"] = serde_json::json!(
-                                job["id"]
-                                    .as_str()
-                                    .is_some_and(basecraft_plugin_host::file_tool::can_cancel_run)
-                            );
-                        }
-                    }
+                    task_capabilities(&mut data, previous);
                     data.to_string()
                 })
                 .map_err(|e| e.to_string()),
@@ -448,6 +454,74 @@ pub(crate) fn session_revision(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tasks_bridge_cancels_live_registered_run_and_refuses_retained_ids() {
+        use basecraft_plugin_host::{
+            jobs::JobManager,
+            policy::SessionPolicy,
+            registry::{Registry, RegistryConfig},
+        };
+        use basecraft_protocol::operation::RuntimeState;
+        use serde_json::json;
+        use std::time::{Duration, Instant};
+        let temp = tempfile::tempdir().unwrap();
+        for name in ["a.txt", "b.txt"] {
+            std::fs::write(temp.path().join(name), "a").unwrap();
+        }
+        let registry = Registry::load(&RegistryConfig {
+            bundled: Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures"),
+            packages: temp.path().join("plugins"),
+            index: temp.path().join("index.json"),
+        })
+        .unwrap();
+        let mut manager = JobManager::default().with_task_cancellation();
+        let request = serde_json::from_value(json!({
+            "operation":"org.example.registry-fixture/count@1",
+            "inputs":{"sources":[{"kind":"file","path":"a.txt"},{"kind":"file","path":"b.txt"}]},
+            "parameters":{"mode":"hang"},"destinations":{"report":"report.json"}
+        }))
+        .unwrap();
+        let accepted = manager
+            .submit(
+                &registry,
+                request,
+                SessionPolicy::new(temp.path(), true).unwrap(),
+                "GUI",
+            )
+            .unwrap();
+        let id = &accepted.run_id;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while manager.get(id).unwrap().state == RuntimeState::Queued {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let mut rows = json!({"jobs":[{"id":id},{"id":"other-process"}]});
+        task_capabilities(&mut rows, false);
+        assert_eq!(rows["jobs"][0]["cancellable"], true);
+        assert_eq!(rows["jobs"][1]["cancellable"], false);
+        task_capabilities(&mut rows, true);
+        assert_eq!(rows["jobs"][0]["cancellable"], false);
+        assert!(request_task_cancellation("other-process").starts_with("fail:"));
+        assert_eq!(
+            request_task_cancellation(id),
+            "notify: Cancellation requested"
+        );
+        loop {
+            let outcome = manager.get(id).unwrap();
+            if outcome.state.terminal() {
+                assert_eq!(outcome.state, RuntimeState::Cancelled);
+                assert!(outcome.artifacts.is_empty());
+                break;
+            }
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!temp.path().join("report.json").exists());
+        task_capabilities(&mut rows, false);
+        assert_eq!(rows["jobs"][0]["cancellable"], false);
+        assert!(request_task_cancellation(id).starts_with("fail:"));
+    }
 
     #[test]
     fn gui_provenance_exports_preserve_authored_methods_and_report_changed_results() {

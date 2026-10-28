@@ -105,7 +105,7 @@ impl DocumentJob {
             request_key: None,
             target: None,
         };
-        let mut manager = JobManager::default();
+        let mut manager = JobManager::default().with_task_cancellation();
         let accepted = manager
             .submit_in_session(&registry, request, policy, "GUI", session)
             .map_err(|error| error.to_string())?;
@@ -161,7 +161,7 @@ impl DocumentJob {
                 revision: session.revision(target),
             }),
         };
-        let mut manager = JobManager::default();
+        let mut manager = JobManager::default().with_task_cancellation();
         let accepted = manager
             .submit_in_session(&registry, request, policy, "GUI", session)
             .map_err(|error| error.to_string())?;

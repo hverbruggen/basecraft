@@ -18,32 +18,62 @@ use serde_json::json;
 
 use crate::{Error, Manifest, PluginProcess, Result};
 
+#[derive(Clone)]
+enum CancellationTarget {
+    Stage(PathBuf),
+    Registered(crate::jobs::TaskCancellation),
+}
+
 static CANCELLATIONS: std::sync::OnceLock<
-    std::sync::Mutex<std::collections::HashMap<String, PathBuf>>,
+    std::sync::Mutex<std::collections::HashMap<String, CancellationTarget>>,
 > = std::sync::OnceLock::new();
 
-fn cancellations() -> &'static std::sync::Mutex<std::collections::HashMap<String, PathBuf>> {
+fn cancellations()
+-> &'static std::sync::Mutex<std::collections::HashMap<String, CancellationTarget>> {
     CANCELLATIONS.get_or_init(std::sync::Mutex::default)
 }
 
-pub fn can_cancel_run(id: &str) -> bool {
+fn cancellation(id: &str) -> Option<CancellationTarget> {
     cancellations()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .contains_key(id)
-}
-
-/// Only an active in-process job can authorize a cancellation file write.
-pub fn cancel_run(id: &str) -> Result<()> {
-    let path = cancellations()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .get(id)
         .cloned()
-        .ok_or_else(|| Error::Protocol("Cancellation is unavailable for this run".into()))?;
-    basecraft_io::write_atomic(&path, |w| w.write_all(b"cancel\n"))
-        .map_err(basecraft_ops::Error::from)?;
-    Ok(())
+}
+
+pub fn can_cancel_run(id: &str) -> bool {
+    match cancellation(id) {
+        Some(CancellationTarget::Stage(_)) => true,
+        Some(CancellationTarget::Registered(handle)) => handle.can_cancel(),
+        None => false,
+    }
+}
+
+/// Only an active in-process owner can authorize cancellation. Registered runs
+/// use the manager's state lock and cancellation flag, never a retained path.
+pub fn cancel_run(id: &str) -> Result<()> {
+    match cancellation(id) {
+        Some(CancellationTarget::Stage(path)) => {
+            basecraft_io::write_atomic(&path, |w| w.write_all(b"cancel\n"))
+                .map_err(basecraft_ops::Error::from)?;
+            Ok(())
+        }
+        Some(CancellationTarget::Registered(handle)) => handle.cancel(),
+        None => Err(Error::Protocol(
+            "Cancellation is unavailable for this run".into(),
+        )),
+    }
+}
+
+pub(crate) fn register_task_cancellation(
+    id: String,
+    handle: crate::jobs::TaskCancellation,
+) -> CancellationRegistration {
+    cancellations()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(id.clone(), CancellationTarget::Registered(handle));
+    CancellationRegistration(id)
 }
 
 /// Known producer support semantics, which must win over numeric-range guesses.
@@ -115,7 +145,7 @@ pub(crate) fn write_support_sidecar(
     Ok(Some(metadata))
 }
 
-struct CancellationRegistration(String);
+pub(crate) struct CancellationRegistration(String);
 impl Drop for CancellationRegistration {
     fn drop(&mut self) {
         cancellations()
@@ -827,7 +857,10 @@ impl FileJob {
                 cancellations()
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .insert(self.run_id.clone(), PathBuf::from(path));
+                    .insert(
+                        self.run_id.clone(),
+                        CancellationTarget::Stage(PathBuf::from(path)),
+                    );
                 CancellationRegistration(self.run_id.clone())
             });
         let frozen_input = if self.artifacts.is_some() {
@@ -1546,5 +1579,28 @@ mod tests {
             output_beside(&file, "mafft", "fasta"),
             dir.path().join("rbcL.mafft-2.fasta")
         );
+    }
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::*;
+
+    #[test]
+    fn tasks_keep_host_stage_cancellation_while_registration_is_live() {
+        let temp = tempfile::tempdir().unwrap();
+        let id = format!("stage-{}", ulid::Ulid::generate());
+        let path = temp.path().join("cancel");
+        cancellations()
+            .lock()
+            .unwrap()
+            .insert(id.clone(), CancellationTarget::Stage(path.clone()));
+        let registration = CancellationRegistration(id.clone());
+        assert!(can_cancel_run(&id));
+        cancel_run(&id).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"cancel\n");
+        drop(registration);
+        assert!(!can_cancel_run(&id));
+        assert!(cancel_run(&id).is_err());
     }
 }

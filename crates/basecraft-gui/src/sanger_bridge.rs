@@ -287,7 +287,8 @@ impl Default for SangerRust {
             selected_call_set: QString::default(),
             calling: false,
             pending_calls: false,
-            caller: basecraft_plugin_host::sanger_calls::SangerCaller::default(),
+            caller: basecraft_plugin_host::sanger_calls::SangerCaller::default()
+                .with_task_cancellation(),
             trace: None,
             review: None,
             review_session: None,

@@ -45,13 +45,23 @@ pub mod qobject {
         fn cancel(self: Pin<&mut AppOperations>);
     }
 }
-#[derive(Default)]
 pub struct OperationsRust {
     busy: bool,
     message: QString,
     outcome: QString,
     jobs: JobManager,
     active: Option<String>,
+}
+impl Default for OperationsRust {
+    fn default() -> Self {
+        Self {
+            busy: false,
+            message: QString::default(),
+            outcome: QString::default(),
+            jobs: JobManager::default().with_task_cancellation(),
+            active: None,
+        }
+    }
 }
 // Keep recursion bounded and reject forms we cannot represent faithfully.
 fn supported_parameters(schema: &Value, depth: usize) -> bool {

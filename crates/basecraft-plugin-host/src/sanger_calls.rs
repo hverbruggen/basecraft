@@ -108,6 +108,13 @@ fn checked(verified: VerifiedOperationResult, identity: &Identity) -> Result<Cal
 }
 
 impl SangerCaller {
+    /// Let the GUI Tasks dialog cancel runs through this caller's manager.
+    #[must_use]
+    pub fn with_task_cancellation(mut self) -> Self {
+        self.jobs = self.jobs.with_task_cancellation();
+        self
+    }
+
     /// Returns a verified cached result, or starts a session-owned background job.
     pub fn start(
         &mut self,
