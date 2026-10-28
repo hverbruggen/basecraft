@@ -189,9 +189,16 @@ class Plugin:
                 evidence = all_evidence.get(adapter.get("primary_input"), []) if adapter.get("primary_input") else next(iter(all_evidence.values()), [])
                 if evidence:
                     record = evidence[0]
-                    if record.get("original_path"):
-                        effective.setdefault("original_source", record["original_path"])
-                        effective.setdefault("input_evidence", dict(record, path=record["original_path"]))
+                    stable = record.get("original_path")
+                    if not stable and record.get("run_directory"):
+                        # Unsaved document bytes are retained with the run; name
+                        # that copy, never the temporary execution input.
+                        retained = sorted(Path(record["run_directory"]).glob("document-input.*"))
+                        if len(retained) == 1:
+                            stable = str(retained[0])
+                    if stable:
+                        effective.setdefault("original_source", stable)
+                        effective.setdefault("input_evidence", dict(record, path=stable))
             alignment = context.get("input_evidence", {}).get("alignment", [])
             if alignment and "alignment_snapshot" in effective:
                 record = alignment[0]
