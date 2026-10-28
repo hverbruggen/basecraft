@@ -238,6 +238,8 @@ pub struct DocumentTarget {
     pub input: (String, String),
     /// The saved file the run read, or `None` for an unsaved snapshot.
     pub saved: Option<PathBuf>,
+    /// The document's location, saved or not, for links back to it.
+    pub path: PathBuf,
 }
 
 /// An unsaved document's current contents, submitted as a generated input.
@@ -432,6 +434,7 @@ impl PreparedOperation {
                                     String::new(),
                                 ),
                                 saved: saved.as_ref().map(|(path, _, _)| path.clone()),
+                                path: session.root().join(session.doc_key(id)),
                             });
                         }
                         // A clean document is its saved file; unsaved edits are
@@ -1053,12 +1056,13 @@ impl PreparedOperation {
             let hash = basecraft_io::hash_file(&path).map_err(basecraft_ops::Error::from)?;
             validated.push((artifact.role.clone(), path, hash));
         }
-        // The registered IQ-TREE route publishes a collection rather than a
-        // FileJob tree. Add the same sidecar before sealing that collection so
+        // Add the producer's support semantics before sealing the collection so
         // retained results, explicit exports, verification and repair agree.
-        if self.operation.id == "basecraft.iqtree/tree@1"
-            && let Some((name, kind)) = file_tool::iqtree_support(self.parameters.get("support"))
-        {
+        if let Some((name, kind)) = file_tool::producer_support(
+            &self.operation.package.manifest.id,
+            &self.operation.descriptor.implementation,
+            &self.parameters,
+        ) {
             let trees: Vec<_> = validated
                 .iter()
                 .filter(|(role, path, _)| {
@@ -1075,7 +1079,7 @@ impl PreparedOperation {
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                     Ok(_) => {
                         return Err(Error::Protocol(
-                            "IQ-TREE support sidecar already exists in staged output".into(),
+                            "support sidecar already exists in staged output".into(),
                         ));
                     }
                     Err(error) => return Err(error.into()),
@@ -1411,12 +1415,60 @@ impl PreparedOperation {
         }
         let destination = self.policy.path(destination, true)?;
         export_member(retained, &destination, hash)?;
+        if destination
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("nwk"))
+        {
+            self.finalise_exported_tree(&destination)?;
+        }
         outcome.artifacts.push(PublishedArtifact {
             role: role.into(),
             path,
             digest: hash.into(),
         });
         self.persist(outcome)
+    }
+
+    /// An exported tree gets what the retained member has: its run binding,
+    /// producer support semantics and the link to the alignment it came from.
+    fn finalise_exported_tree(&self, tree: &Path) -> Result<()> {
+        self.run.bind(tree)?;
+        if let Some((name, kind)) = file_tool::producer_support(
+            &self.operation.package.manifest.id,
+            &self.operation.descriptor.implementation,
+            &self.parameters,
+        ) {
+            file_tool::write_support_sidecar(tree, name, kind)?;
+        }
+        let Some(frozen) = self
+            .context
+            .inputs
+            .get("alignment")
+            .and_then(|values| values.first())
+        else {
+            return Ok(());
+        };
+        let (source, version) = match &self.document {
+            Some(target) => (target.path.clone(), target.generation),
+            None => (
+                self.context
+                    .input_evidence
+                    .get("alignment")
+                    .and_then(|values| values.first())
+                    .and_then(|evidence| evidence.original_path.as_deref())
+                    .map(PathBuf::from)
+                    .ok_or_else(|| Error::Protocol("tree alignment source unknown".into()))?,
+                0,
+            ),
+        };
+        basecraft_ops::links::AlignmentLink::create_referenced(
+            tree,
+            &source,
+            Path::new(frozen),
+            version,
+            &self.run,
+        )?;
+        Ok(())
     }
 
     /// Export a member of an already published collection, such as an extra

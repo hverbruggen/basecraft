@@ -44,9 +44,38 @@ pub fn cancel_run(id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Known producer support semantics, which must win over numeric-range guesses.
+/// `package` and `implementation` name the plugin and its operation.
+pub(crate) fn producer_support(
+    package: &str,
+    implementation: &str,
+    params: &serde_json::Value,
+) -> Option<(&'static str, basecraft_protocol::SupportKind)> {
+    if implementation != "tree" {
+        return None;
+    }
+    match package {
+        "basecraft.distance"
+            if params
+                .get("bootstrap")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0)
+                > 0 =>
+        {
+            Some(("Bootstrap", basecraft_protocol::SupportKind::Bootstrap))
+        }
+        "basecraft.fasttree" => Some((
+            "SH-like local support",
+            basecraft_protocol::SupportKind::Probability,
+        )),
+        "basecraft.iqtree" => iqtree_support(params.get("support")),
+        _ => None,
+    }
+}
+
 /// The built-in IQ-TREE form permits one support method per run. Both IQ-TREE
 /// bootstrap variants write percentages; their names preserve the distinction.
-pub(crate) fn iqtree_support(
+fn iqtree_support(
     selected: Option<&serde_json::Value>,
 ) -> Option<(&'static str, basecraft_protocol::SupportKind)> {
     match selected.and_then(serde_json::Value::as_str) {
@@ -1605,25 +1634,11 @@ impl FileJob {
                     }
                 }
             }
-            // Known producer semantics must win over numeric-range guesses.
-            let support = match manifest.id.as_str() {
-                "basecraft.distance"
-                    if self
-                        .params
-                        .get("bootstrap")
-                        .and_then(serde_json::Value::as_u64)
-                        .unwrap_or(0)
-                        > 0 =>
-                {
-                    Some(("Bootstrap", basecraft_protocol::SupportKind::Bootstrap))
-                }
-                "basecraft.fasttree" => Some((
-                    "SH-like local support",
-                    basecraft_protocol::SupportKind::Probability,
-                )),
-                "basecraft.iqtree" => iqtree_support(self.params.get("support")),
-                _ => None,
-            };
+            let support = producer_support(
+                &manifest.id,
+                "tree",
+                &serde_json::Value::Object(self.params.clone()),
+            );
             if let Some((name, kind)) = support {
                 for tree in &trees {
                     if let Some(run) = &self.artifacts {
