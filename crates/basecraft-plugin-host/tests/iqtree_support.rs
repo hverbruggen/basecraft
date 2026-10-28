@@ -1,13 +1,12 @@
-//! Both built-in IQ-TREE publication routes retain the same support semantics.
-//! A process-local fake executable supplies known Newick bytes without an ML run.
+//! IQ-TREE support semantics survive both registered publication forms: a
+//! whole-collection export and a single exported tree file. A process-local
+//! fake executable supplies known Newick bytes without an ML run.
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
 use basecraft_plugin_host::{
-    FileJob,
-    file_tool::AlignmentInput,
     jobs::JobManager,
     policy::SessionPolicy,
     registry::{Registry, RegistryConfig},
@@ -57,8 +56,6 @@ fn run_cases(root: &Path) {
         b">a\nACGTACGT\n>b\nACGTACGA\n>c\nACGTTCGT\n>d\nTCGTACGT\n",
     )
     .unwrap();
-    let mut session = basecraft_ops::Session::new(root);
-    let doc = session.open(&input).unwrap();
     let registry = Registry::load(&RegistryConfig {
         bundled: plugins(),
         packages: root.join("profile/plugins"),
@@ -73,32 +70,12 @@ fn run_cases(root: &Path) {
         ("ufboot", 42, "", true),
     ] {
         let suffix = if multi { "multi" } else { support };
-        let output = root.join(format!("file-{suffix}.nwk"));
-        let mut file_job = FileJob::from_alignment(
-            &session,
-            doc,
-            (&plugins().join("iqtree"), "tree"),
-            AlignmentInput::Aligned,
-            output.clone(),
-        )
-        .unwrap();
-        file_job.params.insert("model".into(), json!("JC"));
-        file_job.params.insert("threads".into(), json!(1));
-        file_job.params.insert("support".into(), json!(support));
-        file_job.params.insert(
-            "replicates".into(),
-            json!(if support == "ufboot" { 1000 } else { 100 }),
-        );
-        file_job.params.insert("seed".into(), json!(seed));
-        file_job.run().unwrap();
-        check_tree(&output, label, multi);
-
         let destination = format!("registered-{suffix}");
         let request: OperationRequest = serde_json::from_value(json!({
             "operation":"basecraft.iqtree/tree@1",
             "inputs":{"alignment":[{"kind":"file","path":"input.afa"}]},
             "parameters":{"model":"JC","threads":1,"support":support,"replicates":if support == "ufboot" { 1000 } else { 100 },"seed":seed},
-            "destinations":{"artifacts":destination}
+            "destinations":{"artifacts":destination,"artifacts/tree.nwk":format!("file-{suffix}.nwk")}
         }))
         .unwrap();
         let mut jobs = JobManager::default();
@@ -126,6 +103,7 @@ fn run_cases(root: &Path) {
         );
         let exported = root.join(&destination).join("tree.nwk");
         check_tree(&exported, label, multi);
+        check_tree(&root.join(format!("file-{suffix}.nwk")), label, multi);
         let retained = Path::new(completed.evidence.as_ref().unwrap()).join("artifacts/tree.nwk");
         check_tree(&retained, label, multi);
         let moved = root.join(format!("copied-{suffix}"));
@@ -148,7 +126,7 @@ fn run_cases(root: &Path) {
 }
 
 #[test]
-fn known_support_survives_both_publication_paths() {
+fn known_support_survives_both_publication_forms() {
     if std::env::var_os("BASECRAFT_IQTREE_SUPPORT_CHILD").is_some() {
         run_cases(Path::new(
             &std::env::var("BASECRAFT_IQTREE_SUPPORT_ROOT").unwrap(),
@@ -175,7 +153,7 @@ prefix.with_suffix('.treefile').write_text(f'((t0:1,t1:1){label}:1,(t2:1,t3:1)99
     let status = Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
-            "known_support_survives_both_publication_paths",
+            "known_support_survives_both_publication_forms",
             "--nocapture",
         ])
         .env("BASECRAFT_IQTREE_SUPPORT_CHILD", "1")

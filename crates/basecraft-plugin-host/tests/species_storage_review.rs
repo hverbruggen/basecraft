@@ -1,15 +1,35 @@
 //! Independent storage review probes and regression coverage for their corrections.
 // Preserve the independently reviewed assertions verbatim.
 #![allow(clippy::assert_is_empty)]
+mod common;
+
 use basecraft_ops::{Session, files, provenance};
-use basecraft_plugin_host::{
-    FileJob, delimitation_pipeline::AlignmentJob, file_tool::AlignmentInput,
-};
+use basecraft_plugin_host::registry::Registry;
 use serde_json::json;
 use std::path::{Path, PathBuf};
 
-fn plugin() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/delimitation")
+/// Create the species workspace `output` from the open alignment `input`.
+fn setup_alignment(
+    registry: &Registry,
+    session: &mut Session,
+    input: basecraft_ops::DocId,
+    output: &Path,
+) {
+    let outcome = common::run_in(registry, session, |s| {
+        json!({"operation":"basecraft.delimitation/workspace_alignment@1",
+            "inputs":{"alignment":common::document(s, input)},
+            "parameters":{},"destinations":{"workspace":output}})
+    });
+    common::assert_completed(&outcome);
+}
+
+/// The source of a run's referenced input, as its input evidence records it.
+fn referenced_hash(outcome: &basecraft_protocol::operation::OperationOutcome) -> String {
+    basecraft_ops::input_evidence::read_input(&common::evidence(outcome))
+        .unwrap()
+        .source
+        .unwrap()
+        .hash
 }
 
 #[test]
@@ -23,18 +43,10 @@ fn rereview_alignment_move_and_explicit_evidence_decisions() {
         let original = ">a\nAA\nAA\n>b\nAA\nAC\n>c\nAA\nCC\n>d\nCC\nCC\n";
         std::fs::write(&source, original).unwrap();
         let canonical = folder.join("species.spart");
+        let registry = common::bundled();
         let mut session = Session::recoverable(&folder).unwrap();
         let input = session.open(&source).unwrap();
-        let job = FileJob::from_alignment(
-            &session,
-            input,
-            (&plugin(), "workspace_alignment"),
-            AlignmentInput::Aligned,
-            canonical.clone(),
-        )
-        .unwrap();
-        let result = job.run().unwrap();
-        job.record(&mut session, input, &result).unwrap();
+        setup_alignment(&registry, &mut session, input, &canonical);
         drop(session);
         let moved = parent.path().join("moved");
         std::fs::rename(&folder, &moved).unwrap();
@@ -119,10 +131,23 @@ fn rereview_legacy_sidecar_break_and_remove_reach_combined_workspace() {
 
 fn setup_tree(session: &mut Session, source: &Path, output: &Path) {
     let doc = session.open(source).unwrap();
-    let job =
-        FileJob::from_tree(session, doc, (&plugin(), "workspace_tree"), output.into()).unwrap();
-    let result = job.run().unwrap();
-    job.record(session, doc, &result).unwrap();
+    let outcome = common::run_in(&common::bundled(), session, |s| {
+        json!({"operation":"basecraft.delimitation/workspace_tree@1",
+            "inputs":{"tree":common::document(s, doc)},
+            "parameters":{},"destinations":{"workspace":output}})
+    });
+    common::assert_completed(&outcome);
+}
+
+/// Fit single-threshold GMYC to `tree`, a project file, in the workspace `doc`.
+fn fit_in_workspace(session: &mut Session, doc: basecraft_ops::DocId, tree: &Path) {
+    let relative = tree.strip_prefix(session.root()).unwrap().to_owned();
+    let outcome = common::run_in(&common::bundled(), session, |s| {
+        json!({"operation":"basecraft.delimitation/gmyc_single@1",
+            "inputs":{"tree":common::file(relative.to_str().unwrap())},
+            "parameters":{"rooted":true},"target":common::document(s, doc)[0]})
+    });
+    common::assert_completed(&outcome);
 }
 
 #[test]
@@ -148,19 +173,8 @@ fn nexus_source_workspace_can_reuse_its_display_tree() {
         parsed.is_ok(),
         "checked display must be usable Newick: {display:?}: {parsed:?}"
     );
-    let mut job = FileJob::from_file(
-        &session,
-        doc,
-        &display,
-        (&plugin(), "gmyc_single"),
-        root.path().join("fit.json"),
-    )
-    .unwrap();
-    job.params.insert("rooted".into(), json!(true));
-    assert!(
-        job.run().is_ok(),
-        "workspace must reuse its accepted normalized tree"
-    );
+    // The workspace must reuse its accepted normalized tree.
+    fit_in_workspace(&mut session, doc, &display);
 }
 
 #[test]
@@ -186,23 +200,13 @@ fn alignment_gmyc_export_preserves_display_and_declared_inputs() {
     .unwrap();
     let mut session = Session::recoverable(&root).unwrap();
     let doc = session.open(&source).unwrap();
-    let mut preparation = FileJob::from_alignment(
-        &session,
-        doc,
-        (&plugin(), "haplotypes"),
-        AlignmentInput::Aligned,
-        root.join("prepare.json"),
-    )
-    .unwrap();
-    preparation.params.insert("model".into(), json!("p"));
-    let outcome = AlignmentJob {
-        preparation,
-        unique_haplotypes: true,
-        fit_method: "gmyc_single".into(),
-        output: root.join("species.spart"),
-    }
-    .run();
-    outcome.record(&mut session, doc).unwrap();
+    let outcome = common::run_in(&common::bundled(), &mut session, |s| {
+        json!({"operation":"basecraft.host/gmyc_alignment_single@1",
+            "inputs":{"alignment":common::document(s, doc)},
+            "parameters":{"unique_haplotypes":true,"model":"p"},
+            "destinations":{"workspace":"species.spart"}})
+    });
+    common::assert_completed(&outcome);
     let canonical = root.join("species.spart");
     let package = parent.path().join("package");
     provenance::package(&canonical, &package).unwrap();
@@ -277,20 +281,8 @@ fn fitted_workspace_survives_folder_move_then_save_and_export() {
     let mut session = Session::recoverable(&root).unwrap();
     setup_tree(&mut session, &source, &canonical);
     let doc = session.open(&canonical).unwrap();
-    let mut job = FileJob::from_file(
-        &session,
-        doc,
-        &source,
-        (&plugin(), "gmyc_single"),
-        root.join("fit.json"),
-    )
-    .unwrap();
-    job.params.insert("rooted".into(), json!(true));
-    let result = job.run().unwrap();
-    job.record(&mut session, doc, &result).unwrap();
-    basecraft_ops::delimitation::add_analysis_result(&mut session, doc, &job.output).unwrap();
+    fit_in_workspace(&mut session, doc, &source);
     session.save(doc, None).unwrap();
-    drop(job);
     drop(session);
     let moved = parent.path().join("moved");
     std::fs::rename(&root, &moved).unwrap();
@@ -310,27 +302,21 @@ fn preserved_alignment_remains_usable_by_workspace_default_input() {
     // Raw source identity differs from the canonical FASTA submitted by setup.
     std::fs::write(&source, ">a\nAA\nAA\n>b\nAA\nAC\n>c\nAA\nCC\n>d\nCC\nCC\n").unwrap();
     let canonical = root.path().join("species.spart");
+    let registry = common::bundled();
     let mut session = Session::recoverable(root.path()).unwrap();
     let input = session.open(&source).unwrap();
-    let setup = FileJob::from_alignment(
-        &session,
-        input,
-        (&plugin(), "workspace_alignment"),
-        AlignmentInput::Aligned,
-        canonical.clone(),
-    )
-    .unwrap();
-    let result = setup.run().unwrap();
-    setup.record(&mut session, input, &result).unwrap();
+    setup_alignment(&registry, &mut session, input, &canonical);
     let clean = files::load_delimitation(&canonical).unwrap();
     let owner = PathBuf::from(&clean.exchange_fields["basecraft_alignment_evidence_run"]);
+    // The clean source is referenced in place; no copy of it is retained.
     assert!(!owner.join("preserved-input").exists());
     assert!(!owner.join("submitted.fasta").exists());
-    assert_ne!(
+    assert!(!owner.join("document-input.afa").exists());
+    assert_eq!(
         basecraft_ops::input_evidence::read_input(&owner)
             .unwrap()
-            .submitted_hash,
-        clean.exchange_fields["basecraft_alignment_hash"],
+            .state,
+        "referenced"
     );
     assert_eq!(
         basecraft_ops::delimitation::checked_alignment(&clean, &canonical)
@@ -344,42 +330,37 @@ fn preserved_alignment_remains_usable_by_workspace_default_input() {
     std::fs::write(&source, ">a\nTTTT\n>b\nTTTC\n>c\nTTCC\n>d\nCCCC\n").unwrap();
     assert!(provenance::verify(&canonical).unwrap().is_empty());
     let doc = session.open(&canonical).unwrap();
-    let work = session.delimitation(doc);
+    let work = session.delimitation(doc).clone();
     // The controller resolves the linked default through the shared lifecycle,
     // including when it submits an all-specimen display-tree job.
-    let linked = basecraft_ops::delimitation::checked_alignment(work, &canonical)
+    let linked = basecraft_ops::delimitation::checked_alignment(&work, &canonical)
         .unwrap()
         .unwrap();
-    let expected = &work.exchange_fields["basecraft_alignment_hash"];
-    let job = FileJob::from_file(
-        &session,
-        doc,
-        &linked,
-        (&plugin(), "haplotypes"),
-        root.path().join("prep.json"),
-    )
-    .unwrap();
+    let expected = work.exchange_fields["basecraft_alignment_hash"].clone();
+    let relative = linked.strip_prefix(root.path()).unwrap().to_owned();
+    let relative = relative.to_str().unwrap();
+    let preparation = common::run_in(&registry, &mut session, |_| {
+        json!({"operation":"basecraft.delimitation/haplotypes@1",
+            "inputs":{"alignment":common::file(relative)},"parameters":{}})
+    });
+    common::assert_completed(&preparation);
     assert_eq!(
-        &job.input_key.1, expected,
+        referenced_hash(&preparation),
+        expected,
         "GUI default must follow the verified preserved alignment, as checked_display_tree does for trees"
     );
-    assert!(job.run().is_ok());
-    let distance = plugin().parent().unwrap().join("distance");
-    let mut display = FileJob::from_file(
-        &session,
-        doc,
-        &linked,
-        (&distance, "tree"),
-        root.path().join("display.nwk"),
-    )
-    .unwrap();
-    display.params.insert("method".into(), json!("upgma"));
-    display.params.insert("model".into(), json!("p"));
-    assert_eq!(&display.input_key.1, expected);
-    let outcome = display.run();
-    assert!(
-        outcome.is_ok(),
-        "display job must reuse the preserved alignment: {outcome:?}"
+    let display = common::run_in(&registry, &mut session, |s| {
+        json!({"operation":"basecraft.distance/tree@1",
+            "inputs":{"alignment":common::file(relative)},
+            "parameters":{"method":"upgma","model":"p"},
+            "destinations":{"artifacts/tree.nwk":"display.nwk"},
+            "target":common::document(s, doc)[0]})
+    });
+    common::assert_completed(&display);
+    assert_eq!(
+        referenced_hash(&display),
+        expected,
+        "display job must reuse the preserved alignment"
     );
     std::fs::remove_file(&source).unwrap();
     let mut old = work.clone();

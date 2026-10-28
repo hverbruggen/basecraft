@@ -1,43 +1,15 @@
-//! Filesystem and public Python SDK boundary acceptance, without numerical mocks
-//! masquerading as scientific validation. Real scientific tools have separate tests.
+//! Filesystem and public Python SDK boundary acceptance for registered runs,
+//! without numerical mocks masquerading as scientific validation. Real
+//! scientific tools have separate tests.
+mod common;
+
 use basecraft_ops::{
     Session,
     analysis_store::ArtifactRun,
     input_evidence::{self, SavePolicy},
 };
-use basecraft_plugin_host::{FileJob, file_tool::AlignmentInput};
 use basecraft_protocol::Op;
 use std::{fmt::Write as _, path::Path};
-
-fn fixture(root: &Path) -> std::path::PathBuf {
-    let plugin = root.join("plugin");
-    std::fs::create_dir(&plugin).unwrap();
-    std::fs::write(plugin.join("plugin.toml"), "schema = 1\nid = 'basecraft.mafft'\nname = 'Storage test'\nversion = 'test'\n[entry]\noperation = 'python:test.py'\n").unwrap();
-    std::fs::write(
-        plugin.join("test.py"),
-        r"
-import json
-from pathlib import Path
-from basecraft.plugin import Plugin
-plugin = Plugin('basecraft.mafft', 'test')
-@plugin.operation('align')
-def align(snapshot, params):
-    allocation = params['analysis_artifacts']
-    root = Path(allocation['metadata_directory'])
-    assert root.is_absolute() and root.is_dir()
-    assert Path(allocation['working_directory']).is_absolute()
-    assert allocation['run_id'] == params['job_id']
-    source, target = Path(params['input']), Path(params['output'])
-    target.write_bytes(source.read_bytes())
-    receipt = root / 'sdk-allocation.json'
-    receipt.write_text(json.dumps(allocation))
-    return {'ops': [], 'outputs': [str(target), str(receipt)]}
-plugin.run()
-",
-    )
-    .unwrap();
-    plugin
-}
 
 fn files(root: &Path) -> Vec<std::path::PathBuf> {
     let mut out = Vec::new();
@@ -69,36 +41,25 @@ fn synthetic_large_clean_source_has_metadata_only_evidence_and_relocates() {
         }
     }
     std::fs::write(&source, &text).unwrap();
-    let plugin = fixture(dir.path());
+    let registry = common::copy_aligner(dir.path());
     let result = folder.join("aligned.fasta");
     let mut session = Session::recoverable(&folder).unwrap();
-    let doc = session.open(&source).unwrap();
-    let job = FileJob::from_alignment(
-        &session,
-        doc,
-        (&plugin, "align"),
-        AlignmentInput::Ungapped,
-        result.clone(),
-    )
-    .unwrap();
-    let outcome = job.run();
-    job.record_terminal(&mut session, doc, &outcome, 0.0)
-        .unwrap();
-    job.record(&mut session, doc, &outcome.unwrap()).unwrap();
-    let io = job.input_io().unwrap();
-    assert_eq!(io["source_identity_hash_bytes"], 0);
-    assert_eq!(io["persistent_original_copy_bytes"], 0);
-    assert_eq!(io["persistent_submitted_copy_bytes"], 0);
-    assert_eq!(io["execution_scratch_read_bytes"], text.len() as u64);
+    common::align_copy(&registry, &mut session, &source, &result);
     let run = ArtifactRun::for_result(&result).unwrap().unwrap();
+    // The clean source is referenced in place: its bytes are never copied.
+    assert_eq!(
+        input_evidence::read_input(&run).unwrap().state,
+        "referenced"
+    );
+    assert!(!run.join("document-input.afa").exists());
     assert!(!run.join("submitted.fasta").exists());
     assert!(!run.join("preserved-input").exists());
     assert!(!folder.join(".basecraft/project.toml").exists());
     let mut bytes = 0;
     for path in files(&folder.join(".basecraft")) {
-        if path.starts_with(run.join("pending")) {
+        if path.starts_with(run.join("artifacts")) {
             continue;
-        } // Output hardlink, no input copy.
+        } // The retained result itself, not input evidence.
         bytes += std::fs::metadata(path).unwrap().len();
     }
     assert!(
@@ -110,11 +71,7 @@ fn synthetic_large_clean_source_has_metadata_only_evidence_and_relocates() {
         basecraft_ops::provenance::verify(&result).unwrap(),
         Vec::<String>::new()
     );
-    println!(
-        "input_bytes={} metadata_bytes={bytes} host_input_io={io}",
-        text.len()
-    );
-    drop(job);
+    println!("input_bytes={} metadata_bytes={bytes}", text.len());
     drop(session);
     let moved = dir.path().join("moved");
     std::fs::rename(&folder, &moved).unwrap();
@@ -142,20 +99,11 @@ fn common_save_route_preserves_actual_original_and_dirty_submitted_input() {
     let source = dir.path().join("input.fasta");
     std::fs::write(&source, ">a\nAAAA\n>b\nAAAT\n").unwrap();
     let old = std::fs::read(&source).unwrap();
-    let plugin = fixture(dir.path());
+    let registry = common::copy_aligner(dir.path());
     let output = dir.path().join("out.fasta");
     let mut session = Session::new(dir.path());
     let doc = session.open(&source).unwrap();
-    let job = FileJob::from_alignment(
-        &session,
-        doc,
-        (&plugin, "align"),
-        AlignmentInput::Ungapped,
-        output.clone(),
-    )
-    .unwrap();
-    let result = job.run().unwrap();
-    job.record(&mut session, doc, &result).unwrap();
+    common::align_document(&registry, &mut session, doc, &output);
     session
         .apply(
             doc,
@@ -174,28 +122,15 @@ fn common_save_route_preserves_actual_original_and_dirty_submitted_input() {
     ));
     assert_eq!(std::fs::read(&source).unwrap(), old);
     let dirty_output = dir.path().join("dirty.fasta");
-    let dirty = FileJob::from_alignment(
-        &session,
-        doc,
-        (&plugin, "align"),
-        AlignmentInput::Ungapped,
-        dirty_output.clone(),
-    )
-    .unwrap();
-    let result = dirty.run().unwrap();
-    dirty.record(&mut session, doc, &result).unwrap();
+    let dirty = common::align_document(&registry, &mut session, doc, &dirty_output);
     let run = ArtifactRun::for_result(&dirty_output).unwrap().unwrap();
+    assert_eq!(run, common::evidence(&dirty));
     assert_eq!(input_evidence::read_input(&run).unwrap().state, "generated");
+    // The unsaved bytes that were analysed are retained with the run.
     assert!(
-        std::fs::read_to_string(run.join("submitted.fasta"))
+        std::fs::read_to_string(run.join("document-input.afa"))
             .unwrap()
             .contains("TAAA")
-    );
-    assert!(
-        dirty.input_io().unwrap()["persistent_submitted_copy_bytes"]
-            .as_u64()
-            .unwrap()
-            > 0
     );
     // Save As leaves old evidence intact and never needs a decision for a new path.
     session
@@ -237,22 +172,12 @@ fn downstream_evidence_follows_preservation_and_complete_export_keeps_dependency
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("source.afa");
     std::fs::write(&source, ">a\nAAAA\n>b\nAAAT\n").unwrap();
-    let plugin = fixture(root.path());
+    let registry = common::copy_aligner(root.path());
     let mut session = Session::recoverable(root.path()).unwrap();
     let first = root.path().join("first.afa");
     let second = root.path().join("second.afa");
     for (source, output) in [(&source, &first), (&first, &second)] {
-        let doc = session.open(source).unwrap();
-        let job = FileJob::from_alignment(
-            &session,
-            doc,
-            (&plugin, "align"),
-            AlignmentInput::Ungapped,
-            output.clone(),
-        )
-        .unwrap();
-        let result = job.run().unwrap();
-        job.record(&mut session, doc, &result).unwrap();
+        common::align_copy(&registry, &mut session, source, output);
     }
     let conflict = input_evidence::conflicts(&source).unwrap();
     assert_eq!(conflict.analyses.len(), 2);
@@ -291,20 +216,10 @@ fn save_as_descendants_receive_each_explicit_evidence_decision() {
         let first = root.path().join("first.afa");
         let saved = root.path().join("saved.afa");
         let last = root.path().join("last.afa");
-        let plugin = fixture(root.path());
+        let registry = common::copy_aligner(root.path());
         let mut session = Session::recoverable(root.path()).unwrap();
         for (input, output) in [(&source, &first), (&saved, &last)] {
-            let doc = session.open(input).unwrap();
-            let job = FileJob::from_alignment(
-                &session,
-                doc,
-                (&plugin, "align"),
-                AlignmentInput::Ungapped,
-                output.clone(),
-            )
-            .unwrap();
-            let outcome = job.run().unwrap();
-            job.record(&mut session, doc, &outcome).unwrap();
+            common::align_copy(&registry, &mut session, input, output);
             if output == &first {
                 let doc = session.open(&first).unwrap();
                 session.save(doc, Some(&saved)).unwrap();
@@ -349,18 +264,9 @@ fn complete_export_remaps_history_and_retains_original_records_without_store() {
     std::fs::write(&source, ">a\nAAAA\n>b\nAAAT\n").unwrap();
     let first = root.path().join("first.afa");
     let saved = root.path().join("saved.afa");
-    let plugin = fixture(root.path());
+    let registry = common::copy_aligner(root.path());
     let mut session = Session::recoverable(root.path()).unwrap();
-    let doc = session.open(&source).unwrap();
-    let job = FileJob::from_alignment(
-        &session,
-        doc,
-        (&plugin, "align"),
-        AlignmentInput::Ungapped,
-        first.clone(),
-    )
-    .unwrap();
-    job.record(&mut session, doc, &job.run().unwrap()).unwrap();
+    common::align_copy(&registry, &mut session, &source, &first);
     let doc = session.open(&first).unwrap();
     for residue in ["T", "C"] {
         session

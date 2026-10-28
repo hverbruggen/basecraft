@@ -1,8 +1,10 @@
-//! Real local/pixi tool runs through the same boundary as the GUI.
+//! Real local/pixi tool runs through the same registered route as the GUI.
+mod common;
+
 use basecraft_ops::Session;
-use basecraft_plugin_host::{FileJob, file_tool::AlignmentInput, process::python_interpreter};
+use basecraft_plugin_host::process::python_interpreter;
 use basecraft_protocol::Op;
-use std::path::Path;
+use serde_json::json;
 
 fn available(name: &str) -> bool {
     std::process::Command::new(python_interpreter()).args(["-c", &format!(
@@ -22,18 +24,13 @@ fn trimal_and_iqtree_preserve_identifiers_and_provenance() {
     std::fs::write(&input, ">a:one\nACGTACGTACGT--ACGTACGTACGT\n>b\nACGTACGTTCGT--ACGTACGTACGT\n>c\nTCGTACGTACGT--ACGTACGTACGA\n>d\nTCGTACGTTCGT--ACGTACGTACGA\n").unwrap();
     let mut session = Session::new(root);
     let doc = session.open(&input).unwrap();
-    let plugins = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins");
+    let registry = common::bundled();
     let trimmed = root.join("trimmed.afa");
-    let job = FileJob::from_alignment(
-        &session,
-        doc,
-        (&plugins.join("trimal"), "trim"),
-        AlignmentInput::Aligned,
-        trimmed.clone(),
-    )
-    .unwrap();
-    let result = job.run().unwrap();
-    job.record(&mut session, doc, &result).unwrap();
+    let outcome = common::run_in(&registry, &mut session, |s| {
+        json!({"operation":"basecraft.trimal/trim@1","inputs":{"alignment":common::document(s, doc)},
+            "parameters":{},"destinations":{"artifacts/trimmed.afa":"trimmed.afa"}})
+    });
+    common::assert_completed(&outcome);
     let out = session.open(&trimmed).unwrap();
     assert_eq!(session.alignment(out).width(), 24);
     assert_eq!(session.alignment(out).row(0).name, "a:one");
@@ -49,20 +46,14 @@ fn trimal_and_iqtree_preserve_identifiers_and_provenance() {
         )
         .unwrap();
     let tree = root.join("tree.nwk");
-    let mut job = FileJob::from_alignment(
-        &session,
-        doc,
-        (&plugins.join("iqtree"), "tree"),
-        AlignmentInput::Aligned,
-        tree.clone(),
-    )
-    .unwrap();
-    job.params.insert("model".into(), serde_json::json!("JC"));
-    job.params.insert("threads".into(), serde_json::json!(1));
-    let result = job.run().unwrap();
-    job.record(&mut session, doc, &result).unwrap();
+    let outcome = common::run_in(&registry, &mut session, |s| {
+        json!({"operation":"basecraft.iqtree/tree@1","inputs":{"alignment":common::document(s, doc)},
+            "parameters":{"model":"JC","threads":1},"destinations":{"artifacts/tree.nwk":"tree.nwk"}})
+    });
+    common::assert_completed(&outcome);
     let tree_doc = session.open(&tree).unwrap();
     assert!(session.tree(tree_doc).find_tip("a:one").is_some());
+    // The unsaved edit is what IQ-TREE saw, and the tree links to exactly that.
     let link = basecraft_ops::links::AlignmentLink::read(&tree).unwrap();
     assert!(link.inferred);
     assert_eq!(link.alignment_version, session.alignment(doc).version());
@@ -71,13 +62,15 @@ fn trimal_and_iqtree_preserve_identifiers_and_provenance() {
         .unwrap();
     let snapshot_doc = session.open(&snapshot).unwrap();
     assert_eq!(session.alignment(snapshot_doc).read(0, 0, 1), b"T");
-    assert!(result.outputs.iter().any(|p| p.ends_with(".iqtree")));
+    // IQ-TREE's report stays with the run's retained results.
     assert!(
-        result
-            .outputs
+        outcome
+            .artifacts
             .iter()
-            .any(|p| p.ends_with(".alignment.json"))
+            .any(|artifact| artifact.path.ends_with(".iqtree")),
+        "{outcome:#?}"
     );
+    assert_eq!(common::tool_runs(&session, doc).len(), 2);
     session.flush().unwrap();
     assert!(basecraft_ops::replay::replay(root).unwrap().ok());
 }

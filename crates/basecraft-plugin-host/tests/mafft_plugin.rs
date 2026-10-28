@@ -1,14 +1,14 @@
-//! End to end: realign an alignment with the MAFFT plugin and log the run.
-//! Skips when the plugin's Python or MAFFT isn't available.
+//! End to end: realign an alignment with the registered MAFFT operation and
+//! record the run. Skips when the plugin's Python or MAFFT isn't available.
+mod common;
 
 use std::fmt::Write as _;
-use std::path::Path;
 
 use basecraft_ops::Session;
-use basecraft_plugin_host::FileJob;
-use basecraft_plugin_host::file_tool::{AlignmentInput, output_beside};
+use basecraft_plugin_host::file_tool::output_beside;
 use basecraft_plugin_host::process::python_interpreter;
 use basecraft_protocol::{Actor, Op};
+use serde_json::json;
 
 fn mafft_available() -> bool {
     let python = python_interpreter();
@@ -47,19 +47,18 @@ fn realigns_with_mafft_and_logs_the_run() {
     let mut session = Session::new(root);
     let doc = session.open(&file).unwrap();
     assert!(session.is_alignment(doc));
-    let plugin = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/mafft");
     let output = output_beside(&file, "mafft", "fasta");
-    let job = FileJob::from_alignment(
-        &session,
-        doc,
-        (&plugin, "align"),
-        AlignmentInput::Ungapped,
-        output.clone(),
-    )
-    .unwrap();
-    let result = job.run().unwrap();
-    job.record(&mut session, doc, &result).unwrap();
-    assert_eq!(result.tool.as_ref().map(|t| t.name.as_str()), Some("mafft"));
+    let registry = common::bundled();
+    let outcome = common::run_in(&registry, &mut session, |s| {
+        json!({"operation":"basecraft.mafft/align@1","inputs":{"alignment":common::document(s, doc)},
+            "parameters":{},"destinations":{"artifacts/alignment.afa":"seqs.mafft.fasta"}})
+    });
+    common::assert_completed(&outcome);
+    assert_eq!(output, root.join("seqs.mafft.fasta"));
+    // The run's evidence names the external program that did the work.
+    let execution = common::read_json(&common::evidence(&outcome).join("execution.json"));
+    assert_eq!(execution["executor"], "basecraft.mafft");
+    assert_eq!(execution["tool"]["name"], "mafft");
 
     // The output is an alignment of the same sequences.
     let out = session.open(&output).unwrap();
@@ -71,19 +70,21 @@ fn realigns_with_mafft_and_logs_the_run() {
         let ungapped: Vec<u8> = row.into_iter().filter(|&b| b != b'-').collect();
         assert_eq!(ungapped, seq.as_bytes(), "row {name}");
     }
+    assert_eq!(
+        basecraft_ops::provenance::verify(&output).unwrap(),
+        Vec::<String>::new()
+    );
+    // The source document's history holds the run, by MAFFT, linked by run ID.
+    let runs = common::tool_run_events(&session, doc);
+    assert_eq!(runs.len(), 1);
+    assert!(matches!(&runs[0].actor, Actor::Tool { tool, .. } if tool == "mafft"));
+    let Op::ToolRun { params, .. } = &runs[0].op else {
+        unreachable!()
+    };
+    assert_eq!(params["run_id"], outcome.run_id.as_str());
+    assert_eq!(params["operation"], "basecraft.mafft/align@1");
     drop(session);
 
-    let entries = basecraft_ops::log::read_all(root).unwrap();
-    let run = entries
-        .iter()
-        .find(|e| matches!(e.op, Op::ToolRun { .. }))
-        .expect("tool.run logged");
-    assert!(matches!(&run.actor, Actor::Tool { tool, .. } if tool == "mafft"));
-    assert_eq!(
-        run.result.hashes.len(),
-        3,
-        "input, output and diagnostic log hashed"
-    );
     let report = basecraft_ops::replay::replay(root).unwrap();
     assert!(report.ok(), "{:#?}", report.problems);
 }

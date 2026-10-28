@@ -1,65 +1,26 @@
-//! Independent combined-storage lifecycle regression probes.
+//! Independent combined-storage lifecycle regression probes, on registered runs.
 // Preserve the independently reviewed assertions verbatim.
 #![allow(clippy::assert_is_empty)]
+mod common;
+
 use basecraft_ops::{Session, analysis_store::ArtifactRun, input_evidence, provenance};
-use basecraft_plugin_host::{FileJob, file_tool::AlignmentInput};
+use basecraft_plugin_host::registry::Registry;
 use basecraft_protocol::Op;
 use std::path::{Path, PathBuf};
 
-fn fixture(root: &Path) -> std::path::PathBuf {
-    let plugin = root.join("plugin");
-    std::fs::create_dir(&plugin).unwrap();
-    std::fs::write(plugin.join("plugin.toml"), "schema = 1\nid = 'basecraft.mafft'\nname = 'Storage test'\nversion = 'test'\n[entry]\noperation = 'python:test.py'\n").unwrap();
-    std::fs::write(
-        plugin.join("test.py"),
-        r"
-import json
-from pathlib import Path
-from basecraft.plugin import Plugin
-plugin = Plugin('basecraft.mafft', 'test')
-@plugin.operation('align')
-def align(snapshot, params):
-    allocation = params['analysis_artifacts']
-    root = Path(allocation['metadata_directory'])
-    assert root.is_absolute() and root.is_dir()
-    assert Path(allocation['working_directory']).is_absolute()
-    assert allocation['run_id'] == params['job_id']
-    source, target = Path(params['input']), Path(params['output'])
-    target.write_bytes(source.read_bytes())
-    receipt = root / 'sdk-allocation.json'
-    receipt.write_text(json.dumps(allocation))
-    return {'ops': [], 'outputs': [str(target), str(receipt)]}
-plugin.run()
-",
-    )
-    .unwrap();
-    plugin
+fn analyse(session: &mut Session, registry: &Registry, source: &Path, output: &Path) {
+    common::align_copy(registry, session, source, output);
 }
 
-fn analyse(session: &mut Session, plugin: &Path, source: &Path, output: &Path) {
-    let doc = session.open(source).unwrap();
-    let job = FileJob::from_alignment(
-        session,
-        doc,
-        (plugin, "align"),
-        AlignmentInput::Ungapped,
-        output.to_path_buf(),
-    )
-    .unwrap();
-    let result = job.run().unwrap();
-    job.record(session, doc, &result).unwrap();
-    assert!(provenance::verify(output).unwrap().is_empty());
-}
-
-fn setup() -> (tempfile::TempDir, Session, PathBuf, PathBuf, PathBuf) {
+fn setup() -> (tempfile::TempDir, Session, Registry, PathBuf, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("source.afa");
     std::fs::write(&source, ">a\nAAAA\n>b\nAAAT\n").unwrap();
     let first = dir.path().join("first.afa");
-    let plugin = fixture(dir.path());
+    let registry = common::copy_aligner(dir.path());
     let mut session = Session::recoverable(dir.path()).unwrap();
-    analyse(&mut session, &plugin, &source, &first);
-    (dir, session, plugin, source, first)
+    analyse(&mut session, &registry, &source, &first);
+    (dir, session, registry, source, first)
 }
 
 fn save_as(session: &mut Session, first: &Path, copied: &Path) {
@@ -70,11 +31,11 @@ fn save_as(session: &mut Session, first: &Path, copied: &Path) {
 
 #[test]
 fn dependencies_follow_save_as_delegation() {
-    let (dir, mut session, plugin, source, first) = setup();
+    let (dir, mut session, registry, source, first) = setup();
     let copied = dir.path().join("copy.afa");
     save_as(&mut session, &first, &copied);
     let downstream = dir.path().join("downstream.afa");
-    analyse(&mut session, &plugin, &copied, &downstream);
+    analyse(&mut session, &registry, &copied, &downstream);
     let downstream_run = ArtifactRun::for_result(&downstream).unwrap().unwrap();
     let conflict = input_evidence::conflicts(&source).unwrap();
     assert!(
