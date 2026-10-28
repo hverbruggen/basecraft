@@ -1572,7 +1572,7 @@ impl qobject::AlignmentController {
         std::thread::spawn(move || {
             while !stop.load(Ordering::Acquire) {
                 std::thread::sleep(std::time::Duration::from_millis(100));
-                if qt_thread.queue(|this| this.poll_tool()).is_err() {
+                if qt_thread.queue(qobject::AlignmentController::poll_tool).is_err() {
                     break;
                 }
             }
