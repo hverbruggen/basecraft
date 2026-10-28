@@ -158,7 +158,7 @@ fn coding_review_frames_undo_save_reload_and_replay() {
         .unwrap();
         assert_eq!(s.submission(doc).frames.len(), 2);
         s.undo(doc).unwrap();
-        assert!(s.submission(doc).frames.is_empty());
+        assert_eq!(s.submission(doc).frames, Vec::new());
         s.redo(doc).unwrap();
         assert_eq!(s.submission(doc).frames.len(), 2);
         // A refused edit changes nothing.
@@ -204,7 +204,7 @@ fn changed_source_is_refused_until_chosen_again() {
     let doc = rbcl(&mut s);
     std::fs::write(root.join("rbcL.afa"), ">HV101_rbcL\nACGTACGT\n").unwrap();
     let review = submission::review(&s, doc, &submitter()).unwrap();
-    assert!(review.prepared.records.is_empty());
+    assert_eq!(review.prepared.records.len(), 0);
     assert!(
         review
             .prepared
@@ -314,9 +314,18 @@ fn package_is_deterministic_and_validation_is_tied_to_its_inputs() {
     std::fs::create_dir_all(&reports).unwrap();
     std::fs::write(reports.join("submission.sqn"), "Seq-submit ::= {}\n").unwrap();
     std::fs::write(reports.join("submission.gbf"), "LOCUS HV101_rbcL\n").unwrap();
+    std::fs::write(reports.join("table2asn.log"), "exit code: 0\n").unwrap();
     std::fs::write(reports.join("submission.val"), "Error: valid [SEQ_FEAT.InternalStop] 2 internal stops. FEATURE: CDS: x [lcl|HV103_rbcL:<1->306]\nWarning: valid [SEQ_INST.TerminalNs] N at end BIOSEQ: lcl|HV102_rbcL: raw\n").unwrap();
-    let artifacts: Vec<_> = ["submission.sqn", "submission.gbf", "submission.val"].iter().map(|n| json!({"role":"reports","path":reports.join(n).display().to_string(),"digest":"b3:x"})).collect();
-    let outcome = json!({"state":"completed","run_id":"run1","data":{"status":"completed","version":"1.28.1094","message":"ok"},"artifacts":artifacts});
+    let artifacts: Vec<_> = [
+        "submission.sqn",
+        "submission.gbf",
+        "submission.val",
+        "table2asn.log",
+    ]
+    .iter()
+    .map(|n| json!({"role":"reports","path":reports.join(n).display().to_string(),"digest":"b3:x"}))
+    .collect();
+    let outcome = json!({"state":"completed","run_id":"run1","data":{"status":"completed","version":"1.28.1094","exit_code":0,"message":"ok"},"artifacts":artifacts});
     let summary = submission::record_validation(root, &package, &outcome).unwrap();
     assert_eq!(summary.status, "errors");
     assert_eq!((summary.errors, summary.warnings), (1, 1));
@@ -437,7 +446,7 @@ fn rrna_its_and_coi_batches() {
         f.qualifiers[0].1,
         "contains small subunit ribosomal RNA, internal transcribed spacer 1, 5.8S ribosomal RNA, and internal transcribed spacer 2"
     );
-    assert!((f.partial5, f.partial3) == (true, true));
+    assert_eq!((f.partial5, f.partial3), (true, true));
     assert!(codes(&review, "HV403_ITS").contains(&"duplicate_record".into()));
     assert!(codes(&review, "orphan_ITS").contains(&"unlinked".into()));
     assert!(review.prepared.issues.iter().any(|i| i.code == "no_title"));

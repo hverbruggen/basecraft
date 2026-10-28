@@ -554,10 +554,26 @@ def main():
                 reviews["python"] = py.review_submission(doc)
                 py.export_submission(doc, "package")
                 summaries["python"] = py.validate_submission("package", timeout=60)
+            # Each project's metadata manifest has its own generated IDs.
+            for review in reviews.values():
+                review.pop("metadata_hash")
             codes = sorted({(i["code"], i.get("record")) for i in reviews["cli"]["issues"]})
             assert ("duplicate_record", "HV403_ITS") in codes, codes
             for route in ("mcp", "python"):
-                assert reviews[route] == reviews["cli"], route
+                if reviews[route] != reviews["cli"]:
+                    def first_difference(a, b, where="review"):
+                        if type(a) is not type(b) or not isinstance(a, (dict, list)):
+                            return None if a == b else (where, a, b)
+                        keys = sorted(set(a) | set(b)) if isinstance(a, dict) else range(max(len(a), len(b)))
+                        for key in keys:
+                            try:
+                                found = first_difference(a[key], b[key], f"{where}/{key}")
+                            except (KeyError, IndexError):
+                                return (f"{where}/{key}", "missing on one side", None)
+                            if found:
+                                return found
+                        return None
+                    raise AssertionError((route, first_difference(reviews["cli"], reviews[route])))
                 for name in ("genbank/submission.fsa", "genbank/submission.src",
                              "genbank/submission.tbl", "genbank/submission.sbt",
                              "genbank/submission.sqn", "records.tsv", "specimens.tsv",

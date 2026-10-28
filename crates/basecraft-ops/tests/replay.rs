@@ -945,7 +945,7 @@ fn submission_edits_undo_save_and_replay() {
             .unwrap();
         }
         s.undo(doc).unwrap();
-        assert!(s.submission(doc).frames.is_empty());
+        assert_eq!(s.submission(doc).frames, Vec::new());
         s.save(doc, None).unwrap();
         s.redo(doc).unwrap();
         s.save(doc, None).unwrap();

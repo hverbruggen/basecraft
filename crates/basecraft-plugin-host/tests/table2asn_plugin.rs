@@ -41,7 +41,7 @@ fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/submission")
 }
 
-/// The bundled plugin, run with BASECRAFT_TABLE2ASN set to `tool`.
+/// The bundled plugin, run with `BASECRAFT_TABLE2ASN` set to `tool`.
 fn registry(root: &Path, tool: &Path) -> Registry {
     let dir = root.join("bundle/table2asn");
     std::fs::create_dir_all(&dir).unwrap();

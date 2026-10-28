@@ -4,7 +4,6 @@
 //! typed `submission.edit` operations (saved after each command), review,
 //! package export, table2asn validation through the registered operation
 //! runner, and returned accessions.
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use basecraft_ops::submission;
@@ -94,7 +93,7 @@ pub enum SubmissionCommand {
         project: PathBuf,
     },
     /// Print the submitter preference; `--set` merges a JSON object of
-    /// fields (first_name, last_name, email, institution, city, country, ...).
+    /// fields (`first_name`, `last_name`, `email`, `institution`, `city`, `country`, ...).
     Submitter {
         #[arg(long)]
         set: Option<String>,
