@@ -17,6 +17,13 @@ captions and tabs. It defaults to 100 and accepts integers from 100 to 200; the 
 steppers offer 25-percent increments and a reset to 100. It composes with interface
 font size and Qt display scaling without changing the window font or canvas zoom.
 
+`submitter` holds the contact details and affiliation written to every GenBank
+submission template (`.sbt`): name, email, phone, institution, department,
+street, city, state, postal code and country, each at most 200 characters on
+one line. First and last name, email (with an `@`), institution, city and
+country are required before a package is ready; empty fields are unset. Authors
+and the publication title belong to each submission document, not here.
+
 `basecraft_platform::paths::AppPaths` discovers native config, data, state, cache
 and scratch locations without creating them. On Linux these use XDG locations
 with the application directory `basecraft`; macOS uses Library application support

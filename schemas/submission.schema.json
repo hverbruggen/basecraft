@@ -1,0 +1,419 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Submission",
+  "type": "object",
+  "properties": {
+    "accessions": {
+      "description": "Accessions returned by the archive, by record name.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/AccessionEntry"
+      }
+    },
+    "batch": {
+      "$ref": "#/$defs/BatchSettings"
+    },
+    "destination": {
+      "$ref": "#/$defs/Destination",
+      "default": "genbank"
+    },
+    "export": {
+      "$ref": "#/$defs/ExportSettings",
+      "default": {
+        "trim_terminal_unknown": true
+      }
+    },
+    "frames": {
+      "description": "Reading frames the user confirmed or chose, by record name.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/FrameChoice"
+      }
+    },
+    "publication": {
+      "$ref": "#/$defs/Publication",
+      "default": {
+        "authors": [],
+        "title": ""
+      }
+    },
+    "rows": {
+      "description": "Decisions for rows, by record name. Rows without one are new.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/RowDecision"
+      }
+    },
+    "source": {
+      "description": "The alignment the records are extracted from.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SourceAlignment"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": true,
+  "required": [
+    "version",
+    "batch"
+  ],
+  "$defs": {
+    "AccessionEntry": {
+      "type": "object",
+      "properties": {
+        "accession": {
+          "description": "Accession, with its version when the archive gave one.",
+          "type": "string"
+        },
+        "record": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "record",
+        "accession"
+      ]
+    },
+    "Author": {
+      "type": "object",
+      "properties": {
+        "first": {
+          "type": "string"
+        },
+        "last": {
+          "type": "string"
+        },
+        "middle": {
+          "description": "Middle initials, without the first name's, such as `M.`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "first",
+        "last"
+      ]
+    },
+    "BatchSettings": {
+      "description": "Settings shared by every record of the batch.",
+      "type": "object",
+      "properties": {
+        "ends": {
+          "$ref": "#/$defs/EndPolicy",
+          "default": "auto"
+        },
+        "genetic_code": {
+          "description": "NCBI genetic code (translation table) number.",
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        },
+        "marker": {
+          "$ref": "#/$defs/Marker"
+        },
+        "mol_type": {
+          "$ref": "#/$defs/MolType",
+          "default": "genomic_dna"
+        },
+        "organelle": {
+          "description": "The organelle the marker is from; none for nuclear markers.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Organelle"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "marker",
+        "genetic_code"
+      ]
+    },
+    "Destination": {
+      "type": "string",
+      "enum": [
+        "genbank"
+      ]
+    },
+    "EndPolicy": {
+      "description": "How the feature's ends are marked.",
+      "oneOf": [
+        {
+          "description": "Coding markers: an end is complete when it has a start (5') or stop\n(3') codon in frame. Other markers: both ends partial.",
+          "type": "string",
+          "const": "auto"
+        },
+        {
+          "description": "Both ends partial.",
+          "type": "string",
+          "const": "partial"
+        },
+        {
+          "description": "Both ends complete.",
+          "type": "string",
+          "const": "complete"
+        }
+      ]
+    },
+    "ExportSettings": {
+      "type": "object",
+      "properties": {
+        "trim_terminal_unknown": {
+          "description": "Remove runs of unknown bases (N, ?) at the ends of each record.\nThe trimmed lengths are recorded in the coordinate map.",
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "FrameChoice": {
+      "description": "A reading frame the user reviewed for one record.",
+      "type": "object",
+      "properties": {
+        "codon_start": {
+          "description": "1, 2 or 3: the first base of the first complete codon.",
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        },
+        "record": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "record",
+        "codon_start"
+      ]
+    },
+    "ItsComponent": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "ITS1",
+            "5.8S",
+            "ITS2"
+          ]
+        },
+        {
+          "description": "Small subunit (18S) ribosomal RNA.",
+          "type": "string",
+          "const": "SSU"
+        },
+        {
+          "description": "Large subunit (28S) ribosomal RNA.",
+          "type": "string",
+          "const": "LSU"
+        }
+      ]
+    },
+    "Marker": {
+      "description": "The marker type, which decides the one feature each record gets.",
+      "oneOf": [
+        {
+          "description": "A protein-coding gene: a `gene` and a `CDS` feature.",
+          "type": "object",
+          "properties": {
+            "gene": {
+              "description": "Gene symbol, such as `rbcL`; may be empty.",
+              "type": "string",
+              "default": ""
+            },
+            "kind": {
+              "type": "string",
+              "const": "coding"
+            },
+            "product": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "product"
+          ]
+        },
+        {
+          "description": "A ribosomal RNA gene, such as `18S ribosomal RNA`.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "rrna"
+            },
+            "product": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "product"
+          ]
+        },
+        {
+          "description": "The ITS region: one `misc_RNA` with a note listing the components\npresent. Internal boundaries are not annotated.",
+          "type": "object",
+          "properties": {
+            "components": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ItsComponent"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "its"
+            }
+          },
+          "required": [
+            "kind",
+            "components"
+          ]
+        },
+        {
+          "description": "A non-coding region, such as an intergenic spacer: one\n`misc_feature` with this description as its note.",
+          "type": "object",
+          "properties": {
+            "description": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "spacer"
+            }
+          },
+          "required": [
+            "kind",
+            "description"
+          ]
+        }
+      ]
+    },
+    "MolType": {
+      "type": "string",
+      "enum": [
+        "genomic_dna",
+        "genomic_rna"
+      ]
+    },
+    "Organelle": {
+      "type": "string",
+      "enum": [
+        "mitochondrion",
+        "chloroplast",
+        "plastid",
+        "apicoplast",
+        "chromoplast",
+        "cyanelle",
+        "kinetoplast",
+        "nucleomorph"
+      ]
+    },
+    "Publication": {
+      "description": "The publication the sequences belong to, written to the `.sbt`.",
+      "type": "object",
+      "properties": {
+        "authors": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Author"
+          }
+        },
+        "title": {
+          "type": "string",
+          "default": ""
+        }
+      }
+    },
+    "RowDecision": {
+      "description": "What to do with a row.",
+      "type": "object",
+      "properties": {
+        "record": {
+          "description": "The alignment row name (FASTA ID).",
+          "type": "string"
+        }
+      },
+      "oneOf": [
+        {
+          "description": "A newly generated sequence, exported for submission.",
+          "type": "object",
+          "properties": {
+            "decision": {
+              "type": "string",
+              "const": "new"
+            }
+          },
+          "required": [
+            "decision"
+          ]
+        },
+        {
+          "description": "Already in an archive (a downloaded reference, or submitted\nbefore); not exported.",
+          "type": "object",
+          "properties": {
+            "accession": {
+              "type": "string"
+            },
+            "decision": {
+              "type": "string",
+              "const": "existing"
+            }
+          },
+          "required": [
+            "decision",
+            "accession"
+          ]
+        },
+        {
+          "description": "Left out of the submission.",
+          "type": "object",
+          "properties": {
+            "decision": {
+              "type": "string",
+              "const": "exclude"
+            }
+          },
+          "required": [
+            "decision"
+          ]
+        }
+      ],
+      "required": [
+        "record"
+      ]
+    },
+    "SourceAlignment": {
+      "description": "An alignment file inside the project and the BLAKE3 hash of the bytes\nthe submission was prepared from. A different file content is refused\nuntil the source is selected again.",
+      "type": "object",
+      "properties": {
+        "document": {
+          "description": "Project-relative path.",
+          "type": "string"
+        },
+        "hash": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "document",
+        "hash"
+      ]
+    }
+  }
+}
