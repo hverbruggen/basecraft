@@ -921,7 +921,7 @@ impl Session {
                             return Err(error.into());
                         }
                         return Err(invalid(format!(
-                            "partial metadata save: replaced {}; failed at {}: {error}. Metadata generation is incomplete. Keep the open document and retry saving after fixing the destination, or save to a new folder. Recovery remains at {}",
+                            "partial metadata save: replaced {}; failed at {}: {error}. Metadata generation is incomplete. Keep the open document and retry saving after fixing the destination, or save to a new folder. Temporary recovery, when enabled, is at {}",
                             replaced.join(", "),
                             path.display(),
                             self.storage_root.display()
