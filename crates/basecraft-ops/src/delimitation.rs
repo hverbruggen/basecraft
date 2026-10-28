@@ -13,6 +13,30 @@ pub fn publish_workspace(
     work: &basecraft_protocol::delimitation::DelimitationWorkspace,
     run: &crate::analysis_store::ArtifactRun,
 ) -> Result<()> {
+    let name = stage_workspace(target, work, run)?;
+    run.publish_primary(&name)?;
+    run.bind(target)
+}
+
+/// Publish a run's species workspace as a new SPART file at `target`, which
+/// may lie anywhere in the project; never replaces an existing file.
+pub fn publish_workspace_to(
+    target: &std::path::Path,
+    work: &basecraft_protocol::delimitation::DelimitationWorkspace,
+    run: &crate::analysis_store::ArtifactRun,
+) -> Result<()> {
+    let name = stage_workspace(target, work, run)?;
+    run.publish(&name, crate::analysis_store::ArtifactDestination::Metadata)?;
+    run.publish_secondary(&name, target)?;
+    run.bind(target)
+}
+
+/// Stage the SPART and its sidecar in the run; returns the staged name.
+fn stage_workspace(
+    target: &std::path::Path,
+    work: &basecraft_protocol::delimitation::DelimitationWorkspace,
+    run: &crate::analysis_store::ArtifactRun,
+) -> Result<String> {
     let name = target
         .file_name()
         .and_then(|n| n.to_str())
@@ -25,8 +49,7 @@ pub fn publish_workspace(
     basecraft_io::write_atomic(&run.artifact(&format!("{name}.basecraft.json"))?, |w| {
         files::write_delimitation_sidecar_at(work, &hash, target, w)
     })?;
-    run.publish_primary(name)?;
-    run.bind(target)
+    Ok(name.into())
 }
 
 /// Explicitly attach a clean file to a species workspace using the common

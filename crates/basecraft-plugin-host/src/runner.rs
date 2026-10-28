@@ -1429,6 +1429,84 @@ impl PreparedOperation {
         self.persist(outcome)
     }
 
+    /// Record this run in `doc`'s history although `doc` is not one of its
+    /// inputs, as for a species workspace analysing a file it references.
+    pub fn bind_target(
+        &mut self,
+        session: &basecraft_ops::Session,
+        doc: basecraft_ops::DocId,
+    ) -> Result<()> {
+        if self.document.is_some() || self.sequence.is_some() {
+            return Err(Error::Protocol(
+                "run already records into its input document".into(),
+            ));
+        }
+        if !session.is_open(doc) {
+            return Err(Error::Protocol("unknown target document".into()));
+        }
+        let evidence = self
+            .context
+            .input_evidence
+            .values()
+            .flatten()
+            .next()
+            .ok_or_else(|| Error::Protocol("target run has no input".into()))?;
+        let key = evidence
+            .original_path
+            .clone()
+            .unwrap_or_else(|| "generated input".into());
+        let path = session.root().join(session.doc_key(doc));
+        self.document = Some(DocumentTarget {
+            doc,
+            session: session.id().into(),
+            generation: session.generation(doc),
+            revision: session.revision(doc),
+            record: session.document_record(doc)?,
+            input: (key, evidence.submitted_hash.clone()),
+            saved: session.saved_source(doc)?.map(|(path, _, _)| path),
+            path,
+        });
+        Ok(())
+    }
+
+    /// Publish the species workspace in a completed run's result as a new
+    /// SPART file in the project.
+    pub fn publish_workspace(&self, destination: &str) -> Result<PathBuf> {
+        let validated: Vec<(String, PathBuf, String)> =
+            serde_json::from_slice(&basecraft_ops::provenance::read_record(
+                &self.run.artifact("validated-artifacts.json")?,
+            )?)?;
+        let (role, staged, hash) = validated
+            .iter()
+            .find(|(_, path, _)| path.file_name().is_some_and(|name| name == "result.json"))
+            .ok_or_else(|| Error::Protocol("run returned no species result".into()))?;
+        let retained = if self.operation.descriptor.host_workflow.is_some() {
+            staged.clone()
+        } else {
+            self.run.artifact(role)?.join(
+                staged
+                    .strip_prefix(
+                        self.context
+                            .outputs
+                            .get(role)
+                            .ok_or_else(|| Error::Protocol("undeclared output role".into()))?,
+                    )
+                    .map_err(|_| Error::Protocol("result escapes allocation".into()))?,
+            )
+        };
+        if basecraft_io::hash_file(&retained).map_err(basecraft_ops::Error::from)? != *hash {
+            return Err(Error::Protocol("retained species result changed".into()));
+        }
+        let value: Value = serde_json::from_slice(&std::fs::read(&retained)?)?;
+        if value["workspace"].is_null() {
+            return Err(Error::Protocol("result holds no species workspace".into()));
+        }
+        let work = serde_json::from_value(value["workspace"].clone())?;
+        let target = self.policy.path(destination, true)?;
+        basecraft_ops::delimitation::publish_workspace_to(&target, &work, &self.run)?;
+        Ok(target)
+    }
+
     /// An exported tree gets what the retained member has: its run binding,
     /// producer support semantics and the link to the alignment it came from.
     fn finalise_exported_tree(&self, tree: &Path) -> Result<()> {
@@ -1489,7 +1567,12 @@ impl PreparedOperation {
             serde_json::from_slice(&basecraft_ops::provenance::read_record(
                 &self.run.artifact("validated-artifacts.json")?,
             )?)?;
-        let staging = PathBuf::from(&self.context.outputs[role]);
+        let staging = PathBuf::from(
+            self.context
+                .outputs
+                .get(role)
+                .ok_or_else(|| Error::Protocol("undeclared output role".into()))?,
+        );
         let hash = validated
             .iter()
             .find(|(name, path, _)| {

@@ -65,6 +65,45 @@ impl JobManager {
     ) -> Result<OperationOutcome> {
         self.submit_with_session(registry, request, policy, initiator, Some(session))
     }
+    /// Like `submit_in_session`, also recording the run in `target`'s history
+    /// when that document is not itself an input, such as a species workspace.
+    pub fn submit_for_document(
+        &mut self,
+        registry: &Registry,
+        request: OperationRequest,
+        policy: SessionPolicy,
+        initiator: &str,
+        session: &mut basecraft_ops::Session,
+        target: basecraft_ops::DocId,
+    ) -> Result<OperationOutcome> {
+        self.submit_with_target(
+            registry,
+            request,
+            policy,
+            initiator,
+            Some(session),
+            Some(target),
+        )
+    }
+    /// Publish the species workspace of a completed run as a new SPART file.
+    pub fn publish_workspace(&self, id: &str, destination: &str) -> Result<std::path::PathBuf> {
+        let job = self
+            .jobs
+            .get(id)
+            .ok_or_else(|| Error::Protocol("unknown job in this session".into()))?;
+        if job
+            .outcome
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .state
+            != RuntimeState::Completed
+        {
+            return Err(Error::Protocol(
+                "invalid_arguments: only a completed run can publish results".into(),
+            ));
+        }
+        job.prepared.publish_workspace(destination)
+    }
     pub fn target_document(&self, id: &str) -> Option<basecraft_ops::DocId> {
         self.jobs.get(id).and_then(|job| {
             job.prepared
@@ -262,6 +301,17 @@ impl JobManager {
         initiator: &str,
         session: Option<&mut basecraft_ops::Session>,
     ) -> Result<OperationOutcome> {
+        self.submit_with_target(registry, request, policy, initiator, session, None)
+    }
+    fn submit_with_target(
+        &mut self,
+        registry: &Registry,
+        request: OperationRequest,
+        policy: SessionPolicy,
+        initiator: &str,
+        mut session: Option<&mut basecraft_ops::Session>,
+        target: Option<basecraft_ops::DocId>,
+    ) -> Result<OperationOutcome> {
         let descriptor = request
             .request_key
             .as_ref()
@@ -298,14 +348,20 @@ impl JobManager {
             .clone();
         let pins = operation.pins(&registry.generation);
         let key = request.request_key.clone();
-        let prepared = PreparedOperation::prepare(
+        let mut prepared = PreparedOperation::prepare(
             operation,
             request,
             policy,
             initiator.into(),
-            session,
+            session.as_deref_mut(),
             registry,
         )?;
+        if let Some(target) = target {
+            let session = session.ok_or_else(|| {
+                Error::Protocol("a target document needs its owning session".into())
+            })?;
+            prepared.bind_target(session, target)?;
+        }
         let outcome = OperationOutcome {
             schema: 1,
             operation: prepared.operation.id.clone(),
