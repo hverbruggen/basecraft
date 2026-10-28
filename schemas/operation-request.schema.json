@@ -41,6 +41,17 @@
         "null"
       ],
       "default": null
+    },
+    "target": {
+      "description": "A document that records this run in its history and receives its\nresults when it is not itself an input, such as a species workspace\nanalysing a file it references. Needs an owning session.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/InputReference"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "additionalProperties": false,
