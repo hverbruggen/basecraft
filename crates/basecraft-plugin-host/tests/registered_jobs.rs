@@ -693,6 +693,17 @@ fn document_inputs_read_the_session_revision_and_record_history() {
             )
         ]
     );
+    // The Tasks view lists registered runs and points at their own record.
+    let tasks = basecraft_ops::document_record::jobs(true).unwrap();
+    let listed = tasks["jobs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|task| task["id"] == clean.run_id.as_str())
+        .cloned()
+        .unwrap();
+    assert_eq!(listed["status"], "completed");
+    assert!(Path::new(listed["runtime_record"].as_str().unwrap()).is_file());
     // A failed document-bound run is recorded as an attempt, without a result.
     let request = json!({"operation":"org.example.registry-fixture/count@1","inputs":{"sources":document(&session)},
             "parameters":{"mode":"fail"},"destinations":{"report":"failed.json"}});
