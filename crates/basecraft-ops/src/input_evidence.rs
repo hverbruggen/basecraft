@@ -841,8 +841,33 @@ pub fn relink(bundle: &Path, original: &Path) -> Result<()> {
     }
     reference.path = relative(&owner, &original)?;
     reference.stamp = stamp(&original)?;
+    let hash = reference.hash.clone();
     input.state = "referenced".into();
-    write_json(&owner.join("input.json"), &input)
+    write_json(&owner.join("input.json"), &input)?;
+    // A registered run keeps one reference ledger per original beside the run.
+    // Relink each ledger in this result's declared ancestry that names the same
+    // bytes; an explicitly broken ledger stays broken.
+    for (directory, _) in ancestors(bundle)? {
+        let directory = directory.canonicalize()?;
+        if directory == owner || !directory.join("input.json").is_file() {
+            continue;
+        }
+        let mut ledger = read_input(&directory)?;
+        if ledger.state == "broken" || ledger.extra.contains_key("origin_run") {
+            continue;
+        }
+        let Some(source) = ledger.source.as_mut() else {
+            continue;
+        };
+        if source.hash != hash {
+            continue;
+        }
+        source.path = relative(&directory, &original)?;
+        source.stamp = stamp(&original)?;
+        ledger.state = "referenced".into();
+        write_json(&directory.join("input.json"), &ledger)?;
+    }
+    Ok(())
 }
 
 /// Explicit portable export materializes referenced dependencies; ordinary analysis does not.
