@@ -61,10 +61,9 @@ fn review_nonzero_tool_exit_cannot_pass_with_warning_report() {
     let package = package(dir.path(), "batch");
     let outcome = outcome(dir.path(), &package, 1);
     let summary = submission::record_validation(dir.path(), &package, &outcome).unwrap();
-    assert_ne!(
-        summary.status, "passed",
-        "nonzero tool exit was accepted: {summary:?}"
-    );
+    assert_eq!(summary.status, "failed", "{summary:?}");
+    assert_eq!(summary.warnings, 1, "retain parsed issues on failed exits");
+    assert!(!package.join("genbank/submission.sqn").exists());
 }
 
 #[test]
@@ -82,6 +81,9 @@ fn review_old_outcome_cannot_validate_regenerated_inputs() {
         ..Submitter::default()
     };
     let changed = submission::export(&mut session, doc, &package, &contact).unwrap();
+    let newer_outcome = outcome(root, &package, 0);
+    let newer = submission::record_validation(root, &package, &newer_outcome).unwrap();
+    assert_eq!(newer.status, "passed");
     match submission::record_validation(root, &package, &old_outcome) {
         Err(_) => (),
         Ok(summary) => assert_ne!(
@@ -122,6 +124,7 @@ fn review_metadata_partial_write_reports_completed_table_replacements() {
     let manifest = metadata::create(root).unwrap();
     let mut session = Session::unlogged(root);
     let doc = session.open(&manifest).unwrap();
+    let original = std::fs::read(&manifest).unwrap();
     let destination = root.join("copy");
     std::fs::create_dir(&destination).unwrap();
     // Reverse write order replaces records and identifications, then fails
@@ -138,6 +141,15 @@ fn review_metadata_partial_write_reports_completed_table_replacements() {
         error.contains("partial") || error.contains("incomplete"),
         "partial metadata write was not explained: {error}"
     );
+    assert!(error.contains("records.tsv") && error.contains("identifications.tsv"));
+    assert!(error.contains("retry") && error.contains("taxa.tsv"));
+    assert_eq!(std::fs::read(&manifest).unwrap(), original);
+    std::fs::remove_dir(destination.join("taxa.tsv")).unwrap();
+    session
+        .save(doc, Some(&destination.join(metadata::MANIFEST)))
+        .unwrap();
+    metadata::load(&destination.join(metadata::MANIFEST)).unwrap();
+    assert_eq!(std::fs::read(&manifest).unwrap(), original);
 }
 
 #[test]
@@ -229,4 +241,41 @@ fn returned_ids_survive_selection_save_reopen_and_refuse_ambiguous_lines() {
     assert_eq!(plan.accessions.len(), 1);
     assert_eq!(plan.accessions[0].record, "a@b");
     assert_eq!(plan.unmatched.len(), 1);
+}
+
+#[test]
+fn reexported_seqid_with_two_record_meanings_is_ambiguous() {
+    use basecraft_protocol::submission::{Decision, RowDecision, SubmissionEdit};
+    let dir = tempfile::tempdir().unwrap();
+    let folder = package(dir.path(), "batch");
+    let mut session = Session::unlogged(dir.path());
+    let doc = session
+        .open(&dir.path().join("batch.submission.json"))
+        .unwrap();
+    submission::edit(
+        &mut session,
+        doc,
+        SubmissionEdit::SetRows {
+            rows: vec![RowDecision {
+                record: "a@b".into(),
+                decision: Decision::Exclude,
+            }],
+        },
+    )
+    .unwrap();
+    let selection_hash = submission::review(&session, doc, &Submitter::default())
+        .unwrap()
+        .selection_hash
+        .unwrap();
+    submission::edit(
+        &mut session,
+        doc,
+        SubmissionEdit::ConfirmSelection { selection_hash },
+    )
+    .unwrap();
+    submission::export(&mut session, doc, &folder, &Submitter::default()).unwrap();
+    let plan =
+        submission::plan_accessions(&session, doc, "a_b PX123456", &Submitter::default()).unwrap();
+    assert!(plan.accessions.is_empty());
+    assert_eq!(plan.unmatched, ["a_b PX123456"]);
 }

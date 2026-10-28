@@ -28,9 +28,9 @@ pub struct Submission {
     /// Fingerprint of the reviewed source, effective decisions and accession evidence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selection_confirmation: Option<String>,
-    /// Identity mapping from the last successfully written package; independent of row selection.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub exported: Option<ExportMapping>,
+    /// Identity mappings from successfully written packages; independent of row selection.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exported: Vec<ExportMapping>,
     pub batch: BatchSettings,
     /// Reading frames the user confirmed or chose, by record name.
     #[serde(default)]
@@ -55,7 +55,7 @@ impl Default for Submission {
             source: None,
             rows: Vec::new(),
             selection_confirmation: None,
-            exported: None,
+            exported: Vec::new(),
             batch: BatchSettings::default(),
             frames: Vec::new(),
             export: ExportSettings::default(),

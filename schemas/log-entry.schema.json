@@ -2244,6 +2244,32 @@
         }
       ]
     },
+    "ExportMapping": {
+      "description": "Retained identities for interpreting archive returns after later selection edits.",
+      "type": "object",
+      "properties": {
+        "records": {
+          "description": "Submitted SeqID to original biological record name.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceAlignment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "records"
+      ]
+    },
     "ExportSettings": {
       "type": "object",
       "properties": {
@@ -3297,6 +3323,23 @@
           ]
         },
         {
+          "description": "Confirm the selection fingerprint returned by submission review.",
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "confirm_selection"
+            },
+            "selection_hash": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "action",
+            "selection_hash"
+          ]
+        },
+        {
           "type": "object",
           "properties": {
             "action": {
@@ -3369,6 +3412,23 @@
           "required": [
             "action",
             "publication"
+          ]
+        },
+        {
+          "description": "Retain the mapping after writing a submission package.",
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "record_export"
+            },
+            "mapping": {
+              "$ref": "#/$defs/ExportMapping"
+            }
+          },
+          "required": [
+            "action",
+            "mapping"
           ]
         },
         {

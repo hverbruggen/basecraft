@@ -1156,11 +1156,17 @@ fn verified_reports(
         if artifact["role"] != "reports"
             || basecraft_io::hash_file(&path)? != artifact["digest"].as_str().unwrap_or_default()
             || crate::provenance::bundle_for_result(&path).canonicalize()? != run.canonicalize()?
-            || !crate::provenance::verify(&path)?.is_empty()
         {
             return Err(invalid(
                 "validation artifact or publication evidence differs",
             ));
+        }
+        let issues = crate::provenance::verify(&path)?;
+        if !issues.is_empty() {
+            return Err(invalid(format!(
+                "validation publication verification failed: {}",
+                issues.join("; ")
+            )));
         }
     }
     // Only read files actually published by this run, including optional reports.
@@ -1289,12 +1295,12 @@ pub fn record_validation(
                 });
             }
             let complete = data["exit_code"] == 0
+                && outcome["errors"].as_array().is_none_or(Vec::is_empty)
                 && sqn.is_file()
                 && gbf.is_file()
                 && report
                     .lines()
-                    .filter(|line| !line.trim().is_empty())
-                    .next()
+                    .find(|line| !line.trim().is_empty())
                     .is_none_or(|line| {
                         ["Error: ", "Reject: ", "Fatal: ", "Warning: ", "Info: "]
                             .iter()
@@ -1434,25 +1440,27 @@ pub fn plan_accessions(
     submitter: &Submitter,
 ) -> Result<AccessionPlan> {
     let sub = checked(session, doc)?;
-    let fallback;
-    let ids = if let Some(mapping) = &sub.exported {
-        if mapping.source != sub.source {
+    let mut ids: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    if sub.exported.is_empty() {
+        // Compatibility for documents made before export mappings were retained.
+        for r in &review(session, doc, submitter)?.prepared.records {
+            if let Some(id) = &r.export_id {
+                ids.entry(id.clone()).or_default().insert(r.record.clone());
+            }
+        }
+    } else {
+        for mapping in sub.exported.iter().filter(|m| m.source == sub.source) {
+            for (id, record) in &mapping.records {
+                ids.entry(id.clone()).or_default().insert(record.clone());
+            }
+        }
+        if ids.is_empty() {
             return Err(invalid(
                 "the submission source changed since export; use the original submission for returned accessions",
             ));
         }
-        &mapping.records
-    } else {
-        // Compatibility for documents made before export mappings were retained.
-        fallback = review(session, doc, submitter)?
-            .prepared
-            .records
-            .iter()
-            .filter_map(|r| Some((r.export_id.clone()?, r.record.clone())))
-            .collect();
-        &fallback
-    };
-    let originals: BTreeSet<&String> = ids.values().collect();
+    }
+    let originals: BTreeSet<&String> = ids.values().flatten().collect();
     let mut plan = AccessionPlan::default();
     let mut seen = BTreeSet::new();
     for line in text.lines() {
@@ -1465,7 +1473,11 @@ pub fn plan_accessions(
         }
         // Archive SeqIDs take precedence over original-name fallback. Never
         // combine the namespaces in a map: original names can equal another ID.
-        let exported: BTreeSet<&String> = fields.iter().filter_map(|f| ids.get(*f)).collect();
+        let exported: BTreeSet<&String> = fields
+            .iter()
+            .filter_map(|f| ids.get(*f))
+            .flatten()
+            .collect();
         let named: BTreeSet<&String> = fields
             .iter()
             .filter_map(|f| originals.iter().find(|r| r.as_str() == *f).copied())

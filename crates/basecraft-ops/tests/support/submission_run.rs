@@ -9,6 +9,8 @@ pub fn retain(root: &Path, request: &Value, outcome: &mut Value) {
     let run = ArtifactRun::create(&anchor, &ulid::Ulid::generate().to_string()).unwrap();
     let mut evidence = serde_json::Map::new();
     let mut inputs = vec![];
+    let mut first = None;
+    let mut upstream = vec![];
     for role in ["sequences", "sources", "features", "template"] {
         let source = root.join(request["inputs"][role][0]["path"].as_str().unwrap());
         let hash = basecraft_io::hash_file(&source).unwrap();
@@ -16,11 +18,20 @@ pub fn retain(root: &Path, request: &Value, outcome: &mut Value) {
             input_evidence::reference_input_with_dependencies(&anchor, &source, &hash, &[], "test")
                 .unwrap();
         let record = input_evidence::read_input(ledger.directory()).unwrap();
-        let mut reference = record.source.unwrap();
+        upstream.push(json!({"bundle":input_evidence::relative(run.directory(),ledger.directory()).unwrap(), "id":ledger.id(),"hash":basecraft_io::hash_file(&ledger.artifact("manifest.json").unwrap()).unwrap()}));
+        let mut reference = record.source.clone().unwrap();
         reference.path = input_evidence::relative(run.directory(), &source).unwrap();
+        if first.is_none() {
+            let mut record = record;
+            record.source = Some(reference.clone());
+            first = Some(record);
+        }
         inputs.push(json!({"id":role,"logical_name":role,"hash":hash,"size":reference.stamp.size,"retained":null,"reference":reference}));
         evidence.insert(role.into(), json!([{"original_path":source,"source_hash":hash,"submitted_hash":hash,"transformation":"identity-v1","run_directory":ledger.directory()}]));
     }
+    let mut first = first.unwrap();
+    first.extra.insert("upstream".into(), json!(upstream));
+    input_evidence::write_json(&run.artifact("input.json").unwrap(), &first).unwrap();
     let mut artifacts = vec![];
     let mut outputs = vec![];
     for entry in std::fs::read_dir(&reports).unwrap() {

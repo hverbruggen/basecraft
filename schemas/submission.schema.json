@@ -24,6 +24,13 @@
         "trim_terminal_unknown": true
       }
     },
+    "exported": {
+      "description": "Identity mappings from successfully written packages; independent of row selection.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ExportMapping"
+      }
+    },
     "frames": {
       "description": "Reading frames the user confirmed or chose, by record name.",
       "type": "array",
@@ -40,12 +47,19 @@
       }
     },
     "rows": {
-      "description": "Decisions for rows, by record name. Rows without one are new.",
+      "description": "Explicit decisions by record name; absent rows use accession-aware defaults.",
       "type": "array",
       "default": [],
       "items": {
         "$ref": "#/$defs/RowDecision"
       }
+    },
+    "selection_confirmation": {
+      "description": "Fingerprint of the reviewed source, effective decisions and accession evidence.",
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "source": {
       "description": "The alignment the records are extracted from.",
@@ -168,6 +182,32 @@
           "type": "string",
           "const": "complete"
         }
+      ]
+    },
+    "ExportMapping": {
+      "description": "Retained identities for interpreting archive returns after later selection edits.",
+      "type": "object",
+      "properties": {
+        "records": {
+          "description": "Submitted SeqID to original biological record name.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceAlignment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "records"
       ]
     },
     "ExportSettings": {
