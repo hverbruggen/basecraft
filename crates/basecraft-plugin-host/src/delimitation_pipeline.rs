@@ -1,6 +1,7 @@
 //! Exact identity preprocessing, followed by ASAP or public UPGMA and GMYC.
-//! Every stage is an ordinary public file-plugin job with retained outcomes.
-use crate::{Error, FileJob, Result};
+//! Each stage is a crate-private file-plugin job with its own retained run,
+//! executed inside the registered `basecraft.host` workflow run.
+use crate::{Error, Result, file_tool::FileJob};
 use basecraft_ops::{DocId, Session};
 use basecraft_protocol::{
     delimitation::{JobRecord, JobStatus},
@@ -10,7 +11,7 @@ use serde_json::{Value, json};
 use std::{collections::BTreeMap, path::PathBuf, time::Instant};
 
 /// The fit stage of a reserved alignment workflow (`basecraft.host` descriptors).
-pub fn workflow_fit(workflow: &str) -> Option<&'static str> {
+pub(crate) fn workflow_fit(workflow: &str) -> Option<&'static str> {
     match workflow {
         "asap_alignment" => Some("asap"),
         "gmyc_alignment_single" => Some("gmyc_single"),
@@ -19,26 +20,26 @@ pub fn workflow_fit(workflow: &str) -> Option<&'static str> {
     }
 }
 
-pub struct AlignmentJob {
-    pub preparation: FileJob,
-    pub unique_haplotypes: bool,
-    pub fit_method: String,
-    pub output: PathBuf,
+pub(crate) struct AlignmentJob {
+    pub(crate) preparation: FileJob,
+    pub(crate) unique_haplotypes: bool,
+    pub(crate) fit_method: String,
+    pub(crate) output: PathBuf,
 }
 struct Stage {
     job: FileJob,
     outcome: Result<InvokeResult>,
     elapsed: f64,
 }
-pub struct PipelineOutcome {
+pub(crate) struct PipelineOutcome {
     stages: Vec<Stage>,
     unavailable: Option<String>,
-    pub output: PathBuf,
+    pub(crate) output: PathBuf,
     primary: Option<PathBuf>,
 }
 impl AlignmentJob {
     /// No session access: this method can run on a worker thread.
-    pub fn run(mut self) -> PipelineOutcome {
+    pub(crate) fn run(mut self) -> PipelineOutcome {
         let primary = self.preparation.species_workspace_target(&self.output);
         self.output = self.preparation.output.with_file_name("fit.json");
         let mut result = PipelineOutcome {
@@ -289,7 +290,7 @@ fn cancelled(job: &FileJob) -> bool {
 }
 impl PipelineOutcome {
     /// Retain every completed/failed/cancelled stage, then return the final result.
-    pub fn record(self, session: &mut Session, doc: DocId) -> Result<InvokeResult> {
+    pub(crate) fn record(self, session: &mut Session, doc: DocId) -> Result<InvokeResult> {
         let inputs = self
             .stages
             .first()
@@ -363,58 +364,5 @@ impl PipelineOutcome {
         }
         result.outputs = outputs;
         Ok(result)
-    }
-}
-
-/// A worker owns inputs until its outcome is recorded on the session thread.
-pub enum FileWorkflow {
-    Single(FileJob),
-    Alignment(AlignmentJob),
-}
-pub enum WorkflowOutcome {
-    Single {
-        job: Box<FileJob>,
-        outcome: Result<InvokeResult>,
-        elapsed: f64,
-    },
-    Alignment(PipelineOutcome),
-}
-impl FileWorkflow {
-    pub fn run(self) -> WorkflowOutcome {
-        match self {
-            Self::Single(job) => {
-                let started = Instant::now();
-                let outcome = job.run();
-                WorkflowOutcome::Single {
-                    job: Box::new(job),
-                    outcome,
-                    elapsed: started.elapsed().as_secs_f64(),
-                }
-            }
-            Self::Alignment(job) => WorkflowOutcome::Alignment(job.run()),
-        }
-    }
-}
-impl WorkflowOutcome {
-    pub fn output(&self) -> &std::path::Path {
-        match self {
-            Self::Single { job, .. } => &job.output,
-            Self::Alignment(outcome) => &outcome.output,
-        }
-    }
-    pub fn record(self, session: &mut Session, doc: DocId) -> Result<InvokeResult> {
-        match self {
-            Self::Single {
-                job,
-                outcome,
-                elapsed,
-            } => {
-                job.record_terminal(session, doc, &outcome, elapsed)?;
-                let result = outcome?;
-                job.record(session, doc, &result)?;
-                Ok(result)
-            }
-            Self::Alignment(outcome) => outcome.record(session, doc),
-        }
     }
 }

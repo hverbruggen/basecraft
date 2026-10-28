@@ -1,14 +1,16 @@
-//! Plugin operations that read and write files, such as aligners.
+//! Helpers shared by registered runs (input freezing, support semantics,
+//! publication, result names and cancellation) and the crate-private stage
+//! runner that host workflows use inside a registered `basecraft.host` run.
 //!
-//! A run happens in three steps, so the slow middle one can go to another
-//! thread: [`FileJob::from_alignment`] writes the tool's input from an open
+//! A stage runs in three steps, so the slow middle one can go to another
+//! thread: [`FileJob::from_alignment`] writes the stage input from an open
 //! document, [`FileJob::run`] runs the plugin, and [`FileJob::record`] logs
 //! a `tool.run` operation with the hashes of what went in and came out.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-use basecraft_ops::files::{HashingWriter, write_alignment, write_ungapped};
+use basecraft_ops::files::{HashingWriter, write_alignment};
 use basecraft_ops::{DocId, Session};
 use basecraft_protocol::Actor;
 use basecraft_protocol::plugin::InvokeResult;
@@ -123,25 +125,16 @@ impl Drop for CancellationRegistration {
     }
 }
 
-/// What a tool gets from an alignment.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AlignmentInput {
-    /// The rows without gaps, for an aligner.
-    Ungapped,
-    /// The alignment as it is, for tree building.
-    Aligned,
-}
-
-pub struct FileJob {
+pub(crate) struct FileJob {
     /// The plugin's directory and the operation to call.
-    pub plugin: PathBuf,
-    pub operation: String,
-    pub input: PathBuf,
+    pub(crate) plugin: PathBuf,
+    pub(crate) operation: String,
+    pub(crate) input: PathBuf,
     /// What the input was made from, with the hash of the input itself.
-    pub input_key: (String, String),
-    pub output: PathBuf,
+    pub(crate) input_key: (String, String),
+    pub(crate) output: PathBuf,
     /// Public operation parameters, retained in the tool-run log.
-    pub params: serde_json::Map<String, serde_json::Value>,
+    pub(crate) params: serde_json::Map<String, serde_json::Value>,
     run_id: String,
     source_record: basecraft_ops::document_record::DocumentRecord,
     cpu_budget: usize,
@@ -283,7 +276,7 @@ impl FileJob {
     /// Run stages from this accepted registry: the resolved package is verified
     /// before spawning and CPU settings bind against its exact descriptor.
     #[must_use]
-    pub fn with_registry(mut self, registry: std::sync::Arc<crate::registry::Registry>) -> Self {
+    pub(crate) fn with_registry(mut self, registry: std::sync::Arc<crate::registry::Registry>) -> Self {
         self.accepted_registry = Some(registry);
         self
     }
@@ -296,12 +289,12 @@ impl FileJob {
     }
 
     #[must_use]
-    pub fn with_cpu_budget(mut self, budget: usize) -> Self {
+    pub(crate) fn with_cpu_budget(mut self, budget: usize) -> Self {
         self.cpu_budget = budget.clamp(1, crate::compute::available());
         self
     }
 
-    pub fn species_input_evidence(&self) -> Result<serde_json::Value> {
+    pub(crate) fn species_input_evidence(&self) -> Result<serde_json::Value> {
         let run = self
             .artifacts
             .as_ref()
@@ -316,7 +309,7 @@ impl FileJob {
         )
     }
 
-    pub fn species_workspace_target(&self, output: &Path) -> Option<PathBuf> {
+    pub(crate) fn species_workspace_target(&self, output: &Path) -> Option<PathBuf> {
         self.species.as_ref().filter(|s| s.standalone).map(|_| {
             if basecraft_ops::files::Format::from_path(output).ok()
                 == Some(basecraft_ops::files::Format::Delimitation)
@@ -328,36 +321,18 @@ impl FileJob {
         })
     }
 
-    pub fn publish_species_workspace_at(&mut self, target: Option<PathBuf>) {
+    pub(crate) fn publish_species_workspace_at(&mut self, target: Option<PathBuf>) {
         if let Some(storage) = &mut self.species {
             storage.primary = target;
         }
     }
 
-    /// Progress and cancellation live with execution scratch, never as durable
-    /// companions of the scientific result.
-    pub fn control_paths(&self) -> (PathBuf, PathBuf) {
-        (
-            self.scratch_dir.path().join("progress.json"),
-            self.scratch_dir.path().join("cancel"),
-        )
-    }
-
-    /// Supporting species stages stay in their reserved run, never beside the SPART.
-    pub fn species_artifact(&self, name: &str) -> Result<PathBuf> {
-        self.artifacts
-            .as_ref()
-            .ok_or_else(|| Error::Protocol("No species artifact run".into()))?
-            .artifact(name)
-            .map_err(Into::into)
-    }
-
-    /// A job whose input is the alignment as FASTA, with or without gaps.
-    pub fn from_alignment(
+    /// The first stage of a host workflow: the alignment as canonical FASTA.
+    /// Species stages reserve their own run with its input evidence.
+    pub(crate) fn from_alignment(
         session: &Session,
         doc: DocId,
         (plugin, operation): (&Path, &str),
-        kind: AlignmentInput,
         output: PathBuf,
     ) -> Result<Self> {
         if !session.is_alignment(doc) {
@@ -377,200 +352,25 @@ impl FileJob {
         let path = dir.path().join("input.fasta");
         let mut file = std::io::BufWriter::new(std::fs::File::create(&path)?);
         let mut hw = HashingWriter::new(&mut file);
-        let key = match kind {
-            AlignmentInput::Ungapped => {
-                write_ungapped(session.alignment(doc), &mut hw)?;
-                format!("{} (ungapped)", session.doc_key(doc))
-            }
-            AlignmentInput::Aligned => {
-                write_alignment(session.alignment(doc), &mut hw)?;
-                session.doc_key(doc).to_string()
-            }
-        };
+        write_alignment(session.alignment(doc), &mut hw)?;
         let hash = hw.hash();
         file.flush()?;
         let run_id = ulid::Ulid::generate().to_string();
-        let manifest = Manifest::load(plugin)?;
-        let referenced = operation == "tree"
-            || matches!(
-                (manifest.id.as_str(), operation),
-                ("basecraft.mafft", "align")
-                    | ("basecraft.trimal", "trim")
-                    | ("basecraft.distance", "matrix")
-            );
-        let artifacts = if referenced {
-            let _lock = basecraft_ops::input_evidence::lock()?;
-            let run = basecraft_ops::analysis_store::ArtifactRun::create(&output, &run_id)?;
-            let source = session.referenced_source(doc, run.directory())?;
-            let input_record = basecraft_ops::input_evidence::SubmittedInput {
-                schema_version: 1,
-                state: if source.is_some() {
-                    "referenced"
-                } else {
-                    "generated"
-                }
-                .into(),
-                source,
-                submitted_hash: hash.clone(),
-                submitted_size: std::fs::metadata(&path)?.len(),
-                transformation: match kind {
-                    AlignmentInput::Aligned => "canonical-fasta-v1",
-                    AlignmentInput::Ungapped => "ungapped-fasta-v1",
-                }
-                .into(),
-                extra: std::collections::BTreeMap::new(),
-            };
-            basecraft_ops::input_evidence::write_json(
-                &run.directory().join("run.json"),
-                &json!({"schema_version":1,"id":run_id,"result":output.file_name().and_then(|n| n.to_str()).ok_or_else(|| Error::Protocol("result filename is not UTF-8".into()))?,"status":"prepared"}),
-            )?;
-            basecraft_ops::input_evidence::write_json(
-                &run.directory().join("input.json"),
-                &input_record,
-            )?;
-            basecraft_ops::input_evidence::register(&run)?;
-            Some(run)
-        } else {
-            None
-        };
-        let source_hash = if let Some(run) = &artifacts {
-            basecraft_ops::input_evidence::read_input(run.directory())?
-                .source
-                .map_or_else(String::new, |r| r.hash)
-        } else if manifest.id == "basecraft.delimitation" {
-            String::new()
-        } else {
-            basecraft_io::hash_file(&source_path).map_err(basecraft_ops::Error::from)?
-        };
         let mut job = Self {
             plugin: plugin.to_path_buf(),
             operation: operation.to_string(),
             input: path,
-            input_key: (key, hash),
+            input_key: (session.doc_key(doc).to_string(), hash),
             output,
             params: [("job_id".into(), json!(run_id.clone()))]
                 .into_iter()
                 .collect(),
             run_id,
-            source_path: session.root().join(session.doc_key(doc)),
-            source_version: session.generation(doc),
-            source_record: session.document_record(doc)?,
-            source_hash,
-            cpu_budget: crate::compute::effective_allocation()?,
-            accepted_registry: None,
-            granted_budget: std::sync::atomic::AtomicUsize::new(0),
-            artifacts,
-            species: None,
-            allocation_started: std::sync::atomic::AtomicBool::new(false),
-            scratch_read_bytes: std::sync::atomic::AtomicU64::new(0),
-            submitted_copy_bytes: std::sync::atomic::AtomicU64::new(0),
-            scratch_dir: dir,
-        };
-        job.prepare_species(
-            Some((session, doc)),
-            None,
-            match kind {
-                AlignmentInput::Aligned => "canonical-fasta-v1",
-                AlignmentInput::Ungapped => "ungapped-fasta-v1",
-            },
-        )?;
-        Ok(job)
-    }
-
-    /// Run the plugin. Touches no session, so it can run on any thread.
-    pub fn from_tree(
-        session: &Session,
-        doc: DocId,
-        (plugin, operation): (&Path, &str),
-        output: PathBuf,
-    ) -> Result<Self> {
-        if !session.is_tree(doc) {
-            return Err(Error::Protocol("a tree input is required".into()));
-        }
-        let source_path = session.root().join(session.doc_key(doc));
-        if output.exists() && output.canonicalize()? == source_path.canonicalize()? {
-            return Err(Error::Protocol(
-                "output must differ from source tree".into(),
-            ));
-        }
-        let dir = tempfile::Builder::new()
-            .prefix("basecraft-tree-job-")
-            .tempdir()?;
-        let input = dir.path().join("input.nwk");
-        std::fs::write(&input, session.tree(doc).to_newick())?;
-        let hash = basecraft_io::hash_file(&input).map_err(basecraft_ops::Error::from)?;
-        let run_id = ulid::Ulid::generate().to_string();
-        let mut job = Self {
-            plugin: plugin.to_path_buf(),
-            operation: operation.into(),
-            input,
-            input_key: (session.doc_key(doc).into(), hash),
-            output,
-            params: [("job_id".into(), json!(run_id.clone()))]
-                .into_iter()
-                .collect(),
-            run_id,
-            source_path: source_path.clone(),
-            source_version: session.generation(doc),
-            source_record: session.document_record(doc)?,
-            source_hash: if Manifest::load(plugin)?.id == "basecraft.delimitation" {
-                String::new()
-            } else {
-                basecraft_io::hash_file(&source_path).map_err(basecraft_ops::Error::from)?
-            },
-            cpu_budget: crate::compute::effective_allocation()?,
-            accepted_registry: None,
-            granted_budget: std::sync::atomic::AtomicUsize::new(0),
-            artifacts: None,
-            species: None,
-            allocation_started: std::sync::atomic::AtomicBool::new(false),
-            scratch_read_bytes: std::sync::atomic::AtomicU64::new(0),
-            submitted_copy_bytes: std::sync::atomic::AtomicU64::new(0),
-            scratch_dir: dir,
-        };
-        job.prepare_species(Some((session, doc)), None, "canonical-newick-v1")?;
-        Ok(job)
-    }
-
-    /// Public immutable file input for analyses coordinated by another document.
-    pub fn from_file(
-        session: &Session,
-        doc: DocId,
-        input: &Path,
-        (plugin, operation): (&Path, &str),
-        output: PathBuf,
-    ) -> Result<Self> {
-        let source_path = input.canonicalize()?;
-        if output.exists() && output.canonicalize()? == input.canonicalize()? {
-            return Err(Error::Protocol(
-                "output must differ from analysis input".into(),
-            ));
-        }
-        let dir = tempfile::Builder::new()
-            .prefix("basecraft-file-job-")
-            .tempdir()?;
-        let snapshot = dir.path().join(
-            input
-                .file_name()
-                .unwrap_or_else(|| std::ffi::OsStr::new("input")),
-        );
-        let input_stamp = basecraft_ops::input_evidence::stamp(input)?;
-        let hash = freeze_file(input, &snapshot)?;
-        let run_id = ulid::Ulid::generate().to_string();
-        let mut job = Self {
-            plugin: plugin.into(),
-            operation: operation.into(),
-            input: snapshot,
-            input_key: (input.display().to_string(), hash.clone()),
-            output,
-            params: [("job_id".into(), json!(run_id.clone()))]
-                .into_iter()
-                .collect(),
-            source_version: session.generation(doc),
-            source_record: file_input_record(input, plugin, operation)?,
-            source_hash: hash.clone(),
             source_path,
-            run_id,
+            source_version: session.generation(doc),
+            source_record: session.document_record(doc)?,
+            // Set from the referenced source when the stage reserves its run.
+            source_hash: String::new(),
             cpu_budget: crate::compute::effective_allocation()?,
             accepted_registry: None,
             granted_budget: std::sync::atomic::AtomicUsize::new(0),
@@ -581,65 +381,13 @@ impl FileJob {
             submitted_copy_bytes: std::sync::atomic::AtomicU64::new(0),
             scratch_dir: dir,
         };
-        job.prepare_species(
-            Some((session, doc)),
-            Some((input, &input_stamp)),
-            "identity-v1",
-        )?;
-        if session.is_delimitation(doc) && operation == "tree" {
-            job.prepare_species_display(input, &input_stamp)?;
-        }
+        job.prepare_species(Some((session, doc)), None, "canonical-fasta-v1")?;
         Ok(job)
-    }
-
-    fn prepare_species_display(
-        &mut self,
-        input: &Path,
-        accepted: &basecraft_protocol::provenance::FileStamp,
-    ) -> Result<()> {
-        use basecraft_ops::{analysis_store::ArtifactRun, input_evidence};
-        if !matches!(
-            Manifest::load(&self.plugin)?.id.as_str(),
-            "basecraft.distance" | "basecraft.iqtree"
-        ) {
-            return Ok(());
-        }
-        let _lock = input_evidence::lock()?;
-        let source = input.canonicalize()?;
-        let stamp = input_evidence::stamp(&source)?;
-        if &stamp != accepted {
-            return Err(Error::Protocol(
-                "Display alignment changed during submission".into(),
-            ));
-        }
-        let run = ArtifactRun::create(&self.output, &self.run_id)?;
-        let input = input_evidence::SubmittedInput {
-            schema_version: 1,
-            source: Some(basecraft_protocol::provenance::InputReference {
-                path: input_evidence::relative(run.directory(), &source)?,
-                hash: self.input_key.1.clone(),
-                stamp,
-                extra: std::collections::BTreeMap::new(),
-            }),
-            submitted_hash: self.input_key.1.clone(),
-            submitted_size: accepted.size,
-            transformation: "identity-v1".into(),
-            state: "referenced".into(),
-            extra: std::collections::BTreeMap::new(),
-        };
-        input_evidence::write_json(&run.artifact("input.json")?, &input)?;
-        input_evidence::write_json(
-            &run.artifact("run.json")?,
-            &json!({"schema_version":1,"id":run.id(),"result":self.output.file_name().and_then(|n|n.to_str()),"status":"prepared"}),
-        )?;
-        input_evidence::register(&run)?;
-        self.artifacts = Some(run);
-        Ok(())
     }
 
     /// Compose a dependent public file operation without accessing a document on
     /// the worker thread. The next input is copied before the stage starts.
-    pub fn following(
+    pub(crate) fn following(
         &self,
         input: &Path,
         (plugin, operation): (&Path, &str),
@@ -830,7 +578,7 @@ impl FileJob {
 
     /// Host-controlled I/O after the document's existing verified open. These
     /// counters exclude tool reads, mmap page faults and the initial document load.
-    pub fn input_io(&self) -> Option<serde_json::Value> {
+    fn input_io(&self) -> Option<serde_json::Value> {
         self.artifacts.as_ref().map(|_| json!({
             "source_identity_hash_bytes": 0, "persistent_original_copy_bytes": 0,
             "execution_scratch_read_bytes": self.scratch_read_bytes.load(std::sync::atomic::Ordering::Relaxed),
@@ -870,7 +618,7 @@ impl FileJob {
 
     /// Record a terminal outcome even if the plugin reports an RPC error.
     /// Input snapshots outlive the temporary worker directory through the store.
-    pub fn record_terminal(
+    pub(crate) fn record_terminal(
         &self,
         session: &mut Session,
         doc: DocId,
@@ -974,7 +722,7 @@ impl FileJob {
         Ok(())
     }
 
-    pub fn run(&self) -> Result<InvokeResult> {
+    pub(crate) fn run(&self) -> Result<InvokeResult> {
         let paths = basecraft_platform::paths::AppPaths::discover()
             .map_err(|e| Error::Protocol(e.to_string()))?;
         let id = &self.run_id;
@@ -1226,33 +974,6 @@ impl FileJob {
                 }
             }
         }
-        if Manifest::load(&self.plugin)?.id == "basecraft.distance" {
-            let declaration = run.artifact("cache-publication.json")?;
-            if declaration.is_file() {
-                let record: serde_json::Value =
-                    serde_json::from_slice(&std::fs::read(&declaration)?)?;
-                paths.push(declaration);
-                if let (Some(name), Some(hash)) =
-                    (record["cache"].as_str(), record["hash"].as_str())
-                {
-                    let path = run.artifact(name)?;
-                    if basecraft_io::hash_file(&path).map_err(basecraft_ops::Error::from)? != hash {
-                        return Err(Error::Protocol("retained cache evidence changed".into()));
-                    }
-                    paths.push(path);
-                    let report = run.artifact(&format!(
-                        "{}.run.json",
-                        self.output
-                            .file_name()
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                    ))?;
-                    if report.is_file() {
-                        paths.push(report);
-                    }
-                }
-            }
-        }
         let mut outputs = std::collections::BTreeMap::new();
         for path in paths {
             if std::fs::symlink_metadata(&path)?.file_type().is_symlink() {
@@ -1453,41 +1174,6 @@ impl FileJob {
             "output".into(),
             serde_json::to_value(&tool_output).map_err(|e| Error::Protocol(e.to_string()))?,
         );
-        let cache = if manifest.id == "basecraft.distance" {
-            if let Some(run) = &self.artifacts {
-                let mut protected = vec![
-                    self.source_path.clone(),
-                    frozen_input.into(),
-                    self.output.clone(),
-                    tool_output.clone(),
-                    PathBuf::from(format!("{}.run.json", self.output.display())),
-                ];
-                protected.extend([
-                    self.expected_bootstrap_path(run, false)?,
-                    self.expected_bootstrap_path(run, true)?,
-                ]);
-                protected.extend(
-                    ["progress", "cancel_file", "groups"]
-                        .into_iter()
-                        .filter_map(|key| {
-                            params
-                                .get(key)
-                                .and_then(serde_json::Value::as_str)
-                                .map(PathBuf::from)
-                        }),
-                );
-                crate::distance_cache::DistanceCache::prepare(
-                    run,
-                    &mut params,
-                    &tool_output,
-                    &protected,
-                )?
-            } else {
-                None
-            }
-        } else {
-            None
-        };
         let mut result =
             process.invoke(&self.operation, serde_json::Value::Object(params), None)?;
         if !tool_output.is_file() {
@@ -1539,21 +1225,8 @@ impl FileJob {
                 }
             }
             // Validate the entire return before publishing anything. Retain
-            // support files and finish declared secondary exports before making
-            // primary/component results visible. These steps are not a transaction.
-            for (_, allocation) in &allocated {
-                if let Some((name, true)) = allocation {
-                    let destination = run.destination(
-                        basecraft_ops::analysis_store::ArtifactDestination::WorkingDirectory,
-                        name,
-                    )?;
-                    if cache.as_ref().is_some_and(|c| c.is_secondary(&destination)) {
-                        return Err(Error::Protocol(
-                            "secondary cache collides with a scientific result".into(),
-                        ));
-                    }
-                }
-            }
+            // support files before making primary/component results visible.
+            // These steps are not a transaction.
             let mut published = std::collections::HashMap::new();
             for (path, allocation) in &allocated {
                 if let Some((name, false)) = allocation {
@@ -1565,13 +1238,6 @@ impl FileJob {
                     published.insert(path.clone(), destination);
                 }
             }
-            let secondary = if let Some(cache) = &cache {
-                cache
-                    .finish(run)
-                    .map_err(|error| self.publication_failure(run, error))?
-            } else {
-                Vec::new()
-            };
             for (path, allocation) in &allocated {
                 if let Some((name, true)) = allocation {
                     let destination = publish_artifact(
@@ -1592,7 +1258,6 @@ impl FileJob {
                         .to_string()
                 })
                 .collect();
-            result.outputs.extend(secondary);
             if self.operation == "tree" {
                 run.bind(&self.output)?;
             }
@@ -1626,7 +1291,6 @@ impl FileJob {
                 if path
                     .extension()
                     .is_some_and(|e| e.eq_ignore_ascii_case("nwk"))
-                    && !cache.as_ref().is_some_and(|c| c.is_secondary(&path))
                 {
                     let path = path.canonicalize()?;
                     if !trees.contains(&path) {
@@ -1679,38 +1343,8 @@ impl FileJob {
         Ok(result)
     }
 
-    fn publication_failure(
-        &self,
-        run: &basecraft_ops::analysis_store::ArtifactRun,
-        failure: Error,
-    ) -> Error {
-        let report = run.directory().join(format!(
-            "{}.run.json",
-            self.output
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-        ));
-        if let Ok(bytes) = std::fs::read(&report) {
-            if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) {
-                if let Some(collection) = value.pointer("/bootstrap/replicate_trees") {
-                    if self
-                        .valid_bootstrap_artifact(run, collection)
-                        .unwrap_or(false)
-                    {
-                        return Error::Protocol(format!(
-                            "{failure}; retained bootstrap artifacts: {collection}; report: {}",
-                            report.display()
-                        ));
-                    }
-                }
-            }
-        }
-        failure
-    }
-
     /// Log the run against the document its input came from.
-    pub fn record(&self, session: &mut Session, doc: DocId, result: &InvokeResult) -> Result<()> {
+    pub(crate) fn record(&self, session: &mut Session, doc: DocId, result: &InvokeResult) -> Result<()> {
         let manifest = Manifest::load(&self.plugin)?;
         let actor = result.tool.as_ref().map_or_else(
             || Actor::Plugin {
@@ -1791,11 +1425,7 @@ impl FileJob {
                         .and_then(|s| s.primary.as_deref())
                         .filter(|p| p.is_file())
                         .unwrap_or(&self.output),
-                    &if manifest.id == "basecraft.distance" {
-                        crate::distance_cache::publication_outputs(run, &outputs)?
-                    } else {
-                        outputs.clone()
-                    },
+                    &outputs,
                     &self.source_record,
                     run,
                 )
@@ -1817,39 +1447,6 @@ impl FileJob {
         )?;
         Ok(())
     }
-}
-
-fn file_input_record(
-    input: &Path,
-    plugin: &Path,
-    operation: &str,
-) -> Result<basecraft_ops::document_record::DocumentRecord> {
-    let format = basecraft_ops::files::Format::from_path(input).ok();
-    let tree = matches!(
-        operation,
-        "workspace_tree"
-            | "gmyc_single"
-            | "gmyc_multiple"
-            | "gmyc_exhaustive"
-            | "ptp"
-            | "mptp"
-            | "manual_cut"
-            | "inspect_tree"
-            | "validate_time_tree"
-            | "relative_time"
-    );
-    let species = Manifest::load(plugin)?.id == "basecraft.delimitation";
-    if (species || operation == "tree")
-        && (format.is_none() || tree && input.file_name().is_some_and(|n| n == "submitted.fasta"))
-    {
-        // Preserved originals and exported content-addressed artifacts need no
-        // format-bearing filename. The method validates their actual bytes;
-        // absence of an imported document history stays an honest boundary.
-        return Ok(basecraft_ops::document_record::DocumentRecord::empty(
-            &input.display().to_string(),
-        ));
-    }
-    basecraft_ops::document_record::DocumentRecord::from_file(input).map_err(Into::into)
 }
 
 /// `<stem>.<suffix>.<ext>` beside `file`, numbered if that name is taken:

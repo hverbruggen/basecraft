@@ -8,7 +8,7 @@
 pub mod apply;
 pub mod compute;
 pub mod contract;
-pub mod delimitation_pipeline;
+mod delimitation_pipeline;
 pub mod file_tool;
 pub mod installation;
 pub mod jobs;
@@ -22,11 +22,9 @@ pub mod runtime;
 pub mod sanger_calls;
 pub mod snapshot;
 
-mod distance_cache;
 mod error;
 
 pub use error::{Error, Result};
-pub use file_tool::FileJob;
 pub use manifest::Manifest;
 pub use process::PluginProcess;
 pub use snapshot::Snapshot;

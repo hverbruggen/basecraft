@@ -164,8 +164,8 @@ class Plugin:
                 raise ValueError("legacy context overlaps scientific parameters")
             effective.update(controls)
             if controls:
-                # Explicit host compatibility facade. Its preallocated flat
-                # bindings and publication policy stay with FileJob; the same
+                # Host workflow stage. Its preallocated flat bindings and
+                # publication policy stay with the host stage runner; the same
                 # scientific schema/defaults and context capability still apply.
                 return handler(snapshot, effective)
             for binding, parameter in adapter["inputs"].items():

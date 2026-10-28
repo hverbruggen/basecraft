@@ -1,5 +1,6 @@
-//! Shared registered-operation preparation and validated finalization. Scientific
-//! bytes and publications use the same `FileJob`/store/input-evidence primitives.
+//! Registered-operation preparation, execution and validated finalization: the
+//! one route every interface uses to run an analysis. Host workflows run their
+//! stages through the crate-private `file_tool` stage runner inside a run.
 use std::collections::{BTreeMap, BTreeSet};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
@@ -1924,11 +1925,10 @@ impl PreparedOperation {
         let root = PathBuf::from(&self.context.outputs["artifacts"]);
         let mut session = basecraft_ops::Session::unlogged(&self.policy.root);
         let doc = session.open(&source)?;
-        let mut preparation = crate::FileJob::from_alignment(
+        let mut preparation = crate::file_tool::FileJob::from_alignment(
             &session,
             doc,
             (&preparation_plugin, "haplotypes"),
-            crate::file_tool::AlignmentInput::Aligned,
             root.join("preparation.json"),
         )?
         .with_cpu_budget(self.context.cpu_threads)

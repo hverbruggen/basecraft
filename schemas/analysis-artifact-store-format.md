@@ -1,6 +1,6 @@
 # Analysis artifacts and referenced inputs v1
 
-A new MAFFT `align`, trimAl `trim`, distance `matrix`, or generic alignment-to-tree FileJob reserves
+Every registered analysis run, and each stage of a host workflow inside one, reserves
 `.basecraft/analyses-v1/runs/RUN-ID/` beside the final primary output. No project
 marker is required or created. Other analysis families retain their existing
 paths until explicitly adapted. Old companion files are never migrated or removed.
