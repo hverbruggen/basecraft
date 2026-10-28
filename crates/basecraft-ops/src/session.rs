@@ -48,6 +48,7 @@ enum Inverse {
     Delimitation(Box<basecraft_protocol::delimitation::DelimitationWorkspace>),
     /// The whole metadata as it was: one edit can touch every table.
     Metadata(Box<basecraft_protocol::metadata::ProjectMetadata>),
+    Submission(Box<basecraft_protocol::submission::Submission>),
 }
 
 struct Applied {
@@ -256,6 +257,20 @@ impl Session {
         }
     }
 
+    /// A GenBank submission document. Panics if `id` is another kind.
+    pub fn submission(&self, id: DocId) -> &basecraft_protocol::submission::Submission {
+        match &self.docs[id.0].content {
+            Loaded::Submission(sub) => sub,
+            _ => panic!("not a submission"),
+        }
+    }
+
+    pub fn is_submission(&self, id: DocId) -> bool {
+        self.docs
+            .get(id.0)
+            .is_some_and(|slot| matches!(slot.content, Loaded::Submission(_)))
+    }
+
     pub fn is_metadata(&self, id: DocId) -> bool {
         self.docs
             .get(id.0)
@@ -295,7 +310,9 @@ impl Session {
     fn sequence_of(&self, id: DocId) -> Result<&Opened> {
         match &self.docs[id.0].content {
             Loaded::Sequence(o) => Ok(o),
-            Loaded::Delimitation(_) | Loaded::Metadata(_) => Err(invalid("this needs a sequence")),
+            Loaded::Delimitation(_) | Loaded::Metadata(_) | Loaded::Submission(_) => {
+                Err(invalid("this needs a sequence"))
+            }
             Loaded::Alignment(_) => Err(invalid("this needs a sequence, not an alignment")),
             Loaded::Tree(_) => Err(invalid("this needs a sequence, not a tree")),
         }
@@ -391,6 +408,11 @@ impl Session {
                 features: opened.metadata.identifications.len() as u64,
                 rows: Some(opened.metadata.links.len() as u64),
             },
+            Loaded::Submission(sub) => DocState {
+                len: sub.rows.len() as u64,
+                features: sub.frames.len() as u64,
+                rows: Some(sub.accessions.len() as u64),
+            },
             Loaded::Tree(o) => DocState {
                 len: o.doc.tip_count() as u64,
                 features: o.doc.annotations().len() as u64,
@@ -457,6 +479,7 @@ impl Session {
             files::Format::Metadata => crate::metadata::files(path).split_off(1),
             files::Format::Tree | files::Format::Delimitation => vec![files::tree_sidecar(path)],
             files::Format::GenBank | files::Format::Fasta => vec![files::gff_sidecar(path)],
+            files::Format::Submission => Vec::new(),
         };
         let hash_companions = || -> Result<Vec<Option<String>>> {
             companions
@@ -491,7 +514,10 @@ impl Session {
         if matches!(&content, Loaded::Sequence(o) if o.format == files::Format::Fasta)
             || matches!(
                 content,
-                Loaded::Tree(_) | Loaded::Delimitation(_) | Loaded::Metadata(_)
+                Loaded::Tree(_)
+                    | Loaded::Delimitation(_)
+                    | Loaded::Metadata(_)
+                    | Loaded::Submission(_)
             )
         {
             for (companion, hash) in companions.iter().zip(companion_hashes) {
@@ -863,6 +889,18 @@ impl Session {
         let mut hashes = Vec::new();
         let mut main_hash = String::new();
         let opened = match &self.docs[id.0].content {
+            Loaded::Submission(sub) => {
+                if format != files::Format::Submission {
+                    return Err(invalid(format!(
+                        "a submission is saved as *{}",
+                        crate::submission::SUFFIX
+                    )));
+                }
+                let bytes = crate::submission::encode(sub)?;
+                basecraft_io::write_atomic(&target, |w| w.write_all(&bytes))?;
+                hashes.push((self.relative(&target), basecraft_io::hash_bytes(&bytes)));
+                return self.log_save(id, &target, hashes);
+            }
             Loaded::Metadata(opened) => {
                 if format != files::Format::Metadata {
                     return Err(invalid(format!(
@@ -1798,6 +1836,11 @@ impl Session {
     /// Replay a save using its actual exchange format, including Save As.
     pub fn save_hashes_at(&self, id: DocId, target: &Path) -> Result<Vec<String>> {
         let opened = match &self.docs[id.0].content {
+            Loaded::Submission(sub) => {
+                return Ok(vec![basecraft_io::hash_bytes(&crate::submission::encode(
+                    sub,
+                )?)]);
+            }
             Loaded::Metadata(opened) => {
                 return Ok(crate::metadata::encode(&opened.metadata)?
                     .iter()
@@ -2083,6 +2126,17 @@ impl Session {
                     .map_err(|e| invalid(e.0))?;
                 return Ok((Inverse::Metadata(before), None));
             }
+            Loaded::Submission(sub) => {
+                let Op::SubmissionEdit { edit } = op else {
+                    return Err(invalid(format!(
+                        "{} can't be applied to a submission",
+                        op.name()
+                    )));
+                };
+                let before = Box::new(sub.clone());
+                basecraft_docs::submission::apply(sub, edit).map_err(|e| invalid(e.0))?;
+                return Ok((Inverse::Submission(before), None));
+            }
             Loaded::Alignment(a) => {
                 return execute_alignment(a, op).map(|u| (Inverse::Alignment(u), None));
             }
@@ -2235,12 +2289,16 @@ impl Session {
             (Loaded::Metadata(opened), Inverse::Metadata(before)) => {
                 opened.metadata = (**before).clone();
             }
+            (Loaded::Submission(sub), Inverse::Submission(before)) => {
+                *sub = (**before).clone();
+            }
             (Loaded::Sequence(o), inverse) => undo_sequence(&mut o.doc, inverse),
             (
                 Loaded::Alignment(_)
                 | Loaded::Tree(_)
                 | Loaded::Delimitation(_)
-                | Loaded::Metadata(_),
+                | Loaded::Metadata(_)
+                | Loaded::Submission(_),
                 _,
             ) => {
                 return Err(invalid("undo of the wrong kind of edit"));
@@ -2412,6 +2470,7 @@ fn execute_sequence(doc: &mut SequenceDoc, op: &Op) -> Result<(Inverse, Option<F
         | Op::TreeStyle { .. } => Err(invalid(format!("{} needs a tree", op.name()))),
         Op::DelimitationEdit { .. } => Err(invalid("this needs a delimitation workspace")),
         Op::MetadataEdit { .. } => Err(invalid("this needs the project metadata")),
+        Op::SubmissionEdit { .. } => Err(invalid("this needs a submission document")),
         Op::JobFinished { .. } => Err(invalid("use log_job_finished")),
         Op::Open { .. }
         | Op::Save { .. }
@@ -2525,6 +2584,7 @@ fn restore_inverse(content: &mut Loaded, inverse: &Inverse) -> Result<()> {
         (Loaded::Metadata(opened), Inverse::Metadata(before)) => {
             opened.metadata = (**before).clone();
         }
+        (Loaded::Submission(sub), Inverse::Submission(before)) => *sub = (**before).clone(),
         _ => return Err(invalid("edit rollback has incompatible document type")),
     }
     Ok(())
@@ -2543,7 +2603,8 @@ fn undo_sequence(doc: &mut SequenceDoc, inverse: &Inverse) {
         Inverse::Alignment(_)
         | Inverse::Tree(_)
         | Inverse::Delimitation(_)
-        | Inverse::Metadata(_) => {}
+        | Inverse::Metadata(_)
+        | Inverse::Submission(_) => {}
     }
 }
 

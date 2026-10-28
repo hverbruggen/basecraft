@@ -1,0 +1,1319 @@
+//! GenBank marker submissions: the submission document, review against the
+//! source alignment and project metadata, the submission package, table2asn
+//! validation results and returned accessions.
+//!
+//! A submission is a project document (`*.submission.json`) edited with
+//! `submission.edit` operations, like the delimitation workspace. Exporting
+//! writes a package folder; table2asn runs on it as the registered
+//! operation `basecraft.table2asn/validate@1` through the shared runner,
+//! and [`record_validation`] reads its reports back into the package.
+//! Everything here is local preparation: a clean table2asn report is not
+//! archive acceptance.
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
+use std::path::{Path, PathBuf};
+
+use basecraft_docs::submission::{
+    self as model, Issue, Prepared, PreparedRecord, Severity, SourceRow,
+};
+use basecraft_io::ncbi;
+use basecraft_platform::settings::Submitter;
+use basecraft_protocol::Op;
+use basecraft_protocol::metadata::ProjectMetadata;
+use basecraft_protocol::submission::{
+    AccessionEntry, Decision, Marker, SUBMISSION_VERSION, SourceAlignment, Submission,
+    SubmissionEdit,
+};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+
+use crate::error::invalid;
+use crate::{DocId, Result, Session};
+
+/// Submission documents are named `<name>.submission.json`.
+pub const SUFFIX: &str = ".submission.json";
+/// The registered table2asn validation operation.
+pub const VALIDATE_OPERATION: &str = "basecraft.table2asn/validate@1";
+const PACKAGE_SCHEMA: &str = "basecraft.genbank-submission-package";
+const BASE: &str = "submission";
+const DISCLAIMER: &str = "Local preparation and validation only. A clean table2asn report shows that these files pass that tool's checks in this version; it is not acceptance by GenBank, whose curators review every submission.";
+
+/// Whether `path` names a submission document.
+pub fn is_submission(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.len() > SUFFIX.len() && n.ends_with(SUFFIX))
+}
+
+/// Read a submission document.
+pub fn load(path: &Path) -> Result<Submission> {
+    let value: Value = serde_json::from_slice(&std::fs::read(path)?)
+        .map_err(|e| invalid(format!("{} is not valid JSON: {e}", path.display())))?;
+    let version = value["version"].as_u64().unwrap_or(0);
+    if version > u64::from(SUBMISSION_VERSION) {
+        return Err(invalid(format!(
+            "this submission was written by a newer Basecraft (format version {version}); this version reads version {SUBMISSION_VERSION}"
+        )));
+    }
+    let sub: Submission = serde_json::from_value(value)
+        .map_err(|e| invalid(format!("{} is not a submission: {e}", path.display())))?;
+    model::validate(&sub).map_err(|e| invalid(e.0))?;
+    Ok(sub)
+}
+
+/// The bytes a submission document is saved as.
+pub fn encode(sub: &Submission) -> Result<Vec<u8>> {
+    let mut bytes = serde_json::to_vec_pretty(sub)?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
+/// The source reference for an alignment file inside the project: its
+/// project-relative path and current content hash.
+pub fn source_for(project: &Path, alignment: &Path) -> Result<SourceAlignment> {
+    let document = crate::metadata::document_key(project, alignment)?;
+    let hash = basecraft_io::hash_file(&project.join(&document))?;
+    Ok(SourceAlignment { document, hash })
+}
+
+/// Write a new submission document for `alignment` at `path` and open it.
+/// Refuses to replace an existing file.
+pub fn create(session: &mut Session, path: &Path, alignment: &Path) -> Result<DocId> {
+    if !is_submission(path) {
+        return Err(invalid(format!("submission documents are named *{SUFFIX}")));
+    }
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        session.root().join(path)
+    };
+    if path.exists() {
+        return Err(invalid(format!(
+            "{} already exists; open it instead",
+            path.display()
+        )));
+    }
+    let source = source_for(session.root(), alignment)?;
+    // Check the alignment reads before writing anything.
+    read_rows(&session.root().join(&source.document))?;
+    let sub = Submission {
+        source: Some(source),
+        ..Submission::default()
+    };
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let bytes = encode(&sub)?;
+    basecraft_io::write_atomic(&path, |w| w.write_all(&bytes))?;
+    session.open(&path)
+}
+
+/// Apply one submission edit as an undoable operation.
+pub fn edit(session: &mut Session, doc: DocId, edit: SubmissionEdit) -> Result<()> {
+    session.apply(
+        doc,
+        Op::SubmissionEdit {
+            edit: Box::new(edit),
+        },
+    )?;
+    Ok(())
+}
+
+/// History text for an edit.
+pub fn describe(edit: &SubmissionEdit) -> String {
+    match edit {
+        SubmissionEdit::SetSource { source } => format!("Submission source {}", source.document),
+        SubmissionEdit::SetRows { rows } => format!("Submission decisions for {} rows", rows.len()),
+        SubmissionEdit::SetBatch { .. } => "Submission batch settings".into(),
+        SubmissionEdit::SetFrames { frames, clear } => format!(
+            "Reading frames: {} set, {} cleared",
+            frames.len(),
+            clear.len()
+        ),
+        SubmissionEdit::SetExport { .. } => "Submission export settings".into(),
+        SubmissionEdit::SetPublication { .. } => "Submission authors and title".into(),
+        SubmissionEdit::SetAccessions { accessions } => {
+            format!("Recorded {} accessions", accessions.len())
+        }
+    }
+}
+
+fn checked(session: &Session, doc: DocId) -> Result<&Submission> {
+    if !session.is_submission(doc) {
+        return Err(invalid("choose a submission document"));
+    }
+    Ok(session.submission(doc))
+}
+
+/// Read every record of an aligned FASTA file as rows.
+pub fn read_rows(path: &Path) -> Result<Vec<SourceRow>> {
+    let bytes = std::fs::read(path)?;
+    let index = basecraft_io::fasta::FastaIndex::build(&bytes)?;
+    if index.records.is_empty() {
+        return Err(invalid(format!("{} has no records", path.display())));
+    }
+    index
+        .records
+        .iter()
+        .map(|r| {
+            Ok(SourceRow {
+                name: r.name.clone(),
+                residues: r.read(&bytes, 0, r.len)?,
+            })
+        })
+        .collect()
+}
+
+/// The project metadata as saved, and its manifest's hash; empty metadata
+/// when the project has none.
+pub fn project_metadata(project: &Path) -> Result<(ProjectMetadata, Option<String>)> {
+    let manifest = crate::metadata::manifest_path(project);
+    if !manifest.is_file() {
+        return Ok((ProjectMetadata::default(), None));
+    }
+    let opened = crate::metadata::load(&manifest)?;
+    Ok((opened.metadata, Some(basecraft_io::hash_file(&manifest)?)))
+}
+
+/// The submitter preference, from the user's settings.
+pub fn submitter_preference() -> Result<Submitter> {
+    let paths =
+        basecraft_platform::paths::AppPaths::discover().map_err(|e| invalid(e.to_string()))?;
+    basecraft_platform::settings::SettingsStore::new(paths.preferences())
+        .load()
+        .map(|p| p.submitter)
+        .map_err(|e| invalid(e.to_string()))
+}
+
+/// A review of a submission against its source alignment, the project
+/// metadata and the submitter preference.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Review {
+    #[serde(flatten)]
+    pub prepared: Prepared,
+    /// The source alignment's current hash, when it can be read.
+    pub source_hash: Option<String>,
+    /// Hash of the metadata manifest used.
+    pub metadata_hash: Option<String>,
+}
+
+/// Review a submission: extraction, specimen data, features, frames and
+/// every local issue. A changed source alignment prepares nothing until
+/// it is selected again.
+pub fn review(session: &Session, doc: DocId, submitter: &Submitter) -> Result<Review> {
+    let sub = checked(session, doc)?;
+    review_submission(session.root(), sub, submitter)
+}
+
+/// [`review`] for a submission held outside a session.
+pub fn review_submission(
+    project: &Path,
+    sub: &Submission,
+    submitter: &Submitter,
+) -> Result<Review> {
+    let (meta, metadata_hash) = project_metadata(project)?;
+    let mut issues = Vec::new();
+    let mut source_hash = None;
+    let mut rows = Vec::new();
+    if let Some(source) = &sub.source {
+        let path = project.join(&source.document);
+        match basecraft_io::hash_file(&path) {
+            Ok(hash) if hash == source.hash => {
+                rows = read_rows(&path)?;
+                source_hash = Some(hash);
+            }
+            Ok(hash) => {
+                source_hash = Some(hash);
+                issues.push(Issue {
+                    severity: Severity::Blocking,
+                    source: "basecraft".into(),
+                    code: "source_changed".into(),
+                    message: format!("{} changed since it was chosen; choose it again to prepare the submission from its current content", source.document),
+                    record: None,
+                    specimen: None,
+                    tool_severity: None,
+                });
+            }
+            Err(e) => {
+                issues.push(local(
+                    Severity::Blocking,
+                    "source_unreadable",
+                    format!("{} can't be read: {e}", source.document),
+                ));
+            }
+        }
+    }
+    let document = sub.source.as_ref().map_or("", |s| s.document.as_str());
+    let mut prepared = model::prepare(sub, &rows, &meta, document);
+    for missing in submitter.missing() {
+        prepared.issues.push(local(
+            Severity::Blocking,
+            "submitter",
+            format!(
+                "Submitter {} is not set (Data submission > Submitter)",
+                missing.replace('_', " ")
+            ),
+        ));
+    }
+    ascii_issues(sub, &prepared, submitter, &mut issues);
+    issues.append(&mut prepared.issues);
+    prepared.issues = issues;
+    Ok(Review {
+        prepared,
+        source_hash,
+        metadata_hash,
+    })
+}
+
+fn local(severity: Severity, code: &str, message: impl Into<String>) -> Issue {
+    Issue {
+        severity,
+        source: "basecraft".into(),
+        code: code.into(),
+        message: message.into(),
+        record: None,
+        specimen: None,
+        tool_severity: None,
+    }
+}
+
+/// NCBI submission files are ASCII. Non-ASCII text is flagged, never
+/// transliterated silently.
+fn ascii_issues(
+    sub: &Submission,
+    prepared: &Prepared,
+    submitter: &Submitter,
+    issues: &mut Vec<Issue>,
+) {
+    let mut flag = |what: String, text: &str, record: Option<&PreparedRecord>| {
+        if !text.is_ascii() {
+            issues.push(Issue {
+                record: record.map(|r| r.record.clone()),
+                specimen: record.and_then(|r| r.specimen.clone()),
+                ..local(
+                    Severity::Blocking,
+                    "non_ascii",
+                    format!("{what} {text:?} has non-ASCII characters; NCBI files are ASCII. Enter an ASCII spelling"),
+                )
+            });
+        }
+    };
+    for (name, value) in submitter.fields() {
+        flag(format!("Submitter {}", name.replace('_', " ")), value, None);
+    }
+    flag("Title".into(), &sub.publication.title, None);
+    for author in &sub.publication.authors {
+        flag(
+            "Author".into(),
+            &format!("{} {} {}", author.first, author.middle, author.last),
+            None,
+        );
+    }
+    for record in prepared.exported() {
+        if let Some(organism) = &record.organism {
+            flag("Organism".into(), organism, Some(record));
+        }
+        for (name, value) in &record.qualifiers {
+            flag(name.clone(), value, Some(record));
+        }
+        if let Some(feature) = &record.feature {
+            for (name, value) in &feature.qualifiers {
+                flag(name.clone(), value, Some(record));
+            }
+        }
+    }
+}
+
+// The package.
+
+/// What an export wrote.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PackageSummary {
+    pub directory: String,
+    /// Hash of the four table2asn input files together; a validation run
+    /// belongs to exactly this hash.
+    pub input_hash: String,
+    pub records: usize,
+    pub blocking: usize,
+    pub review: usize,
+    /// `draft` (blocking issues remain), `prepared` (no local blocking
+    /// issues; not yet validated), `validated` (table2asn reported no
+    /// errors for these exact files) or `validation_errors`.
+    pub status: String,
+    pub files: BTreeMap<String, String>,
+}
+
+fn tsv(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for c in value.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\t' => out.push_str("\\t"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+fn table(header: &[&str], rows: &[Vec<String>]) -> Vec<u8> {
+    let mut out = header.join("\t");
+    out.push('\n');
+    for row in rows {
+        out.push_str(&row.iter().map(|v| tsv(v)).collect::<Vec<_>>().join("\t"));
+        out.push('\n');
+    }
+    out.into_bytes()
+}
+
+fn decision_text(decision: &Decision) -> &'static str {
+    match decision {
+        Decision::New => "new",
+        Decision::Existing { .. } => "existing",
+        Decision::Exclude => "exclude",
+    }
+}
+
+fn contact(submitter: &Submitter) -> ncbi::Contact {
+    ncbi::Contact {
+        first: submitter.first_name.clone(),
+        middle: submitter.middle_initials.clone(),
+        last: submitter.last_name.clone(),
+        email: submitter.email.clone(),
+        phone: submitter.phone.clone(),
+        institution: submitter.institution.clone(),
+        department: submitter.department.clone(),
+        street: submitter.street.clone(),
+        city: submitter.city.clone(),
+        state: submitter.state.clone(),
+        postal_code: submitter.postal_code.clone(),
+        country: submitter.country.clone(),
+    }
+}
+
+/// The table2asn input files, in order: FASTA, source table, feature
+/// table, template.
+fn genbank_files(
+    sub: &Submission,
+    prepared: &Prepared,
+    submitter: &Submitter,
+) -> Result<[Vec<u8>; 4]> {
+    let records: Vec<&PreparedRecord> = prepared.exported().collect();
+    let mut modifiers = vec![(
+        "mol_type".to_string(),
+        sub.batch.mol_type.as_str().to_string(),
+    )];
+    if let Some(organelle) = sub.batch.organelle {
+        modifiers.push(("location".into(), organelle.as_str().into()));
+    }
+    if matches!(sub.batch.marker, Marker::Coding { .. }) {
+        let name = if sub
+            .batch
+            .organelle
+            .is_some_and(basecraft_protocol::submission::Organelle::mitochondrial)
+        {
+            "mgcode"
+        } else {
+            "gcode"
+        };
+        modifiers.push((name.into(), sub.batch.genetic_code.to_string()));
+    }
+    let mut fsa = Vec::new();
+    ncbi::write_fsa(
+        &mut fsa,
+        &records
+            .iter()
+            .map(|r| ncbi::FsaRecord {
+                id: r.export_id.as_deref().unwrap_or_default(),
+                modifiers: &modifiers,
+                residues: r.residues.as_bytes(),
+            })
+            .collect::<Vec<_>>(),
+    )?;
+    let sources: Vec<Vec<(String, String)>> = records
+        .iter()
+        .map(|r| {
+            let mut q = Vec::new();
+            if let Some(organism) = &r.organism {
+                q.push(("organism".to_string(), organism.clone()));
+            }
+            q.extend(r.qualifiers.iter().cloned());
+            q
+        })
+        .collect();
+    let mut src = Vec::new();
+    ncbi::write_src(
+        &mut src,
+        &records
+            .iter()
+            .zip(&sources)
+            .map(|(r, q)| (r.export_id.as_deref().unwrap_or_default(), q.as_slice()))
+            .collect::<Vec<_>>(),
+    )?;
+    let gene_qualifiers: Vec<Vec<(String, String)>> = records
+        .iter()
+        .map(|r| {
+            r.feature
+                .as_ref()
+                .and_then(|f| f.gene.clone())
+                .map(|g| vec![("gene".to_string(), g)])
+                .unwrap_or_default()
+        })
+        .collect();
+    let mut tbl_records = Vec::new();
+    for (r, gene) in records.iter().zip(&gene_qualifiers) {
+        let mut features = Vec::new();
+        if let Some(f) = &r.feature {
+            let end = r.residues.len() as u64;
+            if !gene.is_empty() {
+                features.push(ncbi::TableFeature {
+                    kind: "gene",
+                    start: 1,
+                    end,
+                    partial5: f.partial5,
+                    partial3: f.partial3,
+                    qualifiers: gene,
+                });
+            }
+            features.push(ncbi::TableFeature {
+                kind: &f.kind,
+                start: 1,
+                end,
+                partial5: f.partial5,
+                partial3: f.partial3,
+                qualifiers: &f.qualifiers,
+            });
+        }
+        tbl_records.push((r.export_id.as_deref().unwrap_or_default(), features));
+    }
+    let mut tbl = Vec::new();
+    ncbi::write_tbl(&mut tbl, &tbl_records)?;
+    let authors: Vec<ncbi::Person> = sub
+        .publication
+        .authors
+        .iter()
+        .map(|a| ncbi::Person {
+            first: a.first.clone(),
+            middle: a.middle.clone(),
+            last: a.last.clone(),
+        })
+        .collect();
+    let mut sbt = Vec::new();
+    ncbi::write_sbt(
+        &mut sbt,
+        &contact(submitter),
+        &authors,
+        &sub.publication.title,
+    )?;
+    Ok([fsa, src, tbl, sbt])
+}
+
+const GENBANK_NAMES: [&str; 4] = ["fsa", "src", "tbl", "sbt"];
+
+fn input_hash(files: &[Vec<u8>; 4]) -> String {
+    let mut hasher = basecraft_io::Hasher::new();
+    for (name, bytes) in GENBANK_NAMES.iter().zip(files) {
+        hasher.update(name.as_bytes());
+        hasher.update(basecraft_io::hash_bytes(bytes).as_bytes());
+    }
+    hasher.finish()
+}
+
+/// The folder a validation run of `input_hash` keeps its reports in.
+pub fn validation_dir(package: &Path, input_hash: &str) -> PathBuf {
+    let short: String = input_hash
+        .trim_start_matches("b3:")
+        .chars()
+        .take(16)
+        .collect();
+    package.join("validation").join(short)
+}
+
+fn records_table(prepared: &Prepared) -> Vec<u8> {
+    let rows: Vec<Vec<String>> = prepared
+        .records
+        .iter()
+        .map(|r| {
+            let f = r.feature.as_ref();
+            vec![
+                r.export_id.clone().unwrap_or_default(),
+                r.record.clone(),
+                (r.row + 1).to_string(),
+                decision_text(&r.decision).into(),
+                r.accession.clone().unwrap_or_default(),
+                r.specimen.clone().unwrap_or_default(),
+                r.organism.clone().unwrap_or_default(),
+                r.research_name.clone().unwrap_or_default(),
+                if r.export_id.is_some() {
+                    r.residues.len().to_string()
+                } else {
+                    String::new()
+                },
+                f.map(|f| f.kind.clone()).unwrap_or_default(),
+                f.map(|f| if f.partial5 { "partial" } else { "complete" }.to_string())
+                    .unwrap_or_default(),
+                f.map(|f| if f.partial3 { "partial" } else { "complete" }.to_string())
+                    .unwrap_or_default(),
+                r.frame
+                    .as_ref()
+                    .and_then(|x| x.effective)
+                    .map(|c| c.to_string())
+                    .unwrap_or_default(),
+                if r.export_id.is_some() {
+                    r.trimmed.0.to_string()
+                } else {
+                    String::new()
+                },
+                if r.export_id.is_some() {
+                    r.trimmed.1.to_string()
+                } else {
+                    String::new()
+                },
+            ]
+        })
+        .collect();
+    table(
+        &[
+            "export_id",
+            "record",
+            "row",
+            "decision",
+            "accession",
+            "specimen_id",
+            "organism",
+            "research_name",
+            "length",
+            "feature",
+            "five_prime",
+            "three_prime",
+            "codon_start",
+            "trimmed_5",
+            "trimmed_3",
+        ],
+        &rows,
+    )
+}
+
+fn specimens_table(prepared: &Prepared) -> Vec<u8> {
+    let mut columns: Vec<String> = Vec::new();
+    for r in prepared.exported() {
+        for (q, _) in &r.qualifiers {
+            if !columns.contains(q) {
+                columns.push(q.clone());
+            }
+        }
+    }
+    let rows: Vec<Vec<String>> = prepared
+        .exported()
+        .map(|r| {
+            let mut row = vec![
+                r.export_id.clone().unwrap_or_default(),
+                r.specimen.clone().unwrap_or_default(),
+                r.organism.clone().unwrap_or_default(),
+                r.research_name.clone().unwrap_or_default(),
+            ];
+            for c in &columns {
+                row.push(
+                    r.qualifiers
+                        .iter()
+                        .find(|(q, _)| q == c)
+                        .map(|(_, v)| v.clone())
+                        .unwrap_or_default(),
+                );
+            }
+            row
+        })
+        .collect();
+    let mut header = vec!["export_id", "specimen_id", "organism", "research_name"];
+    header.extend(columns.iter().map(String::as_str));
+    table(&header, &rows)
+}
+
+fn coordinate_table(prepared: &Prepared) -> Vec<u8> {
+    let mut rows = Vec::new();
+    for r in prepared.exported() {
+        for s in &r.segments {
+            rows.push(vec![
+                r.export_id.clone().unwrap_or_default(),
+                r.record.clone(),
+                (r.row + 1).to_string(),
+                (s.export_start + 1).to_string(),
+                s.export_end.to_string(),
+                (s.column_start + 1).to_string(),
+                (s.column_start + s.export_end - s.export_start).to_string(),
+            ]);
+        }
+    }
+    table(
+        &[
+            "export_id",
+            "record",
+            "row",
+            "export_start",
+            "export_end",
+            "alignment_start",
+            "alignment_end",
+        ],
+        &rows,
+    )
+}
+
+/// Issues as a table, one per line.
+pub fn issues_table(issues: &[Issue]) -> Vec<u8> {
+    let rows: Vec<Vec<String>> = issues
+        .iter()
+        .map(|i| {
+            vec![
+                i.severity.as_str().into(),
+                i.source.clone(),
+                i.tool_severity.clone().unwrap_or_default(),
+                i.code.clone(),
+                i.record.clone().unwrap_or_default(),
+                i.specimen.clone().unwrap_or_default(),
+                i.message.clone(),
+            ]
+        })
+        .collect();
+    table(
+        &[
+            "severity",
+            "source",
+            "tool_severity",
+            "code",
+            "record",
+            "specimen_id",
+            "message",
+        ],
+        &rows,
+    )
+}
+
+fn count(issues: &[Issue], severity: Severity) -> usize {
+    issues.iter().filter(|i| i.severity == severity).count()
+}
+
+fn readme(
+    summary: &PackageSummary,
+    sub: &Submission,
+    issues: &[Issue],
+    validation: Option<&ValidationSummary>,
+) -> Vec<u8> {
+    let mut text = String::new();
+    text.push_str("GenBank marker submission package (Basecraft)\n\n");
+    text.push_str(DISCLAIMER);
+    text.push_str("\n\n");
+    let _ = writeln!(text, "Status: {}", summary.status);
+    let _ = writeln!(text, "Records: {}", summary.records);
+    if let Some(source) = &sub.source {
+        let _ = writeln!(
+            text,
+            "Source alignment: {} ({})",
+            source.document, source.hash
+        );
+    }
+    let _ = writeln!(text, "Input hash: {}\n", summary.input_hash);
+    text.push_str("Files\n");
+    text.push_str("  genbank/submission.fsa  sequences with batch source modifiers\n");
+    text.push_str("  genbank/submission.src  source qualifiers per record\n");
+    text.push_str("  genbank/submission.tbl  five-column feature table\n");
+    text.push_str("  genbank/submission.sbt  submitter, authors and title\n");
+    text.push_str("  genbank/submission.sqn  table2asn output to send (after validation)\n");
+    text.push_str("  genbank/submission.gbf  GenBank flatfile preview (after validation)\n");
+    text.push_str("  records.tsv, specimens.tsv, coordinate-map.tsv  records, their specimens and alignment columns\n");
+    text.push_str("  validation/  local issues, and table2asn reports per input hash\n\n");
+    match validation {
+        Some(v) => {
+            let _ = writeln!(
+                text,
+                "Validation: table2asn {} ({}): {} errors, {} warnings. Reports in {}\n",
+                v.tool_version, v.status, v.errors, v.warnings, v.directory
+            );
+        }
+        None => text.push_str("Validation: not yet run for these exact files. Run table2asn validation in Basecraft (Data submission > Validate) or `basecraft submission validate`.\n\n"),
+    }
+    text.push_str("Handoff\n");
+    text.push_str(
+        "  1. Resolve the actions below and validate again until table2asn reports no errors.\n",
+    );
+    text.push_str(
+        "  2. Read genbank/submission.gbf to check the records as GenBank will show them.\n",
+    );
+    text.push_str("  3. Submit genbank/submission.sqn as NCBI currently instructs for table2asn files (by email to gb-sub@ncbi.nlm.nih.gov at the time of writing; check NCBI's table2asn page first).\n");
+    text.push_str("  4. Import the accession list NCBI returns (Data submission > Accessions or `basecraft submission accessions`).\n\n");
+    let open: Vec<&Issue> = issues
+        .iter()
+        .filter(|i| matches!(i.severity, Severity::Blocking | Severity::Review))
+        .collect();
+    let _ = writeln!(text, "Unresolved actions ({})", open.len());
+    for issue in open {
+        let _ = writeln!(
+            text,
+            "  [{}] {}{}",
+            issue.severity.as_str(),
+            issue
+                .record
+                .as_ref()
+                .map(|r| format!("{r}: "))
+                .unwrap_or_default(),
+            issue.message
+        );
+    }
+    text.into_bytes()
+}
+
+fn write_file(path: &Path, bytes: &[u8]) -> Result<String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    basecraft_io::write_atomic(path, |w| w.write_all(bytes))?;
+    Ok(basecraft_io::hash_bytes(bytes))
+}
+
+fn relative(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+/// Write the submission package to `directory` (inside the project).
+/// Regenerating with the same inputs writes identical files. The package
+/// records the validation run for its exact input hash, if there is one;
+/// an `.sqn` or `.gbf` from other inputs is removed.
+pub fn export(
+    session: &mut Session,
+    doc: DocId,
+    directory: &Path,
+    submitter: &Submitter,
+) -> Result<PackageSummary> {
+    let sub = checked(session, doc)?.clone();
+    let directory = if directory.is_absolute() {
+        directory.to_path_buf()
+    } else {
+        session.root().join(directory)
+    };
+    let root = session.root().canonicalize()?;
+    std::fs::create_dir_all(&directory)?;
+    let directory = directory.canonicalize()?;
+    if !directory.starts_with(&root) {
+        return Err(invalid("the package folder must be inside the project"));
+    }
+    let manifest = directory.join("package.json");
+    if directory.read_dir()?.next().is_some() && !manifest.is_file() {
+        return Err(invalid(format!(
+            "{} has other files; choose an empty folder or an earlier package",
+            directory.display()
+        )));
+    }
+    if manifest.is_file() {
+        let existing: Value =
+            serde_json::from_slice(&std::fs::read(&manifest)?).unwrap_or(Value::Null);
+        if existing["schema"] != PACKAGE_SCHEMA {
+            return Err(invalid(format!(
+                "{} is not a Basecraft submission package",
+                directory.display()
+            )));
+        }
+    }
+    let review = review_submission(&root, &sub, submitter)?;
+    let genbank = genbank_files(&sub, &review.prepared, submitter)?;
+    let hash = input_hash(&genbank);
+    let mut files = BTreeMap::new();
+    for (ext, bytes) in GENBANK_NAMES.iter().zip(&genbank) {
+        let path = directory.join("genbank").join(format!("{BASE}.{ext}"));
+        files.insert(relative(&directory, &path), write_file(&path, bytes)?);
+    }
+    for (name, bytes) in [
+        ("records.tsv", records_table(&review.prepared)),
+        ("specimens.tsv", specimens_table(&review.prepared)),
+        ("coordinate-map.tsv", coordinate_table(&review.prepared)),
+        (
+            "validation/local-issues.tsv",
+            issues_table(&review.prepared.issues),
+        ),
+    ] {
+        files.insert(name.into(), write_file(&directory.join(name), &bytes)?);
+    }
+    let validation = read_validation(&directory, &hash)?;
+    for ext in ["sqn", "gbf"] {
+        let path = directory.join("genbank").join(format!("{BASE}.{ext}"));
+        let current = validation.as_ref().and_then(|v| v.copies.get(ext));
+        match current {
+            Some(expected) if basecraft_io::hash_file(&path).ok().as_ref() == Some(expected) => {
+                files.insert(relative(&directory, &path), expected.clone());
+            }
+            _ if path.exists() => std::fs::remove_file(&path)?,
+            _ => {}
+        }
+    }
+    let blocking = count(&review.prepared.issues, Severity::Blocking);
+    let status = status(blocking, validation.as_ref());
+    let summary = PackageSummary {
+        directory: relative(&root, &directory),
+        input_hash: hash.clone(),
+        records: review.prepared.exported().count(),
+        blocking,
+        review: count(&review.prepared.issues, Severity::Review),
+        status,
+        files: files.clone(),
+    };
+    files.insert(
+        "README.txt".into(),
+        write_file(
+            &directory.join("README.txt"),
+            &readme(&summary, &sub, &review.prepared.issues, validation.as_ref()),
+        )?,
+    );
+    let package = json!({
+        "schema": PACKAGE_SCHEMA,
+        "version": 1,
+        "destination": "genbank",
+        "note": DISCLAIMER,
+        "status": summary.status,
+        "submission": {"document": session.doc_key(doc), "hash": basecraft_io::hash_bytes(&encode(&sub)?)},
+        "source": sub.source,
+        "metadata_manifest_hash": review.metadata_hash,
+        "batch": sub.batch,
+        "export": sub.export,
+        "input_hash": hash,
+        "records": review.prepared.exported().map(|r| json!({"export_id": r.export_id, "record": r.record, "row": r.row + 1, "specimen": r.specimen})).collect::<Vec<_>>(),
+        "issues": {"blocking": summary.blocking, "review": summary.review},
+        "files": files,
+        "validation": validation,
+        "tools": {"table2asn": validation.as_ref().map(|v| v.tool_version.clone())},
+    });
+    let mut bytes = serde_json::to_vec_pretty(&package)?;
+    bytes.push(b'\n');
+    session.export(doc, &manifest, "genbank-submission-package", |w| {
+        w.write_all(&bytes)
+    })?;
+    Ok(summary)
+}
+
+fn status(blocking: usize, validation: Option<&ValidationSummary>) -> String {
+    match (blocking, validation) {
+        (0, Some(v)) if v.status == "passed" => "validated",
+        (_, Some(v)) if v.status == "errors" => "validation_errors",
+        (0, _) => "prepared",
+        _ => "draft",
+    }
+    .into()
+}
+
+// Validation.
+
+/// A table2asn run, as recorded in the package.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ValidationSummary {
+    pub input_hash: String,
+    /// `passed` (completed, a report was read and it has no errors),
+    /// `errors`, `unavailable` (the tool could not run: nothing is known
+    /// about the sequences) or `failed`.
+    pub status: String,
+    pub tool_version: String,
+    pub run_id: String,
+    /// Package-relative folder with the raw reports.
+    pub directory: String,
+    pub errors: usize,
+    pub warnings: usize,
+    pub infos: usize,
+    pub message: String,
+    /// Hashes of the `.sqn` and `.gbf` copied into `genbank/`.
+    #[serde(default)]
+    pub copies: BTreeMap<String, String>,
+    #[serde(default)]
+    pub issues: Vec<Issue>,
+}
+
+fn read_validation(package: &Path, input_hash: &str) -> Result<Option<ValidationSummary>> {
+    let path = validation_dir(package, input_hash).join("summary.json");
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let summary: ValidationSummary = serde_json::from_slice(&std::fs::read(&path)?)?;
+    Ok((summary.input_hash == input_hash).then_some(summary))
+}
+
+/// The package's recorded input hash, checked against its current files.
+fn package_inputs(package: &Path) -> Result<(Value, String)> {
+    let manifest: Value = serde_json::from_slice(&std::fs::read(package.join("package.json"))?)?;
+    if manifest["schema"] != PACKAGE_SCHEMA {
+        return Err(invalid("not a Basecraft submission package"));
+    }
+    let hash = manifest["input_hash"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    let mut files: [Vec<u8>; 4] = Default::default();
+    for (slot, ext) in files.iter_mut().zip(GENBANK_NAMES) {
+        *slot = std::fs::read(package.join("genbank").join(format!("{BASE}.{ext}")))?;
+    }
+    if input_hash(&files) != hash {
+        return Err(invalid(
+            "the package's genbank files changed since export; export the package again",
+        ));
+    }
+    Ok((manifest, hash))
+}
+
+/// The operation request that validates a package with table2asn, with a
+/// new report folder for its input hash. Paths are project-relative.
+pub fn validation_request(project: &Path, package: &Path) -> Result<Value> {
+    let root = project.canonicalize()?;
+    let package = if package.is_absolute() {
+        package.to_path_buf()
+    } else {
+        root.join(package)
+    }
+    .canonicalize()?;
+    let (_, hash) = package_inputs(&package)?;
+    let dir = validation_dir(&package, &hash);
+    std::fs::create_dir_all(&dir)?;
+    let destination = (1..=999)
+        .map(|n| {
+            dir.join(if n == 1 {
+                "table2asn".to_string()
+            } else {
+                format!("table2asn-{n}")
+            })
+        })
+        .find(|p| !p.exists())
+        .unwrap_or_else(|| dir.join("table2asn"));
+    let input = |ext: &str| json!([{"kind": "file", "path": relative(&root, &package.join("genbank").join(format!("{BASE}.{ext}")))}]);
+    Ok(json!({
+        "operation": VALIDATE_OPERATION,
+        "inputs": {"sequences": input("fsa"), "sources": input("src"), "features": input("tbl"), "template": input("sbt")},
+        "parameters": {},
+        "destinations": {"reports": relative(&root, &destination)},
+    }))
+}
+
+/// Read a finished table2asn job's reports into the package: issues mapped
+/// to records and specimens, the summary, the `.sqn` and `.gbf` copied
+/// into `genbank/`, and the package manifest and README updated.
+/// `outcome` is the operation outcome as JSON. An unavailable tool or a
+/// failed run is recorded as such, never as a sequence error.
+pub fn record_validation(
+    project: &Path,
+    package: &Path,
+    outcome: &Value,
+) -> Result<ValidationSummary> {
+    let root = project.canonicalize()?;
+    let package = if package.is_absolute() {
+        package.to_path_buf()
+    } else {
+        root.join(package)
+    }
+    .canonicalize()?;
+    let (mut manifest, hash) = package_inputs(&package)?;
+    let dir = validation_dir(&package, &hash);
+    let data = &outcome["data"];
+    // Collection members are listed one by one, in the hidden store and at
+    // the destination; prefer the copy inside this package.
+    let folders: Vec<PathBuf> = outcome["artifacts"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|a| a["role"] == "reports")
+        .filter_map(|a| a["path"].as_str())
+        .map(|p| {
+            if Path::new(p).is_absolute() {
+                PathBuf::from(p)
+            } else {
+                root.join(p)
+            }
+        })
+        .filter(|p| p.file_name().is_some_and(|n| n == "table2asn.log"))
+        .filter_map(|p| p.parent().map(Path::to_path_buf))
+        .collect();
+    let reports = folders
+        .iter()
+        .find(|p| p.starts_with(&package))
+        .or_else(|| folders.first())
+        .cloned();
+    let mut summary = ValidationSummary {
+        input_hash: hash.clone(),
+        status: "failed".into(),
+        tool_version: data["version"].as_str().unwrap_or("unknown").into(),
+        run_id: outcome["run_id"].as_str().unwrap_or_default().into(),
+        directory: relative(&package, &dir),
+        errors: 0,
+        warnings: 0,
+        infos: 0,
+        message: String::new(),
+        copies: BTreeMap::new(),
+        issues: Vec::new(),
+    };
+    let state = outcome["state"].as_str().unwrap_or_default();
+    if data["status"] == "unavailable" {
+        summary.status = "unavailable".into();
+        summary.message = data["message"]
+            .as_str()
+            .unwrap_or("table2asn is not available")
+            .into();
+    } else if state != "completed" {
+        summary.message = outcome["errors"][0]["message"]
+            .as_str()
+            .unwrap_or("the validation job did not complete")
+            .into();
+    } else if let Some(reports) = reports {
+        summary.directory = relative(&package, &reports);
+        let val = reports.join(format!("{BASE}.val"));
+        let sqn = reports.join(format!("{BASE}.sqn"));
+        let gbf = reports.join(format!("{BASE}.gbf"));
+        // table2asn writes no .val when it has nothing to report. A run
+        // counts only when it exited cleanly and wrote the .sqn and the
+        // flatfile preview, which it makes after validating.
+        let quiet = !val.is_file() && data["exit_code"] == 0 && gbf.is_file();
+        if !sqn.is_file() || !(val.is_file() || quiet) {
+            summary.message =
+                "table2asn produced no validation report or .sqn; the run is not a pass".into();
+        } else {
+            let ids: BTreeMap<String, (String, Option<String>)> = manifest["records"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|r| {
+                    Some((
+                        r["export_id"].as_str()?.to_string(),
+                        (
+                            r["record"].as_str()?.to_string(),
+                            r["specimen"].as_str().map(str::to_string),
+                        ),
+                    ))
+                })
+                .collect();
+            let report = if quiet {
+                String::new()
+            } else {
+                std::fs::read_to_string(&val)?
+            };
+            for message in ncbi::parse_val(&report) {
+                let severity = match message.severity.as_str() {
+                    "Error" | "Reject" | "Fatal" => {
+                        summary.errors += 1;
+                        Severity::Blocking
+                    }
+                    "Warning" => {
+                        summary.warnings += 1;
+                        Severity::Review
+                    }
+                    _ => {
+                        summary.infos += 1;
+                        Severity::Info
+                    }
+                };
+                let target = message.seq_id.as_ref().and_then(|id| ids.get(id));
+                summary.issues.push(Issue {
+                    severity,
+                    source: "table2asn".into(),
+                    code: message.code,
+                    message: message.message,
+                    record: target.map(|t| t.0.clone()),
+                    specimen: target.and_then(|t| t.1.clone()),
+                    tool_severity: Some(message.severity),
+                });
+            }
+            summary.status = if summary.errors == 0 {
+                "passed"
+            } else {
+                "errors"
+            }
+            .into();
+            summary.message = format!(
+                "table2asn {}: {} errors, {} warnings",
+                summary.tool_version, summary.errors, summary.warnings
+            );
+            for ext in ["sqn", "gbf"] {
+                let from = reports.join(format!("{BASE}.{ext}"));
+                if from.is_file() {
+                    let bytes = std::fs::read(&from)?;
+                    let to = package.join("genbank").join(format!("{BASE}.{ext}"));
+                    summary.copies.insert(ext.into(), write_file(&to, &bytes)?);
+                }
+            }
+        }
+    } else {
+        summary.message = "the validation job published no reports".into();
+    }
+    if summary.status == "unavailable" {
+        summary.issues.push(local(
+            Severity::Unavailable,
+            "table2asn_unavailable",
+            summary.message.clone(),
+        ));
+    } else if summary.status == "failed" {
+        summary.issues.push(local(
+            Severity::Unavailable,
+            "table2asn_failed",
+            summary.message.clone(),
+        ));
+    }
+    std::fs::create_dir_all(&dir)?;
+    write_file(&dir.join("issues.tsv"), &issues_table(&summary.issues))?;
+    let mut bytes = serde_json::to_vec_pretty(&summary)?;
+    bytes.push(b'\n');
+    write_file(&dir.join("summary.json"), &bytes)?;
+    // The manifest and README now describe this run.
+    let blocking =
+        usize::try_from(manifest["issues"]["blocking"].as_u64().unwrap_or(0)).unwrap_or(usize::MAX);
+    manifest["status"] = json!(status(blocking, Some(&summary)));
+    manifest["validation"] = serde_json::to_value(&summary)?;
+    manifest["tools"]["table2asn"] = json!(summary.tool_version);
+    for (ext, hash) in &summary.copies {
+        manifest["files"][format!("genbank/{BASE}.{ext}")] = json!(hash);
+    }
+    let mut bytes = serde_json::to_vec_pretty(&manifest)?;
+    bytes.push(b'\n');
+    write_file(&package.join("package.json"), &bytes)?;
+    let readme_path = package.join("README.txt");
+    if let Ok(text) = std::fs::read_to_string(&readme_path) {
+        let line = text
+            .lines()
+            .find(|l| l.starts_with("Validation: "))
+            .unwrap_or_default()
+            .to_string();
+        let status_line = text
+            .lines()
+            .find(|l| l.starts_with("Status: "))
+            .unwrap_or_default()
+            .to_string();
+        let updated = text
+            .replacen(
+                &line,
+                &format!(
+                    "Validation: table2asn {} ({}): {} errors, {} warnings. Reports in {}",
+                    summary.tool_version,
+                    summary.status,
+                    summary.errors,
+                    summary.warnings,
+                    summary.directory
+                ),
+                1,
+            )
+            .replacen(
+                &status_line,
+                &format!(
+                    "Status: {}",
+                    manifest["status"].as_str().unwrap_or_default()
+                ),
+                1,
+            );
+        write_file(&readme_path, updated.as_bytes())?;
+    }
+    Ok(summary)
+}
+
+/// The validation recorded for a package's current input hash, if any.
+pub fn current_validation(project: &Path, package: &Path) -> Result<Option<ValidationSummary>> {
+    let package = if package.is_absolute() {
+        package.to_path_buf()
+    } else {
+        project.join(package)
+    };
+    if !package.join("package.json").is_file() {
+        return Ok(None);
+    }
+    match package_inputs(&package) {
+        Ok((_, hash)) => read_validation(&package, &hash),
+        Err(_) => Ok(None),
+    }
+}
+
+// Accessions.
+
+/// Accessions read from the archive's list, matched to records.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct AccessionPlan {
+    pub accessions: Vec<AccessionEntry>,
+    /// Lines that name no record of this submission, or no accession.
+    pub unmatched: Vec<String>,
+}
+
+/// Read an accession list as NCBI returns it: lines holding a sequence ID
+/// (the export ID or the record name) and an accession, separated by tabs,
+/// spaces or commas. Header and blank lines are skipped.
+pub fn plan_accessions(
+    session: &Session,
+    doc: DocId,
+    text: &str,
+    submitter: &Submitter,
+) -> Result<AccessionPlan> {
+    let review = review(session, doc, submitter)?;
+    let mut ids: BTreeMap<String, String> = BTreeMap::new();
+    for r in &review.prepared.records {
+        ids.insert(r.record.clone(), r.record.clone());
+        if let Some(id) = &r.export_id {
+            ids.insert(id.clone(), r.record.clone());
+        }
+    }
+    let mut plan = AccessionPlan::default();
+    let mut seen = BTreeSet::new();
+    for line in text.lines() {
+        let fields: Vec<&str> = line
+            .split(|c: char| c == '\t' || c == ',' || c.is_whitespace())
+            .filter(|f| !f.is_empty())
+            .collect();
+        if fields.is_empty() {
+            continue;
+        }
+        let record = fields.iter().find_map(|f| ids.get(*f));
+        let accession = fields.iter().find(|f| model::valid_accession(f));
+        match (record, accession) {
+            (Some(record), Some(accession)) if seen.insert(record.clone()) => {
+                plan.accessions.push(AccessionEntry {
+                    record: record.clone(),
+                    accession: (*accession).to_string(),
+                });
+            }
+            (None, None) if plan.accessions.is_empty() && plan.unmatched.is_empty() => {}
+            _ => plan.unmatched.push(line.trim().to_string()),
+        }
+    }
+    Ok(plan)
+}
+
+/// A publication table of accessions: one row per record with one.
+pub fn accession_table(session: &Session, doc: DocId, submitter: &Submitter) -> Result<Vec<u8>> {
+    let review = review(session, doc, submitter)?;
+    let (meta, _) = project_metadata(session.root())?;
+    let rows: Vec<Vec<String>> = review
+        .prepared
+        .records
+        .iter()
+        .filter_map(|r| {
+            let accession = r.accession.clone()?;
+            let organism = r.organism.clone().or_else(|| {
+                r.specimen
+                    .as_ref()
+                    .and_then(|s| basecraft_docs::metadata::insdc_source(&meta, s).ok())
+                    .and_then(|q| {
+                        q.qualifiers
+                            .into_iter()
+                            .find(|(k, _)| k == "organism")
+                            .map(|(_, v)| v)
+                    })
+            });
+            Some(vec![
+                r.record.clone(),
+                r.specimen.clone().unwrap_or_default(),
+                organism.unwrap_or_default(),
+                r.export_id.clone().unwrap_or_default(),
+                decision_text(&r.decision).into(),
+                accession,
+            ])
+        })
+        .collect();
+    Ok(table(
+        &[
+            "record",
+            "specimen_id",
+            "organism",
+            "export_id",
+            "decision",
+            "accession",
+        ],
+        &rows,
+    ))
+}

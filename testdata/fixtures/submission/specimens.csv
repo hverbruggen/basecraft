@@ -1,0 +1,14 @@
+document,record,specimen_id,organism,institutionCode,catalogNumber,eventDate,country,locality,decimalLatitude,decimalLongitude,recordedBy
+rbcL.afa,HV101_rbcL,HV101,Caulerpa taxifolia,MEL,HV101,2019-05-12,Australia,"Victoria, Port Phillip Bay",-38.1,144.9,H. Verbruggen
+rbcL.afa,HV102_rbcL,HV102,Caulerpa taxifolia,MEL,HV102,2019-05,Australia,Victoria,,,
+rbcL.afa,HV103_rbcL,HV103,Caulerpa taxifolia,MEL,HV103,2019,Australia,,,,
+COI.afa,HV201_COI,HV201,Drosophila melanogaster,,HV201,2021-03-02,Australia,Melbourne,-37.8,144.96,
+COI.afa,HV202_COI,HV202,Drosophila melanogaster,,HV202,2021-03,Australia,,,,
+COI.afa,HV203_COI,HV203,Drosophila melanogaster,,HV203,not collected,Australia,,,,
+COI.afa,HV204_COI,HV204,Drosophila melanogaster,,HV204,,Australia,,,,
+18S.afa,HV301_18S,HV301,Caulerpa webbiana,,HV301,2018,Spain,Canary Islands,,,
+18S.afa,HV302_18S,HV302,Caulerpa sp.,,HV302,2018,Spain,,,,
+ITS.afa,HV401_ITS,HV401,Caulerpa racemosa,,HV401,2020-01,Australia,,,,
+ITS.afa,HV402_ITS,HV402,Caulerpa microphysa,,HV402,2020-01,Australia,,,,
+ITS.afa,HV403_ITS,HV403,Caulerpa racemosa,,HV403,2020-01,Australia,,,,
+ITS.afa,HV404_ITS,HV404,Caulerpa microphysa,,HV404,2020-02,Atlantis,,,,

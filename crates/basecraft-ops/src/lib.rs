@@ -12,6 +12,7 @@ pub mod provenance;
 pub mod replay;
 pub mod sanger_review;
 pub mod session;
+pub mod submission;
 
 mod error;
 mod save_guard;

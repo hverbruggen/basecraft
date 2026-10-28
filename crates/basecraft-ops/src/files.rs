@@ -20,6 +20,9 @@ pub enum Format {
     /// The project's specimen metadata: a manifest with TSV tables beside
     /// it. See [`crate::metadata`].
     Metadata,
+    /// A GenBank marker submission: one JSON document. See
+    /// [`crate::submission`].
+    Submission,
     /// FASTA, with annotations in a GFF3 sidecar of the same stem.
     Fasta,
     /// Newick or NEXUS (told apart by content), with annotations and style
@@ -31,6 +34,9 @@ impl Format {
     pub fn from_path(path: &Path) -> Result<Self> {
         if crate::metadata::is_manifest(path) {
             return Ok(Format::Metadata);
+        }
+        if crate::submission::is_submission(path) {
+            return Ok(Format::Submission);
         }
         let ext = path
             .extension()
@@ -54,6 +60,7 @@ pub enum Kind {
     Sequence,
     Delimitation,
     Metadata,
+    Submission,
     Alignment,
     Tree,
 }
@@ -68,6 +75,7 @@ pub fn kind(path: &Path) -> Result<Kind> {
     match Format::from_path(path)? {
         Format::Delimitation => return Ok(Kind::Delimitation),
         Format::Metadata => return Ok(Kind::Metadata),
+        Format::Submission => return Ok(Kind::Submission),
         Format::Tree => return Ok(Kind::Tree),
         Format::GenBank => return Ok(Kind::Sequence),
         Format::Fasta => {}
@@ -115,6 +123,7 @@ pub enum Loaded {
     Sequence(Opened),
     Delimitation(basecraft_protocol::delimitation::DelimitationWorkspace),
     Metadata(crate::metadata::OpenedMetadata),
+    Submission(basecraft_protocol::submission::Submission),
     Alignment(OpenedAlignment),
     Tree(OpenedTree),
 }
@@ -123,6 +132,9 @@ pub enum Loaded {
 pub fn load(path: &Path) -> Result<Loaded> {
     if Format::from_path(path)? == Format::Metadata {
         return crate::metadata::load(path).map(Loaded::Metadata);
+    }
+    if Format::from_path(path)? == Format::Submission {
+        return crate::submission::load(path).map(Loaded::Submission);
     }
     if Format::from_path(path)? == Format::Delimitation {
         return load_delimitation(path).map(Loaded::Delimitation);
@@ -332,6 +344,7 @@ pub fn open(path: &Path) -> Result<Opened> {
         Format::Metadata => Err(crate::error::invalid(
             "this is the project's specimen metadata",
         )),
+        Format::Submission => Err(crate::error::invalid("this is a GenBank submission")),
         Format::Tree => Err(crate::error::invalid(format!(
             "{} is a tree, not a sequence",
             path.display()
@@ -378,6 +391,9 @@ pub fn write_main(opened: &Opened, w: &mut dyn Write) -> io::Result<()> {
         Format::GenBank => genbank::write(w, &doc.to_genbank()),
         Format::Delimitation => Err(io::Error::other("this is a delimitation workspace")),
         Format::Metadata => Err(io::Error::other("a sequence can't be written as metadata")),
+        Format::Submission => Err(io::Error::other(
+            "a sequence can't be written as a submission",
+        )),
         Format::Tree => Err(io::Error::other("a sequence can't be written as a tree")),
         Format::Fasta => {
             let Some(file) = &opened.fasta else {
