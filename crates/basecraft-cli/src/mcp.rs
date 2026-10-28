@@ -85,6 +85,8 @@ impl Server {
             ("delimitation", self.session.generation(doc))
         } else if self.session.is_metadata(doc) {
             ("metadata", self.session.generation(doc))
+        } else if self.session.is_submission(doc) {
+            ("submission", self.session.generation(doc))
         } else {
             ("sequence", self.session.doc(doc).version())
         };
@@ -98,10 +100,21 @@ impl Server {
         args: &Value,
         registry: &basecraft_plugin_host::registry::Registry,
     ) -> Result<Value> {
-        let creates = name == "metadata_open" && args["create"].as_bool() == Some(true);
+        let creates = (name == "metadata_open" && args["create"].as_bool() == Some(true))
+            || (name == "submission_submitter" && args.get("set").is_some());
         if (matches!(
             name,
-            "apply" | "save" | "run_tool" | "undo" | "redo" | "metadata_template"
+            "apply"
+                | "save"
+                | "run_tool"
+                | "undo"
+                | "redo"
+                | "metadata_template"
+                | "submission_create"
+                | "submission_export"
+                | "submission_validation_request"
+                | "submission_record_validation"
+                | "submission_accession_table"
         ) || creates)
             && !self.writable
         {
@@ -155,6 +168,9 @@ impl Server {
                     return Ok(
                         json!({"metadata":self.session.metadata(doc),"notices":self.session.metadata_notices(doc)}),
                     );
+                }
+                if self.session.is_submission(doc) {
+                    return Ok(serde_json::to_value(self.session.submission(doc))?);
                 }
                 let start = args["start"].as_u64().unwrap_or(0);
                 let end = args["end"]
@@ -303,6 +319,88 @@ impl Server {
                     text(args, "specimen")?,
                 )?)
             }
+            // GenBank marker submissions: the same functions as `basecraft submission`.
+            "submission_create" => {
+                let path = self.path(text(args, "path")?)?;
+                let alignment = self.path(text(args, "alignment")?)?;
+                let doc = basecraft_ops::submission::create(&mut self.session, &path, &alignment)?;
+                self.documents.insert(doc.0, doc);
+                Ok(self.state(doc))
+            }
+            "submission_review" => {
+                let doc = self.doc(args)?;
+                let submitter = basecraft_ops::submission::submitter_preference()?;
+                Ok(serde_json::to_value(basecraft_ops::submission::review(
+                    &self.session,
+                    doc,
+                    &submitter,
+                )?)?)
+            }
+            "submission_export" => {
+                let doc = self.doc(args)?;
+                let output = self.path(text(args, "output")?)?;
+                let submitter = basecraft_ops::submission::submitter_preference()?;
+                let summary =
+                    basecraft_ops::submission::export(&mut self.session, doc, &output, &submitter)?;
+                Ok(serde_json::to_value(summary)?)
+            }
+            "submission_validation_request" => {
+                let package = self.path(text(args, "package")?)?;
+                Ok(basecraft_ops::submission::validation_request(
+                    self.session.root(),
+                    &package,
+                )?)
+            }
+            "submission_record_validation" => {
+                let package = self.path(text(args, "package")?)?;
+                Ok(serde_json::to_value(
+                    basecraft_ops::submission::record_validation(
+                        self.session.root(),
+                        &package,
+                        &args["outcome"],
+                    )?,
+                )?)
+            }
+            "submission_plan_accessions" => {
+                let doc = self.doc(args)?;
+                let submitter = basecraft_ops::submission::submitter_preference()?;
+                Ok(serde_json::to_value(
+                    basecraft_ops::submission::plan_accessions(
+                        &self.session,
+                        doc,
+                        text(args, "text")?,
+                        &submitter,
+                    )?,
+                )?)
+            }
+            "submission_accession_table" => {
+                let doc = self.doc(args)?;
+                let output = self.path(text(args, "output")?)?;
+                let submitter = basecraft_ops::submission::submitter_preference()?;
+                let table =
+                    basecraft_ops::submission::accession_table(&self.session, doc, &submitter)?;
+                basecraft_io::write_atomic(&output, |w| w.write_all(&table))?;
+                Ok(json!({"output":output}))
+            }
+            "submission_submitter" => {
+                let paths = basecraft_platform::paths::AppPaths::discover()?;
+                let store = basecraft_platform::settings::SettingsStore::new(paths.preferences());
+                let mut submitter = store.load()?.submitter;
+                if let Some(set) = args.get("set") {
+                    let mut value = serde_json::to_value(&submitter)?;
+                    for (name, field) in set.as_object().ok_or("set must be an object")? {
+                        if value.get(name).is_none() {
+                            return Err(format!("{name} is not a submitter field").into());
+                        }
+                        value[name] = field.clone();
+                    }
+                    submitter = serde_json::from_value(value)?;
+                    store.update(basecraft_platform::settings::Change::Submitter(Box::new(
+                        submitter.clone(),
+                    )))?;
+                }
+                Ok(json!({"submitter":submitter,"missing":submitter.missing()}))
+            }
             _ => Err("Unknown tool".into()),
         }
     }
@@ -356,6 +454,14 @@ fn tools() -> Value {
         tool("metadata_template","Write an .ods template, every cell text, pre-filled for each record of a project FASTA file.",json!({"document":doc,"file":string,"output":string}), &["document","file","output"]),
         tool("metadata_status","List a FASTA file's records that have no stored link to a specimen.",json!({"document":doc,"file":string}), &["document","file"]),
         tool("metadata_insdc","Derive a specimen's INSDC source qualifiers from its Darwin Core columns and current identification, with the required ones still missing.",json!({"document":doc,"specimen":string}), &["document","specimen"]),
+        tool("submission_create","Create a GenBank marker submission document (path ending .submission.json) for an aligned FASTA inside the project, and open it. Edit it with apply and submission.edit operations ({action: set_rows | set_batch | set_frames | set_export | set_publication | set_source | set_accessions, ...}; see schemas/submission-edit.schema.json) and save it with save.",json!({"path":string,"alignment":string}), &["path","alignment"]),
+        tool("submission_review","Prepare a submission's records from its source alignment and the project metadata and list every local issue: extraction (ungapped, ambiguity kept, terminal unknowns, masked columns, export IDs), specimen source qualifiers, organism names, features, and reading frames detected per record for review (confirm them with set_frames). Blocking issues keep the package from being ready.",json!({"document":doc}), &["document"]),
+        tool("submission_export","Write the submission package (genbank/ .fsa .src .tbl .sbt, records, specimens, coordinate map, README, package.json) to a folder in the project. Same inputs give identical files. Returns the input hash and status.",json!({"document":doc,"output":string}), &["document","output"]),
+        tool("submission_validation_request","The OperationRequest that validates an exported package with table2asn. Submit it with the basecraft.table2asn.validate.v1 tool, wait with jobs_result, then pass the outcome to submission_record_validation.",json!({"package":string}), &["package"]),
+        tool("submission_record_validation","Read a finished table2asn job's reports into the package: issues mapped to records and specimens, status (passed, errors, unavailable, failed), .sqn and .gbf copied to genbank/. Local validation only, not archive acceptance.",json!({"package":string,"outcome":{"type":"object"}}), &["package","outcome"]),
+        tool("submission_plan_accessions","Match an accession list returned by NCBI (lines with a sequence ID and an accession) to the submission's records. Record the result with apply {op: submission.edit, params: {edit: {action: set_accessions, accessions}}}.",json!({"document":doc,"text":string}), &["document","text"]),
+        tool("submission_accession_table","Write a publication table of records, specimens, organisms and accessions.",json!({"document":doc,"output":string}), &["document","output"]),
+        tool("submission_submitter","Read the submitter contact preference used for .sbt files and the required fields still missing; with set (an object of fields such as first_name, last_name, email, institution, city, country), update it.",json!({"set":{"type":"object"}}), &[]),
         tool("run_tool","Compatibility route: run a bundled tool's registered operation on a session document and write one result file. Parameters follow the operation descriptor (delimitation also takes params.method). Prefer the generated operation tools.",json!({"document":doc,"tool":{"enum":crate::tools::NAMES},"output":string,"params":{"type":"object"}}), &["document","tool","output"])
     ]})
 }

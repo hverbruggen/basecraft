@@ -3,6 +3,7 @@
 mod mcp;
 mod metadata;
 mod operations;
+mod submission;
 mod tools;
 
 use std::path::PathBuf;
@@ -91,6 +92,12 @@ enum Command {
     Metadata {
         #[command(subcommand)]
         action: metadata::MetadataCommand,
+    },
+    /// GenBank marker submissions: row decisions, batch settings, reading
+    /// frames, the submission package, table2asn validation and accessions.
+    Submission {
+        #[command(subcommand)]
+        action: submission::SubmissionCommand,
     },
     /// Calculate DNA distances or infer a tree with the registered
     /// basecraft.distance operations. Omitted settings take the descriptor
@@ -224,6 +231,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Command::Plugins { action } => operations::plugins(action)?,
         Command::Operations { action } => operations::operations(action)?,
         Command::Metadata { action } => metadata::run(action)?,
+        Command::Submission { action } => submission::run(action)?,
         Command::History { file, json } => {
             let file = file.canonicalize()?;
             let mut session = script_session(file.parent().ok_or("File has no parent")?)?;
@@ -507,6 +515,14 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 (
                     "metadata-edit",
                     schemars::schema_for!(basecraft_protocol::metadata::MetadataEdit),
+                ),
+                (
+                    "submission",
+                    schemars::schema_for!(basecraft_protocol::submission::Submission),
+                ),
+                (
+                    "submission-edit",
+                    schemars::schema_for!(basecraft_protocol::submission::SubmissionEdit),
                 ),
                 (
                     "log-entry",

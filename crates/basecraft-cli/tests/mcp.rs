@@ -633,3 +633,68 @@ fn metadata_tools_respect_write_permission_and_plan_before_applying() {
     assert_eq!(read["metadata"]["specimens"]["rows"], json!([]));
     assert_eq!(replies[3]["result"]["isError"], true);
 }
+
+#[test]
+fn submission_tools_respect_write_permission_and_edit_through_apply() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("its.afa"), ">a\nACGTACGT\n>b\nACGTAC--\n").unwrap();
+    let readonly = session(
+        d.path(),
+        false,
+        &[
+            request(
+                1,
+                "submission_create",
+                json!({"path":"its.submission.json","alignment":"its.afa"}),
+            ),
+            request(2, "submission_submitter", json!({"set":{"city":"Hobart"}})),
+        ],
+    );
+    for reply in &readonly {
+        let text = reply["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("permission_denied"), "{text}");
+    }
+    assert!(!d.path().join("its.submission.json").exists());
+    let edit = json!({"action":"set_rows","rows":[{"record":"b","decision":"exclude"}]});
+    let replies = session(
+        d.path(),
+        true,
+        &[
+            request(
+                1,
+                "submission_create",
+                json!({"path":"its.submission.json","alignment":"its.afa"}),
+            ),
+            request(
+                2,
+                "apply",
+                json!({"document":0,"version":0,"operation":{"op":"submission.edit","params":{"edit":edit}}}),
+            ),
+            request(3, "read", json!({"document":0})),
+            request(4, "submission_review", json!({"document":0})),
+            request(5, "submission_submitter", json!({})),
+        ],
+    );
+    assert_eq!(
+        replies[0]["result"]["structuredContent"]["kind"],
+        "submission"
+    );
+    let read = &replies[2]["result"]["structuredContent"];
+    assert_eq!(read["rows"][0]["decision"], "exclude");
+    let review = &replies[3]["result"]["structuredContent"];
+    assert_eq!(review["records"][1]["decision"]["decision"], "exclude");
+    assert!(
+        review["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|i| i["code"] == "unlinked")
+    );
+    assert!(
+        replies[4]["result"]["structuredContent"]["missing"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m == "email")
+    );
+}

@@ -386,6 +386,57 @@ class Session:
         """INSDC source qualifiers derived for a specimen."""
         return self.call("metadata_insdc", {"document": document, "specimen": specimen})
 
+    # GenBank marker submissions
+
+    def create_submission(self, path, alignment):
+        """Create and open a submission document (``*.submission.json``) for an alignment."""
+        return self.call("submission_create", {"path": str(path), "alignment": str(alignment)})
+
+    def edit_submission(self, document, edit):
+        """Apply one ``submission.edit`` (a dict with ``action``) as an undoable edit."""
+        version = self.state(document)["version"]
+        return self.apply(document, version, {"op": "submission.edit", "params": {"edit": edit}})
+
+    def review_submission(self, document):
+        """Prepared records, detected reading frames and every local issue."""
+        return self.call("submission_review", {"document": document})
+
+    def export_submission(self, document, output):
+        """Write the submission package to ``output`` inside the project."""
+        return self.call("submission_export", {"document": document, "output": str(output)})
+
+    def validate_submission(self, package, *, timeout=None):
+        """Validate an exported package with table2asn and record its reports.
+
+        Runs the registered ``basecraft.table2asn/validate@1`` operation as a
+        job of this session. A run that could not start or finish is recorded
+        as unavailable or failed, never as a sequence error.
+        """
+        request = self.call("submission_validation_request", {"package": str(package)})
+        job = self.submit(request["operation"], inputs=request["inputs"],
+                          parameters=request["parameters"], destinations=request["destinations"])
+        try:
+            outcome = job.result(timeout=timeout)
+        except OperationError as error:
+            outcome = error.outcome
+        return self.call("submission_record_validation", {"package": str(package), "outcome": outcome})
+
+    def plan_accessions(self, document, text):
+        """Match an NCBI accession list to the submission's records."""
+        return self.call("submission_plan_accessions", {"document": document, "text": text})
+
+    def record_accessions(self, document, accessions):
+        """Record planned accessions as one undoable edit."""
+        return self.edit_submission(document, {"action": "set_accessions", "accessions": accessions})
+
+    def accession_table(self, document, output):
+        """Write a publication table of records and accessions."""
+        return self.call("submission_accession_table", {"document": document, "output": str(output)})
+
+    def submitter(self, **fields):
+        """The submitter contact preference; keyword fields update it."""
+        return self.call("submission_submitter", {"set": fields} if fields else {})
+
     # Operations
 
     def submit(self, operation, **arguments):
