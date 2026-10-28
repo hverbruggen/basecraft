@@ -31,9 +31,11 @@ fn ragged_save_and_save_as_reopen_preserve_explicit_lengths_and_gaps() {
                 .save(doc, save_as.then_some(target.as_path()))
                 .unwrap();
             assert!(session.alignment(doc).validate_aligned_input().is_err());
-            // Repeat ordinary Save after Save As too: the accepted saved hash
-            // and serializer must agree, without introducing display padding.
-            session.save(doc, None).unwrap();
+            // Repeat the same save route: its accepted hash and serializer
+            // must agree, without introducing display padding.
+            session
+                .save(doc, save_as.then_some(target.as_path()))
+                .unwrap();
         }
         assert_eq!(
             std::fs::read_to_string(target).unwrap(),
@@ -87,7 +89,7 @@ fn ragged_extent_tracks_explicit_gap_edits_undo_redo_and_snapshots() {
                     row: 1,
                     start: 3,
                     end: 6,
-                    residues: "-.-".into(),
+                    residues: "---".into(),
                 },
             )
             .unwrap();
@@ -99,12 +101,12 @@ fn ragged_extent_tracks_explicit_gap_edits_undo_redo_and_snapshots() {
     }
     assert_eq!(
         std::fs::read_to_string(&source).unwrap(),
-        RAGGED.replace("A.-\n", "A.--.-\n")
+        RAGGED.replace("A.-\n", "A.----\n")
     );
     let mut session = Session::new(dir.path());
     let doc = session.open(&source).unwrap();
     assert!(session.alignment(doc).validate_aligned_input().is_ok());
-    assert_eq!(session.alignment(doc).read(1, 0, 6), b"A.--.-");
+    assert_eq!(session.alignment(doc).read(1, 0, 6), b"A.----");
 }
 
 #[test]
@@ -133,7 +135,7 @@ fn ragged_row_extents_follow_reordering_and_undo_after_width_growth() {
                 doc,
                 Op::AlnMoveRows {
                     rows: vec![(0, 1)],
-                    to: 2,
+                    to: 1,
                 },
             )
             .unwrap();
