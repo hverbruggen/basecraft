@@ -15,7 +15,8 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 #[derive(Subcommand)]
 pub enum MetadataCommand {
     /// Inspect partitions/labels or plan explicit workspace links and partition promotion.
-    /// Request is JSON with action partitions|labels|link_workspace|promote_partition.
+    /// Request is JSON with action `partitions`, `labels`, `link_records`,
+    /// `link_workspace` or `promote_partition`.
     Consumer {
         request: String,
         #[arg(long, default_value = ".")]
