@@ -14,6 +14,16 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 #[derive(Subcommand)]
 pub enum MetadataCommand {
+    /// Inspect partitions/labels or plan explicit workspace links and partition promotion.
+    /// Request is JSON with action partitions|labels|link_workspace|promote_partition.
+    Consumer {
+        request: String,
+        #[arg(long, default_value = ".")]
+        project: PathBuf,
+        /// Apply a planned edit and save using the shared Session.
+        #[arg(long)]
+        apply: bool,
+    },
     /// Create empty metadata tables in the project's `metadata/` folder.
     Init {
         #[arg(long, default_value = ".")]
@@ -170,6 +180,27 @@ fn finish(
 
 pub fn run(command: MetadataCommand) -> Result<()> {
     match command {
+        MetadataCommand::Consumer {
+            request,
+            project,
+            apply,
+        } => {
+            let (mut session, doc) = open(&project, false)?;
+            let request = serde_json::from_str(&request)?;
+            let plan = metadata::consumer_plan(&session, doc, &request)?;
+            println!("{}", serde_json::to_string_pretty(&plan)?);
+            if apply {
+                let operation = plan.get("operation").ok_or("this request is read-only")?;
+                let target = plan["target"].as_str().ok_or("missing plan target")?;
+                let target_doc = if target == session.doc_key(doc) {
+                    doc
+                } else {
+                    session.open(&session.root().join(target))?
+                };
+                session.apply(target_doc, serde_json::from_value(operation.clone())?)?;
+                session.save(target_doc, None)?;
+            }
+        }
         MetadataCommand::Init { project } => {
             let manifest = metadata::create(&project.canonicalize()?)?;
             println!("{}", manifest.display());

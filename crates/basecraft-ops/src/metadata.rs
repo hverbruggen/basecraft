@@ -95,6 +95,8 @@ struct Manifest {
     tables: Tables,
     #[serde(default)]
     import: ImportSettings,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    partitions: Vec<basecraft_protocol::delimitation::Hypothesis>,
     #[serde(flatten)]
     extra: BTreeMap<String, serde_json::Value>,
 }
@@ -246,6 +248,7 @@ pub fn load(manifest_path: &Path) -> Result<OpenedMetadata> {
         identifications,
         links,
         import: manifest.import,
+        partitions: manifest.partitions,
         extra: manifest.extra,
     };
     model::validate(&metadata).map_err(|e| invalid(e.0))?;
@@ -336,6 +339,7 @@ pub fn encode(meta: &ProjectMetadata) -> Result<Vec<Vec<u8>>> {
             records: entry(RECORDS, &records, Vec::new()),
         },
         import: meta.import.clone(),
+        partitions: meta.partitions.clone(),
         extra: meta.extra.clone(),
     };
     let mut manifest = serde_json::to_vec_pretty(&manifest)?;
@@ -1283,4 +1287,119 @@ pub fn insdc(session: &Session, doc: crate::DocId, specimen: &str) -> Result<ser
         "qualifiers": source.qualifiers.into_iter().collect::<BTreeMap<_, _>>(),
         "missing": source.missing,
     }))
+}
+
+/// Shared consumer routes. Plans are inspectable and applied using the normal
+/// version-checked `apply` operation; this function never mutates documents.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum ConsumerRequest {
+    Partitions,
+    Labels {
+        document: String,
+        records: Vec<String>,
+        fields: Vec<basecraft_protocol::metadata::LabelField>,
+    },
+    LinkWorkspace {
+        workspace: String,
+        links: BTreeMap<String, String>,
+    },
+    PromotePartition {
+        workspace: String,
+        hypothesis: String,
+        id: String,
+    },
+}
+
+pub fn consumer_plan(
+    session: &Session,
+    doc: crate::DocId,
+    request: &ConsumerRequest,
+) -> Result<serde_json::Value> {
+    use basecraft_docs::metadata_consumers;
+    use basecraft_protocol::{Op, metadata::MetadataEdit};
+    let meta = checked_metadata(session, doc)?;
+    let metadata_hash =
+        basecraft_io::hash_bytes(&serde_json::to_vec(meta).map_err(|e| invalid(e.to_string()))?);
+    let (workspace, links, promotion) = match request {
+        ConsumerRequest::Partitions => {
+            return Ok(
+                serde_json::json!({"partitions": metadata_consumers::partitions(meta), "metadata_hash": metadata_hash}),
+            );
+        }
+        ConsumerRequest::Labels {
+            document,
+            records,
+            fields,
+        } => {
+            let key = document_key(session.root(), Path::new(document))?;
+            return Ok(
+                serde_json::json!({"labels":metadata_consumers::compose_labels(meta, &key, records, fields), "metadata_hash":metadata_hash, "fields":fields}),
+            );
+        }
+        ConsumerRequest::LinkWorkspace { workspace, links } => (workspace, Some(links), None),
+        ConsumerRequest::PromotePartition {
+            workspace,
+            hypothesis,
+            id,
+        } => (workspace, None, Some((hypothesis, id))),
+    };
+    let key = document_key(session.root(), Path::new(workspace))?;
+    // A separate unlogged reader keeps planning passive and never creates records.
+    let mut reader = Session::unlogged(session.root());
+    let work_doc = reader.open(&session.root().join(&key))?;
+    if !reader.is_delimitation(work_doc) {
+        return Err(invalid("choose a delimitation workspace"));
+    }
+    let work = reader.delimitation(work_doc);
+    let workspace_hash =
+        basecraft_io::hash_bytes(&serde_json::to_vec(work).map_err(|e| invalid(e.to_string()))?);
+    let (target, operation) = if let Some(links) = links {
+        for roster in links.values() {
+            if !meta.specimens.rows.iter().any(|s| &s.id == roster) {
+                return Err(invalid(format!("unknown project roster ID {roster}")));
+            }
+        }
+        let edit = basecraft_protocol::delimitation::DelimitationEdit::SetRosterLinks {
+            links: links.clone(),
+        };
+        let mut checked = work.clone();
+        basecraft_docs::delimitation::apply(&mut checked, &edit).map_err(|e| invalid(e.0))?;
+        (
+            key,
+            Op::DelimitationEdit {
+                edit: Box::new(edit),
+            },
+        )
+    } else {
+        let (hypothesis, id) = promotion.ok_or_else(|| invalid("missing partition source"))?;
+        let mut partition = metadata_consumers::project_partition(meta, work, hypothesis, id)
+            .map_err(|e| invalid(e.0))?;
+        partition
+            .provenance
+            .inputs
+            .insert("project_metadata".into(), metadata_hash.clone());
+        partition
+            .provenance
+            .inputs
+            .insert("source_workspace".into(), workspace_hash.clone());
+        partition
+            .provenance
+            .parameters
+            .insert("source_workspace".into(), serde_json::json!(key));
+        partition.provenance.parameters.insert(
+            "metadata_sources".into(),
+            serde_json::to_value(session.document_record(doc)?.report()?)
+                .map_err(|e| invalid(e.to_string()))?,
+        );
+        (
+            session.doc_key(doc).to_string(),
+            Op::MetadataEdit {
+                edit: Box::new(MetadataEdit::PutPartition { partition }),
+            },
+        )
+    };
+    Ok(
+        serde_json::json!({"target":target, "operation":operation, "metadata_hash":metadata_hash, "workspace_hash":workspace_hash}),
+    )
 }

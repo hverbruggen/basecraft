@@ -762,6 +762,10 @@ impl qobject::DelimitationController {
                 .map_or_else(|| r.active_hypothesis.to_string(), str::to_string);
             let members = r.selection.specimens.clone();
             Ok(match name.to_string().as_str() {
+                "roster_links" => DelimitationEdit::SetRosterLinks {
+                    links: serde_json::from_value(args["links"].clone())
+                        .map_err(|e| e.to_string())?,
+                },
                 "create" if args.get("source").and_then(Value::as_str).is_some() => {
                     DelimitationEdit::Derive {
                         source: text("source"),

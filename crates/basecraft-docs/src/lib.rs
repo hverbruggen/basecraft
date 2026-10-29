@@ -17,3 +17,5 @@ pub use coord::{Bias, Change};
 pub use piece::{PieceTable, Residues};
 pub use sequence::{EditResult, FeatureId, SequenceDoc};
 pub use tree::{SupportSet, TreeDoc, TreeNode};
+
+pub mod metadata_consumers;

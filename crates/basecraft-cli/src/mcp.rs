@@ -301,6 +301,15 @@ impl Server {
                     &file,
                 )?)?)
             }
+            "metadata_consumer" => {
+                let doc = self.doc(args)?;
+                let request = serde_json::from_value(args["request"].clone())?;
+                Ok(basecraft_ops::metadata::consumer_plan(
+                    &self.session,
+                    doc,
+                    &request,
+                )?)
+            }
             "metadata_insdc" => {
                 let doc = self.doc(args)?;
                 Ok(basecraft_ops::metadata::insdc(
@@ -445,6 +454,7 @@ fn tools() -> Value {
         tool("metadata_plan_sheet","Plan, without applying, an import from a spreadsheet (.ods, .xlsx, .csv, .tsv). request: {path, mapping?: {header: {role, column?}} (guessed when omitted), document?: FASTA whose records the record column names, options?}. Returns the plan with the mapping used.",json!({"document":doc,"request":{"type":"object"}}), &["document","request"]),
         tool("metadata_template","Write an .ods template, every cell text, pre-filled for each record of a project FASTA file.",json!({"document":doc,"file":string,"output":string}), &["document","file","output"]),
         tool("metadata_status","List a FASTA file's records that have no stored link to a specimen.",json!({"document":doc,"file":string}), &["document","file"]),
+        tool("metadata_consumer","Inspect project partitions or metadata labels, or plan explicit workspace roster links/result promotion. request: {action: partitions} | {action: labels, document, records: [scientific ID], fields: [specimen|genus|species|accession|{column:{name}}]} | {action: link_workspace, workspace: project path, links: {workspace ID: roster ID}} | {action: promote_partition, workspace, hypothesis, id}. Plans return target and typed operation, applied through generic apply to the opened target at its current version, then save. Missing/conflicting roster links refuse promotion. Planning is read-only.",json!({"document":doc,"request":{"type":"object"}}), &["document","request"]),
         tool("metadata_insdc","Derive a specimen's INSDC source qualifiers from its Darwin Core columns and current identification, with the required ones still missing.",json!({"document":doc,"specimen":string}), &["document","specimen"]),
         tool("submission_create","Create a GenBank marker submission document (path ending .submission.json) for an aligned FASTA inside the project, and open it. Edit it with apply and submission.edit operations ({action: set_rows | set_batch | set_frames | set_export | set_publication | set_source | set_accessions | confirm_selection, ...}; see schemas/submission-edit.schema.json) and save it with save.",json!({"path":string,"alignment":string}), &["path","alignment"]),
         tool("submission_review","Prepare a submission's records from its source alignment and the project metadata and list every local issue: extraction (ungapped, ambiguity kept, terminal unknowns, masked columns, export IDs), specimen source qualifiers, organism names, features, and reading frames detected per record for review (confirm them with set_frames). Accession-aware row choices and evidence are local unverified heuristics. Review included/excluded rows, then apply submission.edit with {action: confirm_selection, selection_hash: <returned selection_hash>} before export. Bulk include/exclude uses set_rows. Source/selection/evidence changes require confirmation again. Blocking issues keep the package from being ready.",json!({"document":doc}), &["document"]),

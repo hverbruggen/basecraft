@@ -406,6 +406,13 @@ class Session:
         return self.apply(document, version, {"op": "metadata.edit", "params": {
             "edit": {"action": "apply", "changes": changes}}})
 
+    def metadata_consumer(self, document, request):
+        """Inspect partitions/labels or plan links/promotion; apply the returned typed
+        operation to its target using ``apply`` at the current version, then save.
+        See ``metadata_consumer`` MCP tool for the shared request contract.
+        """
+        return self.call("metadata_consumer", {"document": document, "request": request})
+
     def insdc_source(self, document, specimen):
         """INSDC source qualifiers derived for a specimen."""
         return self.call("metadata_insdc", {"document": document, "specimen": specimen})

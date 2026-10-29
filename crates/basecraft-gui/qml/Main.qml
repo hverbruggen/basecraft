@@ -1168,6 +1168,7 @@ ApplicationWindow {
                         controller: window.treeOpen ? window.current : null
                         customization: window.customization
                         onExtraRequested: treeStyle.openStyle("extra")
+                        onLabelsRequested: { metadataTipLabels.target = window.current; metadataTipLabels.error = ""; metadataTipLabels.open() }
                         Component.onCompleted: commands.forEach(command => window.registerRibbonCommand(command))
                     }
                     ToolSeparator { Layout.fillHeight: true }
@@ -1248,6 +1249,10 @@ ApplicationWindow {
                 }
                 RibbonPage {
                     SpeciesMethodsGroup { commandSuffix: "workspace" }
+                    RibbonGroup {
+                        title: "Specimens"
+                        RibbonButton { commandId: "species.roster-links"; text: "Roster"; iconName: "matrix"; enabled: window.speciesView !== null && specimenMetadata.available; tip: "Explicitly link workspace records to project specimens and save partitions"; onInvoked: rosterConsumer.show(window.current, window.currentPath) }
+                    }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
                         title: "Display"
@@ -2167,6 +2172,86 @@ ApplicationWindow {
         }
     }
 
+    AppContentDialog {
+        id: metadataTipLabels
+        title: "Tree tip labels"
+        property var target: null
+        property string error: ""
+        initialFocusItem: labelSpecimen
+        body: ColumnLayout {
+            Label { text: "Compose stored metadata in this order. Empty fields are skipped; unlinked tips keep their identity."; wrapMode: Text.Wrap; Layout.fillWidth: true }
+            CheckBox { id: labelGenus; text: "Genus"; checked: true }
+            CheckBox { id: labelSpecies; text: "Species epithet"; checked: true }
+            CheckBox { id: labelSpecimen; text: "Specimen ID"; checked: true }
+            CheckBox { id: labelAccession; text: "Accession" }
+            AppErrorLabel { text: metadataTipLabels.error; visible: text.length > 0; Layout.fillWidth: true }
+            RowLayout {
+                AppButton { text: "Original labels"; onClicked: { const e = metadataTipLabels.target.compose_metadata_labels(shell.project_dir, "[]"); if (e.length) metadataTipLabels.error = e; else metadataTipLabels.close() } }
+                AppButton { text: "Apply"; onClicked: {
+                    const fields = []
+                    if (labelGenus.checked) fields.push("genus")
+                    if (labelSpecies.checked) fields.push("species")
+                    if (labelSpecimen.checked) fields.push("specimen")
+                    if (labelAccession.checked) fields.push("accession")
+                    const e = metadataTipLabels.target.compose_metadata_labels(shell.project_dir, JSON.stringify(fields))
+                    if (e.length) metadataTipLabels.error = e; else metadataTipLabels.close()
+                } }
+            }
+        }
+    }
+    AppContentDialog {
+        id: rosterConsumer
+        title: "Project specimens and partitions"
+        standardButtons: Dialog.Close
+        property var target: null
+        property string path: ""
+        property var work: ({specimens: [], hypotheses: []})
+        property var links: ({})
+        property string error: ""
+        initialFocusItem: rosterRows
+        function show(controller, file) {
+            target = controller; path = file; work = JSON.parse(controller.workspace_json)
+            const stored = {}
+            for (const s of work.specimens) if ((s.attributes || {}).basecraft_roster_id) stored[s.id] = s.attributes.basecraft_roster_id
+            links = stored; error = ""; open()
+        }
+        body: ColumnLayout {
+            Label { text: "Link each workspace ID to its stable project specimen. Several records may share one specimen. Save the workspace before promoting a result."; wrapMode: Text.Wrap; Layout.fillWidth: true }
+            ColumnLayout {
+                id: rosterRows
+                Repeater {
+                    model: rosterConsumer.work.specimens
+                    delegate: RowLayout {
+                        required property var modelData
+                        Label { text: modelData.id; Layout.fillWidth: true }
+                        ComboBox {
+                            model: ["Unlinked"].concat(window.metadataTable.rows.map(s => s.id))
+                            currentIndex: Math.max(0, model.indexOf(rosterConsumer.links[modelData.id] || "Unlinked"))
+                            Accessible.name: "Project specimen for " + modelData.id
+                            onActivated: {
+                                const updated = Object.assign({}, rosterConsumer.links)
+                                if (currentIndex === 0) delete updated[modelData.id]; else updated[modelData.id] = currentText
+                                rosterConsumer.links = updated
+                            }
+                        }
+                    }
+                }
+            }
+            AppButton { text: "Apply roster links"; onClicked: {
+                const p = JSON.parse(specimenMetadata.consumer(JSON.stringify({action: "link_workspace", workspace: rosterConsumer.path, links: rosterConsumer.links}), false))
+                if (p.error) rosterConsumer.error = p.error
+                else { rosterConsumer.target.action("roster_links", JSON.stringify({links: rosterConsumer.links})); rosterConsumer.error = "Links applied. Save the workspace before promoting a partition." }
+            } }
+            ComboBox { id: partitionSource; model: rosterConsumer.work.hypotheses; textRole: "name"; Accessible.name: "Delimitation result to promote"; Layout.fillWidth: true }
+            TextField { id: projectPartitionId; placeholderText: "Project partition ID"; Accessible.name: "Project partition ID"; Layout.fillWidth: true }
+            AppButton { text: "Save project partition"; enabled: rosterConsumer.target !== null && !rosterConsumer.target.dirty && partitionSource.currentIndex >= 0 && projectPartitionId.text.trim().length > 0; onClicked: {
+                const p = JSON.parse(specimenMetadata.consumer(JSON.stringify({action: "promote_partition", workspace: rosterConsumer.path, hypothesis: rosterConsumer.work.hypotheses[partitionSource.currentIndex].id, id: projectPartitionId.text.trim()}), true))
+                rosterConsumer.error = p.error || "Saved project partition"
+            } }
+            Label { text: "Project partitions: " + ((window.metadataTable.partitions || []).map(p => p.name).join(", ")); wrapMode: Text.Wrap; Layout.fillWidth: true }
+            AppErrorLabel { text: rosterConsumer.error; visible: text.length > 0; wrapMode: Text.Wrap; Layout.fillWidth: true }
+        }
+    }
     TreeTipNameDialog {
         id: tipDialog
         controller: window.treeOpen ? window.current : null

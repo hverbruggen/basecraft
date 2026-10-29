@@ -14,6 +14,7 @@ RibbonGroup {
     property var customization: ({shortcuts: {}, ribbon_hidden: []})
     readonly property var commands: [order.commandAction, smallFirst, largeFirst, extra.commandAction]
     signal extraRequested()
+    signal labelsRequested()
     RibbonNumberField {
         objectName: "tipFont"
         label: "Tips"
@@ -22,6 +23,14 @@ RibbonGroup {
         value: group.controller ? group.controller.tip_font : 13
         enabled: group.controller !== null
         onEdited: value => group.controller.set_sizes(value, 0, 0)
+    }
+    AppButton {
+        objectName: "metadataTipLabels"
+        text: "Labels"
+        Accessible.name: "Compose tree tip labels from specimen metadata"
+        visible: group.treePage
+        enabled: group.controller !== null
+        onClicked: group.labelsRequested()
     }
     AppCommand {
         id: smallFirst

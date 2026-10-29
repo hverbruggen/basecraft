@@ -684,7 +684,7 @@ fn describe_node(doc: &TreeDoc, n: usize) -> String {
     let node = doc.node(n);
     let mut parts = Vec::new();
     if node.is_tip() {
-        parts.push(display_name(&node.name));
+        parts.push(tip_label(doc, &node.name));
     } else {
         let tips = doc.tip_counts()[n];
         parts.push(if node.name.is_empty() {
@@ -957,7 +957,7 @@ fn layout_with(
     let show_tips = row >= tip_font * 0.7;
     let label_w = if show_tips {
         tips.iter()
-            .map(|&t| text_w(&doc.node(t).name, tip_font))
+            .map(|&t| text_w(&tip_label(doc, &doc.node(t).name), tip_font))
             .fold(0.0, f32::max)
             + LABEL_GAP
     } else {
@@ -1230,7 +1230,7 @@ fn shapes(
                 x: l.x[i] + LABEL_GAP,
                 y: l.y[i] - tip_font / 2.0,
                 size: tip_font,
-                text: display_name(&node.name),
+                text: tip_label(doc, &node.name),
                 color: if in_selection[i] {
                     pal.accent
                 } else {
@@ -1890,4 +1890,13 @@ mod tests {
         assert!(tip.contains("font-style=\"italic\""), "{tip}");
         assert!(svg.matches("<circle").count() >= 2);
     }
+}
+
+/// Display settings never alter Newick names or matching keys.
+pub fn tip_label(doc: &TreeDoc, name: &str) -> String {
+    doc.style()
+        .tip_labels
+        .get(name)
+        .cloned()
+        .unwrap_or_else(|| display_name(name))
 }
