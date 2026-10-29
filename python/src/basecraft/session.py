@@ -360,6 +360,16 @@ class Session:
         """
         return self.call("file_record", {"path": str(path)})
 
+    def extract(self, document, path, start, end, *, version, segments=(), reverse=False):
+        """Extract a sequence revision to a new GenBank file with source ancestry.
+
+        Coordinates are zero-based, half-open; segments are in biological order,
+        followed by optional reverse complement. Pass the inspected version.
+        """
+        return self.call("extract", {"document": document, "version": version,
+                                    "path": str(path), "start": start, "end": end,
+                                    "segments": list(segments), "reverse": reverse})
+
     def import_support(self, document, path, name=""):
         """Add the support values of another project tree file to an open tree.
 

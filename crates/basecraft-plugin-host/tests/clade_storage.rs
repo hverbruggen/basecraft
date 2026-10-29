@@ -93,7 +93,7 @@ fn unsaved_clade_tree_with_referenced_alignment_retains_both_inputs_and_selectio
             .iter()
             .any(|e| matches!(e.op, Op::TreeRenameTip { .. }))
     );
-    assert!(publication.events.iter().any(|e| matches!(&e.op, Op::ToolRun { params, .. } if params.pointer("/_execution/resolved_parameters/taxa") == Some(&json!(["a","b"])))));
+    assert!(publication.events.iter().any(|e| matches!(&e.op, Op::ToolRun { params, .. } if params.pointer("/effective/taxa") == Some(&json!(["a","b"])))));
     assert!(provenance::verify(&result).unwrap().is_empty());
     let package = root.join("package");
     provenance::package(&result, &package).unwrap();

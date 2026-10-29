@@ -99,6 +99,20 @@ enum Command {
         #[arg(long, default_value = "")]
         name: String,
     },
+    /// Extract a zero-based, half-open sequence range to a new GenBank file,
+    /// retaining source revision and coordinate mapping through shared provenance.
+    Extract {
+        file: PathBuf,
+        start: u64,
+        end: u64,
+        #[arg(long)]
+        output: PathBuf,
+        /// Ordered splice segments as JSON [[start,end],...].
+        #[arg(long, default_value = "[]")]
+        segments: String,
+        #[arg(long)]
+        reverse: bool,
+    },
     /// Index a FASTA file (or load its cached index) and print a summary.
     Index { file: PathBuf },
     /// Replay a project's operation log and check every step.
@@ -302,6 +316,33 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             println!(
                 "{}",
                 serde_json::json!({"added": imported.added, "matched": imported.matched})
+            );
+        }
+        Command::Extract {
+            file,
+            start,
+            end,
+            output,
+            segments,
+            reverse,
+        } => {
+            let file = file.canonicalize()?;
+            if output.try_exists()? {
+                return Err("Extraction destination already exists; choose a new file".into());
+            }
+            let output = output
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or(std::path::Path::new("."))
+                .canonicalize()?
+                .join(output.file_name().ok_or("Output filename missing")?);
+            let segments: Vec<(u64, u64)> = serde_json::from_str(&segments)?;
+            let mut session = script_session(file.parent().ok_or("File has no parent")?)?;
+            let doc = session.open(&file)?;
+            session.extract(doc, (start, end), &segments, reverse, &output)?;
+            println!(
+                "{}",
+                serde_json::json!({"output":output,"hash":basecraft_io::hash_file(&output)?})
             );
         }
         Command::Index { file } => {

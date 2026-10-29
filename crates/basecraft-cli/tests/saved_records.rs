@@ -475,3 +475,87 @@ fn support_import_runs_headlessly_with_the_same_reference_evidence() {
         Vec::<String>::new()
     );
 }
+
+#[test]
+fn sequence_extraction_cli_mcp_and_python_share_source_and_mapping_semantics() {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("project");
+    let profile = temp.path().join("profile");
+    std::fs::create_dir(&project).unwrap();
+    let source = project.join("gene.fasta");
+    std::fs::write(&source, ">gene\nACGTACGT\n").unwrap();
+    let output = project.join("cli.gb");
+    ok(&cli(
+        &profile,
+        &[
+            "extract",
+            source.to_str().unwrap(),
+            "1",
+            "7",
+            "--segments",
+            "[[1,3],[5,7]]",
+            "--reverse",
+            "--output",
+            output.to_str().unwrap(),
+        ],
+    ));
+    let expected = std::fs::read(&output).unwrap();
+    let mut mcp = Mcp::start(&project, &profile, true);
+    let opened = mcp.tool("open", &json!({"path":"gene.fasta"}));
+    let doc = opened["structuredContent"]["document"].clone();
+    let version = opened["structuredContent"]["version"].clone();
+    let mut args = json!({"document":doc,"version":version,"path":"mcp.gb","start":1,"end":7,"segments":[[1,3],[5,7]],"reverse":true});
+    let extracted = mcp.tool("extract", &args);
+    assert_ne!(extracted["isError"], true, "{extracted}");
+    assert_eq!(std::fs::read(project.join("mcp.gb")).unwrap(), expected);
+    assert_eq!(
+        mcp.tool("extract", &args)["isError"],
+        true,
+        "existing destination was replaced"
+    );
+    args["path"] = json!("stale.gb");
+    args["version"] = json!(999);
+    assert_eq!(mcp.tool("extract", &args)["isError"], true);
+    assert!(!project.join("stale.gb").exists());
+    mcp.close();
+    let mut readonly = Mcp::start(&project, &profile, false);
+    let opened = readonly.tool("open", &json!({"path":"gene.fasta"}));
+    args["document"] = opened["structuredContent"]["document"].clone();
+    args["version"] = opened["structuredContent"]["version"].clone();
+    assert_eq!(readonly.tool("extract", &args)["isError"], true);
+    readonly.close();
+    for name in ["cli.gb", "mcp.gb"] {
+        let result = project.join(name);
+        let publication = basecraft_ops::provenance::inspect(&result).unwrap();
+        assert!(publication.inputs[0].reference.is_some());
+        let input = basecraft_ops::input_evidence::read_input(
+            &basecraft_ops::provenance::bundle_for_result(&result),
+        )
+        .unwrap();
+        assert_eq!(
+            input.extra["extraction"]["selection"]["params"]["segments"],
+            json!([[1, 3], [5, 7]])
+        );
+    }
+    // Python delegates directly to this same MCP method, including its writes gate.
+    let python = std::env::var("BASECRAFT_PYTHON").unwrap_or_else(|_| "python3".into());
+    let script = r#"
+from basecraft.session import Session
+s = object.__new__(Session)
+s.call = lambda name, args: (name,args)
+name,args = s.extract(3,'new.gb',1,7,version=4,segments=[(1,3),(5,7)],reverse=True)
+assert name == 'extract' and args['version'] == 4 and args['reverse']
+assert args['segments'] == [(1,3),(5,7)]
+"#;
+    assert!(
+        Command::new(python)
+            .args(["-c", script])
+            .env(
+                "PYTHONPATH",
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../python/src")
+            )
+            .status()
+            .unwrap()
+            .success()
+    );
+}

@@ -103,6 +103,7 @@ impl Server {
             "apply"
                 | "save"
                 | "import_support"
+                | "extract"
                 | "undo"
                 | "redo"
                 | "metadata_template"
@@ -210,6 +211,33 @@ impl Server {
                 self.session.apply(doc, op)?;
                 self.session.flush()?;
                 Ok(self.state(doc))
+            }
+            "extract" => {
+                let doc = self.doc(args)?;
+                let version = args["version"]
+                    .as_u64()
+                    .ok_or("Provide the document version you inspected")?;
+                if version != self.session.revision(doc) {
+                    return Err("stale_revision: Document version changed; inspect it again before extraction".into());
+                }
+                let target = self.path(text(args, "path")?)?;
+                if target.try_exists()? {
+                    return Err("Extraction destination already exists; choose a new file".into());
+                }
+                let start = args["start"].as_u64().ok_or("Provide start")?;
+                let end = args["end"].as_u64().ok_or("Provide end")?;
+                let segments: Vec<(u64, u64)> = serde_json::from_value(
+                    args.get("segments").cloned().unwrap_or_else(|| json!([])),
+                )?;
+                self.session.extract(
+                    doc,
+                    (start, end),
+                    &segments,
+                    args["reverse"].as_bool().unwrap_or(false),
+                    &target,
+                )?;
+                self.session.flush()?;
+                Ok(json!({"output":target,"hash":basecraft_io::hash_file(&target)?}))
             }
             "import_support" => {
                 let doc = self.doc(args)?;
@@ -445,6 +473,7 @@ fn tools() -> Value {
         tool("redo","Redo one edit group.",json!({"document":doc}), &["document"]),
         tool("save","Save a document, optionally to a new project path. An existing other file is never replaced.",json!({"document":doc,"path":string}), &["document"]),
         tool("file_record","Read history and methods for a saved project file as it is on disk, including saved Sanger reviews. Same output as `basecraft history --json`; writes nothing.",json!({"path":string}), &["path"]),
+        tool("extract","Extract the inspected sequence revision to a new GenBank file with source ancestry. Coordinates are zero-based, half-open; optional splice segments are in biological order, followed by optional reverse complement. Existing destinations are refused.",json!({"document":doc,"version":{"type":"integer","minimum":0},"path":string,"start":{"type":"integer","minimum":0},"end":{"type":"integer","minimum":0},"segments":{"type":"array","items":{"type":"array","items":{"type":"integer","minimum":0},"minItems":2,"maxItems":2}},"reverse":{"type":"boolean"}}), &["document","version","path","start","end"]),
         tool("import_support","Add the support values of another project tree file to an open tree as one undoable edit. The source is recorded as a referenced input. An empty or omitted name keeps the source's set names.",json!({"document":doc,"path":string,"name":string}), &["document","path"]),
         tool("provenance_inspect","Read the provenance publication of a saved project result.",json!({"path":string}), &["path"]),
         tool("provenance_verify","Check a saved result against its recorded hashes and retained inputs; runs no tools.",json!({"path":string}), &["path"]),
