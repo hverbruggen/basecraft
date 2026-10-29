@@ -5,6 +5,7 @@
 pub mod atomic;
 #[cfg(unix)]
 pub mod fdpass;
+pub mod files;
 pub mod interrupt;
 pub mod paths;
 #[cfg(unix)]

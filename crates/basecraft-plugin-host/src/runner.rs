@@ -2035,7 +2035,10 @@ impl PreparedOperation {
             RuntimeState::Cancelled => "cancelled",
             RuntimeState::Partial => "partial",
             RuntimeState::Interrupted => "interrupted",
-            _ => "running",
+            RuntimeState::Queued => "queued",
+            RuntimeState::Running => "running",
+            RuntimeState::Cancelling => "cancelling",
+            RuntimeState::Finalizing => "finalizing",
         };
         let source = self.document.as_ref().map_or_else(
             || {
