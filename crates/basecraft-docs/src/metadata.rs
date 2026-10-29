@@ -55,24 +55,6 @@ impl KnownColumn {
 /// `strain` have no Darwin Core term and keep their INSDC names.
 pub const KNOWN_COLUMNS: &[KnownColumn] = &[
     KnownColumn {
-        name: "genus",
-        kind: KnownKind::Text,
-        description: "Recorded genus for display labels",
-        insdc: None,
-    },
-    KnownColumn {
-        name: "specificEpithet",
-        kind: KnownKind::Text,
-        description: "Recorded species epithet for display labels",
-        insdc: None,
-    },
-    KnownColumn {
-        name: "accession",
-        kind: KnownKind::Text,
-        description: "Recorded accession for display labels",
-        insdc: None,
-    },
-    KnownColumn {
         name: "catalogNumber",
         kind: KnownKind::Text,
         description: "Voucher number in its collection",
@@ -142,6 +124,24 @@ pub const KNOWN_COLUMNS: &[KnownColumn] = &[
         name: "habitat",
         kind: KnownKind::Text,
         description: "Habitat or environment",
+        insdc: None,
+    },
+    KnownColumn {
+        name: "genus",
+        kind: KnownKind::Text,
+        description: "Recorded genus for display labels",
+        insdc: None,
+    },
+    KnownColumn {
+        name: "specificEpithet",
+        kind: KnownKind::Text,
+        description: "Recorded species epithet for display labels",
+        insdc: None,
+    },
+    KnownColumn {
+        name: "accession",
+        kind: KnownKind::Text,
+        description: "Recorded accession for display labels",
         insdc: None,
     },
 ];
