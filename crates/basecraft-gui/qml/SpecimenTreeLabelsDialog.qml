@@ -61,6 +61,8 @@ AppDialog {
         }
         Label { text: "Record links"; font.bold: true }
         SpecimenLinkList {
+            id: treeLinks
+            nextFocusItem: saveLinks.enabled ? saveLinks : labelGenus
             objectName: "treeRecordLinks"
             rows: metadataTipLabels.records.map(r => ({id: r.record, label: r.record + " → " + (r.specimen || r.issue || "Unlinked")}))
             specimenIds: metadataTipLabels.table.rows.map(s => s.id)
@@ -73,14 +75,14 @@ AppDialog {
                 metadataTipLabels.pendingLinks = links
             }
         }
-        AppButton { objectName: "saveTreeRecordLinks"; text: "Save record links"; enabled: Object.keys(metadataTipLabels.pendingLinks).length > 0; onClicked: {
+        AppButton { id: saveLinks; Keys.onPressed: event => treeLinks.focusLastOnBacktab(event); objectName: "saveTreeRecordLinks"; text: "Save record links"; enabled: Object.keys(metadataTipLabels.pendingLinks).length > 0; onClicked: {
             if (metadataTipLabels.target.record_revision() !== metadataTipLabels.revision) { metadataTipLabels.error = "The tree changed. Close and reopen this dialog."; return }
             const p = JSON.parse(metadataTipLabels.metadataController.consumer(JSON.stringify({action: "link_records", document: metadataTipLabels.path, links: metadataTipLabels.pendingLinks}), true))
             if (p.error) metadataTipLabels.error = p.error
             else metadataTipLabels.show(metadataTipLabels.target, metadataTipLabels.path)
         } }
         GridLayout { columns: 2
-        CheckBox { id: labelGenus; text: "Genus"; checked: true }
+        CheckBox { id: labelGenus; objectName: "metadataLabelGenus"; Keys.onPressed: event => { if (!saveLinks.enabled) treeLinks.focusLastOnBacktab(event); else event.accepted = false }; text: "Genus"; checked: true }
         CheckBox { id: labelSpecies; text: "Species epithet"; checked: true }
         CheckBox { id: labelSpecimen; text: "Specimen ID"; checked: true }
         CheckBox { id: labelAccession; text: "Accession" }

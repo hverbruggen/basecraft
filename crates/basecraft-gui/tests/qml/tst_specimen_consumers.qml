@@ -6,8 +6,9 @@ import "../../qml"
 Item {
     id: host
     width: 1000; height: 700
-    property var specimens: Array.from({length: 500}, (_, i) => ({id: "specimen-" + i}))
-    property var records: Array.from({length: 500}, (_, i) => ({id: "record-" + i, attributes: {}}))
+    property int recordCount: 500
+    property var specimens: Array.from({length: Math.max(4, recordCount)}, (_, i) => ({id: "specimen-" + i}))
+    property var records: Array.from({length: recordCount}, (_, i) => ({id: "record-" + i, attributes: {}}))
     QtObject {
         id: metadata
         property bool available: true
@@ -29,58 +30,106 @@ Item {
         function compose_metadata_labels(project, fields) { last = fields; return "" }
         function action(name, args) { last = name }
     }
-    Component { id: rosterFactory; SpecimenRosterDialog { metadataController: metadata; table: ({rows: host.specimens, partitions: []}) } }
-    Component { id: labelsFactory; SpecimenTreeLabelsDialog { metadataController: metadata; table: ({rows: host.specimens, partitions: []}) } }
+    Component {
+        id: windowFactory
+        ApplicationWindow {
+            id: appWindow
+            visible: true
+            width: 1000; height: 700
+            font.family: "monospace"
+            font.pointSize: 9
+            property alias roster: roster
+            property alias labels: labels
+            SpecimenRosterDialog { id: roster; metadataController: metadata; table: ({rows: host.specimens, partitions: []}) }
+            SpecimenTreeLabelsDialog { id: labels; metadataController: metadata; table: ({rows: host.specimens, partitions: []}) }
+        }
+    }
     TestCase {
         name: "SpecimenConsumers"
         when: windowShown
         function init() { failOnWarning(/Binding loop|TypeError|ReferenceError/) }
         function test_large_lists_data() {
-            return [{tag: "roster-regular", roster: true, width: 1000, height: 700, font: 14},
-                    {tag: "tree-regular", roster: false, width: 1000, height: 700, font: 14},
-                    {tag: "roster-compact", roster: true, width: 800, height: 600, font: 18},
-                    {tag: "tree-compact", roster: false, width: 800, height: 600, font: 18}]
+            const cases = []
+            for (const roster of [true, false]) {
+                const kind = roster ? "roster" : "tree"
+                cases.push({tag: kind + "-four-native", roster, count: 4, width: 2340, height: 1302, points: 9})
+                cases.push({tag: kind + "-500", roster, count: 500, width: 1000, height: 700, points: 9})
+                cases.push({tag: kind + "-500-compact", roster, count: 500, width: 800, height: 600, points: 13})
+            }
+            cases.push({tag: "tree-500-no-edits-backtab", roster: false, count: 500, width: 1000, height: 700, points: 9, edit: false, backtab: true})
+            return cases
         }
-        function reachable(item) {
-            verify(item.visible && item.width > 0 && item.height > 0)
-            const p = item.mapToItem(host, 0, 0)
-            verify(p.y >= 0 && p.y + item.height <= host.height + 1, "Control must remain within window: " + p.y)
-            verify(p.x >= 0 && p.x + item.width <= host.width + 1)
+        function visibleInside(item, container) {
+            const p = item.mapToItem(container, 0, 0)
+            return item.visible && item.width > 0 && item.height > 0
+                && p.y >= -1 && p.y + item.height <= container.height + 1
+                && p.x >= -1 && p.x + item.width <= container.width + 1
+        }
+        function checkRow(window, list, row) {
+            tryVerify(() => window.activeFocusItem && window.activeFocusItem.Accessible.name === "Project specimen for record-" + row,
+                1000, "User keys reach logical row " + row + "; got " + (window.activeFocusItem ? window.activeFocusItem.Accessible.name + "/" + window.activeFocusItem.objectName + "/" + window.activeFocusItem : "none"))
+            tryVerify(() => visibleInside(window.activeFocusItem, list.view), 1000,
+                "Focused row " + row + " is fully inside its viewport")
         }
         function test_large_lists(data) {
-            host.width = data.width; host.height = data.height
-            host.Window.window.width = data.width; host.Window.window.height = data.height
-            const dialog = createTemporaryObject(data.roster ? rosterFactory : labelsFactory, host)
-            dialog.font.pixelSize = data.font
+            host.recordCount = data.count
+            target.last = ""
+            const window = createTemporaryObject(windowFactory, host, {width: data.width, height: data.height})
+            window.font.pointSize = data.points
+            window.requestActivate()
+            tryCompare(window, "active", true)
+            const dialog = data.roster ? window.roster : window.labels
             dialog.show(target, data.roster ? "result.spart" : "tree.nwk")
             tryCompare(dialog, "opened", true)
             const list = findChild(dialog, data.roster ? "workspaceRosterLinks" : "treeRecordLinks")
-            tryCompare(list.view, "count", 500)
-            verify(waitForPolish(list.Window.window))
-            verify(list.height <= 240 && list.height >= 45, "Bounded viewport: " + list.height)
-            verify(list.view.contentHeight > list.view.height * 10)
-            list.view.positionViewAtIndex(499, ListView.Contain)
-            tryVerify(() => list.view.contentY > 0)
-            tryVerify(() => list.view.itemAtIndex(499) !== null)
-            const choice = findChild(list.view.itemAtIndex(499), "specimenLinkChoice")
-            choice.forceActiveFocus()
-            tryVerify(() => choice.activeFocus)
-            reachable(choice)
-            reachable(dialog.standardButton(Dialog.Close))
+            tryCompare(list.view, "count", data.count)
+            // Popup layout is separate from ApplicationWindow.contentItem polish.
+            // Wait for settled geometry; do not mutate item geometry in the test.
+            tryVerify(() => dialog.width > 450 && list.width >= Math.floor(dialog.availableWidth) - 1)
+            verify(list.height <= 240 && list.height >= 45)
+            if (data.count > 4) {
+                verify(list.view.contentHeight > list.view.height * 10)
+                verify(list.view.contentItem.children.length < 80, "Delegates remain virtualized")
+            }
+            const first = findChild(list.view.itemAtIndex(0), "specimenLinkChoice")
+            verify(visibleInside(first, list.view))
+            // Enter using a user click, then traverse and edit every row with keys.
+            mouseClick(first)
+            keyClick(Qt.Key_Escape)
+            for (let row = 0; row < data.count; row++) {
+                checkRow(window, list, row)
+                if (data.edit !== false) {
+                    for (let down = 0; down <= row % 3; down++) keyClick(Qt.Key_Down)
+                    const assigned = data.roster ? dialog.links : dialog.pendingLinks
+                    compare(assigned["record-" + row], "specimen-" + (row % 3), "The edited mapping belongs to this row")
+                }
+                keyClick(Qt.Key_Tab)
+                wait(0)
+            }
+            const action = findChild(dialog, data.roster ? "applyRosterLinks" : data.edit === false ? "metadataLabelGenus" : "saveTreeRecordLinks")
+            tryCompare(action, "activeFocus", true)
+            verify(visibleInside(action, dialog.contentItem))
+            // Shift+Tab re-enters at the last logical row and crosses recycled
+            // delegate boundaries in reverse, without imperative focus/scroll calls.
+            if (data.backtab) keyClick(Qt.Key_Backtab); else keyClick(Qt.Key_Tab, Qt.ShiftModifier)
+            for (let row = data.count - 1; row >= 0; row--) {
+                checkRow(window, list, row)
+                if (data.backtab) keyClick(Qt.Key_Backtab); else keyClick(Qt.Key_Tab, Qt.ShiftModifier)
+                wait(0)
+            }
+            tryVerify(() => !list.containsItem(window.activeFocusItem), 1000,
+                "Backtab at the first row leaves the logical list")
+            // Shared footer Tab handling is independently owned by WF-0041.
+            verify(visibleInside(dialog.standardButton(Dialog.Close), dialog.background))
+            if (data.count > 4) verify(list.view.contentItem.children.length < 80)
             if (data.roster) {
-                reachable(findChild(dialog, "applyRosterLinks"))
-                reachable(findChild(dialog, "saveProjectPartition"))
-                const partitionId = findChild(dialog, "projectPartitionId")
-                partitionId.text = "saved-result"
-                mouseClick(findChild(dialog, "applyRosterLinks"))
+                verify(visibleInside(findChild(dialog, "saveProjectPartition"), dialog.contentItem))
+                mouseClick(action)
                 compare(target.last, "roster_links")
             } else {
-                reachable(findChild(dialog, "saveTreeRecordLinks"))
-                reachable(dialog.standardButton(Dialog.Apply))
-                reachable(dialog.standardButton(Dialog.Reset))
-                list.edited("record-499", "specimen-499")
+                verify(visibleInside(dialog.standardButton(Dialog.Apply), dialog.background))
                 mouseClick(dialog.standardButton(Dialog.Apply))
-                compare(metadata.last, "link_records")
+                if (data.edit !== false) compare(metadata.last, "link_records")
                 compare(target.last, '["genus","species","specimen"]')
             }
             dialog.close()

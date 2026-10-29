@@ -29,6 +29,8 @@ AppDialog {
         implicitHeight: 480
         Label { text: "Link each workspace ID to its stable project specimen. Several records may share one specimen. Save the workspace before promoting a result."; wrapMode: Text.Wrap; Layout.fillWidth: true }
         SpecimenLinkList {
+            id: rosterLinks
+            nextFocusItem: applyLinks
             objectName: "workspaceRosterLinks"
             rows: rosterConsumer.work.specimens.map(s => ({id: s.id, label: s.id + (rosterConsumer.links[s.id] && !rosterConsumer.table.rows.some(r => r.id === rosterConsumer.links[s.id]) ? " (unknown roster ID: " + rosterConsumer.links[s.id] + ")" : "")}))
             specimenIds: rosterConsumer.table.rows.map(s => s.id)
@@ -39,7 +41,7 @@ AppDialog {
                 rosterConsumer.links = updated
             }
         }
-        AppButton { objectName: "applyRosterLinks"; text: "Apply roster links"; onClicked: {
+        AppButton { id: applyLinks; Keys.onPressed: event => rosterLinks.focusLastOnBacktab(event); objectName: "applyRosterLinks"; text: "Apply roster links"; onClicked: {
             if (rosterConsumer.target.record_revision() !== rosterConsumer.revision) { rosterConsumer.error = "The workspace changed. Close and reopen this dialog before linking."; return }
             const p = JSON.parse(rosterConsumer.metadataController.consumer(JSON.stringify({action: "link_workspace", workspace: rosterConsumer.path, links: rosterConsumer.links}), false))
             if (p.error) rosterConsumer.error = p.error
