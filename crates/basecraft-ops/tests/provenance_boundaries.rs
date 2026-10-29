@@ -385,6 +385,17 @@ fn extraction_is_reference_first_and_packages_exact_source_and_mapping() {
         .extract(doc, (1, 7), &[(1, 3), (5, 7)], true, &result)
         .unwrap();
     let publication = provenance::inspect(&result).unwrap();
+    let conflicts = basecraft_ops::input_evidence::conflicts(&source).unwrap();
+    assert!(
+        !conflicts.analyses.is_empty(),
+        "extraction did not register its referenced source in shared save protection"
+    );
+    assert!(
+        conflicts
+            .analyses
+            .iter()
+            .any(|analysis| analysis.result == "extract.gb")
+    );
     assert!(publication.inputs[0].retained.is_none());
     assert!(publication.inputs[0].reference.is_some());
     let issues = provenance::verify(&result).unwrap();

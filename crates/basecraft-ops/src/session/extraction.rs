@@ -106,6 +106,12 @@ impl Session {
         input.extra.insert("extraction".into(), serde_json::json!({"schema_version":1,"source_revision":snapshot.revision,"selection":activity.op,"coordinates":"zero-based-half-open; segments in biological order; reverse-complement after splicing"}));
         crate::input_evidence::write_json(&bundle.join("input.json"), &input)?;
         if let Some(run) = &run {
+            crate::input_evidence::write_json(
+                &run.artifact("run.json")?,
+                &serde_json::json!({
+                    "schema_version":1,"id":run.id(),"result":path.file_name().and_then(|name| name.to_str()),"status":"saved"
+                }),
+            )?;
             crate::input_evidence::register(run)?;
         }
         let (events, effective_edits) = portable_analysis_activity(&snapshot, activity);
