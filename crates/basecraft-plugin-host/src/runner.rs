@@ -940,13 +940,13 @@ impl PreparedOperation {
                 let member = format!("bootstrap-{}{suffix}", prepared.run.id());
                 prepared
                     .policy
-                    .path(&prepared.bootstrap_destination(Path::new(&member))?, true)?;
+                    .path(&prepared.bootstrap_destination(Path::new(&member)), true)?;
             }
         }
         Ok(prepared)
     }
 
-    fn bootstrap_destination(&self, member: &Path) -> Result<String> {
+    fn bootstrap_destination(&self, member: &Path) -> String {
         let directory = self
             .request
             .destinations
@@ -954,7 +954,7 @@ impl PreparedOperation {
             .map(Path::new)
             .and_then(Path::parent)
             .unwrap_or(Path::new(""));
-        Ok(directory.join(member).display().to_string())
+        directory.join(member).display().to_string()
     }
 
     /// Merge child histories through the same submitted-record abstraction used
@@ -1467,7 +1467,7 @@ impl PreparedOperation {
                     if name.starts_with(&format!("bootstrap-{}", self.run.id()))
                         && name.ends_with(".nex")
                     {
-                        let destination = self.bootstrap_destination(member)?;
+                        let destination = self.bootstrap_destination(member);
                         self.publish_member(
                             role,
                             &retained.join(member),

@@ -27,7 +27,7 @@ pub(crate) struct AlignmentWorkflow<'a> {
     pub stages: Vec<OperationOutcome>,
 }
 impl AlignmentWorkflow<'_> {
-    fn stage(&mut self, operation: &str, inputs: Value, parameters: Value) -> Result<PathBuf> {
+    fn stage(&mut self, operation: &str, inputs: &Value, parameters: &Value) -> Result<PathBuf> {
         if self.cancelled.load(Ordering::Acquire) {
             return Err(Error::Protocol("cancelled before workflow stage".into()));
         }
@@ -140,8 +140,8 @@ impl AlignmentWorkflow<'_> {
         )?;
         let prepare = self.stage(
             "basecraft.delimitation/haplotypes",
-            json!({"alignment":[{"kind":"file","path":source}]}),
-            effective.clone(),
+            &json!({"alignment":[{"kind":"file","path":source}]}),
+            &effective,
         )?;
         let report: Value = serde_json::from_slice(&std::fs::read(prepare.join("result.json"))?)?;
         let counts = &report["metrics"]["haplotypes"];
@@ -214,8 +214,8 @@ impl AlignmentWorkflow<'_> {
             tree_params["method"] = json!("upgma");
             let tree = self.stage(
                 "basecraft.distance/tree",
-                json!({"alignment":[{"kind":"file","path":alignment}]}),
-                tree_params,
+                &json!({"alignment":[{"kind":"file","path":alignment}]}),
+                &tree_params,
             )?;
             inputs["tree"] = json!([{"kind":"file","path":tree.join("tree.nwk")}]);
             params["rooted"] = json!(true);
@@ -223,7 +223,7 @@ impl AlignmentWorkflow<'_> {
             params["tree_inference"] =
                 json!("UPGMA equal-rate clustering from retained aligned sequences");
         }
-        let result = self.stage(&format!("basecraft.delimitation/{fit}"), inputs, params)?;
+        let result = self.stage(&format!("basecraft.delimitation/{fit}"), &inputs, &params)?;
         let target = Path::new(&self.parent.context.outputs["artifacts"]);
         // Keep nested stage results in their owned runs. The parent's stable fit
         // report is the one logical result consumed by every interface.
@@ -269,19 +269,19 @@ impl AlignmentWorkflow<'_> {
                     let mut linked = serde_json::to_value(evidence)?;
                     linked["path"] = json!(stable);
                     params["alignment_evidence"] = linked;
-                    if let Some(old) = old {
-                        if let Some(inputs) = hypothesis["provenance"]["inputs"].as_object_mut() {
-                            inputs.remove(&old);
-                            inputs.insert(
-                                stable.clone(),
-                                json!(
-                                    evidence
-                                        .source_hash
-                                        .as_ref()
-                                        .unwrap_or(&evidence.submitted_hash)
-                                ),
-                            );
-                        }
+                    if let Some(old) = old
+                        && let Some(inputs) = hypothesis["provenance"]["inputs"].as_object_mut()
+                    {
+                        inputs.remove(&old);
+                        inputs.insert(
+                            stable.clone(),
+                            json!(
+                                evidence
+                                    .source_hash
+                                    .as_ref()
+                                    .unwrap_or(&evidence.submitted_hash)
+                            ),
+                        );
                     }
                 }
             }
