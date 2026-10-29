@@ -60,13 +60,10 @@ fn legacy_metadata_opens_with_warning_and_survives_explicit_save() {
     let path = dir.path().join("tree.nwk");
     std::fs::write(&path, "((a,b)90,c);\n").unwrap();
     let side = files::tree_sidecar(&path);
-    let legacy =
-        br#"{"supports":[{"name":"Do not apply","source":"old"}],"annotations":{},"style":{}}"#;
     // Use the complete default style serializer to keep this a real old format.
     let mut value = serde_json::to_value(basecraft_protocol::TreeStyle::default()).unwrap();
     let style = value.take();
     let bytes = serde_json::to_vec(&serde_json::json!({"supports":[{"name":"Do not apply","source":"old"}],"annotations":{},"style":style})).unwrap();
-    let _ = legacy;
     std::fs::write(&side, &bytes).unwrap();
     let opened = files::load_tree(&path).unwrap();
     assert!(opened.metadata_warning.is_some());
@@ -368,7 +365,7 @@ fn extraction_is_reference_first_and_packages_exact_source_and_mapping() {
     let input =
         basecraft_ops::input_evidence::read_input(&provenance::bundle_for_result(&result)).unwrap();
     assert_eq!(
-        input.extra["extraction"]["selection"]["segments"],
+        input.extra["extraction"]["selection"]["params"]["segments"],
         serde_json::json!([[1, 3], [5, 7]])
     );
     let package = dir.path().join("package");
@@ -379,5 +376,50 @@ fn extraction_is_reference_first_and_packages_exact_source_and_mapping() {
         provenance::verify(&package.join("extract.gb"))
             .unwrap()
             .is_empty()
+    );
+}
+
+#[test]
+fn saving_a_forest_preserves_other_members_and_refreshes_bound_identity() {
+    use basecraft_ops::analysis_store::ArtifactRun;
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("forest.nwk");
+    std::fs::write(&file, "((a,b)90,c);\n((x,y)42,z);\n").unwrap();
+    let run = ArtifactRun::create(&file, "forest-save").unwrap();
+    let tree = files::load_tree(&file).unwrap().doc;
+    let mut metadata = Vec::new();
+    files::write_tree_sidecar_at(
+        &tree,
+        &basecraft_io::hash_file(&file).unwrap(),
+        &mut metadata,
+    )
+    .unwrap();
+    std::fs::write(run.artifact("forest.nwk.basecraft.json").unwrap(), metadata).unwrap();
+    run.bind(&file).unwrap();
+    let mut session = Session::new(dir.path());
+    let doc = session.open(&file).unwrap();
+    session
+        .apply(
+            doc,
+            Op::TreeRenameTip {
+                from: "a".into(),
+                to: "renamed-a".into(),
+            },
+        )
+        .unwrap();
+    session.save(doc, None).unwrap();
+    assert!(ArtifactRun::for_result_checked(&file).unwrap().is_some());
+    let opened = files::load_tree(&file).unwrap();
+    assert_eq!(opened.remaining.len(), 1);
+    assert_eq!(opened.remaining[0].to_newick(), "((x,y)42,z);");
+    assert!(opened.doc.to_newick().contains("renamed-a"));
+    session.undo(doc).unwrap();
+    session.save(doc, None).unwrap();
+    assert!(
+        !files::load_tree(&file)
+            .unwrap()
+            .doc
+            .to_newick()
+            .contains("renamed-a")
     );
 }

@@ -1276,10 +1276,12 @@ impl Session {
                 }
                 hash = hw.hash();
                 Ok(())
-            })?;
+            }).map_err(|error| if sidecar_file {
+                invalid(format!("tree data saved; metadata incomplete: {error}. Keep the open document or temporary recovery and retry saving"))
+            } else { error.into() })?;
             hashes.push((self.relative(path), hash));
         }
-        crate::analysis_store::ArtifactRun::refresh_binding(target)?;
+        crate::analysis_store::ArtifactRun::refresh_binding(target).map_err(|error| invalid(format!("tree and metadata saved; binding publication incomplete: {error}. Keep the open document and retry saving")))?;
         Ok(hashes)
     }
 

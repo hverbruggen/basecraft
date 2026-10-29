@@ -119,6 +119,8 @@ pub struct OpenedTree {
     pub nexus: bool,
     /// Unverifiable legacy metadata remains on disk and was not applied.
     pub metadata_warning: Option<String>,
+    /// Other forest members are preserved when the first tree is edited.
+    pub remaining: Vec<TreeDoc>,
 }
 
 pub enum Loaded {
@@ -252,10 +254,13 @@ struct SupportName {
 pub fn load_tree(path: &Path) -> Result<OpenedTree> {
     let text = std::fs::read_to_string(path)?;
     let nexus = newick::is_nexus(&text);
-    let parsed = newick::parse_trees(&text)?
-        .into_iter()
+    let mut parsed_trees = newick::parse_trees(&text)?.into_iter();
+    let parsed = parsed_trees
         .next()
         .ok_or_else(|| Error::Empty(path.to_path_buf()))?;
+    let remaining = parsed_trees
+        .map(|parsed| TreeDoc::from_parsed(String::new(), &parsed))
+        .collect();
     let name = path
         .file_name()
         .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
@@ -263,6 +268,7 @@ pub fn load_tree(path: &Path) -> Result<OpenedTree> {
     let mut metadata_warning = None;
     // Errors in a hidden association must never select an adjacent legacy file.
     let run = crate::analysis_store::ArtifactRun::for_result_checked(path)?;
+    let bound = run.is_some();
     let sidecar = run.map_or_else(
         || tree_sidecar(path),
         |run| {
@@ -310,6 +316,9 @@ pub fn load_tree(path: &Path) -> Result<OpenedTree> {
             }
         }
     }
+    if bound && !sidecar.exists() {
+        metadata_warning = Some("Bound tree metadata is unavailable; exchange values remain open with unknown support meaning and default presentation.".into());
+    }
     // Legacy Basecraft distance runs carry explicit bootstrap metadata. Require
     // an exact matching result, so stale adjacent reports cannot relabel imports.
     let report_path = PathBuf::from(format!("{}.run.json", path.display()));
@@ -341,19 +350,26 @@ pub fn load_tree(path: &Path) -> Result<OpenedTree> {
         doc,
         nexus,
         metadata_warning,
+        remaining,
     })
 }
 
 /// Write a tree as Newick, or as NEXUS if it was read from NEXUS.
 pub fn write_tree(tree: &OpenedTree, w: &mut dyn Write) -> io::Result<()> {
-    let newick = tree.doc.to_newick();
     if tree.nexus {
-        writeln!(
-            w,
-            "#NEXUS\nbegin trees;\n\ttree tree1 = [&R] {newick}\nend;"
-        )
+        writeln!(w, "#NEXUS\nbegin trees;")?;
+        for (index, doc) in std::iter::once(&tree.doc)
+            .chain(&tree.remaining)
+            .enumerate()
+        {
+            writeln!(w, "\ttree tree{} = [&R] {}", index + 1, doc.to_newick())?;
+        }
+        writeln!(w, "end;")
     } else {
-        writeln!(w, "{newick}")
+        for doc in std::iter::once(&tree.doc).chain(&tree.remaining) {
+            writeln!(w, "{}", doc.to_newick())?;
+        }
+        Ok(())
     }
 }
 
