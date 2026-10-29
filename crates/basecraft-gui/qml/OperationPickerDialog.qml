@@ -52,6 +52,13 @@ AppContentDialog {
         const inputs = {}
         for (let i = 0; i < inputFields.count; ++i) {
             const row = inputFields.itemAt(i)
+            if (!row.path.trim().length) {
+                if (row.requiredInput) {
+                    formError = "Choose a file for " + row.role
+                    return
+                }
+                continue
+            }
             inputs[row.role] = [{kind: "file", path: row.path}]
         }
         let parameters
@@ -88,8 +95,9 @@ AppContentDialog {
                 required property string modelData
                 readonly property string role: modelData
                 readonly property string path: input.text
-                Label { text: inputRow.role; Layout.fillWidth: true }
-                TextField { id: input; text: inputFields.count === 1 ? dialog.inputPath : ""; placeholderText: "File inside the project"; Accessible.name: inputRow.role + " input file"; enabled: !backend.busy; Layout.fillWidth: true }
+                readonly property bool requiredInput: dialog.selected.inputs[role].min > 0
+                Label { text: inputRow.role + (inputRow.requiredInput ? "" : " (optional)"); Layout.fillWidth: true }
+                TextField { id: input; text: inputRow.requiredInput && Object.keys(dialog.selected.inputs).filter(role => dialog.selected.inputs[role].min > 0).length === 1 ? dialog.inputPath : ""; placeholderText: "File inside the project"; Accessible.name: inputRow.role + " input file"; enabled: !backend.busy; Layout.fillWidth: true }
             }
         }
         Loader {

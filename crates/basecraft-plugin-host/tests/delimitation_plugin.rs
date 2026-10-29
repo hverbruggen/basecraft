@@ -857,3 +857,64 @@ fn parent_cancellation_interrupts_registered_fit_and_retains_every_stage_receipt
             .exists()
     );
 }
+
+#[test]
+fn workflow_repairs_publication_and_applies_all_hypotheses_in_one_undo_group() {
+    require_engine();
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("input.fa"), ">a\nAAAAAAAAAAAAAAAAAAAA\n>b\nAAAAAAAAAAAAAAAAAAAT\n>c\nAAAAACAAAAAAAAAAAAAT\n>d\nAAAAACAAAAAGAAAAAAAT\n>e\nAAAAACAAAAAGAAAAAATT\n").unwrap();
+    let registry = common::bundled();
+    let setup = common::run(
+        &registry,
+        root.path(),
+        json!({"operation":"basecraft.delimitation/workspace_alignment@1",
+        "inputs":{"alignment":common::file("input.fa")}, "parameters":{},"destinations":{"workspace":"species.spart"}}),
+    );
+    common::assert_completed(&setup);
+    let mut session = Session::new(root.path());
+    let doc = session.open(root.path().join("species.spart")).unwrap();
+    let before = session.delimitation(doc).hypotheses.clone();
+    let mut manager = JobManager::default();
+    let accepted = common::submit_in(&mut manager,&registry,&mut session,|s| json!({
+        "operation":"basecraft.host/asap_alignment@1","inputs":{"alignment":common::file("input.fa")},
+        "parameters":{"model":"p","unique_haplotypes":true,"replicates":1000},
+        "target":common::document(s,doc)[0],"destinations":{"workspace":"fit.spart"}
+    })).unwrap();
+    let export = root.path().join("fit.spart");
+    std::fs::write(&export, "foreign").unwrap();
+    let partial = common::wait_in(&manager, &mut session, &accepted.run_id);
+    assert_eq!(partial.state, RuntimeState::Partial, "{partial:#?}");
+    assert_eq!(session.delimitation(doc).hypotheses, before);
+    assert_eq!(std::fs::read_to_string(&export).unwrap(), "foreign");
+    let receipt = common::evidence(&partial).join("stages.json");
+    let stages = std::fs::read(&receipt).unwrap();
+    std::fs::remove_file(&export).unwrap();
+    manager.repair(&accepted.run_id).unwrap();
+    let complete = common::wait_in(&manager, &mut session, &accepted.run_id);
+    common::assert_completed(&complete);
+    assert_eq!(
+        std::fs::read(receipt).unwrap(),
+        stages,
+        "repair must never execute stages again"
+    );
+    let applied = session.delimitation(doc).hypotheses.clone();
+    assert!(applied.len() > before.len());
+    assert_eq!(
+        finished(&session, doc)
+            .iter()
+            .filter(|(id, status)| id == &complete.run_id && *status == JobStatus::Completed)
+            .count(),
+        1
+    );
+    session.undo(doc).unwrap();
+    assert_eq!(session.delimitation(doc).hypotheses, before);
+    session.redo(doc).unwrap();
+    assert_eq!(session.delimitation(doc).hypotheses, applied);
+    assert!(
+        basecraft_ops::provenance::verify(&export)
+            .unwrap()
+            .is_empty()
+    );
+    drop(session);
+    assert!(replay::replay(root.path()).unwrap().ok());
+}

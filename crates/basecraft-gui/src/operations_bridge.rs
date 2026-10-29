@@ -123,9 +123,9 @@ fn catalog() -> basecraft_plugin_host::Result<Value> {
         } else if descriptor
             .inputs
             .values()
-            .any(|binding| binding.min != 1 || binding.max != 1)
+            .any(|binding| binding.min > 1 || binding.max != 1)
         {
-            Some("File lists and optional inputs are available through CLI/Python/MCP")
+            Some("File lists are available through CLI/Python/MCP")
         } else if !supported_parameters(&descriptor.parameters, 0) {
             Some("This settings schema is available through CLI/Python/MCP")
         } else {
