@@ -487,9 +487,7 @@ impl PreparedOperation {
                     }
                 }
                 let generated_count: usize = generated.values().map(Vec::len).sum();
-                if generated_count > 1
-                    || (generated_count == 1 && bindings.inputs.values().any(|v| !v.is_empty()))
-                {
+                if generated_count > 1 {
                     return Err(Error::Protocol(
                         "unsupported_input: save the document before combining it with other inputs"
                             .into(),
@@ -798,9 +796,11 @@ impl PreparedOperation {
         }
         for (name, inputs) in &generated {
             for input in inputs {
+                let mut dependencies = sources_from_upstream(run.directory())?;
+                dependencies.extend(input.dependencies.iter().cloned());
                 input_evidence::link_generated_input(
                     &run,
-                    &input.dependencies,
+                    &dependencies,
                     &input.bytes,
                     input.transformation,
                     "Document snapshot",

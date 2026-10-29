@@ -265,13 +265,6 @@ use crate::bridge::{
     monospace_font, omarchy_theme_path, project_root, took,
 };
 
-struct CladeExtraction {
-    output: PathBuf,
-    source_changed: bool,
-    params: Value,
-    inputs: Vec<(String, String)>,
-}
-
 #[allow(clippy::struct_excessive_bools)]
 pub struct TreeRust {
     frame: QByteArray,
@@ -730,137 +723,128 @@ impl qobject::TreeController {
     }
 
     pub fn extract_clade_alignment(mut self: Pin<&mut Self>) {
+        use basecraft_plugin_host::{
+            jobs::JobManager,
+            policy::SessionPolicy,
+            registry::{Registry, RegistryConfig},
+        };
+        use basecraft_protocol::operation::{InputReference, OperationRequest, RuntimeState};
         if self.rust().busy {
             return;
         }
-        let work = {
-            let r = self.rust();
-            let (Some(session), Some(doc)) = (&r.session, r.doc) else {
-                return;
+        let submitted = (|| -> Result<_, String> {
+            let mut r = self.as_mut().rust_mut();
+            let r = &mut *r;
+            let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
+                return Err("No tree open".into());
             };
             let tree = session.tree(doc);
             let taxa = r.view.selected_names(tree);
             if taxa.is_empty() {
-                self.fail("Select one or more clades first");
+                return Err("Select one or more clades first".into());
+            }
+            let tree_path = PathBuf::from(r.file_path.to_string());
+            let link = basecraft_ops::links::AlignmentLink::read_view(&tree_path)
+                .map_err(|e| format!("Link an alignment first: {e}"))?;
+            let input = link
+                .checked_snapshot(&tree_path, tree)
+                .map_err(|e| e.to_string())?;
+            let output =
+                basecraft_plugin_host::file_tool::output_beside(&tree_path, "clade", "afa");
+            let registry = RegistryConfig::discover()
+                .and_then(|c| Registry::load(&c))
+                .map_err(|e| e.to_string())?;
+            let policy = SessionPolicy::new(session.root(), true).map_err(|e| e.to_string())?;
+            let destination = output
+                .strip_prefix(&policy.root)
+                .map_err(|e| e.to_string())?
+                .to_string_lossy()
+                .into_owned();
+            let request = OperationRequest {
+                operation: "basecraft.clade-alignment/extract@1".into(),
+                inputs: [
+                    (
+                        "alignment".into(),
+                        vec![InputReference::File {
+                            path: input.to_string_lossy().into_owned(),
+                        }],
+                    ),
+                    (
+                        "selection_tree".into(),
+                        vec![InputReference::Document {
+                            doc: doc.0.to_string(),
+                            generation: session.generation(doc),
+                            revision: session.revision(doc),
+                        }],
+                    ),
+                ]
+                .into(),
+                parameters: json!({"taxa":taxa}),
+                destinations: [("artifacts/clade.afa".into(), destination)].into(),
+                pins: None,
+                request_key: None,
+                target: None,
+            };
+            let mut jobs = JobManager::default().with_task_cancellation();
+            let accepted = jobs
+                .submit_in_session(&registry, request, policy, "GUI", session)
+                .map_err(|e| e.to_string())?;
+            Ok((
+                jobs,
+                accepted.run_id,
+                session.id().to_owned(),
+                output,
+                link.source_changed(),
+            ))
+        })();
+        let (jobs, run_id, session_id, output, source_changed) = match submitted {
+            Ok(work) => work,
+            Err(error) => {
+                self.fail(&format!("Cannot extract clades: {error}"));
                 return;
             }
-            let source = match session.saved_source(doc) {
-                Ok(Some(source)) => source,
-                Ok(None) => {
-                    self.fail("Save the current tree before extracting clades so its exact selection revision can be retained");
-                    return;
-                }
-                Err(error) => {
-                    self.fail(&error.to_string());
-                    return;
-                }
-            };
-            (
-                PathBuf::from(r.file_path.to_string()),
-                tree.clone(),
-                taxa,
-                session.id().to_owned(),
-                doc,
-                source.2,
-            )
         };
         self.as_mut().set_busy(true);
         self.as_mut().notify("Extracting the selected clades…");
         let qt_thread = self.qt_thread();
         std::thread::spawn(move || {
-            let result =
-                (|| -> Result<CladeExtraction, Box<dyn std::error::Error + Send + Sync>> {
-                    let (tree_path, tree, taxa, _, _, _) = &work;
-                    let link = basecraft_ops::links::AlignmentLink::read_view(tree_path)
-                        .map_err(|e| format!("Link an alignment first: {e}"))?;
-                    let input = link.checked_snapshot(tree_path, tree)?;
-                    let output =
-                        basecraft_plugin_host::file_tool::output_beside(tree_path, "clade", "afa");
-                    use basecraft_plugin_host::{
-                        jobs::JobManager,
-                        policy::SessionPolicy,
-                        registry::{Registry, RegistryConfig},
-                    };
-                    use basecraft_protocol::operation::{
-                        InputReference, OperationRequest, RuntimeState,
-                    };
-                    let registry = Registry::load(&RegistryConfig::discover()?)?;
-                    let root = project_root(tree_path).canonicalize()?;
-                    let request = OperationRequest {
-                        operation: "basecraft.clade-alignment/extract@1".into(),
-                        inputs: [
-                            (
-                                "alignment".into(),
-                                vec![InputReference::File {
-                                    path: input.to_string_lossy().into_owned(),
-                                }],
-                            ),
-                            (
-                                "selection_tree".into(),
-                                vec![InputReference::File {
-                                    path: tree_path.to_string_lossy().into_owned(),
-                                }],
-                            ),
-                        ]
-                        .into(),
-                        parameters: json!({"taxa":taxa}),
-                        destinations: [(
-                            "artifacts/clade.afa".into(),
-                            output.strip_prefix(&root)?.to_string_lossy().into_owned(),
-                        )]
-                        .into(),
-                        pins: None,
-                        request_key: None,
-                        target: None,
-                    };
-                    let mut jobs = JobManager::default().with_task_cancellation();
-                    let accepted =
-                        jobs.submit(&registry, request, SessionPolicy::new(&root, true)?, "GUI")?;
-                    let outcome = loop {
-                        let outcome = jobs.get(&accepted.run_id)?;
-                        if outcome.state.terminal() {
-                            break outcome;
-                        }
-                        std::thread::sleep(std::time::Duration::from_millis(10));
-                    };
-                    if outcome.state != RuntimeState::Completed {
-                        return Err(format!(
-                            "Clade extraction ended {:?}: {:?}",
-                            outcome.state, outcome.errors
-                        )
-                        .into());
+            // Execution belongs to the shared runner. Its document continuation
+            // returns to the owning session thread, as for other document jobs.
+            loop {
+                match jobs.get(&run_id) {
+                    Ok(outcome)
+                        if outcome.state.terminal() || outcome.state == RuntimeState::Applying =>
+                    {
+                        break;
                     }
-                    let params = json!({"taxa":taxa,"run_id":outcome.run_id,"tree_hash":work.5,"mapping":"rows by exact name; columns unchanged"});
-                    Ok(CladeExtraction {
-                        output,
-                        source_changed: link.source_changed(),
-                        params,
-                        inputs: vec![
-                            (input.to_string_lossy().into_owned(), link.snapshot_hash),
-                            (tree_path.to_string_lossy().into_owned(), work.5.clone()),
-                        ],
-                    })
-                })();
+                    Err(_) => break,
+                    _ => std::thread::sleep(std::time::Duration::from_millis(10)),
+                }
+            }
             let _ = qt_thread.queue(move |mut this| {
                 this.as_mut().set_busy(false);
-                let result = result.and_then(|done| {
+                let result = (|| -> Result<_, String> {
                     let mut r = this.as_mut().rust_mut();
-                    let Some(session) = &mut r.session else { return Err("Tree was closed".into()) };
-                    if session.id() != work.3 { return Err("The open tree changed during extraction".into()); }
-                    session.log_tool_run(work.4,basecraft_protocol::Actor::Plugin {
-                        id:"basecraft.clade-alignment".into(),version:"0.1.0".into()
-                    },("basecraft.clade-alignment","extract"),done.params.clone(),
-                        &done.inputs,std::slice::from_ref(&done.output))?;
-                    Ok(done)
-                });
-                match result {
-                    Ok(done) => {
-                        this.as_mut().done(if done.source_changed {
-                            "Opened clades from the retained alignment snapshot; the source file has changed"
-                        } else { "Opened alignment for the selected clades" });
-                        this.file_created(QString::from(&done.output.to_string_lossy().into_owned()));
+                    let Some(session) = &mut r.session else {
+                        let _ = jobs.cancel(&run_id);
+                        return Err("Tree was closed; retained artifacts remain in Tasks".into());
+                    };
+                    if session.id() != session_id {
+                        let _ = jobs.cancel(&run_id);
+                        return Err("Tree was replaced; retained artifacts remain in Tasks".into());
                     }
-                    Err(e) => this.fail(&format!("Cannot extract clades: {e}")),
+                    let outcome = jobs.wait_in_session(&run_id, session, &|| false).map_err(|e| e.to_string())?;
+                    if outcome.state != RuntimeState::Completed {
+                        return Err(format!("run ended {:?}: {:?}", outcome.state, outcome.errors));
+                    }
+                    Ok(())
+                })();
+                match result {
+                    Ok(()) => {
+                        this.as_mut().done(if source_changed { "Opened clades from the retained alignment snapshot; the source file has changed" } else { "Opened alignment for the selected clades" });
+                        this.file_created(QString::from(&output.to_string_lossy().into_owned()));
+                    }
+                    Err(error) => this.fail(&format!("Cannot extract clades: {error}")),
                 }
             });
         });

@@ -1974,6 +1974,30 @@ impl Session {
                 ));
             }
         }
+        // The exact submitted snapshot already lives in the registered run.
+        // Reuse the support-import reference owner for its source edge; do not
+        // duplicate execution receipts or copy the input again. Legacy callers
+        // without exact submitted bytes keep their evidence explicitly unknown.
+        if self.tracked
+            && !edits.is_empty()
+            && params.get("input_run").is_none()
+            && self.provenance_policy != basecraft_platform::settings::ProvenancePolicy::None
+            && let Some((source, hash)) = inputs.first()
+        {
+            let source = self.resolve(source);
+            let ledger = crate::input_evidence::reference_input_with_dependencies(
+                &self.resolve(self.doc_key(id)),
+                &source,
+                hash,
+                &[],
+                "Retained annotation input snapshot",
+            )?;
+            let record = ledger
+                .directory()
+                .join("records")
+                .join(format!("{}.json", ledger.id()));
+            params["input_run"] = serde_json::json!({"schema_version":1,"id":ledger.id(),"hash":basecraft_io::hash_file(&record)?});
+        }
         params["contributions"] = serde_json::json!({"schema_version":1,"edits":edits});
         self.log_tool_run(id, actor, activity, params, inputs, &[])
     }
@@ -2797,7 +2821,9 @@ pub(crate) fn portable_analysis_activity(
 ) {
     use basecraft_protocol::provenance::EditActivity;
     let mut events = snapshot.events.clone();
-    events.push(activity.clone());
+    if !events.iter().any(|event| event.id == activity.id) {
+        events.push(activity.clone());
+    }
     let mut effective = snapshot.effective.clone();
     effective.push(EditActivity {
         id: activity.id.clone(),

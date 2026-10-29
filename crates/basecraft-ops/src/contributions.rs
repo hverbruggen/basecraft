@@ -15,18 +15,49 @@ pub(crate) fn project(events: &[LogEntry], effective: &mut Vec<EditActivity>) {
         (Option<&str>, Option<basecraft_protocol::Location>),
     > = std::collections::BTreeMap::new();
     let mut sessions = HashMap::new();
+    let mut saved_documents: HashMap<&str, HashSet<&str>> = HashMap::new();
     let mut supports = HashMap::new();
     for event in events {
+        if matches!(event.op, Op::Save { .. })
+            && let Some((_, hash)) = event.result.hashes.first()
+        {
+            saved_documents
+                .entry(hash.as_str())
+                .or_default()
+                .insert(event.doc.as_str());
+        }
         if let Op::Open { .. } = event.op {
             if sessions.insert(event.doc.as_str(), event.session.as_str())
                 != Some(event.session.as_str())
             {
+                // Save As can change the document key. Rebase only through an
+                // exact previously saved content hash, never actor/time proximity.
+                let prior_doc = event
+                    .result
+                    .hashes
+                    .first()
+                    .and_then(|(_, hash)| saved_documents.get(hash.as_str()))
+                    .filter(|docs| docs.len() == 1)
+                    .and_then(|docs| docs.iter().next())
+                    .copied()
+                    .unwrap_or(event.doc.as_str());
+                if prior_doc != event.doc {
+                    let moved: Vec<_> = supports
+                        .iter()
+                        .filter(|((doc, _), _)| *doc == prior_doc)
+                        .map(|((_, name), owner)| (*name, *owner))
+                        .collect();
+                    supports.retain(|(doc, _), _| *doc != prior_doc);
+                    for (name, owner) in moved {
+                        supports.insert((event.doc.as_str(), name), owner);
+                    }
+                }
                 let prior: Vec<_> = features
                     .iter()
-                    .filter(|((doc, _), _)| *doc == event.doc)
+                    .filter(|((doc, _), _)| *doc == prior_doc)
                     .map(|(_, value)| value.clone())
                     .collect();
-                features.retain(|(doc, _), _| *doc != event.doc);
+                features.retain(|(doc, _), _| *doc != prior_doc);
                 if prior.len() as u64 == event.state.features {
                     for (id, value) in (0u32..).zip(prior) {
                         features.insert((&event.doc, id), value);

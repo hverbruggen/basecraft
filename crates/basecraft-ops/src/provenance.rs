@@ -408,6 +408,13 @@ fn link_selected_inputs(bundle: &Path, publication: &Publication) -> Result<()> 
         .and_then(serde_json::Value::as_object)
         .cloned()
         .unwrap_or_default();
+    for reference in links.values_mut() {
+        if let Some(current) = upstream.iter().find(|current| {
+            current["id"] == reference["id"] && current["hash"] == reference["hash"]
+        }) {
+            *reference = current.clone();
+        }
+    }
     let selected: std::collections::HashSet<_> = dependencies
         .iter()
         .map(|(event, _)| event.as_str())

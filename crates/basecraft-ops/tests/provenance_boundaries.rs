@@ -278,7 +278,7 @@ fn annotation_runs_follow_partial_deletion_and_feature_ids_after_reopen() {
     session.apply(doc, Op::FeatureRemove { id: 0 }).unwrap();
     let report = session.document_record(doc).unwrap().report().unwrap();
     assert!(report.methods.contains("first-plugin") && report.methods.contains("second-plugin"));
-    let saved = dir.path().join("gene.gb");
+    let saved = dir.path().join("saved.fasta");
     session.save(doc, Some(&saved)).unwrap();
     drop(session);
     let mut session = Session::recoverable_with_paths(dir.path(), &paths(dir.path())).unwrap();
@@ -363,7 +363,8 @@ fn extraction_is_reference_first_and_packages_exact_source_and_mapping() {
     let publication = provenance::inspect(&result).unwrap();
     assert!(publication.inputs[0].retained.is_none());
     assert!(publication.inputs[0].reference.is_some());
-    assert!(provenance::verify(&result).unwrap().is_empty());
+    let issues = provenance::verify(&result).unwrap();
+    assert!(issues.is_empty(), "{issues:?}");
     let input =
         basecraft_ops::input_evidence::read_input(&provenance::bundle_for_result(&result)).unwrap();
     assert_eq!(
