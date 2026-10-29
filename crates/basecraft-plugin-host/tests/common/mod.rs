@@ -320,3 +320,10 @@ pub fn analyses(
         .filter(|analysis| read_json(&analysis.run.join("run.json"))["status"] != "referenced")
         .collect()
 }
+
+/// Resolve the verified original through its shared input owner. Tests must not
+/// assume every backing ledger owns a separate physical preservation copy.
+pub fn verified_input(run: &Path) -> PathBuf {
+    let input = basecraft_ops::input_evidence::read_input(run).unwrap();
+    basecraft_ops::input_evidence::verified_source(run, input.source.as_ref().unwrap()).unwrap()
+}

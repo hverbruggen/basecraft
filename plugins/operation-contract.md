@@ -475,5 +475,6 @@ Existing saved form settings keep the same values and need no migration.
 Save conflicts group a registered analysis with its dedicated input ledgers,
 while preserving every guarded backing decision. Distinct runs remain separate
 even if their names and inputs match. Preserve Copy stores matching original bytes
-once per analysis; backing ledgers reference the verified retained location.
+once per analysis in a leaf input ledger; other backing references use existing
+verified ledger delegation toward that owner.
 Legacy registered ownership is derived only from declared reference-ledger ancestry.

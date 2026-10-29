@@ -714,6 +714,7 @@ pub fn resolve(conflict: &EvidenceConflict, policy: SavePolicy) -> Result<()> {
         ));
     }
     for analysis in &conflict.analyses {
+        let logical_owner = &analysis.run;
         let mut preserved: BTreeMap<String, PathBuf> = BTreeMap::new();
         let backing = if analysis.backing_analyses.is_empty() {
             std::slice::from_ref(analysis)
@@ -721,6 +722,12 @@ pub fn resolve(conflict: &EvidenceConflict, policy: SavePolicy) -> Result<()> {
             &analysis.backing_analyses
         };
         let mut backing: Vec<_> = backing.iter().collect();
+        if policy == SavePolicy::PreserveCopy {
+            // A leaf input ledger can own shared bytes without a cycle. The
+            // logical run already depends on that ledger; delegate toward the
+            // leaf, never from it back to its parent analysis.
+            backing.sort_by_key(|analysis| (!analysis.direct, &analysis.run == logical_owner));
+        }
         if policy == SavePolicy::RemoveAnalysis {
             // A parent workflow contains its child stores. Move the children
             // first, retaining their trash inside the recoverable parent tree.
@@ -749,9 +756,8 @@ pub fn resolve(conflict: &EvidenceConflict, policy: SavePolicy) -> Result<()> {
                             .source
                             .as_ref()
                             .ok_or_else(|| invalid("reference is missing"))?;
-                        let retained = preserved_path(&owner, &retained);
-                        verify_preserved(&retained, effective)?;
-                        preserved.insert(reference.hash.clone(), retained);
+                        verify_preserved(&owner.join("preserved-input"), effective)?;
+                        preserved.insert(reference.hash.clone(), owner);
                         continue;
                     }
                     if input.state != "referenced" {
@@ -762,9 +768,9 @@ pub fn resolve(conflict: &EvidenceConflict, policy: SavePolicy) -> Result<()> {
                         return Err(invalid("input reference moved; refresh the save decision"));
                     }
                     if let Some(owner) = preserved.get(&reference.hash) {
-                        verify_preserved(owner, reference)?;
+                        verify_preserved(&owner.join("preserved-input"), reference)?;
                         input.extra.insert(
-                            "preserved_path".into(),
+                            "origin_run".into(),
                             serde_json::json!(relative(&affected.run, owner)?),
                         );
                         input.state = "preserved".into();
@@ -795,7 +801,7 @@ pub fn resolve(conflict: &EvidenceConflict, policy: SavePolicy) -> Result<()> {
                         std::fs::File::open(&affected.run)?.sync_all()?;
                         copied
                     };
-                    preserved.insert(reference.hash.clone(), destination.clone());
+                    preserved.insert(reference.hash.clone(), affected.run.clone());
                     input.state = "preserved".into();
                     input
                         .extra
@@ -835,18 +841,6 @@ pub fn resolve(conflict: &EvidenceConflict, policy: SavePolicy) -> Result<()> {
         }
     }
     Ok(())
-}
-
-// Sharing bytes is not ancestry delegation: delegating a ledger back to its
-// parent analysis would create a cycle in that parent's upstream inventory.
-fn preserved_path(run: &Path, input: &SubmittedInput) -> PathBuf {
-    run.join(
-        input
-            .extra
-            .get("preserved_path")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("preserved-input"),
-    )
 }
 
 fn verify_preserved(path: &Path, reference: &InputReference) -> Result<()> {
@@ -937,7 +931,7 @@ pub fn verified_source(bundle: &Path, reference: &InputReference) -> Result<Path
         return Err(invalid("input reference identity changed"));
     }
     let path = if input.state == "preserved" {
-        preserved_path(&location, &input)
+        location.join("preserved-input")
     } else {
         location.join(&effective.path)
     };

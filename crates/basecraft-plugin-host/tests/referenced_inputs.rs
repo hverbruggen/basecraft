@@ -140,7 +140,7 @@ fn common_save_route_preserves_actual_original_and_dirty_submitted_input() {
         .save_with_evidence(doc, None, SavePolicy::PreserveCopy)
         .unwrap();
     let run = ArtifactRun::for_result(&output).unwrap().unwrap();
-    assert_eq!(std::fs::read(run.join("preserved-input")).unwrap(), old);
+    assert_eq!(std::fs::read(common::verified_input(&run)).unwrap(), old);
     assert_eq!(
         basecraft_ops::provenance::verify(&output).unwrap(),
         Vec::<String>::new()
@@ -191,7 +191,7 @@ fn downstream_evidence_follows_preservation_and_complete_export_keeps_dependency
     let package = root.path().join("portable");
     basecraft_ops::provenance::package(&second, &package).unwrap();
     let first_run = ArtifactRun::for_result(&first).unwrap().unwrap();
-    std::fs::write(first_run.join("preserved-input"), ">a\nTTTT\n>b\nTTTT\n").unwrap();
+    std::fs::write(common::verified_input(&first_run), ">a\nTTTT\n>b\nTTTT\n").unwrap();
     assert_ne!(
         basecraft_ops::provenance::verify(&second).unwrap(),
         Vec::<String>::new()
@@ -383,7 +383,7 @@ fn one_save_decision_covers_every_backing_reference_without_merging_analyses() {
             Vec::<String>::new()
         );
     }
-    let original = conflict.analyses[0].run.join("preserved-input");
+    let original = common::verified_input(&conflict.analyses[0].run);
     std::fs::write(original, "damaged").unwrap();
     assert!(input_evidence::resolve(&conflict, SavePolicy::PreserveCopy).is_err());
 }

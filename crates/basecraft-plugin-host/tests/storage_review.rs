@@ -110,12 +110,12 @@ fn repeated_preserve_decision_never_replaces_verified_old_bytes() {
     let conflict = input_evidence::conflicts(&source).unwrap();
     input_evidence::resolve(&conflict, input_evidence::SavePolicy::PreserveCopy).unwrap();
     let run = ArtifactRun::for_result(&first).unwrap().unwrap();
-    assert_eq!(std::fs::read(run.join("preserved-input")).unwrap(), old);
+    assert_eq!(std::fs::read(common::verified_input(&run)).unwrap(), old);
     std::fs::write(&source, ">a\nTTTT\n>b\nTTTA\n").unwrap();
     // A retry of the same public decision must not overwrite the protected copy,
     // even if it rejects the now-stale source afterwards.
     let _ = input_evidence::resolve(&conflict, input_evidence::SavePolicy::PreserveCopy);
-    assert_eq!(std::fs::read(run.join("preserved-input")).unwrap(), old);
+    assert_eq!(std::fs::read(common::verified_input(&run)).unwrap(), old);
 }
 
 #[test]
