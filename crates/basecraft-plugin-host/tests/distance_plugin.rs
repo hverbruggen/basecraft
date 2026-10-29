@@ -274,7 +274,7 @@ fn registered_cache_reuses_distances_across_consumers_and_refuses_mismatch() {
         let report = match operation {
             "tree" => "tree.nwk.run.json",
             "matrix" => "distances.tsv.run.json",
-            _ => "groups.json.run.json",
+            _ => "groups.tsv.run.json",
         };
         assert_eq!(
             common::read_json(&common::member(&outcome, report))["cache_reused"],

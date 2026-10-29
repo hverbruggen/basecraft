@@ -924,7 +924,7 @@ pub fn verified_source(bundle: &Path, reference: &InputReference) -> Result<Path
             "referenced input changed; original evidence unavailable (timestamp alone is not identity)",
         ));
     }
-    Ok(path)
+    Ok(path.canonicalize()?)
 }
 
 /// Honest repair: only a byte-verified original may replace a missing/changed reference.

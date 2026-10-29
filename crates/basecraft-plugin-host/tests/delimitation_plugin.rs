@@ -126,6 +126,24 @@ fn exact_identity_precedes_public_tree_inference_and_restores_specimens() {
         });
         common::assert_completed(&outcome);
         assert!(root.path().join(&workspace).is_file());
+        let stages: Vec<basecraft_protocol::operation::OperationOutcome> = serde_json::from_value(
+            common::read_json(&common::evidence(&outcome).join("stages.json")),
+        )
+        .unwrap();
+        assert_eq!(stages.len(), 3);
+        for stage in &stages {
+            common::assert_completed(stage);
+            assert!(common::evidence(stage).join("execution.json").is_file());
+        }
+        let publication =
+            basecraft_ops::provenance::inspect(&root.path().join(&workspace)).unwrap();
+        for operation in ["haplotypes", "tree", "gmyc_single"] {
+            assert!(
+                publication.events.iter().any(|event| matches!(&event.op,
+                basecraft_protocol::Op::ToolRun { operation: actual, .. } if actual == operation)),
+                "missing stage {operation}"
+            );
+        }
         let result = common::read_json(&common::artifact(&outcome, "fit.json"));
         assert_eq!(
             result["workspace"]["specimens"].as_array().unwrap().len(),
@@ -777,4 +795,65 @@ fn alignment_workflows_use_frozen_unsaved_inputs() {
             4
         );
     }
+}
+
+#[test]
+fn parent_cancellation_interrupts_registered_fit_and_retains_every_stage_receipt() {
+    require_engine();
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("input.fa");
+    std::fs::write(&source, ">a\nAAAAAAAAAAAAAAAAAAAA\n>b\nAAAAAAAAAAAAAAAAAAAT\n>c\nAAAAACAAAAAAAAAAAAAT\n>d\nAAAAACAAAAAGAAAAAAAT\n>e\nAAAAACAAAAAGAAAAAATT\n").unwrap();
+    let registry = common::bundled();
+    let mut session = Session::new(root.path());
+    let doc = session.open(&source).unwrap();
+    let generation = session.generation(doc);
+    let mut manager = JobManager::default();
+    let accepted = common::submit_in(&mut manager, &registry, &mut session, |s| json!({
+        "operation":"basecraft.host/asap_alignment@1", "inputs":{"alignment":common::document(s,doc)},
+        "parameters":{"model":"p","replicates":10000000}
+    })).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let path = common::evidence(&accepted).join("stages.json");
+        if let Ok(bytes) = std::fs::read(path)
+            && let Ok(stages) = serde_json::from_slice::<
+                Vec<basecraft_protocol::operation::OperationOutcome>,
+            >(&bytes)
+            && stages
+                .last()
+                .is_some_and(|s| s.operation == "basecraft.delimitation/asap@1")
+        {
+            break;
+        }
+        assert!(
+            !manager.get(&accepted.run_id).unwrap().state.terminal(),
+            "workflow stopped before fitting"
+        );
+        assert!(std::time::Instant::now() < deadline, "fit did not start");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    manager.cancel(&accepted.run_id).unwrap();
+    let cancelled = common::wait_in(&manager, &mut session, &accepted.run_id);
+    assert_eq!(cancelled.state, RuntimeState::Cancelled);
+    assert_eq!(session.generation(doc), generation);
+    assert_eq!(
+        finished(&session, doc),
+        [(accepted.run_id, JobStatus::Cancelled)]
+    );
+    let stages: Vec<basecraft_protocol::operation::OperationOutcome> = serde_json::from_value(
+        common::read_json(&common::evidence(&cancelled).join("stages.json")),
+    )
+    .unwrap();
+    assert_eq!(stages.len(), 2);
+    assert_eq!(stages[0].state, RuntimeState::Completed);
+    assert_eq!(stages[1].state, RuntimeState::Cancelled);
+    for stage in stages {
+        let receipt = common::read_json(&common::evidence(&stage).join("runtime.json"));
+        assert_eq!(receipt["state"], serde_json::to_value(stage.state).unwrap());
+    }
+    assert!(
+        !common::evidence(&cancelled)
+            .join("workflow/fit.json")
+            .exists()
+    );
 }

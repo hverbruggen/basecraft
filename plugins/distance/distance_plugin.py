@@ -147,10 +147,6 @@ def invoke(kind, params):
         metadata = json.loads(run.stdout)
         if supplied_cache and not metadata.get("cache_reused"):
             raise ValueError("Distance engine refused the supplied cache identity; no result was published")
-        saved = json.loads(cache.read_text())
-        saved["basecraft_identity"] = identity
-        write_atomic(cache, json.dumps(saved, indent=2) + "\n")
-
         retained = [retained_output(metadata, collection)] if collection else []
         # Publish on the destination filesystem, including for cross-device temp dirs.
         partial = None
@@ -168,6 +164,9 @@ def invoke(kind, params):
                     diagnostic += f"; primary scratch cleanup failed at {partial}: {cleanup_error}"
             raise recovery_error(diagnostic, metadata, report, retained) from error
     try:
+        saved = json.loads(cache.read_text())
+        saved["basecraft_identity"] = identity
+        write_atomic(cache, json.dumps(saved, indent=2) + "\n")
         write_atomic(report, json.dumps(metadata, indent=2) + "\n")
     except OSError as error:
         raise recovery_error(f"Run report publication failed: {error}", metadata, report, retained, save_report=False) from error
