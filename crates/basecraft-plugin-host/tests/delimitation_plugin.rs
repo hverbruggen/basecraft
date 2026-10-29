@@ -920,8 +920,8 @@ fn workflow_repairs_publication_and_applies_all_hypotheses_in_one_undo_group() {
 
 #[test]
 fn workflow_save_decision_covers_nested_stages_and_original_ancestry() {
-    require_engine();
     use basecraft_ops::input_evidence::{SavePolicy, conflicts, resolve};
+    require_engine();
     for policy in [
         SavePolicy::PreserveCopy,
         SavePolicy::BreakEvidence,
