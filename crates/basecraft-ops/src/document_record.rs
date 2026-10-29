@@ -578,24 +578,24 @@ fn job_records(directory: &Path, previous: bool, owner: &str) -> crate::Result<s
                 if !previous && !current {
                     continue;
                 }
-                if run.get("runtime_record").is_some() {
-                    if let Err(error) = reconcile_task_receipt(&mut run, &mut budget) {
-                        let notice = format!(
-                            "Canonical task receipt unavailable or unsupported for {}: {error}",
-                            path.display()
-                        );
-                        run["status"] =
-                            serde_json::json!("Completion unconfirmed; receipt unavailable");
-                        run["outputs"] = serde_json::json!({});
-                        run["artifacts"] = serde_json::json!([]);
-                        run["errors"] = serde_json::json!([]);
-                        run["warnings"] = serde_json::json!([]);
-                        run["effective_parameters"] = serde_json::Value::Null;
-                        run["primary_output"] = serde_json::Value::Null;
-                        run["diagnostics"] = serde_json::json!(notice);
-                        run["receipt_confirmed"] = serde_json::json!(false);
-                        warnings.push(notice);
-                    }
+                if run.get("runtime_record").is_some()
+                    && let Err(error) = reconcile_task_receipt(&mut run, &mut budget)
+                {
+                    let notice = format!(
+                        "Canonical task receipt unavailable or unsupported for {}: {error}",
+                        path.display()
+                    );
+                    run["status"] =
+                        serde_json::json!("Completion unconfirmed; receipt unavailable");
+                    run["outputs"] = serde_json::json!({});
+                    run["artifacts"] = serde_json::json!([]);
+                    run["errors"] = serde_json::json!([]);
+                    run["warnings"] = serde_json::json!([]);
+                    run["effective_parameters"] = serde_json::Value::Null;
+                    run["primary_output"] = serde_json::Value::Null;
+                    run["diagnostics"] = serde_json::json!(notice);
+                    run["receipt_confirmed"] = serde_json::json!(false);
+                    warnings.push(notice);
                 }
                 if matches!(
                     run["status"].as_str(),
@@ -872,11 +872,9 @@ mod tests {
             assert_eq!(row["diagnostics"], "canonical error\ncanonical warning");
             assert_eq!(row["effective_parameters"]["canonical"], true);
             assert_eq!(row["receipt_confirmed"], true);
-            assert!(
-                job_records(&jobs, false, "new-owner").unwrap()["jobs"]
-                    .as_array()
-                    .unwrap()
-                    .is_empty()
+            assert_eq!(
+                job_records(&jobs, false, "new-owner").unwrap()["jobs"],
+                serde_json::json!([])
             );
             let previous = job_records(&jobs, true, "new-owner").unwrap();
             if ["queued", "running", "cancelling", "finalizing"].contains(&state) {
@@ -951,12 +949,12 @@ mod tests {
             {"role":"artifacts","path":hidden,"digest":"support"},
             {"role":"tree","path":tree,"digest":"canonical"}]);
         std::fs::write(&receipt, outcome.to_string()).unwrap();
-        let publication = Publication {
+        let mut publication = Publication {
             schema_version: 1,
             id: "registered".into(),
             session: "current".into(),
             parents: vec![],
-            parent_hashes: Default::default(),
+            parent_hashes: std::collections::BTreeMap::default(),
             created: String::new(),
             origin: String::new(),
             inputs: vec![],
@@ -985,6 +983,37 @@ mod tests {
         assert_eq!(
             rows["jobs"][0]["outputs"][tree.to_str().unwrap()],
             "canonical"
+        );
+        let index_path = jobs.join("registered/manifest.json");
+        let mut index: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&index_path).unwrap()).unwrap();
+        index["output_roles"] = serde_json::json!({"tree":{"media_type":"text/x-newick","min":1,"max":1,"visibility":"supporting"}});
+        std::fs::write(&index_path, index.to_string()).unwrap();
+        assert!(
+            job_records(&jobs, false, "current").unwrap()["jobs"][0]["primary_output"].is_null()
+        );
+        index["output_roles"]["tree"]["visibility"] = serde_json::json!("result");
+        std::fs::write(&index_path, index.to_string()).unwrap();
+        assert_eq!(
+            job_records(&jobs, false, "current").unwrap()["jobs"][0]["primary_output"],
+            tree.to_str().unwrap()
+        );
+        // A metadata-only result is still openable with an explicit result
+        // role; retained bootstrap support without that role is not selected.
+        let retained_tree = receipt.parent().unwrap().join("tree.nwk");
+        outcome["artifacts"][1]["path"] = serde_json::json!(retained_tree);
+        std::fs::write(&receipt, outcome.to_string()).unwrap();
+        publication.outputs[0].logical_name = ".basecraft/run/tree.nwk".into();
+        publication.outputs[0].retained = Some("tree.nwk".into());
+        std::fs::write(&manifest, serde_json::to_vec(&publication).unwrap()).unwrap();
+        assert_eq!(
+            job_records(&jobs, false, "current").unwrap()["jobs"][0]["primary_output"],
+            retained_tree.to_str().unwrap()
+        );
+        outcome["state"] = serde_json::json!("partial");
+        std::fs::write(&receipt, outcome.to_string()).unwrap();
+        assert!(
+            job_records(&jobs, false, "current").unwrap()["jobs"][0]["primary_output"].is_null()
         );
         outcome["artifacts"][1]["digest"] = serde_json::json!("changed");
         std::fs::write(&receipt, outcome.to_string()).unwrap();
