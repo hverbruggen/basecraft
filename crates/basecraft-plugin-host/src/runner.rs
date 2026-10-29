@@ -972,10 +972,12 @@ impl PreparedOperation {
                     continue;
                 }
                 if let Some(artifact) = stage.artifacts.first() {
+                    let publication =
+                        basecraft_ops::provenance::inspect(Path::new(&artifact.path))?;
                     record.include_input(
-                        &basecraft_ops::document_record::DocumentRecord::from_file(Path::new(
-                            &artifact.path,
-                        ))?,
+                        &basecraft_ops::document_record::DocumentRecord::from_publication(
+                            &publication,
+                        ),
                     );
                 }
             }

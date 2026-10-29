@@ -170,6 +170,19 @@ impl AlignmentWorkflow<'_> {
         } else {
             source.clone()
         };
+        let alignment_hash =
+            basecraft_io::hash_file(&alignment).map_err(basecraft_ops::Error::from)?;
+        if unique
+            && !report["job"]["outputs"].as_object().is_some_and(|outputs| {
+                outputs.iter().any(|(path, hash)| {
+                    Path::new(path).file_name() == alignment.file_name() && hash == &alignment_hash
+                })
+            })
+        {
+            return Err(Error::Protocol(
+                "Prepared representative alignment changed".into(),
+            ));
+        }
         let mut params = effective.clone();
         params["deduplicate"] = json!(unique);
         params["original_count"] = counts["original_count"].clone();
@@ -180,10 +193,17 @@ impl AlignmentWorkflow<'_> {
             "all specimens"
         });
         let mut inputs = json!({"alignment":[{"kind":"file","path": if fit == "asap" { &alignment } else { &source }}]});
+        if fit == "asap" && unique {
+            inputs["full_alignment"] = json!([{"kind":"file","path":source}]);
+        }
         if unique {
             let mapping = prepare.join("result.json.haplotypes.json");
             let hash = basecraft_io::hash_file(&mapping).map_err(basecraft_ops::Error::from)?;
-            if report["job"]["outputs"][mapping.display().to_string()] != hash {
+            if !report["job"]["outputs"].as_object().is_some_and(|outputs| {
+                outputs.iter().any(|(path, digest)| {
+                    Path::new(path).file_name() == mapping.file_name() && digest == &hash
+                })
+            }) {
                 return Err(Error::Protocol("Prepared haplotype mapping changed".into()));
             }
             params["mapping_hash"] = json!(hash);
@@ -232,6 +252,39 @@ impl AlignmentWorkflow<'_> {
                     .unwrap_or(&evidence.submitted_hash)
             );
             fields["basecraft_alignment_evidence_run"] = json!(evidence.run_directory);
+            if let Some(hypotheses) = workspace
+                .get_mut("hypotheses")
+                .and_then(Value::as_array_mut)
+            {
+                for hypothesis in hypotheses {
+                    let params = &mut hypothesis["provenance"]["parameters"];
+                    let old = params["alignment_snapshot"].as_str().map(str::to_owned);
+                    params["alignment_snapshot"] = json!(stable);
+                    params["alignment_input_hash"] = json!(
+                        evidence
+                            .source_hash
+                            .as_ref()
+                            .unwrap_or(&evidence.submitted_hash)
+                    );
+                    let mut linked = serde_json::to_value(evidence)?;
+                    linked["path"] = json!(stable);
+                    params["alignment_evidence"] = linked;
+                    if let Some(old) = old {
+                        if let Some(inputs) = hypothesis["provenance"]["inputs"].as_object_mut() {
+                            inputs.remove(&old);
+                            inputs.insert(
+                                stable.clone(),
+                                json!(
+                                    evidence
+                                        .source_hash
+                                        .as_ref()
+                                        .unwrap_or(&evidence.submitted_hash)
+                                ),
+                            );
+                        }
+                    }
+                }
+            }
         }
         basecraft_ops::input_evidence::write_json(&target.join("fit.json"), &metadata)?;
         Ok(InvokeResult {

@@ -199,7 +199,9 @@ class Plugin:
                     if stable:
                         effective.setdefault("original_source", stable)
                         effective.setdefault("input_evidence", dict(record, path=stable))
-            alignment = context.get("input_evidence", {}).get("alignment", [])
+            alignment_binding = next((name for name, parameter in adapter["inputs"].items()
+                                      if parameter == "alignment_snapshot"), "alignment")
+            alignment = context.get("input_evidence", {}).get(alignment_binding, [])
             if alignment and "alignment_snapshot" in effective:
                 record = alignment[0]
                 effective.setdefault("alignment_input_hash", record["submitted_hash"])

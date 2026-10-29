@@ -29,6 +29,9 @@ def invoke(method, params):
     if not isinstance(job_id, str) or len(job_id) > 100 or not all(c.isascii() and (c.isalnum() or c in "-_") for c in job_id):
         raise ValueError("job_id must contain only 1-100 ASCII letters, digits, '-' or '_'")
     allocation = params.get("analysis_artifacts")
+    if method == "asap" and allocation and "alignment_snapshot" not in params:
+        params = dict(params, alignment_snapshot=str(source),
+                      alignment_evidence=params.get("input_evidence", {}))
     snapshot = source if allocation else Path(str(target) + ".input." + job_id + source.suffix)
     spart = Path(str(target) + ".spart")
     sidecar = Path(str(spart) + ".basecraft.json")
