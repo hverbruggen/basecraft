@@ -11,6 +11,32 @@ use crate::{Result, error::invalid};
 
 pub const NUCLEOTIDE_LIMIT: usize = 1_000_000;
 pub const PROTEIN_LIMIT: usize = 100_000;
+const NUCLEOTIDE_RESIDUES: &[u8] = b"ACGTURYSWKMBDHVN";
+
+/// A presentation default, never permission to submit or bypass validation.
+/// Document molecule metadata wins over ambiguous letters. Unlabelled input
+/// defaults to nucleotide unless it contains letters outside the IUPAC set.
+pub fn suggested_alphabet(queries: &[Query]) -> &'static str {
+    if queries.iter().any(|query| {
+        let molecule = query.source["molecule"]
+            .as_str()
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if molecule.contains("protein") || molecule == "aa" {
+            true
+        } else if molecule.contains("dna") || molecule.contains("rna") {
+            false
+        } else {
+            query.sequence.bytes().any(|b| {
+                b.is_ascii_alphabetic() && !NUCLEOTIDE_RESIDUES.contains(&b.to_ascii_uppercase())
+            })
+        }
+    }) {
+        "protein"
+    } else {
+        "nucleotide"
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -173,7 +199,7 @@ pub fn prepare(queries: &[Query], settings: &Value) -> Result<Plan> {
     }
     let alphabet = settings["alphabet"].as_str().unwrap_or("");
     let (allowed, limit) = match alphabet {
-        "nucleotide" => (b"ACGTURYSWKMBDHVN".as_slice(), NUCLEOTIDE_LIMIT),
+        "nucleotide" => (NUCLEOTIDE_RESIDUES, NUCLEOTIDE_LIMIT),
         "protein" => (b"ABCDEFGHIKLMNPQRSTVWXYZUOJ".as_slice(), PROTEIN_LIMIT),
         _ => {
             return Err(invalid(
@@ -365,6 +391,31 @@ mod tests {
             source: Value::Null,
         }
     }
+    #[test]
+    fn presentation_default_respects_metadata_and_keeps_validation() {
+        let mut q = query("ACGTNNRY---".into());
+        assert_eq!(suggested_alphabet(&[q.clone()]), "nucleotide");
+        q.source = json!({"molecule":"protein"});
+        assert_eq!(suggested_alphabet(&[q.clone()]), "protein");
+        q.sequence = "MELKQ".into();
+        q.source = Value::Null;
+        assert_eq!(suggested_alphabet(&[q.clone()]), "protein");
+        q.source = json!({"molecule":"DNA"});
+        assert_eq!(suggested_alphabet(&[q.clone()]), "nucleotide");
+        assert!(prepare(&[q], &settings("nucleotide")).is_err());
+        let mixed = vec![
+            query("ACGT".into()),
+            Query {
+                source: json!({"molecule":"protein"}),
+                ..query("ACGT".into())
+            },
+        ];
+        // An inferred default never makes conflicting explicit metadata valid.
+        let mut mixed = mixed;
+        mixed[0].source = json!({"molecule":"DNA"});
+        assert!(prepare(&mixed, &settings(suggested_alphabet(&mixed))).is_err());
+    }
+
     #[test]
     fn limits_consent_and_frozen_identity() {
         for (alphabet, limit) in [("nucleotide", NUCLEOTIDE_LIMIT), ("protein", PROTEIN_LIMIT)] {

@@ -28,6 +28,10 @@ pub mod qobject {
         #[qinvokable]
         fn blast_contact(self: &AppOperations) -> QString;
         #[qinvokable]
+        fn blast_default_alphabet(self: &AppOperations, queries: &QString) -> QString;
+        #[qinvokable]
+        fn open_browser_window(self: &AppOperations, url: &QString) -> QString;
+        #[qinvokable]
         fn preview_blast(self: &AppOperations, queries: &QString, parameters: &QString) -> QString;
         #[qinvokable]
         fn submit_blast(
@@ -147,6 +151,20 @@ fn blast_parameters(parameters: &str) -> basecraft_plugin_host::Result<Value> {
 }
 
 impl qobject::AppOperations {
+    pub fn blast_default_alphabet(&self, queries: &QString) -> QString {
+        let queries: Vec<basecraft_ops::blast::Query> =
+            serde_json::from_str(&queries.to_string()).unwrap_or_default();
+        QString::from(basecraft_ops::blast::suggested_alphabet(&queries))
+    }
+    pub fn open_browser_window(&self, url: &QString) -> QString {
+        QString::from(
+            match basecraft_platform::browser::open_new_window(&url.to_string()) {
+                Ok(true) => "opened",
+                Ok(false) => "unsupported",
+                Err(_) => "failed",
+            },
+        )
+    }
     pub fn blast_contact(&self) -> QString {
         QString::from(&std::env::var("BASECRAFT_BLAST_CONTACT_EMAIL").unwrap_or_default())
     }

@@ -7,7 +7,7 @@ AppFormDialog {
     id: dialog
     title: "BLAST at NCBI"
     standardButtons: Dialog.Close
-    initialFocusItem: alphabet
+    initialFocusItem: program
     property var sourceProvider: null
     property string sourceMode: "whole"
     property bool alignment: false
@@ -20,7 +20,11 @@ AppFormDialog {
     property string resultMessage: ""
     property bool submitted: false
     // Injectable browser boundary for tests; retry only opens the retained URL.
-    property var openBrowser: url => Qt.openUrlExternally(url)
+    property var openBrowser: url => backend.open_browser_window(url)
+    property var openSystemBrowser: url => Qt.openUrlExternally(url)
+    property string configuredContact: ""
+    readonly property var programAlphabets: ["nucleotide", "nucleotide", "protein", "protein"]
+    readonly property var programDatabases: ["nt", "nr", "nr", "nt"]
     signal copyText(string text)
     required property var backend
     Timer {
@@ -38,13 +42,29 @@ AppFormDialog {
         sourceChoice.currentIndex = modes.indexOf(sourceMode)
         preview = ({}); frozenSource = ""; frozenSettings = ""
         formError = ""; resultUrl = ""; resultMessage = ""; submitted = false
-        contact.text = backend.blast_contact()
+        configuredContact = backend.blast_contact()
+        contact.text = configuredContact
+        options.checked = false
+        chooseDefault()
         open()
     }
+    function chooseDefault() {
+        try {
+            program.currentIndex = backend.blast_default_alphabet(sourceProvider(sourceMode)) === "protein" ? 2 : 0
+            megablast.checked = false
+        } catch (error) { formError = String(error) }
+    }
     function settings() {
-        return JSON.stringify({alphabet: alphabet.currentIndex < 0 ? "" : (alphabet.currentIndex === 0 ? "nucleotide" : "protein"),
-            database: database.currentText, expect: Number(expect.text), max_hits: maxHits.value,
-            megablast: megablast.checked, contact_email: contact.text.trim()})
+        return JSON.stringify({alphabet: programAlphabets[program.currentIndex],
+            database: programDatabases[program.currentIndex], expect: Number(expect.text), max_hits: maxHits.value,
+            megablast: program.currentIndex === 0 && megablast.checked, contact_email: contact.text.trim()})
+    }
+    // Search prepares and validates locally. Oversized queries stop here for
+    // a separate explicit truncation decision; ordinary queries submit once.
+    function search() {
+        if (backend.busy || submitted) return
+        review()
+        if (preview.approval_hash && !preview.error && !preview.oversized) start(false)
     }
     function invalidate() { preview = ({}); frozenSettings = ""; frozenSource = "" }
     function review() {
@@ -57,12 +77,13 @@ AppFormDialog {
         } catch (error) { formError = String(error); invalidate() }
     }
     function start(truncate) {
+        if (backend.busy || submitted) return
         formError = ""
         try {
             const current = sourceProvider(sourceMode)
             if (current !== frozenSource || settings() !== frozenSettings) {
                 invalidate()
-                formError = "Source or settings changed. Review a new preview before submitting."
+                formError = "Source or settings changed. Search again before submitting."
                 return
             }
             submitted = backend.submit_blast(current, frozenSettings, preview.approval_hash, truncate)
@@ -71,7 +92,12 @@ AppFormDialog {
     }
     function openAgain() {
         if (!/^https:\/\/blast\.ncbi\.nlm\.nih\.gov\/Blast\.cgi\?CMD=Get&RID=[A-Z0-9-]{8,64}&FORMAT_TYPE=HTML$/.test(resultUrl)) return
-        if (!openBrowser(resultUrl)) resultMessage = "Browser could not open. Copy the link or choose Open again."
+        const opened = openBrowser(resultUrl)
+        if (opened === "unsupported") {
+            resultMessage = openSystemBrowser(resultUrl)
+                ? "Opened in the system browser. This browser/platform controls whether a new window or tab is used."
+                : "Browser could not open. Copy the link or choose Open again."
+        } else if (opened !== "opened") resultMessage = "Browser could not open. Copy the link or choose Open again."
     }
     function completed() {
         const outcome = JSON.parse(backend.outcome || "{}")
@@ -85,65 +111,67 @@ AppFormDialog {
     }
     Label {
         Layout.fillWidth: true; wrapMode: Text.Wrap
-        text: "Selected sequences will be sent to NCBI over HTTPS. Basecraft submits once and opens your browser; NCBI runs the search. RID links are temporary."
+        text: "Search sends the chosen sequence to NCBI and opens browser results. RID links are temporary."
     }
     AppComboBox {
         id: sourceChoice; objectName: "blastSource"; Kirigami.FormData.label: "Query source"
         model: dialog.alignment ? ["All current FASTA rows", "Selected rows (whole sequences)", "Selected rows and columns"] : ["Whole current sequence", "Current selection", "Annotation", "All FASTA records (current unsaved first record)"]
         enabled: !backend.busy && !dialog.submitted
-        onActivated: { dialog.sourceMode = dialog.modes[currentIndex]; dialog.invalidate() }
+        onActivated: { dialog.sourceMode = dialog.modes[currentIndex]; dialog.invalidate(); dialog.chooseDefault() }
     }
     AppComboBox {
-        id: alphabet; objectName: "blastAlphabet"; Kirigami.FormData.label: "Query alphabet"
-        model: ["Nucleotide", "Protein"]; currentIndex: -1
+        id: program; objectName: "blastProgram"; Kirigami.FormData.label: "Program"
+        model: ["blastn — nucleotide → nucleotide (nt)", "blastx — translated nucleotide → protein (nr)",
+            "blastp — protein → protein (nr)", "tblastn — protein → translated nucleotide (nt)"]
         enabled: !backend.busy && !dialog.submitted
-        onActivated: { if (currentIndex !== 0) megablast.checked = false; dialog.invalidate() }
-    }
-    AppComboBox {
-        id: database; Kirigami.FormData.label: "Target database"
-        model: ["nt", "nr"]; enabled: !backend.busy && !dialog.submitted
-        onActivated: { if (currentText !== "nt") megablast.checked = false; dialog.invalidate() }
+        onActivated: { megablast.checked = false; dialog.invalidate() }
     }
     Label {
-        Kirigami.FormData.label: "Program"
-        text: alphabet.currentIndex < 0 ? "Choose a query alphabet" : alphabet.currentIndex === 0 ? (database.currentText === "nt" ? "blastn" : "blastx") : (database.currentText === "nr" ? "blastp" : "tblastn")
+        Layout.fillWidth: true; wrapMode: Text.Wrap
+        text: "Program defaults from the input molecule or letters. Check ambiguous sequences before searching."
     }
     TextField {
         id: contact; objectName: "blastContact"; Kirigami.FormData.label: "NCBI contact email"
         enabled: !backend.busy && !dialog.submitted
-        placeholderText: "Authorized service contact"
+        visible: !dialog.configuredContact.length || options.checked
+        placeholderText: "NCBI API contact (required)"
         onTextEdited: dialog.invalidate()
     }
+    Label {
+        Layout.fillWidth: true; wrapMode: Text.Wrap; visible: contact.visible
+        text: "NCBI asks API clients to include a contact email for service problems."
+    }
+    CheckBox { id: options; text: "Search options"; enabled: !backend.busy && !dialog.submitted }
     TextField {
+        visible: options.checked
         id: expect; Kirigami.FormData.label: "E-value"
         text: "0.05"; enabled: !backend.busy && !dialog.submitted
         onTextEdited: dialog.invalidate()
     }
     AppSpinBox {
+        visible: options.checked
         id: maxHits; Kirigami.FormData.label: "Maximum hits"
         from: 1; to: 5000; value: 100; editable: true
         enabled: !backend.busy && !dialog.submitted
         onValueModified: dialog.invalidate()
     }
     CheckBox {
+        visible: options.checked && program.currentIndex === 0
         id: megablast; Kirigami.FormData.label: "Nucleotide search"
         text: "Megablast (close matches)"
-        enabled: alphabet.currentIndex === 0 && database.currentText === "nt" && !backend.busy && !dialog.submitted
+        enabled: program.currentIndex === 0 && !backend.busy && !dialog.submitted
         onToggled: dialog.invalidate()
     }
-    AppButton {
-        text: "Preview queries"; enabled: !backend.busy && !dialog.submitted
-        onClicked: dialog.review()
-    }
     Label {
-        Layout.fillWidth: true; wrapMode: Text.Wrap; visible: !!dialog.preview.approval_hash
+        Layout.fillWidth: true; wrapMode: Text.Wrap; visible: dialog.preview.oversized === true
         text: (dialog.preview.records || []).length + " records, " + dialog.preview.original_residues + " residues. Service limit: " + dialog.preview.limit + ". Proposed submission: " + dialog.preview.submitted_residues + " residues."
     }
     Label {
         Layout.fillWidth: true; wrapMode: Text.Wrap; visible: dialog.preview.oversized === true
-        text: "Oversized query. Proposed policy: keep leading residues in input order, retain complete records until one must be shortened, then omit subsequent records. Cancel/Close sends nothing; change the source and preview again, or explicitly proceed with truncation. The original source stays unchanged."
+        text: "Oversized query. Proposed policy: keep leading residues in input order, retain complete records until one must be shortened, then omit subsequent records. Cancel/Close sends nothing; change the source and search again, or explicitly proceed with truncation. The original source stays unchanged."
     }
     ColumnLayout {
+      visible: dialog.preview.oversized === true
       Layout.fillWidth: true
       Repeater {
         model: dialog.preview.records || []
@@ -155,9 +183,10 @@ AppFormDialog {
     }
     }
     AppButton {
-        text: dialog.preview.oversized ? "Proceed with truncation and open browser" : "Submit and open browser"
-        enabled: !!dialog.preview.approval_hash && !dialog.preview.error && !backend.busy && !dialog.submitted
-        onClicked: dialog.start(dialog.preview.oversized === true)
+        objectName: "blastSearch"
+        text: dialog.preview.oversized ? "Submit truncated query" : "Search"
+        enabled: !backend.busy && !dialog.submitted
+        onClicked: { if (dialog.preview.oversized && dialog.preview.approval_hash) dialog.start(true); else dialog.search() }
     }
     AppButton { text: "Cancel submission"; visible: backend.busy; onClicked: backend.cancel() }
     Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: dialog.formError; visible: text.length > 0; Accessible.role: Accessible.AlertMessage }

@@ -4,12 +4,22 @@
 submission receipt. It does not wait for search completion, poll, import results,
 retry uncertain submissions or launch a browser in headless clients. The GUI
 opens the accepted RID URL automatically and retains Copy link/Open again if
-launch fails. Submission completion means accepted by NCBI, not finished BLAST.
+launch fails. On Linux, recognized Firefox/Chromium-family desktop identifiers
+use the browser's `--new-window` option with separate process arguments. Other
+browsers/platforms use the system URL opener with an explicit window/tab limitation
+message. A successful launch does not guarantee that browser policy permits a new
+window. No shell evaluates result URLs. Submission completion means accepted by NCBI, not finished BLAST.
 
 Use the sequence analysis controls or sequence/annotation context menu. For a
 multi-record FASTA opened as rows, use BLAST in the Alignment ribbon/context
 menu: all rows, selected whole rows, or selected rows/columns. Unsaved changes
-are included. Alphabet is an explicit choice; mixed alphabets must be separated.
+are included. The GUI suggests blastn or blastp using document molecule metadata,
+then residue letters, and offers blastx/tblastn explicitly. Ambiguous unlabelled
+input defaults to nucleotide; check the program before searching. Mixed alphabets
+must be separated. The selected program determines query alphabet and database;
+all query validation still runs through the shared preparation/authorization path.
+Search prepares queries locally and submits once. Oversized queries require a
+second explicit truncation decision with per-record details.
 Whole-sequence FASTA input includes every record, not just the displayed one.
 Annotation extraction shares Copy/Extract's biological segment order and reverse
 complement logic. Mixed-strand annotations are rejected explicitly.
@@ -23,7 +33,10 @@ E-value defaults to 0.05; maximum hits to 100. Scoring fields are explicit in
 
 Set `BASECRAFT_BLAST_CONTACT_EMAIL` in your local launch environment, or supply
 `contact_email` for a submission. The GUI allows entering the authorized service
-contact. There is no bundled address and no Git-author/user-account discovery.
+contact and hides it under Search options when already configured. NCBI's
+[API usage guidance](https://blast.ncbi.nlm.nih.gov/doc/blast-help/developerinfo.html#usage-guidelines)
+asks API clients to include email/tool contact parameters; the contact requirement
+is retained even though EMAIL is not a required Common URL API search parameter. There is no bundled address and no Git-author/user-account discovery.
 The contact is sent to NCBI and retained with local request evidence. An absent
 or invalid contact prevents upload. Local configuration and receipt files should
 not be committed to a source repository.

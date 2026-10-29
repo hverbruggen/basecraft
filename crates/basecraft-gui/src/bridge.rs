@@ -200,6 +200,8 @@ pub mod qobject {
         /// The selected residues, for the clipboard.
         #[qinvokable]
         fn selection_text(self: &GenomeController) -> QString;
+        #[qinvokable]
+        fn has_selection(self: &GenomeController) -> bool;
         /// Write the selection, with its annotations, to a new GenBank file
         /// next to the open one. Returns the new file's path, or empty.
         #[qinvokable]
@@ -355,6 +357,7 @@ pub(crate) const KEY_PLUS: i32 = 0x2b;
 pub(crate) const KEY_MINUS: i32 = 0x2d;
 pub(crate) const KEY_EQUAL: i32 = 0x3d;
 pub(crate) const KEY_0: i32 = 0x30;
+pub(crate) const KEY_A: i32 = 0x41;
 pub(crate) const KEY_N: i32 = 0x4e;
 pub(crate) const KEY_Y: i32 = 0x59;
 pub(crate) const KEY_Z: i32 = 0x5a;
@@ -971,6 +974,10 @@ impl qobject::GenomeController {
             (v.cursor, v.selection, v.selected)
         };
         let handled = match key {
+            KEY_A if modifiers == CTRL => {
+                self.as_mut().rust_mut().view.select_all(len);
+                true
+            }
             KEY_Z if ctrl && shift => {
                 self.as_mut().redo();
                 true
@@ -1701,6 +1708,10 @@ impl qobject::GenomeController {
             self.as_mut().set_dirty(true);
         }
         Ok((applied, known))
+    }
+
+    pub fn has_selection(&self) -> bool {
+        self.rust().view.selection.is_some()
     }
 
     /// The selected bases. A selected annotation is copied as itself:

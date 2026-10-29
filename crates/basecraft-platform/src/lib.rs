@@ -3,6 +3,7 @@
 //! handling.
 
 pub mod atomic;
+pub mod browser;
 #[cfg(unix)]
 pub mod fdpass;
 pub mod files;

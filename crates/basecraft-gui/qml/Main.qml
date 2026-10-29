@@ -1103,6 +1103,12 @@ ApplicationWindow {
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
                         enabled: window.alignmentOpen
+                        title: "Find"
+                        RibbonButton { commandId: "alignment.blast"; text: "BLAST"; tip: "Submit selected or all FASTA rows to NCBI"; iconName: "search"; onInvoked: window.beginBlast("all") }
+                    }
+                    ToolSeparator { Layout.fillHeight: true }
+                    RibbonGroup {
+                        enabled: window.alignmentOpen
                         title: "Align"
                         RibbonButton { commandId: "ribbon.realign-the-sequences-with-mafft-default-settings-into-a";
                             iconName: "align"
@@ -1111,7 +1117,6 @@ ApplicationWindow {
                             tip: "Realign the sequences with MAFFT, default settings, into a new file"
                             onInvoked: window.current.align_mafft()
                         }
-                        RibbonButton { commandId: "alignment.blast"; text: "BLAST"; tip: "Submit selected or all FASTA rows to NCBI"; iconName: "search"; onInvoked: window.beginBlast("all") }
                         RibbonButton { commandId: "ribbon.trim-unreliable-columns-with-trimal-automated1-into-a-new";
                             iconName: "trim"
                             text: "trimAL"
@@ -2046,6 +2051,7 @@ ApplicationWindow {
     BlastDialog { id: blastDialog; backend: blastBackend; onCopyText: text => clipboard.put(text) }
     function beginBlast(mode, feature) {
         const controller = window.current
+        if (!window.alignmentOpen && mode === "whole" && controller.has_selection()) mode = "selection"
         const annotation = window.alignmentOpen ? -1 : (feature === undefined ? controller.selected_feature() : feature)
         blastDialog.show(source => controller.blast_queries(source, annotation), mode, window.alignmentOpen)
     }

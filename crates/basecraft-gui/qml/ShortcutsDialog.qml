@@ -35,6 +35,7 @@ AppDialog {
             ["Ctrl+Shift+N", "Annotate the selection on the reverse strand"],
             ["Enter", "Edit the selected annotation"],
             ["Delete", "Delete the selected annotation"],
+            ["Ctrl+A", "Select the whole sequence (sequence view focus)"],
             ["Ctrl+C", "Copy the selected bases"],
             ["Ctrl+E", "Extract the selection as a new sequence"],
         ] },

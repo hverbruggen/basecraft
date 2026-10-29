@@ -788,6 +788,15 @@ impl GenomeView {
         self.drag = Drag::None;
     }
 
+    /// Select the full forward sequence, replacing annotation/spliced selection.
+    pub fn select_all(&mut self, len: u64) {
+        self.selection = (len > 0).then_some((0, len));
+        self.selection_parts = None;
+        self.selection_reverse = false;
+        self.selected = None;
+        self.cursor = Some(len);
+    }
+
     /// Move the cursor by `delta` residues; with `extend`, grow the selection.
     pub fn move_cursor(&mut self, delta: i64, extend: bool, len: u64) {
         self.selection_parts = None;
@@ -2228,6 +2237,24 @@ mod tests {
             qualifiers: vec![],
         };
         assert_eq!(pieces(&g, 150_000, true), vec![(100, 600)]);
+    }
+
+    #[test]
+    fn select_all_replaces_reverse_spliced_selection_and_handles_empty_sequence() {
+        let mut v = GenomeView::new(1000.0, 600.0);
+        v.selection = Some((10, 30));
+        v.selection_parts = Some(vec![(10, 15), (25, 30)]);
+        v.selection_reverse = true;
+        v.selected = Some(FeatureId(1));
+        v.select_all(100);
+        assert_eq!(v.selection, Some((0, 100)));
+        assert_eq!(v.cursor, Some(100));
+        assert!(v.selection_parts.is_none());
+        assert!(v.selected.is_none());
+        assert!(!v.selection_reverse);
+        v.select_all(0);
+        assert!(v.selection.is_none());
+        assert_eq!(v.cursor, Some(0));
     }
 
     #[test]
