@@ -83,7 +83,11 @@ pub fn tree(doc: &TreeDoc, requested: i32) -> TextPage {
                 .map_or_else(|| "root".into(), |p| (p + 1).to_string()),
             node.length
                 .map_or_else(|| "not recorded".into(), |v| v.to_string()),
-            if node.is_tip() { super::tree::tip_label(doc, &node.name) } else { node.name.clone() }
+            if node.is_tip() {
+                super::tree::tip_label(doc, &node.name)
+            } else {
+                node.name.clone()
+            }
         );
         for set in doc.supports() {
             let _ = write!(

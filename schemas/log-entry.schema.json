@@ -1878,6 +1878,26 @@
       "description": "One atomic edit. Inferred and imported results must first be derived.",
       "oneOf": [
         {
+          "description": "Explicit workspace specimen -> project roster ID links. Empty replaces\nall links with unlinked status; local scientific IDs stay unchanged.",
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "set_roster_links"
+            },
+            "links": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "action",
+            "links"
+          ]
+        },
+        {
           "description": "Import a validated batch without splitting lineage across separate edits.",
           "type": "object",
           "properties": {
@@ -2785,6 +2805,39 @@
     "MetadataEdit": {
       "description": "One atomic metadata edit.",
       "oneOf": [
+        {
+          "description": "Add or replace a project partition using the shared hypothesis model.",
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "put_partition"
+            },
+            "partition": {
+              "$ref": "#/$defs/Hypothesis"
+            }
+          },
+          "required": [
+            "action",
+            "partition"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "remove_partition"
+            },
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "action",
+            "id"
+          ]
+        },
         {
           "type": "object",
           "properties": {
@@ -3723,6 +3776,13 @@
           "format": "uint32",
           "default": 13,
           "minimum": 0
+        },
+        "tip_labels": {
+          "description": "Display-only labels keyed by original tip identity.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
         },
         "vertical_bar_labels": {
           "description": "Write clade labels beside bars top to bottom, rather than across.",

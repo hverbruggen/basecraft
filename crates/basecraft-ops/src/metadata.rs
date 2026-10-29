@@ -1108,7 +1108,9 @@ pub fn cell_change(
 pub fn describe(edit: &basecraft_protocol::metadata::MetadataEdit) -> String {
     use basecraft_protocol::metadata::MetadataEdit;
     match edit {
-        MetadataEdit::PutPartition { partition } => format!("Saved project partition {}", partition.name),
+        MetadataEdit::PutPartition { partition } => {
+            format!("Saved project partition {}", partition.name)
+        }
         MetadataEdit::RemovePartition { id } => format!("Removed project partition {id}"),
         MetadataEdit::Apply { changes } => format!("Specimen metadata: {}", summary(changes)),
         MetadataEdit::RemoveSpecimens { specimens } => format!(

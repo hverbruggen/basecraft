@@ -696,6 +696,13 @@
           "default": 13,
           "minimum": 0
         },
+        "tip_labels": {
+          "description": "Display-only labels keyed by original tip identity.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
         "vertical_bar_labels": {
           "description": "Write clade labels beside bars top to bottom, rather than across.",
           "type": "boolean",

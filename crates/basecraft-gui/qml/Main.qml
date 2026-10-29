@@ -1168,7 +1168,7 @@ ApplicationWindow {
                         controller: window.treeOpen ? window.current : null
                         customization: window.customization
                         onExtraRequested: treeStyle.openStyle("extra")
-                        onLabelsRequested: { metadataTipLabels.target = window.current; metadataTipLabels.error = ""; metadataTipLabels.open() }
+                        onLabelsRequested: { metadataTipLabels.target = window.current; metadataTipLabels.revision = window.current.record_revision(); metadataTipLabels.error = ""; metadataTipLabels.open() }
                         Component.onCompleted: commands.forEach(command => window.registerRibbonCommand(command))
                     }
                     ToolSeparator { Layout.fillHeight: true }
@@ -2174,6 +2174,12 @@ ApplicationWindow {
 
     AppContentDialog {
         id: metadataTipLabels
+        property string revision: ""
+        function applyFields(fields) {
+            if (!target || target.record_revision() !== revision) { error = "The tree changed. Close this dialog and choose labels again."; return }
+            const e = target.compose_metadata_labels(shell.project_dir, JSON.stringify(fields))
+            if (e.length) error = e; else close()
+        }
         title: "Tree tip labels"
         property var target: null
         property string error: ""
@@ -2186,21 +2192,21 @@ ApplicationWindow {
             CheckBox { id: labelAccession; text: "Accession" }
             AppErrorLabel { text: metadataTipLabels.error; visible: text.length > 0; Layout.fillWidth: true }
             RowLayout {
-                AppButton { text: "Original labels"; onClicked: { const e = metadataTipLabels.target.compose_metadata_labels(shell.project_dir, "[]"); if (e.length) metadataTipLabels.error = e; else metadataTipLabels.close() } }
+                AppButton { text: "Original labels"; onClicked: metadataTipLabels.applyFields([]) }
                 AppButton { text: "Apply"; onClicked: {
                     const fields = []
                     if (labelGenus.checked) fields.push("genus")
                     if (labelSpecies.checked) fields.push("species")
                     if (labelSpecimen.checked) fields.push("specimen")
                     if (labelAccession.checked) fields.push("accession")
-                    const e = metadataTipLabels.target.compose_metadata_labels(shell.project_dir, JSON.stringify(fields))
-                    if (e.length) metadataTipLabels.error = e; else metadataTipLabels.close()
+                    metadataTipLabels.applyFields(fields)
                 } }
             }
         }
     }
     AppContentDialog {
         id: rosterConsumer
+        property string revision: ""
         title: "Project specimens and partitions"
         standardButtons: Dialog.Close
         property var target: null
@@ -2210,7 +2216,7 @@ ApplicationWindow {
         property string error: ""
         initialFocusItem: partitionSource
         function show(controller, file) {
-            target = controller; path = file; work = JSON.parse(controller.workspace_json)
+            target = controller; revision = controller.record_revision(); path = file; work = JSON.parse(controller.workspace_json)
             const stored = {}
             for (const s of work.specimens) if ((s.attributes || {}).basecraft_roster_id) stored[s.id] = s.attributes.basecraft_roster_id
             links = stored; error = ""; open()
@@ -2238,9 +2244,10 @@ ApplicationWindow {
                 }
             }
             AppButton { text: "Apply roster links"; onClicked: {
+                if (rosterConsumer.target.record_revision() !== rosterConsumer.revision) { rosterConsumer.error = "The workspace changed. Close and reopen this dialog before linking."; return }
                 const p = JSON.parse(specimenMetadata.consumer(JSON.stringify({action: "link_workspace", workspace: rosterConsumer.path, links: rosterConsumer.links}), false))
                 if (p.error) rosterConsumer.error = p.error
-                else { rosterConsumer.target.action("roster_links", JSON.stringify({links: rosterConsumer.links})); rosterConsumer.error = "Links applied. Save the workspace before promoting a partition." }
+                else { rosterConsumer.target.action("roster_links", JSON.stringify({links: rosterConsumer.links})); rosterConsumer.revision = rosterConsumer.target.record_revision(); rosterConsumer.error = "Links applied. Save the workspace before promoting a partition." }
             } }
             ComboBox { id: partitionSource; model: rosterConsumer.work.hypotheses; textRole: "name"; Accessible.name: "Delimitation result to promote"; Layout.fillWidth: true }
             TextField { id: projectPartitionId; placeholderText: "Project partition ID"; Accessible.name: "Project partition ID"; Layout.fillWidth: true }

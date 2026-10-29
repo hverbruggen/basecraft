@@ -155,6 +155,33 @@ fn explicit_roster_links_partitions_undo_replay_and_moved_project() {
             basecraft_docs::metadata_consumers::partitions(s.metadata(m)).len(),
             2
         );
+        metadata::apply_plan(
+            &mut s,
+            m,
+            ChangeSet {
+                specimens: vec!["new-specimen".into()],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            s.metadata(m).partitions[0]
+                .unassigned
+                .contains("new-specimen")
+        );
+        s.undo(m).unwrap();
+        s.apply(
+            m,
+            Op::MetadataEdit {
+                edit: Box::new(
+                    basecraft_protocol::metadata::MetadataEdit::RemovePartition { id: "p1".into() },
+                ),
+            },
+        )
+        .unwrap();
+        assert!(s.metadata(m).partitions.is_empty());
+        s.undo(m).unwrap();
+        s.save(m, None).unwrap();
     }
     let replayed = replay::replay(&root).unwrap();
     assert!(replayed.problems.is_empty(), "{:?}", replayed.problems);
@@ -194,6 +221,22 @@ fn partial_unknown_and_conflicting_links_are_truthful() {
             .unwrap_err()
             .0
             .contains("assigned and unassigned")
+    );
+    work.specimens[2].attributes.insert(
+        basecraft_docs::delimitation::ROSTER_ID.into(),
+        "roster-B".into(),
+    );
+    let mut second = work.hypotheses[0].groups[0].clone();
+    let moved = second.members.iter().next().unwrap().clone();
+    second.id = "second".into();
+    second.members = [moved.clone()].into();
+    work.hypotheses[0].groups[0].members.remove(&moved);
+    work.hypotheses[0].groups.push(second);
+    assert!(
+        basecraft_docs::metadata_consumers::project_partition(s.metadata(m), &work, &source, "p")
+            .unwrap_err()
+            .0
+            .contains("conflicting source groups")
     );
     work.specimens[2].attributes.insert(
         basecraft_docs::delimitation::ROSTER_ID.into(),

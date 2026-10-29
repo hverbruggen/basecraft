@@ -23,6 +23,13 @@
         "$ref": "#/$defs/RecordLink"
       }
     },
+    "partitions": {
+      "description": "Saved project partitions; members are stable roster IDs.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Hypothesis"
+      }
+    },
     "specimens": {
       "description": "The specimen roster: one row per specimen, keyed by its local ID.",
       "$ref": "#/$defs/Table"
@@ -313,6 +320,57 @@
         }
       ]
     },
+    "Group": {
+      "type": "object",
+      "properties": {
+        "attributes": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "color": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "individual_scores": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Score"
+            }
+          },
+          "default": {}
+        },
+        "label": {
+          "type": "string"
+        },
+        "members": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "scores": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Score"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "color",
+        "members"
+      ]
+    },
     "HeaderPattern": {
       "description": "How to read fields from structured FASTA headers, such as\n`HV1234|Caulerpa taxifolia|2019-05-12`.",
       "type": "object",
@@ -336,6 +394,74 @@
         "name",
         "separator",
         "fields"
+      ]
+    },
+    "Hypothesis": {
+      "type": "object",
+      "properties": {
+        "attributes": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "groups": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Group"
+          }
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "origin": {
+          "$ref": "#/$defs/HypothesisOrigin"
+        },
+        "parent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provenance": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "scores": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Score"
+          }
+        },
+        "unassigned": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "origin",
+        "groups",
+        "unassigned",
+        "provenance"
+      ]
+    },
+    "HypothesisOrigin": {
+      "type": "string",
+      "enum": [
+        "manual",
+        "imported",
+        "inferred",
+        "derived",
+        "manual_cut"
       ]
     },
     "Identification": {
@@ -398,6 +524,15 @@
         }
       }
     },
+    "JobStatus": {
+      "type": "string",
+      "enum": [
+        "completed",
+        "failed",
+        "cancelled",
+        "unavailable"
+      ]
+    },
     "MissingReason": {
       "description": "Why a value is missing: the INSDC missing-value vocabulary, written as\nINSDC writes it.",
       "type": "string",
@@ -421,6 +556,84 @@
       "description": "A date at year, month or day precision",
       "type": "string",
       "pattern": "^[0-9]{4}(-[0-9]{2}(-[0-9]{2})?)?$"
+    },
+    "Provenance": {
+      "type": "object",
+      "properties": {
+        "analysis_tree": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "diagnostics": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "haplotypes": {
+          "description": "Representative ID to original specimen IDs; never likelihood weights.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          },
+          "default": {}
+        },
+        "inputs": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "method": {
+          "type": "string"
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": true,
+          "default": {}
+        },
+        "seed": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JobStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "version": {
+          "type": "string"
+        },
+        "workers": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "method",
+        "version"
+      ]
     },
     "RecordLink": {
       "description": "A stored link from a sequence record to the specimen it came from. Many\nrecords may link to one specimen. Links are made at import and never\nre-derived from names.",
@@ -459,6 +672,30 @@
       },
       "required": [
         "id"
+      ]
+    },
+    "Score": {
+      "type": "object",
+      "properties": {
+        "interpretation": {
+          "type": "string"
+        },
+        "method": {
+          "type": "string"
+        },
+        "scale": {
+          "type": "string"
+        },
+        "value": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "value",
+        "method",
+        "scale",
+        "interpretation"
       ]
     },
     "SpreadsheetMapping": {

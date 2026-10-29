@@ -1641,6 +1641,36 @@ mod tests {
     }
 
     #[test]
+    fn metadata_labels_draw_without_replacing_identity() {
+        let mut doc = tree("(scientific_ID:1,other:2);");
+        let mut style = doc.style().clone();
+        style.tip_labels.insert(
+            "scientific_ID".into(),
+            "Caulerpa taxifolia voucher 123".into(),
+        );
+        doc.set_style(style);
+        let mut view = TreeView::new(800.0, 400.0);
+        view.sync(&doc);
+        let drawn = texts(&shapes(&doc, &view.layout, &Palette::print(), None, None));
+        assert!(
+            drawn
+                .iter()
+                .any(|(text, _, _)| text == "Caulerpa taxifolia voucher 123")
+        );
+        assert!(doc.nodes().iter().any(|n| n.name == "scientific_ID"));
+        assert!(
+            view.tip_rows(&doc)
+                .iter()
+                .any(|(name, _, _)| name == "scientific_ID")
+        );
+        assert!(
+            crate::accessible::tree(&doc, 0)
+                .text
+                .contains("Caulerpa taxifolia voucher 123")
+        );
+    }
+
+    #[test]
     fn a_replacement_tree_is_laid_out_afresh() {
         let mut view = TreeView::new(400.0, 300.0);
         let first = tree("((a,b),(c,d));");
