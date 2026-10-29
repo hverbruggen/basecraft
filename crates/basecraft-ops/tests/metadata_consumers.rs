@@ -60,7 +60,7 @@ fn setup(root: &std::path::Path) -> (Session, basecraft_ops::DocId, basecraft_op
             groups: vec![Group {
                 id: "g1".into(),
                 label: "one".into(),
-                color: "".into(),
+                color: String::new(),
                 members: ["r1".into(), "r2".into()].into(),
                 scores: vec![],
                 individual_scores: BTreeMap::new(),
@@ -154,7 +154,7 @@ fn explicit_roster_links_partitions_undo_replay_and_moved_project() {
             plan["metadata_hash"].as_str().unwrap()
         );
         s.undo(m).unwrap();
-        assert!(s.metadata(m).partitions.is_empty());
+        assert_eq!(s.metadata(m).partitions, [] as [Hypothesis; 0]);
         s.redo(m).unwrap();
         s.save(m, None).unwrap();
         assert_eq!(
@@ -185,7 +185,7 @@ fn explicit_roster_links_partitions_undo_replay_and_moved_project() {
             },
         )
         .unwrap();
-        assert!(s.metadata(m).partitions.is_empty());
+        assert_eq!(s.metadata(m).partitions, [] as [Hypothesis; 0]);
         s.undo(m).unwrap();
         s.save(m, None).unwrap();
     }
@@ -449,7 +449,7 @@ fn copied_consumers_reject_another_metadata_owner_with_identical_ids() {
     std::fs::write(&tsv, external).unwrap();
     let mut reader = Session::unlogged(first.path());
     let m = metadata::open(&mut reader, false).unwrap().unwrap();
-    assert!(!reader.metadata_notices(m).is_empty());
+    assert_ne!(reader.metadata_notices(m), [] as [String; 0]);
     let external_plan = metadata::consumer_plan(&reader, m, &request).unwrap();
     assert_eq!(external_plan["labels"][0]["label"], "Ulva roster-A");
     assert_eq!(a.tree(tree).style().tip_labels["r1"], "Caulerpa roster-A");

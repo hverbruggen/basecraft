@@ -86,3 +86,19 @@ Headless clients use `basecraft metadata consumer REQUEST --project PROJECT`
 (workspace, links) or `promote_partition` (workspace, hypothesis, id). Planning
 writes nothing. Edit plans return a target and normal typed operation; CLI
 `--apply` applies and saves, while MCP/Python use version-checked apply and save.
+
+Workspace roster bindings also retain a standard provenance `InputReference` in
+`exchange_fields.basecraft_metadata_reference`. Its path is project-relative;
+`extra.owner_event` is the metadata's existing Open-activity identity, not a new
+roster ID. Promotion checks that owner and logical path. Copied consumer files
+cannot silently use equal local specimen IDs from another project's metadata.
+Legacy unbound workspaces still open; explicit linking establishes their owner.
+Missing/replaced owner evidence requires explicit relinking rather than inference.
+
+Label snapshots retain the same reference as `metadata_labels.metadata_source`,
+as well as their canonical metadata hash and per-tip link issues. Snapshots remain
+viewable when metadata is missing or belongs to another project. Explicit refresh
+checks the owner; Original labels clears the snapshot before deliberate rebinding.
+The Labels dialog states the snapshot source/hash and refresh behavior, and allows
+explicit record-to-specimen assignments for standalone trees. Opening a tree does
+not create links. Bulk assignments use the same `link_records` planning route.

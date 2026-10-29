@@ -1434,6 +1434,11 @@ pub fn consumer_plan(
             .parameters
             .insert("source_workspace".into(), serde_json::json!(key));
         partition.provenance.parameters.insert(
+            "metadata_source".into(),
+            serde_json::to_value(consumer_source(session, doc)?)
+                .map_err(|e| invalid(e.to_string()))?,
+        );
+        partition.provenance.parameters.insert(
             "metadata_sources".into(),
             serde_json::to_value(session.document_record(doc)?.report()?)
                 .map_err(|e| invalid(e.to_string()))?,
