@@ -252,6 +252,16 @@ struct SupportName {
 
 /// Read the first tree of a Newick or NEXUS file, with its sidecar.
 pub fn load_tree(path: &Path) -> Result<OpenedTree> {
+    load_tree_metadata(path, false)
+}
+
+/// Replay has verified the journal's exact tree AND sidecar hashes before this
+/// call. This does not grant trust to an unbound live adjacent sidecar.
+pub(crate) fn load_tree_from_verified_snapshot(path: &Path) -> Result<OpenedTree> {
+    load_tree_metadata(path, true)
+}
+
+fn load_tree_metadata(path: &Path, verified_snapshot: bool) -> Result<OpenedTree> {
     let text = std::fs::read_to_string(path)?;
     let nexus = newick::is_nexus(&text);
     let mut parsed_trees = newick::parse_trees(&text)?.into_iter();
@@ -280,21 +290,22 @@ pub fn load_tree(path: &Path) -> Result<OpenedTree> {
     );
     if sidecar.exists() {
         let side: TreeSidecar = serde_json::from_slice(&std::fs::read(&sidecar)?)?;
-        if side.schema_version == 0 {
+        if side.schema_version == 0 && !verified_snapshot {
             metadata_warning = Some(format!(
                 "Unverified legacy tree metadata at {} was left unapplied; the exchange tree is open and the original metadata bytes are preserved.",
                 sidecar.display()
             ));
-        } else if side.schema_version != 1 {
+        } else if side.schema_version > 1 {
             return Err(crate::error::invalid(
                 "Unsupported future tree metadata version; bytes were preserved",
             ));
         } else {
-            if side.tree_hash != basecraft_io::hash_bytes(doc.to_newick().as_bytes())
-                || side
-                    .exchange_hash
-                    .as_ref()
-                    .is_some_and(|hash| *hash != basecraft_io::hash_bytes(text.as_bytes()))
+            if side.schema_version == 1
+                && (side.tree_hash != basecraft_io::hash_bytes(doc.to_newick().as_bytes())
+                    || side
+                        .exchange_hash
+                        .as_ref()
+                        .is_some_and(|hash| *hash != basecraft_io::hash_bytes(text.as_bytes())))
             {
                 return Err(crate::error::invalid(
                     "Tree metadata describes different exchange contents; bytes were preserved and metadata was not applied",
@@ -391,7 +402,32 @@ fn write_tree_metadata(
     exchange_hash: Option<String>,
     w: &mut dyn Write,
 ) -> io::Result<()> {
-    let side = TreeSidecar {
+    let side = tree_metadata(doc, exchange_hash);
+    serde_json::to_writer_pretty(&mut *w, &side)?;
+    writeln!(w)
+}
+
+pub(crate) fn write_legacy_tree_sidecar(doc: &TreeDoc, w: &mut dyn Write) -> io::Result<()> {
+    #[derive(Serialize)]
+    struct Legacy<'a> {
+        supports: &'a [SupportName],
+        annotations: &'a BTreeMap<u32, CladeAnnotation>,
+        style: &'a TreeStyle,
+    }
+    let side = tree_metadata(doc, None);
+    serde_json::to_writer_pretty(
+        &mut *w,
+        &Legacy {
+            supports: &side.supports,
+            annotations: &side.annotations,
+            style: &side.style,
+        },
+    )?;
+    writeln!(w)
+}
+
+fn tree_metadata(doc: &TreeDoc, exchange_hash: Option<String>) -> TreeSidecar {
+    TreeSidecar {
         schema_version: 1,
         tree_hash: basecraft_io::hash_bytes(doc.to_newick().as_bytes()),
         exchange_hash,
@@ -406,9 +442,7 @@ fn write_tree_metadata(
             .collect(),
         annotations: doc.annotations().clone(),
         style: doc.style().clone(),
-    };
-    serde_json::to_writer_pretty(&mut *w, &side)?;
-    writeln!(w)
+    }
 }
 
 /// An open document plus what's needed to write its file back.

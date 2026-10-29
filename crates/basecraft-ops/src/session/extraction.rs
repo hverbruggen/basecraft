@@ -78,7 +78,7 @@ impl Session {
                     source: None,
                     submitted_hash: hash.clone(),
                     submitted_size: bytes.len() as u64,
-                    transformation: "current-sequence-file-v1".into(),
+                    transformation: "identity-v1".into(),
                     state: "generated".into(),
                     extra: Default::default(),
                 },

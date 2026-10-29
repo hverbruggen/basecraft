@@ -308,6 +308,13 @@ impl Session {
         id: DocId,
         target: &Path,
     ) -> Result<Option<Vec<String>>> {
+        if let Loaded::Tree(tree) = &self.docs[id.0].content {
+            let mut main = HashingWriter::new(std::io::sink());
+            files::write_tree(tree, &mut main)?;
+            let mut side = HashingWriter::new(std::io::sink());
+            files::write_legacy_tree_sidecar(&tree.doc, &mut side)?;
+            return Ok(Some(vec![main.hash(), side.hash()]));
+        }
         let Loaded::Delimitation(work) = &self.docs[id.0].content else {
             return Ok(None);
         };
@@ -516,6 +523,14 @@ impl Session {
     // Open and save.
 
     pub fn open(&mut self, path: &Path) -> Result<DocId> {
+        self.open_inner(path, false)
+    }
+
+    pub(crate) fn open_replay_snapshot(&mut self, path: &Path) -> Result<DocId> {
+        self.open_inner(path, true)
+    }
+
+    fn open_inner(&mut self, path: &Path, verified_snapshot: bool) -> Result<DocId> {
         if crate::sanger_review::evidence_kind(path).is_some() {
             return Err(invalid(
                 "Saved Sanger reviews and drafts are edited only in the Basecraft application; read a saved Sanger review's history, methods and provenance with the history, methods and provenance commands",
@@ -545,7 +560,11 @@ impl Session {
                 .collect()
         };
         let companion_hashes = hash_companions()?;
-        let content = files::load(path)?;
+        let content = if verified_snapshot && format == files::Format::Tree {
+            Loaded::Tree(files::load_tree_from_verified_snapshot(path)?)
+        } else {
+            files::load(path)?
+        };
         if basecraft_io::hash_file(path)? != accepted_hash
             || hash_companions()? != companion_hashes
             || crate::input_evidence::stamp(path)? != disk_stamp

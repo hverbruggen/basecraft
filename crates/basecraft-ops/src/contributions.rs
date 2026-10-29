@@ -12,7 +12,7 @@ pub(crate) fn project(events: &[LogEntry], effective: &mut Vec<EditActivity>) {
     // identities while rebasing those slots, using the existing coordinate map.
     let mut features: std::collections::BTreeMap<
         (&str, u32),
-        (Option<&str>, Option<basecraft_protocol::Location>),
+        (Vec<&str>, Option<basecraft_protocol::Location>),
     > = std::collections::BTreeMap::new();
     let mut sessions = HashMap::new();
     let mut saved_documents: HashMap<&str, HashSet<&str>> = HashMap::new();
@@ -65,7 +65,7 @@ pub(crate) fn project(events: &[LogEntry], effective: &mut Vec<EditActivity>) {
                 } else {
                     // Imported baseline annotations have no recorded owner.
                     for id in 0..u32::try_from(event.state.features.min(100_000)).unwrap_or(0) {
-                        features.insert((&event.doc, id), (None, None));
+                        features.insert((&event.doc, id), (Vec::new(), None));
                     }
                 }
             }
@@ -78,7 +78,7 @@ pub(crate) fn project(events: &[LogEntry], effective: &mut Vec<EditActivity>) {
                 if let Some(id) = event.result.feature {
                     features.insert(
                         (&event.doc, id),
-                        (Some(event.id.as_str()), Some(feature.location.clone())),
+                        (vec![event.id.as_str()], Some(feature.location.clone())),
                     );
                 }
             }
@@ -86,7 +86,8 @@ pub(crate) fn project(events: &[LogEntry], effective: &mut Vec<EditActivity>) {
                 features.remove(&(event.doc.as_str(), *id));
             }
             Op::FeatureUpdate { id, feature } => {
-                if let Some((_, location)) = features.get_mut(&(event.doc.as_str(), *id)) {
+                if let Some((owners, location)) = features.get_mut(&(event.doc.as_str(), *id)) {
+                    owners.push(event.id.as_str());
                     *location = Some(feature.location.clone());
                 }
             }
@@ -130,8 +131,16 @@ pub(crate) fn project(events: &[LogEntry], effective: &mut Vec<EditActivity>) {
     }
     let survivors: HashSet<_> = features
         .values()
-        .filter_map(|(owner, _)| *owner)
+        .flat_map(|(owners, _)| owners.iter().copied())
         .chain(supports.values().copied())
+        .chain(
+            events
+                .iter()
+                .filter(|event| {
+                    active.contains(event.id.as_str()) && matches!(event.op, Op::SeqReplace { .. })
+                })
+                .map(|event| event.id.as_str()),
+        )
         .collect();
     let mut retained_runs = HashSet::new();
     for event in events {

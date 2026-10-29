@@ -65,7 +65,7 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut Report) -> Re
                 continue;
             }
             match materialise(root, work.path(), &e.result.hashes) {
-                Ok(()) => match session.open(&work.path().join(path)) {
+                Ok(()) => match session.open_replay_snapshot(&work.path().join(path)) {
                     Ok(id) => {
                         session.restore_replay_paths(id, work.path(), &source_root);
                         docs.insert(&e.doc, id);
