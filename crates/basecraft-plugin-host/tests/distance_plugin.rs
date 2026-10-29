@@ -286,10 +286,9 @@ fn registered_cache_reuses_distances_across_consumers_and_refuses_mismatch() {
                 std::fs::read(common::member(&matrix, "distances.tsv")).unwrap()
             );
         }
-        assert!(
-            basecraft_ops::provenance::verify(&common::member(&outcome, report))
-                .unwrap()
-                .is_empty()
+        assert_eq!(
+            basecraft_ops::provenance::verify(&common::member(&outcome, report)).unwrap(),
+            Vec::<String>::new()
         );
     }
     assert_eq!(std::fs::read(root.join("cache.json")).unwrap(), cached);
@@ -352,10 +351,9 @@ fn bootstrap_destination_publishes_working_copy_and_repairs_late_collision() {
                 std::fs::read(&visible).unwrap(),
                 std::fs::read(retained).unwrap()
             );
-            assert!(
-                basecraft_ops::provenance::verify(&visible)
-                    .unwrap()
-                    .is_empty()
+            assert_eq!(
+                basecraft_ops::provenance::verify(&visible).unwrap(),
+                Vec::<String>::new()
             );
         }
     }
@@ -377,9 +375,8 @@ fn bootstrap_destination_publishes_working_copy_and_repairs_late_collision() {
     assert_eq!(std::fs::read_to_string(&visible).unwrap(), "foreign");
     std::fs::remove_file(&visible).unwrap();
     common::assert_completed(&manager.repair(&accepted.run_id).unwrap());
-    assert!(
-        basecraft_ops::provenance::verify(&visible)
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        basecraft_ops::provenance::verify(&visible).unwrap(),
+        Vec::<String>::new()
     );
 }

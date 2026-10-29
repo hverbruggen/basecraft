@@ -378,7 +378,10 @@ fn one_save_decision_covers_every_backing_reference_without_merging_analyses() {
         }
     }
     for path in [&first, &second] {
-        assert!(basecraft_ops::provenance::verify(path).unwrap().is_empty());
+        assert_eq!(
+            basecraft_ops::provenance::verify(path).unwrap(),
+            Vec::<String>::new()
+        );
     }
     let original = conflict.analyses[0].run.join("preserved-input");
     std::fs::write(original, "damaged").unwrap();

@@ -810,7 +810,7 @@ fn parent_cancellation_interrupts_registered_fit_and_retains_every_stage_receipt
     let mut manager = JobManager::default();
     let accepted = common::submit_in(&mut manager, &registry, &mut session, |s| json!({
         "operation":"basecraft.host/asap_alignment@1", "inputs":{"alignment":common::document(s,doc)},
-        "parameters":{"model":"p","replicates":10000000}
+        "parameters":{"model":"p","replicates":10_000_000}
     })).unwrap();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
@@ -872,7 +872,7 @@ fn workflow_repairs_publication_and_applies_all_hypotheses_in_one_undo_group() {
     );
     common::assert_completed(&setup);
     let mut session = Session::new(root.path());
-    let doc = session.open(root.path().join("species.spart")).unwrap();
+    let doc = session.open(&root.path().join("species.spart")).unwrap();
     let before = session.delimitation(doc).hypotheses.clone();
     let mut manager = JobManager::default();
     let accepted = common::submit_in(&mut manager,&registry,&mut session,|s| json!({
@@ -910,10 +910,9 @@ fn workflow_repairs_publication_and_applies_all_hypotheses_in_one_undo_group() {
     assert_eq!(session.delimitation(doc).hypotheses, before);
     session.redo(doc).unwrap();
     assert_eq!(session.delimitation(doc).hypotheses, applied);
-    assert!(
-        basecraft_ops::provenance::verify(&export)
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        basecraft_ops::provenance::verify(&export).unwrap(),
+        Vec::<String>::new()
     );
     drop(session);
     assert!(replay::replay(root.path()).unwrap().ok());
