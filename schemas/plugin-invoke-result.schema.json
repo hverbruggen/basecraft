@@ -517,6 +517,18 @@
               "additionalProperties": {
                 "type": "string"
               }
+            },
+            "metadata": {
+              "description": "Standard source reference, with the metadata's existing owner activity.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/InputReference"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
             }
           },
           "required": [
@@ -1044,6 +1056,48 @@
         }
       ]
     },
+    "FileStamp": {
+      "description": "Cheap change signal captured during an existing verified read. Matching time\nand length alone do not prove content identity.",
+      "type": "object",
+      "properties": {
+        "device": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "inode": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "modified_nanos": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "modified_seconds": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "size": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "size",
+        "modified_seconds",
+        "modified_nanos"
+      ]
+    },
     "FrameChoice": {
       "description": "A reading frame the user reviewed for one record.",
       "type": "object",
@@ -1267,6 +1321,27 @@
           }
         }
       }
+    },
+    "InputReference": {
+      "type": "object",
+      "properties": {
+        "hash": {
+          "description": "Source bytes hash reused from the verified document read.",
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "stamp": {
+          "$ref": "#/$defs/FileStamp"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "path",
+        "stamp",
+        "hash"
+      ]
     },
     "ItsComponent": {
       "oneOf": [

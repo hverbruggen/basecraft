@@ -2172,135 +2172,17 @@ ApplicationWindow {
         }
     }
 
-    AppContentDialog {
+    SpecimenTreeLabelsDialog {
         id: metadataTipLabels
-        property string revision: ""
-        property string path: ""
-        property var records: []
-        property var pendingLinks: ({})
-        property var snapshot: null
-        function show(controller, file) {
-            target = controller; path = file; revision = controller.record_revision()
-            const presentation = JSON.parse(controller.style_json())
-            snapshot = presentation.style.metadata_labels || null
-            const tips = presentation.tips || []
-            const result = JSON.parse(specimenMetadata.consumer(JSON.stringify({action: "labels", document: file, records: tips, fields: []}), false))
-            records = result.labels || tips.map(record => ({record: record, specimen: null, issue: "No specimen metadata"}))
-            pendingLinks = {}; error = result.error || ""; open()
-        }
-        function applyFields(fields) {
-            if (!target || target.record_revision() !== revision) { error = "The tree changed. Close this dialog and choose labels again."; return }
-            const e = target.compose_metadata_labels(shell.project_dir, JSON.stringify(fields))
-            if (e.length) error = e; else close()
-        }
-        title: "Tree tip labels"
-        property var target: null
-        property string error: ""
-        initialFocusItem: labelSpecimen
-        body: ColumnLayout {
-            Label { text: "Compose stored metadata in this order. Empty fields are skipped; unlinked tips keep their identity."; wrapMode: Text.Wrap; Layout.fillWidth: true }
-            Label {
-                text: metadataTipLabels.snapshot
-                    ? "Saved label snapshot from " + ((metadataTipLabels.snapshot.metadata_source || {}).path || "unknown metadata owner") + " (" + metadataTipLabels.snapshot.metadata_hash + "). Metadata edits do not update this snapshot automatically. Apply explicitly refreshes it; Original labels clears the snapshot before rebinding to another project."
-                    : "Apply saves a label snapshot with its metadata owner and hash. Metadata edits do not update labels automatically."
-                wrapMode: Text.Wrap; Layout.fillWidth: true
-            }
-            Label { text: "Record links"; font.bold: true }
-            Repeater {
-                model: metadataTipLabels.records
-                delegate: RowLayout {
-                    required property var modelData
-                    Label { text: modelData.record + " → " + (modelData.specimen || modelData.issue || "Unlinked"); Layout.fillWidth: true }
-                    ComboBox {
-                        model: ["Leave unchanged"].concat(window.metadataTable.rows.map(s => s.id))
-                        enabled: specimenMetadata.available
-                        Accessible.name: "Link tree record " + modelData.record + " to specimen"
-                        onActivated: {
-                            const links = Object.assign({}, metadataTipLabels.pendingLinks)
-                            if (currentIndex === 0) delete links[modelData.record]; else links[modelData.record] = currentText
-                            metadataTipLabels.pendingLinks = links
-                        }
-                    }
-                }
-            }
-            AppButton { text: "Save record links"; enabled: Object.keys(metadataTipLabels.pendingLinks).length > 0; onClicked: {
-                if (metadataTipLabels.target.record_revision() !== metadataTipLabels.revision) { metadataTipLabels.error = "The tree changed. Close and reopen this dialog."; return }
-                const p = JSON.parse(specimenMetadata.consumer(JSON.stringify({action: "link_records", document: metadataTipLabels.path, links: metadataTipLabels.pendingLinks}), true))
-                if (p.error) metadataTipLabels.error = p.error
-                else metadataTipLabels.show(metadataTipLabels.target, metadataTipLabels.path)
-            } }
-            CheckBox { id: labelGenus; text: "Genus"; checked: true }
-            CheckBox { id: labelSpecies; text: "Species epithet"; checked: true }
-            CheckBox { id: labelSpecimen; text: "Specimen ID"; checked: true }
-            CheckBox { id: labelAccession; text: "Accession" }
-            AppErrorLabel { text: metadataTipLabels.error; visible: text.length > 0; Layout.fillWidth: true }
-            RowLayout {
-                AppButton { text: "Original labels"; onClicked: metadataTipLabels.applyFields([]) }
-                AppButton { text: "Apply"; onClicked: {
-                    const fields = []
-                    if (labelGenus.checked) fields.push("genus")
-                    if (labelSpecies.checked) fields.push("species")
-                    if (labelSpecimen.checked) fields.push("specimen")
-                    if (labelAccession.checked) fields.push("accession")
-                    metadataTipLabels.applyFields(fields)
-                } }
-            }
-        }
+        metadataController: specimenMetadata
+        table: window.metadataTable
+        projectDir: shell.project_dir
     }
-    AppContentDialog {
+    SpecimenRosterDialog {
         id: rosterConsumer
-        property string revision: ""
-        title: "Project specimens and partitions"
-        standardButtons: Dialog.Close
-        property var target: null
-        property string path: ""
-        property var work: ({specimens: [], hypotheses: []})
-        property var links: ({})
-        property string error: ""
-        initialFocusItem: partitionSource
-        function show(controller, file) {
-            target = controller; revision = controller.record_revision(); path = file; work = JSON.parse(controller.workspace_json)
-            const stored = {}
-            for (const s of work.specimens) if ((s.attributes || {}).basecraft_roster_id) stored[s.id] = s.attributes.basecraft_roster_id
-            links = stored; error = ""; open()
-        }
-        body: ColumnLayout {
-            Label { text: "Link each workspace ID to its stable project specimen. Several records may share one specimen. Save the workspace before promoting a result."; wrapMode: Text.Wrap; Layout.fillWidth: true }
-            ColumnLayout {
-                id: rosterRows
-                Repeater {
-                    model: rosterConsumer.work.specimens
-                    delegate: RowLayout {
-                        required property var modelData
-                        Label { text: modelData.id + (rosterConsumer.links[modelData.id] && !window.metadataTable.rows.some(s => s.id === rosterConsumer.links[modelData.id]) ? " (unknown roster ID: " + rosterConsumer.links[modelData.id] + ")" : ""); Layout.fillWidth: true }
-                        ComboBox {
-                            model: ["Unlinked"].concat(window.metadataTable.rows.map(s => s.id))
-                            currentIndex: Math.max(0, model.indexOf(rosterConsumer.links[modelData.id] || "Unlinked"))
-                            Accessible.name: "Project specimen for " + modelData.id
-                            onActivated: {
-                                const updated = Object.assign({}, rosterConsumer.links)
-                                if (currentIndex === 0) delete updated[modelData.id]; else updated[modelData.id] = currentText
-                                rosterConsumer.links = updated
-                            }
-                        }
-                    }
-                }
-            }
-            AppButton { text: "Apply roster links"; onClicked: {
-                if (rosterConsumer.target.record_revision() !== rosterConsumer.revision) { rosterConsumer.error = "The workspace changed. Close and reopen this dialog before linking."; return }
-                const p = JSON.parse(specimenMetadata.consumer(JSON.stringify({action: "link_workspace", workspace: rosterConsumer.path, links: rosterConsumer.links}), false))
-                if (p.error) rosterConsumer.error = p.error
-                else { rosterConsumer.target.action("roster_links", JSON.stringify(p.operation.params.edit)); rosterConsumer.revision = rosterConsumer.target.record_revision(); rosterConsumer.error = "Links applied. Save the workspace before promoting a partition." }
-            } }
-            ComboBox { id: partitionSource; model: rosterConsumer.work.hypotheses; textRole: "name"; Accessible.name: "Delimitation result to promote"; Layout.fillWidth: true }
-            TextField { id: projectPartitionId; placeholderText: "Project partition ID"; Accessible.name: "Project partition ID"; Layout.fillWidth: true }
-            AppButton { text: "Save project partition"; enabled: rosterConsumer.target !== null && !rosterConsumer.target.dirty && partitionSource.currentIndex >= 0 && projectPartitionId.text.trim().length > 0; onClicked: {
-                const p = JSON.parse(specimenMetadata.consumer(JSON.stringify({action: "promote_partition", workspace: rosterConsumer.path, hypothesis: rosterConsumer.work.hypotheses[partitionSource.currentIndex].id, id: projectPartitionId.text.trim()}), true))
-                rosterConsumer.error = p.error || "Saved project partition"
-            } }
-            Label { text: "Project partitions: " + ((window.metadataTable.partitions || []).map(p => p.name).join(", ")); wrapMode: Text.Wrap; Layout.fillWidth: true }
-            AppErrorLabel { text: rosterConsumer.error; visible: text.length > 0; wrapMode: Text.Wrap; Layout.fillWidth: true }
-        }
+        metadataController: specimenMetadata
+        table: window.metadataTable
+        projectDir: shell.project_dir
     }
     TreeTipNameDialog {
         id: tipDialog

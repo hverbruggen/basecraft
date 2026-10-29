@@ -723,6 +723,18 @@
               "additionalProperties": {
                 "type": "string"
               }
+            },
+            "metadata": {
+              "description": "Standard source reference, with the metadata's existing owner activity.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/InputReference"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
             }
           },
           "required": [
