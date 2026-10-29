@@ -2066,7 +2066,6 @@ impl PreparedOperation {
             "initiator": self.initiator,
             "source": {"path": source},
             "outputs": outputs,
-            "output_roles": self.operation.descriptor.outputs,
             "diagnostics": outcome.errors.first().map(|error| error.message.clone()),
             "runtime_record": runtime,
         });

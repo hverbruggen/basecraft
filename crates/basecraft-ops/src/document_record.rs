@@ -628,17 +628,18 @@ struct TaskReadBudget(u64);
 
 impl TaskReadBudget {
     fn read(&mut self, path: &Path) -> crate::Result<Vec<u8>> {
-        let size = std::fs::metadata(path)?.len();
+        let metadata = std::fs::metadata(path)?;
+        if !metadata.is_file() {
+            return Err(crate::error::invalid("evidence is not a regular file"));
+        }
+        let size = metadata.len();
         if size > self.0 {
             self.0 = 0;
             return Err(crate::error::invalid(
                 "retained task aggregate reading limit (64 MiB) exceeded",
             ));
         }
-        let result = crate::provenance::read_record_with_limit(path, self.0);
-        let charged = result.as_ref().map_or(self.0, |bytes| bytes.len() as u64);
-        self.0 = self.0.saturating_sub(charged);
-        result
+        crate::provenance::read_record_with_budget(path, &mut self.0)
     }
 }
 
@@ -667,7 +668,7 @@ fn reconcile_task_receipt(
     if run["id"] != outcome.run_id || run["operation"] != outcome.operation {
         return Err(crate::error::invalid("operation receipt identity mismatch"));
     }
-    let primary = task_primary_output(&outcome, Path::new(path), &run["output_roles"], budget);
+    let primary = task_primary_output(&outcome, Path::new(path), budget);
     run["status"] = serde_json::to_value(outcome.state)?;
     run["effective_parameters"] = outcome.effective_parameters;
     run["outputs"] = serde_json::to_value(
@@ -711,7 +712,6 @@ fn reconcile_task_receipt(
 fn task_primary_output(
     outcome: &basecraft_protocol::operation::OperationOutcome,
     runtime: &Path,
-    roles: &serde_json::Value,
     budget: &mut TaskReadBudget,
 ) -> crate::Result<Option<String>> {
     if !outcome.state.terminal() || outcome.artifacts.is_empty() {
@@ -727,42 +727,69 @@ fn task_primary_output(
             "publication schema or run identity mismatch",
         ));
     }
-    // Role declarations are immutable descriptor metadata in new indexes. They
-    // may select among canonical artifacts, never supply a path or digest.
-    let roles: std::collections::BTreeMap<String, basecraft_protocol::operation::OutputBinding> =
-        serde_json::from_value(roles.clone()).unwrap_or_default();
-    for output in &publication.outputs {
-        let logical = Path::new(&output.logical_name);
-        if !normal_task_path(logical) || crate::files::Format::from_path(logical).is_err() {
-            continue;
-        }
-        if let Some(artifact) = outcome.artifacts.iter().find(|artifact| {
-            use basecraft_protocol::operation::ArtifactVisibility;
-            let path = Path::new(&artifact.path);
-            if artifact.digest != output.hash || !path.is_absolute() {
-                return false;
+    // Use the accepted descriptor's exact primary role/member, not collection
+    // ordering. A result collection can include primary and supporting trees.
+    let descriptor: basecraft_protocol::operation::OperationDescriptor =
+        serde_json::from_slice(&budget.read(&root.join("descriptor.json"))?)?;
+    if basecraft_io::hash_bytes(&serde_json::to_vec(&descriptor)?) != outcome.pins.descriptor_digest
+    {
+        return Err(crate::error::invalid(
+            "primary result descriptor identity mismatch",
+        ));
+    }
+    let primary = descriptor
+        .legacy_adapter
+        .as_ref()
+        .and_then(|adapter| adapter.outputs.get("output"));
+    for retained_only in [false, true] {
+        for output in &publication.outputs {
+            let logical = Path::new(&output.logical_name);
+            if !normal_task_path(logical) || crate::files::Format::from_path(logical).is_err() {
+                continue;
             }
-            let result_role = roles
-                .get(&artifact.role)
-                .is_some_and(|binding| binding.visibility == ArtifactVisibility::Result);
-            let visible = !path.starts_with(root)
-                && path.ends_with(logical)
-                && !logical
-                    .components()
-                    .any(|part| part.as_os_str().to_string_lossy().starts_with('.'));
-            // With older indexes, publication's visible document outputs are
-            // enough. Hidden members require explicit result-role semantics
-            // and successful completion, so partial support is never promoted.
-            let retained_result = result_role
-                && outcome.state == basecraft_protocol::operation::RuntimeState::Completed
-                && output.retained.as_deref().is_some_and(|retained| {
-                    let retained = Path::new(retained);
-                    normal_task_path(retained) && root.join(retained) == path
+            if let Some(artifact) = outcome.artifacts.iter().find(|artifact| {
+                use basecraft_protocol::operation::ArtifactVisibility;
+                let path = Path::new(&artifact.path);
+                if artifact.digest != output.hash || !path.is_absolute() {
+                    return false;
+                }
+                let binding = descriptor.outputs.get(&artifact.role);
+                let result_role =
+                    binding.is_some_and(|binding| binding.visibility == ArtifactVisibility::Result);
+                let visible = !path.starts_with(root)
+                    && path.ends_with(logical)
+                    && !logical
+                        .components()
+                        .any(|part| part.as_os_str().to_string_lossy().starts_with('.'));
+                let retained = output
+                    .retained
+                    .as_deref()
+                    .map(Path::new)
+                    .filter(|path| normal_task_path(path));
+                let matches_primary = primary.is_some_and(|primary| {
+                    if primary.role != artifact.role || !normal_task_path(Path::new(&primary.path))
+                    {
+                        return false;
+                    }
+                    let expected = if binding.is_some_and(|binding| binding.collection) {
+                        Path::new(&primary.role).join(&primary.path)
+                    } else {
+                        Path::new(&primary.role).to_path_buf()
+                    };
+                    retained.is_some_and(|retained| retained == expected)
                 });
-            (visible && (roles.is_empty() || result_role || artifact.role == "workspace"))
-                || retained_result
-        }) {
-            return Ok(Some(artifact.path.clone()));
+                if !retained_only {
+                    return visible
+                        && (artifact.role == "workspace"
+                            || (result_role && (primary.is_none() || matches_primary)));
+                }
+                result_role
+                    && matches_primary
+                    && outcome.state == basecraft_protocol::operation::RuntimeState::Completed
+                    && retained.is_some_and(|retained| root.join(retained) == path)
+            }) {
+                return Ok(Some(artifact.path.clone()));
+            }
         }
     }
     Ok(None)
@@ -940,15 +967,21 @@ mod tests {
     }
 
     #[test]
-    fn task_primary_result_requires_canonical_artifact_and_visible_publication() {
+    fn task_primary_result_uses_real_distance_primary_member_not_bootstrap_order() {
+        use basecraft_protocol::operation::{ArtifactVisibility, OperationContract};
         let temp = tempfile::tempdir().unwrap();
         let (jobs, receipt, mut outcome) = registered_fixture(temp.path(), "completed");
-        let tree = temp.path().join("tree.nwk");
-        let hidden = receipt.parent().unwrap().join("bootstrap.partial.nex");
-        outcome["artifacts"] = serde_json::json!([
-            {"role":"artifacts","path":hidden,"digest":"support"},
-            {"role":"tree","path":tree,"digest":"canonical"}]);
-        std::fs::write(&receipt, outcome.to_string()).unwrap();
+        let root = receipt.parent().unwrap();
+        let tree = root.join("artifacts/tree.nwk");
+        let bootstrap = root.join("artifacts/bootstrap-run.partial.nex");
+        let contract: OperationContract =
+            serde_json::from_slice(include_bytes!("../../../plugins/distance/operations.json"))
+                .unwrap();
+        let mut descriptor = contract
+            .operations
+            .into_iter()
+            .find(|descriptor| descriptor.name == "tree")
+            .unwrap();
         let mut publication = Publication {
             schema_version: 1,
             id: "registered".into(),
@@ -958,14 +991,22 @@ mod tests {
             created: String::new(),
             origin: String::new(),
             inputs: vec![],
-            outputs: vec![basecraft_protocol::provenance::ArtifactRevision {
-                id: "tree".into(),
-                logical_name: "tree.nwk".into(),
-                hash: "canonical".into(),
-                size: 0,
-                retained: None,
-                reference: None,
-            }],
+            outputs: [
+                ("artifacts/bootstrap-run.partial.nex", "support"),
+                ("artifacts/tree.nwk", "canonical"),
+            ]
+            .into_iter()
+            .map(
+                |(member, hash)| basecraft_protocol::provenance::ArtifactRevision {
+                    id: member.into(),
+                    logical_name: format!(".basecraft/run/{member}"),
+                    hash: hash.into(),
+                    size: 0,
+                    retained: Some(member.into()),
+                    reference: None,
+                },
+            )
+            .collect(),
             events: vec![],
             effective_edits: vec![],
             completeness: basecraft_protocol::provenance::Completeness {
@@ -976,55 +1017,178 @@ mod tests {
             },
             report_template_version: 2,
         };
-        let manifest = receipt.parent().unwrap().join("manifest.json");
+        // Actual SDK ordering: bootstrap first; both members have the SAME
+        // artifacts/result role, including withheld partial bootstrap support.
+        outcome["artifacts"] = serde_json::json!([
+            {"role":"artifacts","path":bootstrap,"digest":"support"},
+            {"role":"artifacts","path":tree,"digest":"canonical"}]);
+        outcome["pins"]["descriptor_digest"] = serde_json::json!(basecraft_io::hash_bytes(
+            &serde_json::to_vec(&descriptor).unwrap()
+        ));
+        let descriptor_path = root.join("descriptor.json");
+        let manifest = root.join("manifest.json");
+        std::fs::write(&descriptor_path, serde_json::to_vec(&descriptor).unwrap()).unwrap();
         std::fs::write(&manifest, serde_json::to_vec(&publication).unwrap()).unwrap();
-        let rows = job_records(&jobs, false, "current").unwrap();
-        assert_eq!(rows["jobs"][0]["primary_output"], tree.to_str().unwrap());
-        assert_eq!(
-            rows["jobs"][0]["outputs"][tree.to_str().unwrap()],
-            "canonical"
-        );
-        let index_path = jobs.join("registered/manifest.json");
-        let mut index: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&index_path).unwrap()).unwrap();
-        index["output_roles"] = serde_json::json!({"tree":{"media_type":"text/x-newick","min":1,"max":1,"visibility":"supporting"}});
-        std::fs::write(&index_path, index.to_string()).unwrap();
-        assert!(
-            job_records(&jobs, false, "current").unwrap()["jobs"][0]["primary_output"].is_null()
-        );
-        index["output_roles"]["tree"]["visibility"] = serde_json::json!("result");
-        std::fs::write(&index_path, index.to_string()).unwrap();
+        std::fs::write(&receipt, outcome.to_string()).unwrap();
         assert_eq!(
             job_records(&jobs, false, "current").unwrap()["jobs"][0]["primary_output"],
             tree.to_str().unwrap()
         );
-        // A metadata-only result is still openable with an explicit result
-        // role; retained bootstrap support without that role is not selected.
-        let retained_tree = receipt.parent().unwrap().join("tree.nwk");
-        outcome["artifacts"][1]["path"] = serde_json::json!(retained_tree);
-        std::fs::write(&receipt, outcome.to_string()).unwrap();
-        publication.outputs[0].logical_name = ".basecraft/run/tree.nwk".into();
-        publication.outputs[0].retained = Some("tree.nwk".into());
+        outcome["artifacts"][0]["path"] =
+            serde_json::json!(root.join("artifacts/bootstrap-run.nex"));
+        publication.outputs[0].logical_name = ".basecraft/run/artifacts/bootstrap-run.nex".into();
+        publication.outputs[0].retained = Some("artifacts/bootstrap-run.nex".into());
         std::fs::write(&manifest, serde_json::to_vec(&publication).unwrap()).unwrap();
+        std::fs::write(&receipt, outcome.to_string()).unwrap();
         assert_eq!(
             job_records(&jobs, false, "current").unwrap()["jobs"][0]["primary_output"],
-            retained_tree.to_str().unwrap()
-        );
-        outcome["state"] = serde_json::json!("partial");
-        std::fs::write(&receipt, outcome.to_string()).unwrap();
-        assert!(
-            job_records(&jobs, false, "current").unwrap()["jobs"][0]["primary_output"].is_null()
-        );
-        outcome["artifacts"][1]["digest"] = serde_json::json!("changed");
-        std::fs::write(&receipt, outcome.to_string()).unwrap();
-        assert!(
-            job_records(&jobs, false, "current").unwrap()["jobs"][0]["primary_output"].is_null()
+            tree.to_str().unwrap()
         );
         outcome["state"] = serde_json::json!("finalizing");
         std::fs::write(&receipt, outcome.to_string()).unwrap();
         assert!(
             job_records(&jobs, false, "current").unwrap()["jobs"][0]["primary_output"].is_null()
         );
+        outcome["state"] = serde_json::json!("completed");
+        // A canonical visible export of that exact primary member wins.
+        let export = temp.path().join("inferred.nwk");
+        publication.outputs.insert(
+            0,
+            basecraft_protocol::provenance::ArtifactRevision {
+                id: "export".into(),
+                logical_name: "inferred.nwk".into(),
+                hash: "canonical".into(),
+                size: 0,
+                retained: Some("artifacts/tree.nwk".into()),
+                reference: None,
+            },
+        );
+        outcome["artifacts"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"role":"artifacts","path":export,"digest":"canonical"}));
+        std::fs::write(&manifest, serde_json::to_vec(&publication).unwrap()).unwrap();
+        std::fs::write(&receipt, outcome.to_string()).unwrap();
+        assert_eq!(
+            job_records(&jobs, false, "current").unwrap()["jobs"][0]["primary_output"],
+            export.to_str().unwrap()
+        );
+        // Stale export digest cannot override the valid retained primary.
+        outcome["artifacts"][2]["digest"] = serde_json::json!("changed");
+        std::fs::write(&receipt, outcome.to_string()).unwrap();
+        assert_eq!(
+            job_records(&jobs, false, "current").unwrap()["jobs"][0]["primary_output"],
+            tree.to_str().unwrap()
+        );
+        // Missing primary must not substitute the bootstrap collection.
+        outcome["artifacts"].as_array_mut().unwrap().remove(1);
+        std::fs::write(&receipt, outcome.to_string()).unwrap();
+        assert!(
+            job_records(&jobs, false, "current").unwrap()["jobs"][0]["primary_output"].is_null()
+        );
+        // A genuinely supporting-only descriptor never offers a primary.
+        descriptor.outputs.get_mut("artifacts").unwrap().visibility =
+            ArtifactVisibility::Supporting;
+        outcome["artifacts"] =
+            serde_json::json!([{ "role":"artifacts","path":tree,"digest":"canonical"}]);
+        outcome["pins"]["descriptor_digest"] = serde_json::json!(basecraft_io::hash_bytes(
+            &serde_json::to_vec(&descriptor).unwrap()
+        ));
+        std::fs::write(&descriptor_path, serde_json::to_vec(&descriptor).unwrap()).unwrap();
+        std::fs::write(&receipt, outcome.to_string()).unwrap();
+        assert!(
+            job_records(&jobs, false, "current").unwrap()["jobs"][0]["primary_output"].is_null()
+        );
+        descriptor.outputs.get_mut("artifacts").unwrap().visibility = ArtifactVisibility::Result;
+        std::fs::write(&descriptor_path, serde_json::to_vec(&descriptor).unwrap()).unwrap();
+        let row = &job_records(&jobs, false, "current").unwrap()["jobs"][0];
+        assert!(row["primary_output"].is_null());
+        assert!(
+            row["diagnostics"]
+                .as_str()
+                .unwrap()
+                .contains("descriptor identity mismatch")
+        );
+        assert_eq!(row["status"], "completed");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn task_nonregular_evidence_is_rejected_in_bounded_subprocess() {
+        use std::os::unix::fs::PermissionsExt;
+        const CHILD: &str = "BASECRAFT_TASK_FIFO_CHILD";
+        if let Some(root) = std::env::var_os(CHILD) {
+            let rows = job_records(&Path::new(&root).join("jobs"), false, "current").unwrap();
+            let text = rows.to_string();
+            assert!(text.contains("not a regular file"), "{text}");
+            assert!(!text.contains("reading limit"), "{text}");
+            assert!(
+                rows["jobs"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|row| row["id"] == "regular")
+            );
+            return;
+        }
+        for location in ["index", "runtime", "publication"] {
+            let temp = tempfile::tempdir().unwrap();
+            let (jobs, receipt, mut outcome) = registered_fixture(temp.path(), "completed");
+            let path = match location {
+                "index" => jobs.join("registered/manifest.json"),
+                "runtime" => receipt.clone(),
+                _ => {
+                    outcome["artifacts"] = serde_json::json!([{ "role":"artifacts","path":"/tree.nwk","digest":"hash"}]);
+                    std::fs::write(&receipt, outcome.to_string()).unwrap();
+                    receipt.parent().unwrap().join("manifest.json")
+                }
+            };
+            if path.exists() {
+                std::fs::remove_file(&path).unwrap();
+            }
+            assert!(
+                std::process::Command::new("mkfifo")
+                    .arg(&path)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            std::fs::create_dir_all(jobs.join("regular")).unwrap();
+            std::fs::write(jobs.join("regular/manifest.json"), serde_json::json!({"schema_version":1,"id":"regular","operation":"legacy","status":"completed","source":{"path":"input"},"outputs":{},"owner_instance":"current"}).to_string()).unwrap();
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "document_record::tests::task_nonregular_evidence_is_rejected_in_bounded_subprocess", "--nocapture"])
+                .env(CHILD, temp.path()).spawn().unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                if let Some(status) = child.try_wait().unwrap() {
+                    assert!(status.success(), "{location}");
+                    break;
+                }
+                if std::time::Instant::now() >= deadline {
+                    child.kill().unwrap();
+                    child.wait().unwrap();
+                    panic!("{location} FIFO hung the retained Tasks query");
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let regular = temp.path().join("regular.json");
+        let link = temp.path().join("regular-link.json");
+        std::fs::write(&regular, "{}").unwrap();
+        std::os::unix::fs::symlink(&regular, &link).unwrap();
+        assert_eq!(crate::provenance::read_record(&link).unwrap(), b"{}");
+        let mut budget = TaskReadBudget(1024);
+        assert!(budget.read(temp.path()).is_err());
+        assert_eq!(budget.0, 1024);
+        let mut permissions = std::fs::metadata(&regular).unwrap().permissions();
+        permissions.set_mode(0o0);
+        std::fs::set_permissions(&regular, permissions).unwrap();
+        // Root may bypass permissions; normal validation runs as an unprivileged user.
+        if std::fs::File::open(&regular).is_err() {
+            assert!(budget.read(&regular).is_err());
+            assert_eq!(budget.0, 1024);
+        }
     }
 
     #[test]
