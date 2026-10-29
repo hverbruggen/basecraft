@@ -339,28 +339,31 @@ impl JobManager {
             } else {
                 result.ops.clone()
             };
-            if let Err(error) = session.apply_sequence_proposals(
+            let edit_ids = match session.apply_sequence_proposals(
                 target.doc,
                 target.generation,
                 target.revision,
                 &ops,
                 &actor,
             ) {
-                job.outcome
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .state = RuntimeState::Running;
-                fail(
-                    job,
-                    if error.to_string().contains("stale_revision") {
-                        OperationErrorCode::StaleRevision
-                    } else {
-                        OperationErrorCode::PluginProtocolViolation
-                    },
-                    error.to_string(),
-                );
-                continue;
-            }
+                Ok(ids) => ids,
+                Err(error) => {
+                    job.outcome
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .state = RuntimeState::Running;
+                    fail(
+                        job,
+                        if error.to_string().contains("stale_revision") {
+                            OperationErrorCode::StaleRevision
+                        } else {
+                            OperationErrorCode::PluginProtocolViolation
+                        },
+                        error.to_string(),
+                    );
+                    continue;
+                }
+            };
             let mut outcome = job
                 .outcome
                 .lock()
@@ -381,8 +384,8 @@ impl JobManager {
                 let key = basecraft_ops::input_evidence::relative(session.root(),&path)?;
                 let params = json!({"requested":job.prepared.request.parameters,"effective":outcome.effective_parameters,
                     "operation":job.prepared.operation.id,"pins":outcome.pins,"initiator":job.prepared.initiator,"run_id":outcome.run_id});
-                session.log_tool_run(target.doc,basecraft_protocol::Actor::Plugin {id:job.prepared.operation.package.manifest.id.clone(),version:job.prepared.operation.package.manifest.version.clone()},
-                    (&job.prepared.operation.package.manifest.id,&job.prepared.operation.descriptor.implementation),params,&[(key,hash)],&[])?;
+                session.log_contributing_tool_run(target.doc,basecraft_protocol::Actor::Plugin {id:job.prepared.operation.package.manifest.id.clone(),version:job.prepared.operation.package.manifest.version.clone()},
+                    (&job.prepared.operation.package.manifest.id,&job.prepared.operation.descriptor.implementation),params,&[(key,hash)],&edit_ids)?;
                 Ok(())
             });
             if let Err(error) = activity {

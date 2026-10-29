@@ -117,6 +117,8 @@ pub struct OpenedAlignment {
 pub struct OpenedTree {
     pub doc: TreeDoc,
     pub nexus: bool,
+    /// Unverifiable legacy metadata remains on disk and was not applied.
+    pub metadata_warning: Option<String>,
 }
 
 pub enum Loaded {
@@ -258,6 +260,7 @@ pub fn load_tree(path: &Path) -> Result<OpenedTree> {
         .file_name()
         .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
     let mut doc = TreeDoc::from_parsed(name, &parsed);
+    let mut metadata_warning = None;
     // Errors in a hidden association must never select an adjacent legacy file.
     let run = crate::analysis_store::ArtifactRun::for_result_checked(path)?;
     let sidecar = run.map_or_else(
@@ -271,35 +274,40 @@ pub fn load_tree(path: &Path) -> Result<OpenedTree> {
     );
     if sidecar.exists() {
         let side: TreeSidecar = serde_json::from_slice(&std::fs::read(&sidecar)?)?;
-        if side.schema_version != 1 {
-            return Err(crate::error::invalid(format!(
-                "Unbound legacy or unsupported tree metadata at {}. Bytes were preserved; explicit exchange-only import or conversion is required",
+        if side.schema_version == 0 {
+            metadata_warning = Some(format!(
+                "Unverified legacy tree metadata at {} was left unapplied; the exchange tree is open and the original metadata bytes are preserved.",
                 sidecar.display()
-            )));
-        }
-        if side.tree_hash != basecraft_io::hash_bytes(doc.to_newick().as_bytes())
-            || side
-                .exchange_hash
-                .as_ref()
-                .is_some_and(|hash| *hash != basecraft_io::hash_bytes(text.as_bytes()))
-        {
-            return Err(crate::error::invalid(
-                "Tree metadata describes different exchange contents; bytes were preserved and metadata was not applied",
             ));
-        }
-        let kinds: Vec<_> = side
-            .supports
-            .iter()
-            .map(|s| (s.name.clone(), s.kind))
-            .collect();
-        let names: Vec<(String, String)> = side
-            .supports
-            .into_iter()
-            .map(|s| (s.name, s.source))
-            .collect();
-        doc.restore(&names, side.annotations, side.style);
-        for (name, kind) in kinds {
-            doc.set_support_kind(&name, kind);
+        } else if side.schema_version != 1 {
+            return Err(crate::error::invalid(
+                "Unsupported future tree metadata version; bytes were preserved",
+            ));
+        } else {
+            if side.tree_hash != basecraft_io::hash_bytes(doc.to_newick().as_bytes())
+                || side
+                    .exchange_hash
+                    .as_ref()
+                    .is_some_and(|hash| *hash != basecraft_io::hash_bytes(text.as_bytes()))
+            {
+                return Err(crate::error::invalid(
+                    "Tree metadata describes different exchange contents; bytes were preserved and metadata was not applied",
+                ));
+            }
+            let kinds: Vec<_> = side
+                .supports
+                .iter()
+                .map(|s| (s.name.clone(), s.kind))
+                .collect();
+            let names: Vec<(String, String)> = side
+                .supports
+                .into_iter()
+                .map(|s| (s.name, s.source))
+                .collect();
+            doc.restore(&names, side.annotations, side.style);
+            for (name, kind) in kinds {
+                doc.set_support_kind(&name, kind);
+            }
         }
     }
     // Legacy Basecraft distance runs carry explicit bootstrap metadata. Require
@@ -329,7 +337,11 @@ pub fn load_tree(path: &Path) -> Result<OpenedTree> {
         let name = doc.supports()[0].name.clone();
         doc.set_support_kind(&name, basecraft_protocol::SupportKind::Bootstrap);
     }
-    Ok(OpenedTree { doc, nexus })
+    Ok(OpenedTree {
+        doc,
+        nexus,
+        metadata_warning,
+    })
 }
 
 /// Write a tree as Newick, or as NEXUS if it was read from NEXUS.

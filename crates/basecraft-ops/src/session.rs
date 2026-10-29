@@ -21,6 +21,7 @@ use crate::error::invalid;
 use crate::files::{self, HashingWriter, Loaded, Opened, OpenedAlignment, OpenedTree};
 use crate::log::LogWriter;
 
+mod extraction;
 pub mod support_import;
 use crate::{Error, Result};
 
@@ -322,6 +323,13 @@ impl Session {
         matches!(self.docs[id.0].content, Loaded::Tree(_))
     }
 
+    pub fn tree_metadata_warning(&self, id: DocId) -> Option<&str> {
+        match &self.docs.get(id.0)?.content {
+            Loaded::Tree(tree) => tree.metadata_warning.as_deref(),
+            _ => None,
+        }
+    }
+
     pub fn is_alignment(&self, id: DocId) -> bool {
         matches!(self.docs[id.0].content, Loaded::Alignment(_))
     }
@@ -569,7 +577,14 @@ impl Session {
                 }
             }
         }
-        let (origin, origin_issue) = crate::document_record::read_origin(path, &hashes);
+        let (origin, mut origin_issue) = crate::document_record::read_origin(path, &hashes);
+        if let Loaded::Tree(tree) = &content
+            && let Some(warning) = &tree.metadata_warning
+        {
+            origin_issue = Some(
+                origin_issue.map_or_else(|| warning.clone(), |issue| format!("{issue}\n{warning}")),
+            );
+        }
         self.docs.push(Slot {
             key: key.clone(),
             content,
@@ -1221,6 +1236,31 @@ impl Session {
     fn save_tree(&self, tree: &OpenedTree, target: &Path) -> Result<Vec<(String, String)>> {
         let mut hashes = Vec::new();
         let sidecar = files::tree_sidecar(target);
+        if sidecar.is_file() {
+            let bytes = std::fs::read(&sidecar)?;
+            let metadata: serde_json::Value = serde_json::from_slice(&bytes)?;
+            if metadata.get("schema_version").is_none() || metadata["schema_version"] == 0 {
+                let backup = sidecar.with_file_name(format!(
+                    "{}.unverified-{}",
+                    sidecar.file_name().unwrap_or_default().to_string_lossy(),
+                    basecraft_io::hash_bytes(&bytes).trim_start_matches("b3:")
+                ));
+                if backup.try_exists()? {
+                    if std::fs::read(&backup)? != bytes {
+                        return Err(invalid(
+                            "legacy metadata backup differs; original was not replaced",
+                        ));
+                    }
+                } else {
+                    let mut staged = tempfile::NamedTempFile::new_in(
+                        sidecar.parent().unwrap_or(Path::new(".")),
+                    )?;
+                    std::io::Write::write_all(&mut staged, &bytes)?;
+                    staged.as_file().sync_all()?;
+                    staged.persist_noclobber(&backup).map_err(|e| e.error)?;
+                }
+            }
+        }
         for (path, sidecar_file) in [(target, false), (sidecar.as_path(), true)] {
             let mut hash = String::new();
             basecraft_io::write_atomic(path, |w| {
@@ -1824,6 +1864,13 @@ impl Session {
                 doc.len()
             )));
         }
+        if segments.iter().any(|(a, b)| a >= b || *b > doc.len()) {
+            return Err(invalid(
+                "extraction segments are outside the source sequence",
+            ));
+        }
+        // Check the accepted source before publishing any derived bytes.
+        self.saved_source(id)?;
         let rec = files::extract_record(doc, start, end, segments, reverse);
         let mut hash = String::new();
         basecraft_io::write_atomic(path, |w| {
@@ -1848,7 +1895,8 @@ impl Session {
                 feature: None,
             },
         );
-        self.write(&entry)
+        self.write(&entry)?;
+        self.publish_extraction(id, path, &entry).map_err(|e| invalid(format!("extracted data saved; provenance incomplete: {e}. Keep the source session and retry to a new destination")))
     }
 
     /// Log a plugin run that read and wrote files, such as an aligner. Its
@@ -1859,7 +1907,7 @@ impl Session {
         id: DocId,
         actor: Actor,
         (plugin, operation): (&str, &str),
-        mut params: serde_json::Value,
+        params: serde_json::Value,
         inputs: &[(String, String)],
         outputs: &[PathBuf],
     ) -> Result<()> {
@@ -1871,33 +1919,6 @@ impl Session {
             let key = self.relative(path);
             hashes.push((key.clone(), basecraft_io::hash_file(path)?));
             keys.push(key);
-        }
-        if outputs.is_empty() && params.is_object() {
-            let last_run = self
-                .events
-                .iter()
-                .rev()
-                .find(|e| e.doc == self.docs[id.0].key && matches!(e.op, Op::ToolRun { .. }))
-                .map(|e| e.id.as_str());
-            let group = self.docs[id.0].undo.last().and_then(|a| a.group);
-            let edits: Vec<_> = self
-                .events
-                .iter()
-                .rev()
-                .take_while(|e| Some(e.id.as_str()) != last_run)
-                .filter(|e| {
-                    e.doc == self.docs[id.0].key
-                        && e.actor == actor
-                        && matches!(e.op, Op::FeatureAdd { .. } | Op::TreeAddSupport { .. })
-                        && group.is_some()
-                        && self.docs[id.0]
-                            .undo
-                            .iter()
-                            .any(|a| a.entry_id == e.id && a.group == group)
-                })
-                .map(|e| e.id.clone())
-                .collect();
-            params["contributions"] = serde_json::json!({"schema_version":1,"edits":edits});
         }
         let entry = self.entry(
             id,
@@ -1915,6 +1936,46 @@ impl Session {
             },
         );
         self.write(&entry)
+    }
+
+    /// Record explicit ownership of proposal/import edits. Generic no-output
+    /// activities never acquire ownership merely by following an edit.
+    pub fn log_contributing_tool_run(
+        &mut self,
+        id: DocId,
+        actor: Actor,
+        activity: (&str, &str),
+        mut params: serde_json::Value,
+        inputs: &[(String, String)],
+        edits: &[String],
+    ) -> Result<()> {
+        if !params.is_object() {
+            return Err(invalid(
+                "contributing activity parameters must be an object",
+            ));
+        }
+        for edit in edits {
+            if self.tracked
+                && !self.events.iter().any(|e| {
+                    e.id == *edit
+                        && e.doc == self.docs[id.0].key
+                        && e.actor == actor
+                        && matches!(
+                            e.op,
+                            Op::FeatureAdd { .. }
+                                | Op::FeatureUpdate { .. }
+                                | Op::TreeAddSupport { .. }
+                                | Op::SeqReplace { .. }
+                        )
+                })
+            {
+                return Err(invalid(
+                    "activity names an unknown or differently owned edit",
+                ));
+            }
+        }
+        params["contributions"] = serde_json::json!({"schema_version":1,"edits":edits});
+        self.log_tool_run(id, actor, activity, params, inputs, &[])
     }
 
     pub fn log_referenced_tool_run(
@@ -2329,7 +2390,7 @@ impl Session {
         revision: u64,
         ops: &[Op],
         actor: &Actor,
-    ) -> Result<()> {
+    ) -> Result<Vec<String>> {
         let slot = self
             .docs
             .get(id.0)
@@ -2377,13 +2438,14 @@ impl Session {
             entries.push(entry);
         }
         if ops.is_empty() {
-            return Ok(());
+            return Ok(Vec::new());
         }
         self.flush()?;
         self.track(id)?;
         if let Some(log) = &mut self.log {
             log.append_batch(&entries)?;
         }
+        let edit_ids = entries.iter().map(|entry| entry.id.clone()).collect();
         if self.tracked {
             self.events.extend(entries);
         }
@@ -2403,7 +2465,7 @@ impl Session {
                 inverse,
                 group: Some(group),
             }));
-        Ok(())
+        Ok(edit_ids)
     }
 
     /// Undo the last operation on a document; returns the undone entry's id.

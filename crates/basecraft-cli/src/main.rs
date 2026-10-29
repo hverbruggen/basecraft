@@ -498,14 +498,22 @@ fn run_plugin(
         version: plugin.info.version.clone(),
     };
     let count = result.ops.len();
-    session.apply_sequence_proposals(doc, generation, snap.version, &result.ops, &actor)?;
+    let edit_ids =
+        session.apply_sequence_proposals(doc, generation, snap.version, &result.ops, &actor)?;
     // No typed contract, so no effective settings or retained run: record what
     // was submitted and the hash of the snapshot a registered run would retain.
     let params = serde_json::json!({"requested": map_value, "operation": operation,
         "contract": "schema-1", "initiator": "CLI",
         "snapshot": {"document": snap.doc, "version": snap.version,
             "hash": basecraft_io::hash_bytes(&snap.payload()?)}});
-    session.log_tool_run(doc, actor, (&plugin.info.id, operation), params, &[], &[])?;
+    session.log_contributing_tool_run(
+        doc,
+        actor,
+        (&plugin.info.id, operation),
+        params,
+        &[],
+        &edit_ids,
+    )?;
     println!("applied {count} proposals");
     if let Some(policy) = save {
         session.save_with_evidence(doc, None, policy)?;

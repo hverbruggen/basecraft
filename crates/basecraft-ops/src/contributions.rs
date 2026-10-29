@@ -6,34 +6,92 @@ use std::collections::{HashMap, HashSet};
 /// Both reports and publication ancestry consume this projection. A run owns
 /// explicit edit identities, never a display label or the nearest historical run.
 pub(crate) fn project(events: &[LogEntry], effective: &mut Vec<EditActivity>) {
-    let event_map: HashMap<_, _> = events.iter().map(|e| (e.id.as_str(), e)).collect();
     let active: HashSet<_> = effective.iter().map(|e| e.id.as_str()).collect();
-    let mut features = HashMap::new();
+    // Feature IDs are stable within a session. GenBank/GFF saves compact deleted
+    // slots; the next open assigns IDs in the saved feature order. Retain owner
+    // identities while rebasing those slots, using the existing coordinate map.
+    let mut features: std::collections::BTreeMap<
+        (&str, u32),
+        (Option<&str>, Option<basecraft_protocol::Location>),
+    > = std::collections::BTreeMap::new();
+    let mut sessions = HashMap::new();
     let mut supports = HashMap::new();
-    for edit in effective.iter() {
-        let Some(event) = event_map.get(edit.id.as_str()) else {
+    for event in events {
+        if let Op::Open { .. } = event.op {
+            if sessions.insert(event.doc.as_str(), event.session.as_str())
+                != Some(event.session.as_str())
+            {
+                let prior: Vec<_> = features
+                    .iter()
+                    .filter(|((doc, _), _)| *doc == event.doc)
+                    .map(|(_, value)| value.clone())
+                    .collect();
+                features.retain(|(doc, _), _| *doc != event.doc);
+                if prior.len() as u64 == event.state.features {
+                    for (id, value) in (0u32..).zip(prior) {
+                        features.insert((&event.doc, id), value);
+                    }
+                } else {
+                    // Imported baseline annotations have no recorded owner.
+                    for id in 0..u32::try_from(event.state.features.min(100_000)).unwrap_or(0) {
+                        features.insert((&event.doc, id), (None, None));
+                    }
+                }
+            }
+        }
+        if !active.contains(event.id.as_str()) {
             continue;
-        };
-        match &edit.operation {
-            Op::FeatureAdd { .. } => {
+        }
+        match &event.op {
+            Op::FeatureAdd { feature } => {
                 if let Some(id) = event.result.feature {
-                    features.insert((event.session.as_str(), id), edit.id.as_str());
+                    features.insert(
+                        (&event.doc, id),
+                        (Some(event.id.as_str()), Some(feature.location.clone())),
+                    );
                 }
             }
             Op::FeatureRemove { id } => {
-                features.remove(&(event.session.as_str(), *id));
+                features.remove(&(event.doc.as_str(), *id));
+            }
+            Op::FeatureUpdate { id, feature } => {
+                if let Some((_, location)) = features.get_mut(&(event.doc.as_str(), *id)) {
+                    *location = Some(feature.location.clone());
+                }
+            }
+            Op::SeqReplace {
+                start,
+                end,
+                residues,
+            } => {
+                let change = basecraft_docs::Change {
+                    pos: *start,
+                    deleted: end - start,
+                    inserted: residues.len() as u64,
+                };
+                features.retain(|(doc, _), (_, location)| {
+                    if *doc != event.doc {
+                        return true;
+                    }
+                    if let Some(previous) = location {
+                        *location = basecraft_docs::coord::map_location(previous, &change);
+                        location.is_some()
+                    } else {
+                        true
+                    }
+                });
             }
             Op::TreeAddSupport { name, .. } => {
-                supports.insert(name.as_str(), edit.id.as_str());
+                supports.insert((event.doc.as_str(), name.as_str()), event.id.as_str());
             }
             Op::TreeRemoveSupport { name } => {
-                supports.remove(name.as_str());
+                supports.remove(&(event.doc.as_str(), name.as_str()));
             }
             Op::TreeStyle {
                 remove_supports, ..
             } => {
                 for name in remove_supports {
-                    supports.remove(name.as_str());
+                    supports.remove(&(event.doc.as_str(), name.as_str()));
                 }
             }
             _ => {}
@@ -41,8 +99,8 @@ pub(crate) fn project(events: &[LogEntry], effective: &mut Vec<EditActivity>) {
     }
     let survivors: HashSet<_> = features
         .values()
-        .chain(supports.values())
-        .copied()
+        .filter_map(|(owner, _)| *owner)
+        .chain(supports.values().copied())
         .collect();
     let mut retained_runs = HashSet::new();
     for event in events {

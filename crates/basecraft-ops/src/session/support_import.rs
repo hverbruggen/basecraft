@@ -114,27 +114,26 @@ impl Session {
         params["sets"] = serde_json::json!(added);
         let key = self.relative(&source);
         self.begin_group();
-        let mut count = 0;
+        let mut edit_ids = Vec::new();
         let applied = ops.into_iter().try_for_each(|op| -> Result<()> {
-            self.apply(id, op)?;
-            count += 1;
+            edit_ids.push(self.apply(id, op)?.entry_id);
             Ok(())
         });
         self.end_group();
         if let Err(error) = applied {
             // One undo removes the partial group; nothing else is touched.
-            if count > 0 {
+            if !edit_ids.is_empty() {
                 self.undo(id)?;
             }
             return Err(error);
         }
-        self.log_tool_run(
+        self.log_contributing_tool_run(
             id,
             self.actor.clone(),
             ACTIVITY,
             params,
             &[(key, hash)],
-            &[],
+            &edit_ids,
         )?;
         Ok(SupportImport { added, matched })
     }

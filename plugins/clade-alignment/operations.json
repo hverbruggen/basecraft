@@ -34,6 +34,12 @@
           "media_type": "text/x-fasta",
           "min": 1,
           "max": 1
+        },
+        "selection_tree": {
+          "view": "newick",
+          "media_type": "text/x-newick",
+          "min": 0,
+          "max": 1
         }
       },
       "outputs": {
@@ -53,7 +59,8 @@
       "legacy_adapter": {
         "primary_input": "alignment",
         "inputs": {
-          "alignment": "input"
+          "alignment": "input",
+          "selection_tree": "selection_tree"
         },
         "input_arrays": [],
         "outputs": {

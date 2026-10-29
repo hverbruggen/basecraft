@@ -269,7 +269,7 @@ struct CladeExtraction {
     output: PathBuf,
     source_changed: bool,
     params: Value,
-    input: (String, String),
+    inputs: Vec<(String, String)>,
 }
 
 #[allow(clippy::struct_excessive_bools)]
@@ -619,7 +619,7 @@ impl qobject::TreeController {
                     state.view.multi_taxa = None;
                 }
                 self.as_mut().set_dirty(true);
-                self.as_mut().notify("");
+                self.as_mut().notify(&warning);
                 self.refresh();
                 Ok(())
             }
@@ -744,12 +744,24 @@ impl qobject::TreeController {
                 self.fail("Select one or more clades first");
                 return;
             }
+            let source = match session.saved_source(doc) {
+                Ok(Some(source)) => source,
+                Ok(None) => {
+                    self.fail("Save the current tree before extracting clades so its exact selection revision can be retained");
+                    return;
+                }
+                Err(error) => {
+                    self.fail(&error.to_string());
+                    return;
+                }
+            };
             (
                 PathBuf::from(r.file_path.to_string()),
                 tree.clone(),
                 taxa,
                 session.id().to_owned(),
                 doc,
+                source.2,
             )
         };
         self.as_mut().set_busy(true);
@@ -758,26 +770,75 @@ impl qobject::TreeController {
         std::thread::spawn(move || {
             let result =
                 (|| -> Result<CladeExtraction, Box<dyn std::error::Error + Send + Sync>> {
-                    let (tree_path, tree, taxa, _, _) = &work;
+                    let (tree_path, tree, taxa, _, _, _) = &work;
                     let link = basecraft_ops::links::AlignmentLink::read_view(tree_path)
                         .map_err(|e| format!("Link an alignment first: {e}"))?;
                     let input = link.checked_snapshot(tree_path, tree)?;
                     let output =
                         basecraft_plugin_host::file_tool::output_beside(tree_path, "clade", "afa");
-                    let manifest = basecraft_plugin_host::Manifest::load(
-                        &crate::bridge::plugin_dir("clade-alignment"),
-                    )?;
-                    let mut process = basecraft_plugin_host::PluginProcess::spawn(&manifest)?;
-                    let params = json!({"input":input,"output":output,"taxa":taxa,"tree_version":tree.version()});
-                    let result = process.invoke("extract", params.clone(), None)?;
-                    if !output.exists() || result.outputs.is_empty() {
-                        return Err("Plugin wrote no alignment".into());
+                    use basecraft_plugin_host::{
+                        jobs::JobManager,
+                        policy::SessionPolicy,
+                        registry::{Registry, RegistryConfig},
+                    };
+                    use basecraft_protocol::operation::{
+                        InputReference, OperationRequest, RuntimeState,
+                    };
+                    let registry = Registry::load(&RegistryConfig::discover()?)?;
+                    let root = project_root(tree_path).canonicalize()?;
+                    let request = OperationRequest {
+                        operation: "basecraft.clade-alignment/extract@1".into(),
+                        inputs: [
+                            (
+                                "alignment".into(),
+                                vec![InputReference::File {
+                                    path: input.to_string_lossy().into_owned(),
+                                }],
+                            ),
+                            (
+                                "selection_tree".into(),
+                                vec![InputReference::File {
+                                    path: tree_path.to_string_lossy().into_owned(),
+                                }],
+                            ),
+                        ]
+                        .into(),
+                        parameters: json!({"taxa":taxa}),
+                        destinations: [(
+                            "artifacts/clade.afa".into(),
+                            output.strip_prefix(&root)?.to_string_lossy().into_owned(),
+                        )]
+                        .into(),
+                        pins: None,
+                        request_key: None,
+                        target: None,
+                    };
+                    let mut jobs = JobManager::default().with_task_cancellation();
+                    let accepted =
+                        jobs.submit(&registry, request, SessionPolicy::new(&root, true)?, "GUI")?;
+                    let outcome = loop {
+                        let outcome = jobs.get(&accepted.run_id)?;
+                        if outcome.state.terminal() {
+                            break outcome;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    };
+                    if outcome.state != RuntimeState::Completed {
+                        return Err(format!(
+                            "Clade extraction ended {:?}: {:?}",
+                            outcome.state, outcome.errors
+                        )
+                        .into());
                     }
+                    let params = json!({"taxa":taxa,"run_id":outcome.run_id,"tree_hash":work.5,"mapping":"rows by exact name; columns unchanged"});
                     Ok(CladeExtraction {
                         output,
                         source_changed: link.source_changed(),
                         params,
-                        input: (input.to_string_lossy().into_owned(), link.snapshot_hash),
+                        inputs: vec![
+                            (input.to_string_lossy().into_owned(), link.snapshot_hash),
+                            (tree_path.to_string_lossy().into_owned(), work.5.clone()),
+                        ],
                     })
                 })();
             let _ = qt_thread.queue(move |mut this| {
@@ -789,7 +850,7 @@ impl qobject::TreeController {
                     session.log_tool_run(work.4,basecraft_protocol::Actor::Plugin {
                         id:"basecraft.clade-alignment".into(),version:"0.1.0".into()
                     },("basecraft.clade-alignment","extract"),done.params.clone(),
-                        std::slice::from_ref(&done.input),std::slice::from_ref(&done.output))?;
+                        &done.inputs,std::slice::from_ref(&done.output))?;
                     Ok(done)
                 });
                 match result {
@@ -861,6 +922,10 @@ impl qobject::TreeController {
         };
         match session.open(&path) {
             Ok(doc) if session.is_tree(doc) => {
+                let warning = session
+                    .tree_metadata_warning(doc)
+                    .unwrap_or_default()
+                    .to_owned();
                 {
                     let mut r = self.as_mut().rust_mut();
                     let r = &mut *r;
