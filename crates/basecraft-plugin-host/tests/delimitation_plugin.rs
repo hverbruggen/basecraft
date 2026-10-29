@@ -1,11 +1,13 @@
 //! Actual public socket/SDK/native-engine workflows through registered
-//! operations; no mock numerical results.
+//! operations; no mock numerical results. Cancellation uses a gated engine
+//! wrapper to hold execution without relying on scientific workload duration.
 mod common;
 
 use basecraft_ops::{Session, input_evidence, replay};
 use basecraft_plugin_host::jobs::JobManager;
 use basecraft_protocol::{delimitation::JobStatus, operation::RuntimeState};
 use serde_json::{Value, json};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 /// The test environment names the native delimitation engine the plugin runs.
@@ -515,7 +517,6 @@ fn dirty_tree_submission_retains_generated_bytes_without_stale_original_claim() 
 
 #[test]
 fn ptp_and_mptp_keep_upstream_directories_hidden_and_preserve_imported_groups() {
-    use std::os::unix::fs::PermissionsExt;
     // The plugin finds mPTP through the environment, so the cases run in a
     // child process that names this storage fixture as mPTP.
     if std::env::var_os("BASECRAFT_MPTP_FIXTURE_CHILD").is_some() {
@@ -803,35 +804,99 @@ fn parent_cancellation_interrupts_registered_fit_and_retains_every_stage_receipt
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("input.fa");
     std::fs::write(&source, ">a\nAAAAAAAAAAAAAAAAAAAA\n>b\nAAAAAAAAAAAAAAAAAAAT\n>c\nAAAAACAAAAAAAAAAAAAT\n>d\nAAAAACAAAAAGAAAAAAAT\n>e\nAAAAACAAAAAGAAAAAATT\n").unwrap();
-    let registry = common::bundled();
+    // Reuse the public adapter and real preparation engine. Only ASAP execution
+    // is held: an accepted stage receipt alone cannot prove the fit is running,
+    // and even a large simulation ceiling permits ASAP's early stopping.
+    let bundled = common::fixture_package(
+        root.path(),
+        "delimitation",
+        "asap",
+        r"
+from pathlib import Path
+import delimitation_plugin as adapter
+adapter.executable = lambda params: str(Path(__file__).with_name('engine.py'))
+adapter.plugin.contract()
+adapter.plugin.run()
+",
+    );
+    let package = bundled.join("delimitation");
+    let manifest = std::fs::read_to_string(common::plugins().join("delimitation/plugin.toml"))
+        .unwrap()
+        .replace("python:delimitation_plugin.py", "python:fixture.py");
+    std::fs::write(package.join("plugin.toml"), manifest).unwrap();
+    let host = bundled.join("host-workflows");
+    std::fs::create_dir(&host).unwrap();
+    for name in ["plugin.toml", "operations.json", "host_workflows.py"] {
+        std::fs::copy(
+            common::plugins().join("host-workflows").join(name),
+            host.join(name),
+        )
+        .unwrap();
+    }
+    for name in ["operations.json", "delimitation_plugin.py"] {
+        std::fs::copy(
+            common::plugins().join("delimitation").join(name),
+            package.join(name),
+        )
+        .unwrap();
+    }
+    let engine = package.join("engine.py");
+    let real_engine = std::env::var("BASECRAFT_DELIMITATION").unwrap();
+    std::fs::write(
+        &engine,
+        format!(
+            r"#!/usr/bin/env python3
+import json, os, sys, time
+from pathlib import Path
+if len(sys.argv) == 3 and sys.argv[1] == '--request':
+    request = json.loads(Path(sys.argv[2]).read_text())
+    if request['method'] == 'asap':
+        gate = Path(__file__).with_name('release-fit')
+        ready = Path(__file__).with_name('fit-ready')
+        ready.with_suffix('.tmp').write_text(json.dumps(request))
+        ready.with_suffix('.tmp').replace(ready)
+        deadline = time.monotonic() + 60
+        while not gate.exists():
+            if time.monotonic() >= deadline:
+                raise RuntimeError('test did not cancel the held fit')
+            time.sleep(.01)
+os.execv({real_engine}, [{real_engine}, *sys.argv[1:]])
+",
+            real_engine = serde_json::to_string(&real_engine).unwrap()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&engine, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let registry = common::registry(&bundled);
     let mut session = Session::new(root.path());
     let doc = session.open(&source).unwrap();
     let generation = session.generation(doc);
     let mut manager = JobManager::default();
     let accepted = common::submit_in(&mut manager, &registry, &mut session, |s| json!({
         "operation":"basecraft.host/asap_alignment@1", "inputs":{"alignment":common::document(s,doc)},
-        "parameters":{"model":"p","replicates":10_000_000}
+        "parameters":{"model":"p","replicates":1000},
+        "destinations":{"workspace":"cancelled.spart"}
     })).unwrap();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
-        let path = common::evidence(&accepted).join("stages.json");
-        if let Ok(bytes) = std::fs::read(path)
-            && let Ok(stages) = serde_json::from_slice::<
-                Vec<basecraft_protocol::operation::OperationOutcome>,
-            >(&bytes)
-            && stages
-                .last()
-                .is_some_and(|s| s.operation == "basecraft.delimitation/asap@1")
-        {
+        if package.join("fit-ready").is_file() {
             break;
         }
-        assert!(
-            !manager.get(&accepted.run_id).unwrap().state.terminal(),
-            "workflow stopped before fitting"
-        );
+        let outcome = manager.get(&accepted.run_id).unwrap();
+        if outcome.state.terminal() {
+            let retained = root.keep();
+            panic!(
+                "workflow stopped before fitting: {outcome:#?}; evidence: {}",
+                retained.display()
+            );
+        }
         assert!(std::time::Instant::now() < deadline, "fit did not start");
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
+    let held_request = common::read_json(&package.join("fit-ready"));
+    let child_cancel = Path::new(held_request["cancel_file"].as_str().unwrap());
+    assert!(!child_cancel.exists());
+    assert!(!package.join("release-fit").exists());
     manager.cancel(&accepted.run_id).unwrap();
     let cancelled = common::wait_in(&manager, &mut session, &accepted.run_id);
     assert_eq!(cancelled.state, RuntimeState::Cancelled);
@@ -847,15 +912,20 @@ fn parent_cancellation_interrupts_registered_fit_and_retains_every_stage_receipt
     assert_eq!(stages.len(), 2);
     assert_eq!(stages[0].state, RuntimeState::Completed);
     assert_eq!(stages[1].state, RuntimeState::Cancelled);
+    // This path belongs to the child: parent-only cancellation is insufficient.
+    assert!(child_cancel.is_file());
+    assert!(!package.join("release-fit").exists());
     for stage in stages {
         let receipt = common::read_json(&common::evidence(&stage).join("runtime.json"));
         assert_eq!(receipt["state"], serde_json::to_value(stage.state).unwrap());
     }
-    assert!(
-        !common::evidence(&cancelled)
-            .join("workflow/fit.json")
-            .exists()
-    );
+    // The workflow writes working output before the runner publishes artifacts.
+    // Neither boundary may expose a successful fit from this held child.
+    for path in ["workflow/fit.json", "artifacts/fit.json"] {
+        assert!(!common::evidence(&cancelled).join(path).exists());
+    }
+    assert_eq!(cancelled.artifacts, Vec::new());
+    assert!(!root.path().join("cancelled.spart").exists());
 }
 
 #[test]
