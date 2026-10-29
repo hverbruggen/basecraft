@@ -107,6 +107,9 @@ pub enum SupportKind {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct TreeStyle {
+    /// Display-only labels keyed by original tip identity.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tip_labels: BTreeMap<String, String>,
     pub support_placement: SupportPlacement,
     /// Support sets shown at nodes, in order, joined with "/". Empty shows
     /// every set.
@@ -140,6 +143,7 @@ pub struct TreeStyle {
 impl Default for TreeStyle {
     fn default() -> Self {
         Self {
+            tip_labels: BTreeMap::new(),
             support_placement: SupportPlacement::Natural,
             support_shown: Vec::new(),
             support_min: 0,

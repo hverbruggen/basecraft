@@ -95,6 +95,8 @@ struct Manifest {
     tables: Tables,
     #[serde(default)]
     import: ImportSettings,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    partitions: Vec<basecraft_protocol::delimitation::Hypothesis>,
     #[serde(flatten)]
     extra: BTreeMap<String, serde_json::Value>,
 }
@@ -246,6 +248,7 @@ pub fn load(manifest_path: &Path) -> Result<OpenedMetadata> {
         identifications,
         links,
         import: manifest.import,
+        partitions: manifest.partitions,
         extra: manifest.extra,
     };
     model::validate(&metadata).map_err(|e| invalid(e.0))?;
@@ -336,6 +339,7 @@ pub fn encode(meta: &ProjectMetadata) -> Result<Vec<Vec<u8>>> {
             records: entry(RECORDS, &records, Vec::new()),
         },
         import: meta.import.clone(),
+        partitions: meta.partitions.clone(),
         extra: meta.extra.clone(),
     };
     let mut manifest = serde_json::to_vec_pretty(&manifest)?;
@@ -1104,6 +1108,10 @@ pub fn cell_change(
 pub fn describe(edit: &basecraft_protocol::metadata::MetadataEdit) -> String {
     use basecraft_protocol::metadata::MetadataEdit;
     match edit {
+        MetadataEdit::PutPartition { partition } => {
+            format!("Saved project partition {}", partition.name)
+        }
+        MetadataEdit::RemovePartition { id } => format!("Removed project partition {id}"),
         MetadataEdit::Apply { changes } => format!("Specimen metadata: {}", summary(changes)),
         MetadataEdit::RemoveSpecimens { specimens } => format!(
             "Removed {} from the specimen roster",
@@ -1283,4 +1291,234 @@ pub fn insdc(session: &Session, doc: crate::DocId, specimen: &str) -> Result<ser
         "qualifiers": source.qualifiers.into_iter().collect::<BTreeMap<_, _>>(),
         "missing": source.missing,
     }))
+}
+
+/// Shared consumer routes. Plans are inspectable and applied using the normal
+/// version-checked `apply` operation; this function never mutates documents.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum ConsumerRequest {
+    Partitions,
+    /// Explicit record-ID assignments reviewed at the document workflow step.
+    LinkRecords {
+        document: String,
+        links: BTreeMap<String, String>,
+    },
+    Labels {
+        document: String,
+        records: Vec<String>,
+        fields: Vec<basecraft_protocol::metadata::LabelField>,
+    },
+    LinkWorkspace {
+        workspace: String,
+        links: BTreeMap<String, String>,
+    },
+    PromotePartition {
+        workspace: String,
+        hypothesis: String,
+        id: String,
+    },
+}
+
+pub fn consumer_plan(
+    session: &Session,
+    doc: crate::DocId,
+    request: &ConsumerRequest,
+) -> Result<serde_json::Value> {
+    use basecraft_docs::metadata_consumers;
+    use basecraft_protocol::{Op, metadata::MetadataEdit};
+    let meta = checked_metadata(session, doc)?;
+    let metadata_hash =
+        basecraft_io::hash_bytes(&serde_json::to_vec(meta).map_err(|e| invalid(e.to_string()))?);
+    let (workspace, links, promotion) = match request {
+        ConsumerRequest::Partitions => {
+            return Ok(
+                serde_json::json!({"partitions": metadata_consumers::partitions(meta), "metadata_hash": metadata_hash}),
+            );
+        }
+        ConsumerRequest::LinkRecords { document, links } => {
+            let key = document_key(session.root(), Path::new(document))?;
+            let edit = MetadataEdit::Apply {
+                changes: ChangeSet {
+                    links: links
+                        .iter()
+                        .map(|(record, specimen)| RecordLink {
+                            document: key.clone(),
+                            record: record.clone(),
+                            specimen: specimen.clone(),
+                        })
+                        .collect(),
+                    ..ChangeSet::default()
+                },
+            };
+            let mut checked = meta.clone();
+            model::apply(&mut checked, &edit).map_err(|e| invalid(e.0))?;
+            return Ok(
+                serde_json::json!({"target":session.doc_key(doc), "operation": Op::MetadataEdit { edit: Box::new(edit) }, "metadata_hash": metadata_hash}),
+            );
+        }
+        ConsumerRequest::Labels {
+            document,
+            records,
+            fields,
+        } => {
+            let key = document_key(session.root(), Path::new(document))?;
+            let source = consumer_source(session, doc)?;
+            if matches!(
+                crate::files::Format::from_path(&session.root().join(&key))?,
+                crate::files::Format::Tree
+            ) {
+                let mut reader = Session::unlogged(session.root());
+                let tree = reader.open(&session.root().join(&key))?;
+                verify_label_owner(reader.tree(tree).style(), &source)?;
+            }
+            return Ok(
+                serde_json::json!({"labels":metadata_consumers::compose_labels(meta, &key, records, fields), "metadata_hash":metadata_hash, "metadata_source":source, "fields":fields}),
+            );
+        }
+        ConsumerRequest::LinkWorkspace { workspace, links } => (workspace, Some(links), None),
+        ConsumerRequest::PromotePartition {
+            workspace,
+            hypothesis,
+            id,
+        } => (workspace, None, Some((hypothesis, id))),
+    };
+    let key = document_key(session.root(), Path::new(workspace))?;
+    // A separate unlogged reader keeps planning passive and never creates records.
+    let mut reader = Session::unlogged(session.root());
+    let work_doc = reader.open(&session.root().join(&key))?;
+    if !reader.is_delimitation(work_doc) {
+        return Err(invalid("choose a delimitation workspace"));
+    }
+    let work = reader.delimitation(work_doc);
+    let workspace_hash =
+        basecraft_io::hash_bytes(&serde_json::to_vec(work).map_err(|e| invalid(e.to_string()))?);
+    let (target, operation) = if let Some(links) = links {
+        for roster in links.values() {
+            if !meta.specimens.rows.iter().any(|s| &s.id == roster) {
+                return Err(invalid(format!("unknown project roster ID {roster}")));
+            }
+        }
+        let edit = basecraft_protocol::delimitation::DelimitationEdit::SetRosterLinks {
+            links: links.clone(),
+            metadata: Some(consumer_source(session, doc)?),
+        };
+        let mut checked = work.clone();
+        basecraft_docs::delimitation::apply(&mut checked, &edit).map_err(|e| invalid(e.0))?;
+        (
+            key,
+            Op::DelimitationEdit {
+                edit: Box::new(edit),
+            },
+        )
+    } else {
+        let stored = work.exchange_fields.get(basecraft_docs::delimitation::METADATA_REFERENCE)
+            .ok_or_else(|| invalid("Workspace roster links have no metadata owner; explicitly link them to this project before promoting"))?;
+        let stored: basecraft_protocol::provenance::InputReference =
+            serde_json::from_str(stored)
+                .map_err(|e| invalid(format!("Invalid workspace metadata reference: {e}")))?;
+        verify_consumer_owner(&stored, &consumer_source(session, doc)?)?;
+        let (hypothesis, id) = promotion.ok_or_else(|| invalid("missing partition source"))?;
+        let mut partition = metadata_consumers::project_partition(meta, work, hypothesis, id)
+            .map_err(|e| invalid(e.0))?;
+        partition
+            .provenance
+            .inputs
+            .insert("project_metadata".into(), metadata_hash.clone());
+        partition
+            .provenance
+            .inputs
+            .insert("source_workspace".into(), workspace_hash.clone());
+        partition
+            .provenance
+            .parameters
+            .insert("source_workspace".into(), serde_json::json!(key));
+        partition.provenance.parameters.insert(
+            "metadata_source".into(),
+            serde_json::to_value(consumer_source(session, doc)?)
+                .map_err(|e| invalid(e.to_string()))?,
+        );
+        (
+            session.doc_key(doc).to_string(),
+            Op::MetadataEdit {
+                edit: Box::new(MetadataEdit::PutPartition {
+                    partition: Box::new(partition),
+                }),
+            },
+        )
+    };
+    Ok(
+        serde_json::json!({"target":target, "operation":operation, "metadata_hash":metadata_hash, "workspace_hash":workspace_hash}),
+    )
+}
+
+/// Reuse the saved metadata source and its existing Open activity identity.
+/// The activity remains in publication history across edits and moves, including
+/// accepted typed TSV edits; an unrelated project's equal local IDs are insufficient.
+/// No independent roster or identity allocator is introduced.
+pub fn consumer_source(
+    session: &Session,
+    doc: crate::DocId,
+) -> Result<basecraft_protocol::provenance::InputReference> {
+    checked_metadata(session, doc)?;
+    let (_, stamp, hash) = session
+        .saved_source(doc)?
+        .ok_or_else(|| invalid("Save the specimen metadata before binding consumers"))?;
+    let path = session.root().join(session.doc_key(doc));
+    let publication = crate::provenance::inspect(&path).map_err(|_| invalid("Metadata owner evidence is unavailable; save its document history before binding consumers"))?;
+    let event = publication
+        .events
+        .iter()
+        .find(|e| matches!(e.op, basecraft_protocol::Op::Open { .. }))
+        .ok_or_else(|| {
+            invalid("Metadata owner Open activity is unavailable; restore its provenance")
+        })?;
+    Ok(basecraft_protocol::provenance::InputReference {
+        path: session.doc_key(doc).into(),
+        stamp,
+        hash,
+        extra: BTreeMap::from([("owner_event".into(), serde_json::json!(event.id))]),
+    })
+}
+
+/// Hashes identify the retained snapshot; owner activity + logical project path
+/// identify the document allowed to refresh it, even after normal edits/moves.
+pub fn verify_consumer_owner(
+    expected: &basecraft_protocol::provenance::InputReference,
+    current: &basecraft_protocol::provenance::InputReference,
+) -> Result<()> {
+    let owner = expected
+        .extra
+        .get("owner_event")
+        .and_then(serde_json::Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            invalid("Stored metadata owner is missing; explicitly rebind the consumer")
+        })?;
+    if current.path != expected.path
+        || current
+            .extra
+            .get("owner_event")
+            .and_then(serde_json::Value::as_str)
+            != Some(owner)
+    {
+        return Err(invalid(
+            "Consumer belongs to different project metadata; identical specimen IDs do not establish ownership. Explicitly relink it to this project.",
+        ));
+    }
+    Ok(())
+}
+
+/// A saved display snapshot stays readable everywhere, but refreshing it must
+/// not resolve equal IDs against another project's metadata.
+pub fn verify_label_owner(
+    style: &basecraft_protocol::TreeStyle,
+    source: &basecraft_protocol::provenance::InputReference,
+) -> Result<()> {
+    let Some(snapshot) = style.extra.get("metadata_labels") else {
+        return Ok(());
+    };
+    let expected = serde_json::from_value(snapshot["metadata_source"].clone())
+        .map_err(|_| invalid("Label snapshot has no metadata owner; choose Original labels before explicitly composing a new snapshot"))?;
+    verify_consumer_owner(&expected, source)
 }

@@ -10,6 +10,7 @@ Item {
     height: 300
     property int textSize: 12
     property int annotations: 0
+    property int labelRequests: 0
     property var linkTarget: null
     QtObject {
         id: controller
@@ -33,7 +34,7 @@ Item {
         RibbonPage {
             TreeRootingGroup { id: root; controller: controller; treeOpen: true }
             TreeCladeGroup { id: clade; controller: controller; onAnnotateRequested: host.annotations++ }
-            TreeStyleGroup { id: order; controller: controller }
+            TreeStyleGroup { id: order; controller: controller; onLabelsRequested: host.labelRequests++ }
             TreeAlignmentGroup { id: alignment; controller: controller; onLinkRequested: target => host.linkTarget = target }
         }
     }
@@ -91,6 +92,17 @@ Item {
             clade.controller = null
             order.controller = null
             verify(!small.enabled && !large.enabled)
+        }
+        function test_metadata_labels_follow_tree_context() {
+            host.labelRequests = 0
+            const labels = findChild(order, "metadataTipLabels")
+            verify(labels.enabled)
+            labels.commandAction.trigger()
+            compare(host.labelRequests, 1)
+            order.controller = null
+            verify(!labels.enabled)
+            labels.commandAction.trigger()
+            compare(host.labelRequests, 1)
         }
         function test_caption_alignment_data() {
             const rows = []

@@ -189,6 +189,12 @@ pub mod qobject {
         /// Support sets and style as JSON, for the support settings.
         #[qinvokable]
         fn style_json(self: &TreeController) -> QString;
+        #[qinvokable]
+        fn compose_metadata_labels(
+            self: Pin<&mut TreeController>,
+            project: &QString,
+            fields: &QString,
+        ) -> QString;
         /// Replace the style from JSON. Returns an error message, or empty.
         #[qinvokable]
         fn set_style(self: Pin<&mut TreeController>, json: &QString) -> QString;
@@ -1481,6 +1487,73 @@ impl qobject::TreeController {
         }
     }
 
+    pub fn compose_metadata_labels(
+        mut self: Pin<&mut Self>,
+        project: &QString,
+        fields: &QString,
+    ) -> QString {
+        let planned = (|| -> Result<(TreeStyle, usize), String> {
+            let r = self.rust();
+            let (session, doc) = r.session.as_ref().zip(r.doc).ok_or("No tree open")?;
+            let tree = session.tree(doc);
+            let mut style = tree.style().clone();
+            let previous_style = style.clone();
+            let fields: Vec<basecraft_protocol::metadata::LabelField> =
+                serde_json::from_str(&fields.to_string()).map_err(|e| e.to_string())?;
+            style.tip_labels.clear();
+            style.extra.remove("metadata_labels");
+            if fields.is_empty() {
+                return Ok((style, 0));
+            }
+            let root = PathBuf::from(project.to_string());
+            let mut reader = Session::unlogged(&root);
+            let metadata = basecraft_ops::metadata::open(&mut reader, false)
+                .map_err(|e| e.to_string())?
+                .ok_or("This project has no specimen metadata")?;
+            let source = basecraft_ops::metadata::consumer_source(&reader, metadata)
+                .map_err(|e| e.to_string())?;
+            basecraft_ops::metadata::verify_label_owner(&previous_style, &source)
+                .map_err(|e| e.to_string())?;
+            let path = session.root().join(session.doc_key(doc));
+            let request = basecraft_ops::metadata::ConsumerRequest::Labels {
+                document: path.to_string_lossy().into_owned(),
+                records: tree
+                    .nodes()
+                    .iter()
+                    .filter(|n| n.is_tip())
+                    .map(|n| n.name.clone())
+                    .collect(),
+                fields,
+            };
+            let plan = basecraft_ops::metadata::consumer_plan(&reader, metadata, &request)
+                .map_err(|e| e.to_string())?;
+            let labels: Vec<basecraft_protocol::metadata::ComposedLabel> =
+                serde_json::from_value(plan["labels"].clone()).map_err(|e| e.to_string())?;
+            let issues = labels.iter().filter(|l| l.issue.is_some()).count();
+            style.tip_labels = labels
+                .into_iter()
+                .filter(|l| l.issue.is_none())
+                .map(|l| (l.record, l.label))
+                .collect();
+            style.extra.insert("metadata_labels".into(), plan);
+            Ok((style, issues))
+        })();
+        match planned {
+            Err(error) => QString::from(error),
+            Ok((style, issues)) => {
+                if let Err(error) = self.as_mut().edit(Op::TreeStyle {
+                    style,
+                    remove_supports: Vec::new(),
+                }) {
+                    QString::from(error)
+                } else {
+                    self.done(&format!("Composed tip labels; {issues} tips retain their identity because links are missing or ambiguous"));
+                    QString::default()
+                }
+            }
+        }
+    }
+
     pub fn style_json(&self) -> QString {
         let v = self
             .with_doc(|d| {
@@ -1494,6 +1567,7 @@ impl qobject::TreeController {
                         "kind": s.kind,
                     })).collect::<Vec<_>>(),
                     "style": d.style(),
+                    "tips": d.nodes().iter().filter(|n| n.is_tip()).map(|n| &n.name).collect::<Vec<_>>(),
                 })
             })
             .unwrap_or(Value::Null);

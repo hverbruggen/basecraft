@@ -684,7 +684,7 @@ fn describe_node(doc: &TreeDoc, n: usize) -> String {
     let node = doc.node(n);
     let mut parts = Vec::new();
     if node.is_tip() {
-        parts.push(display_name(&node.name));
+        parts.push(tip_label(doc, &node.name));
     } else {
         let tips = doc.tip_counts()[n];
         parts.push(if node.name.is_empty() {
@@ -755,6 +755,15 @@ fn footer_space(doc: &TreeDoc) -> f32 {
     } else {
         0.0
     }
+}
+
+/// Display settings never alter Newick names or matching keys.
+pub fn tip_label(doc: &TreeDoc, name: &str) -> String {
+    doc.style()
+        .tip_labels
+        .get(name)
+        .cloned()
+        .unwrap_or_else(|| display_name(name))
 }
 
 #[cfg(test)]
@@ -957,7 +966,7 @@ fn layout_with(
     let show_tips = row >= tip_font * 0.7;
     let label_w = if show_tips {
         tips.iter()
-            .map(|&t| text_w(&doc.node(t).name, tip_font))
+            .map(|&t| text_w(&tip_label(doc, &doc.node(t).name), tip_font))
             .fold(0.0, f32::max)
             + LABEL_GAP
     } else {
@@ -1230,7 +1239,7 @@ fn shapes(
                 x: l.x[i] + LABEL_GAP,
                 y: l.y[i] - tip_font / 2.0,
                 size: tip_font,
-                text: display_name(&node.name),
+                text: tip_label(doc, &node.name),
                 color: if in_selection[i] {
                     pal.accent
                 } else {
@@ -1638,6 +1647,36 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn metadata_labels_draw_without_replacing_identity() {
+        let mut doc = tree("(scientific_ID:1,other:2);");
+        let mut style = doc.style().clone();
+        style.tip_labels.insert(
+            "scientific_ID".into(),
+            "Caulerpa taxifolia voucher 123".into(),
+        );
+        doc.set_style(style);
+        let mut view = TreeView::new(800.0, 400.0);
+        view.sync(&doc);
+        let drawn = texts(&shapes(&doc, &view.layout, &Palette::print(), None, None));
+        assert!(
+            drawn
+                .iter()
+                .any(|(text, _, _)| text == "Caulerpa taxifolia voucher 123")
+        );
+        assert!(doc.nodes().iter().any(|n| n.name == "scientific_ID"));
+        assert!(
+            view.tip_rows(&doc)
+                .iter()
+                .any(|(name, _, _)| name == "scientific_ID")
+        );
+        assert!(
+            crate::accessible::tree(&doc, 0)
+                .text
+                .contains("Caulerpa taxifolia voucher 123")
+        );
     }
 
     #[test]

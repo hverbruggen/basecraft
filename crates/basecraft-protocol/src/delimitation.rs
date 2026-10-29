@@ -196,6 +196,14 @@ pub struct DelimitationWorkspace {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum DelimitationEdit {
+    /// Explicit workspace specimen -> project roster ID links. Empty replaces
+    /// all links with unlinked status; local scientific IDs stay unchanged.
+    SetRosterLinks {
+        links: BTreeMap<String, String>,
+        /// Standard source reference, with the metadata's existing owner activity.
+        #[serde(default)]
+        metadata: Option<crate::provenance::InputReference>,
+    },
     /// Import a validated batch without splitting lineage across separate edits.
     Combine {
         hypotheses: Vec<Hypothesis>,

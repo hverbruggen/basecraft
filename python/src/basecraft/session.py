@@ -324,7 +324,7 @@ class Session:
         return self.call("state", {"document": document})
 
     def read(self, document, start=None, end=None, row=None):
-        """Read residues ``start..end`` (row for alignments), tree tips or a delimitation."""
+        """Read residues ``start..end`` (row for alignments), tree tips/style (including saved label evidence) or a delimitation."""
         arguments = {"document": document}
         for key, value in (("start", start), ("end", end), ("row", row)):
             if value is not None:
@@ -405,6 +405,13 @@ class Session:
         version = self.state(document)["version"]
         return self.apply(document, version, {"op": "metadata.edit", "params": {
             "edit": {"action": "apply", "changes": changes}}})
+
+    def metadata_consumer(self, document, request):
+        """Inspect partitions/labels or plan links/promotion; apply the returned typed
+        operation to its target using ``apply`` at the current version, then save.
+        See ``metadata_consumer`` MCP tool for the shared request contract.
+        """
+        return self.call("metadata_consumer", {"document": document, "request": request})
 
     def insdc_source(self, document, specimen):
         """INSDC source qualifiers derived for a specimen."""

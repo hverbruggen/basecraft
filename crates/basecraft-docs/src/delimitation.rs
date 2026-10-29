@@ -111,6 +111,26 @@ fn fail<T>(message: &str) -> Result<T, EditError> {
 pub fn apply(work: &mut DelimitationWorkspace, edit: &DelimitationEdit) -> Result<(), EditError> {
     let mut next = work.clone();
     match edit {
+        DelimitationEdit::SetRosterLinks { links, metadata } => {
+            if links.iter().any(|(id, roster)| {
+                roster.trim().is_empty() || !next.specimens.iter().any(|s| &s.id == id)
+            }) {
+                return fail("roster links require known workspace IDs and nonempty roster IDs");
+            }
+            next.exchange_fields.remove(METADATA_REFERENCE);
+            if let Some(reference) = metadata {
+                next.exchange_fields.insert(
+                    METADATA_REFERENCE.into(),
+                    serde_json::to_string(reference).map_err(|e| EditError(e.to_string()))?,
+                );
+            }
+            for specimen in &mut next.specimens {
+                specimen.attributes.remove(ROSTER_ID);
+                if let Some(id) = links.get(&specimen.id) {
+                    specimen.attributes.insert(ROSTER_ID.into(), id.clone());
+                }
+            }
+        }
         DelimitationEdit::Combine { hypotheses } => {
             next.hypotheses.extend(hypotheses.clone());
             next.view.visible = next.hypotheses.iter().map(|h| h.id.clone()).collect();
@@ -298,3 +318,9 @@ fn find<'a>(
         .find(|h| h.id == id)
         .ok_or_else(|| EditError("unknown hypothesis".into()))
 }
+
+/// Stored in the existing portable specimen attributes, never inferred on read.
+pub const ROSTER_ID: &str = "basecraft_roster_id";
+
+/// The existing workspace extension stores a standard provenance input reference.
+pub const METADATA_REFERENCE: &str = "basecraft_metadata_reference";

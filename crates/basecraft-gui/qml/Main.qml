@@ -1168,6 +1168,7 @@ ApplicationWindow {
                         controller: window.treeOpen ? window.current : null
                         customization: window.customization
                         onExtraRequested: treeStyle.openStyle("extra")
+                        onLabelsRequested: metadataTipLabels.show(window.current, window.currentPath)
                         Component.onCompleted: commands.forEach(command => window.registerRibbonCommand(command))
                     }
                     ToolSeparator { Layout.fillHeight: true }
@@ -1248,6 +1249,10 @@ ApplicationWindow {
                 }
                 RibbonPage {
                     SpeciesMethodsGroup { commandSuffix: "workspace" }
+                    RibbonGroup {
+                        title: "Specimens"
+                        RibbonButton { commandId: "species.roster-links"; text: "Roster"; iconName: "matrix"; enabled: window.speciesView !== null && specimenMetadata.available; tip: "Explicitly link workspace records to project specimens and save partitions"; onInvoked: rosterConsumer.show(window.current, window.currentPath) }
+                    }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
                         title: "Display"
@@ -2167,6 +2172,18 @@ ApplicationWindow {
         }
     }
 
+    SpecimenTreeLabelsDialog {
+        id: metadataTipLabels
+        metadataController: specimenMetadata
+        table: window.metadataTable
+        projectDir: shell.project_dir
+    }
+    SpecimenRosterDialog {
+        id: rosterConsumer
+        metadataController: specimenMetadata
+        table: window.metadataTable
+        projectDir: shell.project_dir
+    }
     TreeTipNameDialog {
         id: tipDialog
         controller: window.treeOpen ? window.current : null

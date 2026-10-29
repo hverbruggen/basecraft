@@ -56,3 +56,49 @@ Scale-bar labels strictly greater than 0.001 use ordinary decimal notation,
 including values at least 1000; smaller values keep scientific notation. Decimal
 formatting uses a round-trip representation so small nonzero values cannot be
 rounded misleadingly to zero.
+
+`style.tip_labels` optionally maps original tip identities to display strings.
+It changes canvas, figure export, tooltips and the selectable text display-label
+column; Newick names, alignment matching and inference inputs retain their IDs.
+Empty/absent maps preserve the normal name display. Metadata composition is an
+explicit `tree.style` snapshot: `style.metadata_labels` retains ordered fields,
+resolved specimen IDs, per-tip link issues and the canonical metadata hash.
+Later metadata edits do not silently replace an accepted snapshot. Recompose
+from Tree style > Labels to update it, or choose Original labels to clear it.
+The `genus`, `specificEpithet` and `accession` columns supply the corresponding
+fields; missing values are skipped. Unknown/duplicate record links keep the
+original identity and report an issue. Taxon names are not split heuristically.
+
+Project partitions are `Hypothesis` values in the metadata JSON manifest, with
+members in the canonical specimen roster. Current identifications remain a
+partition derived from recorded assignments. Explicit workspace links are stored
+in each existing portable specimen attribute `basecraft_roster_id`, edited with
+`delimitation.edit/set_roster_links`; absent links leave legacy workspaces usable.
+Promotion requires complete valid links and rejects conflicting many-to-one
+assignments. The promoted partition stores exact source hypothesis, mappings and
+source/metadata hashes. Record-level fitted scores stay in the source evidence,
+rather than being misrepresented as per-specimen scores after projection.
+
+Headless clients use `basecraft metadata consumer REQUEST --project PROJECT`
+(or MCP `metadata_consumer`, Python `Session.metadata_consumer`). Requests use
+`action: partitions`, `labels` (document, records, fields), `link_records`
+(document, links keyed by record ID; explicit updates preserve other links), `link_workspace`
+(workspace, links) or `promote_partition` (workspace, hypothesis, id). Planning
+writes nothing. Edit plans return a target and normal typed operation; CLI
+`--apply` applies and saves, while MCP/Python use version-checked apply and save.
+
+Workspace roster bindings also retain a standard provenance `InputReference` in
+`exchange_fields.basecraft_metadata_reference`. Its path is project-relative;
+`extra.owner_event` is the metadata's existing Open-activity identity, not a new
+roster ID. Promotion checks that owner and logical path. Copied consumer files
+cannot silently use equal local specimen IDs from another project's metadata.
+Legacy unbound workspaces still open; explicit linking establishes their owner.
+Missing/replaced owner evidence requires explicit relinking rather than inference.
+
+Label snapshots retain the same reference as `metadata_labels.metadata_source`,
+as well as their canonical metadata hash and per-tip link issues. Snapshots remain
+viewable when metadata is missing or belongs to another project. Explicit refresh
+checks the owner; Original labels clears the snapshot before deliberate rebinding.
+The Labels dialog states the snapshot source/hash and refresh behavior, and allows
+explicit record-to-specimen assignments for standalone trees. Opening a tree does
+not create links. Bulk assignments use the same `link_records` planning route.

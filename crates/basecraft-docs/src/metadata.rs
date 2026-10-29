@@ -126,6 +126,24 @@ pub const KNOWN_COLUMNS: &[KnownColumn] = &[
         description: "Habitat or environment",
         insdc: None,
     },
+    KnownColumn {
+        name: "genus",
+        kind: KnownKind::Text,
+        description: "Recorded genus for display labels",
+        insdc: None,
+    },
+    KnownColumn {
+        name: "specificEpithet",
+        kind: KnownKind::Text,
+        description: "Recorded species epithet for display labels",
+        insdc: None,
+    },
+    KnownColumn {
+        name: "accession",
+        kind: KnownKind::Text,
+        description: "Recorded accession for display labels",
+        insdc: None,
+    },
 ];
 
 pub fn known_column(name: &str) -> Option<&'static KnownColumn> {
@@ -362,6 +380,7 @@ pub fn validate(meta: &ProjectMetadata) -> Result<(), EditError> {
             ));
         }
     }
+    crate::metadata_consumers::validate_partitions(meta)?;
     for pattern in &meta.import.header_patterns {
         if pattern.separator.is_empty() || pattern.name.is_empty() {
             return fail("a header pattern needs a name and a separator");
@@ -374,6 +393,25 @@ pub fn validate(meta: &ProjectMetadata) -> Result<(), EditError> {
 pub fn apply(meta: &mut ProjectMetadata, edit: &MetadataEdit) -> Result<(), EditError> {
     let mut next = meta.clone();
     match edit {
+        MetadataEdit::PutPartition { partition } => {
+            if partition.id == "identifications" {
+                return fail(
+                    "the current identification partition is derived from recorded identifications",
+                );
+            }
+            if let Some(old) = next.partitions.iter_mut().find(|p| p.id == partition.id) {
+                *old = partition.as_ref().clone();
+            } else {
+                next.partitions.push(partition.as_ref().clone());
+            }
+        }
+        MetadataEdit::RemovePartition { id } => {
+            let before = next.partitions.len();
+            next.partitions.retain(|p| &p.id != id);
+            if next.partitions.len() == before {
+                return fail("unknown project partition");
+            }
+        }
         MetadataEdit::Apply { changes } => apply_changes(&mut next, changes)?,
         MetadataEdit::RemoveSpecimens { specimens } => {
             if specimens.is_empty() {
@@ -448,6 +486,9 @@ fn apply_changes(meta: &mut ProjectMetadata, changes: &ChangeSet) -> Result<(), 
     for id in &changes.specimens {
         if meta.specimens.rows.iter().any(|r| &r.id == id) {
             return fail(format!("specimen {id} is already in the roster"));
+        }
+        for partition in &mut meta.partitions {
+            partition.unassigned.insert(id.clone());
         }
         meta.specimens.rows.push(Row {
             id: id.clone(),

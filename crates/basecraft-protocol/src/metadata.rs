@@ -33,6 +33,9 @@ pub struct ProjectMetadata {
     pub links: Vec<RecordLink>,
     #[serde(default)]
     pub import: ImportSettings,
+    /// Saved project partitions; members are stable roster IDs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub partitions: Vec<crate::delimitation::Hypothesis>,
     /// Fields written by a later Basecraft, kept unchanged on save.
     #[serde(flatten)]
     pub extra: BTreeMap<String, serde_json::Value>,
@@ -47,6 +50,7 @@ impl Default for ProjectMetadata {
             identifications: Vec::new(),
             links: Vec::new(),
             import: ImportSettings::default(),
+            partitions: Vec::new(),
             extra: BTreeMap::new(),
         }
     }
@@ -445,6 +449,13 @@ impl ChangeSet {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum MetadataEdit {
+    /// Add or replace a project partition using the shared hypothesis model.
+    PutPartition {
+        partition: Box<crate::delimitation::Hypothesis>,
+    },
+    RemovePartition {
+        id: String,
+    },
     Apply {
         changes: ChangeSet,
     },
@@ -467,6 +478,26 @@ pub enum MetadataEdit {
     SetImportSettings {
         settings: ImportSettings,
     },
+}
+
+/// Ordered display fields. These never replace record or specimen identities.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LabelField {
+    Specimen,
+    Genus,
+    Species,
+    Accession,
+    Column { name: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ComposedLabel {
+    pub record: String,
+    pub specimen: Option<String>,
+    pub label: String,
+    /// Unknown or ambiguous links retain the original record as the label.
+    pub issue: Option<String>,
 }
 
 #[cfg(test)]

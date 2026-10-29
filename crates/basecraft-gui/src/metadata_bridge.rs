@@ -102,6 +102,8 @@ pub mod qobject {
         ) -> bool;
         #[qinvokable]
         fn link_status(self: &MetadataController, file: &QString) -> QString;
+        #[qinvokable]
+        fn consumer(self: Pin<&mut MetadataController>, request: &QString, apply: bool) -> QString;
     }
 }
 
@@ -201,6 +203,7 @@ pub(crate) fn table_json(meta: Option<&ProjectMetadata>, notices: &[String]) -> 
         .map(|k| json!({"name": k.name, "description": k.description}))
         .collect();
     json!({"available": true, "columns": columns, "rows": rows, "addable": addable,
+        "partitions": basecraft_docs::metadata_consumers::partitions(meta),
         "notices": notices, "taxa": meta.taxa.len(), "links": meta.links.len(),
         "patterns": meta.import.header_patterns, "mappings": meta.import.spreadsheet_mappings,
         "missing": MissingReason::ALL.iter().map(|r| r.as_str()).collect::<Vec<_>>()})
@@ -306,6 +309,32 @@ impl qobject::MetadataController {
     }
 
     /// Open the project's metadata if it has any. Creates nothing.
+    pub fn consumer(mut self: Pin<&mut Self>, request: &QString, apply: bool) -> QString {
+        let planned = (|| -> Result<Value, String> {
+            let (session, doc) = self.rust().current()?;
+            let request = serde_json::from_str(&request.to_string()).map_err(|e| e.to_string())?;
+            metadata::consumer_plan(session, doc, &request).map_err(|e| e.to_string())
+        })();
+        let value = match planned {
+            Ok(value) => value,
+            Err(error) => return qs(&json!({"error":error})),
+        };
+        if apply {
+            let edit = serde_json::from_value::<Op>(value["operation"].clone());
+            match edit {
+                Ok(Op::MetadataEdit { edit }) => {
+                    if !self.as_mut().edit(vec![*edit], "Saved specimen metadata")
+                        || self.rust().dirty
+                    {
+                        return qs(&json!({"error":self.rust().message.to_string()}));
+                    }
+                }
+                _ => return qs(&json!({"error":"Apply workspace links in their workspace"})),
+            }
+        }
+        qs(&value)
+    }
+
     pub fn use_project(mut self: Pin<&mut Self>, path: &QString) {
         self.as_mut().set_project_dir(path.clone());
         {
