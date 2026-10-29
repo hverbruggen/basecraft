@@ -15,6 +15,27 @@ AppContentDialog {
     // Short labels: size to the text rather than the style's minimum width.
     component FooterButton: AppButton { implicitWidth: contentItem.implicitWidth + leftPadding + rightPadding }
 
+    component AboutLink: Label {
+        id: linkLabel
+        required property string targetUrl
+        textFormat: Text.StyledText
+        linkColor: dialog.palette.link
+        activeFocusOnTab: true
+        Accessible.role: Accessible.Link
+        onLinkActivated: link => Qt.openUrlExternally(link)
+        Keys.onReturnPressed: Qt.openUrlExternally(targetUrl)
+        Keys.onSpacePressed: Qt.openUrlExternally(targetUrl)
+        HoverHandler { cursorShape: linkLabel.hoveredLink ? Qt.PointingHandCursor : Qt.ArrowCursor }
+        Rectangle {
+            anchors.fill: parent
+            anchors.margins: -2
+            visible: linkLabel.activeFocus
+            color: "transparent"
+            border.color: dialog.palette.highlight
+            radius: 2
+        }
+    }
+
     // Asks the window to open the keyboard shortcuts after this dialog closes.
     signal shortcutsRequested()
     initialFocusItem: closeButton
@@ -119,28 +140,23 @@ AppContentDialog {
             Binding { target: art.item; property: "dark"; value: logo.darkBackground; when: art.item !== null }
         }
 
-        Label {
-            id: copyright
-            objectName: "aboutCopyright"
+        RowLayout {
             Layout.alignment: Qt.AlignHCenter
-            textFormat: Text.StyledText
-            linkColor: dialog.palette.link
-            text: "© 2026 <a href=\"" + dialog.labUrl + "\">Heroen Verbruggen</a>  ·  <a href=\"https://ieo.csic.es/\">CSIC-IEO</a>  ·  GPL-3.0, Apache-2.0"
-            activeFocusOnTab: true
-            Accessible.role: Accessible.Link
-            Accessible.name: "Copyright 2026 Heroen Verbruggen, lab website. CSIC-IEO, affiliation website. Licences GPL-3.0 and Apache-2.0"
-            onLinkActivated: link => Qt.openUrlExternally(link)
-            Keys.onReturnPressed: Qt.openUrlExternally(dialog.labUrl)
-            Keys.onSpacePressed: Qt.openUrlExternally(dialog.labUrl)
-            HoverHandler { cursorShape: copyright.hoveredLink ? Qt.PointingHandCursor : Qt.ArrowCursor }
-            Rectangle {
-                anchors.fill: parent
-                anchors.margins: -2
-                visible: copyright.activeFocus
-                color: "transparent"
-                border.color: dialog.palette.highlight
-                radius: 2
+            spacing: 0
+            AboutLink {
+                objectName: "aboutCopyright"
+                text: "© 2026 <a href=\"" + targetUrl + "\">Heroen Verbruggen</a>"
+                targetUrl: dialog.labUrl
+                Accessible.name: "Copyright 2026 Heroen Verbruggen, lab website"
             }
+            Label { text: "  ·  " }
+            AboutLink {
+                objectName: "aboutAffiliation"
+                text: "<a href=\"" + targetUrl + "\">CSIC-IEO</a>"
+                targetUrl: "https://ieo.csic.es/"
+                Accessible.name: "CSIC-IEO, affiliation website"
+            }
+            Label { text: "  ·  GPL-3.0, Apache-2.0" }
         }
 
         Label {
