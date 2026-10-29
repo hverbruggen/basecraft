@@ -315,6 +315,10 @@ fn bundled_frozen_runtime_retains_old_selection_and_rejects_changed_lock_or_vers
     assert_eq!(selected.reported_versions["nativecheck"], "managed-native");
     assert!(selected.executable_digests.contains_key("nativecheck"));
     let mut command = std::process::Command::new(&selected.interpreter);
+    command.env(
+        "BASECRAFT_RUNTIME_EXECUTABLES",
+        "inherited-untrusted-selection",
+    );
     basecraft_plugin_host::runtime::configure_command(
         &mut command,
         &package.manifest,

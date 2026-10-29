@@ -20,6 +20,9 @@ requirements:
   host:
     - libxml2 {{ REVIEWED_LIBXML2_PIN }}
     - libxslt {{ REVIEWED_LIBXSLT_PIN }}
+    # Linux configure also required BerkeleyDB, SQLITE3 and ICU headers.
+    # Resolve actual Conda package names/pins from a native locked build;
+    # the Debian feasibility build is not a release dependency selection.
     # Add the COMPLETE closure from the native target's configure/link report.
   run:
     - {{ pin_compatible('libxml2', exact=True) }}

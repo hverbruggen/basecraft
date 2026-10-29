@@ -2,7 +2,8 @@
 
 The selected source candidate is Toolkit release 30.8.0 at immutable commit
 `01ab652af9da9d557b1553504d4dcd4db12f5b86`. `source.toml` pins the
-63 MB source archive, streamed and hashed on 2026-10-28 without compiling it.
+63 MB source archive. A Linux source build and package qualification are
+described below; matching native release artifacts remain outstanding.
 `meta.yaml.in` is an intentionally incomplete recipe template, not a usable
 package or proof of platform support. No binaries, dependency locks, channels
 or uploads are supplied here. Do not enable this runtime in the plugin until
@@ -31,17 +32,16 @@ provide all required components through a locked Conda build environment or
 freeze a reviewed Conan lock/cache with exact revisions and hashes per target.
 Exclude incidental private packages and ambient machine libraries.
 
-## Native feasibility plan (not executed)
+## Native feasibility and remaining targets
 
 | Target | Build route | Open checks |
 | --- | --- | --- |
-| linux-64 | GCC/Clang C++20, native Conda package | minimum glibc, compiler runtime, full linked closure |
+| linux-64 | GCC13.3 source build exercised; Conda package pending | release closure, minimum glibc, compiler runtime |
 | osx-64 | Intel Apple Clang, native Conda package | deployment target, remaining Intel support, SDK/toolchain |
 | osx-arm64 | ARM Apple Clang, native Conda package | SDK/deployment target, arm64 dependencies |
 | win-64 | MSVC 2022, native Conda package | XML/XSLT/EXSLT discovery, runtime DLL closure, environment activation |
 
-After the coordinator releases the build hold, use external build/scratch
-storage and the shared build-host lock for Linux. Native macOS/Windows builders
+Use external build/scratch storage and the shared compile lock for Linux. Native macOS/Windows builders
 are still required; a Linux build is not evidence for them. Proposed Unix
 configuration (check native output before freezing a build script):
 
@@ -103,10 +103,10 @@ then, the current plugin and its explicit development override are unchanged.
 
 ## Required validation before activation
 
-Prepared host tests cover bundled frozen locks, version mismatch, lock
-replacement, changed binaries, idempotent installation and retained versions.
-They have NOT run. Once permitted, run focused `runtime_install` tests, then
-exact-commit `just check`/`just ci` on build-host under the shared compile lock.
+Host tests cover bundled frozen locks, version mismatch, lock replacement,
+changed binaries, idempotent installation and retained versions. Run focused
+`runtime_install` tests under the shared compile lock; broad validation belongs
+to the integrated delivery checkpoint.
 On every supported native target: install offline from retained artifacts,
 check versions and hashes, run the same GenBank submission fixture suite
 (valid records plus validation errors), compare normalized validation issues
@@ -171,3 +171,58 @@ missing/invalid selected paths report unavailable without selecting a different
 version. The host clears inherited mappings for unprovisioned plugins. Until
 real packages/locks are available and deployment activation is connected,
 unprovisioned development keeps its existing explicit override behavior.
+
+## Linux source feasibility (2026-10-29)
+
+The pinned archive was built natively on Linux x86_64 using GCC13.3.0 and
+CMake3.30.5. The executable reports **`table2asn: 1.30.0`**, distinct from the
+Toolkit30.8.0 release and Bioconda1.28.1179 package (reports1.28.1094). Its
+SHA-256 before stripping is
+`6dc72c0f6446aab287b4c3a00be13edede6e4699ac5d4a303c9274638be6cf09`.
+Source header `include/common/ncbi_sc_version.h` sets30; the generated
+TeamCity build number is0. No upstream release/build number was fabricated.
+Require those same effective inputs and actual output on subsequent targets.
+
+Configure requires **XML, XSLT, EXSLT, SQLITE3 and BerkeleyDB**, including the
+transitive data-loader closure. Extracted Debian development packages also
+needed ICU headers and the multiarch XSLT generated header. With an external
+source tree, task-owned extracted dependency prefix and shared compile lock,
+the successful Linux configure/build sequence was:
+
+```sh
+export TMPDIR="$SOURCE/tmp"
+mkdir -p "$TMPDIR"
+export CMAKE_PREFIX_PATH="$DEPS/usr"
+export CPATH="$DEPS/usr/include:$DEPS/usr/include/x86_64-linux-gnu"
+export LIBRARY_PATH="$DEPS/usr/lib/x86_64-linux-gnu"
+export LD_LIBRARY_PATH="$LIBRARY_PATH"
+export PKG_CONFIG_PATH="$LIBRARY_PATH/pkgconfig"
+export PKG_CONFIG_SYSROOT_DIR="$DEPS"
+export CMAKE_ARGS="-DNCBI_ThirdParty_BerkeleyDB=$DEPS/usr -DCMAKE_LIBRARY_PATH=$LIBRARY_PATH -DCMAKE_INCLUDE_PATH=$DEPS/usr/include"
+cd "$SOURCE"
+./cmake-configure --without-debug --without-dll --with-build-root=build-linux \
+  --with-projects=app/table2asn --with-targets='^table2asn$' \
+  --with-components='XML;XSLT;EXSLT;SQLITE3;BerkeleyDB'
+cmake --build build-linux/build --target table2asn --parallel 12
+```
+
+Run compilation only on the designated builder under its shared compile lock.
+The feasibility dependencies were libdb5.3 5.3.28+dfsg2-7, SQLite3.45.1
+(3.45.1-1ubuntu2.8), libxml2 2.9.14+dfsg-1.3ubuntu3, libxslt1.1
+1.1.39-0exp1ubuntu0.24.04.3, ICU74.2-1ubuntu3.1 and system zlib/GCC/glibc.
+This used existing system components and an old base libxml development
+package after a stale update URL failed; it is **not a reviewed release
+closure**. ELF runtime dependencies include libdb-5.3, libsqlite3, zlib,
+libstdc++, libgomp, libgcc, libm and glibc. XML/XSLT appear on the linker command
+but were dropped from the ELF's needed-library list; retain both configure/link
+and ELF evidence rather than inferring the closure from direct CMake names.
+The executable retains builder paths/RPATH and debug data. It is a test
+artifact, not a redistributable Conda package or supported runtime selection.
+
+Before activation, reproduce this in a locked Conda build environment with
+reviewed current dependencies, portable CPU/glibc policy, applicable notices
+and retained immutable packages. Resolve the actual Conda names/pins for the
+additional dependencies in `meta.yaml.in`; its unresolved placeholders remain
+intentional. Native macOS Intel/ARM64 and Windows builds and common-fixture
+validation are still required. No matching-platform support, automatic
+installation or archive acceptance is established by this Linux experiment.

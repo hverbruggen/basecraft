@@ -238,7 +238,11 @@ fn interpreter_path(root: &Path) -> PathBuf {
     }
 }
 fn executable_path(root: &Path, name: &str) -> PathBuf {
-    let file = if cfg!(windows) && !name.ends_with(".exe") {
+    let file = if cfg!(windows)
+        && !Path::new(name)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("exe"))
+    {
         format!("{name}.exe")
     } else {
         name.to_owned()
