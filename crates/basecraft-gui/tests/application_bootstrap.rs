@@ -48,6 +48,58 @@ mod tree_bridge;
 
 use cxx_qt_lib::{QByteArray, QGuiApplication, QQmlApplicationEngine, QUrl};
 
+#[cfg(target_os = "linux")]
+#[link(name = "glib-2.0")]
+unsafe extern "C" {
+    fn g_set_prgname(name: *const std::ffi::c_char);
+    fn g_get_prgname() -> *const std::ffi::c_char;
+}
+
+fn check_identity_case(case: &str) {
+    let (gui_test, kind, expected) = match case {
+        "validation" => (true, None, "org.basecraft.Validation"),
+        "validation-editor" => (true, Some("Alignment"), "org.basecraft.Validation"),
+        "normal" => (false, None, "org.basecraft.Basecraft"),
+        "sequence" => (false, Some("Sequence"), "org.basecraft.Sequence"),
+        "alignment" => (false, Some("Alignment"), "org.basecraft.Alignment"),
+        "tree" => (false, Some("Tree"), "org.basecraft.Tree"),
+        "unknown" => (false, Some("Unknown"), "org.basecraft.Basecraft"),
+        _ => panic!("unknown identity case: {case}"),
+    };
+    let mut args = vec!["basecraft-gui".into()];
+    if let Some(kind) = kind {
+        args.extend(["--editor-kind".into(), kind.into()]);
+    }
+    #[cfg(target_os = "linux")]
+    // SAFETY: a static NUL-terminated string, set on the process main thread
+    // before Qt/GTK initialization. Each case has its own process.
+    unsafe {
+        g_set_prgname(c"basecraft-identity-sentinel".as_ptr());
+    }
+    let app = application::new(&args, gui_test);
+    let app = app.as_ref().expect("Qt application");
+    assert_eq!(app.application_name().to_string(), "Basecraft");
+    assert_eq!(app.organization_name().to_string(), "Basecraft");
+    assert_eq!(app.organization_domain().to_string(), "basecraft.org");
+    assert_eq!(QGuiApplication::desktop_file_name().to_string(), expected);
+    #[cfg(target_os = "linux")]
+    {
+        // SAFETY: GLib owns this NUL-terminated string, seeded above, and no
+        // thread changes it while we read. No GTK window/display is created.
+        let name = unsafe { std::ffi::CStr::from_ptr(g_get_prgname()) };
+        assert_eq!(
+            name.to_str().unwrap(),
+            if gui_test {
+                "org.basecraft.Validation"
+            } else {
+                "basecraft-identity-sentinel"
+            },
+            "native dialog identity for {case}"
+        );
+    }
+    println!("Identity case {case} passed");
+}
+
 fn main() {
     // The test must never open desktop windows, including when run manually.
     if std::env::var("QT_QPA_PLATFORM").as_deref() != Ok("offscreen")
@@ -57,6 +109,28 @@ fn main() {
             "application_bootstrap requires QT_QPA_PLATFORM=offscreen and QT_QPA_PLATFORMTHEME="
         );
         std::process::exit(1);
+    }
+    if std::env::args().nth(1).as_deref() == Some("--identity-case") {
+        check_identity_case(&std::env::args().nth(2).expect("identity case"));
+        return;
+    }
+    for case in [
+        "normal",
+        "sequence",
+        "alignment",
+        "tree",
+        "unknown",
+        "validation",
+        "validation-editor",
+    ] {
+        assert!(
+            std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--identity-case", case])
+                .status()
+                .unwrap()
+                .success(),
+            "isolated identity case {case} failed"
+        );
     }
     let args = vec![
         "basecraft-gui".into(),
