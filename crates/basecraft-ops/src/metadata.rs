@@ -1399,7 +1399,9 @@ pub fn consumer_plan(
         (
             session.doc_key(doc).to_string(),
             Op::MetadataEdit {
-                edit: Box::new(MetadataEdit::PutPartition { partition }),
+                edit: Box::new(MetadataEdit::PutPartition {
+                    partition: Box::new(partition),
+                }),
             },
         )
     };

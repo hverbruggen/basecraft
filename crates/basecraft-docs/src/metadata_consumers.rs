@@ -95,12 +95,12 @@ pub fn project_partition(
         for member in &group.members {
             let target = &links[member.as_str()];
             let assignment = Some(group.id.clone());
-            if let Some(previous) = assignments.insert(target.clone(), assignment.clone()) {
-                if previous != assignment {
-                    return Err(EditError(format!(
-                        "roster specimen {target} belongs to conflicting source groups"
-                    )));
-                }
+            if let Some(previous) = assignments.insert(target.clone(), assignment.clone())
+                && previous != assignment
+            {
+                return Err(EditError(format!(
+                    "roster specimen {target} belongs to conflicting source groups"
+                )));
             }
         }
     }

@@ -400,9 +400,9 @@ pub fn apply(meta: &mut ProjectMetadata, edit: &MetadataEdit) -> Result<(), Edit
                 );
             }
             if let Some(old) = next.partitions.iter_mut().find(|p| p.id == partition.id) {
-                *old = partition.clone();
+                *old = partition.as_ref().clone();
             } else {
-                next.partitions.push(partition.clone());
+                next.partitions.push(partition.as_ref().clone());
             }
         }
         MetadataEdit::RemovePartition { id } => {

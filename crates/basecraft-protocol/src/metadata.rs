@@ -451,7 +451,7 @@ impl ChangeSet {
 pub enum MetadataEdit {
     /// Add or replace a project partition using the shared hypothesis model.
     PutPartition {
-        partition: crate::delimitation::Hypothesis,
+        partition: Box<crate::delimitation::Hypothesis>,
     },
     RemovePartition {
         id: String,
