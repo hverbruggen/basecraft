@@ -153,6 +153,10 @@ impl SupportSet {
 #[derive(Clone, Debug)]
 pub struct TreeDoc {
     pub name: String,
+    /// Member identity and rooting declared in the exchange, independent of
+    /// the file name used for display. Unknown rooting stays unknown.
+    pub exchange_name: String,
+    pub rooted: Option<bool>,
     nodes: Vec<TreeNode>,
     root: usize,
     supports: Vec<SupportSet>,
@@ -234,6 +238,8 @@ impl TreeDoc {
         }
         let mut doc = Self {
             name: name.into(),
+            exchange_name: parsed.name.clone(),
+            rooted: parsed.rooted,
             nodes,
             root: 0,
             supports,
@@ -261,6 +267,16 @@ impl TreeDoc {
 
     pub fn node(&self, i: usize) -> &TreeNode {
         &self.nodes[i]
+    }
+
+    /// Newick plus an explicit exchange rooting declaration when known.
+    pub fn to_newick_with_rooting(&self) -> String {
+        let prefix = match self.rooted {
+            Some(true) => "[&R] ",
+            Some(false) => "[&U] ",
+            None => "",
+        };
+        format!("{prefix}{}", self.to_newick())
     }
 
     pub fn root(&self) -> usize {
@@ -443,6 +459,7 @@ impl TreeDoc {
         };
         self.nodes[node].length = Some(length * fraction);
         self.nodes[other].length = Some(length * (1.0 - fraction));
+        self.rooted = Some(true);
         self.edited();
         Ok(())
     }
@@ -700,6 +717,7 @@ impl TreeDoc {
         }
         self.nodes = nodes;
         self.root = 0;
+        self.rooted = Some(true);
         for (s, v) in values.into_iter().enumerate() {
             self.supports[s].values = v;
         }

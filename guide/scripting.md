@@ -195,3 +195,34 @@ These commands read saved files. They do not run tools or write records.
 From Python, `basecraft.records.document_record(path)` and
 `basecraft.records.methods(path)` wrap `history --json` for saved files.
 Use `Session.document_record` for a document open in a session.
+
+## Sequence extraction and source evidence
+
+Extract zero-based, half-open ranges into a new GenBank file:
+
+```sh
+basecraft extract gene.fasta 10 90 --output region.gb
+basecraft extract gene.fasta 10 90 --segments '[[10,30],[60,90]]' --reverse --output spliced.gb
+```
+
+The CLI, Python and MCP `extract` tool call the same document operation as the
+GUI. Splice segments are ordered biologically; reverse complement is applied
+after splicing. Python works on the inspected current session revision:
+
+```python
+with Session("/path/to/project", writes=True) as session:
+    doc = session.open("gene.fasta")
+    session.extract(doc["document"], "region.gb", 10, 90,
+                    version=doc["version"])
+```
+
+Existing headless destinations and stale inspected revisions are refused.
+The output keeps the source hash, revision and selection mapping. Clean sources
+are referenced; unsaved source revisions retain their generated input bytes.
+`provenance verify` diagnoses changed or unavailable references, and
+`provenance package` materializes the exact available source for sharing.
+
+Registered `basecraft.clade-alignment/extract@1` keeps selected `taxa` and leaves
+alignment columns unchanged. Its optional `selection_tree` input retains the
+tree that guided selection; the GUI supplies its exact current document
+revision, including unsaved edits. The alignment remains a separate input.

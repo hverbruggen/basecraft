@@ -310,7 +310,7 @@ impl Session {
     ) -> Result<Option<Vec<String>>> {
         if let Loaded::Tree(tree) = &self.docs[id.0].content {
             let mut main = HashingWriter::new(std::io::sink());
-            files::write_tree(tree, &mut main)?;
+            files::write_legacy_tree(tree, &mut main)?;
             let mut side = HashingWriter::new(std::io::sink());
             files::write_legacy_tree_sidecar(&tree.doc, &mut side)?;
             return Ok(Some(vec![main.hash(), side.hash()]));

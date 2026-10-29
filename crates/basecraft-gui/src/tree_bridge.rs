@@ -612,7 +612,7 @@ impl qobject::TreeController {
                     state.view.multi_taxa = None;
                 }
                 self.as_mut().set_dirty(true);
-                self.as_mut().notify(&warning);
+                self.as_mut().notify("");
                 self.refresh();
                 Ok(())
             }
@@ -927,7 +927,7 @@ impl qobject::TreeController {
                     .set_file_path(QString::from(&abs.to_string_lossy().into_owned()));
                 self.as_mut().refresh_link();
                 self.as_mut().set_dirty(false);
-                self.as_mut().notify("");
+                self.as_mut().notify(&warning);
                 self.refresh();
                 true
             }

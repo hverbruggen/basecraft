@@ -24,7 +24,67 @@ pub struct ParsedNode {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ParsedTree {
     pub name: String,
+    /// Explicit rooting declaration; None means the exchange made no claim.
+    pub rooted: Option<bool>,
     pub nodes: Vec<ParsedNode>,
+}
+
+/// Write a parsed member without converting support comments into editor data.
+/// Untouched forest members retain their node annotations and exchange rooting.
+pub fn write_parsed(tree: &ParsedTree, w: &mut dyn std::io::Write) -> std::io::Result<()> {
+    enum Part {
+        Node(usize),
+        Label(usize),
+        Text(&'static str),
+    }
+    let prefix = match tree.rooted {
+        Some(true) => "[&R] ",
+        Some(false) => "[&U] ",
+        None => "",
+    };
+    w.write_all(prefix.as_bytes())?;
+    let mut pending = vec![Part::Node(0)];
+    let mut visited = 0;
+    while let Some(part) = pending.pop() {
+        match part {
+            Part::Text(text) => w.write_all(text.as_bytes())?,
+            Part::Node(id) => {
+                visited += 1;
+                if visited > tree.nodes.len() {
+                    return Err(std::io::Error::other("invalid parsed tree cycle"));
+                }
+                let node = tree
+                    .nodes
+                    .get(id)
+                    .ok_or_else(|| std::io::Error::other("invalid parsed tree node"))?;
+                pending.push(Part::Label(id));
+                if !node.children.is_empty() {
+                    pending.push(Part::Text(")"));
+                    for (index, child) in node.children.iter().enumerate().rev() {
+                        pending.push(Part::Node(*child));
+                        if index > 0 {
+                            pending.push(Part::Text(","));
+                        }
+                    }
+                    pending.push(Part::Text("("));
+                }
+            }
+            Part::Label(id) => {
+                let node = tree
+                    .nodes
+                    .get(id)
+                    .ok_or_else(|| std::io::Error::other("invalid parsed tree node"))?;
+                w.write_all(quote_name(&node.name).as_bytes())?;
+                if let Some(length) = node.length {
+                    write!(w, ":{length}")?;
+                }
+                if !node.comment.is_empty() {
+                    write!(w, "[&{}]", node.comment)?;
+                }
+            }
+        }
+    }
+    w.write_all(b";")
 }
 
 /// Whether `text` looks like a NEXUS file.
@@ -42,10 +102,12 @@ pub fn parse_trees(text: &str) -> Result<Vec<ParsedTree>> {
         let mut trees = Vec::new();
         let mut p = Parser::new(text, 0);
         loop {
+            let before_space = p.pos;
             p.skip_space();
             if p.at_end() {
                 break;
             }
+            p.pos = before_space;
             let mut t = p.tree()?;
             t.name = format!("tree{}", trees.len() + 1);
             trees.push(t);
@@ -127,6 +189,12 @@ fn parse_nexus(text: &str) -> Result<Vec<ParsedTree>> {
                     return Err(p.error("expected = after the tree's name"));
                 }
                 let mut t = p.tree()?;
+                if word == "utree" {
+                    if t.rooted == Some(true) {
+                        return Err(p.error("UTREE contradicts an explicit rooted declaration"));
+                    }
+                    t.rooted = Some(false);
+                }
                 t.name = name;
                 for n in &mut t.nodes {
                     if n.children.is_empty()
@@ -313,7 +381,23 @@ impl<'a> Parser<'a> {
         let mut current = 0usize;
         let mut expecting_node = true;
         let mut comments = self.skip_space_keep();
-        // A rooting comment such as [&R] before the tree isn't the root's.
+        // Rooting is tree-level exchange meaning, not a node annotation.
+        let mut rooted = None;
+        for comment in &comments {
+            let value = if comment.eq_ignore_ascii_case("r") {
+                Some(true)
+            } else if comment.eq_ignore_ascii_case("u") {
+                Some(false)
+            } else {
+                None
+            };
+            if let Some(value) = value {
+                if rooted.is_some_and(|previous| previous != value) {
+                    return Err(self.error("contradictory tree rooting declarations"));
+                }
+                rooted = Some(value);
+            }
+        }
         comments.retain(|c| !c.eq_ignore_ascii_case("r") && !c.eq_ignore_ascii_case("u"));
         nodes[0].comment = comments.join(",");
         loop {
@@ -405,6 +489,7 @@ impl<'a> Parser<'a> {
         }
         Ok(ParsedTree {
             name: String::new(),
+            rooted,
             nodes,
         })
     }

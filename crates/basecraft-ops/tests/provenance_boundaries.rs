@@ -411,7 +411,12 @@ fn saving_a_forest_preserves_other_members_and_refreshes_bound_identity() {
     assert!(ArtifactRun::for_result_checked(&file).unwrap().is_some());
     let opened = files::load_tree(&file).unwrap();
     assert_eq!(opened.remaining.len(), 1);
-    assert_eq!(opened.remaining[0].to_newick(), "((x,y)42,z);");
+    assert_eq!(
+        opened.remaining[0].nodes,
+        basecraft_io::newick::parse_newick("((x,y)42,z);")
+            .unwrap()
+            .nodes
+    );
     assert!(opened.doc.to_newick().contains("renamed-a"));
     session.undo(doc).unwrap();
     session.save(doc, None).unwrap();
@@ -421,5 +426,44 @@ fn saving_a_forest_preserves_other_members_and_refreshes_bound_identity() {
             .doc
             .to_newick()
             .contains("renamed-a")
+    );
+}
+
+#[test]
+fn nexus_forest_retains_member_identity_rooting_and_untouched_annotations() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("forest.nex");
+    let text = "#NEXUS\nbegin trees;\ntranslate 1 a, 2 b, 3 c;\ntree 'selected tree' = [&U] ((1:1,2:2)90:3,3:4);\ntree 'rooted member' = [&R] ((1:1,3:2)[&prob=0.99,note=x]:3,2:4);\nutree 'unrooted member' = ((2:5,3:6),1);\ntree 'unknown member' = (1:1,2:2,3:3);\nend;\n";
+    std::fs::write(&file, text).unwrap();
+    let before = basecraft_io::newick::parse_trees(text).unwrap();
+    let mut session = Session::new(dir.path());
+    let doc = session.open(&file).unwrap();
+    session
+        .apply(
+            doc,
+            Op::TreeRenameTip {
+                from: "a".into(),
+                to: "new-a".into(),
+            },
+        )
+        .unwrap();
+    session.save(doc, None).unwrap();
+    let after =
+        basecraft_io::newick::parse_trees(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(after.len(), before.len());
+    for (a, b) in after.iter().zip(&before) {
+        assert_eq!((&a.name, a.rooted), (&b.name, b.rooted));
+    }
+    assert_eq!(
+        &after[1..],
+        &before[1..],
+        "untouched member topology, lengths, labels or comments changed"
+    );
+    assert!(after[0].nodes.iter().any(|n| n.name == "new-a"));
+    session.undo(doc).unwrap();
+    session.save(doc, None).unwrap();
+    assert_eq!(
+        basecraft_io::newick::parse_trees(&std::fs::read_to_string(&file).unwrap()).unwrap(),
+        before
     );
 }

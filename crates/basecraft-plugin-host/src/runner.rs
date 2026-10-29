@@ -279,7 +279,7 @@ fn document_view(
             Ok((bytes, "ungapped-fasta-v1", "afa"))
         }
         InputView::Newick if session.is_tree(doc) => Ok((
-            session.tree(doc).to_newick().into_bytes(),
+            session.tree(doc).to_newick_with_rooting().into_bytes(),
             "canonical-newick-v1",
             "nwk",
         )),

@@ -120,7 +120,7 @@ pub struct OpenedTree {
     /// Unverifiable legacy metadata remains on disk and was not applied.
     pub metadata_warning: Option<String>,
     /// Other forest members are preserved when the first tree is edited.
-    pub remaining: Vec<TreeDoc>,
+    pub remaining: Vec<newick::ParsedTree>,
 }
 
 pub enum Loaded {
@@ -268,9 +268,7 @@ fn load_tree_metadata(path: &Path, verified_snapshot: bool) -> Result<OpenedTree
     let parsed = parsed_trees
         .next()
         .ok_or_else(|| Error::Empty(path.to_path_buf()))?;
-    let remaining = parsed_trees
-        .map(|parsed| TreeDoc::from_parsed(String::new(), &parsed))
-        .collect();
+    let remaining = parsed_trees.collect();
     let name = path
         .file_name()
         .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
@@ -369,18 +367,39 @@ fn load_tree_metadata(path: &Path, verified_snapshot: bool) -> Result<OpenedTree
 pub fn write_tree(tree: &OpenedTree, w: &mut dyn Write) -> io::Result<()> {
     if tree.nexus {
         writeln!(w, "#NEXUS\nbegin trees;")?;
-        for (index, doc) in std::iter::once(&tree.doc)
-            .chain(&tree.remaining)
-            .enumerate()
-        {
-            writeln!(w, "\ttree tree{} = [&R] {}", index + 1, doc.to_newick())?;
+    }
+    if tree.nexus {
+        let name = if tree.doc.exchange_name.is_empty() {
+            "tree1"
+        } else {
+            &tree.doc.exchange_name
+        };
+        write!(w, "\ttree {} = ", newick::quote_name(name))?;
+    }
+    writeln!(w, "{}", tree.doc.to_newick_with_rooting())?;
+    for member in &tree.remaining {
+        if tree.nexus {
+            write!(w, "\ttree {} = ", newick::quote_name(&member.name))?;
         }
-        writeln!(w, "end;")
+        newick::write_parsed(member, w)?;
+        writeln!(w)?;
+    }
+    if tree.nexus {
+        writeln!(w, "end;")?;
+    }
+    Ok(())
+}
+
+/// Historical serializer used only when verifying old journal save hashes.
+pub(crate) fn write_legacy_tree(tree: &OpenedTree, w: &mut dyn Write) -> io::Result<()> {
+    let newick = tree.doc.to_newick();
+    if tree.nexus {
+        writeln!(
+            w,
+            "#NEXUS\nbegin trees;\n\ttree tree1 = [&R] {newick}\nend;"
+        )
     } else {
-        for doc in std::iter::once(&tree.doc).chain(&tree.remaining) {
-            writeln!(w, "{}", doc.to_newick())?;
-        }
-        Ok(())
+        writeln!(w, "{newick}")
     }
 }
 
