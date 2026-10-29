@@ -141,11 +141,9 @@ impl JobManager {
 
     /// Internal composition still uses submit/execute/finalize unchanged. Only
     /// input ancestry and logical analysis ownership are inherited before spawn.
-    pub(crate) fn for_workflow_stage(parent: &PreparedOperation) -> Self {
-        Self {
-            stage_parent: Some(parent.run.directory().into()),
-            ..Self::default()
-        }
+    pub(crate) fn with_workflow_parent(mut self, parent: &PreparedOperation) -> Self {
+        self.stage_parent = Some(parent.run.directory().into());
+        self
     }
 
     pub fn submit(

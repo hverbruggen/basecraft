@@ -49,7 +49,7 @@ impl AlignmentWorkflow<'_> {
             "operation":operation,"inputs":inputs,"parameters":parameters
         }))?;
         let root = self.parent.run.artifact("stages")?;
-        let mut manager = JobManager::for_workflow_stage(self.parent);
+        let mut manager = JobManager::default().with_workflow_parent(self.parent);
         let accepted = manager.submit(
             self.registry,
             request,
