@@ -1,6 +1,6 @@
 """Public file-operation adapter for the shared Rust distance engine."""
-import json
 import hashlib
+import json
 import os
 import shutil
 import subprocess
