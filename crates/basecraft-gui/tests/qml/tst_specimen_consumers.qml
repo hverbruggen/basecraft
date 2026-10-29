@@ -71,6 +71,44 @@ Item {
             tryVerify(() => visibleInside(window.activeFocusItem, list.view), 1000,
                 "Focused row " + row + " is fully inside its viewport")
         }
+        function test_mouse_and_keyboard_alternate_data() {
+            return [{tag: "roster", roster: true}, {tag: "tree", roster: false}]
+        }
+        function test_mouse_and_keyboard_alternate(data) {
+            host.recordCount = 4
+            const window = createTemporaryObject(windowFactory, host)
+            window.requestActivate()
+            tryCompare(window, "active", true)
+            const dialog = data.roster ? window.roster : window.labels
+            dialog.show(target, data.roster ? "result.spart" : "tree.nwk")
+            tryCompare(dialog, "opened", true)
+            const list = findChild(dialog, data.roster ? "workspaceRosterLinks" : "treeRecordLinks")
+            tryVerify(() => dialog.width > 450 && list.width >= Math.floor(dialog.availableWidth) - 1)
+            // Mix mouse entry on non-current rows with logical keyboard traversal.
+            // Popup Home/Down/Enter must commit to the clicked row, not a delegate.
+            for (const row of [0, 1, 3, 0, 2]) {
+                const chooser = findChild(list.view.itemAtIndex(row), "specimenLinkChoice")
+                verify(visibleInside(chooser, list.view))
+                mouseClick(chooser)
+                tryCompare(chooser.popup, "visible", true)
+                keyClick(Qt.Key_Home)
+                for (let down = 0; down <= row % 3; down++) keyClick(Qt.Key_Down)
+                keyClick(Qt.Key_Return)
+                tryCompare(chooser.popup, "visible", false)
+                const assigned = data.roster ? dialog.links : dialog.pendingLinks
+                compare(assigned["record-" + row], "specimen-" + (row % 3), "Mouse selection commits to the clicked row")
+                checkRow(window, list, row)
+                if (row < 3) {
+                    keyClick(Qt.Key_Tab)
+                    checkRow(window, list, row + 1)
+                    keyClick(Qt.Key_Tab, Qt.ShiftModifier)
+                    checkRow(window, list, row)
+                }
+            }
+            const assigned = data.roster ? dialog.links : dialog.pendingLinks
+            for (let row = 0; row < 4; row++) compare(assigned["record-" + row], "specimen-" + (row % 3))
+            dialog.close()
+        }
         function test_large_lists(data) {
             host.recordCount = data.count
             target.last = ""

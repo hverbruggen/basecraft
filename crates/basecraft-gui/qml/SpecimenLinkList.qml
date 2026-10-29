@@ -98,10 +98,10 @@ FocusScrollView {
                 model: [control.emptyText].concat(control.specimenIds)
                 currentIndex: Math.max(0, model.indexOf(control.links[modelData.id] || control.emptyText))
                 Accessible.name: "Project specimen for " + modelData.id
-                onActiveFocusChanged: if (activeFocus) {
-                    list.currentIndex = index
+                // Mouse focus already belongs to the chooser. Changing the
+                // current item here would make ListView focus its RowLayout.
+                onActiveFocusChanged: if (activeFocus)
                     list.positionViewAtIndex(index, ListView.Contain)
-                }
                 Keys.onPressed: event => {
                     if ((event.key !== Qt.Key_Tab && event.key !== Qt.Key_Backtab)
                             || (event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier))) {
