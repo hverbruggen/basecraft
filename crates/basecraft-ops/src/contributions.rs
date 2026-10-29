@@ -159,8 +159,15 @@ pub(crate) fn project(events: &[LogEntry], effective: &mut Vec<EditActivity>) {
             retained_runs.insert(event.id.as_str());
         }
     }
-    // Recompute rather than append: a previous save may have retained this run.
-    effective.retain(|edit| !matches!(&edit.operation, Op::ToolRun { params, .. } if params.get("contributions").is_some()));
+    // The same projection also removes the discarded object-level additions
+    // from generated Methods. Full edit/undo/removal chronology remains events.
+    effective.retain(|edit| match &edit.operation {
+        Op::FeatureAdd { .. } | Op::FeatureUpdate { .. } | Op::TreeAddSupport { .. } => {
+            survivors.contains(edit.id.as_str())
+        }
+        Op::ToolRun { params, .. } => params.get("contributions").is_none(),
+        _ => true,
+    });
     for event in events {
         if retained_runs.contains(event.id.as_str()) {
             effective.push(EditActivity {

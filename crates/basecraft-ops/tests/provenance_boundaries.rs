@@ -326,6 +326,17 @@ fn annotation_runs_follow_partial_deletion_and_feature_ids_after_reopen() {
             .methods
             .contains("second-plugin")
     );
+    let record = session.document_record(doc).unwrap();
+    assert!(!record.effective.iter().any(|edit| matches!(
+        edit.operation,
+        Op::FeatureAdd { .. } | Op::FeatureUpdate { .. }
+    )));
+    assert!(
+        record
+            .events
+            .iter()
+            .any(|event| matches!(event.op, Op::FeatureAdd { .. }))
+    );
 }
 
 #[test]
