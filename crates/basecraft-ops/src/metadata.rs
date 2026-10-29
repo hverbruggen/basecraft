@@ -1438,11 +1438,6 @@ pub fn consumer_plan(
             serde_json::to_value(consumer_source(session, doc)?)
                 .map_err(|e| invalid(e.to_string()))?,
         );
-        partition.provenance.parameters.insert(
-            "metadata_sources".into(),
-            serde_json::to_value(session.document_record(doc)?.report()?)
-                .map_err(|e| invalid(e.to_string()))?,
-        );
         (
             session.doc_key(doc).to_string(),
             Op::MetadataEdit {
