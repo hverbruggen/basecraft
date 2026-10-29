@@ -423,6 +423,12 @@
             },
             "minItems": 0,
             "uniqueItems": true
+          },
+          "sequence_sampling": {
+            "type": "string"
+          },
+          "tree_inference": {
+            "type": "string"
           }
         }
       },
@@ -548,6 +554,12 @@
             },
             "minItems": 0,
             "uniqueItems": true
+          },
+          "sequence_sampling": {
+            "type": "string"
+          },
+          "tree_inference": {
+            "type": "string"
           }
         }
       },
@@ -1259,6 +1271,12 @@
           "retained_count": {
             "type": "integer",
             "minimum": 0
+          },
+          "sequence_sampling": {
+            "type": "string"
+          },
+          "tree_inference": {
+            "type": "string"
           }
         }
       },

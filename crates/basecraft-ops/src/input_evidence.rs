@@ -135,6 +135,10 @@ pub struct AffectedAnalysis {
     pub source_hash: String,
     pub can_preserve: bool,
     pub direct: bool,
+    /// Complete backing decisions for this logical analysis. Empty for legacy
+    /// single-ledger records. Each child retains its own hash/direct guard.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub backing_analyses: Vec<AffectedAnalysis>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -511,6 +515,7 @@ fn scan_run(
             source_hash: reference.hash.clone(),
             can_preserve,
             direct: true,
+            backing_analyses: vec![],
         });
     }
     Ok(Some((input, analysis, bytes)))
@@ -558,6 +563,7 @@ pub fn conflicts_in(target: &Path, stores: &[PathBuf]) -> Result<EvidenceConflic
                     source_hash: String::new(),
                     can_preserve: true,
                     direct: false,
+                    backing_analyses: vec![],
                 });
             }
         }
@@ -565,6 +571,63 @@ pub fn conflicts_in(target: &Path, stores: &[PathBuf]) -> Result<EvidenceConflic
             break;
         }
     }
+    // Only explicit ownership or the runner's declared upstream ledgers may
+    // collapse records. Equal names/hashes alone never merge distinct analyses.
+    let mut owners = BTreeMap::new();
+    for (run, input) in &known_runs {
+        if let Some(owner) = input
+            .extra
+            .get("analysis_run")
+            .and_then(serde_json::Value::as_str)
+        {
+            let owner = lexical(&run.join(owner));
+            if known_runs.iter().any(|(path, _)| lexical(path) == owner) {
+                owners.insert(run.clone(), owner);
+            }
+        } else if run.join("runtime.json").is_file()
+            && let Some(parents) = input
+                .extra
+                .get("upstream")
+                .and_then(serde_json::Value::as_array)
+        {
+            // Compatibility with registered runs written before analysis_run.
+            // A reference-only ledger is dedicated to the declaring operation.
+            for parent in parents {
+                if let Some(path) = parent["bundle"].as_str() {
+                    let ledger = lexical(&run.join(path));
+                    if known_runs.iter().any(|(path, _)| lexical(path) == ledger)
+                        && !ledger.join("runtime.json").exists()
+                    {
+                        owners.entry(ledger).or_insert_with(|| run.clone());
+                    }
+                }
+            }
+        }
+    }
+    let mut groups: BTreeMap<PathBuf, Vec<AffectedAnalysis>> = BTreeMap::new();
+    for analysis in analyses {
+        let owner = owners
+            .get(&analysis.run)
+            .cloned()
+            .unwrap_or_else(|| analysis.run.clone());
+        groups.entry(owner).or_default().push(analysis);
+    }
+    let analyses: Vec<_> = groups
+        .into_iter()
+        .map(|(owner, backing)| {
+            Ok(AffectedAnalysis {
+                result: result_name(&owner)?,
+                run: owner,
+                source_hash: backing
+                    .iter()
+                    .find(|a| a.direct)
+                    .map_or_else(String::new, |a| a.source_hash.clone()),
+                can_preserve: backing.iter().all(|a| a.can_preserve),
+                direct: backing.iter().any(|a| a.direct),
+                backing_analyses: backing,
+            })
+        })
+        .collect::<Result<_>>()?;
     let mut options = vec![
         SavePolicy::Cancel,
         SavePolicy::RemoveAnalysis,
@@ -631,89 +694,118 @@ pub fn resolve(conflict: &EvidenceConflict, policy: SavePolicy) -> Result<()> {
             "old analysed bytes are unavailable; preserve-copy cannot repair this input",
         ));
     }
-    for affected in &conflict.analyses {
-        let mut input = read_input(&affected.run)?;
-        match policy {
-            SavePolicy::PreserveCopy => {
-                if !affected.direct {
-                    continue;
-                }
-                let reference = input
-                    .source
-                    .as_ref()
-                    .ok_or_else(|| invalid("reference is missing"))?;
-                if reference.hash != affected.source_hash {
-                    return Err(invalid("stale input preservation decision"));
-                }
-                let destination = affected.run.join("preserved-input");
-                // A public retry must never touch the live source or replace
-                // retained bytes. The owning ledger may have advanced already.
-                if input.state == "preserved" {
-                    verify_preserved(&destination, reference)?;
-                    continue;
-                }
-                if input.state != "referenced" {
-                    return Err(invalid("input evidence changed; refresh the save decision"));
-                }
-                let source = affected.run.join(&reference.path);
-                if !same_source(&affected.run, reference, &conflict.target) {
-                    return Err(invalid("input reference moved; refresh the save decision"));
-                }
-                let copied = if destination.try_exists()? {
-                    // A previous ledger write may have failed after publication.
-                    verify_preserved(&destination, reference)?;
-                    0
-                } else {
-                    let mut candidate = tempfile::NamedTempFile::new_in(&affected.run)?;
-                    let mut hashing = crate::files::HashingWriter::new(candidate.as_file_mut());
-                    let copied = std::io::copy(&mut std::fs::File::open(&source)?, &mut hashing)?;
-                    if hashing.hash() != reference.hash || copied != reference.stamp.size {
-                        return Err(invalid(
-                            "source changed: copied bytes are not the analysed original; overwrite cancelled",
-                        ));
+    for analysis in &conflict.analyses {
+        let mut preserved: BTreeMap<String, PathBuf> = BTreeMap::new();
+        let backing = if analysis.backing_analyses.is_empty() {
+            std::slice::from_ref(analysis)
+        } else {
+            &analysis.backing_analyses
+        };
+        for affected in backing {
+            let mut input = read_input(&affected.run)?;
+            match policy {
+                SavePolicy::PreserveCopy => {
+                    if !affected.direct {
+                        continue;
                     }
-                    candidate.as_file().sync_all()?;
-                    candidate
-                        .persist_noclobber(&destination)
-                        .map_err(|e| e.error)?;
-                    std::fs::File::open(&affected.run)?.sync_all()?;
-                    copied
-                };
-                input.state = "preserved".into();
-                input
-                    .extra
-                    .insert("preserved_original_bytes".into(), serde_json::json!(copied));
-                write_json(&affected.run.join("input.json"), &input)?;
-            }
-            SavePolicy::BreakEvidence => {
-                input.state = "broken".into();
-                write_json(&affected.run.join("input.json"), &input)?;
-            }
-            SavePolicy::RemoveAnalysis => {
-                let store = affected
-                    .run
-                    .parent()
-                    .and_then(Path::parent)
-                    .ok_or_else(|| invalid("run has no store"))?;
-                let trash = store.join("trash");
-                if !trash.exists() {
-                    std::fs::create_dir(&trash)?;
+                    let reference = input
+                        .source
+                        .as_ref()
+                        .ok_or_else(|| invalid("reference is missing"))?;
+                    if reference.hash != affected.source_hash {
+                        return Err(invalid("stale input preservation decision"));
+                    }
+                    let destination = affected.run.join("preserved-input");
+                    // A public retry must never touch the live source or replace
+                    // retained bytes. The owning ledger may have advanced already.
+                    if input.state == "preserved" {
+                        let (owner, retained) = owning_ledger(&affected.run)?;
+                        let effective = retained
+                            .source
+                            .as_ref()
+                            .ok_or_else(|| invalid("reference is missing"))?;
+                        verify_preserved(&owner.join("preserved-input"), effective)?;
+                        preserved.insert(reference.hash.clone(), owner);
+                        continue;
+                    }
+                    if input.state != "referenced" {
+                        return Err(invalid("input evidence changed; refresh the save decision"));
+                    }
+                    let source = affected.run.join(&reference.path);
+                    if !same_source(&affected.run, reference, &conflict.target) {
+                        return Err(invalid("input reference moved; refresh the save decision"));
+                    }
+                    if let Some(owner) = preserved.get(&reference.hash) {
+                        verify_preserved(&owner.join("preserved-input"), reference)?;
+                        input.extra.insert(
+                            "origin_run".into(),
+                            serde_json::json!(relative(&affected.run, owner)?),
+                        );
+                        input.state = "preserved".into();
+                        input
+                            .extra
+                            .insert("preserved_original_bytes".into(), serde_json::json!(0));
+                        write_json(&affected.run.join("input.json"), &input)?;
+                        continue;
+                    }
+                    let copied = if destination.try_exists()? {
+                        // A previous ledger write may have failed after publication.
+                        verify_preserved(&destination, reference)?;
+                        0
+                    } else {
+                        let mut candidate = tempfile::NamedTempFile::new_in(&affected.run)?;
+                        let mut hashing = crate::files::HashingWriter::new(candidate.as_file_mut());
+                        let copied =
+                            std::io::copy(&mut std::fs::File::open(&source)?, &mut hashing)?;
+                        if hashing.hash() != reference.hash || copied != reference.stamp.size {
+                            return Err(invalid(
+                                "source changed: copied bytes are not the analysed original; overwrite cancelled",
+                            ));
+                        }
+                        candidate.as_file().sync_all()?;
+                        candidate
+                            .persist_noclobber(&destination)
+                            .map_err(|e| e.error)?;
+                        std::fs::File::open(&affected.run)?.sync_all()?;
+                        copied
+                    };
+                    preserved.insert(reference.hash.clone(), affected.run.clone());
+                    input.state = "preserved".into();
+                    input
+                        .extra
+                        .insert("preserved_original_bytes".into(), serde_json::json!(copied));
+                    write_json(&affected.run.join("input.json"), &input)?;
                 }
-                if std::fs::symlink_metadata(&trash)?.file_type().is_symlink() {
-                    return Err(invalid("unsafe analysis trash"));
+                SavePolicy::BreakEvidence => {
+                    input.state = "broken".into();
+                    write_json(&affected.run.join("input.json"), &input)?;
                 }
-                let destination = trash.join(format!(
-                    "{}-{}",
-                    affected
+                SavePolicy::RemoveAnalysis => {
+                    let store = affected
                         .run
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy(),
-                    ulid::Ulid::generate()
-                ));
-                std::fs::rename(&affected.run, destination)?;
+                        .parent()
+                        .and_then(Path::parent)
+                        .ok_or_else(|| invalid("run has no store"))?;
+                    let trash = store.join("trash");
+                    if !trash.exists() {
+                        std::fs::create_dir(&trash)?;
+                    }
+                    if std::fs::symlink_metadata(&trash)?.file_type().is_symlink() {
+                        return Err(invalid("unsafe analysis trash"));
+                    }
+                    let destination = trash.join(format!(
+                        "{}-{}",
+                        affected
+                            .run
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy(),
+                        ulid::Ulid::generate()
+                    ));
+                    std::fs::rename(&affected.run, destination)?;
+                }
+                SavePolicy::Cancel => return Err(invalid("save cancelled")),
             }
-            SavePolicy::Cancel => return Err(invalid("save cancelled")),
         }
     }
     Ok(())

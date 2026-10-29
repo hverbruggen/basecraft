@@ -868,7 +868,7 @@ fn finalize_document(
         }
         progress.activity = true;
     }
-    let mut snapshot = job.prepared.input_record.clone();
+    let mut snapshot = job.prepared.publication_input_record()?;
     // A receiving workspace is an edit destination, not an analysis input.
     // Making the result depend on it would cycle when that workspace records
     // the newly attached result as one of its own dependencies.

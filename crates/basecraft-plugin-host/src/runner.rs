@@ -1,6 +1,6 @@
 //! Registered-operation preparation, execution and validated finalization: the
 //! one route every interface uses to run an analysis. Host workflows run their
-//! stages through the crate-private `file_tool` stage runner inside a run.
+//! stages through registered child jobs with the same lifecycle as other runs.
 use std::collections::{BTreeMap, BTreeSet};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
@@ -574,6 +574,16 @@ impl PreparedOperation {
                     }
                 ));
                 let original_hash = file_tool::freeze_file(&source, &path)?;
+                if name == "cache" && operation.package.manifest.id == "basecraft.distance" {
+                    let issues = basecraft_ops::provenance::verify(&source)?;
+                    if !issues.is_empty() {
+                        return Err(Error::Protocol(format!(
+                            "distance cache evidence is not reusable: {}",
+                            issues.join("; ")
+                        )));
+                    }
+                }
+
                 if accepted_hashes
                     .get(&source)
                     .is_some_and(|accepted| accepted != &original_hash)
@@ -709,6 +719,13 @@ impl PreparedOperation {
                 &format!("Input for {}", operation.id),
             )?;
             let mut record = input_evidence::read_input(ledger.directory())?;
+            record.extra.insert(
+                "analysis_run".into(),
+                json!(input_evidence::relative(
+                    ledger.directory(),
+                    run.directory()
+                )?),
+            );
             record.submitted_hash = submitted_hash;
             record.submitted_size = std::fs::metadata(&frozen)?.len();
             record.transformation = transformation.into();
@@ -915,7 +932,55 @@ impl PreparedOperation {
             })?;
             prepared.bind_target(session, target, save)?;
         }
+        if prepared.operation.package.manifest.id == "basecraft.distance"
+            && prepared.parameters["bootstrap_destination"] == "working"
+            && prepared.parameters["bootstrap"].as_u64().unwrap_or(0) > 0
+        {
+            for suffix in [".nex", ".partial.nex"] {
+                let member = format!("bootstrap-{}{suffix}", prepared.run.id());
+                prepared
+                    .policy
+                    .path(&prepared.bootstrap_destination(Path::new(&member))?, true)?;
+            }
+        }
         Ok(prepared)
+    }
+
+    fn bootstrap_destination(&self, member: &Path) -> Result<String> {
+        let directory = self
+            .request
+            .destinations
+            .get("artifacts/tree.nwk")
+            .map(Path::new)
+            .and_then(Path::parent)
+            .unwrap_or(Path::new(""));
+        Ok(directory.join(member).display().to_string())
+    }
+
+    /// Merge child histories through the same submitted-record abstraction used
+    /// for ordinary inputs. Stage publications remain separate immutable origins.
+    pub(crate) fn publication_input_record(
+        &self,
+    ) -> Result<basecraft_ops::document_record::DocumentRecord> {
+        let mut record = self.input_record.clone();
+        let stages = self.run.artifact("stages.json")?;
+        if stages.is_file() {
+            let outcomes: Vec<OperationOutcome> =
+                serde_json::from_slice(&basecraft_ops::provenance::read_record(&stages)?)?;
+            for stage in outcomes {
+                if stage.state != basecraft_protocol::operation::RuntimeState::Completed {
+                    continue;
+                }
+                if let Some(artifact) = stage.artifacts.first() {
+                    record.include_input(
+                        &basecraft_ops::document_record::DocumentRecord::from_file(Path::new(
+                            &artifact.path,
+                        ))?,
+                    );
+                }
+            }
+        }
+        Ok(record)
     }
 
     pub fn execute(&self, cancelled: Arc<AtomicBool>) -> Result<InvokeResult> {
@@ -1391,6 +1456,27 @@ impl PreparedOperation {
                     }
                 }
             }
+            if role == "artifacts"
+                && self.operation.package.manifest.id == "basecraft.distance"
+                && self.parameters["bootstrap_destination"] == "working"
+            {
+                for (member, hash) in &expected {
+                    let name = member.to_string_lossy();
+                    if name.starts_with(&format!("bootstrap-{}", self.run.id()))
+                        && name.ends_with(".nex")
+                    {
+                        let destination = self.bootstrap_destination(member)?;
+                        self.publish_member(
+                            role,
+                            &retained.join(member),
+                            hash,
+                            &destination,
+                            outcome,
+                        )?;
+                        exports.push((destination, retained.join(member), hash.clone()));
+                    }
+                }
+            }
             collections.insert(role.clone(), retained);
         }
         let mut publication_outputs = Vec::new();
@@ -1642,7 +1728,7 @@ impl PreparedOperation {
                     rows: None,
                 },
             };
-            self.input_record
+            self.publication_input_record()?
                 .publish_operation_activity(&self.run, &activity)?;
         }
         for artifact in &outcome.artifacts {
@@ -2102,44 +2188,6 @@ impl PreparedOperation {
         let registry = self.workflow_registry.as_ref().ok_or_else(|| {
             Error::Protocol("host workflow is missing accepted stage registry".into())
         })?;
-        let preparation_plugin = registry
-            .resolve("basecraft.delimitation/haplotypes@1", None)?
-            .package
-            .manifest
-            .dir
-            .clone();
-        // Execute the bytes accepted at submission, including unsaved edits.
-        let source = PathBuf::from(
-            self.context
-                .inputs
-                .get("alignment")
-                .and_then(|values| values.first())
-                .ok_or_else(|| Error::Protocol("workflow requires alignment input".into()))?,
-        );
-        let root = PathBuf::from(&self.context.outputs["artifacts"]);
-        // Stages record into their own runs; the owner session records this one.
-        let mut session = basecraft_ops::Session::detached(&self.policy.root);
-        let doc = session.open(&source)?;
-        let mut preparation = crate::file_tool::FileJob::from_alignment(
-            &session,
-            doc,
-            (&preparation_plugin, "haplotypes"),
-            root.join("preparation.json"),
-            self.context
-                .input_evidence
-                .get("alignment")
-                .and_then(|values| values.first())
-                .ok_or_else(|| Error::Protocol("workflow requires alignment evidence".into()))?,
-        )?
-        .with_cpu_budget(self.context.cpu_threads)
-        .with_registry(registry.clone());
-        let submitted = basecraft_io::hash_file(Path::new(&self.context.inputs["alignment"][0]))
-            .map_err(basecraft_ops::Error::from)?;
-        if preparation.input_key.1 != submitted {
-            return Err(Error::Protocol(
-                "workflow preparation differs from accepted alignment".into(),
-            ));
-        }
         let effective = Value::Object(crate::compute::parameters_for(
             &self.operation.descriptor,
             self.parameters
@@ -2152,63 +2200,24 @@ impl PreparedOperation {
             .granted_parameters
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = effective.clone();
-        preparation.params.extend(
-            effective
-                .as_object()
-                .cloned()
-                .ok_or_else(|| Error::Protocol("workflow parameters must be an object".into()))?,
-        );
-        preparation
-            .params
-            .insert("cancel_file".into(), json!(self.context.cancel_file));
-        preparation
-            .params
-            .insert("progress".into(), json!(self.context.progress_file));
         let method = self
             .operation
             .descriptor
             .host_workflow
             .as_deref()
             .ok_or_else(|| Error::Protocol("missing host workflow".into()))?;
-        let fit_method = crate::delimitation_pipeline::workflow_fit(method)
-            .ok_or_else(|| Error::Protocol("unknown host workflow".into()))?;
-        let unique = self.parameters["unique_haplotypes"]
-            .as_bool()
-            .unwrap_or(fit_method != "asap");
-        let workflow = crate::delimitation_pipeline::AlignmentJob {
-            preparation,
-            unique_haplotypes: unique,
-            fit_method: fit_method.into(),
-            output: root.join("analysis.spart"),
+        let mut workflow = crate::delimitation_pipeline::AlignmentWorkflow {
+            registry,
+            parent: self,
+            cancelled,
+            stages: vec![],
         };
-        let stages = workflow.run();
-        let fit = stages.output.clone();
-        // The final stage's report is the run's result under one stable name.
-        let execution = stages.record(&mut session, doc).and_then(|result| {
-            std::fs::copy(&fit, root.join("fit.json"))?;
-            Ok(result)
-        });
+        let execution = workflow.run(method, effective);
         input_evidence::write_json(
             &self.run.artifact("execution.json")?,
             &json!({"schema":1,"workflow":method,"initiator":self.initiator,"executor":"basecraft.host","requested_parameters":self.request.parameters,"effective_parameters":self.effective_parameters(),"package_digest":self.operation.package.digest,"descriptor_digest":self.operation.descriptor_digest,"process_instance":basecraft_platform::process_instance()}),
         )?;
-        let mut result = execution?;
-        let mut files = BTreeSet::new();
-        scan_files(&root, &mut files, 0)?;
-        result.artifacts = files
-            .into_iter()
-            .map(|path| {
-                path.strip_prefix(&root)
-                    .map(|relative| PluginArtifact {
-                        role: "artifacts".into(),
-                        path: relative.to_string_lossy().into_owned(),
-                    })
-                    .map_err(|_| Error::Protocol("workflow artifact escapes allocation".into()))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        result.outputs.clear();
-        result.data = None;
-        Ok(result)
+        execution
     }
 }
 

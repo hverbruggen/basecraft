@@ -1,16 +1,16 @@
-//! Exact identity preprocessing, followed by ASAP or public UPGMA and GMYC.
-//! Each stage is a crate-private file-plugin job with its own retained run,
-//! executed inside the registered `basecraft.host` workflow run.
-use crate::{Error, Result, file_tool::FileJob};
-use basecraft_ops::{DocId, Session};
+//! Registered sub-runs for explicit alignment workflows. The parent alone owns
+//! the receiving document and its revision/application/undo boundary.
+use crate::{Error, Result, jobs::JobManager, policy::SessionPolicy, registry::Registry};
 use basecraft_protocol::{
-    delimitation::{JobRecord, JobStatus},
+    operation::{OperationOutcome, OperationRequest, RuntimeState},
     plugin::InvokeResult,
 };
 use serde_json::{Value, json};
-use std::{collections::BTreeMap, path::PathBuf, time::Instant};
+use std::{
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicBool, Ordering},
+};
 
-/// The fit stage of a reserved alignment workflow (`basecraft.host` descriptors).
 pub(crate) fn workflow_fit(workflow: &str) -> Option<&'static str> {
     match workflow {
         "asap_alignment" => Some("asap"),
@@ -20,348 +20,227 @@ pub(crate) fn workflow_fit(workflow: &str) -> Option<&'static str> {
     }
 }
 
-pub(crate) struct AlignmentJob {
-    pub(crate) preparation: FileJob,
-    pub(crate) unique_haplotypes: bool,
-    pub(crate) fit_method: String,
-    pub(crate) output: PathBuf,
+pub(crate) struct AlignmentWorkflow<'a> {
+    pub registry: &'a Registry,
+    pub parent: &'a crate::runner::PreparedOperation,
+    pub cancelled: &'a AtomicBool,
+    pub stages: Vec<OperationOutcome>,
 }
-struct Stage {
-    job: FileJob,
-    outcome: Result<InvokeResult>,
-    elapsed: f64,
-}
-pub(crate) struct PipelineOutcome {
-    stages: Vec<Stage>,
-    unavailable: Option<String>,
-    pub(crate) output: PathBuf,
-    primary: Option<PathBuf>,
-}
-impl AlignmentJob {
-    /// No session access: this method can run on a worker thread.
-    pub(crate) fn run(mut self) -> PipelineOutcome {
-        let primary = self.preparation.species_workspace_target(&self.output);
-        self.output = self.preparation.output.with_file_name("fit.json");
-        let mut result = PipelineOutcome {
-            stages: vec![],
-            unavailable: None,
-            output: self.output.clone(),
-            primary,
-        };
-        let started = Instant::now();
-        let outcome = self.preparation.run();
-        result.stages.push(Stage {
-            job: self.preparation,
-            outcome,
-            elapsed: started.elapsed().as_secs_f64(),
-        });
-        if result.stages[0].outcome.is_err() {
-            return result;
+impl AlignmentWorkflow<'_> {
+    fn stage(&mut self, operation: &str, inputs: Value, parameters: Value) -> Result<PathBuf> {
+        if self.cancelled.load(Ordering::Acquire) {
+            return Err(Error::Protocol("cancelled before workflow stage".into()));
         }
-        if self.fit_method == "asap" {
-            return run_asap(result, self.unique_haplotypes);
-        }
-        let prepare = &result.stages[0].job;
-        let setup = (|| -> Result<FileJob> {
-            if !["gmyc_single", "gmyc_multiple"].contains(&self.fit_method.as_str()) {
-                return Err(Error::Protocol(
-                    "alignment pipeline requires single or multiple GMYC".into(),
-                ));
-            }
-            let metadata: Value = serde_json::from_slice(&std::fs::read(&prepare.output)?)?;
-            let counts = &metadata["metrics"]["haplotypes"];
-            let retained = if self.unique_haplotypes {
-                counts["unique"].as_array().map_or(0, Vec::len)
-            } else {
-                counts["original_count"]
-                    .as_u64()
-                    .and_then(|n| usize::try_from(n).ok())
-                    .unwrap_or(0)
-            };
-            if retained < 2 {
-                return Err(Error::Protocol("GMYC unavailable: fewer than two retained haplotypes; no tree or fit was invented".into()));
-            }
-            let registry = prepare.stage_registry()?;
-            let plugin = registry
-                .resolve("basecraft.distance/tree@1", None)?
-                .package
-                .manifest
-                .dir
-                .clone();
-            let mut tree = following_alignment(
-                prepare,
-                self.unique_haplotypes,
-                (&plugin, "tree"),
-                PathBuf::from(format!("{}.upgma.nwk", self.output.display())),
-            )?;
-            tree.params.insert("method".into(), "upgma".into());
-            for name in [
-                "model",
-                "min_overlap",
-                "threads",
-                "tree_threads",
-                "cancel_file",
-                "progress",
-                "progress_job_id",
-            ] {
-                if let Some(value) = prepare.params.get(name) {
-                    tree.params.insert(name.into(), value.clone());
-                }
-            }
-            Ok(tree)
-        })();
-        let tree = match setup {
-            Ok(tree) => tree,
-            Err(error) => {
-                result.unavailable = Some(error.to_string());
-                return result;
-            }
-        };
-        if cancelled(prepare) {
-            result.unavailable = Some("GMYC cancelled before tree inference".into());
-            return result;
-        }
-        let started = Instant::now();
-        let outcome = tree.run();
-        result.stages.push(Stage {
-            job: tree,
-            outcome,
-            elapsed: started.elapsed().as_secs_f64(),
-        });
-        if result.stages[1].outcome.is_err() {
-            return result;
-        }
-        let prepare = &result.stages[0].job;
-        let setup = (|| -> Result<FileJob> {
-            let mut fit = result.stages[1].job.following(
-                &result.stages[1].job.output,
-                (&prepare.plugin, &self.fit_method),
-                self.output,
-            )?;
-            fit.params.extend(prepare.params.clone());
-            fit.params.insert(
-                "job_id".into(),
-                json!(format!(
-                    "{}-fit",
-                    prepare.params["job_id"].as_str().unwrap_or("alignment")
-                )),
-            );
-            sampling_parameters(prepare, &mut fit, self.unique_haplotypes)?;
-            fit.params.insert("rooted".into(), true.into());
-            fit.params.insert(
-                "units".into(),
-                json!("relative time from equal-rate UPGMA distances; uncalibrated"),
-            );
-            fit.params.insert(
-                "tree_inference".into(),
-                "UPGMA equal-rate clustering from retained aligned sequences".into(),
-            );
-            Ok(fit)
-        })();
-        let mut fit = match setup {
-            Ok(fit) => fit,
-            Err(error) => {
-                result.unavailable = Some(error.to_string());
-                return result;
-            }
-        };
-        fit.publish_species_workspace_at(result.primary.clone());
-        result.output.clone_from(&fit.output);
-        let started = Instant::now();
-        let outcome = fit.run();
-        result.stages.push(Stage {
-            job: fit,
-            outcome,
-            elapsed: started.elapsed().as_secs_f64(),
-        });
-        result
-    }
-}
-fn following_alignment(
-    prepare: &FileJob,
-    unique: bool,
-    operation: (&std::path::Path, &str),
-    output: PathBuf,
-) -> Result<FileJob> {
-    let metadata: Value = serde_json::from_slice(&std::fs::read(&prepare.output)?)?;
-    let source = if unique {
-        PathBuf::from(format!("{}.unique.fasta", prepare.output.display()))
-    } else {
-        prepare.input.clone()
-    };
-    let expected = if unique {
-        metadata["job"]["outputs"]
-            .get(source.display().to_string())
-            .and_then(Value::as_str)
-            .ok_or_else(|| {
-                Error::Protocol("Preparation has no representative alignment hash".into())
-            })?
-    } else {
-        &prepare.input_key.1
-    };
-    let job = prepare.following(&source, operation, output)?;
-    if job.input_key.1 != expected {
-        return Err(Error::Protocol(
-            "Prepared alignment changed; repeat preparation".into(),
-        ));
-    }
-    Ok(job)
-}
-
-/// Carry the exact retained source and reversible mapping into every fit.
-fn sampling_parameters(prepare: &FileJob, fit: &mut FileJob, unique: bool) -> Result<()> {
-    let metadata: Value = serde_json::from_slice(&std::fs::read(&prepare.output)?)?;
-    let counts = &metadata["metrics"]["haplotypes"];
-    let snapshot = prepare.input.display().to_string();
-    let evidence = prepare.species_input_evidence()?;
-    fit.params.extend([
-        ("deduplicate".into(), json!(unique)),
-        ("alignment_input_hash".into(), json!(prepare.input_key.1)),
-        ("alignment_snapshot".into(), json!(snapshot)),
-        ("original_source".into(), evidence["path"].clone()),
-        ("original_count".into(), counts["original_count"].clone()),
-        (
-            "retained_count".into(),
-            if unique {
-                json!(counts["unique"].as_array().map_or(0, Vec::len))
-            } else {
-                counts["original_count"].clone()
-            },
-        ),
-        (
-            "sequence_sampling".into(),
-            json!(if unique {
-                "unique aligned DNA haplotypes"
-            } else {
-                "all specimens"
-            }),
-        ),
-    ]);
-    fit.params.insert("alignment_evidence".into(), evidence);
-    if unique {
-        let mapping = format!("{}.haplotypes.json", prepare.output.display());
-        let hash = metadata["job"]["outputs"]
-            .get(&mapping)
-            .ok_or_else(|| Error::Protocol("Preparation has no mapping hash".into()))?;
-        fit.params.insert("mapping".into(), json!(mapping));
-        fit.params.insert("mapping_hash".into(), hash.clone());
-    }
-    Ok(())
-}
-
-fn run_asap(mut result: PipelineOutcome, unique: bool) -> PipelineOutcome {
-    let prepare = &result.stages[0].job;
-    let setup = (|| -> Result<FileJob> {
-        if cancelled(prepare) {
-            return Err(Error::Protocol("ASAP cancelled before fitting".into()));
-        }
-        let mut fit = following_alignment(
-            prepare,
-            unique,
-            (&prepare.plugin, "asap"),
-            result.output.clone(),
+        let operation = format!("{operation}@1");
+        let descriptor = self.registry.resolve(&operation, None)?.descriptor;
+        // The workflow descriptor is the superset. Pass only parameters declared
+        // by each stage, retaining the normalized nested settings in its receipt.
+        let properties = descriptor.parameters["properties"]
+            .as_object()
+            .ok_or_else(|| Error::Protocol("stage parameters must be an object".into()))?;
+        let parameters: serde_json::Map<_, _> = parameters
+            .as_object()
+            .ok_or_else(|| Error::Protocol("workflow parameters must be an object".into()))?
+            .iter()
+            .filter(|(key, _)| properties.contains_key(*key))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
+        let request: OperationRequest = serde_json::from_value(json!({
+            "operation":operation,"inputs":inputs,"parameters":parameters
+        }))?;
+        let root = self.parent.run.artifact("stages")?;
+        let mut manager = JobManager::default();
+        let accepted = manager.submit(
+            self.registry,
+            request,
+            SessionPolicy::new(&root, true)?,
+            &self.parent.initiator,
         )?;
-        fit.params.extend(prepare.params.clone());
-        sampling_parameters(prepare, &mut fit, unique)?;
-        Ok(fit)
-    })();
-    match setup {
-        Ok(mut job) => {
-            job.publish_species_workspace_at(result.primary.clone());
-            result.output.clone_from(&job.output);
-            let started = Instant::now();
-            let outcome = job.run();
-            result.stages.push(Stage {
-                job,
-                outcome,
-                elapsed: started.elapsed().as_secs_f64(),
-            });
-        }
-        Err(error) => result.unavailable = Some(error.to_string()),
-    }
-    result
-}
-
-fn cancelled(job: &FileJob) -> bool {
-    job.params
-        .get("cancel_file")
-        .and_then(Value::as_str)
-        .is_some_and(|path| std::path::Path::new(path).exists())
-}
-impl PipelineOutcome {
-    /// Retain every completed/failed/cancelled stage, then return the final result.
-    pub(crate) fn record(self, session: &mut Session, doc: DocId) -> Result<InvokeResult> {
-        let inputs = self
+        self.stages.push(accepted.clone());
+        self.persist()?;
+        let mut session = basecraft_ops::Session::detached(&root);
+        let outcome = manager.wait_in_session(&accepted.run_id, &mut session, &|| {
+            self.cancelled.load(Ordering::Acquire)
+        })?;
+        let directory = outcome
+            .evidence
+            .as_ref()
+            .map(PathBuf::from)
+            .ok_or_else(|| Error::Protocol("stage has no retained evidence".into()))?;
+        *self
             .stages
-            .first()
-            .map_or_else(BTreeMap::new, |stage| [stage.job.input_key.clone()].into());
-        let mut last = None;
-        let mut outputs = Vec::new();
-        for stage in self.stages {
-            stage
-                .job
-                .record_terminal(session, doc, &stage.outcome, stage.elapsed)
-                .map_err(|error| {
-                    Error::Protocol(format!(
-                        "Recording {} outcome at {}: {error}",
-                        stage.job.operation,
-                        stage.job.output.display()
-                    ))
-                })?;
-            let result = stage.outcome?;
-            stage.job.record(session, doc, &result).map_err(|error| {
-                Error::Protocol(format!(
-                    "Recording {} at {}: {error}",
-                    stage.job.operation,
-                    stage.job.output.display()
-                ))
-            })?;
-            outputs.extend(result.outputs.iter().cloned());
-            last = Some(result);
+            .last_mut()
+            .ok_or_else(|| Error::Protocol("stage receipt is missing".into()))? = outcome.clone();
+        self.persist()?;
+        if outcome.state != RuntimeState::Completed {
+            return Err(Error::Protocol(format!(
+                "workflow stage {} ended {:?}: {} (evidence: {})",
+                operation,
+                outcome.state,
+                outcome
+                    .errors
+                    .iter()
+                    .map(|e| e.message.as_str())
+                    .collect::<Vec<_>>()
+                    .join("; "),
+                directory.display()
+            )));
         }
-        if let Some(reason) = self.unavailable {
-            let report = JobRecord {
-                id: ulid::Ulid::generate().to_string(),
-                generation: session.generation(doc),
-                status: if reason.contains("cancelled") {
-                    JobStatus::Cancelled
-                } else {
-                    JobStatus::Unavailable
-                },
-                method: "delimitation_alignment".into(),
-                inputs,
-                outputs: BTreeMap::new(),
-                diagnostics: vec![reason.clone()],
-                elapsed_seconds: 0.0,
-            };
-            let path = PathBuf::from(format!("{}.run.json", self.output.display()));
-            basecraft_io::write_atomic(&path, |writer| {
-                serde_json::to_writer_pretty(
-                    writer,
-                    &json!({"version":1,"job":report,"workspace":null,"metrics":{}}),
-                )?;
-                Ok(())
-            })
-            .map_err(basecraft_ops::Error::from)?;
-            let mut record = report;
-            record
-                .outputs
-                .insert(path.display().to_string(), session.snapshot_file(&path)?);
-            session.log_job_finished(doc, record)?;
-            return Err(Error::Protocol(reason));
+        Ok(directory.join("artifacts"))
+    }
+
+    fn persist(&self) -> Result<()> {
+        basecraft_ops::input_evidence::write_json(
+            &self.parent.run.artifact("stages.json")?,
+            &self.stages,
+        )?;
+        // Connect immutable completed stage publications to the existing parent
+        // ledger. They carry their own execution identity, history and inputs.
+        let mut input = basecraft_ops::input_evidence::read_input(self.parent.run.directory())?;
+        let upstream = input
+            .extra
+            .entry("upstream".into())
+            .or_insert_with(|| json!([]))
+            .as_array_mut()
+            .ok_or_else(|| Error::Protocol("invalid workflow ancestry".into()))?;
+        for stage in &self.stages {
+            if stage.state != RuntimeState::Completed {
+                continue;
+            }
+            let directory = Path::new(
+                stage
+                    .evidence
+                    .as_ref()
+                    .ok_or_else(|| Error::Protocol("stage evidence missing".into()))?,
+            );
+            if upstream.iter().any(|parent| parent["id"] == stage.run_id) {
+                continue;
+            }
+            upstream.push(json!({"bundle":basecraft_ops::input_evidence::relative(self.parent.run.directory(), directory)?,
+                "id":stage.run_id,"hash":basecraft_io::hash_file(&directory.join("manifest.json")).map_err(basecraft_ops::Error::from)?}));
         }
-        let mut result =
-            last.ok_or_else(|| Error::Protocol("pipeline produced no stages".into()))?;
-        outputs.sort();
-        outputs.dedup();
-        if let Some(primary) = self.primary
-            && let Some(index) = outputs
-                .iter()
-                .position(|p| std::path::Path::new(p) == primary)
-        {
-            outputs.swap(0, index);
+        basecraft_ops::input_evidence::write_json(
+            &self.parent.run.artifact("input.json")?,
+            &input,
+        )?;
+        Ok(())
+    }
+
+    pub fn run(&mut self, method: &str, effective: Value) -> Result<InvokeResult> {
+        let fit =
+            workflow_fit(method).ok_or_else(|| Error::Protocol("unknown host workflow".into()))?;
+        let root = self.parent.run.artifact("stages")?;
+        std::fs::create_dir(&root)?;
+        // This durable accepted input is shared by all stages. A child must not
+        // refer to the parent's disposable scratch input after it completes.
+        let source = root.join("accepted.fasta");
+        crate::file_tool::freeze_file(
+            Path::new(&self.parent.context.inputs["alignment"][0]),
+            &source,
+        )?;
+        let prepare = self.stage(
+            "basecraft.delimitation/haplotypes",
+            json!({"alignment":[{"kind":"file","path":source}]}),
+            effective.clone(),
+        )?;
+        let report: Value = serde_json::from_slice(&std::fs::read(prepare.join("result.json"))?)?;
+        let counts = &report["metrics"]["haplotypes"];
+        let unique = effective["unique_haplotypes"]
+            .as_bool()
+            .unwrap_or(fit != "asap");
+        let retained = if unique {
+            counts["unique"].as_array().map_or(0, Vec::len)
+        } else {
+            counts["original_count"]
+                .as_u64()
+                .and_then(|n| usize::try_from(n).ok())
+                .unwrap_or(0)
+        };
+        if fit != "asap" && retained < 2 {
+            let diagnostic =
+                "GMYC unavailable: fewer than two retained haplotypes; no tree or fit was invented";
+            basecraft_ops::input_evidence::write_json(
+                &Path::new(&self.parent.context.outputs["artifacts"]).join("fit.json.run.json"),
+                &json!({"version":1,"job":{"status":"unavailable","diagnostics":[diagnostic]},"workspace":null,"metrics":{}}),
+            )?;
+            return Err(Error::Protocol(diagnostic.into()));
         }
-        result.outputs = outputs;
-        Ok(result)
+        let alignment = if unique {
+            prepare.join("result.json.unique.fasta")
+        } else {
+            source.clone()
+        };
+        let mut params = effective.clone();
+        params["deduplicate"] = json!(unique);
+        params["original_count"] = counts["original_count"].clone();
+        params["retained_count"] = json!(retained);
+        params["sequence_sampling"] = json!(if unique {
+            "unique aligned DNA haplotypes"
+        } else {
+            "all specimens"
+        });
+        let mut inputs = json!({"alignment":[{"kind":"file","path": if fit == "asap" { &alignment } else { &source }}]});
+        if unique {
+            let mapping = prepare.join("result.json.haplotypes.json");
+            let hash = basecraft_io::hash_file(&mapping).map_err(basecraft_ops::Error::from)?;
+            if report["job"]["outputs"][mapping.display().to_string()] != hash {
+                return Err(Error::Protocol("Prepared haplotype mapping changed".into()));
+            }
+            params["mapping_hash"] = json!(hash);
+            inputs["mapping"] = json!([{"kind":"file","path":mapping}]);
+        }
+        if fit != "asap" {
+            let mut tree_params = effective;
+            tree_params["method"] = json!("upgma");
+            let tree = self.stage(
+                "basecraft.distance/tree",
+                json!({"alignment":[{"kind":"file","path":alignment}]}),
+                tree_params,
+            )?;
+            inputs["tree"] = json!([{"kind":"file","path":tree.join("tree.nwk")}]);
+            params["rooted"] = json!(true);
+            params["units"] = json!("relative time from equal-rate UPGMA distances; uncalibrated");
+            params["tree_inference"] =
+                json!("UPGMA equal-rate clustering from retained aligned sequences");
+        }
+        let result = self.stage(&format!("basecraft.delimitation/{fit}"), inputs, params)?;
+        let target = Path::new(&self.parent.context.outputs["artifacts"]);
+        // Keep nested stage results in their owned runs. The parent's stable fit
+        // report is the one logical result consumed by every interface.
+        std::fs::copy(result.join("result.json"), target.join("fit.json"))?;
+        let mut metadata: Value = serde_json::from_slice(&std::fs::read(target.join("fit.json"))?)?;
+        // Report the full accepted alignment for representative-only ASAP too.
+        // The fit's mapping and stage receipt retain the representative input.
+        if let Some(workspace) = metadata.get_mut("workspace").and_then(Value::as_object_mut) {
+            let evidence = &self.parent.context.input_evidence["alignment"][0];
+            let stable = evidence.original_path.clone().unwrap_or_else(|| {
+                self.parent
+                    .run
+                    .directory()
+                    .join("submitted.fasta")
+                    .display()
+                    .to_string()
+            });
+            let fields = workspace
+                .entry("exchange_fields")
+                .or_insert_with(|| json!({}));
+            fields["basecraft_alignment_snapshot"] = json!(stable);
+            fields["basecraft_alignment_hash"] = json!(
+                evidence
+                    .source_hash
+                    .as_ref()
+                    .unwrap_or(&evidence.submitted_hash)
+            );
+            fields["basecraft_alignment_evidence_run"] = json!(evidence.run_directory);
+        }
+        basecraft_ops::input_evidence::write_json(&target.join("fit.json"), &metadata)?;
+        Ok(InvokeResult {
+            artifacts: vec![basecraft_protocol::operation::PluginArtifact {
+                role: "artifacts".into(),
+                path: "fit.json".into(),
+            }],
+            message: Some(format!("Completed {method}")),
+            ..InvokeResult::default()
+        })
     }
 }

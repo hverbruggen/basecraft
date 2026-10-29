@@ -1,5 +1,6 @@
 """Public file-operation adapter for the shared Rust distance engine."""
 import json
+import hashlib
 import os
 import shutil
 import subprocess
@@ -79,6 +80,21 @@ def invoke(kind, params):
         raise ValueError("Bootstrap supports only sorted NJ and UPGMA")
     collection = collection_path(params) if bootstrap else None
     cache = Path(params.get("cache", str(target) + ".distances.json")).resolve()
+    producer = Path(executable(params)).resolve()
+    def digest(path):
+        with Path(path).open("rb") as stream:
+            return hashlib.file_digest(stream, "sha256").hexdigest()
+    identity = {"schema": 1, "input_sha256": digest(source), "engine_sha256": digest(producer),
+                "model": model, "min_overlap": params.get("min_overlap", 1)}
+    supplied_cache = params.get("cache_input")
+    if supplied_cache:
+        supplied = Path(supplied_cache)
+        saved = json.loads(supplied.read_text())
+        if saved.get("basecraft_identity") != identity:
+            raise ValueError("Distance cache input/model/effective parameters/producer do not match; calculate a fresh cache")
+        if cache.exists():
+            raise ValueError("Allocated distance cache already exists")
+        shutil.copyfile(supplied, cache)
     report = Path(str(target) + ".run.json")
     if len({target, source, cache, report}) != 4:
         raise ValueError("Input, output, cache, and report paths must differ")
@@ -129,6 +145,12 @@ def invoke(kind, params):
                 raise recovery_error(diagnostic, failed, report, retained)
             raise RuntimeError(diagnostic)
         metadata = json.loads(run.stdout)
+        if supplied_cache and not metadata.get("cache_reused"):
+            raise ValueError("Distance engine refused the supplied cache identity; no result was published")
+        saved = json.loads(cache.read_text())
+        saved["basecraft_identity"] = identity
+        write_atomic(cache, json.dumps(saved, indent=2) + "\n")
+
         retained = [retained_output(metadata, collection)] if collection else []
         # Publish on the destination filesystem, including for cross-device temp dirs.
         partial = None

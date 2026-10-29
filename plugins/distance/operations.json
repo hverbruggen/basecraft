@@ -96,6 +96,12 @@
           "media_type": "text/x-fasta",
           "min": 1,
           "max": 1
+        },
+        "cache": {
+          "view": "bytes",
+          "media_type": "application/json",
+          "min": 0,
+          "max": 1
         }
       },
       "outputs": {
@@ -118,7 +124,8 @@
       "legacy_adapter": {
         "primary_input": "alignment",
         "inputs": {
-          "alignment": "input"
+          "alignment": "input",
+          "cache": "cache_input"
         },
         "input_arrays": [],
         "outputs": {
@@ -175,6 +182,12 @@
           "media_type": "text/x-fasta",
           "min": 1,
           "max": 1
+        },
+        "cache": {
+          "view": "bytes",
+          "media_type": "application/json",
+          "min": 0,
+          "max": 1
         }
       },
       "outputs": {
@@ -197,7 +210,8 @@
       "legacy_adapter": {
         "primary_input": "alignment",
         "inputs": {
-          "alignment": "input"
+          "alignment": "input",
+          "cache": "cache_input"
         },
         "input_arrays": [],
         "outputs": {
@@ -266,6 +280,12 @@
           "media_type": "application/json",
           "min": 0,
           "max": 1
+        },
+        "cache": {
+          "view": "bytes",
+          "media_type": "application/json",
+          "min": 0,
+          "max": 1
         }
       },
       "outputs": {
@@ -289,7 +309,8 @@
         "primary_input": "alignment",
         "inputs": {
           "alignment": "input",
-          "groups": "groups"
+          "groups": "groups",
+          "cache": "cache_input"
         },
         "input_arrays": [],
         "outputs": {
