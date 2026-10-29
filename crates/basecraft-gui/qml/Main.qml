@@ -563,7 +563,7 @@ ApplicationWindow {
         onMessageChanged: if (message.length && message !== "notify: Working…") notification("", message, message.startsWith("fail:") ? "fail" : "done")
     }
     property var activeTasks: ({jobs: []})
-    readonly property int runningTaskCount: (activeTasks.jobs || []).filter(job => job.status === "running").length
+    readonly property int runningTaskCount: (activeTasks.jobs || []).filter(job => ["queued", "running", "cancelling", "finalizing"].includes(job.status)).length
     readonly property int failedTaskCount: (activeTasks.jobs || []).filter(job => job.status === "failed").length
     Timer { interval: 1500; running: true; repeat: true; onTriggered: window.activeTasks = JSON.parse(provenance.jobs(false)) }
     property string frozenReport: ""
@@ -870,7 +870,7 @@ ApplicationWindow {
                 }
                 AppButton {
                     text: window.runningTaskCount ? "Tasks (" + window.runningTaskCount + ")" : "Tasks" + (window.failedTaskCount ? " · " + window.failedTaskCount + " failed" : "")
-                    Accessible.name: "Tasks and notifications, " + window.runningTaskCount + " running, " + window.failedTaskCount + " failed"
+                    Accessible.name: "Tasks and notifications, " + window.runningTaskCount + " active, " + window.failedTaskCount + " failed"
                     onClicked: tasksDialog.open()
                 }
             }

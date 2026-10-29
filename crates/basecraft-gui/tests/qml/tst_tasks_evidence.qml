@@ -12,6 +12,58 @@ TestCase {
     Component { id: dialogComponent; TasksDialog {} }
     SignalSpy { id: openSpy; signalName: "openDocument" }
     SignalSpy { id: copySpy; signalName: "copyText" }
+    Component {
+        id: serviceComponent
+        QtObject {
+            property string notifications: '[{"time":"now","kind":"notify","message":"finished","document":""}]'
+            property string retained: JSON.stringify({jobs: [{id: "retained", operation: "tree", status: "completed", source: {path: "/a.afa"}, outputs: {}, primary_output: "/tree.nwk"}]})
+            function jobs(previous) { return retained }
+            function clear_notifications() { notifications = "[]" }
+        }
+    }
+    function test_active_states_data() {
+        return [
+            {tag: "queued", status: "queued", active: true, cancel: true},
+            {tag: "running", status: "running", active: true, cancel: true},
+            {tag: "cancelling", status: "cancelling", active: true, cancel: false},
+            {tag: "finalizing", status: "finalizing", active: true, cancel: false},
+            {tag: "partial", status: "partial", active: false, cancel: false},
+            {tag: "unconfirmed", status: "Previous owner; completion unconfirmed", active: false, cancel: false}
+        ]
+    }
+    function test_active_states(data) {
+        const dialog = createTemporaryObject(dialogComponent, testCase)
+        dialog.jobData = {jobs: [{id: "run", operation: "tree", status: data.status, cancellable: true, source: {path: "/a.afa"}, outputs: {}}]}
+        dialog.open()
+        tryCompare(dialog, "opened", true)
+        const progress = findChild(dialog.contentItem, "taskProgress")
+        const cancel = findChild(dialog.contentItem, "cancelTask")
+        verify(progress)
+        verify(cancel)
+        compare(progress.visible, data.active)
+        compare(cancel.visible, data.active)
+        compare(cancel.enabled, data.cancel)
+        dialog.jobData = {jobs: [{id: "run", operation: "tree", status: data.status, cancellable: false, source: {path: "/a.afa"}, outputs: {}}]}
+        wait(0)
+        compare(findChild(dialog.contentItem, "cancelTask").enabled, false)
+        dialog.close()
+    }
+    function test_clear_notifications_retains_tasks() {
+        const service = createTemporaryObject(serviceComponent, testCase)
+        const dialog = createTemporaryObject(dialogComponent, testCase, {service: service})
+        dialog.open()
+        tryCompare(dialog, "opened", true)
+        compare(dialog.notices.length, 1)
+        const before = service.retained
+        const clear = findChild(dialog.contentItem, "clearTaskNotifications")
+        verify(clear)
+        mouseClick(clear)
+        compare(dialog.notices.length, 0)
+        dialog.refreshJobs()
+        compare(service.retained, before)
+        compare(dialog.jobData.jobs[0].primary_output, "/tree.nwk")
+        dialog.close()
+    }
     function test_copy_error_takes_the_main_line() {
         const dialog = createTemporaryObject(dialogComponent, testCase)
         const trace = "Traceback (most recent call last):\n  File \"x.py\", line 3\nRuntimeError: GMYC requires positive event ages\n"

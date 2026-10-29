@@ -2035,7 +2035,10 @@ impl PreparedOperation {
             RuntimeState::Cancelled => "cancelled",
             RuntimeState::Partial => "partial",
             RuntimeState::Interrupted => "interrupted",
-            _ => "running",
+            RuntimeState::Queued => "queued",
+            RuntimeState::Running => "running",
+            RuntimeState::Cancelling => "cancelling",
+            RuntimeState::Finalizing => "finalizing",
         };
         let source = self.document.as_ref().map_or_else(
             || {
@@ -2063,6 +2066,7 @@ impl PreparedOperation {
             "initiator": self.initiator,
             "source": {"path": source},
             "outputs": outputs,
+            "output_roles": self.operation.descriptor.outputs,
             "diagnostics": outcome.errors.first().map(|error| error.message.clone()),
             "runtime_record": runtime,
         });

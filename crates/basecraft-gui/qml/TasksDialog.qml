@@ -15,6 +15,7 @@ AppDialog {
         if (job.primary_output !== undefined) return job.primary_output || ""
         return Object.keys(job.outputs || {})[0] || ""
     }
+    function activeStatus(status) { return ["queued", "running", "cancelling", "finalizing"].includes(status) }
     property var jobData: ({jobs: []})
     readonly property var notices: service && service.notifications.length ? JSON.parse(service.notifications) : []
     signal openDocument(string path)
@@ -46,12 +47,12 @@ AppDialog {
                         Label { text: modelData.operation + " — " + modelData.status; font.bold: true; Layout.fillWidth: true; wrapMode: Text.Wrap }
                         Label { text: modelData.source ? modelData.source.path : ""; Layout.fillWidth: true; elide: Text.ElideMiddle }
                         Label { text: modelData.diagnostics || ""; visible: text.length > 0; Layout.fillWidth: true; wrapMode: Text.Wrap }
-                        ProgressBar { visible: modelData.status === "running"; indeterminate: true; Layout.fillWidth: true }
+                        ProgressBar { objectName: "taskProgress"; visible: dialog.activeStatus(modelData.status); indeterminate: true; Layout.fillWidth: true }
                         Flow {
                             Layout.fillWidth: true
                             Layout.preferredHeight: childrenRect.height
                             spacing: 6
-                            AppButton { text: "Cancel"; visible: modelData.status === "running"; enabled: !!modelData.cancellable; onClicked: dialog.service.cancel_run(modelData.id) }
+                            AppButton { objectName: "cancelTask"; text: "Cancel"; visible: dialog.activeStatus(modelData.status); enabled: !!modelData.cancellable && ["queued", "running"].includes(modelData.status); onClicked: dialog.service.cancel_run(modelData.id) }
                             AppButton { text: "Open source"; onClicked: dialog.openDocument(modelData.source.path) }
                             AppButton { objectName: "copyTaskError"; text: "Copy error"; visible: dialog.mainMessage(modelData.diagnostics).length > 0; onClicked: dialog.copyText(dialog.mainMessage(modelData.diagnostics)) }
                             AppButton { text: "Copy diagnostics"; onClicked: dialog.copyText(JSON.stringify(modelData, null, 2)) }
@@ -78,6 +79,6 @@ AppDialog {
                 }
             }
         }
-        AppButton { text: "Clear notifications"; onClicked: if (dialog.service) dialog.service.clear_notifications() }
+        AppButton { objectName: "clearTaskNotifications"; text: "Clear notifications"; onClicked: if (dialog.service) dialog.service.clear_notifications() }
     }
 }

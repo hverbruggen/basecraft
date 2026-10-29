@@ -67,16 +67,25 @@ fn safe_relative(root: &Path, name: &str) -> Result<PathBuf> {
 }
 
 pub fn read_record(path: &Path) -> Result<Vec<u8>> {
+    read_record_with_limit(path, 64 << 20)
+}
+
+/// Share the per-record cap with callers enforcing an aggregate read budget.
+pub(crate) fn read_record_with_limit(path: &Path, remaining: u64) -> Result<Vec<u8>> {
     use std::io::Read;
-    const LIMIT: u64 = 64 << 20;
+    let limit = remaining.min(64 << 20);
     let file = std::fs::File::open(path)?;
-    if file.metadata()?.len() > LIMIT {
-        return Err(invalid("provenance record exceeds 64 MiB"));
+    if file.metadata()?.len() > limit {
+        return Err(invalid(
+            "provenance record exceeds reading limit (at most 64 MiB)",
+        ));
     }
     let mut bytes = Vec::new();
-    file.take(LIMIT + 1).read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > LIMIT {
-        return Err(invalid("provenance record exceeds 64 MiB"));
+    file.take(limit + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > limit {
+        return Err(invalid(
+            "provenance record exceeds reading limit (at most 64 MiB)",
+        ));
     }
     Ok(bytes)
 }

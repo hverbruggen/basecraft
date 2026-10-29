@@ -543,7 +543,7 @@ fn job_records(directory: &Path, previous: bool, owner: &str) -> crate::Result<s
         Err(e) => return Err(e.into()),
     };
     let mut runs = Vec::new();
-    let mut total_bytes = 0u64;
+    let mut budget = TaskReadBudget(64 << 20);
     let mut warnings = Vec::new();
     for (index, entry) in entries.enumerate() {
         if index >= 4096 {
@@ -555,12 +555,8 @@ fn job_records(directory: &Path, previous: bool, owner: &str) -> crate::Result<s
             continue;
         }
         let path = entry.path().join("manifest.json");
-        total_bytes = total_bytes.saturating_add(std::fs::metadata(&path).map_or(0, |m| m.len()));
-        if total_bytes > 64 << 20 {
-            warnings.push("Retained task display reached its 64 MiB reading limit. Individual manifests remain available in application state.".into());
-            break;
-        }
-        let result = crate::provenance::read_record(&path)
+        let result = budget
+            .read(&path)
             .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).map_err(Into::into));
         match result {
             Ok(mut run) => {
@@ -582,7 +578,30 @@ fn job_records(directory: &Path, previous: bool, owner: &str) -> crate::Result<s
                 if !previous && !current {
                     continue;
                 }
-                if run["status"] == "running" && !current {
+                if run.get("runtime_record").is_some() {
+                    if let Err(error) = reconcile_task_receipt(&mut run, &mut budget) {
+                        let notice = format!(
+                            "Canonical task receipt unavailable or unsupported for {}: {error}",
+                            path.display()
+                        );
+                        run["status"] =
+                            serde_json::json!("Completion unconfirmed; receipt unavailable");
+                        run["outputs"] = serde_json::json!({});
+                        run["artifacts"] = serde_json::json!([]);
+                        run["errors"] = serde_json::json!([]);
+                        run["warnings"] = serde_json::json!([]);
+                        run["effective_parameters"] = serde_json::Value::Null;
+                        run["primary_output"] = serde_json::Value::Null;
+                        run["diagnostics"] = serde_json::json!(notice);
+                        run["receipt_confirmed"] = serde_json::json!(false);
+                        warnings.push(notice);
+                    }
+                }
+                if matches!(
+                    run["status"].as_str(),
+                    Some("queued" | "running" | "cancelling" | "finalizing")
+                ) && !current
+                {
                     // A PID alone is insufficient to prove a previous owner is still alive.
                     run["status"] = serde_json::json!("Previous owner; completion unconfirmed");
                 }
@@ -594,9 +613,166 @@ fn job_records(directory: &Path, previous: bool, owner: &str) -> crate::Result<s
             }
             Err(e) => warnings.push(format!("Could not read {}: {e}", path.display())),
         }
+        if budget.0 == 0 {
+            warnings.push("Retained task display reached its 64 MiB reading limit, including canonical receipts. Evidence remains available at its recorded location.".into());
+            break;
+        }
     }
     runs.sort_by(|a, b| b["started"].as_str().cmp(&a["started"].as_str()));
     Ok(serde_json::json!({"jobs":runs, "warnings":warnings}))
+}
+
+/// Charge both discovery and canonical evidence, including malformed JSON. The
+/// bounded reader also caps a file that grows after metadata was inspected.
+struct TaskReadBudget(u64);
+
+impl TaskReadBudget {
+    fn read(&mut self, path: &Path) -> crate::Result<Vec<u8>> {
+        let size = std::fs::metadata(path)?.len();
+        if size > self.0 {
+            self.0 = 0;
+            return Err(crate::error::invalid(
+                "retained task aggregate reading limit (64 MiB) exceeded",
+            ));
+        }
+        let result = crate::provenance::read_record_with_limit(path, self.0);
+        let charged = result.as_ref().map_or(self.0, |bytes| bytes.len() as u64);
+        self.0 = self.0.saturating_sub(charged);
+        result
+    }
+}
+
+fn reconcile_task_receipt(
+    run: &mut serde_json::Value,
+    budget: &mut TaskReadBudget,
+) -> crate::Result<()> {
+    use basecraft_protocol::operation::{CONTRACT_VERSION, OperationOutcome};
+    let path = run["runtime_record"]
+        .as_str()
+        .filter(|path| !path.is_empty())
+        .ok_or_else(|| crate::error::invalid("invalid runtime receipt pointer"))?;
+    // Registered writers store an absolute pointer. A moved project requires
+    // explicit relinking; listing never searches for or rewrites its evidence.
+    if !Path::new(path).is_absolute() {
+        return Err(crate::error::invalid(
+            "runtime receipt pointer must be absolute",
+        ));
+    }
+    let outcome: OperationOutcome = serde_json::from_slice(&budget.read(Path::new(path))?)?;
+    if outcome.schema != CONTRACT_VERSION {
+        return Err(crate::error::invalid(
+            "unsupported operation receipt schema",
+        ));
+    }
+    if run["id"] != outcome.run_id || run["operation"] != outcome.operation {
+        return Err(crate::error::invalid("operation receipt identity mismatch"));
+    }
+    let primary = task_primary_output(&outcome, Path::new(path), &run["output_roles"], budget);
+    run["status"] = serde_json::to_value(outcome.state)?;
+    run["effective_parameters"] = outcome.effective_parameters;
+    run["outputs"] = serde_json::to_value(
+        outcome
+            .artifacts
+            .iter()
+            .map(|artifact| (artifact.path.clone(), artifact.digest.clone()))
+            .collect::<std::collections::BTreeMap<_, _>>(),
+    )?;
+    run["artifacts"] = serde_json::to_value(&outcome.artifacts)?;
+    run["primary_output"] =
+        serde_json::json!(primary.as_ref().ok().and_then(|path| path.as_deref()));
+    run["diagnostics"] = serde_json::json!(
+        outcome
+            .errors
+            .iter()
+            .map(|error| error.message.as_str())
+            .chain(outcome.warnings.iter().map(String::as_str))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    run["errors"] = serde_json::to_value(outcome.errors)?;
+    run["warnings"] = serde_json::to_value(outcome.warnings)?;
+    if let Err(error) = primary {
+        let notice = format!("Primary result unavailable: {error}");
+        run["diagnostics"] = serde_json::json!(
+            format!(
+                "{}\n{notice}",
+                run["diagnostics"].as_str().unwrap_or_default()
+            )
+            .trim()
+        );
+    }
+    run["receipt_confirmed"] = serde_json::json!(true);
+    Ok(())
+}
+
+/// Publication outputs are ordered by the runner with exported results first.
+/// Only offer a document that is BOTH a canonical published artifact and a
+/// visible publication output, never an arbitrary retained support member.
+fn task_primary_output(
+    outcome: &basecraft_protocol::operation::OperationOutcome,
+    runtime: &Path,
+    roles: &serde_json::Value,
+    budget: &mut TaskReadBudget,
+) -> crate::Result<Option<String>> {
+    if !outcome.state.terminal() || outcome.artifacts.is_empty() {
+        return Ok(None);
+    }
+    let root = runtime
+        .parent()
+        .ok_or_else(|| crate::error::invalid("receipt has no directory"))?;
+    let publication: Publication =
+        serde_json::from_slice(&budget.read(&root.join("manifest.json"))?)?;
+    if publication.schema_version != 1 || publication.id != outcome.run_id {
+        return Err(crate::error::invalid(
+            "publication schema or run identity mismatch",
+        ));
+    }
+    // Role declarations are immutable descriptor metadata in new indexes. They
+    // may select among canonical artifacts, never supply a path or digest.
+    let roles: std::collections::BTreeMap<String, basecraft_protocol::operation::OutputBinding> =
+        serde_json::from_value(roles.clone()).unwrap_or_default();
+    for output in &publication.outputs {
+        let logical = Path::new(&output.logical_name);
+        if !normal_task_path(logical) || crate::files::Format::from_path(logical).is_err() {
+            continue;
+        }
+        if let Some(artifact) = outcome.artifacts.iter().find(|artifact| {
+            use basecraft_protocol::operation::ArtifactVisibility;
+            let path = Path::new(&artifact.path);
+            if artifact.digest != output.hash || !path.is_absolute() {
+                return false;
+            }
+            let result_role = roles
+                .get(&artifact.role)
+                .is_some_and(|binding| binding.visibility == ArtifactVisibility::Result);
+            let visible = !path.starts_with(root)
+                && path.ends_with(logical)
+                && !logical
+                    .components()
+                    .any(|part| part.as_os_str().to_string_lossy().starts_with('.'));
+            // With older indexes, publication's visible document outputs are
+            // enough. Hidden members require explicit result-role semantics
+            // and successful completion, so partial support is never promoted.
+            let retained_result = result_role
+                && outcome.state == basecraft_protocol::operation::RuntimeState::Completed
+                && output.retained.as_deref().is_some_and(|retained| {
+                    let retained = Path::new(retained);
+                    normal_task_path(retained) && root.join(retained) == path
+                });
+            (visible && (roles.is_empty() || result_role || artifact.role == "workspace"))
+                || retained_result
+        }) {
+            return Ok(Some(artifact.path.clone()));
+        }
+    }
+    Ok(None)
+}
+
+fn normal_task_path(path: &Path) -> bool {
+    !path.as_os_str().is_empty()
+        && path
+            .components()
+            .all(|part| matches!(part, std::path::Component::Normal(_)))
 }
 
 fn tool_methods(
@@ -649,6 +825,233 @@ fn tool_methods(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn registered_fixture(
+        root: &Path,
+        state: &str,
+    ) -> (std::path::PathBuf, std::path::PathBuf, serde_json::Value) {
+        let jobs = root.join("jobs");
+        let receipt = root.join("run/runtime.json");
+        std::fs::create_dir_all(receipt.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(jobs.join("registered")).unwrap();
+        let outcome = serde_json::json!({"schema":1,"run_id":"registered","operation":"test/run@1","state":state,
+            "pins":{"generation":"g","package_digest":"p","descriptor_digest":"d"},
+            "requested_parameters":{},"effective_parameters":{"canonical":true},"data":null,
+            "artifacts":[],"proposals":null,"warnings":["canonical warning"],
+            "errors":[{"code":"tool_failure","message":"canonical error","operation":"test/run@1"}],"evidence":null});
+        std::fs::write(&receipt, outcome.to_string()).unwrap();
+        let index = serde_json::json!({"schema_version":1,"id":"registered","status":"completed","operation":"test/run@1",
+            "owner_instance":"current","source":{"path":"input.afa"},"outputs":{"stale.nwk":"stale"},
+            "primary_output":"stale.nwk","diagnostics":"stale error","runtime_record":receipt});
+        std::fs::write(jobs.join("registered/manifest.json"), index.to_string()).unwrap();
+        (jobs, receipt, outcome)
+    }
+
+    #[test]
+    fn task_receipts_override_stale_index_for_every_state_and_previous_owner() {
+        for state in [
+            "queued",
+            "running",
+            "cancelling",
+            "finalizing",
+            "completed",
+            "partial",
+            "failed",
+            "cancelled",
+            "interrupted",
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let (jobs, receipt, outcome) = registered_fixture(temp.path(), state);
+            let index = jobs.join("registered/manifest.json");
+            let before = std::fs::read(&index).unwrap();
+            let rows = job_records(&jobs, false, "current").unwrap();
+            let row = &rows["jobs"][0];
+            assert_eq!(row["status"], state);
+            assert_eq!(row["outputs"], serde_json::json!({}));
+            assert!(row["primary_output"].is_null());
+            assert_eq!(row["diagnostics"], "canonical error\ncanonical warning");
+            assert_eq!(row["effective_parameters"]["canonical"], true);
+            assert_eq!(row["receipt_confirmed"], true);
+            assert!(
+                job_records(&jobs, false, "new-owner").unwrap()["jobs"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
+            );
+            let previous = job_records(&jobs, true, "new-owner").unwrap();
+            if ["queued", "running", "cancelling", "finalizing"].contains(&state) {
+                assert_eq!(
+                    previous["jobs"][0]["status"],
+                    "Previous owner; completion unconfirmed"
+                );
+            } else {
+                assert_eq!(previous["jobs"][0]["status"], state);
+            }
+            assert_eq!(std::fs::read(index).unwrap(), before);
+            assert_eq!(
+                std::fs::read_to_string(receipt).unwrap(),
+                outcome.to_string()
+            );
+        }
+    }
+
+    #[test]
+    fn task_receipts_refuse_missing_moved_corrupt_future_and_mismatched_evidence() {
+        for damage in [
+            "missing",
+            "moved",
+            "corrupt",
+            "future",
+            "run",
+            "operation",
+            "bad-pointer",
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let (jobs, receipt, mut outcome) = registered_fixture(temp.path(), "completed");
+            match damage {
+                "missing" => std::fs::remove_file(&receipt).unwrap(),
+                "moved" => std::fs::rename(&receipt, receipt.with_extension("moved")).unwrap(),
+                "corrupt" => std::fs::write(&receipt, "{\"schema\":1,").unwrap(),
+                "bad-pointer" => {
+                    let index = jobs.join("registered/manifest.json");
+                    let mut value: serde_json::Value =
+                        serde_json::from_slice(&std::fs::read(&index).unwrap()).unwrap();
+                    value["runtime_record"] = serde_json::json!(42);
+                    std::fs::write(index, value.to_string()).unwrap();
+                }
+                field => {
+                    match field {
+                        "future" => outcome["schema"] = serde_json::json!(999),
+                        "run" => outcome["run_id"] = serde_json::json!("other"),
+                        _ => outcome["operation"] = serde_json::json!("other"),
+                    }
+                    std::fs::write(&receipt, outcome.to_string()).unwrap();
+                }
+            }
+            let rows = job_records(&jobs, false, "current").unwrap();
+            let row = &rows["jobs"][0];
+            assert_eq!(
+                row["status"], "Completion unconfirmed; receipt unavailable",
+                "{damage}"
+            );
+            assert_eq!(row["receipt_confirmed"], false);
+            assert!(row["primary_output"].is_null());
+            assert_eq!(row["outputs"], serde_json::json!({}));
+            assert_eq!(rows["warnings"].as_array().unwrap().len(), 1);
+        }
+    }
+
+    #[test]
+    fn task_primary_result_requires_canonical_artifact_and_visible_publication() {
+        let temp = tempfile::tempdir().unwrap();
+        let (jobs, receipt, mut outcome) = registered_fixture(temp.path(), "completed");
+        let tree = temp.path().join("tree.nwk");
+        let hidden = receipt.parent().unwrap().join("bootstrap.partial.nex");
+        outcome["artifacts"] = serde_json::json!([
+            {"role":"artifacts","path":hidden,"digest":"support"},
+            {"role":"tree","path":tree,"digest":"canonical"}]);
+        std::fs::write(&receipt, outcome.to_string()).unwrap();
+        let publication = Publication {
+            schema_version: 1,
+            id: "registered".into(),
+            session: "current".into(),
+            parents: vec![],
+            parent_hashes: Default::default(),
+            created: String::new(),
+            origin: String::new(),
+            inputs: vec![],
+            outputs: vec![basecraft_protocol::provenance::ArtifactRevision {
+                id: "tree".into(),
+                logical_name: "tree.nwk".into(),
+                hash: "canonical".into(),
+                size: 0,
+                retained: None,
+                reference: None,
+            }],
+            events: vec![],
+            effective_edits: vec![],
+            completeness: basecraft_protocol::provenance::Completeness {
+                ancestry_known: false,
+                input_bytes_available: true,
+                execution_specification_available: true,
+                replay_verified: false,
+            },
+            report_template_version: 2,
+        };
+        let manifest = receipt.parent().unwrap().join("manifest.json");
+        std::fs::write(&manifest, serde_json::to_vec(&publication).unwrap()).unwrap();
+        let rows = job_records(&jobs, false, "current").unwrap();
+        assert_eq!(rows["jobs"][0]["primary_output"], tree.to_str().unwrap());
+        assert_eq!(
+            rows["jobs"][0]["outputs"][tree.to_str().unwrap()],
+            "canonical"
+        );
+        outcome["artifacts"][1]["digest"] = serde_json::json!("changed");
+        std::fs::write(&receipt, outcome.to_string()).unwrap();
+        assert!(
+            job_records(&jobs, false, "current").unwrap()["jobs"][0]["primary_output"].is_null()
+        );
+        outcome["state"] = serde_json::json!("finalizing");
+        std::fs::write(&receipt, outcome.to_string()).unwrap();
+        assert!(
+            job_records(&jobs, false, "current").unwrap()["jobs"][0]["primary_output"].is_null()
+        );
+    }
+
+    #[test]
+    fn registered_legacy_and_sanger_tasks_coexist_without_listing_writes() {
+        let temp = tempfile::tempdir().unwrap();
+        let (jobs, _, _) = registered_fixture(temp.path(), "partial");
+        for (id, primary) in [
+            ("legacy", serde_json::Value::Null),
+            ("sanger", serde_json::json!("called.fa")),
+        ] {
+            let directory = jobs.join(id);
+            std::fs::create_dir_all(&directory).unwrap();
+            let value = serde_json::json!({"schema_version":1,"id":id,"status":"completed","operation":id,
+                "source":{"path":"input"},"outputs":{},"primary_output":primary,"owner_instance":"current"});
+            std::fs::write(directory.join("manifest.json"), value.to_string()).unwrap();
+        }
+        let first = job_records(&jobs, false, "current").unwrap();
+        let second = job_records(&jobs, true, "current").unwrap();
+        assert_eq!(first, second);
+        let rows = first["jobs"].as_array().unwrap();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(
+            rows.iter().filter(|row| row["id"] == "registered").count(),
+            1
+        );
+        assert_eq!(
+            rows.iter().find(|row| row["id"] == "sanger").unwrap()["primary_output"],
+            "called.fa"
+        );
+        assert_eq!(std::fs::read_dir(&jobs).unwrap().count(), 3);
+        assert_eq!(job_records(&jobs, false, "current").unwrap(), first);
+    }
+
+    #[test]
+    fn task_read_budget_includes_receipts_and_caps_each_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let (jobs, receipt, _) = registered_fixture(temp.path(), "completed");
+        let index = jobs.join("registered/manifest.json");
+        let size = std::fs::metadata(&index).unwrap().len();
+        let mut budget = TaskReadBudget(size + 1);
+        budget.read(&index).unwrap();
+        assert!(budget.read(&receipt).is_err());
+        assert_eq!(budget.0, 0);
+        let file = std::fs::File::create(&receipt).unwrap();
+        file.set_len((64 << 20) + 1).unwrap();
+        assert!(crate::provenance::read_record(&receipt).is_err());
+        let rows = job_records(&jobs, false, "current").unwrap();
+        assert_eq!(rows["jobs"][0]["receipt_confirmed"], false);
+        assert!(
+            rows["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|warning| warning.as_str().unwrap().contains("64 MiB"))
+        );
+    }
 
     #[test]
     fn task_records_handle_missing_malformed_and_previous_owners() {
