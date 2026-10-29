@@ -323,6 +323,9 @@ fn atomic_json(path: &Path, value: &impl serde::Serialize) -> Result<()> {
 // values. The event remains a ToolRun; edits, undo and replay are unchanged.
 // Processed events stay listed under the original `sanger_input_events` key.
 fn link_selected_inputs(bundle: &Path, publication: &Publication) -> Result<()> {
+    let mut effective = publication.effective_edits.clone();
+    crate::contributions::project(&publication.events, &mut effective);
+    let retained: std::collections::HashSet<_> = effective.iter().map(|e| e.id.as_str()).collect();
     let dependencies: Vec<_> = publication
         .events
         .iter()
@@ -337,6 +340,9 @@ fn link_selected_inputs(bundle: &Path, publication: &Publication) -> Result<()> 
                 if plugin == "basecraft.sanger-review" && operation == "reviewed_consensus_input" {
                     return Some((&event.id, &params["sanger_input"]));
                 }
+                if params.get("contributions").is_some() && !retained.contains(event.id.as_str()) {
+                    return None;
+                }
                 if let Some(run) = params.get("input_run") {
                     return Some((&event.id, run));
                 }
@@ -344,10 +350,10 @@ fn link_selected_inputs(bundle: &Path, publication: &Publication) -> Result<()> 
             None
         })
         .collect();
-    if dependencies.is_empty() {
+    let path = bundle.join("input.json");
+    if dependencies.is_empty() && !path.is_file() {
         return Ok(());
     }
-    let path = bundle.join("input.json");
     let mut input = if path.is_file() {
         crate::input_evidence::read_input(bundle)?
     } else {
@@ -394,6 +400,30 @@ fn link_selected_inputs(bundle: &Path, publication: &Publication) -> Result<()> 
         .and_then(serde_json::Value::as_array)
         .cloned()
         .unwrap_or_default();
+    // Keep ownership of selected edges separate from unrelated scientific inputs.
+    // Historical publications and their records are left intact.
+    let mut links = input
+        .extra
+        .get("selected_input_links")
+        .and_then(serde_json::Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let selected: std::collections::HashSet<_> = dependencies
+        .iter()
+        .map(|(event, _)| event.as_str())
+        .collect();
+    let expired: Vec<_> = links
+        .iter()
+        .filter(|(event, _)| !selected.contains(event.as_str()))
+        .map(|(event, reference)| (event.clone(), reference.clone()))
+        .collect();
+    for (event, reference) in expired {
+        links.remove(&event);
+        if !links.values().any(|other| other == &reference) {
+            upstream.retain(|other| other != &reference);
+        }
+        processed.retain(|id| id.as_str() != Some(event.as_str()));
+    }
     let inherited = crate::input_evidence::ancestors(bundle)?;
     for (event, dependency) in dependencies {
         if processed.iter().any(|id| id.as_str() == Some(event)) {
@@ -421,10 +451,20 @@ fn link_selected_inputs(bundle: &Path, publication: &Publication) -> Result<()> 
             }
         } else {
             let directory = crate::input_evidence::registered_run(id, expected)?;
-            upstream.push(serde_json::json!({"bundle":crate::input_evidence::relative(&bundle.canonicalize()?,&directory)?,"id":id,"hash":expected}));
+            let reference = serde_json::json!({"bundle":crate::input_evidence::relative(&bundle.canonicalize()?,&directory)?,"id":id,"hash":expected});
+            links.insert(event.clone(), reference.clone());
+            if !upstream.contains(&reference) {
+                upstream.push(reference);
+            }
+        }
+        if let Some(reference) = upstream.iter().find(|r| r["id"].as_str() == Some(id)) {
+            links.insert(event.clone(), reference.clone());
         }
         processed.push(serde_json::json!(event));
     }
+    input
+        .extra
+        .insert("selected_input_links".into(), serde_json::json!(links));
     input
         .extra
         .insert("upstream".into(), serde_json::json!(upstream));

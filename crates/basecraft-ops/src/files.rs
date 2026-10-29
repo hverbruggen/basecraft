@@ -219,6 +219,14 @@ pub fn tree_sidecar(path: &Path) -> PathBuf {
 /// What a tree's Newick can't hold.
 #[derive(Default, Serialize, Deserialize)]
 struct TreeSidecar {
+    #[serde(default)]
+    schema_version: u32,
+    /// Canonical topology, raw support and node ordering of the first tree.
+    #[serde(default)]
+    tree_hash: String,
+    /// Exact exchange bytes, including every forest component, when file-backed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    exchange_hash: Option<String>,
     /// Support set names and sources, in the order their values are joined
     /// in the Newick labels.
     #[serde(default)]
@@ -250,9 +258,35 @@ pub fn load_tree(path: &Path) -> Result<OpenedTree> {
         .file_name()
         .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
     let mut doc = TreeDoc::from_parsed(name, &parsed);
-    let sidecar = tree_sidecar(path);
+    // Errors in a hidden association must never select an adjacent legacy file.
+    let run = crate::analysis_store::ArtifactRun::for_result_checked(path)?;
+    let sidecar = run.map_or_else(
+        || tree_sidecar(path),
+        |run| {
+            run.join(format!(
+                "{}.basecraft.json",
+                path.file_name().unwrap_or_default().to_string_lossy()
+            ))
+        },
+    );
     if sidecar.exists() {
         let side: TreeSidecar = serde_json::from_slice(&std::fs::read(&sidecar)?)?;
+        if side.schema_version != 1 {
+            return Err(crate::error::invalid(format!(
+                "Unbound legacy or unsupported tree metadata at {}. Bytes were preserved; explicit exchange-only import or conversion is required",
+                sidecar.display()
+            )));
+        }
+        if side.tree_hash != basecraft_io::hash_bytes(doc.to_newick().as_bytes())
+            || side
+                .exchange_hash
+                .as_ref()
+                .is_some_and(|hash| *hash != basecraft_io::hash_bytes(text.as_bytes()))
+        {
+            return Err(crate::error::invalid(
+                "Tree metadata describes different exchange contents; bytes were preserved and metadata was not applied",
+            ));
+        }
         let kinds: Vec<_> = side
             .supports
             .iter()
@@ -312,7 +346,27 @@ pub fn write_tree(tree: &OpenedTree, w: &mut dyn Write) -> io::Result<()> {
 }
 
 pub fn write_tree_sidecar(doc: &TreeDoc, w: &mut dyn Write) -> io::Result<()> {
+    write_tree_metadata(doc, None, w)
+}
+
+/// File-backed metadata binds the entire exchange, including forests and NEXUS.
+pub fn write_tree_sidecar_at(
+    doc: &TreeDoc,
+    exchange_hash: &str,
+    w: &mut dyn Write,
+) -> io::Result<()> {
+    write_tree_metadata(doc, Some(exchange_hash.to_owned()), w)
+}
+
+fn write_tree_metadata(
+    doc: &TreeDoc,
+    exchange_hash: Option<String>,
+    w: &mut dyn Write,
+) -> io::Result<()> {
     let side = TreeSidecar {
+        schema_version: 1,
+        tree_hash: basecraft_io::hash_bytes(doc.to_newick().as_bytes()),
+        exchange_hash,
         supports: doc
             .supports()
             .iter()

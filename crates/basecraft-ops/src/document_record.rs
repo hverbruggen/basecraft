@@ -171,6 +171,7 @@ impl DocumentRecord {
         record.revision.clone_from(&p.id);
         record.events.clone_from(&p.events);
         record.effective.clone_from(&p.effective_edits);
+        crate::contributions::project(&record.events, &mut record.effective);
         if p.completeness.ancestry_known {
             record.warnings.clear();
         }
@@ -830,6 +831,7 @@ fn tool_methods(
     }
     if let Some(settings) = params
         .pointer("/_execution/resolved_parameters")
+        .or_else(|| params.get("effective"))
         .and_then(serde_json::Value::as_object)
     {
         if !settings.is_empty() {
@@ -845,6 +847,18 @@ fn tool_methods(
         }
     } else {
         text.push_str(" Effective defaults were not fully recorded; submitted parameters are available in the supporting record.");
+    }
+    if operation == "import_support" {
+        let _ = write!(
+            text,
+            " Support mapping: matching clades; source {}; sets {}; matched branches {}.",
+            params["source"], params["sets"], params["matched"]
+        );
+    }
+    if let Some(event) = event {
+        for (name, hash) in &event.result.hashes {
+            let _ = write!(text, " Input evidence: {name} ({hash}).");
+        }
     }
     text
 }

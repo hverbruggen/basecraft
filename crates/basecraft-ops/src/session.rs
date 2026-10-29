@@ -705,6 +705,7 @@ impl Session {
                 operation: a.op.clone(),
             }));
         record.deduplicate();
+        crate::contributions::project(&record.events, &mut record.effective);
         Ok(record)
     }
 
@@ -1225,7 +1226,11 @@ impl Session {
             basecraft_io::write_atomic(path, |w| {
                 let mut hw = HashingWriter::new(w);
                 if sidecar_file {
-                    files::write_tree_sidecar(&tree.doc, &mut hw)?;
+                    files::write_tree_sidecar_at(
+                        &tree.doc,
+                        &basecraft_io::hash_file(target).map_err(std::io::Error::other)?,
+                        &mut hw,
+                    )?;
                 } else {
                     files::write_tree(tree, &mut hw)?;
                 }
@@ -1234,6 +1239,7 @@ impl Session {
             })?;
             hashes.push((self.relative(path), hash));
         }
+        crate::analysis_store::ArtifactRun::refresh_binding(target)?;
         Ok(hashes)
     }
 
@@ -1745,6 +1751,7 @@ impl Session {
             let path = bundle.join("records").join(format!("{parent}.json"));
             parent_hashes.insert(parent.clone(), basecraft_io::hash_file(&path)?);
         }
+        crate::contributions::project(&events, &mut effective_edits);
         let publication = Publication {
             schema_version: 1,
             id: save.id.clone(),
@@ -1852,7 +1859,7 @@ impl Session {
         id: DocId,
         actor: Actor,
         (plugin, operation): (&str, &str),
-        params: serde_json::Value,
+        mut params: serde_json::Value,
         inputs: &[(String, String)],
         outputs: &[PathBuf],
     ) -> Result<()> {
@@ -1864,6 +1871,33 @@ impl Session {
             let key = self.relative(path);
             hashes.push((key.clone(), basecraft_io::hash_file(path)?));
             keys.push(key);
+        }
+        if outputs.is_empty() && params.is_object() {
+            let last_run = self
+                .events
+                .iter()
+                .rev()
+                .find(|e| e.doc == self.docs[id.0].key && matches!(e.op, Op::ToolRun { .. }))
+                .map(|e| e.id.as_str());
+            let group = self.docs[id.0].undo.last().and_then(|a| a.group);
+            let edits: Vec<_> = self
+                .events
+                .iter()
+                .rev()
+                .take_while(|e| Some(e.id.as_str()) != last_run)
+                .filter(|e| {
+                    e.doc == self.docs[id.0].key
+                        && e.actor == actor
+                        && matches!(e.op, Op::FeatureAdd { .. } | Op::TreeAddSupport { .. })
+                        && group.is_some()
+                        && self.docs[id.0]
+                            .undo
+                            .iter()
+                            .any(|a| a.entry_id == e.id && a.group == group)
+                })
+                .map(|e| e.id.clone())
+                .collect();
+            params["contributions"] = serde_json::json!({"schema_version":1,"edits":edits});
         }
         let entry = self.entry(
             id,
@@ -2009,7 +2043,7 @@ impl Session {
                 let mut hw = HashingWriter::new(std::io::sink());
                 files::write_tree(t, &mut hw)?;
                 let mut side = HashingWriter::new(std::io::sink());
-                files::write_tree_sidecar(&t.doc, &mut side)?;
+                files::write_tree_sidecar_at(&t.doc, &hw.hash(), &mut side)?;
                 return Ok(vec![hw.hash(), side.hash()]);
             }
         };

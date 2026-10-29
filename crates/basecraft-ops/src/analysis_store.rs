@@ -229,6 +229,16 @@ impl ArtifactRun {
     /// Bounded, read-only discovery beside a result. Hidden bindings take
     /// precedence; legacy companions remain readable when no binding exists.
     pub fn for_result(result: &Path) -> Result<Option<PathBuf>> {
+        Self::resolve_result(result, false)
+    }
+
+    /// Read association only when the binding describes these exact result bytes.
+    /// Save-time location discovery deliberately uses `for_result` instead.
+    pub fn for_result_checked(result: &Path) -> Result<Option<PathBuf>> {
+        Self::resolve_result(result, true)
+    }
+
+    fn resolve_result(result: &Path, checked: bool) -> Result<Option<PathBuf>> {
         let parent = result
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
@@ -290,13 +300,27 @@ impl ArtifactRun {
                 if value["schema_version"] != 1 || value["result"].as_str() != relative.to_str() {
                     return Err(invalid("unsupported or mismatched result binding"));
                 }
+                if checked
+                    && value["result_hash"].as_str()
+                        != Some(basecraft_io::hash_file(result)?.as_str())
+                {
+                    return Err(invalid(
+                        "result contents differ from the hidden binding; metadata was not applied",
+                    ));
+                }
                 let id = value["run"]
                     .as_str()
                     .ok_or_else(|| invalid("result binding has no run"))?;
                 component(id)?;
                 let run = store.join("runs").join(id);
                 if !run.exists() {
-                    return Ok(None);
+                    return if checked {
+                        Err(invalid(
+                            "bound analysis run is missing; metadata was not applied",
+                        ))
+                    } else {
+                        Ok(None)
+                    };
                 }
                 let metadata = run.symlink_metadata()?;
                 if !metadata.is_dir() || metadata.file_type().is_symlink() {
@@ -310,6 +334,34 @@ impl ArtifactRun {
             base = ancestor;
         }
         Err(invalid("result binding ancestor depth exceeds 64"))
+    }
+
+    /// Refresh a previously discovered binding after a successful document save.
+    /// This is a writer operation; it never certifies bytes on passive opening.
+    pub(crate) fn refresh_binding(result: &Path) -> Result<()> {
+        if let Some(directory) = Self::for_result(result)? {
+            let store = directory
+                .parent()
+                .and_then(Path::parent)
+                .ok_or_else(|| invalid("run has no store"))?;
+            let working_directory = store
+                .parent()
+                .and_then(Path::parent)
+                .ok_or_else(|| invalid("store has no working directory"))?
+                .to_path_buf();
+            let id = directory
+                .file_name()
+                .and_then(|n| n.to_str())
+                .ok_or_else(|| invalid("run has no identity"))?
+                .to_owned();
+            Self {
+                directory,
+                working_directory,
+                id,
+            }
+            .bind(result)?;
+        }
+        Ok(())
     }
 
     /// Bind only after primary and supporting outputs plus manifest are durable.

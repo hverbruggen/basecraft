@@ -23,3 +23,5 @@ pub use session::{DocId, Session};
 pub mod document_record;
 
 pub mod delimitation;
+
+mod contributions;

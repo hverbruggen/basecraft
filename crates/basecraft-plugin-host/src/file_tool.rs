@@ -118,7 +118,11 @@ pub(crate) fn write_support_sidecar(
     doc.set_support_kind(name, kind);
     let metadata = basecraft_ops::files::tree_sidecar(tree);
     basecraft_io::write_atomic(&metadata, |w| {
-        basecraft_ops::files::write_tree_sidecar(&doc, w)
+        basecraft_ops::files::write_tree_sidecar_at(
+            &doc,
+            &basecraft_io::hash_file(tree).map_err(std::io::Error::other)?,
+            w,
+        )
     })
     .map_err(basecraft_ops::Error::from)?;
     Ok(Some(metadata))
