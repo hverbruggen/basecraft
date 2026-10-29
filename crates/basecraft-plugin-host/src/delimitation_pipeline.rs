@@ -49,7 +49,7 @@ impl AlignmentWorkflow<'_> {
             "operation":operation,"inputs":inputs,"parameters":parameters
         }))?;
         let root = self.parent.run.artifact("stages")?;
-        let mut manager = JobManager::default();
+        let mut manager = JobManager::for_workflow_stage(self.parent);
         let accepted = manager.submit(
             self.registry,
             request,
@@ -96,6 +96,7 @@ impl AlignmentWorkflow<'_> {
         )?;
         // Connect immutable completed stage publications to the existing parent
         // ledger. They carry their own execution identity, history and inputs.
+        let _guard = basecraft_ops::input_evidence::lock()?;
         let mut input = basecraft_ops::input_evidence::read_input(self.parent.run.directory())?;
         let upstream = input
             .extra

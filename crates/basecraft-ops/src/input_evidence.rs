@@ -612,6 +612,24 @@ pub fn conflicts_in(target: &Path, stores: &[PathBuf]) -> Result<EvidenceConflic
             .unwrap_or_else(|| analysis.run.clone());
         groups.entry(owner).or_default().push(analysis);
     }
+    // A logical analysis owns all its dedicated ledgers, including inputs other
+    // than the overwritten file. Break/remove apply to that whole inventory;
+    // preserve only touches the direct references marked above.
+    for (run, _) in &known_runs {
+        let owner = owners.get(run).unwrap_or(run);
+        if let Some(backing) = groups.get_mut(owner)
+            && !backing.iter().any(|analysis| &analysis.run == run)
+        {
+            backing.push(AffectedAnalysis {
+                run: run.clone(),
+                result: result_name(run)?,
+                source_hash: String::new(),
+                can_preserve: true,
+                direct: false,
+                backing_analyses: vec![],
+            });
+        }
+    }
     let analyses: Vec<_> = groups
         .into_iter()
         .map(|(owner, mut backing)| {
@@ -702,6 +720,12 @@ pub fn resolve(conflict: &EvidenceConflict, policy: SavePolicy) -> Result<()> {
         } else {
             &analysis.backing_analyses
         };
+        let mut backing: Vec<_> = backing.iter().collect();
+        if policy == SavePolicy::RemoveAnalysis {
+            // A parent workflow contains its child stores. Move the children
+            // first, retaining their trash inside the recoverable parent tree.
+            backing.sort_by_key(|analysis| std::cmp::Reverse(analysis.run.components().count()));
+        }
         for affected in backing {
             let mut input = read_input(&affected.run)?;
             match policy {

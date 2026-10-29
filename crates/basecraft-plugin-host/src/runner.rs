@@ -946,6 +946,46 @@ impl PreparedOperation {
         Ok(prepared)
     }
 
+    /// A stage reads accepted bytes but also depends on the parent's original
+    /// input ledgers. Inherit those origins, never the unfinished parent itself:
+    /// the parent will depend on the completed stages, so that would cycle.
+    pub(crate) fn inherit_input_ancestry(&self, parent: &Path) -> Result<()> {
+        let _guard = input_evidence::lock()?;
+        let dependencies = sources_from_upstream(parent)?;
+        let mut ledgers = BTreeSet::from([self.run.directory().to_path_buf()]);
+        ledgers.extend(
+            self.context
+                .input_evidence
+                .values()
+                .flatten()
+                .map(|input| PathBuf::from(&input.run_directory)),
+        );
+        for directory in ledgers {
+            let mut input = input_evidence::read_input(&directory)?;
+            input.extra.insert(
+                "analysis_run".into(),
+                json!(input_evidence::relative(&directory, parent)?),
+            );
+            let upstream = input
+                .extra
+                .entry("upstream".into())
+                .or_insert_with(|| json!([]))
+                .as_array_mut()
+                .ok_or_else(|| Error::Protocol("invalid stage ancestry".into()))?;
+            for dependency in &dependencies {
+                let bytes =
+                    basecraft_ops::provenance::read_record(&dependency.join("manifest.json"))?;
+                let publication: Publication = serde_json::from_slice(&bytes)?;
+                if !upstream.iter().any(|entry| entry["id"] == publication.id) {
+                    upstream.push(json!({"bundle":input_evidence::relative(&directory, &dependency.canonicalize()?)?,
+                        "id":publication.id,"hash":basecraft_io::hash_bytes(&bytes)}));
+                }
+            }
+            input_evidence::write_json(&directory.join("input.json"), &input)?;
+        }
+        Ok(())
+    }
+
     fn bootstrap_destination(&self, member: &Path) -> String {
         let directory = self
             .request

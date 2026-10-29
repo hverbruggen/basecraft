@@ -917,3 +917,86 @@ fn workflow_repairs_publication_and_applies_all_hypotheses_in_one_undo_group() {
     drop(session);
     assert!(replay::replay(root.path()).unwrap().ok());
 }
+
+#[test]
+fn workflow_save_decision_covers_nested_stages_and_original_ancestry() {
+    require_engine();
+    use basecraft_ops::input_evidence::{SavePolicy, conflicts, resolve};
+    for policy in [
+        SavePolicy::PreserveCopy,
+        SavePolicy::BreakEvidence,
+        SavePolicy::RemoveAnalysis,
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("input.fa");
+        let original = ">a\nAAAAAAAAAAAAAAAAAAAA\n>b\nAAAAAAAAAAAAAAAAAAAT\n>c\nAAAAACAAAAAAAAAAAAAT\n>d\nAAAAACAAAAAGAAAAAAAT\n>e\nAAAAACAAAAAGAAAAAATT\n";
+        std::fs::write(&source, original).unwrap();
+        let outcome = common::run(
+            &common::bundled(),
+            root.path(),
+            json!({
+                "operation":"basecraft.host/asap_alignment@1","inputs":{"alignment":common::file("input.fa")},
+                "parameters":{"model":"p","unique_haplotypes":true,"replicates":1000},
+                "destinations":{"workspace":"species.spart"}
+            }),
+        );
+        common::assert_completed(&outcome);
+        let stages: Vec<basecraft_protocol::operation::OperationOutcome> = serde_json::from_value(
+            common::read_json(&common::evidence(&outcome).join("stages.json")),
+        )
+        .unwrap();
+        let conflict = conflicts(&source).unwrap();
+        assert_eq!(
+            conflict.analyses.len(),
+            1,
+            "one logical analysis including all stages"
+        );
+        let backing = &conflict.analyses[0].backing_analyses;
+        assert!(
+            backing.len() > stages.len() + 1,
+            "dedicated input ledgers remain in the decision"
+        );
+        for stage in &stages {
+            assert!(
+                backing.iter().any(|a| a.run == common::evidence(stage)),
+                "stage must depend on the original ancestry"
+            );
+        }
+        resolve(&conflict, policy).unwrap();
+        assert_eq!(std::fs::read_to_string(&source).unwrap(), original);
+        if policy == SavePolicy::PreserveCopy {
+            assert_eq!(
+                backing
+                    .iter()
+                    .filter(|a| a.run.join("preserved-input").exists())
+                    .count(),
+                1
+            );
+            std::fs::remove_file(&source).unwrap();
+            assert_eq!(
+                basecraft_ops::provenance::verify(&root.path().join("species.spart")).unwrap(),
+                Vec::<String>::new()
+            );
+            for stage in stages {
+                assert_eq!(
+                    basecraft_ops::provenance::verify(Path::new(&stage.artifacts[0].path)).unwrap(),
+                    Vec::<String>::new()
+                );
+            }
+        } else {
+            for affected in backing {
+                if policy == SavePolicy::BreakEvidence {
+                    assert_eq!(
+                        input_evidence::read_input(&affected.run).unwrap().state,
+                        "broken"
+                    );
+                } else {
+                    assert!(!affected.run.exists());
+                }
+            }
+            assert!(
+                !matches!(basecraft_ops::provenance::verify(&root.path().join("species.spart")),Ok(issues) if issues.is_empty())
+            );
+        }
+    }
+}

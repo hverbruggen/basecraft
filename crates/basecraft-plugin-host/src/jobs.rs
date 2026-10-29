@@ -67,6 +67,7 @@ pub struct JobManager {
     requests: BTreeMap<String, (String, String)>,
     skip_known_features: bool,
     task_cancellation: bool,
+    stage_parent: Option<std::path::PathBuf>,
     task_registrations: Vec<crate::file_tool::CancellationRegistration>,
 }
 
@@ -136,6 +137,15 @@ impl JobManager {
     pub fn with_task_cancellation(mut self) -> Self {
         self.task_cancellation = true;
         self
+    }
+
+    /// Internal composition still uses submit/execute/finalize unchanged. Only
+    /// input ancestry and logical analysis ownership are inherited before spawn.
+    pub(crate) fn for_workflow_stage(parent: &PreparedOperation) -> Self {
+        Self {
+            stage_parent: Some(parent.run.directory().into()),
+            ..Self::default()
+        }
     }
 
     pub fn submit(
@@ -462,6 +472,9 @@ impl JobManager {
             session,
             registry,
         )?;
+        if let Some(parent) = &self.stage_parent {
+            prepared.inherit_input_ancestry(parent)?;
+        }
         let outcome = OperationOutcome {
             schema: 1,
             operation: prepared.operation.id.clone(),
