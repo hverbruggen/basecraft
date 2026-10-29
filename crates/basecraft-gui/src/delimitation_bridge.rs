@@ -765,6 +765,8 @@ impl qobject::DelimitationController {
                 "roster_links" => DelimitationEdit::SetRosterLinks {
                     links: serde_json::from_value(args["links"].clone())
                         .map_err(|e| e.to_string())?,
+                    metadata: serde_json::from_value(args["metadata"].clone())
+                        .map_err(|e| e.to_string())?,
                 },
                 "create" if args.get("source").and_then(Value::as_str).is_some() => {
                     DelimitationEdit::Derive {

@@ -2178,9 +2178,12 @@ ApplicationWindow {
         property string path: ""
         property var records: []
         property var pendingLinks: ({})
+        property var snapshot: null
         function show(controller, file) {
             target = controller; path = file; revision = controller.record_revision()
-            const tips = JSON.parse(controller.style_json()).tips || []
+            const presentation = JSON.parse(controller.style_json())
+            snapshot = presentation.style.metadata_labels || null
+            const tips = presentation.tips || []
             const result = JSON.parse(specimenMetadata.consumer(JSON.stringify({action: "labels", document: file, records: tips, fields: []}), false))
             records = result.labels || tips.map(record => ({record: record, specimen: null, issue: "No specimen metadata"}))
             pendingLinks = {}; error = result.error || ""; open()
@@ -2196,6 +2199,12 @@ ApplicationWindow {
         initialFocusItem: labelSpecimen
         body: ColumnLayout {
             Label { text: "Compose stored metadata in this order. Empty fields are skipped; unlinked tips keep their identity."; wrapMode: Text.Wrap; Layout.fillWidth: true }
+            Label {
+                text: metadataTipLabels.snapshot
+                    ? "Saved label snapshot from " + ((metadataTipLabels.snapshot.metadata_source || {}).path || "unknown metadata owner") + " (" + metadataTipLabels.snapshot.metadata_hash + "). Metadata edits do not update this snapshot automatically. Apply explicitly refreshes it; Original labels clears the snapshot before rebinding to another project."
+                    : "Apply saves a label snapshot with its metadata owner and hash. Metadata edits do not update labels automatically."
+                wrapMode: Text.Wrap; Layout.fillWidth: true
+            }
             Label { text: "Record links"; font.bold: true }
             Repeater {
                 model: metadataTipLabels.records
@@ -2281,7 +2290,7 @@ ApplicationWindow {
                 if (rosterConsumer.target.record_revision() !== rosterConsumer.revision) { rosterConsumer.error = "The workspace changed. Close and reopen this dialog before linking."; return }
                 const p = JSON.parse(specimenMetadata.consumer(JSON.stringify({action: "link_workspace", workspace: rosterConsumer.path, links: rosterConsumer.links}), false))
                 if (p.error) rosterConsumer.error = p.error
-                else { rosterConsumer.target.action("roster_links", JSON.stringify({links: rosterConsumer.links})); rosterConsumer.revision = rosterConsumer.target.record_revision(); rosterConsumer.error = "Links applied. Save the workspace before promoting a partition." }
+                else { rosterConsumer.target.action("roster_links", JSON.stringify(p.operation.params.edit)); rosterConsumer.revision = rosterConsumer.target.record_revision(); rosterConsumer.error = "Links applied. Save the workspace before promoting a partition." }
             } }
             ComboBox { id: partitionSource; model: rosterConsumer.work.hypotheses; textRole: "name"; Accessible.name: "Delimitation result to promote"; Layout.fillWidth: true }
             TextField { id: projectPartitionId; placeholderText: "Project partition ID"; Accessible.name: "Project partition ID"; Layout.fillWidth: true }

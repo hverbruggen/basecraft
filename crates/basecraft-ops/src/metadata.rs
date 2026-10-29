@@ -1363,8 +1363,17 @@ pub fn consumer_plan(
             fields,
         } => {
             let key = document_key(session.root(), Path::new(document))?;
+            let source = consumer_source(session, doc)?;
+            if matches!(
+                crate::files::Format::from_path(&session.root().join(&key))?,
+                crate::files::Format::Tree
+            ) {
+                let mut reader = Session::unlogged(session.root());
+                let tree = reader.open(&session.root().join(&key))?;
+                verify_label_owner(reader.tree(tree).style(), &source)?;
+            }
             return Ok(
-                serde_json::json!({"labels":metadata_consumers::compose_labels(meta, &key, records, fields), "metadata_hash":metadata_hash, "fields":fields}),
+                serde_json::json!({"labels":metadata_consumers::compose_labels(meta, &key, records, fields), "metadata_hash":metadata_hash, "metadata_source":source, "fields":fields}),
             );
         }
         ConsumerRequest::LinkWorkspace { workspace, links } => (workspace, Some(links), None),
@@ -1392,6 +1401,7 @@ pub fn consumer_plan(
         }
         let edit = basecraft_protocol::delimitation::DelimitationEdit::SetRosterLinks {
             links: links.clone(),
+            metadata: Some(consumer_source(session, doc)?),
         };
         let mut checked = work.clone();
         basecraft_docs::delimitation::apply(&mut checked, &edit).map_err(|e| invalid(e.0))?;
@@ -1402,6 +1412,12 @@ pub fn consumer_plan(
             },
         )
     } else {
+        let stored = work.exchange_fields.get(basecraft_docs::delimitation::METADATA_REFERENCE)
+            .ok_or_else(|| invalid("Workspace roster links have no metadata owner; explicitly link them to this project before promoting"))?;
+        let stored: basecraft_protocol::provenance::InputReference =
+            serde_json::from_str(stored)
+                .map_err(|e| invalid(format!("Invalid workspace metadata reference: {e}")))?;
+        verify_consumer_owner(&stored, &consumer_source(session, doc)?)?;
         let (hypothesis, id) = promotion.ok_or_else(|| invalid("missing partition source"))?;
         let mut partition = metadata_consumers::project_partition(meta, work, hypothesis, id)
             .map_err(|e| invalid(e.0))?;
@@ -1434,4 +1450,75 @@ pub fn consumer_plan(
     Ok(
         serde_json::json!({"target":target, "operation":operation, "metadata_hash":metadata_hash, "workspace_hash":workspace_hash}),
     )
+}
+
+/// Reuse the saved metadata source and its existing Open activity identity.
+/// The activity remains in publication history across edits and moves, including
+/// accepted typed TSV edits; an unrelated project's equal local IDs are insufficient.
+/// No independent roster or identity allocator is introduced.
+pub fn consumer_source(
+    session: &Session,
+    doc: crate::DocId,
+) -> Result<basecraft_protocol::provenance::InputReference> {
+    checked_metadata(session, doc)?;
+    let (_, stamp, hash) = session
+        .saved_source(doc)?
+        .ok_or_else(|| invalid("Save the specimen metadata before binding consumers"))?;
+    let path = session.root().join(session.doc_key(doc));
+    let publication = crate::provenance::inspect(&path).map_err(|_| invalid("Metadata owner evidence is unavailable; save its document history before binding consumers"))?;
+    let event = publication
+        .events
+        .iter()
+        .find(|e| matches!(e.op, basecraft_protocol::Op::Open { .. }))
+        .ok_or_else(|| {
+            invalid("Metadata owner Open activity is unavailable; restore its provenance")
+        })?;
+    Ok(basecraft_protocol::provenance::InputReference {
+        path: session.doc_key(doc).into(),
+        stamp,
+        hash,
+        extra: BTreeMap::from([("owner_event".into(), serde_json::json!(event.id))]),
+    })
+}
+
+/// Hashes identify the retained snapshot; owner activity + logical project path
+/// identify the document allowed to refresh it, even after normal edits/moves.
+pub fn verify_consumer_owner(
+    expected: &basecraft_protocol::provenance::InputReference,
+    current: &basecraft_protocol::provenance::InputReference,
+) -> Result<()> {
+    let owner = expected
+        .extra
+        .get("owner_event")
+        .and_then(serde_json::Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            invalid("Stored metadata owner is missing; explicitly rebind the consumer")
+        })?;
+    if current.path != expected.path
+        || current
+            .extra
+            .get("owner_event")
+            .and_then(serde_json::Value::as_str)
+            != Some(owner)
+    {
+        return Err(invalid(
+            "Consumer belongs to different project metadata; identical specimen IDs do not establish ownership. Explicitly relink it to this project.",
+        ));
+    }
+    Ok(())
+}
+
+/// A saved display snapshot stays readable everywhere, but refreshing it must
+/// not resolve equal IDs against another project's metadata.
+pub fn verify_label_owner(
+    style: &basecraft_protocol::TreeStyle,
+    source: &basecraft_protocol::provenance::InputReference,
+) -> Result<()> {
+    let Some(snapshot) = style.extra.get("metadata_labels") else {
+        return Ok(());
+    };
+    let expected = serde_json::from_value(snapshot["metadata_source"].clone())
+        .map_err(|_| invalid("Label snapshot has no metadata owner; choose Original labels before explicitly composing a new snapshot"))?;
+    verify_consumer_owner(&expected, source)
 }

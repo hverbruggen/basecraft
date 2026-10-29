@@ -69,7 +69,7 @@ pub struct FileStamp {
     pub inode: Option<u64>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct InputReference {
     pub path: String,
     pub stamp: FileStamp,

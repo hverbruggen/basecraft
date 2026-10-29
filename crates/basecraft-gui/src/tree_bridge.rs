@@ -1497,6 +1497,7 @@ impl qobject::TreeController {
             let (session, doc) = r.session.as_ref().zip(r.doc).ok_or("No tree open")?;
             let tree = session.tree(doc);
             let mut style = tree.style().clone();
+            let previous_style = style.clone();
             let fields: Vec<basecraft_protocol::metadata::LabelField> =
                 serde_json::from_str(&fields.to_string()).map_err(|e| e.to_string())?;
             style.tip_labels.clear();
@@ -1509,6 +1510,10 @@ impl qobject::TreeController {
             let metadata = basecraft_ops::metadata::open(&mut reader, false)
                 .map_err(|e| e.to_string())?
                 .ok_or("This project has no specimen metadata")?;
+            let source = basecraft_ops::metadata::consumer_source(&reader, metadata)
+                .map_err(|e| e.to_string())?;
+            basecraft_ops::metadata::verify_label_owner(&previous_style, &source)
+                .map_err(|e| e.to_string())?;
             let path = session.root().join(session.doc_key(doc));
             let request = basecraft_ops::metadata::ConsumerRequest::Labels {
                 document: path.to_string_lossy().into_owned(),

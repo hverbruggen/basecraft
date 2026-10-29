@@ -757,6 +757,15 @@ fn footer_space(doc: &TreeDoc) -> f32 {
     }
 }
 
+/// Display settings never alter Newick names or matching keys.
+pub fn tip_label(doc: &TreeDoc, name: &str) -> String {
+    doc.style()
+        .tip_labels
+        .get(name)
+        .cloned()
+        .unwrap_or_else(|| display_name(name))
+}
+
 #[cfg(test)]
 fn layout(doc: &TreeDoc, width: f32, height: f32, row_zoom: f32, width_zoom: f32) -> Layout {
     layout_with(doc, &[], width, height, row_zoom, width_zoom)
@@ -1920,13 +1929,4 @@ mod tests {
         assert!(tip.contains("font-style=\"italic\""), "{tip}");
         assert!(svg.matches("<circle").count() >= 2);
     }
-}
-
-/// Display settings never alter Newick names or matching keys.
-pub fn tip_label(doc: &TreeDoc, name: &str) -> String {
-    doc.style()
-        .tip_labels
-        .get(name)
-        .cloned()
-        .unwrap_or_else(|| display_name(name))
 }

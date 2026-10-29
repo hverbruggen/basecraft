@@ -200,6 +200,9 @@ pub enum DelimitationEdit {
     /// all links with unlinked status; local scientific IDs stay unchanged.
     SetRosterLinks {
         links: BTreeMap<String, String>,
+        /// Standard source reference, with the metadata's existing owner activity.
+        #[serde(default)]
+        metadata: Option<crate::provenance::InputReference>,
     },
     /// Import a validated batch without splitting lineage across separate edits.
     Combine {

@@ -480,6 +480,26 @@ pub enum MetadataEdit {
     },
 }
 
+/// Ordered display fields. These never replace record or specimen identities.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LabelField {
+    Specimen,
+    Genus,
+    Species,
+    Accession,
+    Column { name: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ComposedLabel {
+    pub record: String,
+    pub specimen: Option<String>,
+    pub label: String,
+    /// Unknown or ambiguous links retain the original record as the label.
+    pub issue: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -549,24 +569,4 @@ mod tests {
         let back = serde_json::to_value(&meta).unwrap();
         assert_eq!(back["later"], serde_json::json!({"a":1}));
     }
-}
-
-/// Ordered display fields. These never replace record or specimen identities.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum LabelField {
-    Specimen,
-    Genus,
-    Species,
-    Accession,
-    Column { name: String },
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct ComposedLabel {
-    pub record: String,
-    pub specimen: Option<String>,
-    pub label: String,
-    /// Unknown or ambiguous links retain the original record as the label.
-    pub issue: Option<String>,
 }

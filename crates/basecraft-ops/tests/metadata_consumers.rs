@@ -2,9 +2,7 @@
 use basecraft_ops::{Session, metadata, replay};
 use basecraft_protocol::{
     Op,
-    delimitation::{
-        DelimitationEdit, DelimitationWorkspace, Group, Hypothesis, HypothesisOrigin, Specimen,
-    },
+    delimitation::{DelimitationWorkspace, Group, Hypothesis, HypothesisOrigin, Specimen},
     metadata::{Cell, CellChange, ChangeSet, LabelField, RecordLink},
 };
 use std::collections::BTreeMap;
@@ -110,11 +108,19 @@ fn explicit_roster_links_partitions_undo_replay_and_moved_project() {
             .zip(["roster-A", "roster-A", "roster-B"])
             .map(|(s, r)| (s.clone(), r.into()))
             .collect();
+        s.save(m, None).unwrap();
+        let planned = metadata::consumer_plan(
+            &s,
+            m,
+            &metadata::ConsumerRequest::LinkWorkspace {
+                workspace: "result.spart".into(),
+                links,
+            },
+        )
+        .unwrap();
         s.apply(
             d,
-            Op::DelimitationEdit {
-                edit: Box::new(DelimitationEdit::SetRosterLinks { links }),
-            },
+            serde_json::from_value(planned["operation"].clone()).unwrap(),
         )
         .unwrap();
         assert_eq!(
@@ -198,6 +204,17 @@ fn explicit_roster_links_partitions_undo_replay_and_moved_project() {
         reopened.delimitation(d).specimens[0].attributes[basecraft_docs::delimitation::ROSTER_ID],
         "roster-A"
     );
+    let moved_plan = metadata::consumer_plan(
+        &reopened,
+        m,
+        &metadata::ConsumerRequest::PromotePartition {
+            workspace: "result.spart".into(),
+            hypothesis: reopened.delimitation(d).hypotheses[0].id.clone(),
+            id: "after-move".into(),
+        },
+    )
+    .unwrap();
+    assert!(moved_plan["operation"].is_object());
 }
 
 #[test]
@@ -312,4 +329,128 @@ fn composed_labels_skip_empty_fields_and_keep_scientific_ids() {
         check.tree(tree).style().tip_labels["r1"],
         "Caulerpa roster-A"
     );
+}
+
+#[test]
+fn copied_consumers_reject_another_metadata_owner_with_identical_ids() {
+    let first = tempfile::tempdir().unwrap();
+    let other = tempfile::tempdir().unwrap();
+    let (mut a, am, aw) = setup(first.path());
+    let (mut b, bm, _) = setup(other.path());
+    a.save(am, None).unwrap();
+    b.save(bm, None).unwrap();
+    let links = BTreeMap::from([
+        ("r1".into(), "roster-A".into()),
+        ("r2".into(), "roster-A".into()),
+        ("r3".into(), "roster-B".into()),
+    ]);
+    let plan = metadata::consumer_plan(
+        &a,
+        am,
+        &metadata::ConsumerRequest::LinkWorkspace {
+            workspace: "result.spart".into(),
+            links,
+        },
+    )
+    .unwrap();
+    a.apply(
+        aw,
+        serde_json::from_value(plan["operation"].clone()).unwrap(),
+    )
+    .unwrap();
+    a.save(aw, None).unwrap();
+    let source = first.path().join("result.spart");
+    let copied = other.path().join("copied.spart");
+    std::fs::copy(&source, &copied).unwrap();
+    std::fs::copy(
+        basecraft_ops::files::tree_sidecar(&source),
+        basecraft_ops::files::tree_sidecar(&copied),
+    )
+    .unwrap();
+    let promote = metadata::ConsumerRequest::PromotePartition {
+        workspace: "copied.spart".into(),
+        hypothesis: a.delimitation(aw).hypotheses[0].id.clone(),
+        id: "p".into(),
+    };
+    assert!(
+        metadata::consumer_plan(&b, bm, &promote)
+            .unwrap_err()
+            .to_string()
+            .contains("different project metadata")
+    );
+
+    let tree_path = first.path().join("tree.nwk");
+    std::fs::write(&tree_path, "(r1:1,r2:2);").unwrap();
+    let tree = a.open(&tree_path).unwrap();
+    let request = metadata::ConsumerRequest::Labels {
+        document: "tree.nwk".into(),
+        records: vec!["r1".into(), "r2".into()],
+        fields: vec![LabelField::Genus, LabelField::Specimen],
+    };
+    let snapshot = metadata::consumer_plan(&a, am, &request).unwrap();
+    let mut style = a.tree(tree).style().clone();
+    style.tip_labels.insert(
+        "r1".into(),
+        snapshot["labels"][0]["label"].as_str().unwrap().into(),
+    );
+    style
+        .extra
+        .insert("metadata_labels".into(), snapshot.clone());
+    a.apply(
+        tree,
+        Op::TreeStyle {
+            style,
+            remove_supports: vec![],
+        },
+    )
+    .unwrap();
+    a.save(tree, None).unwrap();
+    let copied_tree = other.path().join("tree.nwk");
+    std::fs::copy(&tree_path, &copied_tree).unwrap();
+    std::fs::copy(
+        basecraft_ops::files::tree_sidecar(&tree_path),
+        basecraft_ops::files::tree_sidecar(&copied_tree),
+    )
+    .unwrap();
+    let t = b.open(&copied_tree).unwrap();
+    // Passive display preserves the saved snapshot even in a different project.
+    assert_eq!(b.tree(t).style().tip_labels["r1"], "Caulerpa roster-A");
+    // Explicit refresh refuses equal IDs from a different owner.
+    assert!(
+        metadata::consumer_plan(&b, bm, &request)
+            .unwrap_err()
+            .to_string()
+            .contains("different project metadata")
+    );
+    // Normal metadata edits preserve ownership; plans refresh but do not mutate labels.
+    metadata::apply_plan(
+        &mut a,
+        am,
+        ChangeSet {
+            cells: vec![CellChange {
+                specimen: "roster-A".into(),
+                column: "genus".into(),
+                value: Some(Cell::Text("Codium".into())),
+            }],
+            ..ChangeSet::default()
+        },
+    )
+    .unwrap();
+    a.save(am, None).unwrap();
+    let refresh = metadata::consumer_plan(&a, am, &request).unwrap();
+    assert_eq!(refresh["labels"][0]["label"], "Codium roster-A");
+    assert_ne!(refresh["metadata_hash"], snapshot["metadata_hash"]);
+    assert_eq!(a.tree(tree).style().tip_labels["r1"], "Caulerpa roster-A");
+    // Accepted typed external TSV edits do not silently change the saved snapshot.
+    let tsv = first.path().join("metadata/specimens.tsv");
+    let external = std::fs::read_to_string(&tsv)
+        .unwrap()
+        .replace("Codium", "Ulva");
+    std::fs::write(&tsv, external).unwrap();
+    let mut reader = Session::unlogged(first.path());
+    let m = metadata::open(&mut reader, false).unwrap().unwrap();
+    assert!(!reader.metadata_notices(m).is_empty());
+    let external_plan = metadata::consumer_plan(&reader, m, &request).unwrap();
+    assert_eq!(external_plan["labels"][0]["label"], "Ulva roster-A");
+    assert_eq!(a.tree(tree).style().tip_labels["r1"], "Caulerpa roster-A");
 }
