@@ -1540,16 +1540,17 @@ impl qobject::TreeController {
         })();
         match planned {
             Err(error) => QString::from(error),
-            Ok((style, issues)) => match self.as_mut().edit(Op::TreeStyle {
-                style,
-                remove_supports: Vec::new(),
-            }) {
-                Err(error) => QString::from(error),
-                Ok(()) => {
+            Ok((style, issues)) => {
+                if let Err(error) = self.as_mut().edit(Op::TreeStyle {
+                    style,
+                    remove_supports: Vec::new(),
+                }) {
+                    QString::from(error)
+                } else {
                     self.done(&format!("Composed tip labels; {issues} tips retain their identity because links are missing or ambiguous"));
                     QString::default()
                 }
-            },
+            }
         }
     }
 

@@ -324,7 +324,7 @@ class Session:
         return self.call("state", {"document": document})
 
     def read(self, document, start=None, end=None, row=None):
-        """Read residues ``start..end`` (row for alignments), tree tips or a delimitation."""
+        """Read residues ``start..end`` (row for alignments), tree tips/style (including saved label evidence) or a delimitation."""
         arguments = {"document": document}
         for key, value in (("start", start), ("end", end), ("row", row)):
             if value is not None:

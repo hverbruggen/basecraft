@@ -160,7 +160,7 @@ impl Server {
                 let doc = self.doc(args)?;
                 if self.session.is_tree(doc) {
                     return Ok(
-                        json!({"tips":self.session.tree(doc).nodes().iter().filter(|n|n.is_tip()).map(|n|&n.name).collect::<Vec<_>>()}),
+                        json!({"tips":self.session.tree(doc).nodes().iter().filter(|n|n.is_tip()).map(|n|&n.name).collect::<Vec<_>>(), "style":self.session.tree(doc).style()}),
                     );
                 }
                 if self.session.is_delimitation(doc) {
