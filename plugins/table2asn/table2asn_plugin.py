@@ -13,6 +13,7 @@ published with a run log. Basecraft reads the .val report; creating a .sqn
 is not a pass. A missing table2asn is reported as unavailable.
 """
 
+import json
 import os
 import re
 import shutil
@@ -31,7 +32,14 @@ REPORTS = ("sqn", "val", "stats", "gbf", "dr")
 
 
 def executable():
-    """$BASECRAFT_TABLE2ASN, else table2asn beside this Python, else the PATH."""
+    """Selected frozen runtime first; overrides are for unprovisioned development."""
+    if "BASECRAFT_RUNTIME_EXECUTABLES" in os.environ:
+        try:
+            selected = json.loads(os.environ["BASECRAFT_RUNTIME_EXECUTABLES"])
+            path = selected.get("table2asn") if isinstance(selected, dict) else None
+            return path if isinstance(path, str) and Path(path).is_absolute() and Path(path).is_file() else None
+        except (ValueError, OSError):
+            return None
     if path := os.environ.get("BASECRAFT_TABLE2ASN"):
         return path if Path(path).is_file() else None
     beside = Path(sys.prefix) / "bin" / "table2asn"

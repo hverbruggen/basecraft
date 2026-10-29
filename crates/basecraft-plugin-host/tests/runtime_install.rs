@@ -314,6 +314,26 @@ fn bundled_frozen_runtime_retains_old_selection_and_rejects_changed_lock_or_vers
     let selected = package.manifest.managed_runtime.as_ref().unwrap();
     assert_eq!(selected.reported_versions["nativecheck"], "managed-native");
     assert!(selected.executable_digests.contains_key("nativecheck"));
+    let mut command = std::process::Command::new(&selected.interpreter);
+    basecraft_plugin_host::runtime::configure_command(
+        &mut command,
+        &package.manifest,
+        &selected.interpreter,
+    )
+    .unwrap();
+    let output = command
+        .args(["-c", "import os,json; print(json.loads(os.environ['BASECRAFT_RUNTIME_EXECUTABLES'])['nativecheck'])"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        selected
+            .root
+            .join(".pixi/envs/default/bin/nativecheck")
+            .to_str()
+            .unwrap()
+    );
     assert!(
         std::fs::read_to_string(selected.root.join("pixi-args.txt"))
             .unwrap()

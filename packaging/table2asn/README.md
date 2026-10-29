@@ -124,3 +124,50 @@ coordinator.
 - [NCBI build guide](https://ncbi.github.io/cxx-toolkit/pages/ch_cmconfig)
 - [NCBI releases](https://github.com/ncbi/ncbi-cxx-toolkit-public/releases)
 - [Bioconda recipe guidelines](https://bioconda.github.io/contributor/guidelines.html)
+
+## Offline package qualification
+
+`qualify.py` exercises the existing CLI, Python SDK and raw MCP submission tools
+against a **real, explicitly supplied** native validator. It creates only demo
+projects and packages in a new external directory; it never submits or uploads.
+Use an already built CLI and its matching SDK Python, with the matching SDK on
+`PYTHONPATH`:
+
+```sh
+PYTHONPATH=python/src /path/to/sdk/python packaging/table2asn/qualify.py \
+  --binary /path/to/basecraft --table2asn /path/to/bin/table2asn \
+  --root /external/new-demo-directory
+```
+
+Keep the executable's basename `table2asn`: upstream includes its program name
+in `-version` output. All profiles, input copies, command transcripts, reviews,
+saved/reopened submission documents, run evidence and packages remain under the
+new directory. `receipt.json` records executable/SDK/script hashes and actual
+version output; `inventory.json` hashes all retained files, including hidden
+project evidence. Interrupted/failed qualification is never marked passed.
+
+Each of CLI, Python and MCP must produce locally passing COI (mitochondrial
+code 5, explicitly confirmed frames) and 18S packages. The rbcL frameshift and
+ITS invalid-country examples must remain errors mapped to the affected record.
+The script tests refusal before row confirmation, checks saved confirmation
+and frames after reopening, and compares exported validator inputs across the
+three routes. Local tool success requires the shared adapter's `passed` status,
+zero errors and retained `.sqn`/`.gbf`; a created `.sqn` alone is insufficient.
+
+Each package has `DEMO-ONLY.txt`. The submitter and author are deliberately
+fictional placeholders using `example.invalid`; specimen/sequence data are
+representative fixtures, not an approved real study. Real collection metadata,
+vouchers, taxon identifications, permissions, submitter details, authors and
+publication title must replace these examples and be reviewed before a fresh
+export/validation. Passing these checks is not GenBank acceptance.
+
+## Pinned executable handoff
+
+For a selected shared runtime, the host sets `BASECRAFT_RUNTIME_EXECUTABLES`
+to a JSON map of declared executable names to selected absolute paths. The
+runtime receipt verifies executable hashes before invocation. table2asn honors
+this selection before `BASECRAFT_TABLE2ASN`, sibling Python tools or PATH;
+missing/invalid selected paths report unavailable without selecting a different
+version. The host clears inherited mappings for unprovisioned plugins. Until
+real packages/locks are available and deployment activation is connected,
+unprovisioned development keeps its existing explicit override behavior.

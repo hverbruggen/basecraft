@@ -510,6 +510,20 @@ pub fn configure_command(command: &mut Command, manifest: &Manifest, python: &Pa
     if let Some(ambient) = std::env::var_os("PATH") {
         paths.extend(std::env::split_paths(&ambient));
     }
+    // Only host-selected absolute executables may satisfy a pinned runtime.
+    // Clear inherited declarations for plugins without a selected runtime.
+    command.env_remove("BASECRAFT_RUNTIME_EXECUTABLES");
+    if let Some(runtime) = &manifest.managed_runtime {
+        let executables: BTreeMap<_, _> = runtime
+            .executables
+            .iter()
+            .map(|name| (name, executable_path(&runtime.root, name)))
+            .collect();
+        command.env(
+            "BASECRAFT_RUNTIME_EXECUTABLES",
+            serde_json::to_string(&executables)?,
+        );
+    }
     let path = std::env::join_paths(paths).map_err(|e| Error::Protocol(e.to_string()))?;
     command
         .env("PATH", path)
