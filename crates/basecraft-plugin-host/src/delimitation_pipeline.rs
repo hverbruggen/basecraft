@@ -32,7 +32,7 @@ impl AlignmentWorkflow<'_> {
             return Err(Error::Protocol("cancelled before workflow stage".into()));
         }
         let operation = format!("{operation}@1");
-        let descriptor = self.registry.resolve(&operation, None)?.descriptor;
+        let descriptor = &self.registry.resolve(&operation, None)?.descriptor;
         // The workflow descriptor is the superset. Pass only parameters declared
         // by each stage, retaining the normalized nested settings in its receipt.
         let properties = descriptor.parameters["properties"]

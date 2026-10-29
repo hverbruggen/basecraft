@@ -442,3 +442,37 @@ covered by the package fingerprint and executable permissions; they are not down
 or built by shell hooks. `runtime.executables` verifies environment-installed tools,
 not package-bin artifacts. Do not declare an unavailable channel package and expect
 a packaged artifact to override a failed solve. Current process transport is Unix-only.
+
+## Registered workflow stages and distance evidence
+
+Alignment GMYC and ASAP workflows execute registered haplotype, distance-tree
+(where needed), and fit sub-runs. Their retained `stages.json` receipts identify
+normalized parameters, execution evidence and terminal states. Only the parent
+receives the workspace target and applies one result group. Cancellation travels
+from that parent to its active registered stage. Stage files and receipts remain
+available when a later stage fails; publication repair does not rerun science.
+
+Distance `tree`, `matrix`, and `groups` accept an optional `cache` file binding.
+Export a cache with the usual member destination, for example
+`"destinations":{"artifacts/distances.tsv.distances.json":"distances.json"}`
+for a matrix run, then supply `"cache":[{"kind":"file","path":"distances.json"}]`
+in the next run's inputs. Every route uses the same descriptor, frozen input
+ledger and publication checks. Caches carry the submitted alignment SHA-256,
+model, effective minimum overlap and engine executable SHA-256. Older caches
+without this producer evidence and mismatched caches are refused; calculate a
+fresh cache by omitting the input binding. The engine additionally validates its
+matrix schema and semantic alignment identity. Reuse never modifies the supplied
+cache. `cache_reused` in the run report distinguishes reuse from calculation.
+
+Distance-tree `bootstrap_destination` retains `metadata` as its default.
+Both choices retain the complete bootstrap collection in the run. `working`
+also publishes the collection beside the requested tree export, or in the session
+root when no tree export is requested, using the shared no-replace publication
+and repair receipts. It includes partial collections when support is withheld.
+Existing saved form settings keep the same values and need no migration.
+
+Save conflicts group a registered analysis with its dedicated input ledgers,
+while preserving every guarded backing decision. Distinct runs remain separate
+even if their names and inputs match. Preserve Copy stores matching original bytes
+once per analysis; backing ledgers reference the verified retained location.
+Legacy registered ownership is derived only from declared reference-ledger ancestry.

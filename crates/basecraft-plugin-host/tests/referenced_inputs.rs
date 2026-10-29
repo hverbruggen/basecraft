@@ -332,3 +332,55 @@ fn complete_export_remaps_history_and_retains_original_records_without_store() {
         Vec::<String>::new()
     );
 }
+
+#[test]
+fn one_save_decision_covers_every_backing_reference_without_merging_analyses() {
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("source.afa");
+    let old = b">a\nAAAA\n>b\nAAAT\n";
+    std::fs::write(&source, old).unwrap();
+    let registry = common::copy_aligner(root.path());
+    let mut session = Session::recoverable(root.path()).unwrap();
+    let first = root.path().join("first.afa");
+    let second = root.path().join("second.afa");
+    common::align_copy(&registry, &mut session, &source, &first);
+    common::align_copy(&registry, &mut session, &source, &second);
+    let conflict = input_evidence::conflicts(&source).unwrap();
+    assert_eq!(
+        conflict.analyses.len(),
+        2,
+        "distinct analyses stay distinct"
+    );
+    for analysis in &conflict.analyses {
+        assert_eq!(analysis.backing_analyses.len(), 2, "run plus input ledger");
+    }
+    assert!(input_evidence::resolve(&conflict, SavePolicy::Cancel).is_err());
+    assert_eq!(std::fs::read(&source).unwrap(), old);
+    input_evidence::resolve(&conflict, SavePolicy::PreserveCopy).unwrap();
+    std::fs::remove_file(&source).unwrap();
+    // Retries verify retained bytes, even after the source has disappeared.
+    input_evidence::resolve(&conflict, SavePolicy::PreserveCopy).unwrap();
+    for analysis in &conflict.analyses {
+        assert_eq!(
+            analysis
+                .backing_analyses
+                .iter()
+                .filter(|a| a.run.join("preserved-input").exists())
+                .count(),
+            1
+        );
+        for backing in &analysis.backing_analyses {
+            let input = input_evidence::read_input(&backing.run).unwrap();
+            let retained =
+                input_evidence::verified_source(&backing.run, input.source.as_ref().unwrap())
+                    .unwrap();
+            assert_eq!(std::fs::read(retained).unwrap(), old);
+        }
+    }
+    for path in [&first, &second] {
+        assert!(basecraft_ops::provenance::verify(path).unwrap().is_empty());
+    }
+    let original = conflict.analyses[0].run.join("preserved-input");
+    std::fs::write(original, "damaged").unwrap();
+    assert!(input_evidence::resolve(&conflict, SavePolicy::PreserveCopy).is_err());
+}

@@ -614,7 +614,8 @@ pub fn conflicts_in(target: &Path, stores: &[PathBuf]) -> Result<EvidenceConflic
     }
     let analyses: Vec<_> = groups
         .into_iter()
-        .map(|(owner, backing)| {
+        .map(|(owner, mut backing)| {
+            backing.sort_by_key(|a| a.run != owner);
             Ok(AffectedAnalysis {
                 result: result_name(&owner)?,
                 run: owner,
@@ -724,8 +725,9 @@ pub fn resolve(conflict: &EvidenceConflict, policy: SavePolicy) -> Result<()> {
                             .source
                             .as_ref()
                             .ok_or_else(|| invalid("reference is missing"))?;
-                        verify_preserved(&owner.join("preserved-input"), effective)?;
-                        preserved.insert(reference.hash.clone(), owner);
+                        let retained = preserved_path(&owner, &retained);
+                        verify_preserved(&retained, effective)?;
+                        preserved.insert(reference.hash.clone(), retained);
                         continue;
                     }
                     if input.state != "referenced" {
@@ -736,9 +738,9 @@ pub fn resolve(conflict: &EvidenceConflict, policy: SavePolicy) -> Result<()> {
                         return Err(invalid("input reference moved; refresh the save decision"));
                     }
                     if let Some(owner) = preserved.get(&reference.hash) {
-                        verify_preserved(&owner.join("preserved-input"), reference)?;
+                        verify_preserved(owner, reference)?;
                         input.extra.insert(
-                            "origin_run".into(),
+                            "preserved_path".into(),
                             serde_json::json!(relative(&affected.run, owner)?),
                         );
                         input.state = "preserved".into();
@@ -769,7 +771,7 @@ pub fn resolve(conflict: &EvidenceConflict, policy: SavePolicy) -> Result<()> {
                         std::fs::File::open(&affected.run)?.sync_all()?;
                         copied
                     };
-                    preserved.insert(reference.hash.clone(), affected.run.clone());
+                    preserved.insert(reference.hash.clone(), destination.clone());
                     input.state = "preserved".into();
                     input
                         .extra
@@ -809,6 +811,18 @@ pub fn resolve(conflict: &EvidenceConflict, policy: SavePolicy) -> Result<()> {
         }
     }
     Ok(())
+}
+
+// Sharing bytes is not ancestry delegation: delegating a ledger back to its
+// parent analysis would create a cycle in that parent's upstream inventory.
+fn preserved_path(run: &Path, input: &SubmittedInput) -> PathBuf {
+    run.join(
+        input
+            .extra
+            .get("preserved_path")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("preserved-input"),
+    )
 }
 
 fn verify_preserved(path: &Path, reference: &InputReference) -> Result<()> {
@@ -899,7 +913,7 @@ pub fn verified_source(bundle: &Path, reference: &InputReference) -> Result<Path
         return Err(invalid("input reference identity changed"));
     }
     let path = if input.state == "preserved" {
-        location.join("preserved-input")
+        preserved_path(&location, &input)
     } else {
         location.join(&effective.path)
     };

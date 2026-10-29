@@ -235,3 +235,151 @@ fn reference_tree_save_as_and_complete_export_retain_alignment_and_support() {
     assert!(link.checked_snapshot(&exported, &tree).is_ok());
     assert!(Path::new(&common::evidence(&outcome)).is_dir());
 }
+
+#[test]
+fn registered_cache_reuses_distances_across_consumers_and_refuses_mismatch() {
+    if !engine() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let source = root.join("input.afa");
+    std::fs::write(&source, ">a\nAAAAAC\n>b\nAAAACC\n>c\nAAACCC\n").unwrap();
+    let registry = common::bundled();
+    let matrix = common::run(
+        &registry,
+        root,
+        json!({"operation":"basecraft.distance/matrix@1",
+        "inputs":{"alignment":common::file("input.afa")},"parameters":{"model":"p"},
+        "destinations":{"artifacts/distances.tsv.distances.json":"cache.json"}}),
+    );
+    common::assert_completed(&matrix);
+    assert_eq!(
+        common::read_json(&common::member(&matrix, "distances.tsv.run.json"))["cache_reused"],
+        false
+    );
+    let cached = std::fs::read(root.join("cache.json")).unwrap();
+    for operation in ["tree", "matrix", "groups"] {
+        let mut parameters = json!({"model":"p"});
+        if operation == "groups" {
+            parameters["groups_data"] = json!({"a":"one","b":"one","c":"two"});
+        }
+        let outcome = common::run(
+            &registry,
+            root,
+            json!({"operation":format!("basecraft.distance/{operation}@1"),
+            "inputs":{"alignment":common::file("input.afa"),"cache":common::file("cache.json")},"parameters":parameters}),
+        );
+        common::assert_completed(&outcome);
+        let report = match operation {
+            "tree" => "tree.nwk.run.json",
+            "matrix" => "distances.tsv.run.json",
+            _ => "groups.json.run.json",
+        };
+        assert_eq!(
+            common::read_json(&common::member(&outcome, report))["cache_reused"],
+            true
+        );
+        if operation == "matrix" {
+            assert_eq!(
+                std::fs::read(common::member(&outcome, "distances.tsv")).unwrap(),
+                std::fs::read(common::member(&matrix, "distances.tsv")).unwrap()
+            );
+        }
+        assert!(
+            basecraft_ops::provenance::verify(&common::member(&outcome, report))
+                .unwrap()
+                .is_empty()
+        );
+    }
+    assert_eq!(std::fs::read(root.join("cache.json")).unwrap(), cached);
+    for parameters in [
+        json!({"model":"jc69"}),
+        json!({"model":"p","min_overlap":2}),
+    ] {
+        let outcome = common::run(
+            &registry,
+            root,
+            json!({"operation":"basecraft.distance/tree@1",
+            "inputs":{"alignment":common::file("input.afa"),"cache":common::file("cache.json")},"parameters":parameters}),
+        );
+        assert_eq!(
+            outcome.state,
+            basecraft_protocol::operation::RuntimeState::Failed
+        );
+        assert!(
+            outcome
+                .errors
+                .iter()
+                .any(|e| e.message.contains("do not match"))
+        );
+    }
+    // Publication verification refuses a changed cache before accepting a run.
+    std::fs::write(root.join("cache.json"), "{}").unwrap();
+    let mut manager = basecraft_plugin_host::jobs::JobManager::default();
+    assert!(manager.submit(&registry, serde_json::from_value(json!({"operation":"basecraft.distance/tree@1",
+        "inputs":{"alignment":common::file("input.afa"),"cache":common::file("cache.json")},"parameters":{"model":"p"}})).unwrap(),
+        basecraft_plugin_host::policy::SessionPolicy::new(root,true).unwrap(), "test").is_err());
+}
+
+#[test]
+fn bootstrap_destination_publishes_working_copy_and_repairs_late_collision() {
+    if !engine() {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(
+        root.path().join("input.afa"),
+        ">a\nAAAAAC\n>b\nAAAACC\n>c\nAAACCC\n",
+    )
+    .unwrap();
+    let registry = common::bundled();
+    for destination in ["metadata", "working"] {
+        let outcome = common::run(
+            &registry,
+            root.path(),
+            json!({"operation":"basecraft.distance/tree@1",
+            "inputs":{"alignment":common::file("input.afa")},
+            "parameters":{"model":"p","method":"sorted","bootstrap":16,"bootstrap_destination":destination}}),
+        );
+        common::assert_completed(&outcome);
+        let name = format!("bootstrap-{}.nex", outcome.run_id);
+        let retained = common::member(&outcome, &name);
+        let visible = root.path().join(&name);
+        assert_eq!(visible.exists(), destination == "working");
+        if visible.exists() {
+            assert_eq!(
+                std::fs::read(&visible).unwrap(),
+                std::fs::read(retained).unwrap()
+            );
+            assert!(
+                basecraft_ops::provenance::verify(&visible)
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+    }
+    let mut manager = basecraft_plugin_host::jobs::JobManager::default();
+    let accepted = manager.submit(&registry, serde_json::from_value(json!({"operation":"basecraft.distance/tree@1",
+        "inputs":{"alignment":common::file("input.afa")},
+        "parameters":{"model":"p","method":"sorted","bootstrap":256,"bootstrap_destination":"working"}})).unwrap(),
+        basecraft_plugin_host::policy::SessionPolicy::new(root.path(),true).unwrap(), "test").unwrap();
+    let visible = root
+        .path()
+        .join(format!("bootstrap-{}.nex", accepted.run_id));
+    std::fs::write(&visible, "foreign").unwrap();
+    let partial = common::wait(&manager, &accepted.run_id);
+    assert_eq!(
+        partial.state,
+        basecraft_protocol::operation::RuntimeState::Partial,
+        "{partial:#?}"
+    );
+    assert_eq!(std::fs::read_to_string(&visible).unwrap(), "foreign");
+    std::fs::remove_file(&visible).unwrap();
+    common::assert_completed(&manager.repair(&accepted.run_id).unwrap());
+    assert!(
+        basecraft_ops::provenance::verify(&visible)
+            .unwrap()
+            .is_empty()
+    );
+}
