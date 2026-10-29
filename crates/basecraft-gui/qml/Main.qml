@@ -535,8 +535,7 @@ ApplicationWindow {
         commandId: "help.learn"
         text: "Learn"
         iconName: "book"
-        tooltip: "Open help and learning resources"
-        onTriggered: window.ribbonTabName = "Help"
+        tooltip: "Manual pages are not written yet"
     }
     AppCommand {
         id: exportSvgCommand
@@ -1146,7 +1145,7 @@ ApplicationWindow {
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
                         enabled: window.treeOpen
-                        title: "Rate smoothing"
+                        title: "Clock"
                         RibbonButton {
                             commandId: "tree.rate-smoothing"
                             text: "PL"
@@ -2271,12 +2270,15 @@ ApplicationWindow {
         svgDialog.sourcePath = window.currentPath
         svgScope.currentIndex = window.treeOpen ? 2 : 0
         svgPublication.checked = false
+        svgSelection.checked = false
+        svgOptions.alignment = window.alignmentOpen
         svgOptions.open()
     }
     AppContentDialog {
         id: svgOptions
         initialFocusItem: svgScope
         property string format: "svg"
+        property bool alignment: false
         title: format === "png" ? "Export PNG" : "Export editable SVG"
         modal: true
         standardButtons: Dialog.Ok | Dialog.Cancel
@@ -2284,23 +2286,29 @@ ApplicationWindow {
             Label { id: svgScopeLabel; text: "Region" }
             AppComboBox { id: svgScope; objectName: "svgScope"; Accessible.labelledBy: svgScopeLabel; Accessible.name: svgScopeLabel.text; model: ["Visible view", "Selection", "Complete figure"] }
             AppCheckBox { id: svgPublication; text: "Publication colours (white background)" }
-            Label { id: pngWidthLabel; text: "PNG width (pixels)"; visible: svgOptions.format === "png" }
-            AppSpinBox {
-                id: pngWidth
-                objectName: "pngWidth"
+            AppCheckBox { id: svgSelection; objectName: "svgSelection"; text: "Include selection highlighting"; visible: svgOptions.alignment }
+            RowLayout {
                 visible: svgOptions.format === "png"
-                from: 1
-                to: 10000
-                value: 1500
-                editable: true
-                Accessible.labelledBy: pngWidthLabel
-                Accessible.name: pngWidthLabel.text
+                Label { id: pngWidthLabel; text: "PNG width (pixels)"; visible: svgOptions.format === "png" }
+                AppSpinBox {
+                    id: pngWidth
+                    objectName: "pngWidth"
+                    visible: svgOptions.format === "png"
+                    from: 1
+                    to: 10000
+                    value: 1500
+                    editable: true
+                    Accessible.labelledBy: pngWidthLabel
+                    Accessible.name: pngWidthLabel.text
+                }
             }
         }
         onAccepted: {
             svgDialog.format = svgOptions.format
             svgDialog.scope = svgScope.currentIndex
             svgDialog.publication = svgPublication.checked
+            svgDialog.alignment = svgOptions.alignment
+            svgDialog.includeSelection = svgSelection.checked
             svgDialog.rasterWidth = pngWidth.value
             svgDialog.selectedFile = shell.local_file_url(svgDialog.sourcePath.replace(/\.[^./]*$/, "") + "." + svgDialog.format)
             svgDialog.open()
@@ -2316,12 +2324,16 @@ ApplicationWindow {
         property int scope: 0
         property bool publication: false
         property int rasterWidth: 1500
+        property bool alignment: false
+        property bool includeSelection: false
         title: format === "png" ? "Export PNG" : "Export SVG"
         fileMode: FileDialog.SaveFile
         nameFilters: format === "png" ? ["PNG images (*.png)"] : ["SVG figures (*.svg)"]
         onAccepted: {
             if (!controller) return
-            if (format === "png") controller.export_figure_png(window.localPath(selectedFile), scope, publication, rasterWidth)
+            if (alignment && format === "png") controller.export_figure_png_selection(window.localPath(selectedFile), scope, publication, rasterWidth, includeSelection)
+            else if (alignment) controller.export_figure_selection(window.localPath(selectedFile), scope, publication, includeSelection)
+            else if (format === "png") controller.export_figure_png(window.localPath(selectedFile), scope, publication, rasterWidth)
             else controller.export_figure(window.localPath(selectedFile), scope, publication)
         }
     }

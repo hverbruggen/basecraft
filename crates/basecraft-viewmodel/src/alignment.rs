@@ -185,6 +185,17 @@ impl AlignmentView {
     /// A figure viewport at the current cell size, covering the complete alignment or selection.
     #[must_use]
     pub fn figure_view(&self, doc: &AlignmentDoc, selection: bool) -> Self {
+        self.figure_view_with_selection(doc, selection, false)
+    }
+
+    /// Export the full alignment or selected region, optionally retaining overlays.
+    #[must_use]
+    pub fn figure_view_with_selection(
+        &self,
+        doc: &AlignmentDoc,
+        selection: bool,
+        include_selection: bool,
+    ) -> Self {
         let mut view = self.clone();
         let block = if selection {
             self.block()
@@ -199,10 +210,28 @@ impl AlignmentView {
         view.scroll_y = block.rows.0 as f32 * view.row_height();
         view.width = view.name_width + (block.col_count() as f64 * view.px_per_col) as f32;
         view.height = view.header_height() + block.row_count() as f32 * view.row_height();
-        view.selection = None;
-        view.linked_taxa.clear();
-        view.figure = true;
+        view.export_overlays(include_selection);
         view
+    }
+
+    /// Preserve the visible coordinates and cell size, cropping only unused space.
+    #[must_use]
+    pub fn visible_figure_view(&self, doc: &AlignmentDoc, include_selection: bool) -> Self {
+        let mut view = self.clone();
+        view.sync(doc);
+        view.auto_fit = false;
+        view.width = view.width.min(view.x_of(doc.width() as f64)).max(1.0);
+        view.height = view.height.min(view.y_of(doc.row_count())).max(1.0);
+        view.export_overlays(include_selection);
+        view
+    }
+
+    fn export_overlays(&mut self, include_selection: bool) {
+        self.figure = !include_selection;
+        if !include_selection {
+            self.selection = None;
+            self.linked_taxa.clear();
+        }
     }
 
     // Geometry.
@@ -1399,6 +1428,74 @@ mod tests {
         let mut v = AlignmentView::new(800.0, 400.0);
         v.sync(d);
         v
+    }
+
+    #[test]
+    fn visible_export_crops_blank_space_and_preserves_coordinates() {
+        let d = doc(3, 20);
+        let v = view(&d);
+        let mut exported = v.visible_figure_view(&d, false);
+        assert_eq!(exported.width, v.x_of(d.width() as f64));
+        assert_eq!(exported.height, v.y_of(d.row_count()));
+        let mut frame = Frame::new();
+        exported.build(&d, &Theme::publication(), &mut frame);
+        assert_eq!(exported.start, v.start);
+        assert_eq!(exported.px_per_col, v.px_per_col);
+        assert_eq!(exported.scroll_y, v.scroll_y);
+        assert_eq!(v.height, 400.0);
+
+        let d = doc(100, 200);
+        let mut v = view(&d);
+        v.start = 35.5;
+        v.scroll_y = 120.5;
+        let mut exported = v.visible_figure_view(&d, false);
+        exported.build(&d, &Theme::publication(), &mut frame);
+        assert_eq!((exported.width, exported.height), (v.width, v.height));
+        assert_eq!(exported.visible_cols(), v.visible_cols());
+        assert_eq!(exported.visible_rows(), v.visible_rows());
+        assert_eq!(exported.x_of(40.0), v.x_of(40.0));
+        assert_eq!(exported.y_of(10), v.y_of(10));
+    }
+
+    #[test]
+    fn figure_exports_suppress_overlays_unless_requested() {
+        let d = doc(3, 20);
+        let mut selected = view(&d);
+        selected.select_block((0, 2), (2, 8));
+        selected.linked_taxa.insert("row2".into());
+        let mut plain = selected.clone();
+        plain.selection = None;
+        plain.linked_taxa.clear();
+        let theme = Theme::publication();
+        for scope in 0..=2 {
+            let export = |v: &AlignmentView, include| match scope {
+                0 => v.visible_figure_view(&d, include),
+                _ => v.figure_view_with_selection(&d, scope == 1, include),
+            };
+            let mut clean = export(&selected, false);
+            let mut highlighted = export(&selected, true);
+            let mut expected = clean.clone();
+            expected.figure = true;
+            expected.selection = plain.selection;
+            expected.linked_taxa = plain.linked_taxa.clone();
+            let mut clean_frame = Frame::new();
+            let mut highlighted_frame = Frame::new();
+            let mut expected_frame = Frame::new();
+            clean.build(&d, &theme, &mut clean_frame);
+            highlighted.build(&d, &theme, &mut highlighted_frame);
+            expected.build(&d, &theme, &mut expected_frame);
+            assert_eq!(clean_frame.floats(), expected_frame.floats());
+            assert!(highlighted_frame.len() > clean_frame.len());
+            assert_eq!(
+                (clean.width, clean.height),
+                (highlighted.width, highlighted.height)
+            );
+            assert!(clean.selection.is_none());
+            assert!(clean.linked_taxa.is_empty());
+            assert_eq!(highlighted.selection, selected.selection);
+        }
+        assert!(selected.selection.is_some());
+        assert!(selected.linked_taxa.contains("row2"));
     }
 
     #[test]

@@ -13,7 +13,7 @@ Item {
     AppCommand { id: shortcuts; commandId: "test.shortcuts"; text: "Keyboard shortcuts"; onTriggered: scene.shortcutsCount++ }
     AppCommand { id: about; commandId: "test.about"; text: "About Basecraft"; onTriggered: scene.aboutCount++ }
     AppCommand { id: methods; commandId: "test.methods"; text: "Methods"; property string tooltip: "Open a document to read its methods"; enabled: false }
-    AppCommand { id: learn; commandId: "help.learn"; text: "Learn"; onTriggered: scene.ribbonTabName = "Help" }
+    AppCommand { id: learn; commandId: "help.learn"; text: "Manual" }
     Rectangle { anchors.fill: parent; color: scene.dark ? "#1c2630" : "#f3eee4" }
     Ribbon {
         id: ribbon
@@ -79,13 +79,13 @@ Item {
             compare(met.parent.ToolTip.text, "Open a document to read its methods")
             mouseMove(editor, 5, 5)
         }
-        function test_learn_routes_to_help() {
+        function test_manual_is_reserved() {
             const book = findChild(help, "ribbonHelpDocumentation")
             scene.ribbonTabName = "Tree"
-            compare(book.Accessible.name, "Learn")
-            compare(book.ToolTip.text, "Open help and learning resources")
+            compare(book.Accessible.name, "Manual")
+            compare(book.ToolTip.text, "Manual pages are not written yet")
             mouseClick(book)
-            compare(scene.ribbonTabName, "Help")
+            compare(scene.ribbonTabName, "Tree")
         }
         function test_actions_and_focus() {
             const keys = findChild(help, "ribbonHelpShortcuts")

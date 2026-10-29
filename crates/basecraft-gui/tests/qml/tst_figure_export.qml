@@ -41,9 +41,10 @@ Item {
                     id: window
                     width: 800; height: 600
                     property bool treeOpen: false
+                    property bool alignmentOpen: false
                     property string currentPath: "/original.nwk"
                     property var calls: []
-                    property var current: ({export_figure_png: function(path, scope, publication, width) { window.calls.push(["png", path, scope, publication, width]) }, export_figure: function(path, scope, publication) { window.calls.push(["svg", path, scope, publication]) }})
+                    property var current: ({export_figure_selection: function(path, scope, publication, selection) { window.calls.push(["svg", path, scope, publication, selection]) }, export_figure_png_selection: function(path, scope, publication, width, selection) { window.calls.push(["png", path, scope, publication, width, selection]) }, export_figure_png: function(path, scope, publication, width) { window.calls.push(["png", path, scope, publication, width]) }, export_figure: function(path, scope, publication) { window.calls.push(["svg", path, scope, publication]) }})
                     property alias options: svgOptions
                     property alias picker: svgDialog
                     property alias region: svgScope.currentIndex
@@ -79,6 +80,33 @@ Item {
             verify(!width.visible)
             scene.options.reject()
             scene.destroy()
+        }
+        function test_alignment_selection_is_optional_and_captured() {
+            for (const format of ["svg", "png"]) {
+                const scene = harness()
+                scene.alignmentOpen = true
+                scene.exportSvg(format)
+                tryCompare(scene.options, "opened", true)
+                const selection = findChild(scene, "svgSelection")
+                verify(selection.visible)
+                verify(!selection.checked)
+                selection.checked = true
+                scene.options.accept()
+                // Switching documents/options while the picker is open must
+                // retain the original export target and highlighting choice.
+                scene.alignmentOpen = false
+                selection.checked = false
+                scene.picker.accepted()
+                compare(scene.calls, [format === "png"
+                    ? ["png", "/original.png", 0, false, 1500, true]
+                    : ["svg", "/original.svg", 0, false, true]])
+                scene.picker.visible = false
+                scene.exportSvg(format)
+                verify(!selection.checked)
+                verify(!selection.visible)
+                scene.options.reject()
+                scene.destroy()
+            }
         }
         function test_export_captures_controller_and_options() {
             const scene = harness()

@@ -66,10 +66,11 @@ RibbonGroup {
         tip: "Order every clade's branches by size"
         enabled: group.controller !== null
         onInvoked: orderMenu.popup(order, 0, order.height)
-        Menu {
+        RibbonMenu {
             id: orderMenu
-            MenuItem { text: smallFirst.text; onTriggered: smallFirst.trigger() }
-            MenuItem { text: largeFirst.text; onTriggered: largeFirst.trigger() }
+            sizeFactor: order.sizeFactor
+            RibbonMenuItem { sizeFactor: order.sizeFactor; text: smallFirst.text; onTriggered: smallFirst.trigger() }
+            RibbonMenuItem { sizeFactor: order.sizeFactor; text: largeFirst.text; onTriggered: largeFirst.trigger() }
         }
     }
     AppCommandButton {

@@ -143,6 +143,23 @@ pub mod qobject {
             width: f64,
         );
         #[qinvokable]
+        fn export_figure_selection(
+            self: Pin<&mut AlignmentController>,
+            path: &QString,
+            scope: i32,
+            publication: bool,
+            include_selection: bool,
+        );
+        #[qinvokable]
+        fn export_figure_png_selection(
+            self: Pin<&mut AlignmentController>,
+            path: &QString,
+            scope: i32,
+            publication: bool,
+            width: f64,
+            include_selection: bool,
+        );
+        #[qinvokable]
         fn resize(self: Pin<&mut AlignmentController>, width: f64, height: f64);
         #[qinvokable]
         fn wheel(
@@ -591,7 +608,7 @@ impl qobject::AlignmentController {
     }
 
     pub fn export_figure(self: Pin<&mut Self>, path: &QString, scope: i32, publication: bool) {
-        self.export_figure_with(path, scope, publication, None);
+        self.export_figure_selection(path, scope, publication, false);
     }
 
     pub fn export_figure_png(
@@ -601,7 +618,28 @@ impl qobject::AlignmentController {
         publication: bool,
         width: f64,
     ) {
-        self.export_figure_with(path, scope, publication, Some(width));
+        self.export_figure_png_selection(path, scope, publication, width, false);
+    }
+
+    pub fn export_figure_selection(
+        self: Pin<&mut Self>,
+        path: &QString,
+        scope: i32,
+        publication: bool,
+        include_selection: bool,
+    ) {
+        self.export_figure_with(path, scope, publication, None, include_selection);
+    }
+
+    pub fn export_figure_png_selection(
+        self: Pin<&mut Self>,
+        path: &QString,
+        scope: i32,
+        publication: bool,
+        width: f64,
+        include_selection: bool,
+    ) {
+        self.export_figure_with(path, scope, publication, Some(width), include_selection);
     }
 
     fn export_figure_with(
@@ -610,6 +648,7 @@ impl qobject::AlignmentController {
         scope: i32,
         publication: bool,
         png_width: Option<f64>,
+        include_selection: bool,
     ) {
         if !(0..=2).contains(&scope) {
             self.fail("Unknown figure scope");
@@ -632,9 +671,14 @@ impl qobject::AlignmentController {
                 r.theme.clone()
             };
             let mut view = if scope == 0 {
-                r.view.clone()
+                r.view
+                    .visible_figure_view(session.alignment(doc), include_selection)
             } else {
-                r.view.figure_view(session.alignment(doc), scope == 1)
+                r.view.figure_view_with_selection(
+                    session.alignment(doc),
+                    scope == 1,
+                    include_selection,
+                )
             };
             let mut frame = Frame::new();
             view.build(session.alignment(doc), &theme, &mut frame);

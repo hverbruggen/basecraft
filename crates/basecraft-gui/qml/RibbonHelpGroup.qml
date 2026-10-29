@@ -88,18 +88,19 @@ Control {
                 enabled: !!root.exportSvgAction && root.exportSvgAction.enabled
                 Accessible.role: Accessible.ButtonMenu
                 onClicked: exportMenu.popup(exportButton, 0, height)
-                Menu {
+                RibbonMenu {
                     id: exportMenu
-                    MenuItem { action: root.exportSvgAction; text: "Export SVG" }
-                    MenuItem { action: root.exportPngAction; text: "Export PNG" }
+                    sizeFactor: metrics.factor
+                    RibbonMenuItem { sizeFactor: metrics.factor; action: root.exportSvgAction; text: "Export SVG" }
+                    RibbonMenuItem { sizeFactor: metrics.factor; action: root.exportPngAction; text: "Export PNG" }
                 }
             }
             UtilityButton {
                 objectName: "ribbonHelpDocumentation"
                 action: root.learnAction
                 iconName: "book"
-                description: "Learn"
-                ToolTip.text: "Open help and learning resources"
+                description: "Manual"
+                ToolTip.text: "Manual pages are not written yet"
             }
             UtilityButton {
                 objectName: "ribbonHelpPreferences"

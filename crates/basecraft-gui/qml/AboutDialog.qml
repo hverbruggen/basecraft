@@ -66,7 +66,7 @@ AppContentDialog {
                 FooterButton {
                     id: learn
                     objectName: "aboutLearn"
-                    text: "Learn"
+                    text: "Manual"
                     enabled: false
                     Accessible.description: "Manual pages are not written yet"
                 }
@@ -125,10 +125,10 @@ AppContentDialog {
             Layout.alignment: Qt.AlignHCenter
             textFormat: Text.StyledText
             linkColor: dialog.palette.link
-            text: "© 2026 <a href=\"" + dialog.labUrl + "\">Heroen Verbruggen</a>  ·  GPL-3.0-or-later, Apache-2.0"
+            text: "© 2026 <a href=\"" + dialog.labUrl + "\">Heroen Verbruggen</a>  ·  <a href=\"https://ieo.csic.es/\">CSIC-IEO</a>  ·  GPL-3.0, Apache-2.0"
             activeFocusOnTab: true
             Accessible.role: Accessible.Link
-            Accessible.name: "Copyright 2026 Heroen Verbruggen, lab website. Licences GPL-3.0-or-later and Apache-2.0"
+            Accessible.name: "Copyright 2026 Heroen Verbruggen, lab website. CSIC-IEO, affiliation website. Licences GPL-3.0 and Apache-2.0"
             onLinkActivated: link => Qt.openUrlExternally(link)
             Keys.onReturnPressed: Qt.openUrlExternally(dialog.labUrl)
             Keys.onSpacePressed: Qt.openUrlExternally(dialog.labUrl)
