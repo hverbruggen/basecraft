@@ -813,7 +813,8 @@ impl qobject::TreeController {
             loop {
                 match jobs.get(&run_id) {
                     Ok(outcome)
-                        if outcome.state.terminal() || outcome.state == RuntimeState::Applying =>
+                        if outcome.state.terminal()
+                            || outcome.state == RuntimeState::Finalizing =>
                     {
                         break;
                     }
