@@ -1,6 +1,7 @@
 //! Derived sequence ancestry uses the ordinary publication and input-evidence owners.
-use super::*;
+use super::{DocId, LogEntry, Path, Result, Session, files, portable_analysis_activity};
 use basecraft_protocol::provenance::{ArtifactRevision, Completeness, Publication};
+use std::collections::BTreeMap;
 
 impl Session {
     pub(super) fn publish_extraction(
@@ -38,7 +39,7 @@ impl Session {
                 path: crate::input_evidence::relative(&bundle.canonicalize()?, &source)?,
                 stamp,
                 hash: hash.clone(),
-                extra: Default::default(),
+                extra: BTreeMap::default(),
             };
             (
                 crate::input_evidence::SubmittedInput {
@@ -48,7 +49,7 @@ impl Session {
                     submitted_size: reference.stamp.size,
                     transformation: "identity-v1".into(),
                     state: "referenced".into(),
-                    extra: Default::default(),
+                    extra: BTreeMap::default(),
                 },
                 ArtifactRevision {
                     id: format!("{}:source", activity.id),
@@ -80,7 +81,7 @@ impl Session {
                     submitted_size: bytes.len() as u64,
                     transformation: "identity-v1".into(),
                     state: "generated".into(),
-                    extra: Default::default(),
+                    extra: BTreeMap::default(),
                 },
                 ArtifactRevision {
                     id: format!("{}:source", activity.id),
@@ -114,7 +115,7 @@ impl Session {
             id: activity.id.clone(),
             session: self.id.clone(),
             parents: Vec::new(),
-            parent_hashes: Default::default(),
+            parent_hashes: BTreeMap::default(),
             created: activity.t.clone(),
             origin: "Sequence extraction from the recorded source revision".into(),
             inputs: vec![artifact],

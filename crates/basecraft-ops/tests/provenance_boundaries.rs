@@ -118,6 +118,22 @@ fn hidden_binding_errors_never_fall_back_to_adjacent_metadata() {
     .unwrap();
     run.bind(&path).unwrap();
     assert!(files::load_tree(&path).is_ok());
+    let sidecar = run.artifact("forest.nwk.basecraft.json").unwrap();
+    std::fs::remove_file(&sidecar).unwrap();
+    let missing = files::load_tree(&path).unwrap();
+    assert!(
+        missing
+            .metadata_warning
+            .as_deref()
+            .unwrap()
+            .contains("unavailable")
+    );
+    std::fs::write(&sidecar, &metadata).unwrap();
+    let mut future: serde_json::Value = serde_json::from_slice(&metadata).unwrap();
+    future["schema_version"] = serde_json::json!(99);
+    std::fs::write(&sidecar, serde_json::to_vec(&future).unwrap()).unwrap();
+    assert!(files::load_tree(&path).is_err());
+    std::fs::write(&sidecar, &metadata).unwrap();
     let binding = std::fs::read_dir(dir.path().join(".basecraft/analyses-v1/bindings"))
         .unwrap()
         .next()
@@ -466,4 +482,33 @@ fn nexus_forest_retains_member_identity_rooting_and_untouched_annotations() {
         basecraft_io::newick::parse_trees(&std::fs::read_to_string(&file).unwrap()).unwrap(),
         before
     );
+}
+
+#[test]
+fn interrupted_tree_metadata_save_is_explicit_and_never_reuses_old_semantics() {
+    let dir = tempfile::tempdir().unwrap();
+    let original = dir.path().join("original.nwk");
+    std::fs::write(&original, "((a,b)90,c);\n").unwrap();
+    let mut session = Session::new(dir.path());
+    let doc = session.open(&original).unwrap();
+    session
+        .apply(
+            doc,
+            Op::TreeRenameTip {
+                from: "a".into(),
+                to: "new-a".into(),
+            },
+        )
+        .unwrap();
+    let target = dir.path().join("partial.nwk");
+    std::fs::create_dir(files::tree_sidecar(&target)).unwrap();
+    let error = session.save(doc, Some(&target)).unwrap_err().to_string();
+    assert!(error.contains("metadata incomplete"), "{error}");
+    assert!(target.is_file());
+    assert!(files::load_tree(&target).is_err());
+    assert_eq!(
+        std::fs::read_to_string(&original).unwrap(),
+        "((a,b)90,c);\n"
+    );
+    assert!(session.tree(doc).to_newick().contains("new-a"));
 }

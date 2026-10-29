@@ -459,12 +459,16 @@ fn link_selected_inputs(bundle: &Path, publication: &Publication) -> Result<()> 
         } else {
             let directory = crate::input_evidence::registered_run(id, expected)?;
             let reference = serde_json::json!({"bundle":crate::input_evidence::relative(&bundle.canonicalize()?,&directory)?,"id":id,"hash":expected});
-            links.insert(event.clone(), reference.clone());
             if !upstream.contains(&reference) {
-                upstream.push(reference);
+                upstream.push(reference.clone());
+                links.insert(event.clone(), reference);
+            } else if links.values().any(|owned| owned == &reference) {
+                links.insert(event.clone(), reference);
             }
         }
-        if let Some(reference) = upstream.iter().find(|r| r["id"].as_str() == Some(id)) {
+        if let Some(reference) = upstream.iter().find(|r| r["id"].as_str() == Some(id))
+            && links.values().any(|owned| owned == reference)
+        {
             links.insert(event.clone(), reference.clone());
         }
         processed.push(serde_json::json!(event));

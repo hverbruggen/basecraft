@@ -3,6 +3,8 @@
 use basecraft_protocol::{LogEntry, Op, provenance::EditActivity};
 use std::collections::{HashMap, HashSet};
 
+type FeatureState<'a> = (Vec<&'a str>, Option<basecraft_protocol::Location>);
+
 /// Both reports and publication ancestry consume this projection. A run owns
 /// explicit edit identities, never a display label or the nearest historical run.
 pub(crate) fn project(events: &[LogEntry], effective: &mut Vec<EditActivity>) {
@@ -10,10 +12,8 @@ pub(crate) fn project(events: &[LogEntry], effective: &mut Vec<EditActivity>) {
     // Feature IDs are stable within a session. GenBank/GFF saves compact deleted
     // slots; the next open assigns IDs in the saved feature order. Retain owner
     // identities while rebasing those slots, using the existing coordinate map.
-    let mut features: std::collections::BTreeMap<
-        (&str, u32),
-        (Vec<&str>, Option<basecraft_protocol::Location>),
-    > = std::collections::BTreeMap::new();
+    let mut features: std::collections::BTreeMap<(&str, u32), FeatureState<'_>> =
+        std::collections::BTreeMap::new();
     let mut sessions = HashMap::new();
     let mut saved_documents: HashMap<&str, HashSet<&str>> = HashMap::new();
     let mut supports = HashMap::new();
@@ -26,47 +26,46 @@ pub(crate) fn project(events: &[LogEntry], effective: &mut Vec<EditActivity>) {
                 .or_default()
                 .insert(event.doc.as_str());
         }
-        if let Op::Open { .. } = event.op {
-            if sessions.insert(event.doc.as_str(), event.session.as_str())
+        if let Op::Open { .. } = event.op
+            && sessions.insert(event.doc.as_str(), event.session.as_str())
                 != Some(event.session.as_str())
-            {
-                // Save As can change the document key. Rebase only through an
-                // exact previously saved content hash, never actor/time proximity.
-                let prior_doc = event
-                    .result
-                    .hashes
-                    .first()
-                    .and_then(|(_, hash)| saved_documents.get(hash.as_str()))
-                    .filter(|docs| docs.len() == 1)
-                    .and_then(|docs| docs.iter().next())
-                    .copied()
-                    .unwrap_or(event.doc.as_str());
-                if prior_doc != event.doc {
-                    let moved: Vec<_> = supports
-                        .iter()
-                        .filter(|((doc, _), _)| *doc == prior_doc)
-                        .map(|((_, name), owner)| (*name, *owner))
-                        .collect();
-                    supports.retain(|(doc, _), _| *doc != prior_doc);
-                    for (name, owner) in moved {
-                        supports.insert((event.doc.as_str(), name), owner);
-                    }
-                }
-                let prior: Vec<_> = features
+        {
+            // Save As can change the document key. Rebase only through an
+            // exact previously saved content hash, never actor/time proximity.
+            let prior_doc = event
+                .result
+                .hashes
+                .first()
+                .and_then(|(_, hash)| saved_documents.get(hash.as_str()))
+                .filter(|docs| docs.len() == 1)
+                .and_then(|docs| docs.iter().next())
+                .copied()
+                .unwrap_or(event.doc.as_str());
+            if prior_doc != event.doc {
+                let moved: Vec<_> = supports
                     .iter()
                     .filter(|((doc, _), _)| *doc == prior_doc)
-                    .map(|(_, value)| value.clone())
+                    .map(|((_, name), owner)| (*name, *owner))
                     .collect();
-                features.retain(|(doc, _), _| *doc != prior_doc);
-                if prior.len() as u64 == event.state.features {
-                    for (id, value) in (0u32..).zip(prior) {
-                        features.insert((&event.doc, id), value);
-                    }
-                } else {
-                    // Imported baseline annotations have no recorded owner.
-                    for id in 0..u32::try_from(event.state.features.min(100_000)).unwrap_or(0) {
-                        features.insert((&event.doc, id), (Vec::new(), None));
-                    }
+                supports.retain(|(doc, _), _| *doc != prior_doc);
+                for (name, owner) in moved {
+                    supports.insert((event.doc.as_str(), name), owner);
+                }
+            }
+            let prior: Vec<_> = features
+                .iter()
+                .filter(|((doc, _), _)| *doc == prior_doc)
+                .map(|(_, value)| value.clone())
+                .collect();
+            features.retain(|(doc, _), _| *doc != prior_doc);
+            if prior.len() as u64 == event.state.features {
+                for (id, value) in (0u32..).zip(prior) {
+                    features.insert((&event.doc, id), value);
+                }
+            } else {
+                // Imported baseline annotations have no recorded owner.
+                for id in 0..u32::try_from(event.state.features.min(100_000)).unwrap_or(0) {
+                    features.insert((&event.doc, id), (Vec::new(), None));
                 }
             }
         }
