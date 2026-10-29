@@ -118,7 +118,10 @@ impl BoundedSchema {
         let nodes = value_nodes(value, 0)?.saturating_add(bytes);
         let work = self.work.saturating_mul(nodes);
         let work = if self.unique {
-            work.saturating_mul(nodes)
+            // uniqueItems compares array elements, not every scalar byte in
+            // the surrounding object. Bound pair comparisons by the largest
+            // actual array; nodes already includes all serialized element bytes.
+            work.saturating_mul(max_array_len(value).max(1))
         } else {
             work
         };
@@ -144,6 +147,19 @@ impl BoundedSchema {
                 "{label}: value does not satisfy schema at {pointer}"
             ))
         })
+    }
+}
+
+fn max_array_len(value: &Value) -> usize {
+    match value {
+        Value::Array(values) => values
+            .iter()
+            .map(max_array_len)
+            .max()
+            .unwrap_or(0)
+            .max(values.len()),
+        Value::Object(values) => values.values().map(max_array_len).max().unwrap_or(0),
+        _ => 0,
     }
 }
 

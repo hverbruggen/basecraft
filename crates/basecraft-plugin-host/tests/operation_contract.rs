@@ -249,3 +249,20 @@ fn live_process_keeps_its_contract_snapshot_and_still_validates_declared_operati
     );
     process.ping().unwrap();
 }
+
+#[test]
+fn unique_diagnostics_do_not_square_unrelated_scientific_parameter_text() {
+    let schema = BoundedSchema::compile(&json!({"type":"object","properties":{
+        "units":{"type":"string"},"diagnostics":{"type":"array","items":{"type":"string"},"uniqueItems":true}}})).unwrap();
+    schema
+        .validate(&json!({"units":"relative time from accepted aligned sequences; ".repeat(100)}))
+        .unwrap();
+    schema
+        .validate(&json!({"units":"relative time","diagnostics":["one","two"]}))
+        .unwrap();
+    assert!(
+        schema
+            .validate(&json!({"diagnostics":["one","one"]}))
+            .is_err()
+    );
+}

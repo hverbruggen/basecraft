@@ -31,6 +31,7 @@ def invoke(method, params):
     allocation = params.get("analysis_artifacts")
     if method == "asap" and allocation and "alignment_snapshot" not in params:
         params = dict(params, alignment_snapshot=str(source),
+                      alignment_input_hash=params.get("input_evidence", {}).get("submitted_hash"),
                       alignment_evidence=params.get("input_evidence", {}))
     snapshot = source if allocation else Path(str(target) + ".input." + job_id + source.suffix)
     spart = Path(str(target) + ".spart")
