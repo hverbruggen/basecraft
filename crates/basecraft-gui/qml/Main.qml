@@ -1168,7 +1168,7 @@ ApplicationWindow {
                         controller: window.treeOpen ? window.current : null
                         customization: window.customization
                         onExtraRequested: treeStyle.openStyle("extra")
-                        onLabelsRequested: { metadataTipLabels.target = window.current; metadataTipLabels.revision = window.current.record_revision(); metadataTipLabels.error = ""; metadataTipLabels.open() }
+                        onLabelsRequested: metadataTipLabels.show(window.current, window.currentPath)
                         Component.onCompleted: commands.forEach(command => window.registerRibbonCommand(command))
                     }
                     ToolSeparator { Layout.fillHeight: true }
@@ -2175,6 +2175,16 @@ ApplicationWindow {
     AppContentDialog {
         id: metadataTipLabels
         property string revision: ""
+        property string path: ""
+        property var records: []
+        property var pendingLinks: ({})
+        function show(controller, file) {
+            target = controller; path = file; revision = controller.record_revision()
+            const tips = JSON.parse(controller.style_json()).tips || []
+            const result = JSON.parse(specimenMetadata.consumer(JSON.stringify({action: "labels", document: file, records: tips, fields: []}), false))
+            records = result.labels || tips.map(record => ({record: record, specimen: null, issue: "No specimen metadata"}))
+            pendingLinks = {}; error = result.error || ""; open()
+        }
         function applyFields(fields) {
             if (!target || target.record_revision() !== revision) { error = "The tree changed. Close this dialog and choose labels again."; return }
             const e = target.compose_metadata_labels(shell.project_dir, JSON.stringify(fields))
@@ -2186,6 +2196,30 @@ ApplicationWindow {
         initialFocusItem: labelSpecimen
         body: ColumnLayout {
             Label { text: "Compose stored metadata in this order. Empty fields are skipped; unlinked tips keep their identity."; wrapMode: Text.Wrap; Layout.fillWidth: true }
+            Label { text: "Record links"; font.bold: true }
+            Repeater {
+                model: metadataTipLabels.records
+                delegate: RowLayout {
+                    required property var modelData
+                    Label { text: modelData.record + " → " + (modelData.specimen || modelData.issue || "Unlinked"); Layout.fillWidth: true }
+                    ComboBox {
+                        model: ["Leave unchanged"].concat(window.metadataTable.rows.map(s => s.id))
+                        enabled: specimenMetadata.available
+                        Accessible.name: "Link tree record " + modelData.record + " to specimen"
+                        onActivated: {
+                            const links = Object.assign({}, metadataTipLabels.pendingLinks)
+                            if (currentIndex === 0) delete links[modelData.record]; else links[modelData.record] = currentText
+                            metadataTipLabels.pendingLinks = links
+                        }
+                    }
+                }
+            }
+            AppButton { text: "Save record links"; enabled: Object.keys(metadataTipLabels.pendingLinks).length > 0; onClicked: {
+                if (metadataTipLabels.target.record_revision() !== metadataTipLabels.revision) { metadataTipLabels.error = "The tree changed. Close and reopen this dialog."; return }
+                const p = JSON.parse(specimenMetadata.consumer(JSON.stringify({action: "link_records", document: metadataTipLabels.path, links: metadataTipLabels.pendingLinks}), true))
+                if (p.error) metadataTipLabels.error = p.error
+                else metadataTipLabels.show(metadataTipLabels.target, metadataTipLabels.path)
+            } }
             CheckBox { id: labelGenus; text: "Genus"; checked: true }
             CheckBox { id: labelSpecies; text: "Species epithet"; checked: true }
             CheckBox { id: labelSpecimen; text: "Specimen ID"; checked: true }

@@ -1299,6 +1299,11 @@ pub fn insdc(session: &Session, doc: crate::DocId, specimen: &str) -> Result<ser
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum ConsumerRequest {
     Partitions,
+    /// Explicit record-ID assignments reviewed at the document workflow step.
+    LinkRecords {
+        document: String,
+        links: BTreeMap<String, String>,
+    },
     Labels {
         document: String,
         records: Vec<String>,
@@ -1329,6 +1334,27 @@ pub fn consumer_plan(
         ConsumerRequest::Partitions => {
             return Ok(
                 serde_json::json!({"partitions": metadata_consumers::partitions(meta), "metadata_hash": metadata_hash}),
+            );
+        }
+        ConsumerRequest::LinkRecords { document, links } => {
+            let key = document_key(session.root(), Path::new(document))?;
+            let edit = MetadataEdit::Apply {
+                changes: ChangeSet {
+                    links: links
+                        .iter()
+                        .map(|(record, specimen)| RecordLink {
+                            document: key.clone(),
+                            record: record.clone(),
+                            specimen: specimen.clone(),
+                        })
+                        .collect(),
+                    ..ChangeSet::default()
+                },
+            };
+            let mut checked = meta.clone();
+            model::apply(&mut checked, &edit).map_err(|e| invalid(e.0))?;
+            return Ok(
+                serde_json::json!({"target":session.doc_key(doc), "operation": Op::MetadataEdit { edit: Box::new(edit) }, "metadata_hash": metadata_hash}),
             );
         }
         ConsumerRequest::Labels {

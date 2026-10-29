@@ -35,7 +35,7 @@ pub fn validate_partitions(meta: &ProjectMetadata) -> Result<(), EditError> {
             })
             .collect(),
         hypotheses: meta.partitions.clone(),
-        view: Default::default(),
+        view: basecraft_protocol::delimitation::DelimitationView::default(),
         exchange_fields: BTreeMap::new(),
     })
 }

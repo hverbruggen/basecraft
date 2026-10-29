@@ -1561,6 +1561,7 @@ impl qobject::TreeController {
                         "kind": s.kind,
                     })).collect::<Vec<_>>(),
                     "style": d.style(),
+                    "tips": d.nodes().iter().filter(|n| n.is_tip()).map(|n| &n.name).collect::<Vec<_>>(),
                 })
             })
             .unwrap_or(Value::Null);

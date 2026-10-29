@@ -81,7 +81,8 @@ rather than being misrepresented as per-specimen scores after projection.
 
 Headless clients use `basecraft metadata consumer REQUEST --project PROJECT`
 (or MCP `metadata_consumer`, Python `Session.metadata_consumer`). Requests use
-`action: partitions`, `labels` (document, records, fields), `link_workspace`
+`action: partitions`, `labels` (document, records, fields), `link_records`
+(document, links keyed by record ID; explicit updates preserve other links), `link_workspace`
 (workspace, links) or `promote_partition` (workspace, hypothesis, id). Planning
 writes nothing. Edit plans return a target and normal typed operation; CLI
 `--apply` applies and saves, while MCP/Python use version-checked apply and save.

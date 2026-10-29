@@ -499,24 +499,26 @@ def main():
         workspace_fixture = Path(__file__).resolve().parents[3] / "testdata/fixtures/delimitation/manual.spart"
         for route, project in projects.items():
             shutil.copyfile(workspace_fixture, project / "result.spart")
+            (project / "tree.nwk").write_text("(tree-record:1,unlinked:2);")
+            record_links = {"action": "link_records", "document": "tree.nwk", "links": {"tree-record": "HV1"}}
             link_request = {"action": "link_workspace", "workspace": "result.spart",
                             "links": {"a": "HV1", "b": "HV2", "c": "HV1", "d": "HV2"}}
             promote = {"action": "promote_partition", "workspace": "result.spart",
                        "hypothesis": "partition-1", "id": "project-result"}
-            labels = {"action": "labels", "document": "rbcL.fasta",
-                      "records": ["HV1|Caulerpa_taxifolia|2019-05", "unlinked"],
+            labels = {"action": "labels", "document": "tree.nwk",
+                      "records": ["tree-record", "unlinked"],
                       "fields": ["genus", "species", "specimen", "accession"]}
             if route == "cli":
-                for request in (link_request, promote):
+                for request in (record_links, link_request, promote):
                     cli("metadata", "consumer", json.dumps(request), "--project", str(project), "--apply")
                 partition, _ = cli("metadata", "consumer", '{"action":"partitions"}', "--project", str(project))
                 label_result, _ = cli("metadata", "consumer", json.dumps(labels), "--project", str(project))
             elif route == "python":
                 with PythonSession(project, writes=True, command=str(binary)) as py:
                     meta = py.open_metadata()["document"]
-                    for request in (link_request, promote):
+                    for request in (record_links, link_request, promote):
                         plan = py.metadata_consumer(meta, request)
-                        target = meta if request == promote else py.open(plan["target"])["document"]
+                        target = meta if request != link_request else py.open(plan["target"])["document"]
                         py.apply(target, py.state(target)["version"], plan["operation"])
                         py.save(target)
                     partition = py.metadata_consumer(meta, {"action": "partitions"})
@@ -525,9 +527,9 @@ def main():
                 connection = Mcp(binary, project, env)
                 try:
                     meta = connection.tool("metadata_open", {})["structuredContent"]["document"]
-                    for request in (link_request, promote):
+                    for request in (record_links, link_request, promote):
                         plan = connection.tool("metadata_consumer", {"document": meta, "request": request})["structuredContent"]
-                        target = meta if request == promote else connection.tool("open", {"path": plan["target"]})["structuredContent"]["document"]
+                        target = meta if request != link_request else connection.tool("open", {"path": plan["target"]})["structuredContent"]["document"]
                         version = connection.tool("state", {"document": target})["structuredContent"]["version"]
                         connection.tool("apply", {"document": target, "version": version, "operation": plan["operation"]})
                         connection.tool("save", {"document": target})

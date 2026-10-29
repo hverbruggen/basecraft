@@ -323,7 +323,7 @@ impl qobject::MetadataController {
             let edit = serde_json::from_value::<Op>(value["operation"].clone());
             match edit {
                 Ok(Op::MetadataEdit { edit }) => {
-                    if !self.as_mut().edit(vec![*edit], "Saved project partition")
+                    if !self.as_mut().edit(vec![*edit], "Saved specimen metadata")
                         || self.rust().dirty
                     {
                         return qs(&json!({"error":self.rust().message.to_string()}));

@@ -38,7 +38,7 @@ fn setup(root: &std::path::Path) -> (Session, basecraft_ops::DocId, basecraft_op
                     specimen: "roster-A".into(),
                 },
             ],
-            ..Default::default()
+            ..ChangeSet::default()
         },
     )
     .unwrap();
@@ -70,10 +70,10 @@ fn setup(root: &std::path::Path) -> (Session, basecraft_ops::DocId, basecraft_op
             }],
             unassigned: ["r3".into()].into(),
             scores: vec![],
-            provenance: Default::default(),
+            provenance: basecraft_protocol::delimitation::Provenance::default(),
             attributes: BTreeMap::new(),
         }],
-        view: Default::default(),
+        view: basecraft_protocol::delimitation::DelimitationView::default(),
         exchange_fields: BTreeMap::new(),
     };
     let path = root.join("result.spart");
@@ -160,7 +160,7 @@ fn explicit_roster_links_partitions_undo_replay_and_moved_project() {
             m,
             ChangeSet {
                 specimens: vec!["new-specimen".into()],
-                ..Default::default()
+                ..ChangeSet::default()
             },
         )
         .unwrap();
