@@ -494,6 +494,57 @@ def main():
             assert b"HV2|Caulerpa_sp._3|not" in archive.read("content.xml")
         record("specimen metadata imports agree across CLI, MCP and Python")
 
+        # Consumers reuse those exact saved links and generic typed apply/save.
+        consumer_results = {}
+        workspace_fixture = Path(__file__).resolve().parents[3] / "testdata/fixtures/delimitation/manual.spart"
+        for route, project in projects.items():
+            shutil.copyfile(workspace_fixture, project / "result.spart")
+            link_request = {"action": "link_workspace", "workspace": "result.spart",
+                            "links": {"a": "HV1", "b": "HV2", "c": "HV1", "d": "HV2"}}
+            promote = {"action": "promote_partition", "workspace": "result.spart",
+                       "hypothesis": "partition-1", "id": "project-result"}
+            labels = {"action": "labels", "document": "rbcL.fasta",
+                      "records": ["HV1|Caulerpa_taxifolia|2019-05", "unlinked"],
+                      "fields": ["genus", "species", "specimen", "accession"]}
+            if route == "cli":
+                for request in (link_request, promote):
+                    cli("metadata", "consumer", json.dumps(request), "--project", str(project), "--apply")
+                partition, _ = cli("metadata", "consumer", '{"action":"partitions"}', "--project", str(project))
+                label_result, _ = cli("metadata", "consumer", json.dumps(labels), "--project", str(project))
+            elif route == "python":
+                with PythonSession(project, writes=True, command=str(binary)) as py:
+                    meta = py.open_metadata()["document"]
+                    for request in (link_request, promote):
+                        plan = py.metadata_consumer(meta, request)
+                        target = meta if request == promote else py.open(plan["target"])["document"]
+                        py.apply(target, py.state(target)["version"], plan["operation"])
+                        py.save(target)
+                    partition = py.metadata_consumer(meta, {"action": "partitions"})
+                    label_result = py.metadata_consumer(meta, labels)
+            else:
+                connection = Mcp(binary, project, env)
+                try:
+                    meta = connection.tool("metadata_open", {})["structuredContent"]["document"]
+                    for request in (link_request, promote):
+                        plan = connection.tool("metadata_consumer", {"document": meta, "request": request})["structuredContent"]
+                        target = meta if request == promote else connection.tool("open", {"path": plan["target"]})["structuredContent"]["document"]
+                        version = connection.tool("state", {"document": target})["structuredContent"]["version"]
+                        connection.tool("apply", {"document": target, "version": version, "operation": plan["operation"]})
+                        connection.tool("save", {"document": target})
+                    partition = connection.tool("metadata_consumer", {"document": meta, "request": {"action": "partitions"}})["structuredContent"]
+                    label_result = connection.tool("metadata_consumer", {"document": meta, "request": labels})["structuredContent"]
+                finally:
+                    connection.close()
+            saved = next(p for p in partition["partitions"] if p["id"] == "project-result")
+            assert sorted(sorted(g["members"]) for g in saved["groups"]) == [["HV1"], ["HV2"]]
+            assert saved["provenance"]["inputs"]["project_metadata"]
+            assert saved["provenance"]["parameters"]["source_hypothesis"]["id"] == "partition-1"
+            assert label_result["labels"][0]["label"] == "HV1"
+            assert label_result["labels"][1]["issue"]
+            consumer_results[route] = label_result["labels"]
+        assert consumer_results["cli"] == consumer_results["mcp"] == consumer_results["python"]
+        record("specimen partitions, explicit workspace links and display labels agree across CLI, MCP and Python")
+
         # GenBank marker submissions: the CLI, MCP and Python routes share one
         # review, one package writer and the registered table2asn operation,
         # run here against a stand-in table2asn.

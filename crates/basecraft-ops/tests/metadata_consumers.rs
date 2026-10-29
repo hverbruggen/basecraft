@@ -5,7 +5,7 @@ use basecraft_protocol::{
     delimitation::{
         DelimitationEdit, DelimitationWorkspace, Group, Hypothesis, HypothesisOrigin, Specimen,
     },
-    metadata::{Cell, CellChange, ChangeSet, LabelField, MetadataEdit, RecordLink},
+    metadata::{Cell, CellChange, ChangeSet, LabelField, RecordLink},
 };
 use std::collections::BTreeMap;
 
@@ -97,7 +97,7 @@ fn explicit_roster_links_partitions_undo_replay_and_moved_project() {
             basecraft_docs::metadata_consumers::project_partition(
                 s.metadata(m),
                 &work,
-                "result",
+                &work.hypotheses[0].id,
                 "p1"
             )
             .unwrap_err()
@@ -131,20 +131,8 @@ fn explicit_roster_links_partitions_undo_replay_and_moved_project() {
         s.save(d, None).unwrap();
         let request = metadata::ConsumerRequest::PromotePartition {
             workspace: "result.spart".into(),
-            hypothesis: "partition-1".into(),
+            hypothesis: s.delimitation(d).hypotheses[0].id.clone(),
             id: "p1".into(),
-        };
-        // SPART interchange assigns partition IDs on load; the source ID is read, never guessed.
-        let source = s.delimitation(d).hypotheses[0].id.clone();
-        let request = match request {
-            metadata::ConsumerRequest::PromotePartition { workspace, id, .. } => {
-                metadata::ConsumerRequest::PromotePartition {
-                    workspace,
-                    hypothesis: source,
-                    id,
-                }
-            }
-            _ => unreachable!(),
         };
         let plan = metadata::consumer_plan(&s, m, &request).unwrap();
         s.apply(
@@ -281,5 +269,4 @@ fn composed_labels_skip_empty_fields_and_keep_scientific_ids() {
         check.tree(tree).style().tip_labels["r1"],
         "Caulerpa roster-A"
     );
-    let _ = MetadataEdit::RemovePartition { id: "p".into() };
 }

@@ -59,7 +59,7 @@ pub fn alignment(doc: &AlignmentDoc, requested: i32) -> TextPage {
 pub fn tree(doc: &TreeDoc, requested: i32) -> TextPage {
     let (page, pages, start, end) = bounds(requested, doc.nodes().len() as u64, 50);
     let mut text = format!(
-        "Tree, {} tips. Node identifiers are one-based. Root: {}.\nNode\tName\tParent\tBranch length",
+        "Tree, {} tips. Node identifiers are one-based. Root: {}.\nNode\tName\tParent\tBranch length\tDisplay label",
         doc.tip_count(),
         doc.root() + 1
     );
@@ -76,13 +76,14 @@ pub fn tree(doc: &TreeDoc, requested: i32) -> TextPage {
     {
         let _ = write!(
             text,
-            "{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}",
             i + 1,
             node.name,
             node.parent
                 .map_or_else(|| "root".into(), |p| (p + 1).to_string()),
             node.length
-                .map_or_else(|| "not recorded".into(), |v| v.to_string())
+                .map_or_else(|| "not recorded".into(), |v| v.to_string()),
+            if node.is_tip() { super::tree::tip_label(doc, &node.name) } else { node.name.clone() }
         );
         for set in doc.supports() {
             let _ = write!(

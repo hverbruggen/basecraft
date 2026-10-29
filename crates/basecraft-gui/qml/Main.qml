@@ -2208,7 +2208,7 @@ ApplicationWindow {
         property var work: ({specimens: [], hypotheses: []})
         property var links: ({})
         property string error: ""
-        initialFocusItem: rosterRows
+        initialFocusItem: partitionSource
         function show(controller, file) {
             target = controller; path = file; work = JSON.parse(controller.workspace_json)
             const stored = {}
@@ -2223,7 +2223,7 @@ ApplicationWindow {
                     model: rosterConsumer.work.specimens
                     delegate: RowLayout {
                         required property var modelData
-                        Label { text: modelData.id; Layout.fillWidth: true }
+                        Label { text: modelData.id + (rosterConsumer.links[modelData.id] && !window.metadataTable.rows.some(s => s.id === rosterConsumer.links[modelData.id]) ? " (unknown roster ID: " + rosterConsumer.links[modelData.id] + ")" : ""); Layout.fillWidth: true }
                         ComboBox {
                             model: ["Unlinked"].concat(window.metadataTable.rows.map(s => s.id))
                             currentIndex: Math.max(0, model.indexOf(rosterConsumer.links[modelData.id] || "Unlinked"))
