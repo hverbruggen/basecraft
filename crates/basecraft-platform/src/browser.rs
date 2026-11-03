@@ -20,35 +20,50 @@ fn window_command(browser: &str, url: &str) -> std::process::Command {
     command
 }
 
-// Run only on a worker thread. A stalled desktop helper must not retain the
-// browser request forever. Kill and reap this owned child on timeout/error.
+// Run only on a worker thread; reuse process-group ownership so a helper's
+// descendants cannot keep discovery pipes or the request alive after timeout.
+#[cfg(unix)]
 fn command_output_with_timeout(
     command: &mut std::process::Command,
     timeout: std::time::Duration,
 ) -> io::Result<std::process::Output> {
-    let mut child = command
+    use std::io::Read;
+    command
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()?;
+        .stderr(std::process::Stdio::null());
+    let mut child = crate::process::OwnedProcess::spawn(command)?;
+    let stdout = child.take_stdout();
     let start = std::time::Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => return child.wait_with_output(),
-            Ok(None) if start.elapsed() < timeout => {
-                std::thread::sleep(std::time::Duration::from_millis(20));
-            }
-            status => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(status.err().unwrap_or_else(|| {
-                    io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        "Desktop browser discovery timed out",
-                    )
-                }));
-            }
+    while !child.exited()? {
+        if start.elapsed() >= timeout {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "Desktop browser discovery timed out",
+            ));
         }
+        std::thread::sleep(std::time::Duration::from_millis(20));
     }
+    let status = child.finish()?;
+    let mut bytes = Vec::new();
+    if let Some(stdout) = stdout {
+        stdout.take(4096).read_to_end(&mut bytes)?;
+    }
+    Ok(std::process::Output {
+        status,
+        stdout: bytes,
+        stderr: Vec::new(),
+    })
+}
+
+#[cfg(not(unix))]
+fn command_output_with_timeout(
+    _command: &mut std::process::Command,
+    _timeout: std::time::Duration,
+) -> io::Result<std::process::Output> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "Desktop browser discovery is unavailable",
+    ))
 }
 
 /// Returns false when the platform/default browser has no supported mechanism.
@@ -126,6 +141,19 @@ mod tests {
         let error = command_output_with_timeout(&mut command, std::time::Duration::from_millis(40))
             .unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(start.elapsed() < std::time::Duration::from_secs(2));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn exited_helper_descendants_do_not_hold_output_open() {
+        let mut command = std::process::Command::new("/bin/sh");
+        command.args(["-c", "sleep 10 & printf firefox.desktop"]);
+        let start = std::time::Instant::now();
+        let output =
+            command_output_with_timeout(&mut command, std::time::Duration::from_secs(2)).unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"firefox.desktop");
         assert!(start.elapsed() < std::time::Duration::from_secs(2));
     }
 
