@@ -79,6 +79,7 @@ requirements:
     - libxml2 ==2.15.4 h7df9aa5_1
     - libxml2-devel ==2.15.4 h7df9aa5_1
   run:
+    - libiconv >=1.18,<2.0a0
     - libdb 6.2.32.*
     - libsqlite
     - libzlib

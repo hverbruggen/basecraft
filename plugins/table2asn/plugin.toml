@@ -8,12 +8,22 @@ kinds = ["operation"]
 [entry]
 operation = "python:table2asn_plugin.py"
 
-# Informational legacy declaration; this does not provision a runtime.
-# Matching-source cross-platform packages are staged in packaging/table2asn.
-# Activate [runtime] only with retained native artifacts, a frozen Pixi lock
-# and exact native version checks. Never turn this into an unpinned solve or
-# silently substitute a mutable upstream download for a requested version.
-# Until activation, the existing explicit override/environment/PATH behaviour
-# remains available; automatic pinned installation is not delivered yet.
+# Informational legacy declaration for targets without a supported runtime.
 [environment]
 conda = ["bioconda::table2asn"]
+
+# Linux feedback deployment only. The immutable file channel is local to the
+# authorized workstation; public cross-machine distribution is pending.
+# Other platforms retain the legacy unmanaged behavior above.
+[runtime]
+platforms = ["linux-64"]
+channels = ["file:///private/local-path", "conda-forge"]
+lock = "pixi.lock"
+executables = ["table2asn"]
+
+[runtime.dependencies]
+basecraft-table2asn = "==30.8.0"
+
+[runtime.version-checks.table2asn]
+args = ["-version"]
+expected = "table2asn: 1.30.0"

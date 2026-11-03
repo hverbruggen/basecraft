@@ -6,6 +6,8 @@ source_url = "https://codeload.github.com/ncbi/ncbi-cxx-toolkit-public/tar.gz/01
 source_sha256 = "de56c4be23c50d93edf0014e310471be03bb2c8f114b8b414f99149518201d95"
 source_bytes = 62349873
 targets = ["linux-64", "osx-64", "osx-arm64", "win-64"]
-# No target has a validated native artifact yet. Never treat missing artifacts
-# as permission to select a different release or the mutable NCBI downloads.
-validated_targets = []
+# Native Linux artifact/install measured separately in linux-64.json.
+# Scientific qualification evidence lives in the task handoff. Other targets
+# must never substitute a different release or mutable NCBI downloads.
+validated_targets = ["linux-64"]
+measured_tool_version_stdout = "table2asn: 1.30.0\n"

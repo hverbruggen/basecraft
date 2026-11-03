@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "target": "linux-64",
+  "package": {
+    "name": "basecraft-table2asn",
+    "version": "30.8.0",
+    "build": "source01ab652_0",
+    "url": "file:///private/local-path",
+    "sha256": "10cb474dedb8c6b541f69496d68012e9731343c9c0a61ea15ed1d327e06b1ec0",
+    "bytes": 12439373
+  },
+  "source_commit": "01ab652af9da9d557b1553504d4dcd4db12f5b86",
+  "source_sha256": "de56c4be23c50d93edf0014e310471be03bb2c8f114b8b414f99149518201d95",
+  "tool": {
+    "version_stdout": "table2asn: 1.30.0\n",
+    "version_stderr": "",
+    "installed_executable_sha256": "11f8b0ed453b0d157016242eee13a463a77974b6f11e909a548c49ac948a8d94",
+    "rpath": "$ORIGIN/../lib",
+    "maximum_required_glibc_symbol": "GLIBC_2.14"
+  },
+  "policy": {
+    "toolchain": "GCC13.4.0 / glibc2.17 sysroot",
+    "cpu": "x86_64; final -march=x86-64 -mtune=generic -msse2, LocalZCF disabled; Conda dependencies retain upstream linux-64 CPU policy",
+    "runtime_solver_virtual_packages": [
+      "__linux=4.18",
+      "__glibc=2.28",
+      "__archspec=0=x86_64"
+    ],
+    "supported_runtime_floor": "Linux kernel4.18/glibc2.28 (frozen Pixi solver defaults); older OS not qualified",
+    "distribution": "local workstation SSD file channel only; external immutable hosting pending"
+  },
+  "build_lock_sha256": "e623514bf7daaad90069a55a959f0341601beb12b59456418718d7e06686618e",
+  "runtime_lock_sha256": "95753ca24ef9a878caf7f21f0e17f2e80d05d59c424df5ed34bcc01b4b55eb45",
+  "build_audit": {
+    "build_packages": 45,
+    "host_packages": 20,
+    "sha256": "1d056c2ac384cd1ed74cdfbc820fbf8d4f5fda94aa872888a06082900123e96c"
+  },
+  "elf_needed": [
+    "libdb-6.2.so",
+    "libsqlite3.so.0",
+    "libz.so.1",
+    "libresolv.so.2",
+    "libdl.so.2",
+    "librt.so.1",
+    "libm.so.6",
+    "libpthread.so.0",
+    "libiconv.so.2",
+    "libstdc++.so.6",
+    "libgomp.so.1",
+    "libgcc_s.so.1",
+    "libc.so.6",
+    "ld-linux-x86-64.so.2"
+  ],
+  "linkage_notes": "XML/XSLT/EXSLT appear on final link but are dropped from ELF NEEDED; no static external linkage claimed. ICU retained transitively through libsqlite. Frozen closure also conservatively retains inherited host run exports (including libxml2-16/liblzma/readline/ncurses). All non-glibc ldd libraries resolve within installed Conda prefix.",
+  "notices": "NCBI LICENSE plus retained exact build/host package licenses/source recipes,58 unique artifacts; libdb6.2.32 AGPL-3.0-only, libiconv LGPL-2.1-only. Conda libdb artifact dates2021; public distribution/security maintenance review remains pending."
+}
