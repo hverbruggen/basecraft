@@ -240,7 +240,7 @@ fn run(a: &Args) -> Result<()> {
             matrix.write_identified(path, &identity)?;
         }
         if let Some(path) = &a.matrix {
-            matrix.export_tsv(path)?;
+            matrix.export_tsv_threads(path, threads)?;
         }
         if let (Some(path), Some(tree)) = (&a.tree, &tree) {
             fs::write(path, tree.trees.concat())?;

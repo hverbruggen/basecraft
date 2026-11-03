@@ -559,22 +559,40 @@ impl DistanceMatrix {
             && self.gap_policy == "pairwise deletion; ACGTU valid; U=T"
     }
     pub fn export_tsv(&self, path: &Path) -> Result<()> {
-        use std::io::Write;
+        self.export_tsv_threads(path, 1)
+    }
+    /// Rows are formatted in parallel and written in order, so the bytes don't depend on
+    /// the worker count. Text formatting is the slowest part of exporting a large matrix.
+    pub fn export_tsv_threads(&self, path: &Path, threads: usize) -> Result<()> {
+        use std::fmt::Write as _;
+        use std::io::Write as _;
+        let workers = pool(threads)?;
         let mut out = std::io::BufWriter::new(fs::File::create(path)?);
         write!(out, "sequence")?;
         for name in &self.names {
             write!(out, "\t{name}")?;
         }
         writeln!(out)?;
-        for (i, name) in self.names.iter().enumerate() {
-            write!(out, "{name}")?;
+        let format_row = |i: usize| {
+            let mut row = String::with_capacity(self.names.len() * 15 + self.names[i].len());
+            row.push_str(&self.names[i]);
             for j in 0..self.names.len() {
-                match self.get(i, j) {
-                    Some(d) => write!(out, "\t{d:.12}")?,
-                    None => write!(out, "\tNA")?,
-                }
+                // Writing to a String can't fail.
+                let _ = match self.get(i, j) {
+                    Some(d) => write!(row, "\t{d:.12}"),
+                    None => write!(row, "\tNA"),
+                };
             }
-            writeln!(out)?;
+            row.push('\n');
+            row
+        };
+        let rows: Vec<usize> = (0..self.names.len()).collect();
+        for block in rows.chunks(256) {
+            let text: Vec<String> =
+                workers.install(|| block.par_iter().map(|&i| format_row(i)).collect());
+            for row in text {
+                out.write_all(row.as_bytes())?;
+            }
         }
         out.flush()?;
         Ok(())
@@ -1181,6 +1199,25 @@ mod tests {
         bad[at..at + 8].copy_from_slice(&(-1_f64).to_le_bytes());
         fs::write(&path, &bad).unwrap();
         assert!(DistanceMatrix::read(&path).is_err());
+    }
+    #[test]
+    fn matrix_export_bytes_do_not_depend_on_workers() {
+        let a = Alignment {
+            names: (0..300).map(|i| format!("s{i}")).collect(),
+            sequences: (0..300_u32)
+                .map(|i| (0..40_u32).map(|k| b"ACGT-"[((i * k + i) % 5) as usize]).collect())
+                .collect(),
+        };
+        let m = DistanceMatrix::calculate(&a, Model::Jc69, 1, 2).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let (one, four) = (dir.path().join("1.tsv"), dir.path().join("4.tsv"));
+        m.export_tsv(&one).unwrap();
+        m.export_tsv_threads(&four, 4).unwrap();
+        let text = fs::read(&one).unwrap();
+        assert_eq!(text, fs::read(&four).unwrap());
+        let text = String::from_utf8(text).unwrap();
+        assert_eq!(text.lines().count(), 301);
+        assert!(text.starts_with("sequence\ts0\ts1\t"));
     }
     #[test]
     fn identical_sequences_export_plain_zero() {
