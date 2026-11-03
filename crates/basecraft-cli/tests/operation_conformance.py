@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import sys
 import time
+import tomllib
 
 
 FAKE_TABLE2ASN = r"""#!/bin/sh
@@ -553,6 +554,24 @@ def main():
         checkout = Path(__file__).resolve().parents[3]
         bundle = root / "table2asn-bundle"
         shutil.copytree(checkout / "plugins/table2asn", bundle / "table2asn")
+        # This conformance fixture deliberately uses the stand-in below.
+        # Real frozen runtime installation is qualified separately; production
+        # manifests keep their mandatory runtime and must never fall back.
+        manifest = bundle / "table2asn/plugin.toml"
+        original = tomllib.loads(manifest.read_text())
+        expected = dict(original)
+        expected.pop("runtime", None)
+        fixture_lines = []
+        runtime_section = False
+        for line in manifest.read_text().splitlines():
+            header = line.strip()
+            if header.startswith("[") and header.endswith("]"):
+                runtime_section = header == "[runtime]" or header.startswith("[runtime.")
+            if not runtime_section:
+                fixture_lines.append(line)
+        fixture_manifest = "\n".join(fixture_lines) + "\n"
+        assert tomllib.loads(fixture_manifest) == expected
+        manifest.write_text(fixture_manifest)
         fake = root / "fake-table2asn"
         fake.write_text(FAKE_TABLE2ASN)
         fake.chmod(0o755)
