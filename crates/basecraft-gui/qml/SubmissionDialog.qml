@@ -443,7 +443,7 @@ AppDialog {
                         }
                     }
                 }
-                ScrollView {
+                FocusScrollView {
                     visible: showRule.checked
                     Layout.fillWidth: true
                     Layout.preferredHeight: Math.min(210, ruleForm.implicitHeight)
@@ -769,7 +769,7 @@ AppDialog {
                     text: visible ? rowData.record + " translation (codon_start " + rowData.frame.effective + "): " + rowData.frame.translation : ""
                 }
             }
-            ScrollView {
+            FocusScrollView {
                 contentWidth: availableWidth
                 ColumnLayout {
                     width: parent.width
@@ -934,7 +934,7 @@ AppDialog {
                     }
                 }
             }
-            ScrollView {
+            FocusScrollView {
                 contentWidth: availableWidth
                 ColumnLayout {
                     width: parent.width
@@ -1058,7 +1058,7 @@ AppDialog {
                     }
                 }
 
-                ScrollView {
+                FocusScrollView {
                     Layout.fillWidth: true
                     Layout.preferredHeight: Math.min(230, exportForm.implicitHeight)
                     contentWidth: availableWidth

@@ -398,6 +398,17 @@ impl Session {
         Ok(queries)
     }
 
+    /// The existing project-metadata owner, if open; never create a second owner for a preset.
+    pub(crate) fn project_metadata_id(&self) -> Option<DocId> {
+        let key = Path::new(crate::metadata::DIRECTORY).join(crate::metadata::MANIFEST);
+        self.docs
+            .iter()
+            .position(|slot| {
+                matches!(slot.content, Loaded::Metadata(_)) && Path::new(&slot.key) == key
+            })
+            .map(DocId)
+    }
+
     pub fn doc_key(&self, id: DocId) -> &str {
         &self.docs[id.0].key
     }

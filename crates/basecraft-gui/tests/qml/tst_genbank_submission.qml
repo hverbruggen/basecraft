@@ -57,17 +57,25 @@ Item {
             return dialog
         }
 
+        function sequenceControl(dialog, name, row) {
+            const table = findChild(dialog, "submissionSequences")
+            table.forceLayout()
+            table.positionViewAtIndex(row, ListView.Contain)
+            tryVerify(() => findChild(table.contentItem, name) !== null)
+            return findChild(table.contentItem, name)
+        }
+
         function test_frames_are_shown_for_review_and_confirmed() {
             const dialog = open({kind: "coding", gene: "rbcL", product: "ribulose-1,5-bisphosphate carboxylase/oxygenase large subunit"})
             tryCompare(findChild(dialog, "sequenceSearch"), "activeFocus", true)
-            compare(findChild(dialog.body, "frameText_HV101_rbcL").text, "Detected 2: confirm")
-            compare(findChild(dialog.body, "frameText_HV103_rbcL").text, "No clean frame")
-            compare(findChild(dialog.body, "frame_HV101_rbcL").currentText, "2")
-            findChild(dialog.body, "confirmFrame_HV101_rbcL").clicked()
+            compare(sequenceControl(dialog, "frameText_HV101_rbcL", 0).text, "Detected 2: confirm")
+            compare(sequenceControl(dialog, "frameText_HV103_rbcL", 1).text, "No clean frame")
+            compare(sequenceControl(dialog, "frame_HV101_rbcL", 0).currentText, "2")
+            sequenceControl(dialog, "confirmFrame_HV101_rbcL", 0).clicked()
             compare(frames.count, 1)
             compare(Array.from(frames.signalArguments[0]), ["HV101_rbcL", 2])
             // The user overrides HV103's frame with the keyboard.
-            const choice = findChild(dialog.body, "frame_HV103_rbcL")
+            const choice = sequenceControl(dialog, "frame_HV103_rbcL", 1)
             choice.forceActiveFocus()
             keyClick(Qt.Key_Down)
             compare(frames.count, 2)
@@ -84,12 +92,12 @@ Item {
             wait(0)
             findChild(dialog.body, "issue_0").clicked()
             compare(dialog.selectedRow, 0)
-            tryCompare(findChild(dialog.body, "decision_HV101_rbcL"), "activeFocus", true)
+            tryCompare(sequenceControl(dialog, "decision_HV101_rbcL", 0), "activeFocus", true)
             verify(findChild(dialog.body, "translation").text.indexOf("GVGFKAG") > 0)
             dialog.currentTab = 3
             wait(0)
             findChild(dialog.body, "issue_1").clicked()
-            tryCompare(findChild(dialog.body, "decision_HV103_rbcL"), "activeFocus", true)
+            tryCompare(sequenceControl(dialog, "decision_HV103_rbcL", 1), "activeFocus", true)
             // An issue about no record selects nothing.
             verify(!findChild(dialog.body, "issue_2").enabled)
             dialog.close()
@@ -97,17 +105,17 @@ Item {
 
         function test_decisions_and_existing_accessions() {
             const dialog = open({kind: "rrna", product: "18S ribosomal RNA"})
-            compare(findChild(dialog.body, "accession_REF_rbcL").text, "AB123456.1")
-            const decision = findChild(dialog.body, "decision_HV103_rbcL")
+            compare(sequenceControl(dialog, "accession_REF_rbcL", 2).text, "AB123456.1")
+            const decision = sequenceControl(dialog, "decision_HV103_rbcL", 1)
             verify(decision.checked)
             decision.toggle(); decision.toggled()
             compare(Array.from(decisions.signalArguments[0]), ["HV103_rbcL", "exclude", ""])
-            const first = findChild(dialog.body, "decision_HV101_rbcL")
+            const first = sequenceControl(dialog, "decision_HV101_rbcL", 0)
             first.forceActiveFocus()
             keyClick(Qt.Key_Space)
             compare(Array.from(decisions.signalArguments[1]), ["HV101_rbcL", "exclude", ""])
             // Accession evidence remains separate from the inclusion checkbox.
-            verify(findChild(dialog.body, "accession_REF_rbcL").text.includes("AB123456.1"))
+            verify(sequenceControl(dialog, "accession_REF_rbcL", 2).text.includes("AB123456.1"))
             dialog.close()
         }
 
@@ -135,8 +143,8 @@ Item {
             const confirmButton = findChild(dialog.body, "confirmSelection")
             verify(!exportButton.enabled)
             verify(confirmButton.enabled)
-            verify(findChild(dialog.body, "selectionReason_REF_rbcL").text.includes("AB123456.1"))
-            verify(findChild(dialog.body, "selectionReason_REF_rbcL").text.includes("unverified"))
+            verify(sequenceControl(dialog, "selectionReason_REF_rbcL", 2).text.includes("AB123456.1"))
+            verify(sequenceControl(dialog, "selectionReason_REF_rbcL", 2).text.includes("unverified"))
             // Bulk actions are typed edits, never implicit confirmation.
             findChild(dialog.body, "includeAllRows").forceActiveFocus()
             keyClick(Qt.Key_Space)

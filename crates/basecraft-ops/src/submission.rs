@@ -244,8 +244,11 @@ pub fn inclusion_preset_edit(
 pub fn save_inclusion_preset(session: &mut Session, rule: InclusionRule) -> Result<()> {
     // Validate before creating any metadata document.
     inclusion_preset_edit(&ProjectMetadata::default(), rule.clone())?;
-    let doc =
-        crate::metadata::open(session, true)?.ok_or_else(|| invalid("No metadata document"))?;
+    let doc = if let Some(doc) = session.project_metadata_id() {
+        doc
+    } else {
+        crate::metadata::open(session, true)?.ok_or_else(|| invalid("No metadata document"))?
+    };
     let edit = inclusion_preset_edit(session.metadata(doc), rule)?;
     session.apply(
         doc,
