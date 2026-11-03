@@ -265,6 +265,19 @@ pub struct DistanceMatrix {
     #[serde(with = "nullable")]
     pub variances: Vec<f64>,
 }
+const CACHE_MAGIC: &[u8] = b"BASECRAFT-DISTANCES-1\n";
+#[derive(Serialize, Deserialize)]
+struct CacheHeader {
+    schema: u32,
+    input_hash: String,
+    names: Vec<String>,
+    columns: usize,
+    model: Model,
+    min_overlap: u64,
+    gap_policy: String,
+    #[serde(default)]
+    basecraft_identity: serde_json::Value,
+}
 mod nullable {
     use serde::{Deserialize, Deserializer, Serializer};
     pub fn serialize<S: Serializer>(v: &[f64], s: S) -> std::result::Result<S::Ok, S::Error> {
@@ -437,17 +450,106 @@ impl DistanceMatrix {
         }
         Ok(())
     }
+    /// Reads a compact cache, or a JSON cache from an earlier version or another program.
     pub fn read(path: &Path) -> Result<Self> {
-        let m: Self = serde_json::from_reader(std::io::BufReader::new(fs::File::open(path)?))?;
+        let bytes = fs::read(path)?;
+        let m: Self = if bytes.starts_with(CACHE_MAGIC) {
+            Self::from_compact(&bytes)?
+        } else {
+            serde_json::from_slice(&bytes)?
+        };
         m.validate()?;
         Ok(m)
     }
+    /// Writes compact binary unless the path ends in `.json`, which stays readable by eye.
     pub fn write(&self, path: &Path) -> Result<()> {
+        self.write_identified(path, &serde_json::Value::Null)
+    }
+    /// `identity` is stored as given, for callers that bind a cache to its producer.
+    /// Only the compact format carries it.
+    pub fn write_identified(&self, path: &Path, identity: &serde_json::Value) -> Result<()> {
         self.validate()?;
         if self.variances.is_empty() && !self.distances.is_empty() {
             return Err("distance cache requires variances".into());
         }
-        write_json(path, self)
+        if path.extension().is_some_and(|e| e == "json") {
+            return write_json(path, self);
+        }
+        self.write_compact(path, identity)
+    }
+    // Magic, one line of JSON, then little-endian distances, variances and shared-site counts.
+    fn write_compact(&self, path: &Path, identity: &serde_json::Value) -> Result<()> {
+        use std::io::Write;
+        let header = CacheHeader {
+            schema: self.schema,
+            input_hash: self.input_hash.clone(),
+            names: self.names.clone(),
+            columns: self.columns,
+            model: self.model,
+            min_overlap: self.min_overlap,
+            gap_policy: self.gap_policy.clone(),
+            basecraft_identity: identity.clone(),
+        };
+        let dir = path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        let mut temporary = tempfile::NamedTempFile::new_in(dir)?;
+        let mut out = std::io::BufWriter::with_capacity(1 << 20, temporary.as_file_mut());
+        out.write_all(CACHE_MAGIC)?;
+        serde_json::to_writer(&mut out, &header)?;
+        out.write_all(b"\n")?;
+        for values in [&self.distances, &self.variances] {
+            for v in values {
+                out.write_all(&v.to_le_bytes())?;
+            }
+        }
+        for &v in &self.shared_sites {
+            out.write_all(&u32::try_from(v)?.to_le_bytes())?;
+        }
+        out.flush()?;
+        drop(out);
+        temporary.persist(path)?;
+        Ok(())
+    }
+    fn from_compact(bytes: &[u8]) -> Result<Self> {
+        let rest = &bytes[CACHE_MAGIC.len()..];
+        let end = rest
+            .iter()
+            .position(|&b| b == b'\n')
+            .ok_or("distance cache has no header")?;
+        let header: CacheHeader = serde_json::from_slice(&rest[..end])?;
+        let body = &rest[end + 1..];
+        let n = header.names.len();
+        let pairs = n
+            .checked_mul(n.saturating_sub(1))
+            .ok_or("invalid dimensions")?
+            / 2;
+        let floats = pairs.checked_mul(8).ok_or("invalid dimensions")?;
+        let counts = pairs.checked_mul(4).ok_or("invalid dimensions")?;
+        if floats.checked_mul(2).and_then(|f| f.checked_add(counts)) != Some(body.len()) {
+            return Err("distance cache is truncated or has the wrong size".into());
+        }
+        let float = |part: &[u8]| -> Vec<f64> {
+            part.chunks_exact(8)
+                .map(|b| f64::from_le_bytes(b.try_into().unwrap_or([0; 8])))
+                .collect()
+        };
+        Ok(Self {
+            schema: header.schema,
+            input_hash: header.input_hash,
+            names: header.names,
+            columns: header.columns,
+            model: header.model,
+            min_overlap: header.min_overlap,
+            gap_policy: header.gap_policy,
+            distances: float(&body[..floats]),
+            variances: float(&body[floats..2 * floats]),
+            shared_sites: body[2 * floats..]
+                .chunks_exact(4)
+                .map(|b| u64::from(u32::from_le_bytes(b.try_into().unwrap_or([0; 4]))))
+                .collect(),
+        })
     }
     pub fn matches(&self, a: &Alignment, model: Model, min_overlap: u64) -> bool {
         self.input_hash == a.hash()
@@ -1040,6 +1142,44 @@ mod tests {
                 }
             }
         }
+    }
+    #[test]
+    fn compact_cache_round_trips_and_refuses_damage() {
+        let a = Alignment {
+            names: vec!["a 'x".into(), "b".into(), "c".into()],
+            sequences: vec![b"AA--".to_vec(), b"--AA".to_vec(), b"AAAA".to_vec()],
+        };
+        let m = DistanceMatrix::calculate(&a, Model::Jc69, 1, 2).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("m.bin");
+        m.write(&path).unwrap();
+        let back = DistanceMatrix::read(&path).unwrap();
+        assert!(back.matches(&a, Model::Jc69, 1));
+        let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+        assert_eq!(bits(&back.distances), bits(&m.distances));
+        assert_eq!(bits(&back.variances), bits(&m.variances));
+        assert_eq!(back.shared_sites, m.shared_sites);
+        assert_eq!(back.names, m.names);
+        // A JSON cache from an earlier version still loads.
+        let old = dir.path().join("m.json");
+        m.write(&old).unwrap();
+        assert!(fs::read(&old).unwrap().starts_with(b"{"));
+        assert_eq!(DistanceMatrix::read(&old).unwrap().shared_sites, m.shared_sites);
+        let whole = fs::read(&path).unwrap();
+        fs::write(&path, &whole[..whole.len() - 1]).unwrap();
+        assert!(DistanceMatrix::read(&path).is_err());
+        fs::write(&path, &whole[..CACHE_MAGIC.len() + 3]).unwrap();
+        assert!(DistanceMatrix::read(&path).is_err());
+        let mut extra = whole.clone();
+        extra.push(0);
+        fs::write(&path, &extra).unwrap();
+        assert!(DistanceMatrix::read(&path).is_err());
+        // A corrupted estimate fails the same semantic checks as a JSON cache.
+        let mut bad = whole;
+        let at = bad.len() - 12 - 2 * 8;
+        bad[at..at + 8].copy_from_slice(&(-1_f64).to_le_bytes());
+        fs::write(&path, &bad).unwrap();
+        assert!(DistanceMatrix::read(&path).is_err());
     }
     #[test]
     fn identical_sequences_export_plain_zero() {

@@ -45,7 +45,7 @@ fn matrix_reference_generated_failure_move_and_export_use_the_common_store() {
         common::names(&root),
         [".basecraft", "matrix.tsv", "source.afa"]
     );
-    common::member(&clean, "distances.tsv.distances.json");
+    common::member(&clean, "distances.tsv.distances.bin");
     common::member(&clean, "distances.tsv.run.json");
     // A clean document is referenced in place: no copy of its bytes is kept.
     assert!(!run.join("submitted.fasta").exists());

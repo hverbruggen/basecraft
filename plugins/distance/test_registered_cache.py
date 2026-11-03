@@ -20,7 +20,7 @@ class RegisteredCacheIdentity(unittest.TestCase):
             target = root / "matrix.tsv"
             params = {"input": str(source), "output": str(target), "model": "p"}
             invoke("matrix", params)
-            cache = Path(str(target) + ".distances.json")
+            cache = Path(str(target) + ".distances.bin")
             saved = cache.read_bytes()
             params.update(output=str(root / "next.tsv"), cache_input=str(cache))
             invoke("matrix", params)

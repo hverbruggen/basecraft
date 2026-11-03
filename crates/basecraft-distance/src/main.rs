@@ -14,9 +14,13 @@ struct Args {
     /// Aligned DNA FASTA; omit to use an existing --cache.
     #[arg(long)]
     input: Option<PathBuf>,
-    /// Observed-distance JSON cache. Reused only when input, model and overlap agree.
+    /// Observed-distance cache: compact binary, or JSON if the path ends in .json.
+    /// Reused only when input, model and overlap agree.
     #[arg(long)]
     cache: Option<PathBuf>,
+    /// JSON stored in a compact cache's header, for a caller's own producer checks.
+    #[arg(long, requires = "cache")]
+    cache_identity: Option<String>,
     /// DNA distance model (ignored with cache-only input).
     #[arg(long, value_enum, default_value = "k2p")]
     model: Model,
@@ -229,7 +233,11 @@ fn run(a: &Args) -> Result<()> {
         if let Some(path) = &a.cache
             && !cached
         {
-            matrix.write(path)?;
+            let identity = a
+                .cache_identity
+                .as_deref()
+                .map_or(Ok(serde_json::Value::Null), serde_json::from_str)?;
+            matrix.write_identified(path, &identity)?;
         }
         if let Some(path) = &a.matrix {
             matrix.export_tsv(path)?;

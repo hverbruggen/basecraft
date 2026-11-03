@@ -251,7 +251,7 @@ fn registered_cache_reuses_distances_across_consumers_and_refuses_mismatch() {
         root,
         json!({"operation":"basecraft.distance/matrix@1",
         "inputs":{"alignment":common::file("input.afa")},"parameters":{"model":"p"},
-        "destinations":{"artifacts/distances.tsv.distances.json":"cache.json"}}),
+        "destinations":{"artifacts/distances.tsv.distances.bin":"cache.json"}}),
     );
     common::assert_completed(&matrix);
     assert_eq!(

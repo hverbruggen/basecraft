@@ -99,7 +99,7 @@
         },
         "cache": {
           "view": "bytes",
-          "media_type": "application/json",
+          "media_type": "application/octet-stream",
           "min": 0,
           "max": 1
         }
@@ -185,7 +185,7 @@
         },
         "cache": {
           "view": "bytes",
-          "media_type": "application/json",
+          "media_type": "application/octet-stream",
           "min": 0,
           "max": 1
         }
@@ -283,7 +283,7 @@
         },
         "cache": {
           "view": "bytes",
-          "media_type": "application/json",
+          "media_type": "application/octet-stream",
           "min": 0,
           "max": 1
         }

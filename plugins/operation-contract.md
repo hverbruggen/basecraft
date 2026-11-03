@@ -454,8 +454,8 @@ available when a later stage fails; publication repair does not rerun science.
 
 Distance `tree`, `matrix`, and `groups` accept an optional `cache` file binding.
 Export a cache with the usual member destination, for example
-`"destinations":{"artifacts/distances.tsv.distances.json":"distances.json"}`
-for a matrix run, then supply `"cache":[{"kind":"file","path":"distances.json"}]`
+`"destinations":{"artifacts/distances.tsv.distances.bin":"distances.bin"}`
+for a matrix run, then supply `"cache":[{"kind":"file","path":"distances.bin"}]`
 in the next run's inputs. The installed-operation picker accepts optional single-file bindings, including
 cache inputs; matrix and tree operations can use this there. Every route uses
 the same descriptor, frozen input ledger and publication checks. Caches carry the submitted alignment SHA-256,

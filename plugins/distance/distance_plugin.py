@@ -11,6 +11,8 @@ from basecraft.plugin import Plugin
 from basecraft.tools import bootstrap_collection_path as collection_path
 from basecraft.tools import write_atomic
 
+CACHE_MAGIC = b"BASECRAFT-DISTANCES-1\n"
+
 plugin = Plugin("basecraft.distance", "0.1.0")
 
 
@@ -62,6 +64,51 @@ def recovery_error(diagnostic, metadata, report, retained, save_report=True):
     return RuntimeError(diagnostic)
 
 
+NJ = ["Saitou N, Nei M. 1987. The neighbor-joining method: a new method for reconstructing phylogenetic trees. Mol Biol Evol 4:406-425.",
+      "Studier JA, Keppler KJ. 1988. A note on the neighbor-joining algorithm of Saitou and Nei. Mol Biol Evol 5:729-731."]
+FAST_NJ = ["Clausen PTLC. 2023. Scaling neighbor joining to one million taxa with dynamic and heuristic neighbor joining. Bioinformatics 39:btac774."]
+INCOMPLETE = ["Criscuolo A, Gascuel O. 2008. Fast NJ-like algorithms to deal with incomplete distance matrices. BMC Bioinformatics 9:166."]
+COUNTING = ["Elias I, Lagergren J. 2007. Fast computation of distance estimators. BMC Bioinformatics 8:89.",
+            "Simonsen M, Pedersen CNS. 2011. Rapid computation of distance estimators from nucleotide and amino acid alignments. Proc ACM Symposium on Applied Computing, 89-93."]
+MODELS = {"p": ("uncorrected p-distances", []),
+          "jc69": ("Jukes-Cantor distances", ["Jukes TH, Cantor CR. 1969. Evolution of protein molecules. In: Munro HN, editor. Mammalian Protein Metabolism. New York: Academic Press. p 21-132."]),
+          "k2p": ("Kimura two-parameter distances", ["Kimura M. 1980. A simple method for estimating evolutionary rates of base substitutions through comparative studies of nucleotide sequences. J Mol Evol 16:111-120."])}
+TREES = {"sorted": ("exact neighbor joining (Saitou and Nei 1987; Studier and Keppler 1988), searched with row bounds derived from dynamic neighbor joining (Clausen 2023) and extended to non-metric distances", NJ + FAST_NJ),
+         "njstar": ("NJ* (Criscuolo and Gascuel 2008)", NJ + FAST_NJ + INCOMPLETE),
+         "mvrstar": ("MVR* (Criscuolo and Gascuel 2008)", INCOMPLETE),
+         "fourpoint": ("neighbor joining after four-point completion of missing distances (Landry et al. 1996; Makarenkov and Lapointe 2004)", NJ + FAST_NJ + [
+             "Landry PA, Lapointe FJ, Kirsch JAW. 1996. Estimating phylogenies from lacunose distance matrices: additive is superior to ultrametric estimation. Mol Biol Evol 13:818-823.",
+             "Makarenkov V, Lapointe FJ. 2004. A weighted least-squares approach for inferring phylogenies from incomplete distance matrices. Bioinformatics 20:2113-2121."]),
+         "upgma": ("UPGMA (Sokal and Michener 1958)", ["Sokal RR, Michener CD. 1958. A statistical method for evaluating systematic relationships. Univ Kansas Sci Bull 38:1409-1438."])}
+BOOTSTRAP = "Felsenstein J. 1985. Confidence limits on phylogenies: an approach using the bootstrap. Evolution 39:783-791."
+
+
+def methods(kind, model, method, min_overlap, bootstrap):
+    """Scientific description and citations for this run, carried into the Methods text."""
+    name, cited = MODELS[model]
+    text = (f"Pairwise {name} were calculated with basecraft-distance, excluding gaps and ambiguous sites "
+            f"pairwise, with a minimum overlap of {min_overlap}, using packed bit-parallel site counts "
+            "(Elias and Lagergren 2007; Simonsen and Pedersen 2011)")
+    citations = [*cited, *COUNTING]
+    if kind == "tree":
+        tree_text, tree_cited = TREES[method]
+        text += f". The tree was inferred by {tree_text}"
+        citations += tree_cited
+        if bootstrap:
+            text += f", with {bootstrap} ordinary site bootstrap replicates (Felsenstein 1985)"
+            citations.append(BOOTSTRAP)
+    return {"description": text, "citations": citations}
+
+
+def cache_identity(path):
+    """Producer evidence from a compact cache's header, or from an older JSON cache."""
+    with Path(path).open("rb") as stream:
+        magic = stream.read(len(CACHE_MAGIC))
+        if magic == CACHE_MAGIC:
+            return json.loads(stream.readline()).get("basecraft_identity")
+        return json.loads(magic + stream.read()).get("basecraft_identity")
+
+
 def invoke(kind, params):
     target = Path(params["output"]).resolve()
     source = Path(params["input"]).resolve()
@@ -79,7 +126,7 @@ def invoke(kind, params):
     if bootstrap and method not in ("sorted", "upgma"):
         raise ValueError("Bootstrap supports only sorted NJ and UPGMA")
     collection = collection_path(params) if bootstrap else None
-    cache = Path(params.get("cache", str(target) + ".distances.json")).resolve()
+    cache = Path(params.get("cache", str(target) + ".distances.bin")).resolve()
     producer = Path(executable(params)).resolve()
     def digest(path):
         with Path(path).open("rb") as stream:
@@ -89,8 +136,7 @@ def invoke(kind, params):
     supplied_cache = params.get("cache_input")
     if supplied_cache:
         supplied = Path(supplied_cache)
-        saved = json.loads(supplied.read_text())
-        if saved.get("basecraft_identity") != identity:
+        if cache_identity(supplied) != identity:
             raise ValueError("Distance cache input/model/effective parameters/producer do not match; calculate a fresh cache")
         if cache.exists():
             raise ValueError("Allocated distance cache already exists")
@@ -105,7 +151,7 @@ def invoke(kind, params):
             raise ValueError("Bootstrap collection paths must differ from all inputs and other outputs")
     with tempfile.TemporaryDirectory(prefix="basecraft-distance-") as work:
         staged = Path(work) / "result"
-        args = [executable(params), "--cache", str(cache), "--model", model,
+        args = [executable(params), "--cache", str(cache), "--cache-identity", json.dumps(identity), "--model", model,
                 "--method", method, "--min-overlap", str(params.get("min_overlap", 1))]
         if kind == "groups":
             # input is the alignment; assignments are separate and the cache is reusable.
@@ -164,9 +210,6 @@ def invoke(kind, params):
                     diagnostic += f"; primary scratch cleanup failed at {partial}: {cleanup_error}"
             raise recovery_error(diagnostic, metadata, report, retained) from error
     try:
-        saved = json.loads(cache.read_text())
-        saved["basecraft_identity"] = identity
-        write_atomic(cache, json.dumps(saved, indent=2) + "\n")
         write_atomic(report, json.dumps(metadata, indent=2) + "\n")
     except OSError as error:
         raise recovery_error(f"Run report publication failed: {error}", metadata, report, retained, save_report=False) from error
@@ -186,7 +229,10 @@ def invoke(kind, params):
             message += f"; {bootstrap_report['completed']} bootstrap replicates (seed {bootstrap_report['seed']})"
         message += f"; bootstrap trees: {retained[0]}"
     return {"ops": [], "message": message, "outputs": [str(target), str(cache), str(report), *extra_trees, *retained],
-            "tool": {"name": "basecraft-distance", "version": metadata["version"]}}
+            "tool": {"name": "basecraft-distance", "version": metadata["version"]},
+            "execution": {"argv": args, "resolved_parameters": {"model": model, "method": method, "min_overlap": params.get("min_overlap", 1), "bootstrap": bootstrap},
+                          "preprocessing": ["Gaps and ambiguous sites excluded pairwise"], "environment": {},
+                          "methods_template": f"basecraft.distance.{kind}.v1", "methods": methods(kind, model, method, params.get("min_overlap", 1), bootstrap)}}
 
 
 @plugin.operation("tree")

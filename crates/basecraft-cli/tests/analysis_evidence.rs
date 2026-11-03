@@ -211,7 +211,7 @@ fn distance_matrix_keeps_only_the_table_visible() {
     assert_eq!(outcome["state"], "completed", "{outcome}");
     let output = root.join("matrix.tsv");
     // The distance cache and run report stay with the run's retained results.
-    for member in ["distances.tsv.distances.json", "distances.tsv.run.json"] {
+    for member in ["distances.tsv.distances.bin", "distances.tsv.run.json"] {
         assert!(
             outcome["artifacts"]
                 .as_array()
