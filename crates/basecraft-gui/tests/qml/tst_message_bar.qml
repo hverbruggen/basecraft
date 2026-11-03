@@ -91,15 +91,20 @@ Item {
         function test_long_error_stays_one_line() {
             const bar = createTemporaryObject(factory, parent, {message: "ASAP engine is not installed", kind: "error"})
             verify(bar)
-            wait(0)
+            compare(findChild(bar, "messageDetails").visible, false, "No details without fuller text")
+            // Compare messages with the same controls: showing Details may
+            // legitimately increase the height to fit the button.
+            bar.details = "Short diagnostic details"
+            verify(waitForRendering(bar))
+            verify(waitForPolish(bar))
             const oneLine = bar.implicitHeight
             verify(oneLine > 0)
-            compare(findChild(bar, "messageDetails").visible, false, "No details without fuller text")
             let traceback = "Traceback (most recent call last):"
             for (let i = 0; i < 50; i++) traceback += "\n  File \"worker.py\", line " + i + ", in <module>"
             bar.message = traceback
             bar.details = traceback
-            wait(0)
+            verify(waitForRendering(bar))
+            verify(waitForPolish(bar))
             compare(bar.implicitHeight, oneLine, "A 50-line error must not grow the bar")
             compare(findChild(bar, "messageText").lineCount, 1)
             const button = findChild(bar, "messageDetails")
