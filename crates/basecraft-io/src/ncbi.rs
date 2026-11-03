@@ -131,6 +131,15 @@ fn compact_initials(part: &str) -> bool {
     part.chars().count() > 1 && part.chars().all(|c| c.is_alphabetic() && c.is_uppercase())
 }
 
+fn dotted_initials(initials: impl Iterator<Item = char>) -> String {
+    let mut out = String::new();
+    for initial in initials {
+        out.push(initial);
+        out.push('.');
+    }
+    out
+}
+
 /// Each spelled-out word contributes one initial. Periods separate abbreviated
 /// initials; hyphenated given-name components retain their hyphen.
 fn name_initials(name: &str, preserve_compact: bool) -> String {
@@ -141,10 +150,7 @@ fn name_initials(name: &str, preserve_compact: bool) -> String {
                     part.split('.')
                         .map(|component| {
                             if preserve_compact && compact_initials(component) {
-                                component
-                                    .chars()
-                                    .map(|c| format!("{c}."))
-                                    .collect::<String>()
+                                dotted_initials(component.chars())
                             } else {
                                 component
                                     .chars()
@@ -261,12 +267,7 @@ pub fn write_sbt_details(
 ) -> io::Result<()> {
     let person = Person {
         first: contact.first.clone(),
-        middle: contact
-            .middle
-            .chars()
-            .filter(|c| c.is_alphabetic())
-            .map(|c| format!("{c}."))
-            .collect(),
+        middle: dotted_initials(contact.middle.chars().filter(|c| c.is_alphabetic())),
         last: contact.last.clone(),
     };
     writeln!(w, "Submit-block ::= {{")?;
