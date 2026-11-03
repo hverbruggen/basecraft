@@ -132,7 +132,8 @@ def main():
         help="Run the ribbon/dialog screenshot batch (requested checks and release preparation)",
     )
     parser.add_argument(
-        "--root", type=Path, default=Path.home() / ".cache/basecraft/builds"
+        "--root", type=Path,
+        default=Path(os.environ.get("BASECRAFT_BUILD_ROOT", Path.home() / ".cache/basecraft/builds")),
     )
     args = parser.parse_args()
     if not 1 <= args.jobs <= 24:
