@@ -119,20 +119,29 @@ fn plugin_command_runs_registered_sequence_operations() {
     let mut records = Vec::new();
     input_records(temp.path(), &mut records);
     let mut transformations = Vec::new();
+    let mut saw_proposal_target = false;
+    let mut saw_retained_snapshot = false;
     for run in &records {
         let input = basecraft_ops::input_evidence::read_input(run)
             .unwrap_or_else(|error| panic!("{}: {error}", run.display()));
         if let (Some(source), "identity-v1") = (&input.source, input.transformation.as_str()) {
             assert_eq!(input.submitted_hash, source.hash, "{}", run.display());
-            // Sequence runs mark the file they edit; nothing else does here.
-            assert_eq!(
-                input
-                    .extra
-                    .get(basecraft_ops::input_evidence::PROPOSAL_TARGET),
-                Some(&Value::Bool(true)),
-                "{}",
-                run.display()
-            );
+            let path = run.join(&source.path).canonicalize().unwrap();
+            assert_eq!(basecraft_io::hash_file(&path).unwrap(), source.hash);
+            let target = input
+                .extra
+                .get(basecraft_ops::input_evidence::PROPOSAL_TARGET);
+            if path == sequence.canonicalize().unwrap() {
+                // The editable source is exempt from guarding its own save.
+                assert_eq!(target, Some(&Value::Bool(true)), "{}", run.display());
+                saw_proposal_target = true;
+            } else {
+                // Explicit contribution ancestry refers to the immutable
+                // submitted snapshot, not another editable proposal target.
+                assert_eq!(path.file_name().unwrap(), "snapshot.arrow-pair");
+                assert_eq!(target, None, "{}", run.display());
+                saw_retained_snapshot = true;
+            }
         }
         transformations.push((input.state, input.transformation));
     }
@@ -144,6 +153,7 @@ fn plugin_command_runs_registered_sequence_operations() {
         transformations.contains(&("generated".into(), "sequence-arrow-buffers-v1".into())),
         "{transformations:?}"
     );
+    assert!(saw_proposal_target && saw_retained_snapshot);
     let rejected = call(&["bogus=1"]);
     assert!(!rejected.status.success());
     let outcome: Value = serde_json::from_slice(&rejected.stdout).unwrap();
