@@ -24,13 +24,13 @@ builds find it in this repository; packaged builds use `BASECRAFT_PLUGINS`.
 ```sh
 # Calculate once; save observed distances, an optional TSV matrix and an NJ tree.
 basecraft-distance --input genes.aln.fasta --model jc69 \
-  --cache genes.distances.json --matrix genes.tsv --tree genes.nwk
+  --cache genes.distances.bin --matrix genes.tsv --tree genes.nwk
 
 # Reuse the observed cache with a different tree method.
-basecraft-distance --cache genes.distances.json --tree genes.nwk --method njstar
+basecraft-distance --cache genes.distances.bin --tree genes.nwk --method njstar
 
 # Group assignments are a JSON object, e.g. {"sample1":"speciesA","sample2":"speciesA"}.
-basecraft-distance --cache genes.distances.json \
+basecraft-distance --cache genes.distances.bin \
   --groups assignments.json --summary groups.summary.json
 ```
 
@@ -38,8 +38,9 @@ All outputs are optional; choose at least one. `--cache` alone calculates distan
 without constructing a tree. With `--input`, an existing cache is reused only when
 normalized alignment content, names, model and minimum overlap match; otherwise it
 is replaced. Without `--input`, the cache's model and overlap settings are used.
-Cache JSON writes are atomic. Matrix export uses `NA`; JSON uses `null` for missing
-estimates. FASTA identifiers are the first header word and must be unique.
+Cache writes are atomic. A cache is compact binary unless its path ends in `.json`,
+which writes the older readable JSON form; both load. Matrix export uses `NA` for missing
+estimates, JSON uses `null`. FASTA identifiers are the first header word and must be unique.
 
 `--threads` controls distance calculation (default available CPUs capped at 16).
 `--tree-threads` defaults to at most four. `--min-overlap` defaults to 1; choose a
@@ -49,9 +50,11 @@ are missing, never zero. Protein correction models are not implemented.
 
 ## Trees and missing data
 
-- `sorted`: optimized exact sorted-row NJ, with an exhaustive fallback when pruning
-  is poor. Default; requires complete distances within each connected component.
-- `fourpoint`: experimental four-point completion followed by sorted-row NJ; errors
+- `sorted`: exact NJ, the default. It requires complete distances within each connected
+  component. The search now uses cached row bounds rather than sorted rows, and always
+  chooses the same joins as an exhaustive search, ties included. The name stays so saved
+  settings and history keep their meaning.
+- `fourpoint`: experimental four-point completion followed by exact NJ; errors
   if completion cannot fill a connected component.
 - `njstar`, `mvrstar`: experimental direct incomplete-distance methods. NJ* dispatches
   to the optimized search when the component is already complete. MVR* uses
@@ -63,6 +66,66 @@ Negative NJ limbs are retained. NJ is unrooted; UPGMA is rooted and
 ultrametric. Support estimation is opt-in. These are independent implementations; the incomplete-data
 variants and their accuracy limits are described in
 [the research report](../../methods_research/parallel_nj/ROUND2.md).
+
+## Where the methods come from
+
+Basecraft's distance engine combines ideas published and implemented by others. All code
+here was written for Basecraft; no source was copied from these programs. Where a run
+uses one of the methods below, its citations appear in the generated Methods text.
+
+**Distance matrix**
+
+- Bit-parallel site counting comes from Elias & Lagergren (2007), who showed that counting
+  mutational events by word operations removes the distance bottleneck, and from
+  Simonsen & Pedersen (2011), who developed vectorized estimators for RapidNJ.
+- Comparing sequences with a mask of usable sites, in parallel, follows the approach in
+  DecentTree (Wang et al. 2023). The model tables in FastME 2.0 (Lefort et al. 2015) and
+  fastphylo (Khan et al. 2013) were the references for working implementations.
+- Corrections use Jukes & Cantor (1969) and Kimura (1980).
+- Basecraft's own parts are the three bit planes that give p, JC69 and K2P from one count,
+  the short runs of partner rows that keep comparisons in cache, and run-time kernel
+  choice. It doesn't implement the ambiguity estimator of Elias & Lagergren: ambiguous
+  sites are excluded pairwise.
+
+**Tree inference**
+
+- Neighbor joining is Saitou & Nei (1987), in the form given by Studier & Keppler (1988).
+- Caching each row's smallest Q and rescanning only rows that could hold the next minimum
+  is dynamic neighbor joining, by Clausen (2023), implemented in CCPhylo. This idea
+  accounts for most of the speed on real alignments. Keeping one triangular matrix follows
+  the same paper.
+- Earlier versions of this engine used the sorted-row bound of RapidNJ (Simonsen et al.
+  2008, 2011). Reading that work is what led to the row bound below, and RapidNJ and
+  DecentTree remain the main comparators.
+- The guard is Basecraft's own addition. Clausen's exactness argument uses the triangle
+  inequality, which corrected and pairwise-deleted distances can break. Tracking how far a
+  join can lower each row's Q keeps the bound valid for any finite matrix, so results stay
+  exact. It first appeared in the October 2026 prototypes, not in a published method, and
+  it should be cited as this software until it has a publication of its own.
+- Missing distances use NJ* and MVR* (Criscuolo & Gascuel 2008), or four-point completion
+  (Landry et al. 1996; Makarenkov & Lapointe 2004). UPGMA is Sokal & Michener (1958), with
+  the nearest-neighbor chain surveyed by Murtagh (1983). Bootstrap is Felsenstein (1985).
+
+**References**
+
+- Clausen PTLC. 2023. Scaling neighbor joining to one million taxa with dynamic and heuristic neighbor joining. Bioinformatics 39:btac774. https://doi.org/10.1093/bioinformatics/btac774
+- Criscuolo A, Gascuel O. 2008. Fast NJ-like algorithms to deal with incomplete distance matrices. BMC Bioinformatics 9:166. https://doi.org/10.1186/1471-2105-9-166
+- Elias I, Lagergren J. 2007. Fast computation of distance estimators. BMC Bioinformatics 8:89. https://doi.org/10.1186/1471-2105-8-89
+- Felsenstein J. 1985. Confidence limits on phylogenies: an approach using the bootstrap. Evolution 39:783-791.
+- Jukes TH, Cantor CR. 1969. Evolution of protein molecules. In: Munro HN, editor. Mammalian Protein Metabolism. New York: Academic Press. p 21-132.
+- Khan MA, Elias I, Sjölund E, et al. 2013. Fastphylo: fast tools for phylogenetics. BMC Bioinformatics 14:334. https://doi.org/10.1186/1471-2105-14-334
+- Kimura M. 1980. A simple method for estimating evolutionary rates of base substitutions through comparative studies of nucleotide sequences. J Mol Evol 16:111-120.
+- Landry PA, Lapointe FJ, Kirsch JAW. 1996. Estimating phylogenies from lacunose distance matrices: additive is superior to ultrametric estimation. Mol Biol Evol 13:818-823. https://doi.org/10.1093/oxfordjournals.molbev.a025642
+- Lefort V, Desper R, Gascuel O. 2015. FastME 2.0: a comprehensive, accurate, and fast distance-based phylogeny inference program. Mol Biol Evol 32:2798-2800. https://doi.org/10.1093/molbev/msv150
+- Makarenkov V, Lapointe FJ. 2004. A weighted least-squares approach for inferring phylogenies from incomplete distance matrices. Bioinformatics 20:2113-2121. https://doi.org/10.1093/bioinformatics/bth211
+- Murtagh F. 1983. A survey of recent advances in hierarchical clustering algorithms. Comput J 26:354-359. https://doi.org/10.1093/comjnl/26.4.354
+- Saitou N, Nei M. 1987. The neighbor-joining method: a new method for reconstructing phylogenetic trees. Mol Biol Evol 4:406-425. https://doi.org/10.1093/oxfordjournals.molbev.a040454
+- Simonsen M, Mailund T, Pedersen CNS. 2008. Rapid neighbour-joining. In: Algorithms in Bioinformatics, LNCS 5251:113-122. https://doi.org/10.1007/978-3-540-87361-7_10
+- Simonsen M, Mailund T, Pedersen CNS. 2011. Inference of large phylogenies using neighbour-joining. In: Biomedical Engineering Systems and Technologies, CCIS 127:334-344. https://doi.org/10.1007/978-3-642-18472-7_26
+- Simonsen M, Pedersen CNS. 2011. Rapid computation of distance estimators from nucleotide and amino acid alignments. Proc ACM Symposium on Applied Computing, 89-93. https://doi.org/10.1145/1982185.1982208
+- Sokal RR, Michener CD. 1958. A statistical method for evaluating systematic relationships. Univ Kansas Sci Bull 38:1409-1438.
+- Studier JA, Keppler KJ. 1988. A note on the neighbor-joining algorithm of Saitou and Nei. Mol Biol Evol 5:729-731. https://doi.org/10.1093/oxfordjournals.molbev.a040527
+- Wang W, Barbetti J, Wong T, et al. 2023. DecentTree: scalable Neighbour-Joining for the genomic era. Bioinformatics 39:btad536. https://doi.org/10.1093/bioinformatics/btad536
 
 ## Grouping statistics
 
@@ -85,7 +148,7 @@ run metadata are saved beside the alignment; forest components open separately.
 basecraft distance genes.aln.fasta --output genes.nwk --model jc69
 basecraft distance genes.aln.fasta --output genes.tsv --model jc69 --matrix
 basecraft distance genes.aln.fasta --output groups.summary.json \
-  --cache genes.nwk.distances.json --model jc69 --groups assignments.json
+  --cache genes.nwk.distances.bin --model jc69 --groups assignments.json
 ```
 
 The Basecraft command and GUI record the existing typed `tool.run` operation,
@@ -97,8 +160,8 @@ GUI for editing group assignments remain separate taxonomy-workflow features.
 The library exposes `Alignment`, `DistanceMatrix::calculate`, cache read/write,
 `export_tsv`, `tree`, `groups`, and `bootstrap`. It has no Qt dependency.
 Bootstrap cancellation is available through a public cancellation-file parameter
-and the GUI Cancel bootstrap button, checked between replicates. Cache JSON prioritizes interoperability over large-scale storage
-compression and can be much larger/slower to write than a tree alone.
+and the GUI Cancel bootstrap button, checked between replicates. JSON caches favour
+inspection over size, so the plugin writes compact ones.
 
 ## Verification
 
@@ -109,8 +172,9 @@ BASECRAFT_DISTANCE_TEST_BINARY=/absolute/path/to/basecraft-distance \
   cargo test -p basecraft-plugin-host --test distance_plugin
 ```
 
-Tests cover model formulas and saturation, scalar/packed agreement, thread
-reproducibility, exhaustive NJ objective checks, cache invalidation, missing-value
+Tests cover model formulas and saturation, scalar/packed agreement, every available CPU
+kernel, thread reproducibility, byte-for-byte agreement with a separate exhaustive NJ on
+metric, non-metric and tied matrices, cache invalidation and damage, missing-value
 round trips, grouping changes, plugin provenance and operation-log replay.
 
 ## UPGMA

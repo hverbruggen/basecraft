@@ -1,8 +1,9 @@
 //! Exact NJ search with cached row bounds, on one triangular matrix.
 //!
-//! Dynamic NJ (Clausen 2023) caches each row's smallest Q and rescans only rows that
-//! could hold the next minimum. Its proof needs the triangle inequality, which corrected
-//! and pairwise-deleted distances can break. After joining x and y, with
+//! Dynamic NJ (Clausen 2023, Bioinformatics 39:btac774) caches each row's smallest Q and
+//! rescans only rows that could hold the next minimum. Its proof needs the triangle
+//! inequality, which corrected and pairwise-deleted distances can break. This guard is our
+//! addition, and README.md lists every source. After joining x and y, with
 //! a_i = (D_ix + D_iy) / 2, every surviving pair changes by exactly
 //!     Q'_ij - Q_ij = a_i + a_j + D_xy - D_ij
 //! so for any finite matrix row r's old pairs change by at least

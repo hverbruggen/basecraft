@@ -1,4 +1,4 @@
-//! Reusable DNA distances and exact sorted-row neighbor joining.
+//! Reusable DNA distances and exact neighbor joining. README.md credits the methods used.
 //! Missing estimates are retained separately from inferred tree distances.
 // Counts and matrix indices fit exactly at practical in-memory dataset sizes.
 // Mathematical subscripts follow the published NJ formulas.
@@ -137,6 +137,7 @@ impl Packed {
 }
 /// Writes every pair of a triangular matrix from pair counts. Row blocks run as tasks and
 /// visit partner rows in short runs, which keeps both sides of each comparison in cache.
+/// Bit-parallel counting follows Elias & Lagergren (2007) and Simonsen & Pedersen (2011).
 fn fill_pairs(
     packed: &[Packed],
     model: Model,
