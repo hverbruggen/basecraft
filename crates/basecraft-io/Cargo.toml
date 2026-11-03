@@ -10,7 +10,7 @@ license.workspace = true
 
 [dependencies]
 # Spreadsheet parsing and ZIP template/container handling.
-calamine = { version = "0.37", features = ["chrono"] }
+calamine = { version = "0.38", features = ["chrono"] }
 zip = { version = "9.1", default-features = false, features = ["deflate"] }
 # Only used to preflight ODS expansion before calamine allocates its ranges.
 roxmltree = { path = "../../vendor/roxmltree" }
