@@ -777,11 +777,7 @@ fn genbank_files(
         citation
             .authors
             .iter()
-            .map(|a| ncbi::Person {
-                first: a.first.clone(),
-                middle: a.middle.clone(),
-                last: a.last.clone(),
-            })
+            .map(ncbi::Person::from)
             .collect::<Vec<_>>()
     };
     let mut sbt = Vec::new();

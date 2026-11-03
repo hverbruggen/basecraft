@@ -1124,3 +1124,64 @@ fn published_legacy_submission_histories_keep_exact_save_hashes() {
     assert_eq!((report.sessions, report.entries), (2, 6));
     assert!(report.ok(), "{:#?}", report.problems);
 }
+
+#[test]
+fn parsed_full_middle_names_and_initials_reach_distinct_export_citations() {
+    let root = tempfile::tempdir().unwrap();
+    project(root.path());
+    let mut session = Session::new(root.path());
+    let doc = submission::create(
+        &mut session,
+        Path::new("names.submission.json"),
+        Path::new("18S.afa"),
+    )
+    .unwrap();
+    let submission_authors = basecraft_docs::submission::parse_authors(
+        "van der Meer, Anne Marie\nO'Neill-Smith, J. R.\nde la Cruz, Jean-Pierre Marie-Claire",
+    )
+    .unwrap();
+    let publication_authors =
+        basecraft_docs::submission::parse_authors("Smith-Jones, A. M.R.\nLegacy, A. MR").unwrap();
+    submission::edit(
+        &mut session,
+        doc,
+        SubmissionEdit::SetDetails {
+            submission: Publication {
+                title: "Sequence study".into(),
+                authors: submission_authors.clone(),
+            },
+            publication: Publication {
+                title: "Paper study".into(),
+                authors: publication_authors,
+            },
+            publication_differs: true,
+        },
+    )
+    .unwrap();
+    session.save(doc, None).unwrap();
+    let stored = submission::load(&root.path().join("names.submission.json")).unwrap();
+    assert_eq!(stored.submission_citation().authors, submission_authors);
+    assert_eq!(stored.submission_citation().authors[0].middle, "Marie");
+    confirm_selection(&mut session, doc);
+    let package = root.path().join("package");
+    submission::export(&mut session, doc, &package, &submitter()).unwrap();
+    let text = std::fs::read_to_string(package.join("genbank/submission.sbt")).unwrap();
+    let (direct, paper) = text.split_once("Seqdesc ::=").unwrap();
+    for expected in [
+        "last \"van der Meer\"",
+        "middle \"Marie\"",
+        "initials \"A.M.\"",
+        "last \"O'Neill-Smith\"",
+        "initials \"J.R.\"",
+        "middle \"Marie-Claire\"",
+        "initials \"J.-P.M.-C.\"",
+    ] {
+        assert!(direct.contains(expected), "Missing {expected} in {direct}");
+    }
+    assert!(paper.contains("last \"Smith-Jones\""));
+    assert!(paper.contains("initials \"A.M.R.\""));
+    assert!(!paper.contains("middle "));
+    assert!(!text.contains("A.M.a.r.i.e."));
+    let replayed = replay::replay(root.path()).unwrap();
+    assert!(replayed.ok(), "{:?}", replayed.problems);
+}

@@ -952,7 +952,7 @@ AppDialog {
                         text: "Submission authors"
                     }
                     Label {
-                        text: "One author per line: Surname, Given Middle. Example: van der Meer, Anne M.\nNames are checked for format, not identity. Spelling and order are retained."
+                        text: "One author per line: Surname, Given Middle. Example: van der Meer, Anne M.\nNames are checked for format, not identity. Initials may use periods (M.R.); bare uppercase middle runs (MR) retain their legacy initials meaning. Full middle names such as Marie and hyphens are retained."
                         wrapMode: Text.Wrap
                         Layout.fillWidth: true
                     }
@@ -1007,7 +1007,7 @@ AppDialog {
                         objectName: "authorsPreview"
                         readonly property var submissionParsed: dialog.parseAuthors(authors.text)
                         readonly property var publicationParsed: dialog.parseAuthors(publicationDiffers.checked ? publicationAuthors.text : authors.text)
-                        text: submissionParsed.error || publicationParsed.error || "Export preview — submission: " + JSON.stringify(submissionParsed.authors) + "\nPublication: " + JSON.stringify(publicationParsed.authors) + "\nPublication title: " + (publicationDiffers.checked ? pubTitle.text : submissionTitle.text)
+                        text: submissionParsed.error || publicationParsed.error || "Export preview — submission: " + JSON.stringify(submissionParsed.export || []) + "\nPublication: " + JSON.stringify(publicationParsed.export || []) + "\nPublication title: " + (publicationDiffers.checked ? pubTitle.text : submissionTitle.text)
                         wrapMode: Text.Wrap
                         Layout.fillWidth: true
                     }
