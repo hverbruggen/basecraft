@@ -39,3 +39,21 @@ class RegisteredCacheIdentity(unittest.TestCase):
             self.assertEqual(cache.read_bytes(), saved)
             self.assertFalse((root / "changed.tsv").exists())
             self.assertFalse((root / "other.tsv").exists())
+
+
+class MethodsTextTest(unittest.TestCase):
+    def test_each_method_cites_its_sources(self):
+        tree = distance_plugin.methods("tree", "jc69", "sorted", 1, 0)
+        cited = "\n".join(tree["citations"])
+        for author in ("Saitou", "Studier", "Clausen", "Jukes", "Elias", "Simonsen"):
+            self.assertIn(author, cited)
+        self.assertIn("Clausen 2023", tree["description"])
+        star = distance_plugin.methods("tree", "k2p", "njstar", 2, 0)
+        self.assertIn("Criscuolo", "\n".join(star["citations"]))
+        self.assertIn("Kimura", "\n".join(star["citations"]))
+        boot = distance_plugin.methods("tree", "p", "sorted", 1, 100)
+        self.assertIn("Felsenstein", "\n".join(boot["citations"]))
+        matrix = distance_plugin.methods("matrix", "p", "njstar", 1, 0)
+        self.assertNotIn("Saitou", "\n".join(matrix["citations"]))
+        self.assertIn("Elias", "\n".join(matrix["citations"]))
+
