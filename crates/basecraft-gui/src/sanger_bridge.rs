@@ -774,7 +774,11 @@ impl qobject::SangerController {
         self.submit_stage(work::Request::Orient(PathBuf::from(alignment.to_string())))
     }
 
-    pub fn single_review(self: std::pin::Pin<&mut Self>, signal_threshold: i32) -> bool {
+    pub fn single_review(mut self: std::pin::Pin<&mut Self>, signal_threshold: i32) -> bool {
+        if self.rust().stage.is_some() {
+            return false;
+        }
+        self.as_mut().rust_mut().pending_calls = false;
         if !(1..=90).contains(&signal_threshold) {
             self.call_error("Signal cutoff must be between 1 and 90");
             return false;
@@ -1030,6 +1034,9 @@ impl qobject::SangerController {
         paths_json: &QString,
         signal_threshold: i32,
     ) -> bool {
+        // Invalid paired requests also supersede queued automatic calling, so
+        // a later timer cannot replace their failure with single-read success.
+        self.as_mut().rust_mut().pending_calls = false;
         // A selected pair supersedes automatic single-read calling. Detaching
         // its receiver prevents a late single completion masking pair failure.
         if self
