@@ -1190,10 +1190,9 @@ fn retained_inputs_survive_job_drop_and_temporary_source_removal() {
     let issues = basecraft_ops::provenance::verify(&temp.path().join("report.json")).unwrap();
     assert!(issues.is_empty(), "{issues:?}");
     std::fs::write(&inputs[0], b"damaged").unwrap();
-    assert!(
-        !basecraft_ops::provenance::verify(&temp.path().join("report.json"))
-            .unwrap()
-            .is_empty()
+    assert_ne!(
+        basecraft_ops::provenance::verify(&temp.path().join("report.json")).unwrap(),
+        Vec::<String>::new()
     );
 }
 

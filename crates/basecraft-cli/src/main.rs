@@ -122,7 +122,7 @@ enum Command {
     },
     /// Run a plugin's sequence operation on a file and apply what it proposes.
     /// Schema-2 packages must be installed or registered and run through the
-    /// registered operation; schema-1 directories keep the legacy direct call.
+    /// registered operation. Schema-1 packages are refused until migrated.
     Plugin {
         /// Plugin directory, with a plugin.toml.
         plugin: PathBuf,
