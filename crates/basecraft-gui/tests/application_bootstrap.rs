@@ -241,6 +241,19 @@ fn main() {
             const decision = sanger.review_decision;
             const masks = sanger.mask_settings;
             const file = sanger.file_path;
+            const navigationRevision = sanger.record_revision();
+            const originalColumn = sanger.selected_column;
+            check(sanger.go_to_column(false, "2"), "Draft navigation failed");
+            check(sanger.selected_column === 2, "Draft navigation selected wrong column");
+            check(sanger.review_details.indexOf("Draft consensus column 2") >= 0, "Selected evidence did not refresh");
+            check(!sanger.go_to_column(true, "1"), "Missing reference navigation must fail");
+            check(!sanger.go_to_column(false, "0"), "Invalid coordinate must fail");
+            check(!sanger.go_to_column(false, "999999999"), "Outside coordinate must fail");
+            check(sanger.selected_column === 2, "Failed navigation changed selection");
+            check(sanger.go_to_column(false, String(originalColumn)), "Restore selection failed");
+            check(sanger.record_revision() === navigationRevision, "Navigation changed review revision");
+            check(sanger.mask_settings === masks && sanger.dirty, "Navigation changed masks or dirty state");
+            check(sanger.review_decision === decision, "Navigation changed review decision");
             // A queued first-read caller must not run after a failed pair.
             check(sanger.open_file(file), "Reopen for queued calling failed");
             check(sanger.calling, "Reopen should queue calls");
