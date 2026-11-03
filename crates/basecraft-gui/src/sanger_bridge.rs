@@ -41,6 +41,7 @@ pub mod qobject {
         #[qproperty(QString, review_sequence)]
         #[qproperty(QString, review_decision)]
         #[qproperty(QString, alignment_context)]
+        #[qproperty(QString, review_details)]
         #[qproperty(QString, mask_settings)]
         #[qproperty(i32, selected_column)]
         #[qproperty(i32, consensus_columns)]
@@ -157,6 +158,12 @@ pub mod qobject {
         #[qinvokable]
         fn next_issue(self: Pin<&mut SangerController>, forward: bool);
         #[qinvokable]
+        fn go_to_column(
+            self: Pin<&mut SangerController>,
+            reference: bool,
+            column: &QString,
+        ) -> bool;
+        #[qinvokable]
         fn hscroll_to(self: Pin<&mut SangerController>, fraction: f64);
         #[qinvokable]
         fn check_theme(self: Pin<&mut SangerController>);
@@ -248,6 +255,7 @@ pub struct SangerRust {
     review_sequence: QString,
     review_decision: QString,
     alignment_context: QString,
+    review_details: QString,
     mask_settings: QString,
     selected_column: i32,
     consensus_columns: i32,
@@ -300,6 +308,7 @@ impl Default for SangerRust {
             review_sequence: QString::default(),
             review_decision: QString::default(),
             alignment_context: QString::default(),
+            review_details: QString::default(),
             mask_settings: QString::from("{}"),
             selected_column: 1,
             consensus_columns: 1,
@@ -635,11 +644,7 @@ impl qobject::SangerController {
                 });
                 (
                     r.scratch.to_bytes(),
-                    format!(
-                        "{unresolved} unresolved · {} masked · {} reads",
-                        review.masked.iter().filter(|&&m| m).count(),
-                        review.lanes.len()
-                    ),
+                    review.review_counts(),
                     zoom,
                     true,
                     String::from_utf8_lossy(&review.consensus).into_owned(),
@@ -770,6 +775,12 @@ impl qobject::SangerController {
         self.as_mut().set_review_decision(QString::from(&decision));
         self.as_mut().set_unresolved(unresolved);
         self.as_mut().set_alignment_context(QString::from(&context));
+        let details = self
+            .rust()
+            .review
+            .as_ref()
+            .map_or_else(String::new, SangerReviewView::selected_text);
+        self.as_mut().set_review_details(QString::from(details));
         let (sets, selected) = self.rust().review_session.as_ref().map_or_else(
             || (serde_json::json!([]), String::new()), |session| {
                 (serde_json::json!(session.call_sets().iter().enumerate().map(|(i, (id, engine))|
@@ -1514,6 +1525,35 @@ impl qobject::SangerController {
 
     pub fn place_alignment(self: std::pin::Pin<&mut Self>, path: &QString) -> bool {
         self.submit_stage(work::Request::Place(PathBuf::from(path.to_string())))
+    }
+
+    pub fn go_to_column(
+        mut self: std::pin::Pin<&mut Self>,
+        reference: bool,
+        column: &QString,
+    ) -> bool {
+        if self.rust().busy {
+            return false;
+        }
+        let result = self
+            .as_mut()
+            .rust_mut()
+            .review
+            .as_mut()
+            .ok_or_else(|| "No draft review is open".to_string())
+            .and_then(|review| review.go_to_column(reference, &column.to_string()));
+        match result {
+            Ok(()) => {
+                self.as_mut().set_message(QString::default());
+                self.refresh();
+                true
+            }
+            Err(error) => {
+                self.as_mut().set_message_kind(QString::from("fail"));
+                self.as_mut().set_message(QString::from(error));
+                false
+            }
+        }
     }
 
     pub fn next_issue(mut self: std::pin::Pin<&mut Self>, forward: bool) {

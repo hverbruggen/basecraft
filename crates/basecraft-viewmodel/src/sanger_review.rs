@@ -370,6 +370,53 @@ impl SangerReviewView {
             }
         }
     }
+    /// Navigate in an explicitly named, one-based coordinate system. Reference
+    /// columns without draft coverage must not silently select a nearby call.
+    pub fn go_to_column(&mut self, reference: bool, text: &str) -> Result<(), String> {
+        let text = text.trim();
+        let coordinate = text
+            .parse::<usize>()
+            .ok()
+            .filter(|&n| n > 0 && !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit()))
+            .ok_or("Enter a positive whole column number (one-based)")?;
+        let column = if reference {
+            let context = self
+                .alignment
+                .as_ref()
+                .ok_or("No reference alignment is attached")?;
+            if coordinate > context.placement.source_width {
+                return Err("Reference alignment column is outside the alignment".into());
+            }
+            self.columns
+                .iter()
+                .find(|c| c.source == Some(coordinate - 1))
+                .and_then(|c| c.draft)
+                .ok_or("Reference alignment column has no draft consensus coverage")?
+        } else {
+            if coordinate > self.draft.columns.len() {
+                return Err("Draft consensus column is outside the draft".into());
+            }
+            coordinate - 1
+        };
+        self.select_column(column);
+        Ok(())
+    }
+
+    pub fn review_counts(&self) -> String {
+        let masked = self.masked.iter().filter(|&&m| m).count();
+        let unresolved = self
+            .unresolved
+            .iter()
+            .zip(&self.masked)
+            .filter(|(pending, mask)| **pending && !**mask)
+            .count();
+        format!(
+            "{unresolved} unresolved unmasked · {} unmasked columns · {masked} masked · {} reads",
+            self.draft.columns.len() - masked,
+            self.lanes.len()
+        )
+    }
+
     pub fn selected_text(&self) -> String {
         self.site_text(self.draft_display[self.selected])
     }
@@ -383,7 +430,7 @@ impl SangerReviewView {
         let col = self.columns[display];
         let mut parts = Vec::new();
         if let Some(source) = col.source {
-            parts.push(format!("Alignment {}", source + 1));
+            parts.push(format!("Reference alignment column {}", source + 1));
         }
         if let Some(i) = col.draft {
             let state = if self.masked[i] {
@@ -394,7 +441,7 @@ impl SangerReviewView {
                 "resolved"
             };
             parts.push(format!(
-                "Consensus {}: {} · {state}",
+                "Draft consensus column {}: {} · {state}",
                 i + 1,
                 self.consensus[i] as char
             ));
@@ -419,7 +466,7 @@ impl SangerReviewView {
         let col = self.columns[display];
         let mut parts = Vec::new();
         if let Some(source) = col.source {
-            parts.push(format!("Alignment column {}", source + 1));
+            parts.push(format!("Reference alignment column {}", source + 1));
         } else if self.alignment.is_some() {
             let first = self
                 .columns
@@ -442,9 +489,12 @@ impl SangerReviewView {
                 .into(),
             );
         }
+        if self.alignment.is_none() {
+            parts.push("Reference alignment column: unavailable (no alignment attached)".into());
+        }
         if let Some(i) = col.draft {
             parts.push(format!(
-                "Consensus: {}{}",
+                "Draft consensus: {}{}",
                 self.consensus[i] as char,
                 if self.draft.columns[i].conflict {
                     " · reads disagree"
@@ -452,7 +502,7 @@ impl SangerReviewView {
                     ""
                 }
             ));
-            parts.push(format!("Consensus column {}", i + 1));
+            parts.push(format!("Draft consensus column {} (one-based)", i + 1));
             let assessment = self.assessment(i);
             parts.push(format!("Threshold assessment: {}", assessment.reason));
             if let Some(base) = assessment.suggested {
@@ -461,27 +511,75 @@ impl SangerReviewView {
             if self.masked[i] {
                 parts.push("Masked · excluded from consensus exports".into());
             }
+            parts.push("Read calls and signal below are oriented to the draft; native coordinates count from the original read start. Scores and amplitude ratios are not calibrated confidence.".into());
             for (read, lane) in self.lanes.iter().enumerate() {
-                let base = self.draft.columns[i]
+                let input = &self.draft.inputs[read];
+                let support = self.draft.columns[i]
                     .support
                     .iter()
-                    .find(|s| s.read == read + 1)
-                    .map_or("no coverage".into(), |s| s.base.to_string());
-                let score = lane.column_events[i].and_then(|event| {
-                    self.draft.inputs[read]
-                        .calls
-                        .as_ref()
-                        .map(|calls| calls.scores[event])
-                });
-                if let Some(evidence) = self.call_evidence(read, i) {
-                    parts.push(format!("Read {} native Tracy call {} · event signal A:{} C:{} G:{} T:{} · secondary/primary {:.1}% (ambiguous at ≥{}%)",
-                        read + 1, evidence.called as char, evidence.peaks[0], evidence.peaks[1], evidence.peaks[2], evidence.peaks[3], evidence.secondary_percent(), self.review_settings.ambiguity_percent));
-                }
+                    .find(|s| s.read == read + 1);
+                let orientation = if input.orientation == Orientation::Reverse {
+                    "reverse-complemented"
+                } else {
+                    "forward"
+                };
                 parts.push(format!(
-                    "Read {}: {}{}",
+                    "Read {} · {} · {orientation} · aligned call: {}",
                     read + 1,
-                    base,
-                    score.map_or(String::new(), |q| format!(" · Tracy score {q}"))
+                    input.path.display(),
+                    support.map_or("no coverage".into(), |s| s.base.to_string())
+                ));
+                let Some(event) = lane.column_events[i] else {
+                    parts.push(
+                        if support.is_some_and(|s| s.kind == SupportKind::Call) {
+                            "Native read event: unmapped (no unique signal event)"
+                        } else if support.is_some() {
+                            "Native read event: none (alignment gap)"
+                        } else {
+                            "Native read event: none (outside read coverage)"
+                        }
+                        .into(),
+                    );
+                    continue;
+                };
+                let Some(calls) = &input.calls else { continue };
+                let primary = calls.sequence.as_bytes()[event];
+                let secondary = calls
+                    .secondary_sequence
+                    .as_ref()
+                    .map(|seq| seq.as_bytes()[event]);
+                let orient = |base: u8| {
+                    if input.orientation == Orientation::Reverse {
+                        sanger_map::reverse_complement(&[base])[0] as char
+                    } else {
+                        base as char
+                    }
+                };
+                parts.push(format!("Native read base/event {} · signal sample {} (both one-based) · recorded primary {} → {} · secondary {} · Tracy score {}",
+                    event + 1, u64::from(calls.positions[event]) + 1,
+                    primary as char, orient(primary),
+                    secondary.map_or("unavailable".into(), |base| format!("{} → {}", base as char, orient(base))), calls.scores[event]));
+                if let Some(evidence) = self.call_evidence(read, i) {
+                    let ratio = if evidence.peaks.iter().any(|&p| p > 0) {
+                        format!("{:.1}%", evidence.secondary_percent())
+                    } else {
+                        "undefined (zero signal)".into()
+                    };
+                    parts.push(format!("At that event sample, oriented A:{} C:{} G:{} T:{} · second-largest/largest amplitude {ratio} (existing ambiguity threshold {}%). These are simultaneous sample amplitudes, not detected secondary peaks.",
+                        evidence.peaks[0], evidence.peaks[1], evidence.peaks[2], evidence.peaks[3], self.review_settings.ambiguity_percent));
+                }
+            }
+            let mapped: Vec<_> = (0..self.lanes.len())
+                .filter_map(|read| self.call_evidence(read, i))
+                .collect();
+            if mapped.len() == 2 {
+                parts.push(format!("Paired recorded primary calls (oriented): {} / {} · {}. Contribution to the existing gate is explained by the threshold assessment above.",
+                    mapped[0].called as char, mapped[1].called as char,
+                    if mapped[0].called == mapped[1].called { "same symbol" } else { "different symbols" }));
+            } else {
+                parts.push(format!(
+                    "Mapped read events: {} · paired support unavailable at this column",
+                    mapped.len()
                 ));
             }
         }
@@ -580,7 +678,7 @@ impl SangerReviewView {
                 ],
             );
         }
-        Self::bold_label(frame, y, "Trace consensus", theme);
+        Self::bold_label(frame, y, "Draft consensus", theme);
         for display in first..end {
             if let Some(i) = self.columns[display].draft {
                 if self.unresolved[i] {
@@ -607,7 +705,12 @@ impl SangerReviewView {
                 .to_string_lossy();
             let lane_height = lane.height + ROW + 8.0;
             let sequence_y = y + lane.height + 8.0;
-            Self::label(frame, sequence_y, &name, theme);
+            Self::label(
+                frame,
+                sequence_y,
+                &format!("Read {}: {name}", read + 1),
+                theme,
+            );
             for display in first..end {
                 let base = self.columns[display]
                     .draft
@@ -981,11 +1084,107 @@ mod tests {
             .unwrap();
     }
     #[test]
+    fn navigation_uses_named_one_based_columns_and_preserves_selection_on_errors() {
+        let mut view = review(true);
+        assert!(
+            view.go_to_column(true, "1")
+                .unwrap_err()
+                .contains("No reference")
+        );
+        attach(&mut view);
+        view.go_to_column(false, "1").unwrap();
+        for invalid in [
+            "0",
+            "-1",
+            "+1",
+            "1.5",
+            "",
+            "abc",
+            "99999999999999999999999999",
+        ] {
+            assert!(view.go_to_column(false, invalid).is_err());
+            assert_eq!(view.selected, 0);
+        }
+        assert!(
+            view.go_to_column(true, "2")
+                .unwrap_err()
+                .contains("no draft")
+        );
+        assert!(
+            view.go_to_column(true, "5")
+                .unwrap_err()
+                .contains("outside")
+        );
+        assert!(
+            view.go_to_column(false, "3")
+                .unwrap_err()
+                .contains("outside")
+        );
+        assert_eq!(view.selected, 0);
+        view.go_to_column(true, " 4 ").unwrap();
+        assert_eq!(view.selected, 1);
+        assert!(
+            view.selected_text()
+                .contains("Reference alignment column 4")
+        );
+        assert!(
+            view.selected_text()
+                .contains("Draft consensus column 2 (one-based)")
+        );
+    }
+
+    #[test]
+    fn selected_evidence_retains_native_reverse_events_and_recorded_secondary() {
+        let mut view = review(true);
+        view.draft.inputs[1]
+            .calls
+            .as_mut()
+            .unwrap()
+            .secondary_sequence = Some("AT".into());
+        view.select_column(0);
+        let text = view.selected_text();
+        assert!(text.contains("Native read base/event 2 · signal sample 61"));
+        assert!(text.contains("recorded primary T → A · secondary T → A"));
+        assert!(text.contains("oriented A:100 C:0 G:0 T:0"));
+        assert!(text.contains("Paired recorded primary calls (oriented): A / A · same symbol"));
+        assert!(text.contains("secondary unavailable"));
+        assert!(text.contains("not detected secondary peaks"));
+        view.lanes[1].column_events[0] = None;
+        let text = view.selected_text();
+        assert!(text.contains("unmapped (no unique signal event)"));
+        assert!(text.contains("paired support unavailable"));
+        view.draft.columns[0].support.retain(|s| s.read != 2);
+        assert!(view.selected_text().contains("outside read coverage"));
+        view.draft.columns[0]
+            .support
+            .push(basecraft_docs::sanger::ReadSupport {
+                read: 2,
+                base: '-',
+                kind: SupportKind::InternalGap,
+            });
+        assert!(view.selected_text().contains("alignment gap"));
+    }
+
+    #[test]
+    fn counts_separate_unmasked_unresolved_from_masks_without_acceptance_claims() {
+        let mut view = review(false);
+        view.unresolved = vec![true, true];
+        view.masked = vec![true, false];
+        assert_eq!(
+            view.review_counts(),
+            "1 unresolved unmasked · 1 unmasked columns · 1 masked · 2 reads"
+        );
+        view.unresolved[1] = false;
+        assert!(view.review_counts().starts_with("0 unresolved unmasked"));
+        assert!(!view.review_counts().contains("accepted"));
+    }
+
+    #[test]
     fn tracy_events_are_used_even_when_vendor_calls_disagree() {
         let view = review(false);
         assert_eq!(view.lanes[0].column_events, vec![Some(0), Some(1)]);
         assert!(view.selected_text().contains("Tracy score 20"));
-        assert!(!view.selected_text().contains("original"));
+        assert!(view.selected_text().contains("Native read base/event"));
     }
     #[test]
     fn status_summary_tracks_review_masks_and_reference_only_columns() {
@@ -993,8 +1192,8 @@ mod tests {
         attach(&mut view);
         view.unresolved[0] = true;
         let status = view.site_status(0);
-        assert!(status.contains("Alignment 1"));
-        assert!(status.contains("Consensus 1: A · needs review"));
+        assert!(status.contains("Reference alignment column 1"));
+        assert!(status.contains("Draft consensus column 1: A · needs review"));
         assert!(status.contains("R1 A score 30"));
         assert!(!status.contains('\n'));
         assert!(!status.contains("event signal"));
@@ -1003,7 +1202,10 @@ mod tests {
         view.masked[0] = false;
         view.unresolved[0] = false;
         assert!(view.site_status(0).contains("resolved"));
-        assert_eq!(view.site_status(1), "Alignment 2 · No trace coverage");
+        assert_eq!(
+            view.site_status(1),
+            "Reference alignment column 2 · No trace coverage"
+        );
     }
 
     #[test]
@@ -1017,7 +1219,7 @@ mod tests {
         view.select_at(x, 500.0);
         assert_eq!(view.selected, 1);
         assert_eq!(view.display_at(x), Some(3));
-        assert!(view.site_text(3).contains("Alignment column 4"));
+        assert!(view.site_text(3).contains("Reference alignment column 4"));
     }
     #[test]
     fn reverse_trace_peaks_have_the_complementary_color_and_shared_x() {
@@ -1152,7 +1354,7 @@ mod tests {
     fn edits_render_and_vertical_gain_stays_inside_trace_lane() {
         let mut view = review(false);
         view.consensus[0] = b'T';
-        assert!(view.site_text(0).contains("Consensus: T"));
+        assert!(view.site_text(0).contains("Draft consensus: T"));
         let mut frame = Frame::new();
         let theme = Theme::default();
         view.build(&theme, &mut frame);

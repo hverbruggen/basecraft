@@ -30,6 +30,13 @@ FocusScope {
     property bool sourceInitialized: false
     function hoverAt(x, y) { traceMouse.siteText = ctl.hover(x, y) }
     function issue(forward) { ctl.next_issue(forward); viewport.contentY = 0; view.forceActiveFocus() }
+    function goToColumn() {
+        if (working) return
+        if (ctl.go_to_column(coordinateSystem.currentIndex === 0, coordinateInput.text)) {
+            viewport.contentY = 0
+            view.forceActiveFocus()
+        }
+    }
     function accept() { if (ctl.review_set("accept", "")) issue(true) }
     function saveReview() {
         if (working) return
@@ -464,10 +471,81 @@ FocusScope {
         onCancelRequested: doc.cancelWork()
     }
 
+    Pane {
+        id: reviewNavigation
+        objectName: "reviewNavigation"
+        anchors.top: traceActivity.bottom
+        width: parent.width
+        visible: ctl.review_mode
+        height: visible ? navigationContent.implicitHeight + topPadding + bottomPadding : 0
+        ColumnLayout {
+            id: navigationContent
+            width: parent.width
+            spacing: 4
+            RowLayout {
+                Layout.fillWidth: true
+                enabled: !doc.working
+                Label { text: "Go to" }
+                ComboBox {
+                    id: coordinateSystem
+                    objectName: "reviewCoordinateSystem"
+                    model: ["Reference alignment column", "Draft consensus column"]
+                    Accessible.name: "Coordinate system"
+                    implicitWidth: Math.max(implicitContentWidth + leftPadding + rightPadding + indicator.width, 240)
+                }
+                TextField {
+                    id: coordinateInput
+                    objectName: "reviewCoordinateInput"
+                    Layout.preferredWidth: 110
+                    Layout.minimumWidth: 60
+                    placeholderText: "1-based"
+                    Accessible.name: "Column number, one-based"
+                    onAccepted: doc.goToColumn()
+                }
+                AppButton { objectName: "reviewGoTo"; text: "Go"; onClicked: doc.goToColumn() }
+                Item { Layout.fillWidth: true }
+                AppButton {
+                    id: evidenceToggle
+                    objectName: "reviewEvidenceToggle"
+                    text: checked ? "Hide evidence" : "Site evidence"
+                    checkable: true
+                    checked: true
+                }
+            }
+            Label {
+                Layout.fillWidth: true
+                text: ctl.status + " · Unmasked does not mean accepted."
+                textFormat: Text.PlainText
+                wrapMode: Text.Wrap
+            }
+            Label {
+                Layout.fillWidth: true
+                text: ctl.review_details.split("\n").slice(0, 3).join(" · ")
+                textFormat: Text.PlainText
+                wrapMode: Text.Wrap
+            }
+            ScrollView {
+                objectName: "reviewEvidence"
+                Layout.fillWidth: true
+                Layout.preferredHeight: visible ? 130 : 0
+                visible: evidenceToggle.checked
+                clip: true
+                TextArea {
+                    text: ctl.review_details
+                    readOnly: true
+                    selectByMouse: true
+                    textFormat: TextEdit.PlainText
+                    wrapMode: TextEdit.Wrap
+                    Accessible.name: "Selected column coordinates and recorded read evidence"
+                }
+            }
+        }
+    }
+
     Flickable {
         id: viewport
         anchors.fill: parent
-        anchors.topMargin: preparationFailure.height + traceActivity.height
+        anchors.topMargin: preparationFailure.height + traceActivity.height + reviewNavigation.height
         anchors.bottomMargin: cutoffBar.height + (ctl.review_mode && ctl.hscroll_size < 0.999 ? 14 : 0)
         contentWidth: width
         contentHeight: view.height
