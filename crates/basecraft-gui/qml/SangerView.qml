@@ -32,16 +32,17 @@ FocusScope {
     function issue(forward) { ctl.next_issue(forward); viewport.contentY = 0; view.forceActiveFocus() }
     function accept() { if (ctl.review_set("accept", "")) issue(true) }
     function saveReview() {
+        if (working) return
         saveReviewDialog.currentFolder = doc.activeFolder()
         saveReviewDialog.selectedFile = fileUrls.local_file_url(ctl.export_path.replace(/_consensus_from_basecraft\.fasta$/, ".sanger-review.json"))
         saveReviewDialog.open()
     }
-    function alignmentContext() { alignmentDialog.open() }
-    function draftReads() { additionalDialog.open() }
+    function alignmentContext() { if (!working) alignmentDialog.open() }
+    function draftReads() { if (!working) additionalDialog.open() }
     function activeFolder() { return fileUrls.parent_folder_url(ctl.export_path) }
     function exportConsensus() { beginExport("fasta") }
     function copyConsensus() { beginExport("clipboard") }
-    function beginExport(target) { exportName.target = target; exportId.text = doc.specimenId; exportName.open() }
+    function beginExport(target) { if (working) return; exportName.target = target; exportId.text = doc.specimenId; exportName.open() }
     function confirmExportName() {
         const fasta = ctl.reviewed_fasta(exportId.text)
         if (!fasta.length) return
@@ -78,16 +79,16 @@ FocusScope {
     Shortcut { sequence: "Ctrl++"; enabled: doc.visible; onActivated: ctl.zoom_in() }
     Shortcut { sequence: "Ctrl+-"; enabled: doc.visible; onActivated: ctl.zoom_out() }
     Shortcut { sequence: "Ctrl+0"; enabled: doc.visible; onActivated: ctl.fit() }
-    Shortcut { sequence: "Alt+Left"; enabled: doc.visible && ctl.review_mode; onActivated: doc.issue(false) }
-    Shortcut { sequence: "Alt+Right"; enabled: doc.visible && ctl.review_mode; onActivated: doc.issue(true) }
-    Shortcut { sequence: "Alt+Return"; enabled: doc.visible && ctl.review_mode; onActivated: doc.accept() }
-    Shortcut { sequence: "Ctrl+Shift+E"; enabled: doc.visible && ctl.review_mode && ctl.unresolved === 0; onActivated: doc.exportConsensus() }
-    Shortcut { sequence: "Ctrl+Shift+C"; enabled: doc.visible && ctl.review_mode && ctl.unresolved === 0; onActivated: doc.copyConsensus() }
-    Shortcut { sequence: "Ctrl+Shift+A"; enabled: doc.visible && ctl.review_mode && ctl.unresolved === 0 && doc.returnAlignment !== null; onActivated: doc.addToAlignment() }
-    Shortcut { sequence: "Ctrl+Alt+A"; enabled: doc.visible && ctl.review_mode && doc.returnAlignment === null; onActivated: doc.alignmentContext() }
-    Shortcut { sequence: "Ctrl+Alt+D"; enabled: doc.visible && traceRows.length === 1; onActivated: doc.draftReads() }
-    Shortcut { sequence: "Ctrl+Alt+Home"; enabled: doc.visible && ctl.review_mode; onActivated: doc.setMaskStart(ctl.selected_column) }
-    Shortcut { sequence: "Ctrl+Alt+End"; enabled: doc.visible && ctl.review_mode; onActivated: doc.setMaskEnd(ctl.selected_column) }
+    Shortcut { sequence: "Alt+Left"; enabled: doc.visible && !doc.working && ctl.review_mode; onActivated: doc.issue(false) }
+    Shortcut { sequence: "Alt+Right"; enabled: doc.visible && !doc.working && ctl.review_mode; onActivated: doc.issue(true) }
+    Shortcut { sequence: "Alt+Return"; enabled: doc.visible && !doc.working && ctl.review_mode; onActivated: doc.accept() }
+    Shortcut { sequence: "Ctrl+Shift+E"; enabled: doc.visible && !doc.working && ctl.review_mode && ctl.unresolved === 0; onActivated: doc.exportConsensus() }
+    Shortcut { sequence: "Ctrl+Shift+C"; enabled: doc.visible && !doc.working && ctl.review_mode && ctl.unresolved === 0; onActivated: doc.copyConsensus() }
+    Shortcut { sequence: "Ctrl+Shift+A"; enabled: doc.visible && !doc.working && ctl.review_mode && ctl.unresolved === 0 && doc.returnAlignment !== null; onActivated: doc.addToAlignment() }
+    Shortcut { sequence: "Ctrl+Alt+A"; enabled: doc.visible && !doc.working && ctl.review_mode && doc.returnAlignment === null; onActivated: doc.alignmentContext() }
+    Shortcut { sequence: "Ctrl+Alt+D"; enabled: doc.visible && !doc.working && traceRows.length === 1; onActivated: doc.draftReads() }
+    Shortcut { sequence: "Ctrl+Alt+Home"; enabled: doc.visible && !doc.working && ctl.review_mode; onActivated: doc.setMaskStart(ctl.selected_column) }
+    Shortcut { sequence: "Ctrl+Alt+End"; enabled: doc.visible && !doc.working && ctl.review_mode; onActivated: doc.setMaskEnd(ctl.selected_column) }
 
     function setMaskStart(column) {
         const mask = JSON.parse(ctl.mask_settings)
@@ -114,27 +115,76 @@ FocusScope {
     // document. Background messages cannot acknowledge a failed request.
     property var failedReview: null
     property string preparationError: ""
+    // Request context is kept here; execution and working state belong to ctl.
+    // Backend invalidates retired requests before emitting stageFinished.
+    property var pendingReview: null
+    property bool primerPending: false
+    readonly property bool working: ctl.busy || ctl.calling || pendingReview !== null
     function retryReview() {
         const request = failedReview
         if (request) startReview(request.paths, request.reference, request.target, request.cutoff)
     }
-    function startReview(paths, reference, target, cutoff = 20) {
-        sourceInitialized = true
-        const ready = paths.length > 1
-            ? ctl.prepare_reads(JSON.stringify(paths), cutoff)
-            : paths.length === 1 && ctl.open_file(paths[0]) && (cutoff === 20 || ctl.single_review(cutoff))
-        if (!ready) {
-            failedReview = {paths: paths.slice(), reference: reference, target: target, cutoff: cutoff}
-            preparationError = ctl.message
-            return
-        }
+    function failReview() {
+        if (!pendingReview) return
+        failedReview = pendingReview
+        preparationError = ctl.message
+        pendingReview = null
+    }
+    function finishReview() {
+        const request = pendingReview
+        if (!request) return
+        returnAlignment = request.target
+        reviewReference = request.reference
         failedReview = null
         preparationError = ""
-        returnAlignment = target
-        reviewReference = reference
-        if (reference.length && ctl.orient_review(reference)) ctl.place_alignment(reference)
+        pendingReview = null
+    }
+    function submitReviewStage(stage) {
+        const request = pendingReview
+        if (!request) return
+        request.stage = stage
+        const accepted = stage === "prepare" ? ctl.prepare_reads(JSON.stringify(request.paths), request.cutoff)
+            : stage === "single" ? ctl.single_review(request.cutoff)
+            : stage === "orient" ? ctl.orient_review(request.reference)
+            : ctl.place_alignment(request.reference)
+        if (!accepted) failReview()
+    }
+    function reviewStageFinished(stage, success, payload) {
+        if (stage === "primers") {
+            if (!primerPending) return
+            primerPending = false
+            if (success && primerDialog.visible) primerDialog.proposal = payload
+            return
+        }
+        const request = pendingReview
+        if (!request || request.stage !== stage) return
+        if (!success || request.cancelled) { failReview(); return }
+        if (stage === "orient") submitReviewStage("place")
+        else if (stage === "place" || !request.reference.length) finishReview()
+        else submitReviewStage("orient")
+    }
+    function cancelWork() {
+        if (pendingReview) pendingReview.cancelled = true
+        if (ctl.busy) ctl.cancel_stage()
+        if (ctl.calling) ctl.cancel_calls()
+    }
+    function startReview(paths, reference, target, cutoff = 20) {
+        if (ctl.busy || pendingReview || !paths.length) return
+        sourceInitialized = true
+        if (ctl.calling) ctl.cancel_calls()
+        pendingReview = {paths: paths.slice(), reference: reference, target: target, cutoff: cutoff, stage: "", cancelled: false}
+        if (paths.length > 1) { submitReviewStage("prepare"); return }
+        if (!ctl.open_file(paths[0])) { failReview(); return }
+        if (cutoff !== 20) {
+            if (ctl.calling) ctl.cancel_calls()
+            submitReviewStage("single")
+        } else if (reference.length) {
+            if (ctl.calling) ctl.cancel_calls()
+            submitReviewStage("orient")
+        } else finishReview()
     }
     function signalSettings() {
+        if (working) return
         signalDialog.paths = JSON.parse(ctl.input_paths)
         signalDialog.reference = reviewReference
         signalDialog.target = returnAlignment
@@ -180,18 +230,21 @@ FocusScope {
         }
     }
     function addToAlignment() {
+        if (working) return
         const sequence = ctl.reviewed_sequence()
         if (!sequence.length || !returnAlignment) return
         const evidence = ctl.reviewed_evidence()
         if (evidence.length) returnAlignment.addReviewed(sequence, doc.specimenId, true, evidence)
     }
     function maskEnds() {
+        if (working) return
         const mask = JSON.parse(ctl.mask_settings)
         keepStart.value = (mask.start || 0) + 1
         keepEnd.value = mask.end || ctl.consensus_columns
         maskDialog.open()
     }
     function setPrimers() {
+        if (working) return
         const mask = JSON.parse(ctl.mask_settings)
         forwardPrimer.text = mask.forward || ""
         reversePrimer.text = mask.reverse || ""
@@ -236,20 +289,38 @@ FocusScope {
         property string proposal: ""
         title: "Set primers"
         modal: true
+        onClosed: {
+            if (doc.primerPending) { doc.primerPending = false; ctl.cancel_stage() }
+        }
         body: ColumnLayout {
             spacing: 8
             Label { text: "Enter the primer oligos 5′ to 3′. Either amplicon orientation is tested; candidates are searched within 120 bases of each end."; wrapMode: Text.Wrap; Layout.fillWidth: true }
             Label { id: forwardPrimerLabel; text: "Forward primer" }
-            TextField { id: forwardPrimer; objectName: "forwardPrimer"; Accessible.labelledBy: forwardPrimerLabel; Accessible.name: forwardPrimerLabel.text; Layout.fillWidth: true; placeholderText: "IUPAC DNA"; onTextEdited: primerDialog.proposal = "" }
+            TextField { id: forwardPrimer; objectName: "forwardPrimer"; enabled: !doc.working; Accessible.labelledBy: forwardPrimerLabel; Accessible.name: forwardPrimerLabel.text; Layout.fillWidth: true; placeholderText: "IUPAC DNA"; onTextEdited: primerDialog.proposal = "" }
             Label { id: reversePrimerLabel; text: "Reverse primer" }
-            TextField { id: reversePrimer; objectName: "reversePrimer"; Accessible.labelledBy: reversePrimerLabel; Accessible.name: reversePrimerLabel.text; Layout.fillWidth: true; placeholderText: "IUPAC DNA"; onTextEdited: primerDialog.proposal = "" }
+            TextField { id: reversePrimer; objectName: "reversePrimer"; enabled: !doc.working; Accessible.labelledBy: reversePrimerLabel; Accessible.name: reversePrimerLabel.text; Layout.fillWidth: true; placeholderText: "IUPAC DNA"; onTextEdited: primerDialog.proposal = "" }
             RowLayout {
                 Label { id: primerOverlapLabel; text: "Minimum overlap" }
-                AppSpinBox { id: primerOverlap; objectName: "primerOverlap"; Accessible.labelledBy: primerOverlapLabel; Accessible.name: primerOverlapLabel.text; from: 8; to: 100; value: 12; editable: true; onValueModified: primerDialog.proposal = "" }
+                AppSpinBox { id: primerOverlap; objectName: "primerOverlap"; enabled: !doc.working; Accessible.labelledBy: primerOverlapLabel; Accessible.name: primerOverlapLabel.text; from: 8; to: 100; value: 12; editable: true; onValueModified: primerDialog.proposal = "" }
                 Label { id: primerErrorsLabel; text: "Max errors (%)" }
-                AppSpinBox { id: primerErrors; objectName: "primerErrors"; Accessible.labelledBy: primerErrorsLabel; Accessible.name: primerErrorsLabel.text; from: 0; to: 40; value: 25; editable: true; onValueModified: primerDialog.proposal = "" }
+                AppSpinBox { id: primerErrors; objectName: "primerErrors"; enabled: !doc.working; Accessible.labelledBy: primerErrorsLabel; Accessible.name: primerErrorsLabel.text; from: 0; to: 40; value: 25; editable: true; onValueModified: primerDialog.proposal = "" }
             }
-            AppButton { text: "Find primer candidates"; onClicked: primerDialog.proposal = ctl.find_primers(forwardPrimer.text, reversePrimer.text, primerOverlap.value, primerErrors.value) }
+            AppButton {
+                text: "Find primer candidates"
+                enabled: !doc.working
+                onClicked: {
+                    primerDialog.proposal = ""
+                    doc.primerPending = ctl.find_primers(forwardPrimer.text, reversePrimer.text, primerOverlap.value, primerErrors.value)
+                }
+            }
+            AppMessageBar {
+                Layout.fillWidth: true
+                busy: ctl.busy && doc.primerPending
+                visible: busy
+                workingText: ctl.message || "Finding primer candidates"
+                cancelText: "Cancel search"
+                onCancelRequested: ctl.cancel_stage()
+            }
             Label {
                 text: primerDialog.proposal.length ? JSON.parse(primerDialog.proposal).hits.map(h => h.side + "′ candidate: bases " + (h.start + 1) + "–" + h.end + ", overlap " + h.overlap + ", errors " + h.errors).join("\n") || "No convincing terminal primer candidates" : ""
                 visible: text.length > 0; wrapMode: Text.Wrap; Layout.fillWidth: true
@@ -258,15 +329,18 @@ FocusScope {
             RowLayout {
                 Item { Layout.fillWidth: true }
                 AppButton { text: "Cancel"; onClicked: primerDialog.reject() }
-                AppButton { text: "Apply primer masks"; enabled: primerDialog.proposal.length > 0; onClicked: if (ctl.apply_primers(primerDialog.proposal)) { primerDialog.close(); view.forceActiveFocus() } }
+                AppButton { text: "Apply primer masks"; enabled: !doc.working && primerDialog.proposal.length > 0; onClicked: if (ctl.apply_primers(primerDialog.proposal)) { primerDialog.close(); view.forceActiveFocus() } }
             }
         }
     }
-    Shortcut { sequence: "Ctrl+Alt+M"; enabled: doc.visible && ctl.review_mode; onActivated: doc.maskEnds() }
-    Shortcut { sequence: "Ctrl+Alt+P"; enabled: doc.visible && ctl.review_mode; onActivated: doc.setPrimers() }
+    Shortcut { sequence: "Ctrl+Alt+M"; enabled: doc.visible && !doc.working && ctl.review_mode; onActivated: doc.maskEnds() }
+    Shortcut { sequence: "Ctrl+Alt+P"; enabled: doc.visible && !doc.working && ctl.review_mode; onActivated: doc.setPrimers() }
     SangerController { id: ctl }
+    Connections { target: ctl; function onStageFinished(stage, success, payload) { doc.reviewStageFinished(stage, success, payload) } }
+    Timer { interval: 200; repeat: true; running: ctl.busy; onTriggered: ctl.poll_stage() }
+    Component.onDestruction: { ctl.cancel_stage(); ctl.cancel_calls() }
     Timer { interval: 200; repeat: true; running: ctl.calling; onTriggered: ctl.poll_calls() }
-    Shortcut { sequence: "F2"; enabled: doc.visible && ctl.review_mode; onActivated: doc.beginExport("fasta") }
+    Shortcut { sequence: "F2"; enabled: doc.visible && !doc.working && ctl.review_mode; onActivated: doc.beginExport("fasta") }
     function localPath(url) { return fileUrls.local_file_path(url) }
     FileDialog {
         currentFolder: doc.activeFolder()
@@ -286,7 +360,9 @@ FocusScope {
         nameFilters: ["Aligned FASTA (*.afa *.fasta *.fa *.fas *.fna)"]
         onAccepted: {
             const path = doc.localPath(selectedFile)
-            if (ctl.orient_review(path) && ctl.place_alignment(path)) doc.reviewReference = path
+            if (doc.working) return
+            doc.pendingReview = {paths: JSON.parse(ctl.input_paths), reference: path, target: doc.returnAlignment, cutoff: ctl.signal_threshold, stage: "", cancelled: false}
+            doc.submitReviewStage("orient")
         }
     }
     FileDialog {
@@ -340,14 +416,14 @@ FocusScope {
         objectName: "tracePreparationFailure"
         anchors.top: parent.top
         width: parent.width
-        visible: doc.failedReview !== null
+        visible: doc.failedReview !== null && !doc.working
         height: visible ? failureContent.implicitHeight + topPadding + bottomPadding : 0
         ColumnLayout {
             id: failureContent
             width: parent.width
             Label {
                 Layout.fillWidth: true
-                text: "Trace review preparation failed. No new draft was created." + (ctl.review_mode ? " The existing review remains open below." : "")
+                text: "Trace review preparation did not finish." + (ctl.review_mode ? " The current review remains open below." : "")
                 wrapMode: Text.Wrap
             }
             AppErrorLabel {
@@ -368,10 +444,23 @@ FocusScope {
         }
     }
 
+    AppMessageBar {
+        id: traceActivity
+        objectName: "traceActivity"
+        anchors.top: preparationFailure.bottom
+        width: parent.width
+        height: visible ? implicitHeight : 0
+        busy: doc.working
+        visible: busy
+        workingText: ctl.message || (ctl.calling ? "Processing AB1 with Tracy" : "Preparing input")
+        cancelText: "Cancel trace work"
+        onCancelRequested: doc.cancelWork()
+    }
+
     Flickable {
         id: viewport
         anchors.fill: parent
-        anchors.topMargin: preparationFailure.height
+        anchors.topMargin: preparationFailure.height + traceActivity.height
         anchors.bottomMargin: cutoffBar.height + (ctl.review_mode && ctl.hscroll_size < 0.999 ? 14 : 0)
         contentWidth: width
         contentHeight: view.height
@@ -421,6 +510,7 @@ FocusScope {
             property real lastY: 0
             property real lastX: 0
             onPressed: (mouse) => {
+                if (doc.working) return
                 view.forceActiveFocus()
                 lastX = mouse.x
                 if (mouse.button === Qt.LeftButton) ctl.press(mouse.x, mouse.y)
@@ -493,7 +583,7 @@ FocusScope {
         }
         Binding { target: traceScroll; property: "position"; value: ctl.trace_scroll_pos; when: !traceScroll.pressed; restoreMode: Binding.RestoreNone }
         Keys.onPressed: (event) => {
-            if (!view.renderingAvailable) { event.accepted = false; return }
+            if (doc.working || !view.renderingAvailable) { event.accepted = false; return }
             if (ctl.review_mode && !(event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier)) &&
                     (event.key === Qt.Key_Delete || /^[ACGTNRYKMSWBDHV-]$/i.test(event.text))) {
                 if (ctl.review_set("edit", event.key === Qt.Key_Delete ? "-" : event.text)) ctl.next_call(true)
@@ -530,6 +620,7 @@ FocusScope {
         id: cutoffBar
         objectName: "traceCutoffBar"
         visible: ctl.review_mode
+        enabled: !doc.working
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom

@@ -382,14 +382,20 @@ ApplicationWindow {
         let preserve = forceNew
         for (let i = 0; i < openFiles.count; i++) {
             const existing = docs.itemAt(i)
-            if (openFiles.get(i).path === paths[0] && existing && existing.controller.dirty) preserve = true
+            if (openFiles.get(i).path !== paths[0] || !existing) continue
+            if (existing.kind === "trace" && existing.working) { tabs.currentIndex = i; return }
+            if (existing.controller.dirty) preserve = true
         }
         if (preserve) {
             openFiles.append({ path: paths[0], dirty: false, kind: "trace" })
             tabs.currentIndex = openFiles.count - 1
         } else window.openPath(paths[0])
-        const traceIndex = tabs.currentIndex
-        Qt.callLater(() => { ribbonTabName = "Trace"; docs.itemAt(traceIndex).startReview(paths, reference, target, cutoff) })
+        ribbonTabName = "Trace"
+        const traceDocument = docs.itemAt(tabs.currentIndex)
+        Qt.callLater(() => {
+            if (!traceDocument) return
+            traceDocument.startReview(paths, reference, target, cutoff)
+        })
     }
 
     Connections {
@@ -726,8 +732,13 @@ ApplicationWindow {
         initialFocusItem: provenanceText
         contentItem: ColumnLayout {
             Label { visible: window.provenanceExport !== "recover"; text: "File verification and reproduction packages describe saved files. Report exports retain the selected document revision."; wrapMode: Text.Wrap; Layout.fillWidth: true }
-            Label { text: provenance.message; wrapMode: Text.Wrap; Layout.fillWidth: true; Accessible.role: Accessible.AlertMessage }
-            BusyIndicator { running: provenance.busy; visible: running }
+            AppMessageBar {
+                Layout.fillWidth: true
+                busy: provenance.busy
+                workingText: provenance.message || "Working on provenance"
+                message: provenance.message
+                cancellable: false
+            }
             ScrollView {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
@@ -863,9 +874,16 @@ ApplicationWindow {
                     Timer {
                         id: messageTimer
                         interval: 10000
-                        onTriggered: if (window.current) window.current.message = ""
+                        property var sourceController: null
+                        onTriggered: {
+                            if (sourceController && sourceController === window.current && !sourceController.busy)
+                                sourceController.message = ""
+                        }
                     }
-                    onTextChanged: if (messageLabel.text.length > 0) messageTimer.restart()
+                    onTextChanged: if (messageLabel.text.length > 0) {
+                        messageTimer.sourceController = window.current
+                        messageTimer.restart()
+                    }
                 }
                 AppButton {
                     text: window.runningTaskCount ? "Tasks (" + window.runningTaskCount + ")" : "Tasks" + (window.failedTaskCount ? " · " + window.failedTaskCount + " failed" : "")
@@ -1222,12 +1240,6 @@ ApplicationWindow {
                                 onInvoked: toolSettings.show(window.current, "distance", modelData.value)
                             }
                         }
-                        ColumnLayout {
-                            visible: window.currentKind === "alignment" && window.current !== null && window.current.bootstrap_running
-                            Label { text: parent.visible ? window.current.bootstrap_status : ""; font.pixelSize: 11 * window.ribbonSizeFactor }
-                            ProgressBar { from: 0; to: 1; value: parent.visible ? window.current.bootstrap_progress : 0; Layout.fillWidth: true }
-                            AppButton { text: "Cancel bootstrap"; enabled: parent.visible && !window.current.bootstrap_cancelling; onClicked: window.current.cancel_bootstrap() }
-                        }
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
@@ -1297,7 +1309,7 @@ ApplicationWindow {
                     spacing: 6 * window.ribbonSizeFactor
                     RibbonGroup {
                         title: "Calls"
-                        enabled: window.traceOpen && window.current && window.current.review_mode
+                        enabled: window.traceOpen && window.current && window.current.review_mode && window.traceDocument && !window.traceDocument.working
                         AppComboBox {
                             id: traceCallSets
                             Accessible.name: "Trace call set"
@@ -1314,7 +1326,7 @@ ApplicationWindow {
                     }
                     RibbonGroup {
                         title: "Issues"
-                        enabled: window.traceOpen
+                        enabled: window.traceOpen && window.traceDocument && !window.traceDocument.working
                         RibbonButton { commandId: "ribbon.previous-unresolved-issue"; iconName: "previous"; tip: "Previous unresolved issue"; keys: "Alt+← or ["; enabled: (window.traceOpen && window.current && window.current.review_mode); onInvoked: window.traceDocument.issue(false) }
                         RibbonButton { commandId: "ribbon.next-unresolved-issue"; iconName: "next"; tip: "Next unresolved issue"; keys: "Alt+→ or ]"; enabled: (window.traceOpen && window.current && window.current.review_mode); onInvoked: window.traceDocument.issue(true) }
                         RibbonButton { commandId: "ribbon.accept-this-base-and-go-to-the-next-issue"; text: "Accept"; iconName: "accept"; tip: "Accept this base and go to the next issue"; keys: "Alt+Enter"; enabled: (window.traceOpen && window.current && window.current.review_mode); onInvoked: window.traceDocument.accept() }
@@ -1324,13 +1336,13 @@ ApplicationWindow {
                     }
                     RibbonGroup {
                         title: "Masking"
-                        enabled: window.traceOpen && window.current && window.current.review_mode
+                        enabled: window.traceOpen && window.current && window.current.review_mode && window.traceDocument && !window.traceDocument.working
                         RibbonButton { commandId: "ribbon.choose-the-consensus-range-to-keep-in-exports"; text: "Mask ends"; tip: "Choose the consensus range to keep in exports"; keys: "Ctrl+Alt+M"; onInvoked: window.traceDocument.maskEnds() }
                         RibbonButton { commandId: "ribbon.find-partial-terminal-primer-candidates-and-mask-them"; text: "Set primers"; tip: "Find partial terminal primer candidates and mask them"; keys: "Ctrl+Alt+P"; onInvoked: window.traceDocument.setPrimers() }
                     }
                     RibbonGroup {
                         title: "Export consensus"
-                        enabled: window.traceOpen && window.current && window.current.review_mode
+                        enabled: window.traceOpen && window.current && window.current.review_mode && window.traceDocument && !window.traceDocument.working
                         ExportConsensusButton { commandId: "ribbon.add-the-edited-consensus-to-its-alignment"; text: "to alignment"; tip: "Add the edited consensus to its alignment"; keys: "Ctrl+Shift+A"; enabled: window.traceDocument !== null && window.traceDocument.returnAlignment !== null && window.current && window.current.unresolved === 0; onInvoked: window.traceDocument.addToAlignment() }
                         ExportConsensusButton { commandId: "ribbon.export-the-edited-consensus-as-fasta"; text: "to fasta"; tip: "Export the edited consensus as FASTA"; keys: "Ctrl+Shift+E"; enabled: window.current && window.current.unresolved === 0; onInvoked: window.traceDocument.exportConsensus() }
                         ExportConsensusButton { commandId: "ribbon.copy-the-edited-consensus-as-fasta"; text: "to clipboard"; tip: "Copy the edited consensus as FASTA"; keys: "Ctrl+Shift+C"; enabled: window.current && window.current.unresolved === 0; onInvoked: window.traceDocument.copyConsensus() }
@@ -1903,6 +1915,20 @@ ApplicationWindow {
                         }
                     }
                 }
+            }
+
+            // Activity belongs to this document, beside its tabs and canvas.
+            AppMessageBar {
+                objectName: "documentActivity"
+                Layout.fillWidth: true
+                readonly property var controller: window.current
+                busy: !!controller && (window.alignmentOpen || window.treeOpen) && controller.busy
+                visible: busy
+                workingText: busy ? (window.alignmentOpen && controller.bootstrap_running
+                    ? controller.bootstrap_status : controller.message) || "Working" : ""
+                cancellable: busy && window.alignmentOpen && controller.bootstrap_running && !controller.bootstrap_cancelling
+                cancelText: "Cancel bootstrap"
+                onCancelRequested: controller.cancel_bootstrap()
             }
 
             StackLayout {

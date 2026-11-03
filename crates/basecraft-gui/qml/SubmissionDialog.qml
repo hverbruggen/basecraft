@@ -450,7 +450,15 @@ AppContentDialog {
             spacing: 6
             AppButton { objectName: "exportPackage"; text: "Export package"; enabled: !!dialog.document && !!dialog.review.selection_confirmed && !dialog.validating; onClicked: dialog.exportRequested() }
             AppButton { objectName: "validatePackage"; text: "Validate"; enabled: !!dialog.pkg && dialog.pkg.exported && !dialog.validating; onClicked: dialog.validateRequested() }
-            AppButton { text: "Stop validation"; visible: dialog.validating; onClicked: dialog.cancelValidationRequested() }
+        }
+
+        AppMessageBar {
+            Layout.fillWidth: true
+            busy: dialog.validating
+            visible: busy
+            workingText: "Validating with table2asn"
+            cancelText: "Stop validation"
+            onCancelRequested: dialog.cancelValidationRequested()
         }
 
         Label { text: "Accessions"; font.bold: true }

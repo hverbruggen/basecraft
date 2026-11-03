@@ -203,9 +203,16 @@ AppFormDialog {
         enabled: !backend.busy && !dialog.submitted
         onClicked: { if (dialog.preview.oversized && dialog.preview.approval_hash) dialog.start(true); else dialog.search() }
     }
-    AppButton { text: "Cancel submission"; visible: backend.busy; onClicked: backend.cancel() }
     Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: dialog.formError; visible: text.length > 0; Accessible.role: Accessible.AlertMessage }
-    Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: backend.busy ? "Submitting to NCBI. Cancellation after upload cannot undo the remote search." : dialog.resultMessage; visible: text.length > 0 }
+    AppMessageBar {
+        Layout.fillWidth: true
+        busy: backend.busy
+        workingText: "Submitting to NCBI"
+        message: dialog.resultMessage
+        cancelText: "Cancel submission"
+        onCancelRequested: backend.cancel()
+    }
+    Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: "Cancellation after upload cannot undo the remote search."; visible: backend.busy }
     TextField { Layout.fillWidth: true; readOnly: true; visible: dialog.resultUrl.length > 0; text: dialog.resultUrl; Accessible.name: "Accepted BLAST result link"; selectByMouse: true }
     RowLayout {
         visible: dialog.resultUrl.length > 0

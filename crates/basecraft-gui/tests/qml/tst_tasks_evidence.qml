@@ -36,7 +36,7 @@ TestCase {
         dialog.jobData = {jobs: [{id: "run", operation: "tree", status: data.status, cancellable: true, source: {path: "/a.afa"}, outputs: {}}]}
         dialog.open()
         tryCompare(dialog, "opened", true)
-        const progress = findChild(dialog.contentItem, "taskProgress")
+        const progress = findChild(dialog.contentItem, "taskActivity")
         const cancel = findChild(dialog.contentItem, "cancelTask")
         verify(progress)
         verify(cancel)
