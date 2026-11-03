@@ -94,13 +94,12 @@ fn unsaved_clade_tree_with_referenced_alignment_retains_both_inputs_and_selectio
             .any(|e| matches!(e.op, Op::TreeRenameTip { .. }))
     );
     assert!(publication.events.iter().any(|e| matches!(&e.op, Op::ToolRun { params, .. } if params.pointer("/effective/taxa") == Some(&json!(["a","b"])))));
-    assert!(provenance::verify(&result).unwrap().is_empty());
+    assert_eq!(provenance::verify(&result).unwrap(), Vec::<String>::new());
     let package = root.join("package");
     provenance::package(&result, &package).unwrap();
     std::fs::remove_file(&alignment).unwrap();
-    assert!(
-        provenance::verify(&package.join("selected.afa"))
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        provenance::verify(&package.join("selected.afa")).unwrap(),
+        Vec::<String>::new()
     );
 }

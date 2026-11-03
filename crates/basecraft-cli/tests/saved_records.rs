@@ -539,14 +539,14 @@ fn sequence_extraction_cli_mcp_and_python_share_source_and_mapping_semantics() {
     }
     // Python delegates directly to this same MCP method, including its writes gate.
     let python = std::env::var("BASECRAFT_PYTHON").unwrap_or_else(|_| "python3".into());
-    let script = r#"
+    let script = r"
 from basecraft.session import Session
 s = object.__new__(Session)
 s.call = lambda name, args: (name,args)
 name,args = s.extract(3,'new.gb',1,7,version=4,segments=[(1,3),(5,7)],reverse=True)
 assert name == 'extract' and args['version'] == 4 and args['reverse']
 assert args['segments'] == [(1,3),(5,7)]
-"#;
+";
     assert!(
         Command::new(python)
             .args(["-c", script])
