@@ -460,7 +460,7 @@ def main() -> None:
             args.minimum_identity,
             args.signal_threshold,
         )
-    except (ValueError, RuntimeError, OSError, subprocess.TimeoutExpired) as exc:
+    except (TypeError, ValueError, RuntimeError, OSError, subprocess.TimeoutExpired) as exc:
         parser.exit(2, f"Sanger consensus refused: {exc}\n")
     print(
         json.dumps(

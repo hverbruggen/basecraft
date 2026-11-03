@@ -1,6 +1,7 @@
 """Safety and evidence tests for the public Tracy plugin wrapper."""
 
 import copy
+import io
 import json
 import subprocess
 import tempfile
@@ -8,10 +9,22 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from consensus import evidence, merge, trace_calls
+from consensus import evidence, main, merge, trace_calls
 
 
 class ConsensusTests(unittest.TestCase):
+    def test_cli_reports_malformed_tool_output_without_traceback(self):
+        message = io.StringIO()
+        with (
+            patch("sys.argv", ["consensus", "read.ab1", "--output-dir", "unused"]),
+            patch("consensus.merge", side_effect=TypeError("Invalid Tracy call evidence")),
+            patch("sys.stderr", message),
+            self.assertRaises(SystemExit) as failure,
+        ):
+            main()
+        self.assertEqual(failure.exception.code, 2)
+        self.assertEqual(message.getvalue(), "Sanger consensus refused: Invalid Tracy call evidence\n")
+
     def test_more_than_three_is_refused_before_tool_access(self):
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / "draft"
