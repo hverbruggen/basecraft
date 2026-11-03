@@ -161,7 +161,6 @@ impl Best {
 struct Stats {
     evaluated: u64,
     rows: u64,
-    skipped: u64,
     mismatches: usize,
     max_q_error: f64,
     init_s: f64,
@@ -425,6 +424,23 @@ impl DistanceMatrix {
         self.validate()?;
         let n = self.names.len();
         let pool = pool(threads)?;
+        // A complete matrix is already the triangle the search needs.
+        if n >= 3
+            && matches!(method, Method::Sorted | Method::Njstar)
+            && self.distances.iter().all(|x| x.is_finite())
+        {
+            let (t, st) = pool.install(|| {
+                optimized::tree(self.distances.clone(), &self.names, threads > 1, 512, false)
+            });
+            return Ok(TreeResult {
+                trees: vec![t],
+                components: 1,
+                unresolved: false,
+                details: vec![
+                    json!({"completion":{},"search_s":st.search_s,"update_s":st.update_s,"q_evaluations":st.evaluated}),
+                ],
+            });
+        }
         let full = |values: &[f64]| {
             pool.install(|| {
                 let mut d = vec![0.; n * n];
@@ -485,7 +501,11 @@ impl DistanceMatrix {
                 result.trees.push(upgma::tree(dm, &names));
                 result.details.push(json!({"algorithm":"nearest-neighbor chain", "weighting":"cluster size", "rooted":true}));
             } else if complete && method != Method::Mvrstar {
-                let (t, st) = pool.install(|| optimized::tree(dm, &names, threads > 1, 512, false));
+                let triangle: Vec<_> = (1..size)
+                    .flat_map(|i| dm[i * size..i * size + i].iter().copied())
+                    .collect();
+                let (t, st) =
+                    pool.install(|| optimized::tree(triangle, &names, threads > 1, 512, false));
                 result.trees.push(t);
                 result.details.push(json!({"completion":info,"search_s":st.search_s,"update_s":st.update_s,"q_evaluations":st.evaluated}));
             } else if matches!(method, Method::Njstar | Method::Mvrstar) {
@@ -812,6 +832,9 @@ mod tests {
                 }
                 let names = (0..n).map(|i| format!("s{i}")).collect::<Vec<_>>();
                 let pool = pool(4).unwrap();
+                let d: Vec<_> = (1..n)
+                    .flat_map(|i| d[i * n..i * n + i].iter().copied())
+                    .collect();
                 let a = optimized::tree(d.clone(), &names, false, 0, true);
                 let b = pool.install(|| optimized::tree(d, &names, true, 0, true));
                 assert_eq!(a.1.mismatches, 0);
