@@ -93,6 +93,8 @@ pub mod qobject {
         #[qinvokable]
         fn apply_plan(self: Pin<&mut MetadataController>, remember: &QString) -> bool;
         #[qinvokable]
+        fn inclusion_presets(self: Pin<&mut MetadataController>, save: &QString) -> QString;
+        #[qinvokable]
         fn clear_plan(self: Pin<&mut MetadataController>);
         #[qinvokable]
         fn write_template(
@@ -756,6 +758,48 @@ impl qobject::MetadataController {
 
     /// Apply the reviewed plan as one undo step. A non-empty `remember`
     /// saves its header pattern or column mapping under that name.
+    /// Inclusion presets belong to this already-open metadata owner, keeping its
+    /// undo stack, dirty state and accepted disk revision coherent with specimen edits.
+    pub fn inclusion_presets(mut self: Pin<&mut Self>, save: &QString) -> QString {
+        if !save.is_empty() {
+            let planned = (|| -> Result<_, String> {
+                let rule: basecraft_protocol::submission::InclusionRule =
+                    serde_json::from_str(&save.to_string()).map_err(|e| e.to_string())?;
+                basecraft_ops::submission::inclusion_preset_edit(
+                    &basecraft_protocol::metadata::ProjectMetadata::default(),
+                    rule.clone(),
+                )
+                .map_err(|e| e.to_string())?;
+                Ok(rule)
+            })();
+            let rule = match planned {
+                Ok(rule) => rule,
+                Err(error) => return qs(&json!({"error": error})),
+            };
+            if self.rust().doc.is_none() && !self.as_mut().create() {
+                return qs(&json!({"error": self.rust().message.to_string()}));
+            }
+            let edit = self.rust().current().and_then(|(session, doc)| {
+                basecraft_ops::submission::inclusion_preset_edit(session.metadata(doc), rule)
+                    .map_err(|e| e.to_string())
+            });
+            match edit {
+                Ok(edit) => {
+                    if !self.as_mut().edit(vec![edit], "Saved inclusion preset")
+                        || self.rust().dirty
+                    {
+                        return qs(&json!({"error": self.rust().message.to_string()}));
+                    }
+                }
+                Err(error) => return qs(&json!({"error": error})),
+            }
+        }
+        self.rust().current().map_or_else(
+            |_| qs(&json!([])),
+            |(session, doc)| qs(&json!(session.metadata(doc).import.inclusion_rules)),
+        )
+    }
+
     pub fn apply_plan(mut self: Pin<&mut Self>, remember: &QString) -> bool {
         let Some((plan, source)) = self.as_mut().rust_mut().pending.take() else {
             self.report("error", "There is no import to apply");

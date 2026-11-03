@@ -33,6 +33,7 @@ AppDialog {
     property string validationStage: "Validating with table2asn"
     property var inclusionPlan: null
     property var inclusionPresets: []
+    property string presetError: ""
     property var parseAuthors: function (text) {
         return ({
                 authors: []
@@ -271,7 +272,7 @@ AppDialog {
         }
         AppErrorLabel {
             objectName: "submissionMessage"
-            text: dialog.review.error || dialog.message
+            text: dialog.review.error || dialog.presetError || dialog.message
             visible: text.length > 0
             Layout.fillWidth: true
             wrapMode: Text.Wrap

@@ -1055,3 +1055,39 @@ fn distinct_details_export_undo_replay_and_save_failure_keep_memory_recoverable(
     assert_eq!(session.submission(doc).rows, before.rows);
     assert!(replay::replay(root.path()).unwrap().ok());
 }
+
+#[test]
+fn inclusion_presets_reuse_the_open_metadata_owner_and_preserve_pending_edits() {
+    let root = tempfile::tempdir().unwrap();
+    let mut session = Session::new(root.path());
+    let doc = metadata::open(&mut session, true).unwrap().unwrap();
+    session
+        .apply(
+            doc,
+            basecraft_protocol::Op::MetadataEdit {
+                edit: Box::new(basecraft_protocol::metadata::MetadataEdit::Apply {
+                    changes: basecraft_protocol::metadata::ChangeSet {
+                        specimens: vec!["pending-specimen".into()],
+                        ..Default::default()
+                    },
+                }),
+            },
+        )
+        .unwrap();
+    let rule = inclusion_rule();
+    submission::save_inclusion_preset(&mut session, rule.clone()).unwrap();
+    assert_eq!(
+        session.metadata(doc).specimens.rows[0].id,
+        "pending-specimen"
+    );
+    assert_eq!(session.metadata(doc).import.inclusion_rules, [rule]);
+    let saved = metadata::load(&metadata::manifest_path(root.path())).unwrap();
+    assert_eq!(saved.metadata, *session.metadata(doc));
+    session.undo(doc).unwrap();
+    assert_eq!(
+        session.metadata(doc).specimens.rows[0].id,
+        "pending-specimen"
+    );
+    assert_eq!(session.metadata(doc).import.inclusion_rules, []);
+    assert!(replay::replay(root.path()).unwrap().ok());
+}

@@ -225,23 +225,32 @@ pub(crate) fn verify_inclusion(
     Ok(())
 }
 
-/// Remember a rule using the project's existing import-preset owner.
-pub fn save_inclusion_preset(session: &mut Session, rule: InclusionRule) -> Result<()> {
+/// Build the existing owner's typed import-settings edit; GUI and headless saves share it.
+pub fn inclusion_preset_edit(
+    meta: &ProjectMetadata,
+    rule: InclusionRule,
+) -> Result<basecraft_protocol::metadata::MetadataEdit> {
     if rule.name.trim().is_empty() {
         return Err(invalid("Give the preset a name"));
     }
     model::inclusion_rows(&Submission::default(), &rule, &[]).map_err(|e| invalid(e.0))?;
-    let doc =
-        crate::metadata::open(session, true)?.ok_or_else(|| invalid("No metadata document"))?;
-    let mut settings = session.metadata(doc).import.clone();
+    let mut settings = meta.import.clone();
     settings.inclusion_rules.retain(|r| r.name != rule.name);
     settings.inclusion_rules.push(rule);
+    Ok(basecraft_protocol::metadata::MetadataEdit::SetImportSettings { settings })
+}
+
+/// Remember a rule using the project's existing import-preset owner.
+pub fn save_inclusion_preset(session: &mut Session, rule: InclusionRule) -> Result<()> {
+    // Validate before creating any metadata document.
+    inclusion_preset_edit(&ProjectMetadata::default(), rule.clone())?;
+    let doc =
+        crate::metadata::open(session, true)?.ok_or_else(|| invalid("No metadata document"))?;
+    let edit = inclusion_preset_edit(session.metadata(doc), rule)?;
     session.apply(
         doc,
         Op::MetadataEdit {
-            edit: Box::new(
-                basecraft_protocol::metadata::MetadataEdit::SetImportSettings { settings },
-            ),
+            edit: Box::new(edit),
         },
     )?;
     session.save(doc, None)?;

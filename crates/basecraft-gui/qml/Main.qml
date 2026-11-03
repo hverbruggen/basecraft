@@ -1543,7 +1543,11 @@ ApplicationWindow {
         parseAuthors: text => JSON.parse(submissions.preview_authors(text))
         onDetailsRequested: details => submissions.set_details(details)
         onInclusionPreviewRequested: rule => { inclusionPlan = JSON.parse(submissions.preview_inclusion(rule)) }
-        onInclusionPresetsRequested: save => { inclusionPresets = JSON.parse(submissions.inclusion_presets(save)) }
+        onInclusionPresetsRequested: save => {
+            const result = JSON.parse(specimenMetadata.inclusion_presets(save))
+            presetError = result.error || ""
+            if (!result.error) inclusionPresets = result
+        }
         onEditRequested: edit => submissions.edit(edit)
         onPublicationRequested: (title, authors) => submissions.set_publication(title, authors)
         onDecisionRequested: (record, decision, accession) => submissions.set_decision(record, decision, accession)

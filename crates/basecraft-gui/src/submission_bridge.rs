@@ -65,8 +65,6 @@ pub mod qobject {
         #[qinvokable]
         fn preview_inclusion(self: Pin<&mut SubmissionController>, rule: &QString) -> QString;
         #[qinvokable]
-        fn inclusion_presets(self: Pin<&mut SubmissionController>, save: &QString) -> QString;
-        #[qinvokable]
         fn set_decision(
             self: Pin<&mut SubmissionController>,
             record: &QString,
@@ -590,27 +588,6 @@ impl qobject::SubmissionController {
             Err(error) => {
                 self.as_mut().report("error", &error);
                 qs(&json!({"error": error}))
-            }
-        }
-    }
-
-    pub fn inclusion_presets(mut self: Pin<&mut Self>, save: &QString) -> QString {
-        let result = (|| -> Result<_, String> {
-            let mut rust = self.as_mut().rust_mut();
-            let session = rust.session.as_mut().ok_or("Open a submission first")?;
-            if !save.is_empty() {
-                let rule = serde_json::from_str(&save.to_string()).map_err(|e| e.to_string())?;
-                submission::save_inclusion_preset(session, rule).map_err(|e| e.to_string())?;
-            }
-            submission::project_metadata(session.root())
-                .map(|(meta, _)| meta.import.inclusion_rules)
-                .map_err(|e| e.to_string())
-        })();
-        match result {
-            Ok(rules) => qs(&json!(rules)),
-            Err(error) => {
-                self.report("error", &error);
-                qs(&json!([]))
             }
         }
     }
