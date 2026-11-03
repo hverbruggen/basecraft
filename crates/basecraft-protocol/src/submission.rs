@@ -340,7 +340,8 @@ pub struct Publication {
 pub struct Author {
     pub first: String,
     pub last: String,
-    /// Middle initials, without the first name's, such as `M.`.
+    /// Middle names or initials, without the first name's, such as `Marie` or `M.R.`.
+    /// Bare uppercase runs (`MR`) retain their legacy initials meaning; uppercase full names are ambiguous.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub middle: String,
 }

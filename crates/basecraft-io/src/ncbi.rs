@@ -110,24 +110,78 @@ pub struct Contact {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Person {
     pub first: String,
-    /// Middle initials, such as `M.`.
+    /// Middle names or period-separated initials, such as `Marie` or `M.R.`.
     pub middle: String,
     pub last: String,
 }
 
+impl From<&basecraft_protocol::submission::Author> for Person {
+    fn from(author: &basecraft_protocol::submission::Author) -> Self {
+        Self {
+            first: author.first.clone(),
+            middle: author.middle.clone(),
+            last: author.last.clone(),
+        }
+    }
+}
+
+/// `Author.middle` historically held initials. Retain bare uppercase runs such
+/// as MR; uppercase full middle words are inherently ambiguous in that legacy field.
+fn compact_initials(part: &str) -> bool {
+    part.chars().count() > 1 && part.chars().all(|c| c.is_alphabetic() && c.is_uppercase())
+}
+
+fn dotted_initials(initials: impl Iterator<Item = char>) -> String {
+    let mut out = String::new();
+    for initial in initials {
+        out.push(initial);
+        out.push('.');
+    }
+    out
+}
+
+/// Each spelled-out word contributes one initial. Periods separate abbreviated
+/// initials; hyphenated given-name components retain their hyphen.
+fn name_initials(name: &str, preserve_compact: bool) -> String {
+    name.split_whitespace()
+        .map(|word| {
+            word.split('-')
+                .map(|part| {
+                    part.split('.')
+                        .map(|component| {
+                            if preserve_compact && compact_initials(component) {
+                                dotted_initials(component.chars())
+                            } else {
+                                component
+                                    .chars()
+                                    .find(|c| c.is_alphabetic())
+                                    .map_or_else(String::new, |initial| format!("{initial}."))
+                            }
+                        })
+                        .collect::<String>()
+                })
+                .filter(|part| !part.is_empty())
+                .collect::<Vec<_>>()
+                .join("-")
+        })
+        .collect()
+}
+
 impl Person {
-    /// NCBI initials: first-name initial and middle initials, `J.M.`.
+    /// NCBI initials from full given/middle names or dotted initials (`A.M.`, `J.-P.M.-C.`).
     pub fn initials(&self) -> String {
-        let mut out = String::new();
-        if let Some(c) = self.first.chars().next() {
-            out.push(c);
-            out.push('.');
-        }
-        for c in self.middle.chars().filter(|c| c.is_alphabetic()) {
-            out.push(c);
-            out.push('.');
-        }
-        out
+        name_initials(&self.first, false) + &name_initials(&self.middle, true)
+    }
+
+    /// Preserve spelled-out middle names in `Name-std.middle`. Initials-only
+    /// input keeps its historical template shape (no redundant middle field).
+    pub fn middle_name(&self) -> Option<&str> {
+        self.middle
+            .split(|c: char| c.is_whitespace() || c == '-' || c == '.')
+            .any(|part| {
+                !compact_initials(part) && part.chars().filter(|c| c.is_alphabetic()).count() > 1
+            })
+            .then_some(self.middle.as_str())
     }
 }
 
@@ -140,6 +194,9 @@ fn write_name(w: &mut dyn Write, person: &Person, indent: &str, comma: &str) -> 
     writeln!(w, "{indent}name name {{")?;
     writeln!(w, "{indent}  last {},", asn(&person.last))?;
     writeln!(w, "{indent}  first {},", asn(&person.first))?;
+    if let Some(middle) = person.middle_name() {
+        writeln!(w, "{indent}  middle {},", asn(middle))?;
+    }
     writeln!(w, "{indent}  initials {}", asn(&person.initials()))?;
     writeln!(w, "{indent}}}{comma}")
 }
@@ -210,7 +267,7 @@ pub fn write_sbt_details(
 ) -> io::Result<()> {
     let person = Person {
         first: contact.first.clone(),
-        middle: contact.middle.clone(),
+        middle: dotted_initials(contact.middle.chars().filter(|c| c.is_alphabetic())),
         last: contact.last.clone(),
     };
     writeln!(w, "Submit-block ::= {{")?;
@@ -316,6 +373,64 @@ fn local_id(text: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn author_names_and_initials_are_exported_without_expanding_words() {
+        for (first, middle, initials, structured_middle) in [
+            ("Anne", "Marie", "A.M.", Some("Marie")),
+            ("Anne", "M.", "A.M.", None),
+            ("Anne", "M.R.", "A.M.R.", None),
+            ("Anne", "M R", "A.M.R.", None),
+            (
+                "Jean-Pierre",
+                "Marie-Claire",
+                "J.-P.M.-C.",
+                Some("Marie-Claire"),
+            ),
+            ("J.-P.", "M.-C.", "J.-P.M.-C.", None),
+            ("Jean Pierre", "Marie R.", "J.P.M.R.", Some("Marie R.")),
+            ("Anne", "MR", "A.M.R.", None),
+            ("Anne", "MARIE", "A.M.A.R.I.E.", None),
+        ] {
+            let person = Person {
+                first: first.into(),
+                middle: middle.into(),
+                last: "van der Meer-Smith".into(),
+            };
+            assert_eq!(person.initials(), initials);
+            assert_eq!(person.middle_name(), structured_middle);
+            let mut bytes = Vec::new();
+            write_name(&mut bytes, &person, "", "").unwrap();
+            let text = String::from_utf8(bytes).unwrap();
+            assert!(text.contains(&format!("initials \"{initials}\"")), "{text}");
+            if let Some(middle) = structured_middle {
+                assert!(text.contains(&format!("middle \"{middle}\"")), "{text}");
+            } else {
+                assert!(!text.contains("middle "), "{text}");
+            }
+            assert!(text.contains("last \"van der Meer-Smith\""));
+        }
+    }
+
+    #[test]
+    fn contact_middle_initials_keep_their_compact_initials_meaning() {
+        let mut bytes = Vec::new();
+        write_sbt(
+            &mut bytes,
+            &Contact {
+                first: "Jane".into(),
+                middle: "MR".into(),
+                last: "Doe".into(),
+                ..Contact::default()
+            },
+            &[],
+            "Study",
+        )
+        .unwrap();
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(text.contains("initials \"J.M.R.\""));
+        assert!(!text.contains("middle "));
+    }
 
     #[test]
     fn distinct_citations_use_the_actual_asn_destinations() {

@@ -538,7 +538,17 @@ impl qobject::SubmissionController {
 
     pub fn preview_authors(&self, authors: &QString) -> QString {
         qs(&match parse_authors(&authors.to_string()) {
-            Ok(authors) => json!({"authors": authors}),
+            Ok(authors) => {
+                let export: Vec<_> = authors
+                    .iter()
+                    .map(|author| {
+                        let person = basecraft_io::ncbi::Person::from(author);
+                        json!({"first": person.first, "last": person.last,
+                        "middle": person.middle_name(), "initials": person.initials()})
+                    })
+                    .collect();
+                json!({"authors": authors, "export": export})
+            }
             Err(error) => json!({"error": error}),
         })
     }
