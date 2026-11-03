@@ -95,6 +95,8 @@ def methods(kind, model, method, min_overlap, bootstrap, dynamic_search=True):
     citations = [*cited, *COUNTING]
     if kind == "tree":
         tree_text, tree_cited = TREES[method]
+        if method == "sorted" and not dynamic_search:
+            tree_text = "exact neighbor joining (Saitou and Nei 1987; Studier and Keppler 1988)"
         text += f". The tree was inferred by {tree_text}"
         # NJ* only reaches the dynamic search for components with complete distances.
         citations += [c for c in tree_cited if dynamic_search or c not in FAST_NJ]
