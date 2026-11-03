@@ -1165,7 +1165,7 @@ pub fn instrument_review(path: &Path) -> Result<SangerReviewSession, String> {
         version_output: format!("ABIF instrument PBAS{}; no recalculation", calls.number),
         engine_sha256: String::new(), mode: "single".into(), signal_threshold: None,
         inputs: vec![InputRead { read: 1, path: path.clone(), sha256: basecraft_io::sha256_bytes(&bytes),
-            orientation: Orientation::Forward, calls: Some(TraceCalls { sequence: sequence.clone(),
+            orientation: Orientation::Forward, calls: Some(TraceCalls { sequence: sequence.clone(), secondary_sequence: None,
                 positions: calls.positions.clone(), scores: calls.qualities.as_ref().map_or_else(
                     || vec![0; length], |scores| scores.iter().map(|&score| i32::from(score)).collect()) }) }],
         consensus: sequence.clone(), consensus_length: length, minimum_overlap: 1,

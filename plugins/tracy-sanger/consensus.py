@@ -176,22 +176,46 @@ def trace_calls(
     if run.returncode:
         raise RuntimeError(f"Tracy basecall failed: {run.stderr[-2000:]}")
     raw = json.loads(output.read_text())
-    sequence = raw["primarySeq"].upper()
-    positions = [int(sample) - 1 for sample in raw["basecallPos"]]
-    scores = raw["basecallQual"]
+    if not isinstance(raw, dict):
+        raise ValueError("Invalid Tracy call evidence")
+    sequence = raw.get("primarySeq")
+    secondary = raw.get("secondarySeq")
+    samples = raw.get("basecallPos")
+    scores = raw.get("basecallQual")
     if (
-        len(sequence) != len(positions)
-        or len(scores) != len(positions)
-        or not sequence
-        or not re.fullmatch(r"[ACGTNRYKMSWBDHV]+", sequence)
-        or any(a >= b for a, b in pairwise(positions))
-        or positions[0] < 0
-        or positions[-1] >= len(raw["pos"])
+        not isinstance(sequence, str)
+        or not re.fullmatch(r"[ACGTNRYKMSWBDHV]+", sequence.upper())
+        or not isinstance(samples, list)
+        or not isinstance(scores, list)
+        or len(sequence) != len(samples)
+        or len(sequence) != len(scores)
+        or any(type(sample) is not int or not 1 <= sample <= 2**32 for sample in samples)
+        or any(type(score) is not int or not -(2**31) <= score < 2**31 for score in scores)
+        or any(a >= b for a, b in pairwise(samples))
+        or not isinstance(raw.get("pos"), list)
+        or samples[-1] > len(raw["pos"])
     ):
-        raise ValueError("Invalid Tracy call-to-signal coordinates")
+        raise ValueError("Invalid Tracy call-to-signal coordinates or scores")
+    if secondary is not None and (
+        not isinstance(secondary, str)
+        or len(secondary) != len(sequence)
+        or not re.fullmatch(r"[ACGTNRYKMSWBDHV]+", secondary.upper())
+    ):
+        raise ValueError("Invalid Tracy secondary call evidence")
+    for base in "ACGT":
+        channel = raw.get("peak" + base)
+        if (
+            not isinstance(channel, list)
+            or len(channel) != len(raw["pos"])
+            or any(type(value) is not int for value in channel)
+        ):
+            raise ValueError("Invalid Tracy signal channel")
     return {
-        "sequence": sequence,
-        "positions": positions,
+        "sequence": sequence.upper(),
+        # All arrays retain native event order, even for reverse/trimmed drafts.
+        # Absence is unknown evidence, not agreement with the primary call.
+        "secondary_sequence": secondary.upper() if secondary is not None else None,
+        "positions": [sample - 1 for sample in samples],
         "scores": scores,
         "signal_bounds": list(signal_bounds(raw, signal_threshold)),
     }

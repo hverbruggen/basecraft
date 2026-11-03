@@ -63,6 +63,11 @@ pub struct ReviewReference {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TraceCalls {
     pub sequence: String,
+    /// Native secondary calls, indexed by the same events as sequence/positions/scores.
+    /// Missing legacy or instrument evidence is unknown, never primary agreement.
+    /// Draft orientation and clipping do not transform these native arrays.
+    #[serde(default)]
+    pub secondary_sequence: Option<String>,
     pub positions: Vec<u32>,
     pub scores: Vec<i32>,
 }
@@ -196,6 +201,10 @@ impl SangerDraft {
                         .sequence
                         .bytes()
                         .all(|b| b"ACGTNRYKMSWBDHV".contains(&b))
+                    || calls.secondary_sequence.as_ref().is_some_and(|secondary| {
+                        secondary.len() != calls.sequence.len()
+                            || !secondary.bytes().all(|b| b"ACGTNRYKMSWBDHV".contains(&b))
+                    })
                     || calls.positions.windows(2).any(|p| p[0] >= p[1]))
             {
                 return Err("Invalid Tracy signal coordinates".into());
@@ -419,6 +428,68 @@ mod tests {
         assert_eq!(reversed.inputs[0].orientation, Orientation::Reverse);
         assert_eq!(reversed.proposed_read_calls(2), b"G");
         assert_eq!(reversed.reverse_complemented(), draft);
+
+        // Native event evidence survives both serialization and strand changes.
+        let native = serde_json::json!({
+            "sequence": "CAT", "secondary_sequence": "TAT",
+            "positions": [541, 554, 564], "scores": [40, 46, 43]
+        });
+        draft.inputs[0].calls = Some(serde_json::from_value(native.clone()).unwrap());
+        draft.inputs[1].calls = Some(
+            serde_json::from_value(serde_json::json!({
+                "sequence": "ATG", "secondary_sequence": "ATA",
+                "positions": [10, 20, 30], "scores": [43, 46, 40]
+            }))
+            .unwrap(),
+        );
+        draft.validate().unwrap();
+        let restored: SangerDraft =
+            serde_json::from_slice(&serde_json::to_vec(&draft).unwrap()).unwrap();
+        assert_eq!(restored, draft);
+        let reversed = draft.reverse_complemented();
+        reversed.validate().unwrap();
+        for (before, after) in draft.inputs.iter().zip(&reversed.inputs) {
+            assert_eq!(before.calls, after.calls);
+            assert_ne!(before.orientation, after.orientation);
+        }
+        assert_eq!(reversed.reverse_complemented(), draft);
+
+        for secondary in [serde_json::Value::Null, serde_json::json!("missing")] {
+            let mut legacy = native.clone();
+            if secondary.is_null() {
+                legacy["secondary_sequence"] = secondary;
+            } else {
+                legacy.as_object_mut().unwrap().remove("secondary_sequence");
+            }
+            let calls: TraceCalls = serde_json::from_value(legacy).unwrap();
+            assert_eq!(calls.secondary_sequence, None);
+            draft.inputs[0].calls = Some(calls);
+            draft.validate().unwrap();
+        }
+        for (key, value) in [
+            ("secondary_sequence", serde_json::json!("TA")),
+            ("secondary_sequence", serde_json::json!("T-T")),
+            ("secondary_sequence", serde_json::json!("")),
+            ("sequence", serde_json::json!("C?T")),
+            ("positions", serde_json::json!([541, 541, 564])),
+            ("positions", serde_json::json!([541, 554])),
+            ("scores", serde_json::json!([40, 46])),
+        ] {
+            let mut malformed = native.clone();
+            malformed[key] = value;
+            draft.inputs[0].calls = Some(serde_json::from_value(malformed).unwrap());
+            assert!(draft.validate().is_err(), "accepted invalid {key}");
+        }
+        for (key, value) in [
+            ("secondary_sequence", serde_json::json!(["T", "A", "T"])),
+            ("positions", serde_json::json!([-1, 554, 564])),
+            ("scores", serde_json::json!([40, "46", 43])),
+        ] {
+            let mut malformed = native.clone();
+            malformed[key] = value;
+            assert!(serde_json::from_value::<TraceCalls>(malformed).is_err());
+        }
+        draft.inputs[0].calls = Some(serde_json::from_value(native).unwrap());
         draft.columns[1].column = 1;
         assert!(draft.validate().is_err());
     }
