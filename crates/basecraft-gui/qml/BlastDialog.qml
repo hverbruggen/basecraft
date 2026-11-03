@@ -18,7 +18,9 @@ AppFormDialog {
     property string formError: ""
     property string resultUrl: ""
     property string resultMessage: ""
+    property string publicationWarning: ""
     property bool submitted: false
+    property bool browserPending: false
     // Injectable browser boundary for tests; retry only opens the retained URL.
     property var openBrowser: url => backend.open_browser_window(url)
     property var openSystemBrowser: url => Qt.openUrlExternally(url)
@@ -41,7 +43,7 @@ AppFormDialog {
         sourceMode = mode || "whole"
         sourceChoice.currentIndex = modes.indexOf(sourceMode)
         preview = ({}); frozenSource = ""; frozenSettings = ""
-        formError = ""; resultUrl = ""; resultMessage = ""; submitted = false
+        formError = ""; resultUrl = ""; resultMessage = ""; publicationWarning = ""; submitted = false
         configuredContact = backend.blast_contact()
         contact.text = configuredContact
         options.checked = false
@@ -90,24 +92,37 @@ AppFormDialog {
             if (!submitted) formError = backend.message
         } catch (error) { formError = String(error) }
     }
-    function openAgain() {
-        if (!/^https:\/\/blast\.ncbi\.nlm\.nih\.gov\/Blast\.cgi\?CMD=Get&RID=[A-Z0-9-]{8,64}&FORMAT_TYPE=HTML$/.test(resultUrl)) return
-        const opened = openBrowser(resultUrl)
+    Connections {
+        target: dialog.backend
+        function onBrowserFinished(url, status) {
+            dialog.browserPending = false
+            if (url === dialog.resultUrl) dialog.browserResult(status)
+        }
+    }
+    function browserResult(opened) {
+        if (opened === "pending" || opened === "busy") { browserPending = true; return }
         if (opened === "unsupported") {
             resultMessage = openSystemBrowser(resultUrl)
                 ? "Opened in the system browser. This browser/platform controls whether a new window or tab is used."
                 : "Browser could not open. Copy the link or choose Open again."
         } else if (opened !== "opened") resultMessage = "Browser could not open. Copy the link or choose Open again."
+        if (publicationWarning && !resultMessage.includes(publicationWarning)) resultMessage += publicationWarning
     }
+    function openAgain() {
+        if (browserPending) return
+        if (!/^https:\/\/blast\.ncbi\.nlm\.nih\.gov\/Blast\.cgi\?CMD=Get&RID=[A-Z0-9-]{8,64}&FORMAT_TYPE=HTML$/.test(resultUrl)) return
+        browserResult(openBrowser(resultUrl))
+    }
+
     function completed() {
         const outcome = JSON.parse(backend.outcome || "{}")
         const data = outcome.data || {}
-        resultMessage = data.message || backend.message
+        publicationWarning = outcome.state === "partial" ? " Local evidence is incomplete; retain this link and repair publication without resubmitting." : ""
+        resultMessage = (data.message || backend.message) + publicationWarning
         if (data.status === "accepted" && data.url) {
             resultUrl = data.url
             openAgain()
         }
-        if (outcome.state === "partial") resultMessage += " Local evidence is incomplete; retain this link and repair publication without resubmitting."
     }
     Label {
         Layout.fillWidth: true; wrapMode: Text.Wrap

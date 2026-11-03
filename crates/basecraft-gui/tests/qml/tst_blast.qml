@@ -8,6 +8,7 @@ Item {
     TextField { id: invoker }
     QtObject {
         id: backend
+        signal browserFinished(string url, string status)
         property bool busy: false
         property string message: ""
         property string outcome: "{}"
@@ -40,6 +41,7 @@ Item {
         function init() {
             backend.submissions = 0; backend.busy = false; backend.outcome = "{}"
             backend.oversized = false; backend.previewError = ""; backend.defaultAlphabet = "nucleotide"; backend.preparations = 0
+            dialog.browserPending = false
             source = "frozen query"; browserCalls = 0; systemBrowserCalls = 0
             dialog.openBrowser = url => { browserCalls++; return "failed" }
             dialog.openSystemBrowser = url => { systemBrowserCalls++; return true }
@@ -108,6 +110,20 @@ Item {
             dialog.openAgain()
             compare(systemBrowserCalls, 1)
             verify(dialog.resultMessage.includes("window or tab"))
+            compare(backend.submissions, 0)
+        }
+        function test_async_browser_completion_and_stale_result() {
+            dialog.openBrowser = url => { browserCalls++; return "pending" }
+            const url = "https://blast.ncbi.nlm.nih.gov/Blast.cgi?CMD=Get&RID=ABCD1234567&FORMAT_TYPE=HTML"
+            dialog.resultUrl = url
+            dialog.openAgain(); dialog.openAgain()
+            compare(browserCalls, 1); verify(dialog.browserPending)
+            backend.browserFinished(url, "unsupported")
+            compare(systemBrowserCalls, 1); verify(!dialog.browserPending)
+            dialog.openAgain()
+            dialog.show(mode => source, "whole", false)
+            backend.browserFinished(url, "unsupported")
+            compare(systemBrowserCalls, 1); compare(dialog.resultUrl, "")
             compare(backend.submissions, 0)
         }
         function test_unknown_and_escape_send_nothing() {

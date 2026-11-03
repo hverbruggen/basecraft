@@ -4,7 +4,7 @@ use std::io;
 
 fn browser_command(desktop: &str) -> Option<&'static str> {
     match desktop.trim() {
-        "firefox.desktop" | "org.mozilla.firefox.desktop" => Some("firefox"),
+        "firefox.desktop" => Some("firefox"),
         "chromium.desktop" | "chromium-browser.desktop" => Some("chromium"),
         "google-chrome.desktop" => Some("google-chrome"),
         "google-chrome-stable.desktop" => Some("google-chrome-stable"),
@@ -18,6 +18,37 @@ fn window_command(browser: &str, url: &str) -> std::process::Command {
     let mut command = std::process::Command::new(browser);
     command.arg("--new-window").arg(url);
     command
+}
+
+// Run only on a worker thread. A stalled desktop helper must not retain the
+// browser request forever. Kill and reap this owned child on timeout/error.
+fn command_output_with_timeout(
+    command: &mut std::process::Command,
+    timeout: std::time::Duration,
+) -> io::Result<std::process::Output> {
+    let mut child = command
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()?;
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return child.wait_with_output(),
+            Ok(None) if start.elapsed() < timeout => {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            status => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(status.err().unwrap_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "Desktop browser discovery timed out",
+                    )
+                }));
+            }
+        }
+    }
 }
 
 /// Returns false when the platform/default browser has no supported mechanism.
@@ -35,10 +66,10 @@ pub fn open_new_window(url: &str) -> io::Result<bool> {
     if !cfg!(target_os = "linux") {
         return Ok(false);
     }
-    let Ok(default) = std::process::Command::new("xdg-settings")
-        .args(["get", "default-web-browser"])
-        .output()
-    else {
+    let Ok(default) = command_output_with_timeout(
+        std::process::Command::new("xdg-settings").args(["get", "default-web-browser"]),
+        std::time::Duration::from_secs(2),
+    ) else {
         return Ok(false);
     };
     if !default.status.success() {
@@ -48,7 +79,11 @@ pub fn open_new_window(url: &str) -> io::Result<bool> {
         return Ok(false);
     };
     // Neither the desktop identifier nor URL is ever evaluated as shell code.
-    let mut child = window_command(command, url).spawn()?;
+    let mut child = match window_command(command, url).spawn() {
+        Ok(child) => child,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    };
     // Some browsers stay alive for the lifetime of their window.
     std::thread::spawn(move || {
         let _ = child.wait();
@@ -62,10 +97,7 @@ mod tests {
 
     #[test]
     fn only_known_desktop_ids_become_commands() {
-        assert_eq!(
-            browser_command("org.mozilla.firefox.desktop\n"),
-            Some("firefox")
-        );
+        assert_eq!(browser_command("org.mozilla.firefox.desktop\n"), None);
         assert_eq!(browser_command("chromium.desktop"), Some("chromium"));
         assert_eq!(browser_command("custom-wrapper.desktop"), None);
         assert_eq!(browser_command("firefox.desktop; touch /tmp/unsafe"), None);
@@ -83,6 +115,18 @@ mod tests {
                 io::ErrorKind::InvalidInput
             );
         }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn stalled_discovery_is_reaped_and_returns_timeout() {
+        let mut command = std::process::Command::new("sleep");
+        command.arg("10");
+        let start = std::time::Instant::now();
+        let error = command_output_with_timeout(&mut command, std::time::Duration::from_millis(40))
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(start.elapsed() < std::time::Duration::from_secs(2));
     }
 
     #[test]

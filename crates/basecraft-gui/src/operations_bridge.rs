@@ -5,13 +5,14 @@ use basecraft_plugin_host::{
     policy::SessionPolicy,
     registry::{Registry, RegistryConfig},
 };
-use cxx_qt::CxxQtType;
+use cxx_qt::{CxxQtType, Threading};
 use cxx_qt_lib::QString;
 use serde_json::{Value, json};
 use std::{path::Path, pin::Pin};
 
 #[cxx_qt::bridge]
 pub mod qobject {
+    impl cxx_qt::Threading for AppOperations {}
     unsafe extern "C++" {
         include!("cxx-qt-lib/qstring.h");
         type QString = cxx_qt_lib::QString;
@@ -30,7 +31,10 @@ pub mod qobject {
         #[qinvokable]
         fn blast_default_alphabet(self: &AppOperations, queries: &QString) -> QString;
         #[qinvokable]
-        fn open_browser_window(self: &AppOperations, url: &QString) -> QString;
+        fn open_browser_window(self: Pin<&mut AppOperations>, url: &QString) -> QString;
+        #[qsignal]
+        #[cxx_name = "browserFinished"]
+        fn browser_finished(self: Pin<&mut AppOperations>, url: QString, status: QString);
         #[qinvokable]
         fn preview_blast(self: &AppOperations, queries: &QString, parameters: &QString) -> QString;
         #[qinvokable]
@@ -55,6 +59,7 @@ pub struct OperationsRust {
     outcome: QString,
     jobs: JobManager,
     active: Option<String>,
+    browser_pending: bool,
 }
 impl Default for OperationsRust {
     fn default() -> Self {
@@ -64,6 +69,7 @@ impl Default for OperationsRust {
             outcome: QString::default(),
             jobs: JobManager::default().with_task_cancellation(),
             active: None,
+            browser_pending: false,
         }
     }
 }
@@ -156,14 +162,32 @@ impl qobject::AppOperations {
             serde_json::from_str(&queries.to_string()).unwrap_or_default();
         QString::from(basecraft_ops::blast::suggested_alphabet(&queries))
     }
-    pub fn open_browser_window(&self, url: &QString) -> QString {
-        QString::from(
-            match basecraft_platform::browser::open_new_window(&url.to_string()) {
-                Ok(true) => "opened",
-                Ok(false) => "unsupported",
-                Err(_) => "failed",
-            },
-        )
+    pub fn open_browser_window(mut self: Pin<&mut Self>, url: &QString) -> QString {
+        if self.browser_pending {
+            return QString::from("busy");
+        }
+        let url = url.to_string();
+        self.as_mut().rust_mut().browser_pending = true;
+        let thread = self.qt_thread();
+        let spawn = std::thread::Builder::new()
+            .name("basecraft-browser".into())
+            .spawn(move || {
+                let status = match basecraft_platform::browser::open_new_window(&url) {
+                    Ok(true) => "opened",
+                    Ok(false) => "unsupported",
+                    Err(_) => "failed",
+                };
+                let _ = thread.queue(move |mut state| {
+                    state.as_mut().rust_mut().browser_pending = false;
+                    state.browser_finished(QString::from(&url), QString::from(status));
+                });
+            });
+        if spawn.is_err() {
+            self.as_mut().rust_mut().browser_pending = false;
+            QString::from("failed")
+        } else {
+            QString::from("pending")
+        }
     }
     pub fn blast_contact(&self) -> QString {
         QString::from(&std::env::var("BASECRAFT_BLAST_CONTACT_EMAIL").unwrap_or_default())
