@@ -95,8 +95,7 @@ uses one of the methods below, its citations appear in the generated Methods tex
   accounts for most of the speed on real alignments. Keeping one triangular matrix follows
   the same paper.
 - Earlier versions of this engine used the sorted-row bound of RapidNJ (Simonsen et al.
-  2008, 2011). Reading that work is what led to the row bound below, and RapidNJ and
-  DecentTree remain the main comparators.
+  2008, 2011). RapidNJ and DecentTree remain the main comparators.
 - The guard is Basecraft's own addition. Clausen's exactness argument uses the triangle
   inequality, which corrected and pairwise-deleted distances can break. Tracking how far a
   join can lower each row's Q keeps the bound valid for any finite matrix, so results stay
