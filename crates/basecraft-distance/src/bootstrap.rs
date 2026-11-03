@@ -1,6 +1,6 @@
 //! Exact ordinary site bootstrap. No pair-pattern cache or candidate-tree approximation.
 use crate::{
-    Alignment, DistanceMatrix, Method, Packed, Result, TreeResult, estimate, optimized, pool,
+    Alignment, DistanceMatrix, Method, Packed, Result, TreeResult, optimized, pool,
 };
 use basecraft_io::newick::{ParsedTree, parse_newick};
 use rayon::prelude::*;
@@ -210,16 +210,13 @@ fn planes(weights: &[u64]) -> Vec<Vec<u64>> {
         .collect()
 }
 fn weighted_counts(a: &Packed, b: &Packed, weights: &[Vec<u64>]) -> (u64, u64, u64) {
+    let kernel = basecraft_platform::cpu::masked_pair_counts();
     let (mut valid, mut ts, mut tv) = (0, 0, 0);
     for (bit, plane) in weights.iter().enumerate() {
-        for (k, &weight) in plane.iter().enumerate() {
-            let mask = a.valid[k] & b.valid[k] & weight;
-            let h = (a.hi[k] ^ b.hi[k]) & mask;
-            let l = (a.lo[k] ^ b.lo[k]) & mask;
-            valid += u64::from(mask.count_ones()) << bit;
-            tv += u64::from(h.count_ones()) << bit;
-            ts += u64::from((l & !h).count_ones()) << bit;
-        }
+        let (v, t, u) = kernel(a.words(), b.words(), plane);
+        valid += v << bit;
+        ts += t << bit;
+        tv += u << bit;
     }
     (valid, ts, tv)
 }
@@ -260,47 +257,19 @@ fn counted_matrix(
     original: &DistanceMatrix,
     packed: &[Packed],
     workers: &rayon::ThreadPool,
-    counts: impl Fn(&Packed, &Packed) -> (u64, u64, u64) + Sync,
+    counts: impl Fn(&Packed, &Packed) -> (u64, u64, u64) + Sync + Send,
 ) -> DistanceMatrix {
     let mut result = original.clone();
-    // Bounded blocks write the existing triangular arrays directly; there is no
-    // pair-by-pattern table or second O(n²) temporary category array.
+    // The existing triangular arrays are written directly; there is no pair-by-pattern
+    // table or second O(n²) temporary category array.
     workers.install(|| {
-        result
-            .distances
-            .par_chunks_mut(256)
-            .zip(result.variances.par_chunks_mut(256))
-            .zip(result.shared_sites.par_chunks_mut(256))
-            .enumerate()
-            .for_each(|(block, ((ds, vs), ss))| {
-                let k = block * 256;
-                let mut lo = 1;
-                let mut hi = packed.len();
-                while lo + 1 < hi {
-                    let mid = lo + (hi - lo) / 2;
-                    if mid * (mid - 1) / 2 <= k {
-                        lo = mid;
-                    } else {
-                        hi = mid;
-                    }
-                }
-                let mut i = lo;
-                let mut j = k - i * (i - 1) / 2;
-                for ((d, v), s) in ds.iter_mut().zip(vs).zip(ss) {
-                    let (valid, ts, tv) = counts(&packed[i], &packed[j]);
-                    *s = valid;
-                    (*d, *v) = if valid >= original.min_overlap {
-                        estimate(original.model, valid, ts, tv).unwrap_or((f64::NAN, f64::NAN))
-                    } else {
-                        (f64::NAN, f64::NAN)
-                    };
-                    j += 1;
-                    if j == i {
-                        i += 1;
-                        j = 0;
-                    }
-                }
-            });
+        crate::fill_pairs(
+            packed,
+            original.model,
+            original.min_overlap,
+            (&mut result.distances, &mut result.variances, &mut result.shared_sites),
+            counts,
+        );
     });
     result
 }

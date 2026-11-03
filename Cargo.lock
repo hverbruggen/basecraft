@@ -276,6 +276,7 @@ name = "basecraft-distance"
 version = "0.0.0"
 dependencies = [
  "basecraft-io",
+ "basecraft-platform",
  "blake3",
  "clap",
  "rayon",

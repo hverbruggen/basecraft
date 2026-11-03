@@ -4,6 +4,7 @@
 
 pub mod atomic;
 pub mod browser;
+pub mod cpu;
 #[cfg(unix)]
 pub mod fdpass;
 pub mod files;

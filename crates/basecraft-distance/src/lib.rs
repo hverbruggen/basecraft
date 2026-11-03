@@ -3,6 +3,7 @@
 // Counts and matrix indices fit exactly at practical in-memory dataset sizes.
 // Mathematical subscripts follow the published NJ formulas.
 #![allow(clippy::cast_precision_loss, clippy::many_single_char_names)]
+use basecraft_platform::cpu::Words;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -16,6 +17,8 @@ mod bootstrap;
 mod incomplete;
 mod optimized;
 mod upgma;
+// Distinct count triples in one block of barcode data are few, and a logarithm is slow.
+const MEMO: usize = 128;
 pub use bootstrap::{
     BootstrapOptions, BootstrapPublicationError, BootstrapReport, BootstrapResult,
     ReplicateCollection, bootstrap, partial_collection_path,
@@ -50,16 +53,20 @@ impl Alignment {
         for line in text.lines().map(str::trim).filter(|s| !s.is_empty()) {
             if let Some(name) = line.strip_prefix('>') {
                 names.push(name.split_whitespace().next().unwrap_or("").to_string());
-                sequences.push(vec![]);
+                let width = sequences.first().map_or(0, Vec::len);
+                sequences.push(Vec::with_capacity(width));
             } else {
-                sequences
+                let sequence = sequences
                     .last_mut()
-                    .ok_or("sequence before FASTA header")?
-                    .extend(
-                        line.bytes()
-                            .filter(|c| !c.is_ascii_whitespace())
-                            .map(|c| c.to_ascii_uppercase()),
-                    );
+                    .ok_or("sequence before FASTA header")?;
+                let bytes = line.as_bytes();
+                let start = sequence.len();
+                if bytes.iter().any(u8::is_ascii_whitespace) {
+                    sequence.extend(bytes.iter().filter(|c| !c.is_ascii_whitespace()));
+                } else {
+                    sequence.extend_from_slice(bytes);
+                }
+                sequence[start..].make_ascii_uppercase();
             }
         }
         let a = Self { names, sequences };
@@ -67,6 +74,10 @@ impl Alignment {
         Ok(a)
     }
     pub fn validate(&self) -> Result<()> {
+        self.check(false)
+    }
+    // Parallel checks must run inside a caller's pool, so --threads holds.
+    fn check(&self, parallel: bool) -> Result<()> {
         if self.names.is_empty() || self.names.len() != self.sequences.len() {
             return Err("alignment must have named sequences".into());
         }
@@ -83,12 +94,17 @@ impl Alignment {
                 );
             }
         }
-        if self
-            .sequences
-            .iter()
-            .flatten()
-            .any(|c| !b"ACGTUNRYKMSWBDHVX?- .".contains(c))
-        {
+        let mut allowed = [false; 256];
+        for &c in b"ACGTUNRYKMSWBDHVX?- ." {
+            allowed[usize::from(c)] = true;
+        }
+        let bad = |s: &Vec<u8>| s.iter().any(|&c| !allowed[usize::from(c)]);
+        let found = if parallel {
+            self.sequences.par_iter().any(bad)
+        } else {
+            self.sequences.iter().any(bad)
+        };
+        if found {
             return Err("DNA/RNA input required; unsupported residue".into());
         }
         Ok(())
@@ -110,17 +126,82 @@ struct Packed {
     hi: Vec<u64>,
     valid: Vec<u64>,
 }
-fn counts(a: &Packed, b: &Packed) -> (u64, u64, u64) {
-    let (mut v, mut ts, mut tv) = (0, 0, 0);
-    for k in 0..a.lo.len() {
-        let mask = a.valid[k] & b.valid[k];
-        let h = (a.hi[k] ^ b.hi[k]) & mask;
-        let l = (a.lo[k] ^ b.lo[k]) & mask;
-        v += u64::from(mask.count_ones());
-        tv += u64::from(h.count_ones());
-        ts += u64::from((l & !h).count_ones());
+impl Packed {
+    fn words(&self) -> Words<'_> {
+        Words {
+            lo: &self.lo,
+            hi: &self.hi,
+            valid: &self.valid,
+        }
     }
-    (v, ts, tv)
+}
+/// Writes every pair of a triangular matrix from pair counts. Row blocks run as tasks and
+/// visit partner rows in short runs, which keeps both sides of each comparison in cache.
+fn fill_pairs(
+    packed: &[Packed],
+    model: Model,
+    min_overlap: u64,
+    (distances, variances, shared_sites): (&mut [f64], &mut [f64], &mut [u64]),
+    counts: impl Fn(&Packed, &Packed) -> (u64, u64, u64) + Sync + Send,
+) {
+    let n = packed.len();
+    let parallel = rayon::current_num_threads() > 1;
+    let row_bytes = packed.first().map_or(8, |p| p.lo.len() * 24).max(8);
+    let run = (128 * 1024 / row_bytes).clamp(8, 512);
+    let rows = run.min((n / (rayon::current_num_threads() * 8)).max(4));
+    let keep_variances = !variances.is_empty();
+    let mut tasks = vec![];
+    let (mut ds, mut vs, mut ss) = (distances, variances, shared_sites);
+    let mut first = 1;
+    while first < n {
+        let last = (first + rows).min(n);
+        let pairs = index(last, 0) - index(first, 0);
+        let (d_head, d_tail) = std::mem::take(&mut ds).split_at_mut(pairs);
+        let (v_head, v_tail) = std::mem::take(&mut vs).split_at_mut(if keep_variances { pairs } else { 0 });
+        let (s_head, s_tail) = std::mem::take(&mut ss).split_at_mut(pairs);
+        (ds, vs, ss) = (d_tail, v_tail, s_tail);
+        tasks.push((first, last, d_head, v_head, s_head));
+        first = last;
+    }
+    let fill = |(first, last, ds, vs, ss): (usize, usize, &mut [f64], &mut [f64], &mut [u64])| {
+        let base = index(first, 0);
+        let mut memo = vec![(u64::MAX, 0, 0, f64::NAN, f64::NAN); MEMO];
+        for start in (0..last).step_by(run) {
+            for i in first..last {
+                let row = index(i, 0) - base;
+                for j in start..(start + run).min(i) {
+                    let (valid, ts, tv) = counts(&packed[i], &packed[j]);
+                    let k = row + j;
+                    ss[k] = valid;
+                    let slot = &mut memo[(valid as usize)
+                        .wrapping_mul(31)
+                        .wrapping_add((ts as usize).wrapping_mul(7))
+                        .wrapping_add(tv as usize)
+                        & (MEMO - 1)];
+                    if slot.0 != valid || slot.1 != ts || slot.2 != tv {
+                        let (d, v) = if valid >= min_overlap {
+                            estimate(model, valid, ts, tv).unwrap_or((f64::NAN, f64::NAN))
+                        } else {
+                            (f64::NAN, f64::NAN)
+                        };
+                        *slot = (valid, ts, tv, d, v);
+                    }
+                    ds[k] = slot.3;
+                    if keep_variances {
+                        vs[k] = slot.4;
+                    }
+                }
+            }
+        }
+    };
+    if parallel {
+        tasks.into_par_iter().for_each(fill);
+    } else {
+        tasks.into_iter().for_each(fill);
+    }
+}
+fn counts(a: &Packed, b: &Packed) -> (u64, u64, u64) {
+    basecraft_platform::cpu::pair_counts()(a.words(), b.words())
 }
 fn map<T: Send, F: Fn(usize) -> T + Sync + Send>(n: usize, parallel: bool, f: F) -> Vec<T> {
     if parallel {
@@ -254,72 +335,34 @@ fn pool(threads: usize) -> Result<rayon::ThreadPool> {
         .num_threads(threads)
         .build()?)
 }
-type Block<'a> = (usize, ((&'a mut [f64], &'a mut [f64]), &'a mut [u64]));
 impl DistanceMatrix {
-    // Triangular block inverse is nonnegative; integer correction below fixes rounding.
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        clippy::manual_midpoint
-    )]
     pub fn calculate(
         a: &Alignment,
         model: Model,
         min_overlap: u64,
         threads: usize,
     ) -> Result<Self> {
-        a.validate()?;
         if min_overlap == 0 {
             return Err("minimum overlap must be at least one".into());
         }
+        let workers = pool(threads)?;
+        workers.install(|| a.check(threads > 1))?;
         let n = a.names.len();
         let len = n.checked_mul(n - 1).ok_or("too many sequences")? / 2;
-        let (distances, variances, shared_sites) = pool(threads)?.install(|| {
+        let (distances, variances, shared_sites) = workers.install(|| {
             let packed = map(n, threads > 1, |i| optimized::pack_fast(&a.sequences[i]));
-            let mut distances = vec![f64::NAN; len];
-            let mut variances = vec![f64::NAN; len];
+            // Zeroed pages are touched first by the workers that fill them.
+            let mut distances = vec![0.; len];
+            let mut variances = vec![0.; len];
             let mut shared_sites = vec![0; len];
-            let fill = |(block, ((ds, vs), ss)): Block<'_>| {
-                let k = block * 256;
-                let mut i = (((1. + 8. * k as f64).sqrt() + 1.) / 2.) as usize;
-                while i * (i - 1) / 2 > k {
-                    i -= 1;
-                }
-                while (i + 1) * i / 2 <= k {
-                    i += 1;
-                }
-                let mut j = k - i * (i - 1) / 2;
-                for ((d, v), s) in ds.iter_mut().zip(vs).zip(ss) {
-                    let (valid, ts, tv) = counts(&packed[i], &packed[j]);
-                    *s = valid;
-                    if valid >= min_overlap
-                        && let Some((dd, vv)) = estimate(model, valid, ts, tv)
-                    {
-                        *d = dd;
-                        *v = vv;
-                    }
-                    j += 1;
-                    if j == i {
-                        i += 1;
-                        j = 0;
-                    }
-                }
-            };
-            if threads > 1 {
-                distances
-                    .par_chunks_mut(256)
-                    .zip(variances.par_chunks_mut(256))
-                    .zip(shared_sites.par_chunks_mut(256))
-                    .enumerate()
-                    .for_each(fill);
-            } else {
-                distances
-                    .chunks_mut(256)
-                    .zip(variances.chunks_mut(256))
-                    .zip(shared_sites.chunks_mut(256))
-                    .enumerate()
-                    .for_each(fill);
-            }
+            let kernel = basecraft_platform::cpu::pair_counts();
+            fill_pairs(
+                &packed,
+                model,
+                min_overlap,
+                (&mut distances, &mut variances, &mut shared_sites),
+                |x, y| kernel(x.words(), y.words()),
+            );
             (distances, variances, shared_sites)
         });
         Ok(Self {

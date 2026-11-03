@@ -10,6 +10,7 @@ repository.workspace = true
 
 [dependencies]
 basecraft-io = { path = "../basecraft-io" }
+basecraft-platform = { path = "../basecraft-platform" }
 rayon.workspace = true
 serde.workspace = true
 serde_json.workspace = true
