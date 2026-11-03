@@ -79,11 +79,7 @@ impl PluginProcess {
         Self::spawn_allocated(manifest, python, crate::compute::effective_allocation()?)
     }
 
-    pub fn spawn_with_allocation(manifest: &Manifest, budget: usize) -> Result<Self> {
-        Self::spawn_allocated(manifest, &python_interpreter(), budget)
-    }
-
-    pub fn spawn_allocated(manifest: &Manifest, python: &Path, budget: usize) -> Result<Self> {
+    fn spawn_allocated(manifest: &Manifest, python: &Path, budget: usize) -> Result<Self> {
         crate::registry::require_enabled(&manifest.id)?;
         Self::spawn_accepted(manifest, python, budget)
     }
@@ -147,6 +143,11 @@ impl PluginProcess {
         command
             .arg("-B")
             .arg(&script)
+            // Child tools share this process-owned scratch root. Host teardown
+            // removes it even when cancellation kills Python before finally.
+            .env("TMPDIR", dir.path())
+            .env("TMP", dir.path())
+            .env("TEMP", dir.path())
             .env("BASECRAFT_SOCKET", &socket)
             .env("PYTHONPATH", sdk_path())
             .stdin(Stdio::null())

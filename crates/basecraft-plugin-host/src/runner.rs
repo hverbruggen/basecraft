@@ -943,12 +943,97 @@ impl PreparedOperation {
                     .path(&prepared.bootstrap_destination(Path::new(&member)), true)?;
             }
         }
+        if prepared
+            .operation
+            .descriptor
+            .inputs
+            .values()
+            .any(|binding| binding.retain)
+        {
+            prepared.retain_inputs()?;
+        }
         Ok(prepared)
     }
 
-    /// A stage reads accepted bytes but also depends on the parent's original
-    /// input ledgers. Inherit those origins, never the unfinished parent itself:
-    /// the parent will depend on the completed stages, so that would cycle.
+    /// Keep path-bearing results independent of temporary execution inputs.
+    /// Use the existing input ledgers and preserve-copy policy for ancestry;
+    /// submitted (possibly transformed) bytes remain in the normal run store.
+    fn retain_inputs(&mut self) -> Result<()> {
+        let retained_bindings: BTreeSet<_> = self
+            .context
+            .inputs
+            .keys()
+            .filter(|name| {
+                self.operation
+                    .descriptor
+                    .inputs
+                    .get(*name)
+                    .is_some_and(|binding| binding.retain)
+            })
+            .cloned()
+            .collect();
+        for (binding, records) in &self.context.input_evidence {
+            if !retained_bindings.contains(binding) {
+                continue;
+            }
+            for record in records {
+                if record.original_path.is_some() {
+                    input_evidence::preserve_input(Path::new(&record.run_directory))?;
+                }
+            }
+        }
+        // The logical run's primary reference delegates to the preserved leaf,
+        // just as Save As/preserve-copy does. Otherwise primary_matches would
+        // incorrectly prefer the now-removed temporary original.
+        let input_path = self.run.artifact("input.json")?;
+        if input_path.is_file() {
+            let mut input = input_evidence::read_input(self.run.directory())?;
+            if let Some(source) = &input.source
+                && let Some(owner) = self
+                    .context
+                    .input_evidence
+                    .iter()
+                    .filter(|(binding, _)| retained_bindings.contains(*binding))
+                    .flat_map(|(_, records)| records)
+                    .find(|record| record.source_hash.as_ref() == Some(&source.hash))
+            {
+                input.extra.insert(
+                    "origin_run".into(),
+                    json!(input_evidence::relative(
+                        self.run.directory(),
+                        Path::new(&owner.run_directory)
+                    )?),
+                );
+                input.state = "preserved".into();
+                input_evidence::write_json(&input_path, &input)?;
+            }
+        }
+        for (binding, paths) in &mut self.context.inputs {
+            if !retained_bindings.contains(binding) {
+                continue;
+            }
+            for (index, path) in paths.iter_mut().enumerate() {
+                let name = format!("submitted-{binding}-{index}");
+                let retained = self.run.artifact(&name)?;
+                if Path::new(path) == retained {
+                    continue;
+                }
+                let hash = file_tool::freeze_file(Path::new(path), &retained)?;
+                self.ledger_inputs.push(ArtifactRevision {
+                    id: format!("{}:{name}", self.run.id()),
+                    logical_name: name.clone(),
+                    hash,
+                    size: std::fs::metadata(&retained)?.len(),
+                    retained: Some(name),
+                    reference: None,
+                });
+                *path = retained.display().to_string();
+            }
+        }
+        Ok(())
+    }
+
+    /// Inherit a workflow stage's original ledgers, avoiding a parent/child cycle.
     pub(crate) fn inherit_input_ancestry(&self, parent: &Path) -> Result<()> {
         let _guard = input_evidence::lock()?;
         let dependencies = sources_from_upstream(parent)?;

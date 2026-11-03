@@ -8,7 +8,14 @@ use basecraft_plugin_host::{
 use cxx_qt::{CxxQtType, Threading};
 use cxx_qt_lib::QString;
 use serde_json::{Value, json};
-use std::{path::Path, pin::Pin};
+use std::{
+    path::PathBuf,
+    pin::Pin,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 #[cxx_qt::bridge]
 pub mod qobject {
@@ -53,23 +60,19 @@ pub mod qobject {
         fn cancel(self: Pin<&mut AppOperations>);
     }
 }
+#[derive(Default)]
 pub struct OperationsRust {
     busy: bool,
     message: QString,
     outcome: QString,
-    jobs: JobManager,
-    active: Option<String>,
+    cancelled: Option<Arc<AtomicBool>>,
+    pending_result: Option<Result<basecraft_protocol::operation::OperationOutcome, String>>,
     browser_pending: bool,
 }
-impl Default for OperationsRust {
-    fn default() -> Self {
-        Self {
-            busy: false,
-            message: QString::default(),
-            outcome: QString::default(),
-            jobs: JobManager::default().with_task_cancellation(),
-            active: None,
-            browser_pending: false,
+impl Drop for OperationsRust {
+    fn drop(&mut self) {
+        if let Some(cancelled) = &self.cancelled {
+            cancelled.store(true, Ordering::Release);
         }
     }
 }
@@ -220,11 +223,14 @@ impl qobject::AppOperations {
         if self.rust().busy {
             return false;
         }
-        let result = (|| -> basecraft_plugin_host::Result<_> {
+        let queries = queries.to_string();
+        let parameters = parameters.to_string();
+        let approval = approval.to_string();
+        self.start_request(move || {
             let queries: Vec<basecraft_ops::blast::Query> =
-                serde_json::from_str(&queries.to_string())?;
-            let mut parameters = blast_parameters(&parameters.to_string())?;
-            parameters["approval_hash"] = json!(approval.to_string());
+                serde_json::from_str(&queries)?;
+            let mut parameters = blast_parameters(&parameters)?;
+            parameters["approval_hash"] = json!(approval);
             parameters["truncate"] = json!(truncate);
             let plan = basecraft_ops::blast::prepare(&queries, &parameters)?;
             basecraft_ops::blast::authorize(&plan, &parameters)?;
@@ -243,17 +249,7 @@ impl qobject::AppOperations {
                 root,
                 json!({"operation":"basecraft.blast/submit@1","inputs":{"queries":[{"kind":"file","path":"query-source.json"}]},"parameters":parameters}),
             ))
-        })();
-        match result {
-            Ok((root, request)) => self.submit(
-                &QString::from(&root.display().to_string()),
-                &QString::from(&request.to_string()),
-            ),
-            Err(error) => {
-                self.set_message(QString::from(&format!("fail: {error}")));
-                false
-            }
-        }
+        })
     }
 
     pub fn catalog(&self) -> QString {
@@ -263,80 +259,125 @@ impl qobject::AppOperations {
                 .to_string(),
         )
     }
-    pub fn submit(mut self: Pin<&mut Self>, project: &QString, request: &QString) -> bool {
-        if self.rust().busy {
-            return false;
-        }
+    pub fn submit(self: Pin<&mut Self>, project: &QString, request: &QString) -> bool {
+        let root = PathBuf::from(project.to_string());
         let request = request.to_string();
-        let result = (|| -> basecraft_plugin_host::Result<_> {
+        self.start_request(move || {
             if request.len() > basecraft_protocol::operation::MAX_FRAME_BYTES {
                 return Err(basecraft_plugin_host::Error::Protocol(
                     "operation request exceeds byte limit".into(),
                 ));
             }
-            let registry = Registry::load(&RegistryConfig::discover()?)?;
-            let policy = SessionPolicy::new(Path::new(&project.to_string()), true)?;
-            self.as_mut().rust_mut().jobs.submit(
-                &registry,
-                serde_json::from_str(&request)?,
-                policy,
-                "GUI",
-            )
-        })();
-        match result {
-            Ok(accepted) => {
-                self.as_mut().rust_mut().active = Some(accepted.run_id.clone());
-                self.as_mut()
-                    .set_outcome(QString::from(&json!(accepted).to_string()));
-                self.as_mut()
-                    .set_message(QString::from("Running operation"));
-                self.set_busy(true);
-                true
-            }
-            Err(error) => {
-                self.set_message(QString::from(&format!("fail: {error}")));
-                false
-            }
+            Ok((root, serde_json::from_str(&request)?))
+        })
+    }
+
+    fn start_request(
+        mut self: Pin<&mut Self>,
+        prepare: impl FnOnce() -> basecraft_plugin_host::Result<(PathBuf, Value)> + Send + 'static,
+    ) -> bool {
+        if self.rust().busy {
+            return false;
         }
+        let cancelled = Arc::new(AtomicBool::new(false));
+        self.as_mut().rust_mut().cancelled = Some(cancelled.clone());
+        self.as_mut().set_outcome(QString::default());
+        self.as_mut()
+            .set_message(QString::from("Preparing operation"));
+        self.as_mut().set_busy(true);
+        let qt_thread = self.qt_thread();
+        let spawn = std::thread::Builder::new()
+            .name("operation-submission".into())
+            .spawn(move || {
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                    || -> basecraft_plugin_host::Result<_> {
+                        let (root, request) = prepare()?;
+                        if cancelled.load(Ordering::Acquire) {
+                            return Err(basecraft_plugin_host::Error::Protocol(
+                                "Operation cancelled before submission".into(),
+                            ));
+                        }
+                        let registry = Registry::load(&RegistryConfig::discover()?)?;
+                        let policy = SessionPolicy::new(&root, true)?;
+                        let mut jobs = JobManager::default().with_task_cancellation();
+                        let accepted = jobs.submit(
+                            &registry,
+                            serde_json::from_value(request)?,
+                            policy,
+                            "GUI",
+                        )?;
+                        let text = json!(accepted).to_string();
+                        let _ = qt_thread.queue(move |mut state| {
+                            state.as_mut().set_outcome(QString::from(text));
+                            state.set_message(QString::from("Running operation"));
+                        });
+                        loop {
+                            if cancelled.load(Ordering::Acquire) {
+                                jobs.cancel(&accepted.run_id)?;
+                            }
+                            let outcome = jobs.get(&accepted.run_id)?;
+                            if outcome.state.terminal() {
+                                return Ok(outcome);
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(25));
+                        }
+                    },
+                ))
+                .unwrap_or_else(|_| {
+                    Err(basecraft_plugin_host::Error::Protocol(
+                        "Operation worker interrupted".into(),
+                    ))
+                });
+                let _ = qt_thread.queue(move |mut state| {
+                    state.as_mut().rust_mut().pending_result =
+                        Some(result.map_err(|e| e.to_string()));
+                });
+            });
+        if let Err(error) = spawn {
+            self.as_mut().rust_mut().cancelled = None;
+            self.as_mut().set_busy(false);
+            self.set_message(QString::from(format!("fail: {error}")));
+            return false;
+        }
+        true
     }
     pub fn poll(mut self: Pin<&mut Self>) {
-        let Some(id) = self.rust().active.clone() else {
+        // Keep the existing poll/terminal transition contract: callers can
+        // record a terminal outcome immediately after poll clears busy.
+        let Some(result) = self.as_mut().rust_mut().pending_result.take() else {
             return;
         };
-        match self.rust().jobs.get(&id) {
+        self.as_mut().rust_mut().cancelled = None;
+        match result {
             Ok(outcome) => {
-                let terminal = outcome.state.terminal();
                 let message =
                     if outcome.state == basecraft_protocol::operation::RuntimeState::Completed {
                         "done: Operation completed".into()
-                    } else if terminal {
+                    } else {
                         outcome.errors.first().map_or_else(
                             || "notify: Operation cancelled".into(),
-                            |error| format!("fail: {}", error.message),
+                            |e| format!("fail: {}", e.message),
                         )
-                    } else {
-                        "Running operation".into()
                     };
                 self.as_mut()
-                    .set_outcome(QString::from(&json!(outcome).to_string()));
-                self.as_mut().set_message(QString::from(&message));
-                self.set_busy(!terminal);
+                    .set_outcome(QString::from(json!(outcome).to_string()));
+                self.as_mut().set_message(QString::from(message));
             }
             Err(error) => {
+                self.as_mut().set_outcome(QString::from(
+                    json!({"state":"failed","errors":[{"message":error}]}).to_string(),
+                ));
                 self.as_mut()
-                    .set_message(QString::from(&format!("fail: {error}")));
-                self.set_busy(false);
+                    .set_message(QString::from(format!("fail: {error}")));
             }
         }
+        self.set_busy(false);
     }
-    pub fn cancel(mut self: Pin<&mut Self>) {
-        if let Some(id) = self.rust().active.clone()
-            && let Err(error) = self.rust().jobs.cancel(&id)
-        {
-            self.as_mut()
-                .set_message(QString::from(&format!("fail: {error}")));
+    pub fn cancel(self: Pin<&mut Self>) {
+        if let Some(cancelled) = &self.rust().cancelled {
+            cancelled.store(true, Ordering::Release);
         }
-        self.poll();
+        self.set_message(QString::from("Cancelling operation"));
     }
 }
 

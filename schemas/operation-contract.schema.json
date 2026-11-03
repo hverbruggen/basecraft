@@ -67,6 +67,10 @@
           "format": "uint",
           "minimum": 0
         },
+        "retain": {
+          "description": "Preserve original and submitted bytes when results refer to input paths.\nApplied by the shared runner equally for GUI, CLI, Python and MCP.",
+          "type": "boolean"
+        },
         "view": {
           "$ref": "#/$defs/InputView"
         }

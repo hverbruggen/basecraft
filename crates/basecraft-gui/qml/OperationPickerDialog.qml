@@ -20,6 +20,7 @@ AppContentDialog {
     AppOperations { id: backend }
     Timer { interval: 200; repeat: true; running: backend.busy; onTriggered: backend.poll() }
     function show(project, path, dirty) {
+        if (backend.busy) { open(); return }
         dialog.project = project
         inputPath = path
         unsavedInput = dirty
@@ -38,6 +39,7 @@ AppContentDialog {
         operationChoice.currentIndex = data.operations.length ? 0 : -1
     }
     function showOperation(project, path, dirty, id) {
+        if (backend.busy) { open(); return }
         dialog.project = project
         inputPath = path
         unsavedInput = dirty
@@ -47,6 +49,7 @@ AppContentDialog {
     }
     property string formError: ""
     function start() {
+        if (backend.busy) return
         formError = ""
         if (!selected || !selected.supported || unsavedInput) return
         const inputs = {}
@@ -103,6 +106,7 @@ AppContentDialog {
         Loader {
             id: parameterForm
             Layout.fillWidth: true
+            enabled: !backend.busy
             active: dialog.selected && dialog.selected.supported
             function reload() {
                 source = ""
@@ -127,10 +131,16 @@ AppContentDialog {
         }
         RowLayout {
             Button { id: runButton; text: "Run"; enabled: !backend.busy && dialog.selected && dialog.selected.supported && !dialog.unsavedInput; onClicked: dialog.start() }
-            Button { text: "Cancel operation"; enabled: backend.busy; onClicked: backend.cancel() }
             Button { text: "Refresh installed operations"; enabled: !backend.busy; onClicked: dialog.refreshCatalog() }
         }
-        Label { text: backend.message; wrapMode: Text.Wrap; Layout.fillWidth: true; Accessible.name: "Operation status" }
+        AppMessageBar {
+            Layout.fillWidth: true
+            busy: backend.busy
+            workingText: backend.message || "Running operation"
+            message: backend.message
+            cancelText: "Cancel operation"
+            onCancelRequested: backend.cancel()
+        }
         TextArea { visible: dialog.operationOutcome.data !== undefined && dialog.operationOutcome.data !== null; text: JSON.stringify(dialog.operationOutcome.data, null, 2) || ""; readOnly: true; selectByMouse: true; wrapMode: TextEdit.Wrap; Layout.fillWidth: true; Accessible.name: "Structured operation result" }
         Repeater {
             model: dialog.operationOutcome.artifacts || []

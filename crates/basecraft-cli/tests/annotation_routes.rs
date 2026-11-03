@@ -1,5 +1,5 @@
 //! The same annotation through every route that applies sequence proposals
-//! (GUI job runner, CLI `plugin`, MCP operation tool, schema-1 CLI `plugin`)
+//! (GUI job runner, CLI `plugin`, MCP operation tool)
 //! leaves the same invocation evidence in the saved record.
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -271,13 +271,10 @@ fn every_annotation_route_keeps_the_same_invocation_evidence() {
     }
 }
 
-/// A schema-1 package has no typed contract and runs directly, but its call
-/// still records the plugin, operation, submitted settings and snapshot hash.
+/// A schema-1 package has no typed contract: refuse it before executing Python
+/// or opening/mutating the document, with an actionable migration explanation.
 #[test]
-fn schema_one_plugin_call_records_its_invocation() {
-    if !python_ready() {
-        return;
-    }
+fn schema_one_plugin_call_is_rejected_without_execution_or_mutation() {
     let temp = tempfile::tempdir().unwrap();
     let profile = temp.path().join("profile");
     let package = temp.path().join("legacy");
@@ -285,17 +282,14 @@ fn schema_one_plugin_call_records_its_invocation() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/legacy-plugin");
     std::fs::copy(fixture.join("plugin.toml"), package.join("plugin.toml")).unwrap();
+    let sentinel = package.join("executed");
     std::fs::write(
         package.join("plugin.py"),
-        "from basecraft.plugin import Plugin, feature\n\n\
-         plugin = Plugin(\"org.example.legacy\", \"1.0.0\")\n\n\n\
-         @plugin.operation(\"noop\")\n\
-         def noop(_snapshot, parameters):\n    \
-         return {\"ops\": [feature(\"misc_feature\", 0, parameters[\"end\"])]}\n\n\n\
-         if __name__ == \"__main__\":\n    plugin.run()\n",
+        "from pathlib import Path\nPath(__file__).with_name('executed').touch()\n",
     )
     .unwrap();
     let file = project(temp.path(), "legacy-project");
+    let original = std::fs::read(&file).unwrap();
     let output = cli(&profile)
         .args([
             "plugin",
@@ -307,33 +301,18 @@ fn schema_one_plugin_call_records_its_invocation() {
         ])
         .output()
         .unwrap();
+    assert!(!output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
     assert!(
-        output.status.success(),
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+        error.contains("versioned operation contract (schema 2)"),
+        "{error}"
     );
-    assert_eq!(features(&file).len(), 1);
-    let entry = tool_run(&file, "org.example.legacy");
-    let Op::ToolRun {
-        operation, params, ..
-    } = &entry.op
-    else {
-        unreachable!()
-    };
-    assert_eq!(operation, "noop");
-    assert_eq!(params["requested"], json!({"end": 4}), "{params}");
-    assert_eq!(params["contract"], "schema-1", "{params}");
-    assert_eq!(params["initiator"], "CLI", "{params}");
-    // The submitted snapshot is identified by the hash a registered run of
-    // the same document would retain; the legacy route keeps no copy.
-    let hash = params["snapshot"]["hash"].as_str().unwrap();
-    assert!(hash.starts_with("b3:"), "{hash}");
-    assert_eq!(provenance::verify(&file).unwrap(), Vec::<String>::new());
-    let history = cli(&profile)
-        .args(["history", file.to_str().unwrap()])
-        .output()
-        .unwrap();
-    let history = String::from_utf8_lossy(&history.stdout);
-    assert!(history.contains("Ran org.example.legacy noop"), "{history}");
+    assert!(error.contains("migrate/install"), "{error}");
+    assert!(
+        !sentinel.exists(),
+        "Rejected package entry point was executed"
+    );
+    assert_eq!(std::fs::read(&file).unwrap(), original);
+    assert!(!file.parent().unwrap().join(".basecraft").exists());
+    assert!(!provenance::companion(&file).exists());
 }

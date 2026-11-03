@@ -103,6 +103,10 @@ pub struct InputBinding {
     pub media_type: String,
     pub min: usize,
     pub max: usize,
+    /// Preserve original and submitted bytes when results refer to input paths.
+    /// Applied by the shared runner equally for GUI, CLI, Python and MCP.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub retain: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

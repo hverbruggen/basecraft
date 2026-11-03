@@ -193,11 +193,13 @@ FocusScope {
             kind: ctl.message_kind
             details: ctl.message_details
             busy: ctl.busy
+            workingText: ctl.message || "Running species analysis"
             onDetailsRequested: detailsDialog.open()
             onCancelRequested: ctl.cancel_job()
         }
         RowLayout {
             objectName: "thresholdCut"
+            enabled: !ctl.busy
             visible: doc.tool === "cut"
             Layout.fillWidth: true
             Layout.leftMargin: 8

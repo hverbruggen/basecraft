@@ -239,19 +239,17 @@ impl qobject::AppProvenance {
         ));
         success
     }
-    fn export_report(mut self: Pin<&mut Self>, snapshot: &QString, directory: &QString) {
-        let result = (|| -> basecraft_ops::Result<()> {
+    fn export_report(self: Pin<&mut Self>, snapshot: &QString, directory: &QString) {
+        let snapshot = snapshot.to_string();
+        let directory = std::path::PathBuf::from(directory.to_string());
+        self.start_work(move || {
             let report: basecraft_ops::document_record::Report =
-                serde_json::from_str(&snapshot.to_string())?;
-            report.export(Path::new(&directory.to_string()))
-        })();
-        self.as_mut().set_message(QString::from(
-            match result {
-                Ok(()) => "done: Report exported for the selected revision".into(),
-                Err(e) => format!("fail: Report export incomplete: {e}"),
-            }
-            .as_str(),
-        ));
+                serde_json::from_str(&snapshot).map_err(|e| e.to_string())?;
+            report
+                .export(&directory)
+                .map_err(|e| format!("Report export incomplete: {e}"))?;
+            Ok("Report exported for the selected revision".into())
+        });
     }
     fn notification(
         mut self: Pin<&mut Self>,
@@ -371,24 +369,25 @@ impl qobject::AppProvenance {
             }
         }
     }
-    fn start(
+    fn start(self: Pin<&mut Self>, operation: &QString, result: &QString, destination: &QString) {
+        let operation = operation.to_string();
+        let result = std::path::PathBuf::from(result.to_string());
+        let destination = std::path::PathBuf::from(destination.to_string());
+        self.start_work(move || run(&operation, &result, &destination));
+    }
+    fn start_work(
         mut self: Pin<&mut Self>,
-        operation: &QString,
-        result: &QString,
-        destination: &QString,
+        work: impl FnOnce() -> Result<String, String> + Send + 'static,
     ) {
         if *self.busy() {
             return;
         }
-        let operation = operation.to_string();
-        let result = std::path::PathBuf::from(result.to_string());
-        let destination = std::path::PathBuf::from(destination.to_string());
         self.as_mut().set_busy(true);
         self.as_mut().set_text(QString::default());
         self.as_mut().set_message(QString::from("notify: Working…"));
         let thread = self.qt_thread();
         let spawn = std::thread::Builder::new().name("basecraft-provenance".into()).spawn(move || {
-            let result = run(&operation, &result, &destination);
+            let result = work();
             let _ = thread.queue(move |mut state| {
                 state.as_mut().set_busy(false);
                 match result {

@@ -170,7 +170,8 @@ use basecraft_protocol::{
 use basecraft_viewmodel::delimitation::{self, Selection};
 
 use crate::document_jobs::{
-    DocumentJob, bundled, declared_parameters, failure, input_role, primary_member, result_file,
+    BackgroundDocumentJob as DocumentJob, bundled, declared_parameters, failure, input_role,
+    primary_member, result_file,
 };
 
 /// A registered analysis running for this workspace; dropping it cancels it.
@@ -367,7 +368,25 @@ impl qobject::DelimitationController {
             self.set_tree_edits(QString::from(&edits));
         }
     }
+    // BackgroundDocumentJob exclusively owns the Session until poll_job restores it.
+    fn workspace_available(mut self: Pin<&mut Self>) -> bool {
+        let error = if self.rust().busy {
+            Some("Species analysis is running; wait for completion or cancel it first")
+        } else if self.rust().session.is_none() || self.rust().doc.is_none() {
+            Some("No species workspace is open")
+        } else {
+            None
+        };
+        if let Some(error) = error {
+            self.as_mut().fail(error);
+            return false;
+        }
+        true
+    }
     fn edit(mut self: Pin<&mut Self>, edit: DelimitationEdit) -> Result<(), String> {
+        if !self.as_mut().workspace_available() {
+            return Err(self.rust().message.to_string());
+        }
         let result = {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
@@ -394,6 +413,10 @@ impl qobject::DelimitationController {
     }
     #[allow(clippy::many_single_char_names)]
     pub fn open_file(mut self: Pin<&mut Self>, path: &QString) -> bool {
+        if self.rust().busy {
+            self.fail("Wait for the running operation before replacing this document");
+            return false;
+        }
         let p = PathBuf::from(path.to_string());
         let result = (|| -> basecraft_ops::Result<_> {
             let mut s = Session::recoverable(crate::bridge::project_root(&p))?;
@@ -592,6 +615,9 @@ impl qobject::DelimitationController {
         }
     }
     pub fn root_display_tree(mut self: Pin<&mut Self>, method: &QString) -> bool {
+        if !self.as_mut().workspace_available() {
+            return false;
+        }
         let result = (|| -> Result<PathBuf, String> {
             let state = self.rust();
             let session = state.session.as_ref().ok_or("No workspace")?;
@@ -614,6 +640,9 @@ impl qobject::DelimitationController {
         }
     }
     pub fn attach_tree(mut self: Pin<&mut Self>, path: &QString, rooted: bool) -> bool {
+        if !self.as_mut().workspace_available() {
+            return false;
+        }
         let result = (|| -> Result<_, Box<dyn std::error::Error>> {
             let mut p = PathBuf::from(path.to_string());
             if let Some((session, doc)) = self.rust().session.as_ref().zip(self.rust().doc) {
@@ -654,20 +683,22 @@ impl qobject::DelimitationController {
                     .set_display_path(QString::from(retained.to_string_lossy().as_ref()));
                 let changed = {
                     let state = self.rust();
-                    let session = state.session.as_ref().unwrap();
-                    session
-                        .delimitation(state.doc.unwrap())
-                        .view
-                        .display_tree
-                        .as_deref()
+                    let Some((session, doc)) = state.session.as_ref().zip(state.doc) else {
+                        self.fail("No species workspace is open");
+                        return false;
+                    };
+                    session.delimitation(doc).view.display_tree.as_deref()
                         != Some(path.to_string().as_str())
                 };
                 if changed {
                     let evidence = {
                         let state = self.rust();
-                        let session = state.session.as_ref().unwrap();
+                        let Some((session, doc)) = state.session.as_ref().zip(state.doc) else {
+                            self.fail("No species workspace is open");
+                            return false;
+                        };
                         basecraft_ops::delimitation::reference_input(
-                            &session.root().join(session.doc_key(state.doc.unwrap())),
+                            &session.root().join(session.doc_key(doc)),
                             &retained,
                             &hash,
                         )
@@ -743,11 +774,14 @@ impl qobject::DelimitationController {
         .unwrap_or_else(|| json!({}));
         QString::from(value.to_string())
     }
-    pub fn action(self: Pin<&mut Self>, name: &QString, args: &QString) {
+    pub fn action(mut self: Pin<&mut Self>, name: &QString, args: &QString) {
+        if !self.as_mut().workspace_available() {
+            return;
+        }
         let result = (|| -> Result<DelimitationEdit, String> {
             let r = self.rust();
             let s = r.session.as_ref().ok_or("No workspace open")?;
-            let w = s.delimitation(r.doc.unwrap());
+            let w = s.delimitation(r.doc.ok_or("No workspace open")?);
             let args: Value = serde_json::from_str(&args.to_string()).map_err(|e| e.to_string())?;
             let text = |key: &str| {
                 args.get(key)
@@ -1185,6 +1219,9 @@ impl qobject::DelimitationController {
         self.export_with(path, &theme, Some(width));
     }
     pub fn preview_cut(mut self: Pin<&mut Self>, threshold: f64) {
+        if !self.as_mut().workspace_available() {
+            return;
+        }
         let result = {
             let r = self.rust();
             r.time_tree
@@ -1222,13 +1259,23 @@ impl qobject::DelimitationController {
         self.update_bar_columns();
     }
     pub fn save_cut(mut self: Pin<&mut Self>, name: &QString) {
+        if !self.as_mut().workspace_available() {
+            return;
+        }
         let edit = {
             let r = self.rust();
             if r.preview.is_empty() {
                 return;
             }
-            let (tree, _, hash) = r.time_tree.as_ref().unwrap();
-            let w = r.session.as_ref().unwrap().delimitation(r.doc.unwrap());
+            let Some((tree, _, hash)) = r.time_tree.as_ref() else {
+                self.fail("Attach a valid time tree before saving a cut");
+                return;
+            };
+            let Some((session, doc)) = r.session.as_ref().zip(r.doc) else {
+                self.fail("No species workspace is open");
+                return;
+            };
+            let w = session.delimitation(doc);
             let mapping = delimitation::tree_mapping(
                 w,
                 &tree
@@ -1316,6 +1363,9 @@ impl qobject::DelimitationController {
         }
     }
     fn history(mut self: Pin<&mut Self>, redo: bool) {
+        if !self.as_mut().workspace_available() {
+            return;
+        }
         let result = {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
@@ -1345,6 +1395,9 @@ impl qobject::DelimitationController {
         self.as_mut().save_as(&path);
     }
     pub fn save_as(mut self: Pin<&mut Self>, path: &QString) -> bool {
+        if !self.as_mut().workspace_available() {
+            return false;
+        }
         let result = {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
@@ -1748,9 +1801,9 @@ impl qobject::DelimitationController {
         let submitted = {
             let mut state = self.as_mut().rust_mut();
             let state = &mut *state;
-            match state.session.as_mut().zip(state.doc) {
-                Some((session, doc)) => DocumentJob::submit_files(
-                    session,
+            match state.doc {
+                Some(doc) => DocumentJob::submit_files(
+                    &mut state.session,
                     doc,
                     &operation,
                     [(role, vec![analysis_input])].into(),
@@ -1791,10 +1844,10 @@ impl qobject::DelimitationController {
         let polled = {
             let mut state = self.as_mut().rust_mut();
             let state = &mut *state;
-            let (Some(analysis), Some(session)) = (&state.analysis, &mut state.session) else {
+            let Some(analysis) = &state.analysis else {
                 return;
             };
-            analysis.job.poll(session)
+            analysis.job.poll(&mut state.session)
         };
         let outcome = match polled {
             Ok(Some(outcome)) => outcome,
@@ -1970,13 +2023,8 @@ impl qobject::DelimitationController {
         true
     }
     pub fn cancel_job(self: Pin<&mut Self>) {
-        let result = self
-            .rust()
-            .analysis
-            .as_ref()
-            .map(|analysis| analysis.job.cancel());
-        if let Some(Err(e)) = result {
-            self.fail(&e);
+        if let Some(analysis) = &self.rust().analysis {
+            analysis.job.cancel();
         }
     }
     pub fn poll_job(mut self: Pin<&mut Self>) {
@@ -2130,7 +2178,7 @@ fn generated_workspace(name: &str) -> bool {
 }
 
 /// Entry actions run the same registered operation as the CLI, Python and MCP.
-pub(crate) fn create_workspace(
+pub(crate) fn create_workspace_in_session(
     session: &mut Session,
     doc: DocId,
     method: &str,
@@ -2145,7 +2193,7 @@ pub(crate) fn create_workspace(
             "workspace_alignment"
         },
     );
-    let job = DocumentJob::submit(
+    let job = crate::document_jobs::DocumentJob::submit(
         session,
         doc,
         &operation,

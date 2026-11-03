@@ -47,7 +47,14 @@ AppDialog {
                         Label { text: modelData.operation + " — " + modelData.status; font.bold: true; Layout.fillWidth: true; wrapMode: Text.Wrap }
                         Label { text: modelData.source ? modelData.source.path : ""; Layout.fillWidth: true; elide: Text.ElideMiddle }
                         Label { text: modelData.diagnostics || ""; visible: text.length > 0; Layout.fillWidth: true; wrapMode: Text.Wrap }
-                        ProgressBar { objectName: "taskProgress"; visible: dialog.activeStatus(modelData.status); indeterminate: true; Layout.fillWidth: true }
+                        AppMessageBar {
+                            objectName: "taskActivity"
+                            Layout.fillWidth: true
+                            busy: dialog.activeStatus(modelData.status)
+                            visible: busy
+                            workingText: modelData.operation + " — " + modelData.status
+                            cancellable: false // The job's existing Cancel action below owns cancellation.
+                        }
                         Flow {
                             Layout.fillWidth: true
                             Layout.preferredHeight: childrenRect.height

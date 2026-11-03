@@ -3,7 +3,7 @@
 from pathlib import Path
 
 from basecraft.plugin import Plugin
-from basecraft.tools import executable
+from basecraft.tools import allocated_cpus, executable
 from consensus import file_hash, merge, trace_calls
 
 plugin = Plugin("basecraft.tracy-sanger", "0.2.0")
@@ -31,6 +31,7 @@ def consensus(snapshot, params):
         minimum_overlap=int(params.get("minimum_overlap", 50)),
         minimum_identity=float(params.get("minimum_identity", 0.8)),
         signal_threshold=int(params.get("signal_threshold", 20)),
+        workers=allocated_cpus(),
     )
     if file_hash(Path(tracy)) != engine_hash or report["engine_sha256"] != engine_hash:
         raise ValueError("Tracy changed during calling; results were not accepted")

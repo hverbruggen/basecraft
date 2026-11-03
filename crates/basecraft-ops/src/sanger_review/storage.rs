@@ -490,6 +490,46 @@ impl SangerReviewSession {
         self.start_recovery()
     }
 
+    /// An asynchronous continuation owns a separate recovery checkpoint until
+    /// its document owner accepts the completed state. Never overwrite the
+    /// original review's recovery while a cancellable stage is in flight.
+    #[must_use]
+    pub fn fork_for_operation(&self) -> Self {
+        let mut copy = self.clone();
+        copy.recovery = None;
+        copy
+    }
+
+    /// Carry already validated review ancestry, including pre-registry reviews.
+    /// New analyses still attach through `attach_operation_run`.
+    pub fn inherit_review_ancestry(&mut self, previous: &Self) {
+        self.evidence.runs.clone_from(&previous.evidence.runs);
+        self.evidence.sources.clone_from(&previous.evidence.sources);
+    }
+
+    /// Attach placement produced by a registered operation. Its frozen input
+    /// must outlive the job's temporary execution directory.
+    pub fn attach_operation_placement(
+        &mut self,
+        directory: &Path,
+        path: &Path,
+    ) -> Result<(), String> {
+        let placement = SangerPlacement::read(path)?;
+        let context = source(
+            &placement.source_path,
+            &placement.source_sha256,
+            &self.anchor,
+        )
+        .map_err(|e| e.to_string())?;
+        self.evidence.sources.push(context);
+        self.evidence.placement = Some(Support {
+            extra: BTreeMap::new(),
+            path: path.into(),
+            hash: basecraft_io::hash_file(path).map_err(|e| e.to_string())?,
+        });
+        self.attach_operation_run(directory)
+    }
+
     pub fn evidence_runs(&self) -> &[PathBuf] {
         &self.evidence.runs
     }

@@ -178,6 +178,7 @@ struct StoredCallSets {
     sets: Vec<StoredReview>,
 }
 
+#[derive(Clone)]
 pub struct SangerReviewSession {
     // Only the selected session owns the inactive sets. Each set owns its replay history.
     retained: Vec<SangerReviewSession>,

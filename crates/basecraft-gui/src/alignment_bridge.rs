@@ -117,7 +117,10 @@ pub mod qobject {
         fn cancel_bootstrap(self: Pin<&mut AlignmentController>);
 
         #[qinvokable]
-        fn create_delimitation(self: Pin<&mut AlignmentController>, method: &QString) -> QString;
+        fn create_delimitation(self: Pin<&mut AlignmentController>, method: &QString) -> bool;
+        #[qsignal]
+        #[cxx_name = "workspaceCreated"]
+        fn workspace_created(self: Pin<&mut AlignmentController>, path: QString);
         #[qinvokable]
         fn open_file(self: Pin<&mut AlignmentController>, path: &QString) -> bool;
         #[qinvokable]
@@ -291,7 +294,9 @@ use basecraft_docs::AlignmentDoc;
 use basecraft_ops::{DocId, Session};
 use basecraft_plugin_host::file_tool::output_beside;
 
-use crate::document_jobs::{DocumentJob, bundled, failure, primary_member};
+use crate::document_jobs::{
+    BackgroundDocumentJob as DocumentJob, bundled, failure, primary_member,
+};
 use basecraft_protocol::Op;
 use basecraft_protocol::operation::OperationOutcome;
 use basecraft_viewmodel::alignment::Region;
@@ -732,25 +737,49 @@ impl qobject::AlignmentController {
         }
     }
 
-    pub fn create_delimitation(mut self: Pin<&mut Self>, method: &QString) -> QString {
-        let result = {
-            let mut r = self.as_mut().rust_mut();
-            let r = &mut *r;
-            r.session
-                .as_mut()
-                .zip(r.doc)
-                .ok_or_else(|| "No source open".to_string())
-                .and_then(|(s, d)| {
-                    crate::delimitation_bridge::create_workspace(s, d, &method.to_string())
-                })
-        };
-        match result {
-            Ok(path) => QString::from(path),
-            Err(error) => {
-                self.fail(&error);
-                QString::default()
-            }
+    pub fn create_delimitation(mut self: Pin<&mut Self>, method: &QString) -> bool {
+        if self.rust().busy {
+            return false;
         }
+        let Some(doc) = self.rust().doc else {
+            return false;
+        };
+        let Some(session) = self.as_mut().rust_mut().session.take() else {
+            return false;
+        };
+        let method = method.to_string();
+        self.as_mut().set_busy(true);
+        self.as_mut().notify("Creating species workspace");
+        let qt_thread = self.qt_thread();
+        let spawn = crate::document_jobs::background_session(
+            session,
+            move |session| {
+                crate::delimitation_bridge::create_workspace_in_session(session, doc, &method)
+            },
+            move |session, result| {
+                let _ = qt_thread.queue(move |mut this| {
+                    this.as_mut().rust_mut().session = Some(session);
+                    this.as_mut().set_busy(false);
+                    match result {
+                        Ok(path) => {
+                            this.as_mut().done("Species workspace created");
+                            this.workspace_created(QString::from(path));
+                        }
+                        Err(error) => {
+                            this.as_mut().fail(&error);
+                            this.workspace_created(QString::default());
+                        }
+                    }
+                });
+            },
+        );
+        if let Err((session, error)) = spawn {
+            self.as_mut().rust_mut().session = Some(*session);
+            self.as_mut().set_busy(false);
+            self.fail(&error);
+            return false;
+        }
+        true
     }
     pub fn open_file(mut self: Pin<&mut Self>, path: &QString) -> bool {
         if self.rust().busy {
@@ -1523,14 +1552,9 @@ impl qobject::AlignmentController {
         let Some(tool) = &self.rust().tool_job else {
             return;
         };
-        match tool.job.cancel() {
-            Ok(()) => {
-                self.as_mut().set_bootstrap_cancelling(true);
-                self.as_mut()
-                    .set_bootstrap_status(QString::from("Cancelling after the current replicate…"));
-            }
-            Err(error) => self.fail(&format!("Could not request cancellation: {error}")),
-        }
+        tool.job.cancel();
+        self.as_mut().set_bootstrap_cancelling(true);
+        self.set_bootstrap_status(QString::from("Cancelling after the current replicate…"));
     }
 
     /// Run a plugin on this alignment in the background, writing a new file
@@ -1578,8 +1602,9 @@ impl qobject::AlignmentController {
                 let exports = vec![(primary_member(&operation)?, output.clone())];
                 (output, exports)
             };
+            let generation = session.generation(doc);
             let job = DocumentJob::submit(
-                session,
+                &mut r.session,
                 doc,
                 &operation,
                 serde_json::Value::Object(tool.params.clone()),
@@ -1590,7 +1615,7 @@ impl qobject::AlignmentController {
                 name: name.clone(),
                 output,
                 kind,
-                generation: session.generation(doc),
+                generation,
                 stop: Arc::new(AtomicBool::new(false)),
             })
         })();
@@ -1632,10 +1657,10 @@ impl qobject::AlignmentController {
         let polled = {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
-            let (Some(tool), Some(session)) = (&r.tool_job, &mut r.session) else {
+            let Some(tool) = &r.tool_job else {
                 return;
             };
-            tool.job.poll(session)
+            tool.job.poll(&mut r.session)
         };
         let outcome = match polled {
             Ok(Some(outcome)) => outcome,

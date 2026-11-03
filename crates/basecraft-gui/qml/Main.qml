@@ -295,39 +295,75 @@ ApplicationWindow {
     }
 
     property var delimitationSource: null
+    property var delimitationDocument: null
+    property var delimitationRequest: null
+    function documentIsOpen(document, controller, path) {
+        if (!document || !controller || controller.file_path !== path) return false
+        for (let i = 0; i < openFiles.count; ++i)
+            if (docs.itemAt(i) === document && document.controller === controller) return true
+        return false
+    }
+    function retireDelimitationDocument(document) {
+        if (delimitationDocument === document) {
+            delimitationSource = null
+            delimitationDocument = null
+        }
+        if (delimitationRequest && delimitationRequest.document === document)
+            delimitationRequest = null
+    }
     function beginDelimitation(method) {
-        if (!current || current.busy || !(alignmentOpen || treeOpen || delimitationOpen)) return
+        if (delimitationRequest || !current || current.busy || !(alignmentOpen || treeOpen || delimitationOpen)) return
         if (method === "asap" && !alignmentOpen && !(delimitationOpen && current.linked_alignment.length)) return
         delimitationSource = current
+        delimitationDocument = docs.itemAt(tabs.currentIndex)
         speciesDialog.engineProblems = method === "ptp" ? JSON.parse(shell.delimitation_engines()) : ({})
         speciesDialog.show(method, alignmentOpen ? current.file_path : current.linked_alignment || "",
             treeOpen ? current.file_path : delimitationOpen ? current.display_path : "")
+    }
+    function requestDelimitation(method, input, rooted, settings, displayMethod) {
+        const source = delimitationSource
+        const document = delimitationDocument
+        if (delimitationRequest || !source || !document || source.busy || !documentIsOpen(document, source, document.path)) return
+        if (document.kind === "delimitation") {
+            document.startAnalysis(method, input, rooted, settings, displayMethod)
+            return
+        }
+        if (document.kind !== "alignment" && document.kind !== "tree") return
+        // Only request context lives here. The backend owns the frozen input,
+        // execution state and created workspace, including failure diagnostics.
+        delimitationRequest = {source: source, document: document, path: source.file_path,
+            method: method, input: input, rooted: rooted, settings: settings, displayMethod: displayMethod,
+            usesOpenAlignment: document.kind === "alignment" && input === source.file_path}
+        if (!source.create_delimitation(method)) delimitationRequest = null
+    }
+    function completeDelimitation(request, path) {
+        if (!request || request !== delimitationRequest) return
+        delimitationRequest = null
+        if (!path.length || !documentIsOpen(request.document, request.source, request.path)) return
+        // Never reuse or overwrite an already opened result (including edits).
+        for (let i = 0; i < openFiles.count; ++i)
+            if (openFiles.get(i).path === path) return
+        openFiles.append({path: path, dirty: false, kind: "delimitation"})
+        const document = docs.itemAt(openFiles.count - 1)
+        Qt.callLater(() => {
+            if (!documentIsOpen(request.document, request.source, request.path) ||
+                    !document || !documentIsOpen(document, document.controller, path)) return
+            document.draft = true
+            document.startAnalysis(request.method,
+                request.usesOpenAlignment ? document.controller.linked_alignment : request.input,
+                request.rooted, request.settings, request.displayMethod)
+        })
+    }
+    Connections {
+        target: window.delimitationRequest ? window.delimitationRequest.source : null
+        function onWorkspaceCreated(path) { window.completeDelimitation(window.delimitationRequest, path) }
     }
     DelimitationAnalysisDialog {
         id: speciesDialog
         pathResolver: shell
         workers: window.localCpuThreads
-        onRequested: (method, input, rooted, settings, displayMethod) => {
-            const source = window.delimitationSource
-            if (!source) return
-            if (window.delimitationOpen && source === window.current) {
-                docs.itemAt(tabs.currentIndex).startAnalysis(method, input, rooted, settings, displayMethod)
-                return
-            }
-            const usesOpenAlignment = window.alignmentOpen && input === source.file_path
-            const path = source.create_delimitation(method)
-            if (!path.length) return
-            window.openPath(path)
-            const index = tabs.currentIndex
-            Qt.callLater(() => {
-                const document = docs.itemAt(index)
-                if (document && document.kind === "delimitation") {
-                    document.draft = true
-                    window.ribbonTabName = "Delimitation"
-                    document.startAnalysis(method, usesOpenAlignment ? document.controller.linked_alignment : input, rooted, settings, displayMethod)
-                }
-            })
-        }
+        onRequested: (method, input, rooted, settings, displayMethod) =>
+            window.requestDelimitation(method, input, rooted, settings, displayMethod)
     }
     DelimitationController { id: combineController }
     FileDialog {
@@ -382,14 +418,20 @@ ApplicationWindow {
         let preserve = forceNew
         for (let i = 0; i < openFiles.count; i++) {
             const existing = docs.itemAt(i)
-            if (openFiles.get(i).path === paths[0] && existing && existing.controller.dirty) preserve = true
+            if (openFiles.get(i).path !== paths[0] || !existing) continue
+            if (existing.kind === "trace" && existing.working) { tabs.currentIndex = i; return }
+            if (existing.controller.dirty) preserve = true
         }
         if (preserve) {
             openFiles.append({ path: paths[0], dirty: false, kind: "trace" })
             tabs.currentIndex = openFiles.count - 1
         } else window.openPath(paths[0])
-        const traceIndex = tabs.currentIndex
-        Qt.callLater(() => { ribbonTabName = "Trace"; docs.itemAt(traceIndex).startReview(paths, reference, target, cutoff) })
+        ribbonTabName = "Trace"
+        const traceDocument = docs.itemAt(tabs.currentIndex)
+        Qt.callLater(() => {
+            if (!traceDocument) return
+            traceDocument.startReview(paths, reference, target, cutoff)
+        })
     }
 
     Connections {
@@ -726,8 +768,13 @@ ApplicationWindow {
         initialFocusItem: provenanceText
         contentItem: ColumnLayout {
             Label { visible: window.provenanceExport !== "recover"; text: "File verification and reproduction packages describe saved files. Report exports retain the selected document revision."; wrapMode: Text.Wrap; Layout.fillWidth: true }
-            Label { text: provenance.message; wrapMode: Text.Wrap; Layout.fillWidth: true; Accessible.role: Accessible.AlertMessage }
-            BusyIndicator { running: provenance.busy; visible: running }
+            AppMessageBar {
+                Layout.fillWidth: true
+                busy: provenance.busy
+                workingText: provenance.message || "Working on provenance"
+                message: provenance.message
+                cancellable: false
+            }
             ScrollView {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
@@ -863,9 +910,16 @@ ApplicationWindow {
                     Timer {
                         id: messageTimer
                         interval: 10000
-                        onTriggered: if (window.current) window.current.message = ""
+                        property var sourceController: null
+                        onTriggered: {
+                            if (sourceController && sourceController === window.current && !sourceController.busy)
+                                sourceController.message = ""
+                        }
                     }
-                    onTextChanged: if (messageLabel.text.length > 0) messageTimer.restart()
+                    onTextChanged: if (messageLabel.text.length > 0) {
+                        messageTimer.sourceController = window.current
+                        messageTimer.restart()
+                    }
                 }
                 AppButton {
                     text: window.runningTaskCount ? "Tasks (" + window.runningTaskCount + ")" : "Tasks" + (window.failedTaskCount ? " · " + window.failedTaskCount + " failed" : "")
@@ -1027,11 +1081,13 @@ ApplicationWindow {
                         RibbonButton { commandId: "ribbon.annotate-open-reading-frames";
                             text: "ORFs"
                             tip: "Annotate open reading frames"
+                            enabled: window.current && !window.current.busy
                             onInvoked: orfDialog.search(false)
                         }
                         RibbonButton { commandId: "ribbon.annotate-protein-coding-genes-with-prodigal";
                             text: "Prodigal"
                             tip: "Annotate protein-coding genes with Prodigal"
+                            enabled: window.current && !window.current.busy
                             onInvoked: genesDialog.predict(false)
                         }
                     }
@@ -1222,12 +1278,6 @@ ApplicationWindow {
                                 onInvoked: toolSettings.show(window.current, "distance", modelData.value)
                             }
                         }
-                        ColumnLayout {
-                            visible: window.currentKind === "alignment" && window.current !== null && window.current.bootstrap_running
-                            Label { text: parent.visible ? window.current.bootstrap_status : ""; font.pixelSize: 11 * window.ribbonSizeFactor }
-                            ProgressBar { from: 0; to: 1; value: parent.visible ? window.current.bootstrap_progress : 0; Layout.fillWidth: true }
-                            AppButton { text: "Cancel bootstrap"; enabled: parent.visible && !window.current.bootstrap_cancelling; onClicked: window.current.cancel_bootstrap() }
-                        }
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
@@ -1286,7 +1336,7 @@ ApplicationWindow {
                     RibbonGroup {
                         title: "Tools"
                         ModeButton { commandId: "species.select-tool"; text: "Select"; tip: "Click a node to select its clade, or a bar to select a species"; iconName: "selection"; enabled: window.speciesView !== null; active: window.speciesView !== null && window.speciesView.tool === "select"; onInvoked: window.speciesView.setTool("select") }
-                        ModeButton { commandId: "species.threshold-cut"; text: "Threshold"; tip: window.speciesView !== null && !window.current.can_cut ? "Needs an ultrametric display tree (all tips the same distance from the root)" : "Drag a threshold across the tree and save the species it defines"; iconName: "tree-threshold"; enabled: window.speciesView !== null && window.current.can_cut; active: window.speciesView !== null && window.speciesView.tool === "cut"; onInvoked: window.speciesView.setTool("cut") }
+                        ModeButton { commandId: "species.threshold-cut"; text: "Threshold"; tip: window.speciesView !== null && !window.current.can_cut ? "Needs an ultrametric display tree (all tips the same distance from the root)" : "Drag a threshold across the tree and save the species it defines"; iconName: "tree-threshold"; enabled: window.speciesView !== null && !window.current.busy && window.current.can_cut; active: window.speciesView !== null && window.speciesView.tool === "cut"; onInvoked: window.speciesView.setTool("cut") }
                         RibbonButton { commandId: "species.display"; text: "Attach"; tip: window.speciesView !== null && window.current.display_path.length ? "A display tree is attached" : "Attach or build a display tree"; iconName: "tree"; enabled: window.speciesView !== null && !window.current.busy && !window.current.display_path.length; onInvoked: window.beginDelimitation("view") }
                     }
                     Item { Layout.fillWidth: true }
@@ -1297,7 +1347,7 @@ ApplicationWindow {
                     spacing: 6 * window.ribbonSizeFactor
                     RibbonGroup {
                         title: "Calls"
-                        enabled: window.traceOpen && window.current && window.current.review_mode
+                        enabled: window.traceOpen && window.current && window.current.review_mode && window.traceDocument && !window.traceDocument.working
                         AppComboBox {
                             id: traceCallSets
                             Accessible.name: "Trace call set"
@@ -1314,7 +1364,7 @@ ApplicationWindow {
                     }
                     RibbonGroup {
                         title: "Issues"
-                        enabled: window.traceOpen
+                        enabled: window.traceOpen && window.traceDocument && !window.traceDocument.working
                         RibbonButton { commandId: "ribbon.previous-unresolved-issue"; iconName: "previous"; tip: "Previous unresolved issue"; keys: "Alt+← or ["; enabled: (window.traceOpen && window.current && window.current.review_mode); onInvoked: window.traceDocument.issue(false) }
                         RibbonButton { commandId: "ribbon.next-unresolved-issue"; iconName: "next"; tip: "Next unresolved issue"; keys: "Alt+→ or ]"; enabled: (window.traceOpen && window.current && window.current.review_mode); onInvoked: window.traceDocument.issue(true) }
                         RibbonButton { commandId: "ribbon.accept-this-base-and-go-to-the-next-issue"; text: "Accept"; iconName: "accept"; tip: "Accept this base and go to the next issue"; keys: "Alt+Enter"; enabled: (window.traceOpen && window.current && window.current.review_mode); onInvoked: window.traceDocument.accept() }
@@ -1324,13 +1374,13 @@ ApplicationWindow {
                     }
                     RibbonGroup {
                         title: "Masking"
-                        enabled: window.traceOpen && window.current && window.current.review_mode
+                        enabled: window.traceOpen && window.current && window.current.review_mode && window.traceDocument && !window.traceDocument.working
                         RibbonButton { commandId: "ribbon.choose-the-consensus-range-to-keep-in-exports"; text: "Mask ends"; tip: "Choose the consensus range to keep in exports"; keys: "Ctrl+Alt+M"; onInvoked: window.traceDocument.maskEnds() }
                         RibbonButton { commandId: "ribbon.find-partial-terminal-primer-candidates-and-mask-them"; text: "Set primers"; tip: "Find partial terminal primer candidates and mask them"; keys: "Ctrl+Alt+P"; onInvoked: window.traceDocument.setPrimers() }
                     }
                     RibbonGroup {
                         title: "Export consensus"
-                        enabled: window.traceOpen && window.current && window.current.review_mode
+                        enabled: window.traceOpen && window.current && window.current.review_mode && window.traceDocument && !window.traceDocument.working
                         ExportConsensusButton { commandId: "ribbon.add-the-edited-consensus-to-its-alignment"; text: "to alignment"; tip: "Add the edited consensus to its alignment"; keys: "Ctrl+Shift+A"; enabled: window.traceDocument !== null && window.traceDocument.returnAlignment !== null && window.current && window.current.unresolved === 0; onInvoked: window.traceDocument.addToAlignment() }
                         ExportConsensusButton { commandId: "ribbon.export-the-edited-consensus-as-fasta"; text: "to fasta"; tip: "Export the edited consensus as FASTA"; keys: "Ctrl+Shift+E"; enabled: window.current && window.current.unresolved === 0; onInvoked: window.traceDocument.exportConsensus() }
                         ExportConsensusButton { commandId: "ribbon.copy-the-edited-consensus-as-fasta"; text: "to clipboard"; tip: "Copy the edited consensus as FASTA"; keys: "Ctrl+Shift+C"; enabled: window.current && window.current.unresolved === 0; onInvoked: window.traceDocument.copyConsensus() }
@@ -1556,14 +1606,22 @@ ApplicationWindow {
         id: orfDialog
         initialFocusItem: codons
         property bool inSelection: false
-        function search(selectionOnly) { inSelection = selectionOnly; open() }
+        property var source: null
+        property string sourcePath: ""
+        function search(selectionOnly) {
+            if (!window.current || window.current.busy) return
+            source = window.current
+            sourcePath = source.file_path
+            inSelection = selectionOnly
+            open()
+        }
         title: inSelection ? "Find open reading frames in the selection" : "Find open reading frames"
         modal: true
         standardButtons: Dialog.Ok | Dialog.Cancel
         onOpened: codons.forceActiveFocus()
         onAccepted: {
             window.orfMinCodons = codons.value
-            window.current.find_orfs(codons.value, orfDialog.inSelection)
+            if (source && source.file_path === sourcePath && !source.busy) source.find_orfs(codons.value, orfDialog.inSelection)
         }
         body: ColumnLayout {
             spacing: 8
@@ -1594,9 +1652,14 @@ ApplicationWindow {
         id: genesDialog
         initialFocusItem: codeBox
         property bool inSelection: false
+        property var source: null
+        property string sourcePath: ""
         function predict(selectionOnly) {
+            if (!window.current || window.current.busy) return
+            source = window.current
+            sourcePath = source.file_path
             inSelection = selectionOnly
-            const code = window.current.genetic_code()
+            const code = source.genetic_code()
             let i = 0
             for (let k = 0; k < geneticCodes.count; k++)
                 if (geneticCodes.get(k).code === code) i = k
@@ -1607,7 +1670,7 @@ ApplicationWindow {
         modal: true
         standardButtons: Dialog.Ok | Dialog.Cancel
         onOpened: codeBox.forceActiveFocus()
-        onAccepted: window.current.predict_genes(geneticCodes.get(codeBox.currentIndex).code, inSelection)
+        onAccepted: if (source && source.file_path === sourcePath && !source.busy) source.predict_genes(geneticCodes.get(codeBox.currentIndex).code, inSelection)
         body: ColumnLayout {
             spacing: 8
             RowLayout {
@@ -1905,6 +1968,20 @@ ApplicationWindow {
                 }
             }
 
+            // Activity belongs to this document, beside its tabs and canvas.
+            AppMessageBar {
+                objectName: "documentActivity"
+                Layout.fillWidth: true
+                readonly property var controller: window.current
+                busy: !!controller && (window.currentKind === "sequence" || window.alignmentOpen || window.treeOpen) && controller.busy
+                visible: busy
+                workingText: busy ? (window.alignmentOpen && controller.bootstrap_running
+                    ? controller.bootstrap_status : controller.message) || "Working" : ""
+                cancellable: busy && window.alignmentOpen && controller.bootstrap_running && !controller.bootstrap_cancelling
+                cancelText: "Cancel bootstrap"
+                onCancelRequested: controller.cancel_bootstrap()
+            }
+
             StackLayout {
                 id: stack
                 visible: openFiles.count > 0
@@ -1916,7 +1993,10 @@ ApplicationWindow {
                     id: docs
                     model: openFiles
                     onItemAdded: Qt.callLater(window.refreshCurrent)
-                    onItemRemoved: Qt.callLater(window.refreshCurrent)
+                    onItemRemoved: (index, item) => {
+                        window.retireDelimitationDocument(item)
+                        Qt.callLater(window.refreshCurrent)
+                    }
                     // Each file opens in the editor for what it holds.
                     delegate: DelegateChooser {
                         role: "kind"
@@ -2085,8 +2165,8 @@ ApplicationWindow {
         Item { text: "Extract as new sequence"; visible: !menu.onAnnotation; enabled: menu.info.selection; onTriggered: window.current.extract_selection() }
         Item { text: "Zoom to selection"; visible: !menu.onAnnotation; enabled: menu.info.selection; onTriggered: window.current.zoom_to_selection() }
         Item { text: "BLAST selection at NCBI"; visible: !menu.onAnnotation; enabled: menu.info.selection; onTriggered: window.beginBlast("selection") }
-        Item { text: "Find ORFs in selection…"; visible: !menu.onAnnotation; enabled: menu.info.selection; onTriggered: orfDialog.search(true) }
-        Item { text: "Predict genes in selection…"; visible: !menu.onAnnotation; enabled: menu.info.selection; onTriggered: genesDialog.predict(true) }
+        Item { text: "Find ORFs in selection…"; visible: !menu.onAnnotation; enabled: menu.info.selection && window.current && !window.current.busy; onTriggered: orfDialog.search(true) }
+        Item { text: "Predict genes in selection…"; visible: !menu.onAnnotation; enabled: menu.info.selection && window.current && !window.current.busy; onTriggered: genesDialog.predict(true) }
     }
 
     // Alignment context menu: what applies to the cells, rows or columns
@@ -2665,7 +2745,17 @@ ApplicationWindow {
                 const err = c.save_feature(-1, JSON.stringify({ kind: "misc_feature", location: arg("--add"), qualifiers: [{ key: "label", value: "partial test" }] }))
                 if (err.length > 0) console.log("add failed:", err)
             }
-            if (arg("--extract")) console.log("extracted:", c.extract_selection(), "|", c.message)
+            if (arg("--extract")) {
+                const completed = function(path) {
+                    c.extractionFinished.disconnect(completed)
+                    console.log("extracted:", path, "|", c.message)
+                }
+                c.extractionFinished.connect(completed)
+                if (!c.extract_selection()) {
+                    c.extractionFinished.disconnect(completed)
+                    console.log("extraction rejected:", c.message)
+                }
+            }
             if (arg("--hover")) {
                 const h = arg("--hover").split(",")
                 if (window.traceOpen) window.traceDocument.hoverAt(Number(h[0]), Number(h[1]))

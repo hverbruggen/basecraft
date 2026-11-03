@@ -699,6 +699,34 @@ fn result_name(run: &Path) -> Result<String> {
         .into())
 }
 
+/// Retain one owned input ledger before a temporary source disappears. Uses
+/// the same checked, idempotent preserve-copy transition as a document save,
+/// without touching other analyses that happen to reference the same file.
+pub fn preserve_input(bundle: &Path) -> Result<()> {
+    let _guard = lock()?;
+    let input = read_input(bundle)?;
+    let reference = input
+        .source
+        .as_ref()
+        .ok_or_else(|| invalid("input has no source reference"))?;
+    let target = bundle.join(&reference.path);
+    resolve(
+        &EvidenceConflict {
+            target,
+            analyses: vec![AffectedAnalysis {
+                run: bundle.into(),
+                result: "Retained operation input".into(),
+                source_hash: reference.hash.clone(),
+                can_preserve: true,
+                direct: true,
+                backing_analyses: vec![],
+            }],
+            options: vec![SavePolicy::PreserveCopy],
+        },
+        SavePolicy::PreserveCopy,
+    )
+}
+
 /// Apply explicit decisions before overwrite. A partial decision failure aborts
 /// the save; earlier preserved copies/removed metadata remain recoverable.
 pub fn resolve(conflict: &EvidenceConflict, policy: SavePolicy) -> Result<()> {

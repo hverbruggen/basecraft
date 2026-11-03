@@ -122,7 +122,7 @@ enum Command {
     },
     /// Run a plugin's sequence operation on a file and apply what it proposes.
     /// Schema-2 packages must be installed or registered and run through the
-    /// registered operation; schema-1 directories keep the legacy direct call.
+    /// registered operation. Schema-1 packages are refused until migrated.
     Plugin {
         /// Plugin directory, with a plugin.toml.
         plugin: PathBuf,
@@ -500,68 +500,10 @@ fn run_plugin(
         map.insert(k.to_string(), value);
     }
     let manifest = basecraft_plugin_host::Manifest::load(dir)?;
-    if manifest.schema >= 2 {
-        return run_registered_plugin(&manifest, file, operation, map, save);
+    if manifest.schema < 2 {
+        return Err("Plugin requires a versioned operation contract (schema 2); migrate/install it before running analyses".into());
     }
-    // Schema-1 packages have no typed contract: the explicit legacy route.
-    let t = Instant::now();
-    let mut plugin = basecraft_plugin_host::PluginProcess::spawn(&manifest)?;
-    println!(
-        "{} {} started in {:.0} ms",
-        plugin.info.id,
-        plugin.info.version,
-        plugin.startup.as_secs_f64() * 1e3
-    );
-
-    let root = file.parent().unwrap_or(std::path::Path::new("."));
-    let mut session = script_session(root)?;
-    let doc = session.open(file)?;
-    let t_snap = Instant::now();
-    let generation = session.generation(doc);
-    let snap =
-        basecraft_plugin_host::Snapshot::of(session.doc_key(doc), session.checked_sequence(doc)?)?;
-    let snap_ms = t_snap.elapsed().as_secs_f64() * 1e3;
-    let t_call = Instant::now();
-    let map_value = serde_json::Value::Object(map);
-    let result = plugin.invoke(operation, map_value.clone(), Some(&snap))?;
-    let call_ms = t_call.elapsed().as_secs_f64() * 1e3;
-    println!(
-        "snapshot of {} bp in {snap_ms:.0} ms, {operation} in {call_ms:.0} ms: {} proposals{}",
-        snap.len,
-        result.ops.len(),
-        result
-            .message
-            .map(|m| format!(" ({m})"))
-            .unwrap_or_default()
-    );
-    let actor = basecraft_protocol::Actor::Plugin {
-        id: plugin.info.id.clone(),
-        version: plugin.info.version.clone(),
-    };
-    let count = result.ops.len();
-    let edit_ids =
-        session.apply_sequence_proposals(doc, generation, snap.version, &result.ops, &actor)?;
-    // No typed contract, so no effective settings or retained run: record what
-    // was submitted and the hash of the snapshot a registered run would retain.
-    let params = serde_json::json!({"requested": map_value, "operation": operation,
-        "contract": "schema-1", "initiator": "CLI",
-        "snapshot": {"document": snap.doc, "version": snap.version,
-            "hash": basecraft_io::hash_bytes(&snap.payload()?)}});
-    session.log_contributing_tool_run(
-        doc,
-        actor,
-        (&plugin.info.id, operation),
-        params,
-        &[],
-        &edit_ids,
-    )?;
-    println!("applied {count} proposals");
-    if let Some(policy) = save {
-        session.save_with_evidence(doc, None, policy)?;
-        println!("saved {}", file.display());
-    }
-    println!("total {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
-    Ok(())
+    run_registered_plugin(&manifest, file, operation, map, save)
 }
 
 /// `plugin` for a schema-2 package: the registered sequence operation through the

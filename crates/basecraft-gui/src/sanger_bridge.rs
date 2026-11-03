@@ -1,4 +1,7 @@
-//! Read-only chromatogram inspection backed by immutable ABIF evidence.
+//! Chromatogram inspection and asynchronous registered Sanger operations.
+
+#[path = "sanger_work.rs"]
+mod work;
 
 #[cxx_qt::bridge]
 pub mod qobject {
@@ -38,6 +41,7 @@ pub mod qobject {
         #[qproperty(QString, review_sequence)]
         #[qproperty(QString, review_decision)]
         #[qproperty(QString, alignment_context)]
+        #[qproperty(QString, review_details)]
         #[qproperty(QString, mask_settings)]
         #[qproperty(i32, selected_column)]
         #[qproperty(i32, consensus_columns)]
@@ -50,6 +54,18 @@ pub mod qobject {
         #[qproperty(QString, review_settings)]
         type SangerController = super::SangerRust;
 
+        #[qinvokable]
+        fn poll_stage(self: Pin<&mut SangerController>);
+        #[qinvokable]
+        fn cancel_stage(self: Pin<&mut SangerController>);
+        #[qsignal]
+        #[cxx_name = "stageFinished"]
+        fn stage_finished(
+            self: Pin<&mut SangerController>,
+            stage: QString,
+            success: bool,
+            payload: QString,
+        );
         #[qinvokable]
         fn poll_calls(self: Pin<&mut SangerController>);
         #[qinvokable]
@@ -79,7 +95,7 @@ pub mod qobject {
             reverse: &QString,
             overlap: i32,
             errors: i32,
-        ) -> QString;
+        ) -> bool;
         #[qinvokable]
         fn apply_primers(self: Pin<&mut SangerController>, proposal: &QString) -> bool;
         #[qinvokable]
@@ -105,6 +121,13 @@ pub mod qobject {
             additional_paths_json: &QString,
             signal_threshold: i32,
         ) -> bool;
+        /// Retain the request reference before starting any asynchronous stage.
+        #[qinvokable]
+        fn retain_reference(
+            self: Pin<&mut SangerController>,
+            anchor: &QString,
+            source: &QString,
+        ) -> QString;
         /// Prepare a complete multi-read selection without first installing a single read.
         #[qinvokable]
         fn prepare_reads(
@@ -134,6 +157,12 @@ pub mod qobject {
         fn place_alignment(self: Pin<&mut SangerController>, path: &QString) -> bool;
         #[qinvokable]
         fn next_issue(self: Pin<&mut SangerController>, forward: bool);
+        #[qinvokable]
+        fn go_to_column(
+            self: Pin<&mut SangerController>,
+            reference: bool,
+            column: &QString,
+        ) -> bool;
         #[qinvokable]
         fn hscroll_to(self: Pin<&mut SangerController>, fraction: f64);
         #[qinvokable]
@@ -186,19 +215,16 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use basecraft_docs::AlignmentDoc;
-use basecraft_docs::sanger::{SangerDraft, SangerPlacement};
+use basecraft_docs::sanger::SangerDraft;
 use basecraft_io::abif::{self, Trace};
-use basecraft_ops::sanger_review::{
-    MaskSettings, ReviewChoice, ReviewOp, SangerReviewSession, SangerRun,
-};
-use basecraft_plugin_host::{Manifest, PluginProcess};
+use basecraft_ops::sanger_review::{MaskSettings, ReviewChoice, ReviewOp, SangerReviewSession};
 use basecraft_viewmodel::sanger::SangerView;
 use basecraft_viewmodel::sanger_review::SangerReviewView;
 use basecraft_viewmodel::{Frame, Theme, svg};
 use cxx_qt::CxxQtType;
 use cxx_qt_lib::{QByteArray, QString};
 
-use crate::bridge::{css, load_theme, monospace_font, omarchy_theme_path, plugin_dir};
+use crate::bridge::{css, load_theme, monospace_font, omarchy_theme_path};
 
 // Independent generated QML properties describe document state and caller activity.
 #[allow(clippy::struct_excessive_bools)]
@@ -229,6 +255,7 @@ pub struct SangerRust {
     review_sequence: QString,
     review_decision: QString,
     alignment_context: QString,
+    review_details: QString,
     mask_settings: QString,
     selected_column: i32,
     consensus_columns: i32,
@@ -240,7 +267,7 @@ pub struct SangerRust {
     selected_call_set: QString,
     calling: bool,
     pending_calls: bool,
-    caller: basecraft_plugin_host::sanger_calls::SangerCaller,
+    stage: Option<work::Stage>,
     trace: Option<Trace>,
     review: Option<SangerReviewView>,
     review_session: Option<SangerReviewSession>,
@@ -281,6 +308,7 @@ impl Default for SangerRust {
             review_sequence: QString::default(),
             review_decision: QString::default(),
             alignment_context: QString::default(),
+            review_details: QString::default(),
             mask_settings: QString::from("{}"),
             selected_column: 1,
             consensus_columns: 1,
@@ -294,8 +322,7 @@ impl Default for SangerRust {
             selected_call_set: QString::default(),
             calling: false,
             pending_calls: false,
-            caller: basecraft_plugin_host::sanger_calls::SangerCaller::default()
-                .with_task_cancellation(),
+            stage: None,
             trace: None,
             review: None,
             review_session: None,
@@ -351,46 +378,6 @@ fn load_draft_review(path: &Path) -> Result<(SangerReviewView, SangerReviewSessi
     Ok((view, session))
 }
 
-// All explicit Sanger tool invocations share the same durable reservation and
-// failure record. Returned paths must stay inside that owned run.
-fn sanger_tool(
-    anchor: &Path,
-    plugin: &str,
-    operation: &str,
-    sources: &[PathBuf],
-    dependencies: &[PathBuf],
-    output_name: &str,
-    mut parameters: serde_json::Value,
-) -> Result<(SangerRun, PathBuf, Vec<PathBuf>), String> {
-    let run = SangerRun::prepare_with_dependencies(anchor, operation, sources, dependencies)
-        .map_err(|e| e.to_string())?;
-    let output = run.artifact(output_name).map_err(|e| e.to_string())?;
-    parameters["output"] = serde_json::json!(output);
-    run.parameters(&parameters).map_err(|e| e.to_string())?;
-    let outcome = (|| {
-        let manifest = Manifest::load(&plugin_dir(plugin)).map_err(|e| e.to_string())?;
-        let mut process = PluginProcess::spawn(&manifest).map_err(|e| e.to_string())?;
-        process
-            .invoke(operation, parameters, None)
-            .map_err(|e| e.to_string())
-    })();
-    match outcome {
-        Ok(result) => Ok((
-            run,
-            output,
-            result.outputs.into_iter().map(PathBuf::from).collect(),
-        )),
-        Err(error) => {
-            if let Err(record) = run.failed(&error) {
-                return Err(format!(
-                    "{error}; failure record could not be saved: {record}"
-                ));
-            }
-            Err(error)
-        }
-    }
-}
-
 fn session_view(session: &SangerReviewSession) -> Result<SangerReviewView, String> {
     let draft = session.working_draft()?;
     let mut view = review_view(&draft)?;
@@ -416,48 +403,110 @@ impl qobject::SangerController {
 
     pub fn cancel_calls(mut self: std::pin::Pin<&mut Self>) {
         self.as_mut().rust_mut().pending_calls = false;
-        let result = self.as_mut().rust_mut().caller.cancel();
-        self.as_mut().set_calling(false);
-        match result {
-            Ok(()) => {
-                self.as_mut().set_message_kind(QString::from("notify"));
-                self.set_message(QString::from("Alternative calling cancelled"));
-            }
-            Err(error) => self.call_error(&error),
+        if self.rust().stage.is_none() {
+            self.as_mut().set_calling(false);
+        }
+        self.cancel_stage();
+    }
+
+    pub fn cancel_stage(mut self: std::pin::Pin<&mut Self>) {
+        if let Some(stage) = &self.rust().stage {
+            stage
+                .cancelled
+                .store(true, std::sync::atomic::Ordering::Release);
+            self.as_mut().set_message_kind(QString::from("notify"));
+            self.set_message(QString::from("Cancelling Sanger operation"));
         }
     }
 
-    fn retain_calls(
-        mut self: std::pin::Pin<&mut Self>,
-        called: basecraft_plugin_host::sanger_calls::CalledDraft,
-    ) {
-        let result = (|| -> Result<(), String> {
-            let source = called
-                .draft
-                .inputs
-                .first()
-                .ok_or("Caller returned no source")?
-                .path
-                .clone();
-            let mut alternate = SangerReviewSession::from_draft(called.draft, &source)?;
-            alternate.attach_operation_run(&called.run)?;
-            let mut r = self.as_mut().rust_mut();
-            let session = r.review_session.as_mut().ok_or("Trace was closed")?;
-            session.retain_call_set(alternate)?;
-            session.start_recovery()
-        })();
-        self.as_mut().set_dirty(true);
-        self.as_mut().refresh();
-        match result {
-            Ok(()) => {
-                self.as_mut().set_calling(false);
-                self.as_mut().set_message_kind(QString::from("done"));
-                self.set_message(QString::from(
-                    "Computed calls retained. Choose a call set to compare and review.",
-                ));
-            }
-            Err(error) => self.call_error(&error),
+    fn submit_stage(mut self: std::pin::Pin<&mut Self>, request: work::Request) -> bool {
+        if self.rust().stage.is_some() {
+            return false;
         }
+        self.as_mut().rust_mut().pending_calls = false;
+        let single = request.name() == "single";
+        let message = request.message();
+        let session = self
+            .rust()
+            .review_session
+            .as_ref()
+            .map(SangerReviewSession::fork_for_operation);
+        match work::start(request, session) {
+            Ok(stage) => {
+                self.as_mut().rust_mut().stage = Some(stage);
+                self.as_mut().set_busy(true);
+                self.as_mut().set_calling(single);
+                self.as_mut().set_message_kind(QString::from("notify"));
+                self.set_message(QString::from(message));
+                true
+            }
+            Err(error) => {
+                self.as_mut().set_message_kind(QString::from("fail"));
+                self.set_message(QString::from(error));
+                false
+            }
+        }
+    }
+
+    pub fn poll_stage(mut self: std::pin::Pin<&mut Self>) {
+        let Some(stage) = &self.rust().stage else {
+            return;
+        };
+        let result = match stage.receiver.try_recv() {
+            Ok(result) => result,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                Err("Sanger worker disconnected; previous review preserved".into())
+            }
+        };
+        let name = stage.name;
+        let cancelled = stage.cancelled.load(std::sync::atomic::Ordering::Acquire);
+        self.as_mut().rust_mut().stage = None;
+        self.as_mut().set_busy(false);
+        self.as_mut().set_calling(false);
+        let result = if cancelled {
+            Err("Sanger operation cancelled; previous review preserved".into())
+        } else {
+            result
+        };
+        let (success, payload) = match result {
+            Ok(mut completed) => {
+                {
+                    let mut r = self.as_mut().rust_mut();
+                    completed.view.resize(r.view.width, r.view.height);
+                    r.review = Some(completed.view);
+                    r.review_session = Some(completed.session);
+                    if name == "prepare" {
+                        r.review_path = None;
+                        r.trace = None;
+                    }
+                }
+                if name == "prepare" {
+                    self.as_mut()
+                        .set_file_path(QString::from(completed.path.to_string_lossy().as_ref()));
+                }
+                self.as_mut().set_dirty(true);
+                self.as_mut().refresh();
+                self.as_mut().set_message_kind(QString::from("done"));
+                self.as_mut()
+                    .set_message(QString::from(if name == "single" {
+                        "Computed calls retained. Choose a call set to compare and review."
+                    } else {
+                        "Sanger stage completed"
+                    }));
+                (true, completed.payload)
+            }
+            Err(error) => {
+                self.as_mut().set_message_kind(QString::from(if cancelled {
+                    "notify"
+                } else {
+                    "fail"
+                }));
+                self.as_mut().set_message(QString::from(error));
+                (false, String::new())
+            }
+        };
+        self.stage_finished(QString::from(name), success, QString::from(payload));
     }
 
     pub fn compute_calls(self: std::pin::Pin<&mut Self>) {
@@ -465,20 +514,18 @@ impl qobject::SangerController {
     }
 
     pub fn poll_calls(mut self: std::pin::Pin<&mut Self>) {
-        if self.rust().pending_calls {
+        if self.rust().pending_calls && self.rust().stage.is_none() {
             self.as_mut().rust_mut().pending_calls = false;
             self.compute_calls();
-            return;
-        }
-        let result = self.as_mut().rust_mut().caller.poll();
-        match result {
-            Ok(Some(called)) => self.retain_calls(called),
-            Ok(None) => {}
-            Err(error) => self.call_error(&error),
+        } else {
+            self.poll_stage();
         }
     }
 
     pub fn select_calls(mut self: std::pin::Pin<&mut Self>, id: &QString) -> bool {
+        if self.rust().stage.is_some() {
+            return false;
+        }
         let result = (|| -> Result<SangerReviewView, String> {
             let mut r = self.as_mut().rust_mut();
             let session = r.review_session.as_mut().ok_or("No review is open")?;
@@ -597,11 +644,7 @@ impl qobject::SangerController {
                 });
                 (
                     r.scratch.to_bytes(),
-                    format!(
-                        "{unresolved} unresolved · {} masked · {} reads",
-                        review.masked.iter().filter(|&&m| m).count(),
-                        review.lanes.len()
-                    ),
+                    review.review_counts(),
                     zoom,
                     true,
                     String::from_utf8_lossy(&review.consensus).into_owned(),
@@ -732,6 +775,12 @@ impl qobject::SangerController {
         self.as_mut().set_review_decision(QString::from(&decision));
         self.as_mut().set_unresolved(unresolved);
         self.as_mut().set_alignment_context(QString::from(&context));
+        let details = self
+            .rust()
+            .review
+            .as_ref()
+            .map_or_else(String::new, SangerReviewView::selected_text);
+        self.as_mut().set_review_details(QString::from(details));
         let (sets, selected) = self.rust().review_session.as_ref().map_or_else(
             || (serde_json::json!([]), String::new()), |session| {
                 (serde_json::json!(session.call_sets().iter().enumerate().map(|(i, (id, engine))|
@@ -742,170 +791,20 @@ impl qobject::SangerController {
         self.as_mut().set_selected_call_set(QString::from(selected));
     }
 
-    fn install_draft_run(mut self: std::pin::Pin<&mut Self>, run: &SangerRun, path: &Path) -> bool {
-        // Verify sources, evaluation and run attachment before replacing the
-        // installed session (including its manual decisions, masks and undo).
-        let result = load_draft_review(path).and_then(|(review, mut session)| {
-            session.attach_run(run)?;
-            Ok((review, session))
-        });
-        self.as_mut().install_review_result(path, result, true)
-    }
-
-    pub fn orient_review(mut self: std::pin::Pin<&mut Self>, alignment: &QString) -> bool {
-        let result = (|| -> Result<(SangerRun, Option<PathBuf>), String> {
-            let session = self
-                .rust()
-                .review_session
-                .as_ref()
-                .ok_or("Open a draft first")?;
-            let draft = session.working_draft()?;
-            let mut sources: Vec<_> = draft.inputs.iter().map(|r| r.path.clone()).collect();
-            sources.push(PathBuf::from(alignment.to_string()));
-            let (run, output, mut outputs) = sanger_tool(
-                session.storage_anchor(),
-                "mafft",
-                "add_sequences",
-                &sources,
-                session.evidence_runs(),
-                "orientation.json",
-                serde_json::json!({"input":alignment.to_string(),"rows":[["probe",draft.consensus.replace('-',"")]],"orientation":true,"keep":true}),
-            )?;
-            outputs.push(run.review_snapshot(session).map_err(|e| e.to_string())?);
-            let value: serde_json::Value =
-                serde_json::from_slice(&std::fs::read(&output).map_err(|e| e.to_string())?)
-                    .map_err(|e| e.to_string())?;
-            let evidence = if value["reversed"].as_array().is_none_or(Vec::is_empty) {
-                None
-            } else {
-                if !session.automatic_only() {
-                    return Err(
-                    "This review already has decisions; open a fresh draft to change orientation"
-                        .into(),
-                );
-                }
-                // Reverse the immutable original, not its transient resolved paths.
-                let mut reversed = session.draft.reverse_complemented();
-                reversed.limitations.push(format!(
-                    "Draft reverse-complemented for alignment context; source draft SHA-256 {}",
-                    session.draft_sha256
-                ));
-                let evidence = run.artifact("evidence.json").map_err(|e| e.to_string())?;
-                basecraft_ops::input_evidence::write_json(&evidence, &reversed)
-                    .map_err(|e| e.to_string())?;
-                outputs.push(evidence.clone());
-                Some(evidence)
-            };
-            Ok((run.finish(&outputs).map_err(|e| e.to_string())?, evidence))
-        })();
-        match result {
-            Ok((run, Some(path))) => {
-                if self
-                    .rust()
-                    .review_session
-                    .as_ref()
-                    .is_some_and(|session| session.draft.inputs.len() > 1)
-                {
-                    return self.install_draft_run(&run, &path);
-                }
-                let result = (|| -> Result<String, String> {
-                    let mut oriented = SangerReviewSession::new(&path)?;
-                    oriented.attach_run(&run)?;
-                    let id = oriented.draft_sha256.clone();
-                    self.as_mut()
-                        .rust_mut()
-                        .review_session
-                        .as_mut()
-                        .ok_or("No review is open")?
-                        .retain_call_set(oriented)?;
-                    Ok(id)
-                })();
-                match result {
-                    Ok(id) => self.select_calls(&QString::from(id)),
-                    Err(error) => {
-                        self.call_error(&error);
-                        false
-                    }
-                }
-            }
-            Ok((run, None)) => {
-                let result = self
-                    .as_mut()
-                    .rust_mut()
-                    .review_session
-                    .as_mut()
-                    .ok_or_else(|| "No review is open".to_string())
-                    .and_then(|session| session.include_run(&run));
-                if let Err(error) = result {
-                    self.as_mut().set_message(QString::from(error));
-                    self.as_mut().set_message_kind(QString::from("fail"));
-                    return false;
-                }
-                self.as_mut().set_dirty(true);
-                true
-            }
-            Err(error) => {
-                self.as_mut().set_message_kind(QString::from("fail"));
-                self.as_mut()
-                    .set_message(QString::from(crate::bridge::error_summary(&error)));
-                false
-            }
-        }
+    pub fn orient_review(self: std::pin::Pin<&mut Self>, alignment: &QString) -> bool {
+        self.submit_stage(work::Request::Orient(PathBuf::from(alignment.to_string())))
     }
 
     pub fn single_review(mut self: std::pin::Pin<&mut Self>, signal_threshold: i32) -> bool {
-        self.as_mut().rust_mut().pending_calls = false;
-        let Ok(threshold) = u32::try_from(signal_threshold) else {
+        if self.rust().stage.is_some() {
             return false;
-        };
-        let source = self
-            .rust()
-            .review_session
-            .as_ref()
-            .ok_or_else(|| "No review is open".to_string())
-            .and_then(SangerReviewSession::working_draft)
-            .and_then(|draft| {
-                if draft.inputs.len() != 1 {
-                    return Err("Choose a single trace to compute calls".into());
-                }
-                draft
-                    .inputs
-                    .into_iter()
-                    .next()
-                    .ok_or_else(|| "Trace input is missing".into())
-            });
-        let source = match source {
-            Ok(source) => source,
-            Err(error) => {
-                self.call_error(&error);
-                return false;
-            }
-        };
-        let result = self
-            .as_mut()
-            .rust_mut()
-            .caller
-            .start(&source.path, &source.sha256, threshold);
-        match result {
-            Ok(Some(called)) => self.retain_calls(called),
-            Ok(None) => {
-                self.as_mut().set_calling(true);
-                self.as_mut().set_message_kind(QString::from("notify"));
-                let diagnostic = self
-                    .rust()
-                    .caller
-                    .lookup_diagnostics
-                    .first()
-                    .map_or_else(String::new, |message| format!(" Reuse lookup: {message}"));
-                self.as_mut().set_message(QString::from(format!(
-                    "No valid cached calls; computing in background. Current calls remain selected.{diagnostic}")));
-            }
-            Err(error) => {
-                self.call_error(&error);
-                return false;
-            }
         }
-        true
+        self.as_mut().rust_mut().pending_calls = false;
+        if !(1..=90).contains(&signal_threshold) {
+            self.call_error("Signal cutoff must be between 1 and 90");
+            return false;
+        }
+        self.submit_stage(work::Request::Single(signal_threshold.cast_unsigned()))
     }
 
     pub fn reviewed_evidence(mut self: std::pin::Pin<&mut Self>) -> QString {
@@ -969,6 +868,10 @@ impl qobject::SangerController {
     }
 
     pub fn open_file(mut self: std::pin::Pin<&mut Self>, path: &QString) -> bool {
+        self.as_mut().cancel_stage();
+        self.as_mut().rust_mut().stage = None;
+        self.as_mut().set_busy(false);
+        self.as_mut().set_calling(false);
         match basecraft_ops::sanger_review::evidence_kind(Path::new(&path.to_string())) {
             Some(basecraft_ops::sanger_review::EvidenceKind::Review) => {
                 return self.open_review(path);
@@ -1025,6 +928,10 @@ impl qobject::SangerController {
         result: Result<(SangerReviewView, SangerReviewSession), String>,
         dirty: bool,
     ) -> bool {
+        self.as_mut().cancel_stage();
+        self.as_mut().rust_mut().stage = None;
+        self.as_mut().set_busy(false);
+        self.as_mut().set_calling(false);
         match result {
             Ok((mut review, session)) => {
                 self.as_mut().cancel_calls();
@@ -1054,6 +961,10 @@ impl qobject::SangerController {
     }
 
     pub fn open_review(mut self: std::pin::Pin<&mut Self>, path: &QString) -> bool {
+        self.as_mut().cancel_stage();
+        self.as_mut().rust_mut().stage = None;
+        self.as_mut().set_busy(false);
+        self.as_mut().set_calling(false);
         let path = PathBuf::from(path.to_string());
         let result = (|| -> Result<(SangerReviewView, SangerReviewSession), String> {
             let session = SangerReviewSession::load(&path)?;
@@ -1098,6 +1009,16 @@ impl qobject::SangerController {
         // Detach earlier calls before source resolution or JSON validation can
         // fail, so late results cannot replace this request's error.
         self.as_mut().cancel_calls();
+        if self
+            .rust()
+            .stage
+            .as_ref()
+            .is_some_and(|stage| stage.name == "single")
+        {
+            self.as_mut().rust_mut().stage = None;
+            self.as_mut().set_calling(false);
+            self.as_mut().set_busy(false);
+        }
         let paths = (|| -> Result<Vec<String>, String> {
             let source = self
                 .rust()
@@ -1129,57 +1050,75 @@ impl qobject::SangerController {
         }
     }
 
+    pub fn retain_reference(
+        mut self: std::pin::Pin<&mut Self>,
+        anchor: &QString,
+        source: &QString,
+    ) -> QString {
+        if self.rust().stage.is_some() {
+            return QString::default();
+        }
+        match work::retain_reference(
+            Path::new(&anchor.to_string()),
+            Path::new(&source.to_string()),
+        ) {
+            Ok(path) => QString::from(path.to_string_lossy().as_ref()),
+            Err(error) => {
+                self.as_mut().set_message_kind(QString::from("fail"));
+                self.set_message(QString::from(format!(
+                    "Cannot retain review reference: {error}"
+                )));
+                QString::default()
+            }
+        }
+    }
+
     pub fn prepare_reads(
         mut self: std::pin::Pin<&mut Self>,
         paths_json: &QString,
         signal_threshold: i32,
     ) -> bool {
-        // A pending/active single-read result must not replace this request's
-        // status or attach to a subsequently installed multi-read session.
-        self.as_mut().cancel_calls();
-        let result = (|| -> Result<(SangerRun, PathBuf), String> {
-            if !(1..=90).contains(&signal_threshold) {
-                return Err("Signal cutoff must be between 1 and 90 percent".into());
+        // Invalid paired requests also supersede queued automatic calling, so
+        // a later timer cannot replace their failure with single-read success.
+        self.as_mut().rust_mut().pending_calls = false;
+        if self.rust().stage.is_none() {
+            self.as_mut().set_calling(false);
+        }
+        // A selected pair supersedes automatic single-read calling. Detaching
+        // its receiver prevents a late single completion masking pair failure.
+        if self
+            .rust()
+            .stage
+            .as_ref()
+            .is_some_and(|stage| stage.name == "single")
+        {
+            self.as_mut().cancel_stage();
+            self.as_mut().rust_mut().stage = None;
+            self.as_mut().set_busy(false);
+            self.as_mut().set_calling(false);
+        }
+        let paths = serde_json::from_str::<Vec<PathBuf>>(&paths_json.to_string());
+        match paths {
+            Ok(paths) if (2..=3).contains(&paths.len()) && (1..=90).contains(&signal_threshold) => {
+                self.submit_stage(work::Request::Prepare(
+                    paths,
+                    signal_threshold.cast_unsigned(),
+                ))
             }
-            let paths: Vec<String> =
-                serde_json::from_str(&paths_json.to_string()).map_err(|e| e.to_string())?;
-            if !(2..=3).contains(&paths.len()) {
-                return Err("Exactly two or three AB1 reads are required".into());
-            }
-            let sources: Vec<_> = paths.iter().map(PathBuf::from).collect();
-            let (run, output, outputs) = sanger_tool(
-                &sources[0],
-                "tracy-sanger",
-                "consensus",
-                &sources,
-                &[],
-                "draft",
-                serde_json::json!({"reads":paths,"signal_threshold":signal_threshold}),
-            )?;
-            Ok((
-                run.finish(&outputs).map_err(|e| e.to_string())?,
-                output.join("evidence.json"),
-            ))
-        })();
-        match result {
-            Ok((run, evidence)) => {
-                let loaded = self.as_mut().install_draft_run(&run, &evidence);
-                if loaded {
-                    self.as_mut()
-                        .set_message(QString::from("Draft review retained; resume from Tasks"));
-                    self.as_mut().set_message_kind(QString::from("done"));
-                }
-                loaded
-            }
-            Err(error) => {
+            _ => {
                 self.as_mut().set_message_kind(QString::from("fail"));
-                self.as_mut().set_message(QString::from(&error));
+                self.set_message(QString::from(
+                    "Choose two or three AB1 reads and a signal cutoff between 1 and 90",
+                ));
                 false
             }
         }
     }
 
     pub fn save_review(mut self: std::pin::Pin<&mut Self>, path: &QString) -> bool {
+        if self.rust().stage.is_some() {
+            return false;
+        }
         let path = PathBuf::from(path.to_string());
         let result = self
             .as_mut()
@@ -1211,6 +1150,9 @@ impl qobject::SangerController {
         choice: &QString,
         base: &QString,
     ) -> bool {
+        if self.rust().stage.is_some() {
+            return false;
+        }
         let choice = match choice.to_string().as_str() {
             "accept" => self
                 .rust()
@@ -1281,6 +1223,9 @@ impl qobject::SangerController {
     }
 
     fn review_history(mut self: std::pin::Pin<&mut Self>, op: ReviewOp) {
+        if self.rust().stage.is_some() {
+            return;
+        }
         let events_before = self
             .rust()
             .review_session
@@ -1320,6 +1265,9 @@ impl qobject::SangerController {
         mut self: std::pin::Pin<&mut Self>,
         settings_json: &QString,
     ) -> bool {
+        if self.rust().stage.is_some() {
+            return false;
+        }
         let result = (|| -> Result<ReviewOp, String> {
             let settings: basecraft_docs::sanger::ReviewSettings =
                 serde_json::from_str(&settings_json.to_string()).map_err(|e| e.to_string())?;
@@ -1352,6 +1300,9 @@ impl qobject::SangerController {
     }
 
     pub fn mask_ends(mut self: std::pin::Pin<&mut Self>, start: i32, end: i32) -> bool {
+        if self.rust().stage.is_some() {
+            return false;
+        }
         let Some(session) = &self.rust().review_session else {
             return false;
         };
@@ -1389,6 +1340,9 @@ impl qobject::SangerController {
         ok
     }
     pub fn mask_reference(mut self: std::pin::Pin<&mut Self>) -> bool {
+        if self.rust().stage.is_some() {
+            return false;
+        }
         let Some((start, end)) = self
             .rust()
             .review
@@ -1405,68 +1359,18 @@ impl qobject::SangerController {
         )
     }
     pub fn find_primers(
-        mut self: std::pin::Pin<&mut Self>,
+        self: std::pin::Pin<&mut Self>,
         forward: &QString,
         reverse: &QString,
         overlap: i32,
         errors: i32,
-    ) -> QString {
-        let result = (|| -> Result<(String, SangerRun), String> {
-            let review = self.rust().review.as_ref().ok_or("No review open")?;
-            let sequence: String = review
-                .consensus
-                .iter()
-                .filter(|&&b| b != b'-')
-                .map(|&b| char::from(b))
-                .collect();
-            let session = self
-                .rust()
-                .review_session
-                .as_ref()
-                .ok_or("No review open")?;
-            let sources: Vec<_> = session
-                .working_draft()?
-                .inputs
-                .iter()
-                .map(|r| r.path.clone())
-                .collect();
-            let (run, output, mut outputs) = sanger_tool(
-                session.storage_anchor(),
-                "tracy-sanger",
-                "primers",
-                &sources,
-                session.evidence_runs(),
-                "primers.json",
-                serde_json::json!({"sequence":sequence,"forward":forward.to_string(),"reverse":reverse.to_string(),"minimum_overlap":overlap,"error_percent":errors}),
-            )?;
-            outputs.push(run.review_snapshot(session).map_err(|e| e.to_string())?);
-            let text = std::fs::read_to_string(&output).map_err(|e| e.to_string())?;
-            Ok((text, run.finish(&outputs).map_err(|e| e.to_string())?))
-        })();
-        match result {
-            Ok((text, run)) => {
-                let result = self
-                    .as_mut()
-                    .rust_mut()
-                    .review_session
-                    .as_mut()
-                    .ok_or_else(|| "No review open".to_string())
-                    .and_then(|session| session.include_run(&run));
-                if let Err(error) = result {
-                    self.as_mut().set_message(QString::from(error));
-                    return QString::default();
-                }
-                self.as_mut().set_dirty(true);
-                self.as_mut().set_message(QString::default());
-                QString::from(text)
-            }
-            Err(e) => {
-                self.as_mut().set_message(QString::from(e));
-                QString::default()
-            }
-        }
+    ) -> bool {
+        self.submit_stage(work::Request::Primers(serde_json::json!({"forward":forward.to_string(),"reverse":reverse.to_string(),"minimum_overlap":overlap,"error_percent":errors})))
     }
     pub fn apply_primers(mut self: std::pin::Pin<&mut Self>, proposal: &QString) -> bool {
+        if self.rust().stage.is_some() {
+            return false;
+        }
         let result = (|| -> Result<MaskSettings, String> {
             let value: serde_json::Value =
                 serde_json::from_str(&proposal.to_string()).map_err(|e| e.to_string())?;
@@ -1572,6 +1476,9 @@ impl qobject::SangerController {
         path: &QString,
         label: &QString,
     ) -> bool {
+        if self.rust().stage.is_some() {
+            return false;
+        }
         let review_path = self.rust().review_path.clone();
         let output = PathBuf::from(path.to_string());
         let events_before = self
@@ -1616,101 +1523,34 @@ impl qobject::SangerController {
         }
     }
 
-    pub fn place_alignment(mut self: std::pin::Pin<&mut Self>, path: &QString) -> bool {
-        let source = PathBuf::from(path.to_string());
-        let result = (|| -> Result<(SangerRun, PathBuf, SangerPlacement, AlignmentDoc), String> {
-            let fragment = self
-                .rust()
-                .review
-                .as_ref()
-                .ok_or("Open a Sanger draft before placing it")?
-                .draft
-                .consensus
-                .replace('-', "");
-            let session = self
-                .rust()
-                .review_session
-                .as_ref()
-                .ok_or("No review open")?;
-            let (run, output, mut outputs) = sanger_tool(
-                session.storage_anchor(),
-                "mafft",
-                "place_sanger",
-                std::slice::from_ref(&source),
-                session.evidence_runs(),
-                "placement.json",
-                serde_json::json!({"input":source,"fragment":fragment}),
-            )?;
-            outputs.push(run.review_snapshot(session).map_err(|e| e.to_string())?);
-            let placement = SangerPlacement::read(&output)?;
-            let hash = basecraft_io::sha256_file(&source).map_err(|e| e.to_string())?;
-            if !hash.eq_ignore_ascii_case(&placement.source_sha256) {
-                return Err("Source alignment changed during placement".into());
-            }
-            let indexed =
-                Arc::new(basecraft_io::cache::open_fasta(&source).map_err(|e| e.to_string())?);
-            let alignment = AlignmentDoc::from_fasta(source.display().to_string(), &indexed);
-            Ok((
-                run.finish(&outputs).map_err(|e| e.to_string())?,
-                output,
-                placement,
-                alignment,
-            ))
-        })();
+    pub fn place_alignment(self: std::pin::Pin<&mut Self>, path: &QString) -> bool {
+        self.submit_stage(work::Request::Place(PathBuf::from(path.to_string())))
+    }
+
+    pub fn go_to_column(
+        mut self: std::pin::Pin<&mut Self>,
+        reference: bool,
+        column: &QString,
+    ) -> bool {
+        if self.rust().busy {
+            return false;
+        }
+        let result = self
+            .as_mut()
+            .rust_mut()
+            .review
+            .as_mut()
+            .ok_or_else(|| "No draft review is open".to_string())
+            .and_then(|review| review.go_to_column(reference, &column.to_string()));
         match result {
-            Ok((run, output, placement, alignment)) => {
-                let result = self
-                    .as_mut()
-                    .rust_mut()
-                    .review
-                    .as_mut()
-                    .ok_or_else(|| "No Sanger draft is open".to_string())
-                    .and_then(|review| review.attach_alignment(placement, alignment));
-                match result {
-                    Ok(()) => {
-                        self.as_mut().set_dirty(true);
-                        let attached = self
-                            .as_mut()
-                            .rust_mut()
-                            .review_session
-                            .as_mut()
-                            .ok_or_else(|| "No review is open".to_string())
-                            .and_then(|session| session.attach_placement(&run, &output));
-                        if let Err(error) = attached {
-                            self.as_mut().set_message(QString::from(error));
-                            self.as_mut().set_message_kind(QString::from("fail"));
-                            return false;
-                        }
-                        let automatic =
-                            self.rust().review_session.as_ref().is_some_and(|session| {
-                                session.events().iter().all(|op| {
-                                    matches!(
-                                        op,
-                                        ReviewOp::AutoAccept { .. } | ReviewOp::Evaluate { .. }
-                                    )
-                                })
-                            });
-                        let settings = self.rust().review_settings.clone();
-                        self.as_mut().apply_review_settings(&settings);
-                        if automatic {
-                            self.as_mut().mask_reference();
-                        }
-                        self.as_mut().set_message_kind(QString::from("done"));
-                        self.as_mut()
-                            .set_message(QString::from("Alignment context loaded"));
-                        self.refresh();
-                        true
-                    }
-                    Err(error) => {
-                        self.as_mut().set_message_kind(QString::from("error"));
-                        self.as_mut().set_message(QString::from(&error));
-                        false
-                    }
-                }
+            Ok(()) => {
+                self.as_mut().set_message(QString::default());
+                self.refresh();
+                true
             }
             Err(error) => {
-                self.as_mut().set_message_kind(QString::from("error"));
-                self.as_mut().set_message(QString::from(&error));
+                self.as_mut().set_message_kind(QString::from("fail"));
+                self.as_mut().set_message(QString::from(error));
                 false
             }
         }

@@ -82,6 +82,10 @@ Item {
             const dialog = data.roster ? window.roster : window.labels
             dialog.show(target, data.roster ? "result.spart" : "tree.nwk")
             tryCompare(dialog, "opened", true)
+            // opened can precede the first scene frame: hit testing still uses
+            // the old popup/delegate positions until rendering and layout settle.
+            verify(waitForRendering(dialog.contentItem))
+            verify(waitForPolish(window))
             const list = findChild(dialog, data.roster ? "workspaceRosterLinks" : "treeRecordLinks")
             tryVerify(() => dialog.width > 450 && list.width >= Math.floor(dialog.availableWidth) - 1)
             // Mix mouse entry on non-current rows with logical keyboard traversal.
@@ -119,6 +123,10 @@ Item {
             const dialog = data.roster ? window.roster : window.labels
             dialog.show(target, data.roster ? "result.spart" : "tree.nwk")
             tryCompare(dialog, "opened", true)
+            // opened can precede the first scene frame: hit testing still uses
+            // the old popup/delegate positions until rendering and layout settle.
+            verify(waitForRendering(dialog.contentItem))
+            verify(waitForPolish(window))
             const list = findChild(dialog, data.roster ? "workspaceRosterLinks" : "treeRecordLinks")
             tryCompare(list.view, "count", data.count)
             // Popup layout is separate from ApplicationWindow.contentItem polish.
