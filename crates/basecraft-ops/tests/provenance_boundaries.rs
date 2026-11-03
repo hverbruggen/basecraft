@@ -205,7 +205,10 @@ fn imported_support_partial_removal_undo_save_reopen_and_redo() {
     );
     let input =
         basecraft_ops::input_evidence::read_input(&provenance::bundle_for_result(&target)).unwrap();
-    assert_eq!(input.extra["upstream"].as_array().unwrap().as_slice(), []);
+    assert_eq!(
+        input.extra["upstream"].as_array().unwrap().as_slice(),
+        [] as [serde_json::Value; 0]
+    );
     session.undo(doc).unwrap();
     session.save(doc, None).unwrap();
     assert!(
