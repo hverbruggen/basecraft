@@ -109,7 +109,8 @@ comparators are credited here and not in that text.
 - Missing distances use NJ* and MVR* (Criscuolo & Gascuel 2008), or a synchronous, uncapped
   variant of four-point completion (Landry et al. 1996; Makarenkov & Lapointe 2004), without
   the weighted least-squares refinement of MW*. UPGMA is Sokal & Michener (1958), with the
-  nearest-neighbor chain surveyed by Murtagh (1983). Bootstrap is Felsenstein (1985), using
+  nearest-neighbor chain surveyed by Murtagh (1983), the method fastcluster also uses
+  (Müllner 2013). Replaying merges lazily is Basecraft's implementation choice. Bootstrap is Felsenstein (1985), using
   the SplitMix64 generator (Steele et al. 2014).
 
 **What "exact" means here.** Joins match an exhaustive search in the engine's own
@@ -129,6 +130,7 @@ NJ program can return a different tree with the same claim to being NJ.
 - Landry PA, Lapointe FJ, Kirsch JAW. 1996. Estimating phylogenies from lacunose distance matrices: additive is superior to ultrametric estimation. Mol Biol Evol 13:818-823. https://doi.org/10.1093/oxfordjournals.molbev.a025642
 - Lefort V, Desper R, Gascuel O. 2015. FastME 2.0: a comprehensive, accurate, and fast distance-based phylogeny inference program. Mol Biol Evol 32:2798-2800. https://doi.org/10.1093/molbev/msv150
 - Makarenkov V, Lapointe FJ. 2004. A weighted least-squares approach for inferring phylogenies from incomplete distance matrices. Bioinformatics 20:2113-2121. https://doi.org/10.1093/bioinformatics/bth211
+- Müllner D. 2013. fastcluster: fast hierarchical, agglomerative clustering routines for R and Python. J Stat Softw 53(9). https://doi.org/10.18637/jss.v053.i09
 - Murtagh F. 1983. A survey of recent advances in hierarchical clustering algorithms. Comput J 26:354-359. https://doi.org/10.1093/comjnl/26.4.354
 - Saitou N, Nei M. 1987. The neighbor-joining method: a new method for reconstructing phylogenetic trees. Mol Biol Evol 4:406-425. https://doi.org/10.1093/oxfordjournals.molbev.a040454
 - Simonsen M, Mailund T, Pedersen CNS. 2008. Rapid neighbour-joining. In: Algorithms in Bioinformatics, LNCS 5251:113-122. https://doi.org/10.1007/978-3-540-87361-7_10
@@ -196,9 +198,10 @@ nearest-neighbor chain. It returns a rooted ultrametric tree (equal-rate
 assumption), with deterministic ties and cluster heights equal to half their
 merge distance. Distances remain unchanged. Disconnected complete components
 produce separate trees; incomplete connected components fail explicitly.
-Distance estimation is parallel; the UPGMA chain is serial. The implementation
-uses quadratic matrix storage and nearest-neighbor-chain work; it is checked
-against an independent global-minimum average-linkage oracle.
+Distance estimation is parallel; the UPGMA chain is serial. It uses quadratic matrix
+storage and nearest-neighbor-chain work, and merges reach each row when that row is next
+read rather than at once. It is checked against an independent global-minimum average-linkage
+oracle and against eagerly updated merges, ties included.
 
 ```sh
 basecraft-distance --input genes.afa --model k2p --method upgma --tree genes.upgma.nwk

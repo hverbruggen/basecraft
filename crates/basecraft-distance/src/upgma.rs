@@ -1,5 +1,5 @@
 //! Size-weighted average linkage with a reciprocal nearest-neighbor chain, the method used
-//! by fastcluster (Mullner 2013). O(n²) distance storage and work; ties prefer the
+//! by fastcluster (Müllner 2013). O(n²) distance storage and work; ties prefer the
 //! predecessor, then input order.
 //!
 //! A merge changes one entry in every row, a cache miss each if written at once, while the
