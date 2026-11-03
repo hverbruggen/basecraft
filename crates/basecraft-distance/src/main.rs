@@ -18,7 +18,7 @@ struct Args {
     /// Reused only when input, model and overlap agree.
     #[arg(long)]
     cache: Option<PathBuf>,
-    /// JSON stored in a compact cache's header, for a caller's own producer checks.
+    /// JSON stored with a written cache, for a caller's own producer checks.
     #[arg(long, requires = "cache")]
     cache_identity: Option<String>,
     /// DNA distance model (ignored with cache-only input).
@@ -85,6 +85,10 @@ fn run(a: &Args) -> Result<()> {
     {
         return Err("bootstrap requires --input, --tree and --method sorted or upgma; a cache alone is insufficient".into());
     }
+    let identity = a
+        .cache_identity
+        .as_deref()
+        .map_or(Ok(serde_json::Value::Null), serde_json::from_str)?;
     if a.cache.is_none() && a.matrix.is_none() && a.tree.is_none() && a.summary.is_none() {
         return Err("choose --cache, --matrix, --tree, or --summary output".into());
     }
@@ -233,10 +237,6 @@ fn run(a: &Args) -> Result<()> {
         if let Some(path) = &a.cache
             && !cached
         {
-            let identity = a
-                .cache_identity
-                .as_deref()
-                .map_or(Ok(serde_json::Value::Null), serde_json::from_str)?;
             matrix.write_identified(path, &identity)?;
         }
         if let Some(path) = &a.matrix {

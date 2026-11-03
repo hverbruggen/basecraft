@@ -43,6 +43,24 @@ class RegisteredCacheIdentity(unittest.TestCase):
 
 
 class MethodsTextTest(unittest.TestCase):
+    def test_unreadable_cache_input_gets_a_clear_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "cache"
+            for content in (b"[]", b"\xff\xfe not json", b"", distance_plugin.CACHE_MAGIC + b"{broken\n"):
+                path.write_bytes(content)
+                with self.assertRaisesRegex(ValueError, "calculate a fresh cache"):
+                    distance_plugin.cache_identity(path)
+
+    def test_recorded_settings_match_what_ran(self):
+        params = {"min_overlap": 2, "seed": 7}
+        matrix = distance_plugin.resolved_parameters("matrix", "p", "njstar", params, 0)
+        self.assertNotIn("method", matrix)
+        boot = distance_plugin.resolved_parameters("tree", "p", "sorted", params, 100)
+        self.assertEqual(boot["seed"], 7)
+        self.assertEqual(boot["method"], "sorted")
+        plain = distance_plugin.resolved_parameters("tree", "p", "sorted", params, 0)
+        self.assertNotIn("seed", plain)
+
     def test_each_method_cites_its_sources(self):
         tree = distance_plugin.methods("tree", "jc69", "sorted", 1, 0)
         cited = "\n".join(tree["citations"])

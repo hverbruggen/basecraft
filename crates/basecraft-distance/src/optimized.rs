@@ -13,11 +13,13 @@
 //! ```
 //!
 //! Lowering the cached bound by that amount when it is negative keeps it valid without
-//! assuming a metric. Results are the same joins as an exhaustive search over every
-//! pair, including ties, which break on (Q, smaller slot, larger slot).
-use super::{Best, Instant, Packed, Stats, index};
+//! assuming a metric. Joins match an exhaustive search over every pair in the same
+//! floating-point arithmetic, including ties, which break on (Q, smaller slot, larger
+//! slot). Distances so large that Q overflows are refused.
+use super::{Best, Instant, Packed, Result, Stats, index, length_text};
 use rayon::prelude::*;
 const NO_PARTNER: usize = usize::MAX;
+const TOO_LARGE: &str = "distances are too large for neighbor joining";
 const BLOCK: usize = 64;
 const LANES: usize = 4;
 // Enough rows to pay for a parallel batch.
@@ -103,7 +105,7 @@ fn emit(nodes: &[Node], root: usize) -> String {
                 } else {
                     stack.push(Event::Text(")".into()));
                     for (k, &(j, len)) in nodes[i].edges.iter().enumerate().rev() {
-                        stack.push(Event::Text(format!(":{len:.12}")));
+                        stack.push(Event::Text(format!(":{}", length_text(len))));
                         stack.push(Event::Node(j));
                         if k > 0 {
                             stack.push(Event::Text(",".into()));
@@ -140,11 +142,15 @@ pub(super) fn tree(
     parallel: bool,
     cutoff: usize,
     verify: bool,
-) -> (String, Stats) {
+) -> Result<(String, Stats)> {
     let n = names.len();
     assert!(n >= 3 && n < u32::MAX as usize && d.len() == n * (n - 1) / 2);
     let init = Instant::now();
     let mut st = Stats::default();
+    // Caches from older versions can hold -0, which Best orders apart from 0.
+    for v in &mut d {
+        *v += 0.;
+    }
     let mut s = row_sums(&d, n);
     let mut nodes: Vec<_> = names
         .iter()
@@ -177,7 +183,7 @@ pub(super) fn tree(
             .iter()
             .filter(|v| v.is_finite())
             .fold(0_f64, |a, &b| a.max(b.abs()));
-        let pad = 8. * f64::EPSILON * (1. + c * d_limit + 2. * s_limit);
+        let pad = 16. * f64::EPSILON * (1. + c * d_limit + 2. * s_limit);
         let mut best = Best::none();
         for r in 0..slots {
             let p = partner[r];
@@ -250,6 +256,9 @@ pub(super) fn tree(
                 st.mismatches += 1;
             }
         }
+        if best.i == usize::MAX {
+            return Err(TOO_LARGE.into());
+        }
         let start = Instant::now();
         let (x, y) = (best.i, best.j);
         let xy = d[index(y, x)];
@@ -271,6 +280,9 @@ pub(super) fn tree(
             let a = 0.5 * (dx + dy);
             let v = a - 0.5 * xy;
             s[r] += v - dx - dy;
+            if !s[r].is_finite() {
+                return Err(TOO_LARGE.into());
+            }
             d[at_x] = v;
             d_limit = d_limit.max(v.abs());
             new_d.push((r, v));
@@ -290,6 +302,9 @@ pub(super) fn tree(
             a_min = a_min.min(a);
         }
         s[x] = new_d.iter().map(|v| v.1).sum();
+        if !s[x].is_finite() {
+            return Err(TOO_LARGE.into());
+        }
         s[y] = f64::NEG_INFINITY;
         lower[y] = f64::INFINITY;
         partner[y] = NO_PARTNER;
@@ -355,7 +370,7 @@ pub(super) fn tree(
         text: None,
         edges: vec![(roots[a], la), (roots[b], ab - la), (roots[c], ac - la)],
     });
-    (emit(&nodes, nodes.len() - 1), st)
+    Ok((emit(&nodes, nodes.len() - 1), st))
 }
 pub(super) fn pack_fast(s: &[u8]) -> Packed {
     let mut lut = [4u8; 256];

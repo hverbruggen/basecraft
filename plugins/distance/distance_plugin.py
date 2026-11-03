@@ -76,7 +76,7 @@ MODELS = {"p": ("uncorrected p-distances", []),
 TREES = {"sorted": ("exact neighbor joining (Saitou and Nei 1987; Studier and Keppler 1988), searched with row bounds derived from dynamic neighbor joining (Clausen 2023) and extended to non-metric distances", NJ + FAST_NJ),
          "njstar": ("NJ* (Criscuolo and Gascuel 2008)", NJ + FAST_NJ + INCOMPLETE),
          "mvrstar": ("MVR* (Criscuolo and Gascuel 2008)", INCOMPLETE),
-         "fourpoint": ("neighbor joining after four-point completion of missing distances (Landry et al. 1996; Makarenkov and Lapointe 2004)", NJ + FAST_NJ + [
+         "fourpoint": ("neighbor joining after a synchronous, uncapped variant of four-point completion of missing distances, without weighted least-squares refinement (Landry et al. 1996; Makarenkov and Lapointe 2004)", NJ + FAST_NJ + [
              "Landry PA, Lapointe FJ, Kirsch JAW. 1996. Estimating phylogenies from lacunose distance matrices: additive is superior to ultrametric estimation. Mol Biol Evol 13:818-823.",
              "Makarenkov V, Lapointe FJ. 2004. A weighted least-squares approach for inferring phylogenies from incomplete distance matrices. Bioinformatics 20:2113-2121."]),
          "upgma": ("UPGMA (Sokal and Michener 1958)", ["Sokal RR, Michener CD. 1958. A statistical method for evaluating systematic relationships. Univ Kansas Sci Bull 38:1409-1438."])}
@@ -100,13 +100,27 @@ def methods(kind, model, method, min_overlap, bootstrap):
     return {"description": text, "citations": citations}
 
 
+def resolved_parameters(kind, model, method, params, bootstrap):
+    resolved = {"model": model, "min_overlap": params.get("min_overlap", 1)}
+    if kind == "tree":
+        resolved["method"] = method
+        resolved["bootstrap"] = bootstrap
+        if bootstrap:
+            resolved["seed"] = params.get("seed", 1)
+    return resolved
+
+
 def cache_identity(path):
     """Producer evidence from a compact cache's header, or from an older JSON cache."""
-    with Path(path).open("rb") as stream:
-        magic = stream.read(len(CACHE_MAGIC))
-        if magic == CACHE_MAGIC:
-            return json.loads(stream.readline()).get("basecraft_identity")
-        return json.loads(magic + stream.read()).get("basecraft_identity")
+    try:
+        with Path(path).open("rb") as stream:
+            magic = stream.read(len(CACHE_MAGIC))
+            saved = json.loads(stream.readline() if magic == CACHE_MAGIC else magic + stream.read())
+    except (OSError, ValueError) as error:
+        raise ValueError("Distance cache input can't be read; calculate a fresh cache") from error
+    if not isinstance(saved, dict):
+        raise ValueError("Distance cache input can't be read; calculate a fresh cache")
+    return saved.get("basecraft_identity")
 
 
 def invoke(kind, params):
@@ -230,7 +244,7 @@ def invoke(kind, params):
         message += f"; bootstrap trees: {retained[0]}"
     return {"ops": [], "message": message, "outputs": [str(target), str(cache), str(report), *extra_trees, *retained],
             "tool": {"name": "basecraft-distance", "version": metadata["version"]},
-            "execution": {"argv": args, "resolved_parameters": {"model": model, "method": method, "min_overlap": params.get("min_overlap", 1), "bootstrap": bootstrap},
+            "execution": {"argv": args, "resolved_parameters": resolved_parameters(kind, model, method, params, bootstrap),
                           "preprocessing": ["Gaps and ambiguous sites excluded pairwise"], "environment": {},
                           "methods_template": f"basecraft.distance.{kind}.v1", "methods": methods(kind, model, method, params.get("min_overlap", 1), bootstrap)}}
 

@@ -259,7 +259,13 @@ pub(super) fn direct(
         if verify {
             trace.push(json!([x, y, tx, ty]));
         }
-        nodes[x] = format!("({}:{tx:.12},{}:{ty:.12})", nodes[x], nodes[y]);
+        nodes[x] = format!(
+            "({}:{},{}:{})",
+            nodes[x],
+            crate::length_text(tx),
+            nodes[y],
+            crate::length_text(ty)
+        );
         let survivors: Vec<_> = ids.iter().copied().filter(|&i| i != x && i != y).collect();
         let mut nd = vec![f64::NAN; n];
         let mut nv = vec![f64::NAN; n];

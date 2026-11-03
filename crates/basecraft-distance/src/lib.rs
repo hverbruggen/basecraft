@@ -135,7 +135,8 @@ impl Packed {
 }
 /// Writes every pair of a triangular matrix from pair counts. Row blocks run as tasks and
 /// visit partner rows in short runs, which keeps both sides of each comparison in cache.
-/// Bit-parallel counting follows Elias & Lagergren (2007) and Simonsen & Pedersen (2011).
+/// Counting and the usable-site filter follow Elias & Lagergren (2007) and Simonsen &
+/// Pedersen (2011).
 fn fill_pairs(
     packed: &[Packed],
     model: Model,
@@ -268,6 +269,12 @@ pub struct DistanceMatrix {
     pub variances: Vec<f64>,
 }
 const CACHE_MAGIC: &[u8] = b"BASECRAFT-DISTANCES-1\n";
+#[derive(Serialize)]
+struct IdentifiedMatrix<'a> {
+    #[serde(flatten)]
+    matrix: &'a DistanceMatrix,
+    basecraft_identity: &'a serde_json::Value,
+}
 #[derive(Serialize, Deserialize)]
 struct CacheHeader {
     schema: u32,
@@ -436,6 +443,14 @@ impl DistanceMatrix {
         {
             return Err("invalid cache labels".into());
         }
+        let largest = self
+            .distances
+            .iter()
+            .filter(|d| d.is_finite())
+            .fold(0_f64, |a, d| a.max(d.abs()));
+        if (largest * (n as f64) * (n as f64)).is_infinite() {
+            return Err("distance cache holds values too large to use".into());
+        }
         let retained = !self.variances.is_empty();
         for k in 0..len {
             let d = self.distances[k];
@@ -465,6 +480,10 @@ impl DistanceMatrix {
             serde_json::from_slice(&bytes)?
         };
         m.validate()?;
+        // Only a calculation in memory may leave variances out.
+        if m.variances.is_empty() && !m.distances.is_empty() {
+            return Err("invalid distance cache schema or dimensions".into());
+        }
         Ok(m)
     }
     /// Writes compact binary unless the path ends in `.json`, which stays readable by eye.
@@ -472,18 +491,27 @@ impl DistanceMatrix {
         self.write_identified(path, &serde_json::Value::Null)
     }
     /// `identity` is stored as given, for callers that bind a cache to its producer.
-    /// Only the compact format carries it.
     pub fn write_identified(&self, path: &Path, identity: &serde_json::Value) -> Result<()> {
         self.validate()?;
         if self.variances.is_empty() && !self.distances.is_empty() {
             return Err("distance cache requires variances".into());
         }
         if path.extension().is_some_and(|e| e == "json") {
-            return write_json(path, self);
+            if identity.is_null() {
+                return write_json(path, self);
+            }
+            return write_json(
+                path,
+                &IdentifiedMatrix {
+                    matrix: self,
+                    basecraft_identity: identity,
+                },
+            );
         }
         self.write_compact(path, identity)
     }
-    // Magic, one line of JSON, then little-endian distances, variances and shared-site counts.
+    // Magic, one line of JSON, little-endian distances, variances and shared-site counts,
+    // then a BLAKE3 hash of everything before it.
     fn write_compact(&self, path: &Path, identity: &serde_json::Value) -> Result<()> {
         use std::io::Write;
         let header = CacheHeader {
@@ -496,30 +524,37 @@ impl DistanceMatrix {
             gap_policy: self.gap_policy.clone(),
             basecraft_identity: identity.clone(),
         };
-        let dir = path
-            .parent()
-            .filter(|p| !p.as_os_str().is_empty())
-            .unwrap_or(Path::new("."));
-        let mut temporary = tempfile::NamedTempFile::new_in(dir)?;
-        let mut out = std::io::BufWriter::with_capacity(1 << 20, temporary.as_file_mut());
-        out.write_all(CACHE_MAGIC)?;
-        serde_json::to_writer(&mut out, &header)?;
-        out.write_all(b"\n")?;
-        for values in [&self.distances, &self.variances] {
-            for v in values {
-                out.write_all(&v.to_le_bytes())?;
+        write_atomic(path, |file| {
+            let mut out = Hashed {
+                file,
+                hash: blake3::Hasher::new(),
+            };
+            out.write_all(CACHE_MAGIC)?;
+            serde_json::to_writer(&mut out, &header)?;
+            out.write_all(b"\n")?;
+            for values in [&self.distances, &self.variances] {
+                for v in values {
+                    out.write_all(&v.to_le_bytes())?;
+                }
             }
-        }
-        for &v in &self.shared_sites {
-            out.write_all(&u32::try_from(v)?.to_le_bytes())?;
-        }
-        out.flush()?;
-        drop(out);
-        temporary.persist(path)?;
-        Ok(())
+            for &v in &self.shared_sites {
+                out.write_all(&u32::try_from(v)?.to_le_bytes())?;
+            }
+            let digest = out.hash.finalize();
+            out.file.write_all(digest.as_bytes())?;
+            Ok(())
+        })
     }
     fn from_compact(bytes: &[u8]) -> Result<Self> {
-        let rest = &bytes[CACHE_MAGIC.len()..];
+        let content = bytes
+            .len()
+            .checked_sub(32)
+            .filter(|&c| c >= CACHE_MAGIC.len())
+            .ok_or("distance cache is truncated or has the wrong size")?;
+        if blake3::hash(&bytes[..content]).as_bytes() != &bytes[content..] {
+            return Err("distance cache is damaged: its checksum doesn't match".into());
+        }
+        let rest = &bytes[CACHE_MAGIC.len()..content];
         let end = rest
             .iter()
             .position(|&b| b == b'\n')
@@ -614,7 +649,7 @@ impl DistanceMatrix {
     // A complete matrix is already the triangle the search needs.
     fn search(&self, d: Vec<f64>, threads: usize) -> Result<TreeResult> {
         let (t, st) =
-            pool(threads)?.install(|| optimized::tree(d, &self.names, threads > 1, 512, false));
+            pool(threads)?.install(|| optimized::tree(d, &self.names, threads > 1, 512, false))?;
         Ok(TreeResult {
             trees: vec![t],
             components: 1,
@@ -707,7 +742,7 @@ impl DistanceMatrix {
                     .flat_map(|i| dm[i * size..i * size + i].iter().copied())
                     .collect();
                 let (t, st) =
-                    pool.install(|| optimized::tree(triangle, &names, threads > 1, 512, false));
+                    pool.install(|| optimized::tree(triangle, &names, threads > 1, 512, false))?;
                 result.trees.push(t);
                 result.details.push(json!({"completion":info,"search_s":st.search_s,"update_s":st.update_s,"q_evaluations":st.evaluated}));
             } else if matches!(method, Method::Njstar | Method::Mvrstar) {
@@ -830,6 +865,16 @@ impl DistanceMatrix {
         Ok(out)
     }
 }
+/// Branch length text. A tiny negative length rounds to zero without keeping its sign,
+/// because some programs refuse `-0.000000000000`.
+fn length_text(x: f64) -> String {
+    let text = format!("{x:.12}");
+    if text == "-0.000000000000" {
+        text[1..].to_string()
+    } else {
+        text
+    }
+}
 fn quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
 }
@@ -857,24 +902,49 @@ pub struct GroupSummary {
 }
 pub fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
     use std::io::Write;
+    write_atomic(path, |f| {
+        serde_json::to_writer(&mut *f, value)?;
+        writeln!(f)?;
+        Ok(())
+    })
+}
+fn write_atomic(
+    path: &Path,
+    content: impl FnOnce(&mut std::io::BufWriter<&mut fs::File>) -> Result<()>,
+) -> Result<()> {
+    use std::io::Write;
     let dir = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
     let mut temporary = tempfile::NamedTempFile::new_in(dir)?;
-    let mut f = std::io::BufWriter::new(temporary.as_file_mut());
-    serde_json::to_writer(&mut f, value)?;
-    writeln!(f)?;
+    let mut f = std::io::BufWriter::with_capacity(1 << 20, temporary.as_file_mut());
+    content(&mut f)?;
     f.flush()?;
     drop(f);
     temporary.persist(path)?;
     Ok(())
 }
+struct Hashed<'a, 'b> {
+    file: &'a mut std::io::BufWriter<&'b mut fs::File>,
+    hash: blake3::Hasher,
+}
+impl std::io::Write for Hashed<'_, '_> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let written = self.file.write(bytes)?;
+        self.hash.update(&bytes[..written]);
+        Ok(written)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.file.flush()
+    }
+}
 #[cfg(test)]
 #[allow(
     clippy::needless_range_loop,
     clippy::manual_midpoint,
-    clippy::cast_possible_truncation
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
 )]
 mod tests {
     use super::*;
@@ -1048,7 +1118,13 @@ mod tests {
             let (x, y) = (best.i, best.j);
             let xy = d[x][y];
             let limb = 0.5 * xy + (s[x] - s[y]) / (2. * (m - 2) as f64);
-            text[x] = format!("({}:{limb:.12},{}:{:.12})", text[x], text[y], xy - limb);
+            text[x] = format!(
+                "({}:{},{}:{})",
+                text[x],
+                length_text(limb),
+                text[y],
+                length_text(xy - limb)
+            );
             alive.retain(|&i| i != y);
             let mut total = vec![];
             for &i in &alive {
@@ -1066,12 +1142,13 @@ mod tests {
         let (a, b, c) = (alive[0], alive[1], alive[2]);
         let la = (d[a][b] + d[a][c] - d[b][c]) / 2.;
         format!(
-            "({}:{la:.12},{}:{:.12},{}:{:.12});\n",
+            "({}:{},{}:{},{}:{});\n",
             text[a],
+            length_text(la),
             text[b],
-            d[a][b] - la,
+            length_text(d[a][b] - la),
             text[c],
-            d[a][c] - la
+            length_text(d[a][c] - la)
         )
     }
     fn random_matrix(n: usize, state: &mut u64, kind: usize) -> Vec<f64> {
@@ -1117,9 +1194,11 @@ mod tests {
                 let d = random_matrix(n, &mut state, kind);
                 let names = (0..n).map(|i| format!("s{i}")).collect::<Vec<_>>();
                 let expected = exhaustive_nj(&d, &names);
-                let serial = optimized::tree(d.clone(), &names, false, 0, true);
+                let serial = optimized::tree(d.clone(), &names, false, 0, true).unwrap();
                 // A zero cutoff forces the parallel batches regardless of size.
-                let parallel = pool.install(|| optimized::tree(d, &names, true, 0, true));
+                let parallel = pool
+                    .install(|| optimized::tree(d, &names, true, 0, true))
+                    .unwrap();
                 assert_eq!(serial.1.mismatches, 0, "n {n} kind {kind}");
                 assert_eq!(parallel.1.mismatches, 0, "n {n} kind {kind}");
                 assert_eq!(serial.0, expected, "n {n} kind {kind}");
@@ -1218,12 +1297,91 @@ mod tests {
         extra.push(0);
         fs::write(&path, &extra).unwrap();
         assert!(DistanceMatrix::read(&path).is_err());
-        // A corrupted estimate fails the same semantic checks as a JSON cache.
+        // A corrupted estimate fails the same semantic checks as a JSON cache, even when
+        // the checksum has been rewritten to match.
         let mut bad = whole;
-        let at = bad.len() - 12 - 2 * 8;
+        let content = bad.len() - 32;
+        let at = content - 12 - 2 * 8;
         bad[at..at + 8].copy_from_slice(&(-1_f64).to_le_bytes());
+        let digest = blake3::hash(&bad[..content]);
+        bad[content..].copy_from_slice(digest.as_bytes());
         fs::write(&path, &bad).unwrap();
         assert!(DistanceMatrix::read(&path).is_err());
+    }
+    fn cache_with(distances: Vec<f64>) -> DistanceMatrix {
+        let n = ((1. + 8. * distances.len() as f64).sqrt() as usize).div_ceil(2);
+        DistanceMatrix {
+            schema: 1,
+            input_hash: "x".into(),
+            names: (0..n).map(|i| format!("s{i}")).collect(),
+            columns: 10,
+            model: Model::P,
+            min_overlap: 1,
+            gap_policy: "pairwise deletion; ACGTU valid; U=T".into(),
+            variances: vec![0.1; distances.len()],
+            shared_sites: vec![10; distances.len()],
+            distances,
+        }
+    }
+    #[test]
+    fn huge_distances_are_refused_without_a_panic() {
+        // A damaged or hand-edited cache can hold these; the engine can't produce them.
+        for (n, value) in [(4, 1e308), (50, 1e307), (200, 1e306)] {
+            let m = cache_with(vec![value; n * (n - 1) / 2]);
+            assert!(m.tree(Method::Sorted, 1).is_err());
+            assert!(m.tree(Method::Njstar, 2).is_err());
+            assert!(m.groups(&BTreeMap::new()).is_err());
+        }
+        // The search itself refuses overflow, even past the cache checks.
+        let names: Vec<_> = (0..4).map(|i| format!("s{i}")).collect();
+        assert!(optimized::tree(vec![1e308; 6], &names, false, 512, false).is_err());
+        assert!(optimized::tree(vec![f64::MAX; 6], &names, false, 512, true).is_err());
+    }
+    #[test]
+    fn negative_zero_matches_plain_zero_in_the_search() {
+        let names: Vec<_> = (0..8).map(|i| format!("s{i}")).collect();
+        let plain = optimized::tree(vec![0.; 28], &names, false, 512, true).unwrap();
+        let signed = optimized::tree(vec![-0.; 28], &names, false, 512, true).unwrap();
+        assert_eq!(plain.0, signed.0);
+        assert_eq!(signed.1.mismatches, 0);
+        assert!(!signed.0.contains("-0.0"));
+    }
+    #[test]
+    fn caches_without_variances_are_refused_when_read() {
+        let a = alignment();
+        let m = DistanceMatrix::calculate(&a, Model::P, 1, 1).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("m.json");
+        m.write(&path).unwrap();
+        let mut json: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        json["variances"] = json!([]);
+        fs::write(&path, json.to_string()).unwrap();
+        assert!(DistanceMatrix::read(&path).is_err());
+    }
+    #[test]
+    fn every_flipped_bit_in_a_compact_cache_is_noticed() {
+        let m = DistanceMatrix::calculate(&alignment(), Model::Jc69, 1, 1).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("m.bin");
+        m.write_identified(&path, &json!({"engine":"abc"})).unwrap();
+        let whole = fs::read(&path).unwrap();
+        assert!(DistanceMatrix::read(&path).is_ok());
+        for at in CACHE_MAGIC.len()..whole.len() {
+            for bit in 0..8 {
+                let mut bad = whole.clone();
+                bad[at] ^= 1 << bit;
+                fs::write(&path, &bad).unwrap();
+                assert!(DistanceMatrix::read(&path).is_err(), "byte {at} bit {bit}");
+            }
+        }
+        let json_path = dir.path().join("m.json");
+        m.write_identified(&json_path, &json!({"a":1})).unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_slice(&fs::read(&json_path).unwrap()).unwrap();
+        assert_eq!(saved["basecraft_identity"]["a"], 1);
+        assert_eq!(saved["schema"], 1);
+        assert!(DistanceMatrix::read(&json_path).is_ok());
     }
     #[test]
     fn matrix_export_bytes_do_not_depend_on_workers() {
@@ -1304,8 +1462,10 @@ mod tests {
                 let d: Vec<_> = (1..n)
                     .flat_map(|i| d[i * n..i * n + i].iter().copied())
                     .collect();
-                let a = optimized::tree(d.clone(), &names, false, 0, true);
-                let b = pool.install(|| optimized::tree(d, &names, true, 0, true));
+                let a = optimized::tree(d.clone(), &names, false, 0, true).unwrap();
+                let b = pool
+                    .install(|| optimized::tree(d, &names, true, 0, true))
+                    .unwrap();
                 assert_eq!(a.1.mismatches, 0);
                 assert_eq!(b.1.mismatches, 0);
                 assert_eq!(a.0, b.0);

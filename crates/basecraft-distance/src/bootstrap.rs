@@ -366,7 +366,7 @@ fn annotated(
             write!(s, "{:.6}", 100. * count as f64 / replicates as f64).unwrap();
         }
         if let Some(length) = node.length {
-            write!(s, ":{length:.12}").unwrap();
+            write!(s, ":{}", crate::length_text(length)).unwrap();
         }
         strings[i] = s;
     }

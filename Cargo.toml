@@ -77,6 +77,19 @@ opt-level = 3
 debug-assertions = false
 overflow-checks = false
 
+# `cargo test` inherits the dev profile; keep these checks while testing.
+[profile.test.package.basecraft-distance]
+debug-assertions = true
+overflow-checks = true
+
+[profile.test.package.basecraft-delimitation]
+debug-assertions = true
+overflow-checks = true
+
+[profile.test.package.basecraft-asap]
+debug-assertions = true
+overflow-checks = true
+
 [profile.dev.package.basecraft-platform]
 opt-level = 3
 
