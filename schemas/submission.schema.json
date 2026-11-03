@@ -3,6 +3,12 @@
   "title": "Submission",
   "type": "object",
   "properties": {
+    "accession_policy": {
+      "$ref": "#/$defs/AccessionPolicy",
+      "default": {
+        "policy": "legacy_heuristic"
+      }
+    },
     "accessions": {
       "description": "Accessions returned by the archive, by record name.",
       "type": "array",
@@ -39,12 +45,32 @@
         "$ref": "#/$defs/FrameChoice"
       }
     },
+    "marker_drafts": {
+      "description": "Marker-specific drafts survive type switches without transferring scientific text.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/Marker"
+      },
+      "default": {}
+    },
     "publication": {
       "$ref": "#/$defs/Publication",
       "default": {
         "authors": [],
         "title": ""
       }
+    },
+    "publication_differs": {
+      "type": "boolean",
+      "default": false
+    },
+    "row_rules": {
+      "description": "Rule origin for explicit decisions; absent entries are manual/legacy decisions.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/InclusionRule"
+      },
+      "default": {}
     },
     "rows": {
       "description": "Explicit decisions by record name; absent rows use accession-aware defaults.",
@@ -66,6 +92,17 @@
       "anyOf": [
         {
           "$ref": "#/$defs/SourceAlignment"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "submission_details": {
+      "description": "Absent in legacy documents: their publication is also the submission citation.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Publication"
         },
         {
           "type": "null"
@@ -98,6 +135,49 @@
       "required": [
         "record",
         "accession"
+      ]
+    },
+    "AccessionPolicy": {
+      "description": "Legacy suggestions are retained on old documents. Configured sources prevent\nspecimen identifiers elsewhere in a name from influencing inclusion suggestions.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "policy": {
+              "type": "string",
+              "const": "legacy_heuristic"
+            }
+          },
+          "required": [
+            "policy"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "include_metadata": {
+              "type": "boolean"
+            },
+            "input": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/IdentifierSource"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "policy": {
+              "type": "string",
+              "const": "configured"
+            }
+          },
+          "required": [
+            "policy",
+            "include_metadata"
+          ]
+        }
       ]
     },
     "Author": {
@@ -240,6 +320,100 @@
         "codon_start"
       ]
     },
+    "IdentifierSource": {
+      "description": "Identifier fields use the same literal splitting primitive as metadata header imports.\nSubmission rules always use the FASTA identifier, never the full description header.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string",
+              "const": "identifier"
+            }
+          },
+          "required": [
+            "source"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "index": {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            },
+            "separator": {
+              "type": "string"
+            },
+            "source": {
+              "type": "string",
+              "const": "field"
+            }
+          },
+          "required": [
+            "source",
+            "separator",
+            "index"
+          ]
+        }
+      ]
+    },
+    "InclusionAction": {
+      "type": "string",
+      "enum": [
+        "include",
+        "exclude",
+        "unchanged"
+      ]
+    },
+    "InclusionRule": {
+      "type": "object",
+      "properties": {
+        "case_sensitive": {
+          "type": "boolean",
+          "default": false
+        },
+        "input": {
+          "$ref": "#/$defs/IdentifierSource"
+        },
+        "matching": {
+          "$ref": "#/$defs/InclusionAction"
+        },
+        "mode": {
+          "$ref": "#/$defs/MatchMode"
+        },
+        "name": {
+          "type": "string"
+        },
+        "nonmatching": {
+          "$ref": "#/$defs/InclusionAction"
+        },
+        "override_manual": {
+          "type": "boolean",
+          "default": false
+        },
+        "pattern": {
+          "type": "string"
+        },
+        "trim": {
+          "type": "boolean",
+          "default": false
+        },
+        "unresolved": {
+          "$ref": "#/$defs/InclusionAction",
+          "default": "unchanged"
+        }
+      },
+      "required": [
+        "name",
+        "input",
+        "mode",
+        "pattern",
+        "matching",
+        "nonmatching"
+      ]
+    },
     "ItsComponent": {
       "oneOf": [
         {
@@ -341,6 +515,17 @@
             "description"
           ]
         }
+      ]
+    },
+    "MatchMode": {
+      "type": "string",
+      "enum": [
+        "exact",
+        "contains",
+        "starts",
+        "ends",
+        "wildcard",
+        "regex"
       ]
     },
     "MolType": {

@@ -291,6 +291,7 @@ dependencies = [
  "basecraft-io",
  "basecraft-protocol",
  "basecraft-query",
+ "regex",
  "serde",
  "serde_json",
 ]

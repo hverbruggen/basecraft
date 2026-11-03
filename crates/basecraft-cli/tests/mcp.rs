@@ -735,6 +735,7 @@ fn submission_tools_respect_write_permission_and_edit_through_apply() {
                 json!({"path":"its.submission.json","alignment":"its.afa"}),
             ),
             request(2, "submission_submitter", json!({"set":{"city":"Hobart"}})),
+            request(3, "submission_inclusion_presets", json!({"save":{}})),
         ],
     );
     for reply in &readonly {

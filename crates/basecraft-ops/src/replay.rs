@@ -47,7 +47,7 @@ pub fn replay(root: &Path) -> Result<Report> {
 
 fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut Report) -> Result<()> {
     let work = tempfile::tempdir()?;
-    let mut session = Session::unlogged(work.path());
+    let mut session = Session::replay_session(work.path());
     let source_root = recorded_source_root(root)?;
     let mut docs: HashMap<&str, DocId> = HashMap::new();
     // Replay entry id -> logged entry id, to check undo and redo targets.

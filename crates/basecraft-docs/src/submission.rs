@@ -11,7 +11,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use basecraft_protocol::metadata::ProjectMetadata;
 use basecraft_protocol::submission::{
-    AccessionEntry, Decision, EndPolicy, FrameChoice, ItsComponent, Marker, RowDecision,
+    AccessionEntry, Author, Decision, EndPolicy, FrameChoice, IdentifierSource, InclusionAction,
+    InclusionPreviewRow, InclusionRule, ItsComponent, Marker, MatchMode, Publication, RowDecision,
     SUBMISSION_VERSION, Submission, SubmissionEdit,
 };
 use serde::{Deserialize, Serialize};
@@ -134,14 +135,9 @@ pub fn validate(sub: &Submission) -> Result<(), EditError> {
             )));
         }
     }
-    check_text("title", &sub.publication.title, 2000)?;
-    for author in &sub.publication.authors {
-        if author.last.is_empty() {
-            return Err(err("every author needs a last name"));
-        }
-        check_text("author last name", &author.last, 100)?;
-        check_text("author first name", &author.first, 100)?;
-        check_text("author middle initials", &author.middle, 20)?;
+    validate_citation(&sub.publication)?;
+    if let Some(citation) = &sub.submission_details {
+        validate_citation(citation)?;
     }
     let mut seen = BTreeSet::new();
     for entry in &sub.accessions {
@@ -154,6 +150,173 @@ pub fn validate(sub: &Submission) -> Result<(), EditError> {
         }
     }
     Ok(())
+}
+
+pub fn marker_kind(marker: &Marker) -> &'static str {
+    match marker {
+        Marker::Coding { .. } => "coding",
+        Marker::Rrna { .. } => "rrna",
+        Marker::Its { .. } => "its",
+        Marker::Spacer { .. } => "spacer",
+    }
+}
+
+pub fn validate_citation(citation: &Publication) -> Result<(), EditError> {
+    check_text("title", &citation.title, 2000)?;
+    for (index, author) in citation.authors.iter().enumerate() {
+        if author.last.is_empty() || author.first.is_empty() {
+            return Err(err(format!(
+                "Author {} needs a surname and given name or initial",
+                index + 1
+            )));
+        }
+        check_text("author last name", &author.last, 100)?;
+        check_text("author first name", &author.first, 100)?;
+        check_text("author middle initials", &author.middle, 100)?;
+    }
+    Ok(())
+}
+
+/// One author per line, `Surname, Given Middle`. Preserve spelling and order;
+/// format validation establishes no identity and never transliterates names.
+pub fn parse_authors(text: &str) -> Result<Vec<Author>, EditError> {
+    text.lines()
+        .enumerate()
+        .filter(|(_, line)| !line.trim().is_empty())
+        .map(|(i, line)| {
+            let bad = || {
+                err(format!(
+                    "Line {}: use Surname, Given Middle (one author per line)",
+                    i + 1
+                ))
+            };
+            if line.chars().any(char::is_control) {
+                return Err(bad());
+            }
+            let (last, given) = line.trim().split_once(',').ok_or_else(bad)?;
+            if given.contains(',') || last.trim().is_empty() || given.trim().is_empty() {
+                return Err(bad());
+            }
+            let mut parts = given.split_whitespace();
+            let author = Author {
+                last: last.trim().into(),
+                first: parts.next().unwrap_or_default().into(),
+                middle: parts.collect::<Vec<_>>().join(" "),
+            };
+            validate_citation(&Publication {
+                title: String::new(),
+                authors: vec![author.clone()],
+            })
+            .map_err(|e| err(format!("Line {}: {}", i + 1, e.0)))?;
+            Ok(author)
+        })
+        .collect()
+}
+
+/// Compile once per preview. Wildcards support * and ? only; other characters are literal.
+pub fn inclusion_rows(
+    sub: &Submission,
+    rule: &InclusionRule,
+    records: &[(String, Decision)],
+) -> Result<Vec<InclusionPreviewRow>, EditError> {
+    if let IdentifierSource::Field { separator, index } = &rule.input
+        && (separator.is_empty() || *index == 0)
+    {
+        return Err(err("Choose a literal separator and one-based field index"));
+    }
+    let regex = match rule.mode {
+        MatchMode::Regex | MatchMode::Wildcard => {
+            let pattern = if rule.mode == MatchMode::Wildcard {
+                let mut out = String::from("\\A(?:");
+                for ch in rule.pattern.chars() {
+                    match ch {
+                        '*' => out.push_str(".*"),
+                        '?' => out.push('.'),
+                        _ => out.push_str(&regex::escape(&ch.to_string())),
+                    }
+                }
+                out.push_str(")\\z");
+                out
+            } else {
+                rule.pattern.clone()
+            };
+            Some(
+                regex::RegexBuilder::new(&pattern)
+                    .case_insensitive(!rule.case_sensitive)
+                    .size_limit(2 * 1024 * 1024)
+                    .build()
+                    .map_err(|e| err(format!("Invalid pattern: {e}")))?,
+            )
+        }
+        _ => None,
+    };
+    records
+        .iter()
+        .map(|(record, current)| {
+            let extracted = match &rule.input {
+                IdentifierSource::Identifier => Some(record.as_str()),
+                IdentifierSource::Field { separator, index } => {
+                    crate::metadata::header_fields(record, separator)
+                        .and_then(|fields| fields.get(index - 1).copied())
+                }
+            }
+            .map(|value| if rule.trim { value.trim() } else { value });
+            let matched = extracted.filter(|v| !v.is_empty()).map(|value| {
+                let (value, pattern) = if rule.case_sensitive {
+                    (value.to_string(), rule.pattern.clone())
+                } else {
+                    (value.to_lowercase(), rule.pattern.to_lowercase())
+                };
+                match rule.mode {
+                    MatchMode::Exact => value == pattern,
+                    MatchMode::Contains => value.contains(&pattern),
+                    MatchMode::Starts => value.starts_with(&pattern),
+                    MatchMode::Ends => value.ends_with(&pattern),
+                    _ => regex
+                        .as_ref()
+                        .is_some_and(|re| re.is_match(extracted.unwrap_or_default())),
+                }
+            });
+            let action = match matched {
+                Some(true) => rule.matching,
+                Some(false) => rule.nonmatching,
+                None => rule.unresolved,
+            };
+            let preserved_manual = !rule.override_manual
+                && sub.rows.iter().any(|r| &r.record == record)
+                && !sub.row_rules.contains_key(record);
+            let proposed = if preserved_manual {
+                current.clone()
+            } else {
+                match action {
+                    InclusionAction::Include => Decision::New,
+                    InclusionAction::Exclude => Decision::Exclude,
+                    InclusionAction::Unchanged => current.clone(),
+                }
+            };
+            let reason = if preserved_manual {
+                "Manual decision preserved"
+            } else if action == InclusionAction::Unchanged {
+                "unchanged"
+            } else {
+                "Configured identifier rule; no accession identity verified"
+            };
+            let reason = match extracted {
+                None => format!("Missing field; {reason}"),
+                Some("") => format!("Empty field; {reason}"),
+                _ => reason.into(),
+            };
+            Ok(InclusionPreviewRow {
+                record: record.clone(),
+                extracted: extracted.map(str::to_owned),
+                matched,
+                reason,
+                preserved_manual,
+                current: current.clone(),
+                proposed,
+            })
+        })
+        .collect()
 }
 
 fn upsert<T: Clone>(list: &mut Vec<T>, items: &[T], key: impl Fn(&T) -> &str) {
@@ -173,6 +336,9 @@ pub fn apply(sub: &mut Submission, edit: &SubmissionEdit) -> Result<(), EditErro
         SubmissionEdit::SetSource { source } => next.source = Some(source.clone()),
         SubmissionEdit::SetRows { rows } => {
             upsert(&mut next.rows, rows, |r: &RowDecision| &r.record);
+            for row in rows {
+                next.row_rules.remove(&row.record);
+            }
         }
         SubmissionEdit::ConfirmSelection { selection_hash } => {
             if selection_hash.is_empty() {
@@ -180,13 +346,65 @@ pub fn apply(sub: &mut Submission, edit: &SubmissionEdit) -> Result<(), EditErro
             }
             next.selection_confirmation = Some(selection_hash.clone());
         }
-        SubmissionEdit::SetBatch { batch } => next.batch = batch.clone(),
+        SubmissionEdit::SetBatch { batch } => {
+            next.marker_drafts.insert(
+                marker_kind(&next.batch.marker).into(),
+                next.batch.marker.clone(),
+            );
+            next.marker_drafts
+                .insert(marker_kind(&batch.marker).into(), batch.marker.clone());
+            next.batch = batch.clone();
+        }
         SubmissionEdit::SetFrames { frames, clear } => {
             next.frames.retain(|f| !clear.contains(&f.record));
             upsert(&mut next.frames, frames, |f: &FrameChoice| &f.record);
         }
         SubmissionEdit::SetExport { export } => next.export = export.clone(),
         SubmissionEdit::SetPublication { publication } => next.publication = publication.clone(),
+        SubmissionEdit::SetAccessionPolicy { policy } => {
+            if let basecraft_protocol::submission::AccessionPolicy::Configured {
+                input: Some(IdentifierSource::Field { separator, index }),
+                ..
+            } = policy
+                && (separator.is_empty() || *index == 0)
+            {
+                return Err(err(
+                    "Choose an accession separator and one-based field index",
+                ));
+            }
+            next.accession_policy = policy.clone();
+        }
+        SubmissionEdit::SetDetails {
+            submission,
+            publication,
+            publication_differs,
+        } => {
+            next.submission_details = Some(submission.clone());
+            next.publication = publication.clone();
+            next.publication_differs = *publication_differs;
+        }
+        SubmissionEdit::ApplyInclusion { plan } => {
+            let rows: Vec<_> = plan
+                .rows
+                .iter()
+                .filter(|r| {
+                    !r.preserved_manual
+                        && match r.matched {
+                            Some(true) => plan.rule.matching,
+                            Some(false) => plan.rule.nonmatching,
+                            None => plan.rule.unresolved,
+                        } != InclusionAction::Unchanged
+                })
+                .map(|r| RowDecision {
+                    record: r.record.clone(),
+                    decision: r.proposed.clone(),
+                })
+                .collect();
+            upsert(&mut next.rows, &rows, |r| &r.record);
+            for row in rows {
+                next.row_rules.insert(row.record, plan.rule.clone());
+            }
+        }
         SubmissionEdit::RecordExport { mapping } => {
             if !next.exported.contains(mapping) {
                 next.exported.push(mapping.clone());
@@ -198,7 +416,11 @@ pub fn apply(sub: &mut Submission, edit: &SubmissionEdit) -> Result<(), EditErro
             });
         }
     }
-    if next.source != sub.source || next.rows != sub.rows || next.accessions != sub.accessions {
+    if next.source != sub.source
+        || next.rows != sub.rows
+        || next.accessions != sub.accessions
+        || next.accession_policy != sub.accession_policy
+    {
         next.selection_confirmation = None;
     }
     validate(&next)?;
@@ -300,11 +522,37 @@ pub fn selection(
             });
         }
     };
-    add(record, "sequence ID".into());
+    let (input, include_metadata) = match &sub.accession_policy {
+        basecraft_protocol::submission::AccessionPolicy::LegacyHeuristic => {
+            (Some(IdentifierSource::Identifier), true)
+        }
+        basecraft_protocol::submission::AccessionPolicy::Configured {
+            input,
+            include_metadata,
+        } => (input.clone(), *include_metadata),
+    };
+    match input {
+        Some(IdentifierSource::Identifier) => {
+            add(record, "whole identifier (unverified heuristic)".into())
+        }
+        Some(IdentifierSource::Field { separator, index }) => {
+            if index > 0
+                && let Some(fields) = crate::metadata::header_fields(record, &separator)
+                && let Some(value) = fields.get(index - 1)
+            {
+                add(
+                    value,
+                    format!("configured identifier field {index} (separator {separator:?})"),
+                );
+            }
+        }
+        None => {}
+    }
     if let Some(accession) = accession(sub, record) {
         add(accession, "submission accession".into());
     }
-    if let Some(specimen) = linked_specimen(meta, document, record)
+    if include_metadata
+        && let Some(specimen) = linked_specimen(meta, document, record)
         && let Some(row) = meta.specimens.rows.iter().find(|r| r.id == specimen)
     {
         for (column, cell) in &row.cells {
@@ -326,7 +574,12 @@ pub fn selection(
         },
         |r| r.decision.clone(),
     );
-    let reason = if explicit.is_some() {
+    let reason = if let Some(rule) = sub.row_rules.get(record) {
+        format!(
+            "Inclusion rule: {} (identifier matching, not accession verification)",
+            rule.name
+        )
+    } else if explicit.is_some() {
         "Explicit user decision".to_string()
     } else if candidates.is_empty() {
         "Suggested include: no accession candidate found".to_string()
@@ -706,10 +959,22 @@ fn batch_issues(sub: &Submission, issues: &mut Vec<Issue>) {
         }
         _ => {}
     }
-    if sub.publication.title.is_empty() {
-        block("no_title", "Enter the publication title");
+    citation_issues(sub, issues);
+}
+
+/// Refresh citation-only checks without recomputing sequence annotations or frames.
+pub fn citation_issues(sub: &Submission, issues: &mut Vec<Issue>) {
+    issues.retain(|issue| !matches!(issue.code.as_str(), "no_title" | "no_authors"));
+    let mut block =
+        |code: &str, message: &str| issues.push(Issue::local(Severity::Blocking, code, message));
+    if sub.submission_citation().title.is_empty() || sub.publication_citation().title.is_empty() {
+        block(
+            "no_title",
+            "Enter the submission and active publication titles",
+        );
     }
-    if sub.publication.authors.is_empty() {
+    if sub.submission_citation().authors.is_empty() || sub.publication_citation().authors.is_empty()
+    {
         block("no_authors", "Add at least one author");
     }
 }
@@ -1553,5 +1818,207 @@ mod tests {
         let f = p.records[0].feature.as_ref().unwrap();
         assert_eq!((f.partial5, f.partial3), (false, false));
         assert_eq!(p.records[0].frame.as_ref().unwrap().translation, "MKWWK*");
+    }
+}
+
+#[cfg(test)]
+mod redesign_tests {
+    use super::*;
+    use basecraft_protocol::submission::*;
+
+    fn rule() -> InclusionRule {
+        InclusionRule {
+            name: "fourth field".into(),
+            input: IdentifierSource::Field {
+                separator: "_".into(),
+                index: 4,
+            },
+            mode: MatchMode::Exact,
+            pattern: "XX".into(),
+            case_sensitive: true,
+            trim: true,
+            matching: InclusionAction::Include,
+            nonmatching: InclusionAction::Exclude,
+            unresolved: InclusionAction::Unchanged,
+            override_manual: false,
+        }
+    }
+    #[test]
+    fn configurable_fields_distinguish_missing_empty_and_manual() {
+        let mut sub = Submission::default();
+        sub.rows.push(RowDecision {
+            record: "a_b_c_XX".into(),
+            decision: Decision::Exclude,
+        });
+        let records: Vec<_> = [
+            "a_b_c_XX",
+            "a_HV00145_c_XX_tail",
+            "a_b_c_AM049955",
+            "a_b_c",
+            "a_b_c_",
+            "a_b_c_xx",
+        ]
+        .iter()
+        .map(|s| (s.to_string(), Decision::Exclude))
+        .collect();
+        let rows = inclusion_rows(&sub, &rule(), &records).unwrap();
+        assert!(rows[0].preserved_manual);
+        assert_eq!(rows[1].proposed, Decision::New);
+        assert_eq!(rows[2].matched, Some(false));
+        assert_eq!(rows[3].extracted, None);
+        assert_eq!(rows[4].extracted, Some(String::new()));
+        assert!(rows[3].reason.contains("Missing"));
+        assert!(rows[4].reason.contains("Empty"));
+        assert_eq!(rows[5].matched, Some(false));
+        let mut insensitive = rule();
+        insensitive.case_sensitive = false;
+        insensitive.override_manual = true;
+        assert_eq!(
+            inclusion_rows(&sub, &insensitive, &records).unwrap()[5].matched,
+            Some(true)
+        );
+    }
+    #[test]
+    fn match_modes_are_explicit_and_invalid_patterns_rejected() {
+        let records = vec![("Ab[1]".into(), Decision::New)];
+        for (mode, pattern) in [
+            (MatchMode::Exact, "Ab[1]"),
+            (MatchMode::Contains, "b["),
+            (MatchMode::Starts, "Ab"),
+            (MatchMode::Ends, "[1]"),
+            (MatchMode::Wildcard, "A*[?]"),
+            (MatchMode::Regex, r"^Ab\[1\]$"),
+        ] {
+            let mut r = rule();
+            r.input = IdentifierSource::Identifier;
+            r.mode = mode;
+            r.pattern = pattern.into();
+            assert_eq!(
+                inclusion_rows(&Submission::default(), &r, &records).unwrap()[0].matched,
+                Some(true),
+                "{mode:?}"
+            );
+        }
+        let mut r = rule();
+        r.mode = MatchMode::Regex;
+        r.pattern = "[".into();
+        assert!(inclusion_rows(&Submission::default(), &r, &[]).is_err());
+        r = rule();
+        r.input = IdentifierSource::Field {
+            separator: String::new(),
+            index: 0,
+        };
+        assert!(inclusion_rows(&Submission::default(), &r, &[]).is_err());
+    }
+    #[test]
+    fn configured_accession_field_ignores_specimen_shaped_tokens() {
+        let mut sub = Submission::default();
+        let name = "Halimeda_borneensis_HV00145_XX_FrenchPolynesia.BOLD";
+        assert_eq!(
+            selection(&sub, name, &ProjectMetadata::default(), "x").0,
+            Decision::Exclude
+        );
+        apply(
+            &mut sub,
+            &SubmissionEdit::SetAccessionPolicy {
+                policy: AccessionPolicy::Configured {
+                    input: Some(IdentifierSource::Field {
+                        separator: "_".into(),
+                        index: 4,
+                    }),
+                    include_metadata: false,
+                },
+            },
+        )
+        .unwrap();
+        let (decision, _, evidence) = selection(&sub, name, &ProjectMetadata::default(), "x");
+        assert_eq!(decision, Decision::New);
+        assert!(evidence.is_empty());
+    }
+    #[test]
+    fn author_line_errors_and_legitimate_names_keep_order() {
+        let authors = parse_authors(
+            "van der Meer, Anne M.\nO’Neill-Smith, J. R.\nGarcía de la Cruz, María José",
+        )
+        .unwrap();
+        assert_eq!(authors[0].last, "van der Meer");
+        assert_eq!(authors[1].first, "J.");
+        assert_eq!(authors[2].middle, "José");
+        for bad in ["Doe,", ", Jane", "Doe, Jane, Smith", "Doe\t, Jane"] {
+            assert!(
+                parse_authors(&format!("Good, A.\n\n{bad}"))
+                    .unwrap_err()
+                    .0
+                    .contains("Line 3")
+            );
+        }
+    }
+    #[test]
+    fn legacy_details_link_by_default_and_disabled_custom_values_survive() {
+        let mut sub: Submission = serde_json::from_str(r#"{"version":1,"batch":{"marker":{"kind":"rrna","product":"18S"},"genetic_code":1},"publication":{"title":"Legacy","authors":[{"first":"A.","last":"Doe"}]}}"#).unwrap();
+        assert_eq!(sub.submission_citation(), sub.publication_citation());
+        let submission = Publication {
+            title: "Sequences".into(),
+            authors: parse_authors("One, Anne").unwrap(),
+        };
+        let publication = Publication {
+            title: "Paper".into(),
+            authors: parse_authors("Two, Bob").unwrap(),
+        };
+        apply(
+            &mut sub,
+            &SubmissionEdit::SetDetails {
+                submission: submission.clone(),
+                publication: publication.clone(),
+                publication_differs: false,
+            },
+        )
+        .unwrap();
+        let mut sub: Submission =
+            serde_json::from_slice(&serde_json::to_vec(&sub).unwrap()).unwrap();
+        assert_eq!(sub.publication_citation(), &submission);
+        assert_eq!(sub.publication, publication);
+        apply(
+            &mut sub,
+            &SubmissionEdit::SetDetails {
+                submission,
+                publication: publication.clone(),
+                publication_differs: true,
+            },
+        )
+        .unwrap();
+        assert_eq!(sub.publication_citation(), &publication);
+    }
+    #[test]
+    fn marker_drafts_remain_type_specific() {
+        let mut sub = Submission::default();
+        let rrna = BatchSettings {
+            marker: Marker::Rrna {
+                product: "18S ribosomal RNA".into(),
+            },
+            ..BatchSettings::default()
+        };
+        apply(
+            &mut sub,
+            &SubmissionEdit::SetBatch {
+                batch: rrna.clone(),
+            },
+        )
+        .unwrap();
+        apply(
+            &mut sub,
+            &SubmissionEdit::SetBatch {
+                batch: BatchSettings {
+                    marker: Marker::Coding {
+                        gene: "tufA".into(),
+                        product: "elongation factor Tu".into(),
+                    },
+                    ..rrna.clone()
+                },
+            },
+        )
+        .unwrap();
+        assert_eq!(sub.marker_drafts["rrna"], rrna.marker);
+        assert_ne!(sub.marker_drafts["coding"], rrna.marker);
     }
 }

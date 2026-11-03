@@ -1537,6 +1537,11 @@ ApplicationWindow {
         canUndo: submissions.can_undo
         canRedo: submissions.can_redo
         validating: submissionJobs.busy
+        reviewing: submissions.reviewing
+        parseAuthors: text => JSON.parse(submissions.preview_authors(text))
+        onDetailsRequested: details => submissions.set_details(details)
+        onInclusionPreviewRequested: rule => { inclusionPlan = JSON.parse(submissions.preview_inclusion(rule)) }
+        onInclusionPresetsRequested: save => { inclusionPresets = JSON.parse(submissions.inclusion_presets(save)) }
         onEditRequested: edit => submissions.edit(edit)
         onPublicationRequested: (title, authors) => submissions.set_publication(title, authors)
         onDecisionRequested: (record, decision, accession) => submissions.set_decision(record, decision, accession)

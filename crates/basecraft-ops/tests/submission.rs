@@ -759,3 +759,273 @@ fn stored_accession_changes_invalidate_confirmation_but_preserve_explicit_choice
         Decision::New
     );
 }
+
+fn inclusion_rule() -> basecraft_protocol::submission::InclusionRule {
+    use basecraft_protocol::submission::*;
+    InclusionRule {
+        name: "fourth field".into(),
+        input: IdentifierSource::Field {
+            separator: "_".into(),
+            index: 4,
+        },
+        mode: MatchMode::Exact,
+        pattern: "XX".into(),
+        case_sensitive: true,
+        trim: true,
+        matching: InclusionAction::Include,
+        nonmatching: InclusionAction::Exclude,
+        unresolved: InclusionAction::Unchanged,
+        override_manual: false,
+    }
+}
+
+#[test]
+fn inclusion_preview_is_atomic_stale_safe_undoable_and_replayable() {
+    let root = tempfile::tempdir().unwrap();
+    let fasta = root.path().join("names.fas");
+    std::fs::write(
+        &fasta,
+        ">a_b_HV00145_XX desc_not_part_of_ID\nACGT\n>a_b_c_AM049955\nACGT\n>missing\nACGT\n",
+    )
+    .unwrap();
+    let mut session = Session::new(root.path());
+    let doc = submission::create(&mut session, Path::new("test.submission.json"), &fasta).unwrap();
+    let plan = submission::plan_inclusion(&session, doc, &inclusion_rule()).unwrap();
+    assert_eq!((plan.matching, plan.unresolved, plan.included), (1, 1, 2));
+    assert_eq!(plan.rows[0].record, "a_b_HV00145_XX");
+    let before = session.submission(doc).clone();
+    let mut forged = plan.clone();
+    forged.rows[0].proposed = Decision::Exclude;
+    assert!(
+        submission::edit(
+            &mut session,
+            doc,
+            SubmissionEdit::ApplyInclusion {
+                plan: Box::new(forged)
+            }
+        )
+        .is_err()
+    );
+    assert_eq!(session.submission(doc), &before);
+    submission::edit(
+        &mut session,
+        doc,
+        SubmissionEdit::ApplyInclusion {
+            plan: Box::new(plan.clone()),
+        },
+    )
+    .unwrap();
+    let after = session.submission(doc).clone();
+    assert_eq!(
+        after.rows.len(),
+        2,
+        "Unresolved unchanged row must not become explicit"
+    );
+    session.undo(doc).unwrap();
+    assert_eq!(session.submission(doc), &before);
+    session.redo(doc).unwrap();
+    assert_eq!(session.submission(doc), &after);
+    assert!(
+        submission::edit(
+            &mut session,
+            doc,
+            SubmissionEdit::ApplyInclusion {
+                plan: Box::new(plan)
+            }
+        )
+        .is_err()
+    );
+    session.save(doc, None).unwrap();
+    assert!(replay::replay(root.path()).unwrap().ok());
+    let plan = submission::plan_inclusion(&session, doc, &inclusion_rule()).unwrap();
+    std::fs::write(&fasta, ">changed\nACGT\n").unwrap();
+    assert!(
+        submission::edit(
+            &mut session,
+            doc,
+            SubmissionEdit::ApplyInclusion {
+                plan: Box::new(plan)
+            }
+        )
+        .is_err()
+    );
+    assert_eq!(session.submission(doc), &after);
+    assert!(
+        replay::replay(root.path()).unwrap().ok(),
+        "Historical replay must not read changed source"
+    );
+}
+
+#[test]
+fn inclusion_rejects_metadata_changes_and_preserves_manual_origins() {
+    let root = tempfile::tempdir().unwrap();
+    project(root.path());
+    let mut session = Session::new(root.path());
+    let doc = submission::create(
+        &mut session,
+        Path::new("test.submission.json"),
+        Path::new("18S.afa"),
+    )
+    .unwrap();
+    let review = submission::review(&session, doc, &submitter()).unwrap();
+    let name = review.prepared.records[0].record.clone();
+    submission::edit(
+        &mut session,
+        doc,
+        SubmissionEdit::SetRows {
+            rows: vec![RowDecision {
+                record: name.clone(),
+                decision: Decision::Exclude,
+            }],
+        },
+    )
+    .unwrap();
+    let mut rule = inclusion_rule();
+    rule.input = basecraft_protocol::submission::IdentifierSource::Identifier;
+    rule.pattern = String::new();
+    rule.mode = basecraft_protocol::submission::MatchMode::Contains;
+    let plan = submission::plan_inclusion(&session, doc, &rule).unwrap();
+    assert!(
+        plan.rows
+            .iter()
+            .find(|r| r.record == name)
+            .unwrap()
+            .preserved_manual
+    );
+    let meta = metadata::manifest_path(root.path());
+    let bytes = std::fs::read(&meta).unwrap();
+    let mut changed = bytes.clone();
+    changed.push(b' ');
+    std::fs::write(&meta, changed).unwrap();
+    assert!(
+        submission::edit(
+            &mut session,
+            doc,
+            SubmissionEdit::ApplyInclusion {
+                plan: Box::new(plan)
+            }
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn cached_review_invalidates_source_metadata_and_relevant_settings() {
+    let root = tempfile::tempdir().unwrap();
+    project(root.path());
+    let mut session = Session::new(root.path());
+    let doc = submission::create(
+        &mut session,
+        Path::new("test.submission.json"),
+        Path::new("18S.afa"),
+    )
+    .unwrap();
+    let mut cache = submission::ReviewCache::default();
+    let mut sub = session.submission(doc).clone();
+    let first =
+        submission::review_submission_cached(root.path(), &sub, &submitter(), &mut cache).unwrap();
+    sub.publication = basecraft_protocol::submission::Publication {
+        title: "Now named".into(),
+        authors: basecraft_docs::submission::parse_authors("Doe, Jane").unwrap(),
+    };
+    let next =
+        submission::review_submission_cached(root.path(), &sub, &submitter(), &mut cache).unwrap();
+    assert_eq!(first.prepared.records, next.prepared.records);
+    assert!(
+        !next
+            .prepared
+            .issues
+            .iter()
+            .any(|i| i.code == "no_title" || i.code == "no_authors")
+    );
+    sub.batch.marker = Marker::Spacer {
+        description: "Region".into(),
+    };
+    let next =
+        submission::review_submission_cached(root.path(), &sub, &submitter(), &mut cache).unwrap();
+    assert!(
+        next.prepared
+            .exported()
+            .all(|r| r.feature.as_ref().unwrap().kind == "misc_feature")
+    );
+    std::fs::write(root.path().join("18S.afa"), ">changed\nACTG\n").unwrap();
+    let next =
+        submission::review_submission_cached(root.path(), &sub, &submitter(), &mut cache).unwrap();
+    assert!(next.prepared.records.is_empty());
+    assert!(
+        next.prepared
+            .issues
+            .iter()
+            .any(|i| i.code == "source_changed")
+    );
+}
+
+#[test]
+fn distinct_details_export_undo_replay_and_save_failure_keep_memory_recoverable() {
+    let root = tempfile::tempdir().unwrap();
+    project(root.path());
+    let mut session = Session::new(root.path());
+    let doc = rbcl(&mut session);
+    let submission = Publication {
+        title: "Submission study".into(),
+        authors: basecraft_docs::submission::parse_authors("van der Meer, Anne M.").unwrap(),
+    };
+    let publication = Publication {
+        title: "Paper study".into(),
+        authors: basecraft_docs::submission::parse_authors("O'Neill-Smith, Bob").unwrap(),
+    };
+    let before = session.submission(doc).clone();
+    submission::edit(
+        &mut session,
+        doc,
+        SubmissionEdit::SetDetails {
+            submission: submission.clone(),
+            publication: publication.clone(),
+            publication_differs: true,
+        },
+    )
+    .unwrap();
+    session.save(doc, None).unwrap();
+    let package = root.path().join("distinct");
+    submission::export(&mut session, doc, &package, &submitter()).unwrap();
+    let sbt = std::fs::read_to_string(package.join("genbank/submission.sbt")).unwrap();
+    let (direct, paper) = sbt.split_once("Seqdesc ::=").unwrap();
+    assert!(direct.contains("descr \"Submission study\""));
+    assert!(direct.contains("van der Meer"));
+    assert!(!direct.contains("O'Neill-Smith"));
+    assert!(paper.contains("title \"Paper study\""));
+    assert!(paper.contains("O'Neill-Smith"));
+    submission::edit(
+        &mut session,
+        doc,
+        SubmissionEdit::SetDetails {
+            submission,
+            publication: publication.clone(),
+            publication_differs: false,
+        },
+    )
+    .unwrap();
+    let changed = session.submission(doc).clone();
+    let target = root.path().join("submissions/rbcL.submission.json");
+    let disk = std::fs::read(&target).unwrap();
+    std::fs::remove_file(&target).unwrap();
+    std::fs::create_dir(&target).unwrap();
+    assert!(session.save(doc, None).is_err());
+    assert_eq!(
+        session.submission(doc),
+        &changed,
+        "Failed save must retain recoverable edited state"
+    );
+    assert_eq!(
+        session.submission(doc).publication,
+        publication,
+        "Disabled custom details retained"
+    );
+    std::fs::remove_dir(&target).unwrap();
+    std::fs::write(&target, disk).unwrap();
+    session.undo(doc).unwrap();
+    assert!(session.submission(doc).publication_differs);
+    // Export adds its own typed mapping, so undoing details must retain that mapping.
+    assert_eq!(session.submission(doc).rows, before.rows);
+    assert!(replay::replay(root.path()).unwrap().ok());
+}

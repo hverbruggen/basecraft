@@ -749,7 +749,8 @@ pub fn plan_headers(
     }
     let mut planner = Planner::new(meta, options, Some(document.into()));
     for (index, (record, header)) in headers.iter().enumerate() {
-        let fields: Vec<&str> = header.split(pattern.separator.as_str()).collect();
+        let fields = basecraft_docs::metadata::header_fields(header, &pattern.separator)
+            .ok_or_else(|| invalid("choose a field separator"))?;
         let mut source = SourceRow {
             row: index + 1,
             specimen: String::new(),

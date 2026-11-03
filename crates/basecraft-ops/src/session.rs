@@ -106,6 +106,7 @@ pub struct Session {
     provenance_policy: basecraft_platform::settings::ProvenancePolicy,
     local_provenance_root: PathBuf,
     tracked: bool,
+    replaying: bool,
     memory_objects: Mutex<std::collections::HashMap<String, Vec<u8>>>,
     events: Vec<LogEntry>,
     id: String,
@@ -136,6 +137,7 @@ impl Session {
             provenance_policy: basecraft_platform::settings::ProvenancePolicy::Portable,
             local_provenance_root: root.join(".basecraft/provenance"),
             tracked: true,
+            replaying: false,
             memory_objects: Mutex::new(std::collections::HashMap::new()),
             events: Vec::new(),
             root,
@@ -197,6 +199,13 @@ impl Session {
         s.merge = false;
         s.tracked = false;
         s
+    }
+
+    /// Historical replay uses recorded plan results, without consulting today's source files.
+    pub(crate) fn replay_session(root: &Path) -> Self {
+        let mut session = Self::unlogged(root);
+        session.replaying = true;
+        session
     }
 
     /// A session that keeps its activity in memory and writes no journal.
@@ -2207,6 +2216,16 @@ impl Session {
     }
 
     pub fn apply_as(&mut self, doc: DocId, op: Op, actor: Actor) -> Result<Outcome> {
+        if !self.replaying
+            && let Op::SubmissionEdit { edit } = &op
+            && let basecraft_protocol::submission::SubmissionEdit::ApplyInclusion { plan } =
+                edit.as_ref()
+        {
+            if !self.is_submission(doc) {
+                return Err(invalid("choose a submission document"));
+            }
+            crate::submission::verify_inclusion(self.root(), self.submission(doc), plan)?;
+        }
         // Prepare fallible tree edits before tracking. Rejection must not create
         // recovery records, mutate supports, or clear the redo stack.
         let prepared_tree = if matches!(

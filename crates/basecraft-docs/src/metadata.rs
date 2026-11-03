@@ -14,6 +14,12 @@ fn fail<T>(message: impl Into<String>) -> Result<T, EditError> {
     Err(EditError(message.into()))
 }
 
+/// Literal fields, retaining empty positions. No quoting or escape syntax is interpreted.
+/// Metadata passes full headers; submission selection passes identifier text only.
+pub fn header_fields<'a>(text: &'a str, separator: &str) -> Option<Vec<&'a str>> {
+    (!separator.is_empty()).then(|| text.split(separator).collect())
+}
+
 /// The roster's ID column in tables and spreadsheets.
 pub const SPECIMEN_ID: &str = "specimen_id";
 

@@ -21,8 +21,8 @@ use basecraft_platform::settings::Submitter;
 use basecraft_protocol::Op;
 use basecraft_protocol::metadata::ProjectMetadata;
 use basecraft_protocol::submission::{
-    AccessionEntry, Decision, Marker, SUBMISSION_VERSION, SourceAlignment, Submission,
-    SubmissionEdit,
+    AccessionEntry, Decision, Decision as RowChoice, InclusionPlan, InclusionRule, Marker,
+    SUBMISSION_VERSION, SourceAlignment, Submission, SubmissionEdit,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -122,6 +122,7 @@ pub fn edit(session: &mut Session, doc: DocId, edit: SubmissionEdit) -> Result<(
 /// History text for an edit.
 pub fn describe(edit: &SubmissionEdit) -> String {
     match edit {
+        SubmissionEdit::SetAccessionPolicy { .. } => "Submission accession evidence source".into(),
         SubmissionEdit::SetSource { source } => format!("Submission source {}", source.document),
         SubmissionEdit::SetRows { rows } => format!("Submission decisions for {} rows", rows.len()),
         SubmissionEdit::ConfirmSelection { .. } => "Confirmed submission row selection".into(),
@@ -132,12 +133,115 @@ pub fn describe(edit: &SubmissionEdit) -> String {
             clear.len()
         ),
         SubmissionEdit::SetExport { .. } => "Submission export settings".into(),
-        SubmissionEdit::SetPublication { .. } => "Submission authors and title".into(),
+        SubmissionEdit::SetPublication { .. } | SubmissionEdit::SetDetails { .. } => {
+            "Submission authors and title".into()
+        }
+        SubmissionEdit::ApplyInclusion { plan } => format!(
+            "Applied inclusion rule {} to {} rows",
+            plan.rule.name, plan.changed
+        ),
         SubmissionEdit::RecordExport { .. } => "Recorded submission export identities".into(),
         SubmissionEdit::SetAccessions { accessions } => {
             format!("Recorded {} accessions", accessions.len())
         }
     }
+}
+
+/// Preview is read-only. Fingerprint binds the complete target content, source and metadata;
+/// it is portable across CLI sessions, but rejects even unrelated target edits.
+pub fn plan_inclusion(
+    session: &Session,
+    doc: DocId,
+    rule: &InclusionRule,
+) -> Result<InclusionPlan> {
+    plan_inclusion_submission(session.root(), checked(session, doc)?, rule)
+}
+
+pub fn plan_inclusion_submission(
+    project: &Path,
+    sub: &Submission,
+    rule: &InclusionRule,
+) -> Result<InclusionPlan> {
+    let source = sub
+        .source
+        .as_ref()
+        .ok_or_else(|| invalid("Choose a source alignment"))?;
+    let hash = basecraft_io::hash_file(&project.join(&source.document))?;
+    if hash != source.hash {
+        return Err(invalid(
+            "Source changed; choose it again before previewing inclusion",
+        ));
+    }
+    let (meta, metadata_hash) = project_metadata(project)?;
+    let rows = read_rows(&project.join(&source.document))?;
+    // Detect replacement between hashing and reading; immutable byte input is cached by GUI review separately.
+    if basecraft_io::hash_file(&project.join(&source.document))? != hash {
+        return Err(invalid("Source changed while planning"));
+    }
+    let records: Vec<_> = rows
+        .iter()
+        .map(|r| {
+            (
+                r.name.clone(),
+                model::selection(sub, &r.name, &meta, &source.document).0,
+            )
+        })
+        .collect();
+    let rows = model::inclusion_rows(sub, rule, &records).map_err(|e| invalid(e.0))?;
+    Ok(InclusionPlan {
+        fingerprint: basecraft_io::hash_bytes(&serde_json::to_vec(&(
+            "submission-inclusion-v1",
+            sub,
+            hash,
+            metadata_hash,
+        ))?),
+        matching: rows.iter().filter(|r| r.matched == Some(true)).count(),
+        unresolved: rows.iter().filter(|r| r.matched.is_none()).count(),
+        preserved: rows.iter().filter(|r| r.preserved_manual).count(),
+        changed: rows.iter().filter(|r| r.proposed != r.current).count(),
+        included: rows.iter().filter(|r| r.proposed == RowChoice::New).count(),
+        rule: rule.clone(),
+        rows,
+    })
+}
+
+/// Called at the Session boundary, including generic GUI/script/MCP apply routes.
+/// Recompute the entire reviewed result so edited/forged row proposals are rejected too.
+pub(crate) fn verify_inclusion(
+    project: &Path,
+    sub: &Submission,
+    plan: &InclusionPlan,
+) -> Result<()> {
+    let current = plan_inclusion_submission(project, sub, &plan.rule)?;
+    if &current != plan {
+        return Err(invalid(
+            "Stale inclusion preview: target, source or metadata evidence changed; preview again",
+        ));
+    }
+    Ok(())
+}
+
+/// Remember a rule using the project's existing import-preset owner.
+pub fn save_inclusion_preset(session: &mut Session, rule: InclusionRule) -> Result<()> {
+    if rule.name.trim().is_empty() {
+        return Err(invalid("Give the preset a name"));
+    }
+    model::inclusion_rows(&Submission::default(), &rule, &[]).map_err(|e| invalid(e.0))?;
+    let doc =
+        crate::metadata::open(session, true)?.ok_or_else(|| invalid("No metadata document"))?;
+    let mut settings = session.metadata(doc).import.clone();
+    settings.inclusion_rules.retain(|r| r.name != rule.name);
+    settings.inclusion_rules.push(rule);
+    session.apply(
+        doc,
+        Op::MetadataEdit {
+            edit: Box::new(
+                basecraft_protocol::metadata::MetadataEdit::SetImportSettings { settings },
+            ),
+        },
+    )?;
+    session.save(doc, None)?;
+    Ok(())
 }
 
 fn checked(session: &Session, doc: DocId) -> Result<&Submission> {
@@ -210,21 +314,72 @@ pub fn review(session: &Session, doc: DocId, submitter: &Submitter) -> Result<Re
     review_submission(session.root(), sub, submitter)
 }
 
+/// Immutable parsed inputs, reused only after exact content hashes match.
+#[derive(Default)]
+pub struct ReviewCache {
+    source: Option<(SourceAlignment, std::sync::Arc<Vec<SourceRow>>)>,
+    metadata: Option<(Option<String>, ProjectMetadata)>,
+    prepared: Option<(String, Prepared)>,
+}
+
 /// [`review`] for a submission held outside a session.
 pub fn review_submission(
     project: &Path,
     sub: &Submission,
     submitter: &Submitter,
 ) -> Result<Review> {
-    let (meta, metadata_hash) = project_metadata(project)?;
+    review_submission_cached(project, sub, submitter, &mut ReviewCache::default())
+}
+
+pub fn review_submission_cached(
+    project: &Path,
+    sub: &Submission,
+    submitter: &Submitter,
+    cache: &mut ReviewCache,
+) -> Result<Review> {
+    let manifest = crate::metadata::manifest_path(project);
+    let metadata_hash = if manifest.exists() {
+        Some(basecraft_io::hash_file(&manifest)?)
+    } else {
+        None
+    };
+    if cache
+        .metadata
+        .as_ref()
+        .is_none_or(|(hash, _)| hash != &metadata_hash)
+    {
+        let (metadata, read_hash) = project_metadata(project)?;
+        if read_hash != metadata_hash {
+            return Err(invalid("Metadata changed while reading"));
+        }
+        cache.metadata = Some((metadata_hash.clone(), metadata));
+    }
+    let meta = cache
+        .metadata
+        .as_ref()
+        .map(|(_, metadata)| metadata)
+        .ok_or_else(|| invalid("No metadata snapshot"))?;
     let mut issues = Vec::new();
     let mut source_hash = None;
-    let mut rows = Vec::new();
+    let mut rows = std::sync::Arc::new(Vec::new());
     if let Some(source) = &sub.source {
         let path = project.join(&source.document);
         match basecraft_io::hash_file(&path) {
             Ok(hash) if hash == source.hash => {
-                rows = read_rows(&path)?;
+                if cache
+                    .source
+                    .as_ref()
+                    .is_none_or(|(cached, _)| cached != source)
+                {
+                    let parsed = read_rows(&path)?;
+                    if basecraft_io::hash_file(&path)? != hash {
+                        return Err(invalid("Source changed while reading"));
+                    }
+                    cache.source = Some((source.clone(), std::sync::Arc::new(parsed)));
+                }
+                if let Some((_, parsed)) = &cache.source {
+                    rows = parsed.clone();
+                }
                 source_hash = Some(hash);
             }
             Ok(hash) => {
@@ -249,7 +404,28 @@ pub fn review_submission(
         }
     }
     let document = sub.source.as_ref().map_or("", |s| s.document.as_str());
-    let mut prepared = model::prepare(sub, &rows, &meta, document);
+    let mut sequence_settings = sub.clone();
+    sequence_settings.publication = Default::default();
+    sequence_settings.submission_details = None;
+    sequence_settings.publication_differs = false;
+    sequence_settings.selection_confirmation = None;
+    sequence_settings.exported.clear();
+    sequence_settings.marker_drafts.clear();
+    let prepared_key = basecraft_io::hash_bytes(&serde_json::to_vec(&(
+        &sequence_settings,
+        &source_hash,
+        &metadata_hash,
+    ))?);
+    let mut prepared = if let Some((key, prepared)) = &cache.prepared
+        && key == &prepared_key
+    {
+        prepared.clone()
+    } else {
+        let prepared = model::prepare(sub, &rows, meta, document);
+        cache.prepared = Some((prepared_key, prepared.clone()));
+        prepared
+    };
+    model::citation_issues(sub, &mut prepared.issues);
     for missing in submitter.missing() {
         prepared.issues.push(local(
             Severity::Blocking,
@@ -345,13 +521,15 @@ fn ascii_issues(
     for (name, value) in submitter.fields() {
         flag(format!("Submitter {}", name.replace('_', " ")), value, None);
     }
-    flag("Title".into(), &sub.publication.title, None);
-    for author in &sub.publication.authors {
-        flag(
-            "Author".into(),
-            &format!("{} {} {}", author.first, author.middle, author.last),
-            None,
-        );
+    for citation in [sub.submission_citation(), sub.publication_citation()] {
+        flag("Title".into(), &citation.title, None);
+        for author in &citation.authors {
+            flag(
+                "Author".into(),
+                &format!("{} {} {}", author.first, author.middle, author.last),
+                None,
+            );
+        }
     }
     for record in prepared.exported() {
         if let Some(organism) = &record.organism {
@@ -533,22 +711,25 @@ fn genbank_files(
     }
     let mut tbl = Vec::new();
     ncbi::write_tbl(&mut tbl, &tbl_records)?;
-    let authors: Vec<ncbi::Person> = sub
-        .publication
-        .authors
-        .iter()
-        .map(|a| ncbi::Person {
-            first: a.first.clone(),
-            middle: a.middle.clone(),
-            last: a.last.clone(),
-        })
-        .collect();
+    let persons = |citation: &basecraft_protocol::submission::Publication| {
+        citation
+            .authors
+            .iter()
+            .map(|a| ncbi::Person {
+                first: a.first.clone(),
+                middle: a.middle.clone(),
+                last: a.last.clone(),
+            })
+            .collect::<Vec<_>>()
+    };
     let mut sbt = Vec::new();
-    ncbi::write_sbt(
+    ncbi::write_sbt_details(
         &mut sbt,
         &contact(submitter),
-        &authors,
-        &sub.publication.title,
+        &persons(sub.submission_citation()),
+        &sub.submission_citation().title,
+        &persons(sub.publication_citation()),
+        &sub.publication_citation().title,
     )?;
     Ok([fsa, src, tbl, sbt])
 }

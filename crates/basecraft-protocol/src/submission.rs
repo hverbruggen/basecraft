@@ -39,6 +39,19 @@ pub struct Submission {
     pub export: ExportSettings,
     #[serde(default)]
     pub publication: Publication,
+    /// Absent in legacy documents: their publication is also the submission citation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub submission_details: Option<Publication>,
+    #[serde(default)]
+    pub publication_differs: bool,
+    /// Marker-specific drafts survive type switches without transferring scientific text.
+    #[serde(default)]
+    pub marker_drafts: BTreeMap<String, Marker>,
+    /// Rule origin for explicit decisions; absent entries are manual/legacy decisions.
+    #[serde(default)]
+    pub row_rules: BTreeMap<String, InclusionRule>,
+    #[serde(default)]
+    pub accession_policy: AccessionPolicy,
     /// Accessions returned by the archive, by record name.
     #[serde(default)]
     pub accessions: Vec<AccessionEntry>,
@@ -60,8 +73,29 @@ impl Default for Submission {
             frames: Vec::new(),
             export: ExportSettings::default(),
             publication: Publication::default(),
+            submission_details: None,
+            publication_differs: false,
+            marker_drafts: BTreeMap::new(),
+            row_rules: BTreeMap::new(),
+            accession_policy: AccessionPolicy::default(),
             accessions: Vec::new(),
             extra: BTreeMap::new(),
+        }
+    }
+}
+
+impl Submission {
+    pub fn submission_citation(&self) -> &Publication {
+        self.submission_details
+            .as_ref()
+            .unwrap_or(&self.publication)
+    }
+
+    pub fn publication_citation(&self) -> &Publication {
+        if self.publication_differs {
+            &self.publication
+        } else {
+            self.submission_citation()
         }
     }
 }
@@ -350,6 +384,19 @@ pub enum SubmissionEdit {
     SetPublication {
         publication: Publication,
     },
+    SetAccessionPolicy {
+        policy: AccessionPolicy,
+    },
+    /// Both citations in one undoable change. Disabled custom publication values are retained.
+    SetDetails {
+        submission: Publication,
+        publication: Publication,
+        publication_differs: bool,
+    },
+    /// Apply a reviewed rule. The shared ops boundary checks this plan against live inputs.
+    ApplyInclusion {
+        plan: Box<InclusionPlan>,
+    },
     /// Retain the mapping after writing a submission package.
     RecordExport {
         mapping: ExportMapping,
@@ -358,6 +405,90 @@ pub enum SubmissionEdit {
     SetAccessions {
         accessions: Vec<AccessionEntry>,
     },
+}
+
+/// Legacy suggestions are retained on old documents. Configured sources prevent
+/// specimen identifiers elsewhere in a name from influencing inclusion suggestions.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "policy", rename_all = "snake_case")]
+pub enum AccessionPolicy {
+    #[default]
+    LegacyHeuristic,
+    Configured {
+        input: Option<IdentifierSource>,
+        include_metadata: bool,
+    },
+}
+
+/// Identifier fields use the same literal splitting primitive as metadata header imports.
+/// Submission rules always use the FASTA identifier, never the full description header.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "source", rename_all = "snake_case")]
+pub enum IdentifierSource {
+    Identifier,
+    Field { separator: String, index: usize },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MatchMode {
+    Exact,
+    Contains,
+    Starts,
+    Ends,
+    Wildcard,
+    Regex,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum InclusionAction {
+    Include,
+    Exclude,
+    #[default]
+    Unchanged,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct InclusionRule {
+    pub name: String,
+    pub input: IdentifierSource,
+    pub mode: MatchMode,
+    pub pattern: String,
+    #[serde(default)]
+    pub case_sensitive: bool,
+    #[serde(default)]
+    pub trim: bool,
+    pub matching: InclusionAction,
+    pub nonmatching: InclusionAction,
+    #[serde(default)]
+    pub unresolved: InclusionAction,
+    #[serde(default)]
+    pub override_manual: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct InclusionPreviewRow {
+    pub record: String,
+    pub extracted: Option<String>,
+    pub matched: Option<bool>,
+    pub reason: String,
+    pub preserved_manual: bool,
+    pub current: Decision,
+    pub proposed: Decision,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct InclusionPlan {
+    pub rule: InclusionRule,
+    /// Hash of target content, source bytes and metadata evidence; recomputed before apply.
+    pub fingerprint: String,
+    pub rows: Vec<InclusionPreviewRow>,
+    pub matching: usize,
+    pub unresolved: usize,
+    pub preserved: usize,
+    pub changed: usize,
+    pub included: usize,
 }
 
 #[cfg(test)]

@@ -13,12 +13,13 @@ use basecraft_ops::{DocId, Session};
 use basecraft_protocol::submission::{
     Author, Decision, FrameChoice, Publication, RowDecision, SubmissionEdit,
 };
-use cxx_qt::CxxQtType;
+use cxx_qt::{CxxQtType, Threading};
 use cxx_qt_lib::QString;
 use serde_json::{Value, json};
 
 #[cxx_qt::bridge]
 pub mod qobject {
+    impl cxx_qt::Threading for SubmissionController {}
     unsafe extern "C++" {
         include!("cxx-qt-lib/qstring.h");
         type QString = cxx_qt_lib::QString;
@@ -28,6 +29,7 @@ pub mod qobject {
         #[qml_element]
         #[qproperty(QString, project_dir)]
         #[qproperty(QString, path)]
+        #[qproperty(bool, reviewing)]
         #[qproperty(bool, available)]
         #[qproperty(QString, document)]
         #[qproperty(QString, review)]
@@ -55,6 +57,14 @@ pub mod qobject {
             title: &QString,
             authors: &QString,
         ) -> bool;
+        #[qinvokable]
+        fn set_details(self: Pin<&mut SubmissionController>, details: &QString) -> bool;
+        #[qinvokable]
+        fn preview_authors(self: &SubmissionController, authors: &QString) -> QString;
+        #[qinvokable]
+        fn preview_inclusion(self: Pin<&mut SubmissionController>, rule: &QString) -> QString;
+        #[qinvokable]
+        fn inclusion_presets(self: Pin<&mut SubmissionController>, save: &QString) -> QString;
         #[qinvokable]
         fn set_decision(
             self: Pin<&mut SubmissionController>,
@@ -100,6 +110,10 @@ pub struct SubmissionRust {
     project_dir: QString,
     path: QString,
     available: bool,
+    reviewing: bool,
+    review_active: bool,
+    review_epoch: u64,
+    review_cache: Option<submission::ReviewCache>,
     document: QString,
     review: QString,
     package: QString,
@@ -113,23 +127,7 @@ pub struct SubmissionRust {
 
 /// Authors as one per line, `Last, First M.`.
 pub(crate) fn parse_authors(text: &str) -> Result<Vec<Author>, String> {
-    text.lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .map(|line| {
-            let (last, given) = line
-                .split_once(',')
-                .ok_or_else(|| format!("{line:?}: write authors as Last, First M."))?;
-            let mut given = given.split_whitespace();
-            let first = given.next().unwrap_or_default().to_string();
-            let middle = given.collect::<Vec<_>>().join(" ");
-            Ok(Author {
-                first,
-                last: last.trim().to_string(),
-                middle,
-            })
-        })
-        .collect()
+    basecraft_docs::submission::parse_authors(text).map_err(|error| error.0)
 }
 
 pub(crate) fn authors_text(authors: &[Author]) -> String {
@@ -153,16 +151,27 @@ pub(crate) fn authors_text(authors: &[Author]) -> String {
 /// row they concern so selecting one selects the row.
 pub(crate) fn review_view(review: &Review) -> Value {
     let p = &review.prepared;
+    let positions: std::collections::BTreeMap<_, _> = p
+        .records
+        .iter()
+        .enumerate()
+        .map(|(i, r)| (r.record.as_str(), i))
+        .collect();
+    let mut counts = vec![(0usize, 0usize); p.records.len()];
+    for issue in &p.issues {
+        if let Some(index) = issue.record.as_deref().and_then(|name| positions.get(name)) {
+            match issue.severity {
+                basecraft_docs::submission::Severity::Blocking => counts[*index].0 += 1,
+                basecraft_docs::submission::Severity::Review => counts[*index].1 += 1,
+                _ => {}
+            }
+        }
+    }
     let rows: Vec<Value> = p
         .records
         .iter()
-        .map(|r| {
-            let count = |severity| {
-                p.issues
-                    .iter()
-                    .filter(|i| i.record.as_deref() == Some(&r.record) && i.severity == severity)
-                    .count()
-            };
+        .enumerate()
+        .map(|(index, r)| {
             let (decision, accession) = match &r.decision {
                 Decision::New => ("new", r.accession.clone().unwrap_or_default()),
                 Decision::Existing { accession } => ("existing", accession.clone()),
@@ -176,8 +185,8 @@ pub(crate) fn review_view(review: &Review) -> Value {
                 "length": r.residues.len(), "trimmed": [r.trimmed.0, r.trimmed.1],
                 "feature": r.feature.as_ref().map(|f| f.kind.clone()).unwrap_or_default(),
                 "frame": r.frame,
-                "blocking": count(basecraft_docs::submission::Severity::Blocking),
-                "review": count(basecraft_docs::submission::Severity::Review)})
+                "blocking": counts[index].0,
+                "review": counts[index].1})
         })
         .collect();
     let issues: Vec<Value> = p
@@ -187,7 +196,7 @@ pub(crate) fn review_view(review: &Review) -> Value {
             let row = i
                 .record
                 .as_ref()
-                .and_then(|record| p.records.iter().position(|r| &r.record == record));
+                .and_then(|record| positions.get(record.as_str()).copied());
             json!({"severity": i.severity.as_str(), "source": i.source, "code": i.code,
                 "message": i.message, "record": i.record, "specimen": i.specimen, "row": row})
         })
@@ -232,6 +241,7 @@ impl qobject::SubmissionController {
         let state = match (&self.rust().session, self.rust().doc) {
             (Some(session), Some(doc)) => Some((
                 serde_json::to_value(session.submission(doc)).unwrap_or(Value::Null),
+                authors_text(&session.submission(doc).submission_citation().authors),
                 authors_text(&session.submission(doc).publication.authors),
                 session.doc_key(doc).to_string(),
                 session.can_undo(doc),
@@ -239,8 +249,9 @@ impl qobject::SubmissionController {
             )),
             _ => None,
         };
-        if let Some((mut document, authors, key, undo, redo)) = state {
+        if let Some((mut document, authors, publication_authors, key, undo, redo)) = state {
             document["authors_text"] = json!(authors);
+            document["publication_authors_text"] = json!(publication_authors);
             self.as_mut().set_document(qs(&document));
             self.as_mut().set_path(QString::from(key.as_str()));
             self.as_mut().set_available(true);
@@ -260,31 +271,99 @@ impl qobject::SubmissionController {
     /// Recompute the review: after edits, and when the specimen table or
     /// the submitter changes.
     pub fn refresh_review(mut self: Pin<&mut Self>) {
-        let (review, package) = match (&self.rust().session, self.rust().doc) {
-            (Some(session), Some(doc)) => {
+        self.as_mut().rust_mut().review_epoch += 1;
+        if self.rust().review_active {
+            return;
+        }
+        let (project, sub, package_path) = match (&self.rust().session, self.rust().doc) {
+            (Some(session), Some(doc)) => (
+                session.root().to_path_buf(),
+                session.submission(doc).clone(),
+                self.rust().package_path(),
+            ),
+            _ => {
+                self.as_mut()
+                    .set_review(qs(&json!({"rows": [], "issues": []})));
+                self.as_mut().set_package(qs(&Value::Null));
+                self.set_reviewing(false);
+                return;
+            }
+        };
+        let epoch = self.rust().review_epoch;
+        let mut cache = self
+            .as_mut()
+            .rust_mut()
+            .review_cache
+            .take()
+            .unwrap_or_default();
+        self.as_mut().rust_mut().review_active = true;
+        self.as_mut().set_reviewing(true);
+        let thread = self.qt_thread();
+        // Reuse the shared panic/ownership-safe background continuation. The live
+        // owner stays on Qt; this detached owner contains no mutable user state.
+        let worker = Session::detached(&project);
+        let spawned = crate::document_jobs::background_session(
+            worker,
+            move |_| {
+                let started = std::time::Instant::now();
                 let submitter = submission::submitter_preference().unwrap_or_default();
-                let review = match submission::review(session, doc, &submitter) {
-                    Ok(review) => review_view(&review),
+                let review = match submission::review_submission_cached(
+                    &project, &sub, &submitter, &mut cache,
+                ) {
+                    Ok(review) => {
+                        let preparation_seconds = started.elapsed().as_secs_f64();
+                        let conversion = std::time::Instant::now();
+                        let view = review_view(&review);
+                        if std::env::var_os("BASECRAFT_SUBMISSION_TIMINGS").is_some() {
+                            eprintln!(
+                                "submission-review prepare={preparation_seconds:.6}s conversion={:.6}s",
+                                conversion.elapsed().as_secs_f64()
+                            );
+                        }
+                        view
+                    }
                     Err(error) => json!({"rows": [], "issues": [], "error": error.to_string()}),
                 };
-                let package = self.rust().package_path().map_or(Value::Null, |dir| {
-                    let validation = submission::current_validation(session.root(), &dir)
-                        .ok()
-                        .flatten();
-                    let manifest: Value = std::fs::read(dir.join("package.json"))
-                        .ok()
-                        .and_then(|b| serde_json::from_slice(&b).ok())
-                        .unwrap_or(Value::Null);
-                    json!({"directory": dir, "exported": manifest.is_object(),
-                        "status": manifest["status"], "input_hash": manifest["input_hash"],
-                        "validation": validation})
+                let package = package_path.map_or(Value::Null, |dir| {
+                let validation = submission::current_validation(&project, &dir).ok().flatten();
+                let manifest: Value = std::fs::read(dir.join("package.json")).ok()
+                    .and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or(Value::Null);
+                json!({"directory": dir, "exported": manifest.is_object(), "status": manifest["status"],
+                    "input_hash": manifest["input_hash"], "validation": validation})
+            });
+                Ok((review, package, cache, started.elapsed().as_secs_f64()))
+            },
+            move |_, result| {
+                let _ = thread.queue(move |mut this| {
+                    this.as_mut().rust_mut().review_active = false;
+                    let current = epoch == this.rust().review_epoch;
+                    match result {
+                        Ok((review, package, cache, _seconds)) => {
+                            this.as_mut().rust_mut().review_cache = Some(cache);
+                            if current {
+                                this.as_mut().set_review(qs(&review));
+                                this.as_mut().set_package(qs(&package));
+                            }
+                        }
+                        Err(error) => {
+                            if current {
+                                this.as_mut().report("error", &error);
+                            }
+                        }
+                    }
+                    if current {
+                        this.as_mut().set_reviewing(false);
+                    } else {
+                        this.as_mut().refresh_review();
+                    }
                 });
-                (review, package)
-            }
-            _ => (json!({"rows": [], "issues": []}), Value::Null),
-        };
-        self.as_mut().set_review(qs(&review));
-        self.set_package(qs(&package));
+            },
+        );
+        if let Err((_, error)) = spawned {
+            self.as_mut().rust_mut().review_active = false;
+            self.as_mut().set_reviewing(false);
+            self.report("error", &error);
+        }
     }
 
     pub fn use_project(mut self: Pin<&mut Self>, path: &QString) {
@@ -374,6 +453,7 @@ impl qobject::SubmissionController {
             self.report("error", "Open or start a submission first");
             return false;
         }
+        let started = std::time::Instant::now();
         let result = {
             let mut rust = self.as_mut().rust_mut();
             let Some(doc) = rust.doc else {
@@ -389,6 +469,12 @@ impl qobject::SubmissionController {
             session.end_group();
             applied.map(|()| session.save(doc, None))
         };
+        if std::env::var_os("BASECRAFT_SUBMISSION_TIMINGS").is_some() {
+            eprintln!(
+                "submission-edit persistence={:.6}s",
+                started.elapsed().as_secs_f64()
+            );
+        }
         let ok = match result {
             Err(error) => {
                 self.as_mut().report("error", &error.to_string());
@@ -435,6 +521,83 @@ impl qobject::SubmissionController {
             Err(error) => {
                 self.report("error", &error);
                 false
+            }
+        }
+    }
+
+    pub fn preview_authors(&self, authors: &QString) -> QString {
+        qs(&match parse_authors(&authors.to_string()) {
+            Ok(authors) => json!({"authors": authors}),
+            Err(error) => json!({"error": error}),
+        })
+    }
+
+    pub fn set_details(self: Pin<&mut Self>, details: &QString) -> bool {
+        let result = (|| -> Result<SubmissionEdit, String> {
+            let value: Value =
+                serde_json::from_str(&details.to_string()).map_err(|e| e.to_string())?;
+            let citation = |key: &str| -> Result<Publication, String> {
+                Ok(Publication {
+                    title: value[key]["title"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .trim()
+                        .into(),
+                    authors: parse_authors(value[key]["authors"].as_str().unwrap_or_default())?,
+                })
+            };
+            Ok(SubmissionEdit::SetDetails {
+                submission: citation("submission")?,
+                publication: citation("publication")?,
+                publication_differs: value["publication_differs"].as_bool().unwrap_or(false),
+            })
+        })();
+        match result {
+            Ok(edit) => self.apply(vec![edit], "Saved submission details"),
+            Err(error) => {
+                self.report("error", &error);
+                false
+            }
+        }
+    }
+
+    pub fn preview_inclusion(mut self: Pin<&mut Self>, rule: &QString) -> QString {
+        let result = (|| -> Result<_, String> {
+            let rule = serde_json::from_str(&rule.to_string()).map_err(|e| e.to_string())?;
+            let session = self
+                .rust()
+                .session
+                .as_ref()
+                .ok_or("Open a submission first")?;
+            let doc = self.rust().doc.ok_or("Open a submission first")?;
+            submission::plan_inclusion(session, doc, &rule).map_err(|e| e.to_string())
+        })();
+        match result {
+            Ok(plan) => qs(&json!(plan)),
+            Err(error) => {
+                self.as_mut().report("error", &error);
+                qs(&json!({"error": error}))
+            }
+        }
+    }
+
+    pub fn inclusion_presets(mut self: Pin<&mut Self>, save: &QString) -> QString {
+        let result = (|| -> Result<_, String> {
+            let mut rust = self.as_mut().rust_mut();
+            let session = rust.session.as_mut().ok_or("Open a submission first")?;
+            if !save.is_empty() {
+                let rule = serde_json::from_str(&save.to_string()).map_err(|e| e.to_string())?;
+                submission::save_inclusion_preset(session, rule).map_err(|e| e.to_string())?;
+            }
+            submission::project_metadata(session.root())
+                .map(|(meta, _)| meta.import.inclusion_rules)
+                .map_err(|e| e.to_string())
+        })();
+        match result {
+            Ok(rules) => qs(&json!(rules)),
+            Err(error) => {
+                self.report("error", &error);
+                qs(&json!([]))
             }
         }
     }

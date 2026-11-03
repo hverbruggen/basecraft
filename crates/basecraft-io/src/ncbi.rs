@@ -194,6 +194,20 @@ pub fn write_sbt(
     authors: &[Person],
     title: &str,
 ) -> io::Result<()> {
+    write_sbt_details(w, contact, authors, title, authors, title)
+}
+
+/// Distinct direct-submission and unpublished-publication citations.
+/// NCBI-Biblio Cit-sub has `descr`, not `title`; the submission title is
+/// written there explicitly. Cit-gen.title holds the publication title.
+pub fn write_sbt_details(
+    w: &mut dyn Write,
+    contact: &Contact,
+    submission_authors: &[Person],
+    submission_title: &str,
+    publication_authors: &[Person],
+    publication_title: &str,
+) -> io::Result<()> {
     let person = Person {
         first: contact.first.clone(),
         middle: contact.middle.clone(),
@@ -208,10 +222,11 @@ pub fn write_sbt(
     writeln!(w, "  }},")?;
     writeln!(w, "  cit {{")?;
     writeln!(w, "    authors {{")?;
-    write_authors(w, authors, "      ")?;
+    write_authors(w, submission_authors, "      ")?;
     writeln!(w, ",")?;
     write_affil(w, contact, false, "      ")?;
-    writeln!(w, "    }}")?;
+    writeln!(w, "    }},")?;
+    writeln!(w, "    descr {}", asn(submission_title))?;
     writeln!(w, "  }},")?;
     writeln!(w, "  subtype new")?;
     writeln!(w, "}}")?;
@@ -220,10 +235,10 @@ pub fn write_sbt(
     writeln!(w, "    gen {{")?;
     writeln!(w, "      cit \"unpublished\",")?;
     writeln!(w, "      authors {{")?;
-    write_authors(w, authors, "        ")?;
+    write_authors(w, publication_authors, "        ")?;
     writeln!(w)?;
     writeln!(w, "      }},")?;
-    writeln!(w, "      title {}", asn(title))?;
+    writeln!(w, "      title {}", asn(publication_title))?;
     writeln!(w, "    }}")?;
     writeln!(w, "  }}")?;
     writeln!(w, "}}")
@@ -301,6 +316,44 @@ fn local_id(text: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn distinct_citations_use_the_actual_asn_destinations() {
+        let contact = Contact {
+            first: "Contact".into(),
+            last: "Person".into(),
+            ..Contact::default()
+        };
+        let submission = vec![Person {
+            first: "Anne".into(),
+            middle: "M.".into(),
+            last: "van der Meer".into(),
+        }];
+        let publication = vec![Person {
+            first: "Bob".into(),
+            middle: String::new(),
+            last: "O'Neill-Smith".into(),
+        }];
+        let mut out = Vec::new();
+        write_sbt_details(
+            &mut out,
+            &contact,
+            &submission,
+            "Sequence study",
+            &publication,
+            "Paper title",
+        )
+        .unwrap();
+        let out = String::from_utf8(out).unwrap();
+        let (submit, publication) = out.split_once("Seqdesc ::=").unwrap();
+        assert!(submit.contains("descr \"Sequence study\""));
+        assert!(submit.contains("van der Meer"));
+        assert!(!submit.contains("O'Neill-Smith"));
+        assert!(publication.contains("title \"Paper title\""));
+        assert!(publication.contains("O'Neill-Smith"));
+        assert!(!publication.contains("van der Meer"));
+        assert!(submit.contains("Contact"), "Contact is independent");
+    }
 
     #[test]
     fn writes_fsa_src_and_tbl() {

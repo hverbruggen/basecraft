@@ -447,6 +447,18 @@ class Session:
         """
         return self.call("submission_review", {"document": document})
 
+    def preview_submission_inclusion(self, document, rule):
+        """Read-only rule preview; identifier fields are one-based, separators literal."""
+        return self.call("submission_inclusion_preview", {"document": document, "rule": rule})
+
+    def apply_submission_inclusion(self, document, plan):
+        """Apply a complete preview as one undo step; reject stale/changed inputs."""
+        return self.edit_submission(document, {"action": "apply_inclusion", "plan": plan})
+
+    def submission_inclusion_presets(self, save=None):
+        """Read named project rules; optionally save a rule in the shared import settings."""
+        return self.call("submission_inclusion_presets", {"save": save} if save is not None else {})
+
     def export_submission(self, document, output):
         """Write the submission package to ``output`` inside the project."""
         return self.call("submission_export", {"document": document, "output": str(output)})

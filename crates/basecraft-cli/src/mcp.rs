@@ -97,7 +97,8 @@ impl Server {
 
     fn call(&mut self, name: &str, args: &Value) -> Result<Value> {
         let creates = (name == "metadata_open" && args["create"].as_bool() == Some(true))
-            || (name == "submission_submitter" && args.get("set").is_some());
+            || (name == "submission_submitter" && args.get("set").is_some())
+            || (name == "submission_inclusion_presets" && args.get("save").is_some());
         if (matches!(
             name,
             "apply"
@@ -354,6 +355,24 @@ impl Server {
                 self.documents.insert(doc.0, doc);
                 Ok(self.state(doc))
             }
+            "submission_inclusion_preview" => {
+                let doc = self.doc(args)?;
+                let rule =
+                    serde_json::from_value(args.get("rule").cloned().ok_or("missing rule")?)?;
+                Ok(serde_json::to_value(
+                    basecraft_ops::submission::plan_inclusion(&self.session, doc, &rule)?,
+                )?)
+            }
+            "submission_inclusion_presets" => {
+                if let Some(rule) = args.get("save") {
+                    basecraft_ops::submission::save_inclusion_preset(
+                        &mut self.session,
+                        serde_json::from_value(rule.clone())?,
+                    )?;
+                }
+                let (meta, _) = basecraft_ops::submission::project_metadata(self.session.root())?;
+                Ok(serde_json::to_value(meta.import.inclusion_rules)?)
+            }
             "submission_review" => {
                 let doc = self.doc(args)?;
                 let submitter = basecraft_ops::submission::submitter_preference()?;
@@ -486,6 +505,8 @@ fn tools() -> Value {
         tool("metadata_consumer","Inspect project partitions or metadata labels, or plan explicit workspace roster links/result promotion. request: {action: partitions} | {action: link_records, document: project path, links: {record ID: roster ID}} | {action: labels, document, records: [scientific ID], fields: [specimen|genus|species|accession|{column:{name}}]} | {action: link_workspace, workspace: project path, links: {workspace ID: roster ID}} | {action: promote_partition, workspace, hypothesis, id}. Plans return target and typed operation, applied through generic apply to the opened target at its current version, then save. Missing/conflicting roster links refuse promotion. Planning is read-only.",json!({"document":doc,"request":{"type":"object"}}), &["document","request"]),
         tool("metadata_insdc","Derive a specimen's INSDC source qualifiers from its Darwin Core columns and current identification, with the required ones still missing.",json!({"document":doc,"specimen":string}), &["document","specimen"]),
         tool("submission_create","Create a GenBank marker submission document (path ending .submission.json) for an aligned FASTA inside the project, and open it. Edit it with apply and submission.edit operations ({action: set_rows | set_batch | set_frames | set_export | set_publication | set_source | set_accessions | confirm_selection, ...}; see schemas/submission-edit.schema.json) and save it with save.",json!({"path":string,"alignment":string}), &["path","alignment"]),
+        tool("submission_inclusion_preview", "Preview identifier inclusion using a typed rule (whole identifier or one-based literal field, exact/contains/starts/ends/wildcard/regex). Manual decisions are preserved by default. Missing/empty fields are unresolved. Apply the complete returned plan with submission.edit {action: apply_inclusion, plan: ...}; stale or modified plans are rejected atomically. Matching is not accession verification.", json!({"document":doc,"rule":{"type":"object"}}), &["document","rule"]),
+        tool("submission_inclusion_presets", "Read project inclusion presets, or save a typed named rule using the shared metadata import settings.", json!({"save":{"type":"object"}}), &[]),
         tool("submission_review","Prepare a submission's records from its source alignment and the project metadata and list every local issue: extraction (ungapped, ambiguity kept, terminal unknowns, masked columns, export IDs), specimen source qualifiers, organism names, features, and reading frames detected per record for review (confirm them with set_frames). Accession-aware row choices and evidence are local unverified heuristics. Review included/excluded rows, then apply submission.edit with {action: confirm_selection, selection_hash: <returned selection_hash>} before export. Bulk include/exclude uses set_rows. Source/selection/evidence changes require confirmation again. Blocking issues keep the package from being ready.",json!({"document":doc}), &["document"]),
         tool("submission_export","Write the submission package (genbank/ .fsa .src .tbl .sbt, records, specimens, coordinate map, README, package.json) to a folder in the project. Requires confirmation of the current selection fingerprint from submission_review (apply submission.edit confirm_selection). Same inputs give identical files. Returns the input hash and status.",json!({"document":doc,"output":string}), &["document","output"]),
         tool("submission_validation_request","The OperationRequest that validates an exported package with table2asn. Submit it with the basecraft.table2asn.validate.v1 tool, wait with jobs_result, then pass the outcome to submission_record_validation.",json!({"package":string}), &["package"]),
