@@ -60,5 +60,34 @@ too_many_lines = "allow"
 [profile.release]
 debug = "line-tables-only"
 
+# Feedback builds package the dev profile, and unoptimized analysis engines mislead
+# everyone testing them. Their numeric code runs at full speed there too.
+[profile.dev.package.basecraft-distance]
+opt-level = 3
+debug-assertions = false
+overflow-checks = false
+
+[profile.dev.package.basecraft-delimitation]
+opt-level = 3
+debug-assertions = false
+overflow-checks = false
+
+[profile.dev.package.basecraft-asap]
+opt-level = 3
+debug-assertions = false
+overflow-checks = false
+
+[profile.dev.package.basecraft-platform]
+opt-level = 3
+
+[profile.dev.package.rayon]
+opt-level = 3
+
+[profile.dev.package.rayon-core]
+opt-level = 3
+
+[profile.dev.package.blake3]
+opt-level = 3
+
 [profile.bench]
 debug = true
