@@ -92,6 +92,9 @@ class NativeCallsTests(unittest.TestCase):
         self.assertEqual(self.normalize(raw)["secondary_sequence"], "RYK")
 
     def test_malformed_evidence_is_refused(self):
+        for raw in (None, [], "not an object", 7):
+            with self.subTest(raw=raw), self.assertRaises(TypeError):
+                self.normalize(raw)
         for key, value in (
             ("secondarySeq", "TA"), ("secondarySeq", "T-T"),
             ("secondarySeq", ""), ("secondarySeq", ["T", "A", "T"]),

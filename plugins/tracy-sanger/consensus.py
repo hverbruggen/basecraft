@@ -177,7 +177,7 @@ def trace_calls(
         raise RuntimeError(f"Tracy basecall failed: {run.stderr[-2000:]}")
     raw = json.loads(output.read_text())
     if not isinstance(raw, dict):
-        raise ValueError("Invalid Tracy call evidence")
+        raise TypeError("Invalid Tracy call evidence")
     sequence = raw.get("primarySeq")
     secondary = raw.get("secondarySeq")
     samples = raw.get("basecallPos")
