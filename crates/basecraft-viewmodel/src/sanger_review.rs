@@ -511,7 +511,7 @@ impl SangerReviewView {
             if self.masked[i] {
                 parts.push("Masked · excluded from consensus exports".into());
             }
-            parts.push("Read calls and signal below are oriented to the draft; native coordinates count from the original read start. Scores and amplitude ratios are not calibrated confidence.".into());
+            parts.push("Read calls and signal below are oriented to the draft; native call/event coordinates use the recorded caller sequence, not vendor call numbering. Scores and amplitude ratios are not calibrated confidence.".into());
             for (read, lane) in self.lanes.iter().enumerate() {
                 let input = &self.draft.inputs[read];
                 let support = self.draft.columns[i]
@@ -555,10 +555,10 @@ impl SangerReviewView {
                         base as char
                     }
                 };
-                parts.push(format!("Native read base/event {} · signal sample {} (both one-based) · recorded primary {} → {} · secondary {} · Tracy score {}",
+                parts.push(format!("Native read base/event {} · signal sample {} (both one-based) · recorded primary {} → {} · secondary {} · {} score {}",
                     event + 1, u64::from(calls.positions[event]) + 1,
                     primary as char, orient(primary),
-                    secondary.map_or("unavailable".into(), |base| format!("{} → {}", base as char, orient(base))), calls.scores[event]));
+                    secondary.map_or("unavailable".into(), |base| format!("{} → {}", base as char, orient(base))), self.draft.engine, calls.scores[event]));
                 if let Some(evidence) = self.call_evidence(read, i) {
                     let ratio = if evidence.peaks.iter().any(|&p| p > 0) {
                         format!("{:.1}%", evidence.secondary_percent())
@@ -1140,11 +1140,11 @@ mod tests {
             .calls
             .as_mut()
             .unwrap()
-            .secondary_sequence = Some("AT".into());
+            .secondary_sequence = Some("AC".into());
         view.select_column(0);
         let text = view.selected_text();
         assert!(text.contains("Native read base/event 2 · signal sample 61"));
-        assert!(text.contains("recorded primary T → A · secondary T → A"));
+        assert!(text.contains("recorded primary T → A · secondary C → G"));
         assert!(text.contains("oriented A:100 C:0 G:0 T:0"));
         assert!(text.contains("Paired recorded primary calls (oriented): A / A · same symbol"));
         assert!(text.contains("secondary unavailable"));

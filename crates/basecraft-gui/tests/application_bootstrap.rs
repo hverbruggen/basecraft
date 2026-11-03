@@ -241,6 +241,7 @@ fn main() {
             const decision = sanger.review_decision;
             const masks = sanger.mask_settings;
             const file = sanger.file_path;
+            check(sanger.review_details.indexOf("ABI score") >= 0, "Instrument evidence must name its recorded caller");
             const navigationRevision = sanger.record_revision();
             const originalColumn = sanger.selected_column;
             check(sanger.go_to_column(false, "2"), "Draft navigation failed");
