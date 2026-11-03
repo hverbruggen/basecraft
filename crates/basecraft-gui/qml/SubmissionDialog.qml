@@ -261,6 +261,16 @@ AppDialog {
 
     contentItem: ColumnLayout {
         id: content
+        Shortcut {
+            sequences: [StandardKey.Undo]
+            enabled: dialog.opened && dialog.canUndo
+            onActivated: dialog.undoRequested()
+        }
+        Shortcut {
+            sequences: [StandardKey.Redo]
+            enabled: dialog.opened && dialog.canRedo
+            onActivated: dialog.redoRequested()
+        }
         implicitWidth: 1200
         implicitHeight: Math.min(680, Math.max(240, (Overlay.overlay ? Overlay.overlay.height : 800) - 160))
         spacing: 8

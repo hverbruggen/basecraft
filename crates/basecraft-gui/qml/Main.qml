@@ -1827,8 +1827,8 @@ ApplicationWindow {
     Shortcut { sequence: "Ctrl+W"; onActivated: if (openFiles.count > 0) window.closeTab(tabs.currentIndex) }
     // Undo and redo reach the open document wherever the focus is; a text
     // field being edited keeps its own. Trace review has its own undo.
-    Shortcut { sequence: "Ctrl+Z"; enabled: submissionDialog.opened ? submissions.can_undo : window.current !== null && !window.traceOpen; onActivated: submissionDialog.opened ? submissions.undo() : window.current.undo() }
-    Shortcut { sequences: ["Ctrl+Shift+Z", "Ctrl+Y"]; enabled: submissionDialog.opened ? submissions.can_redo : window.current !== null && !window.traceOpen; onActivated: submissionDialog.opened ? submissions.redo() : window.current.redo() }
+    Shortcut { sequence: "Ctrl+Z"; enabled: !submissionDialog.opened && window.current !== null && !window.traceOpen; onActivated: window.current.undo() }
+    Shortcut { sequences: ["Ctrl+Shift+Z", "Ctrl+Y"]; enabled: !submissionDialog.opened && window.current !== null && !window.traceOpen; onActivated: window.current.redo() }
     FileDialog {
         id: saveDialog
         property int index: -1

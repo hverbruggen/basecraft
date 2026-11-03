@@ -12,6 +12,8 @@ Item {
     SignalSpy { id: frames; signalName: "frameRequested" }
     SignalSpy { id: decisions; signalName: "decisionRequested" }
     SignalSpy { id: confirmed; signalName: "confirmDetectedRequested" }
+    SignalSpy { id: undoSpy; signalName: "undoRequested" }
+    SignalSpy { id: redoSpy; signalName: "redoRequested" }
     SignalSpy { id: saved; signalName: "saved" }
     readonly property var codes: [{id: 1, name: "1: Standard"}, {id: 5, name: "5: Invertebrate Mitochondrial"}, {id: 11, name: "11: Bacterial, Archaeal and Plant Plastid"}]
     function document(marker) {
@@ -49,7 +51,7 @@ Item {
             const dialog = createTemporaryObject(submissionFactory, root, {
                 document: root.document(marker), review: root.review, geneticCodes: root.codes,
                 path: "submissions/rbcL.submission.json"})
-            for (const spy of [edits, frames, decisions, confirmed]) { spy.target = dialog; spy.clear() }
+            for (const spy of [edits, frames, decisions, confirmed, undoSpy, redoSpy]) { spy.target = dialog; spy.clear() }
             dialog.open()
             tryCompare(dialog, "opened", true)
             // Initial focus settles after opening; tests move it afterwards.
@@ -231,6 +233,25 @@ Item {
             differs.toggle(); differs.toggled()
             compare(authors.text, "O'Neill-Smith, Jane M.")
             compare(title.text, "Custom paper")
+            dialog.close()
+        }
+
+        function test_history_shortcuts_are_modal_and_text_fields_keep_text_undo() {
+            const dialog = open({kind: "rrna", product: "18S"})
+            dialog.canUndo = true; dialog.canRedo = true
+            const box = sequenceControl(dialog, "decision_HV101_rbcL", 0)
+            box.forceActiveFocus()
+            keyClick(Qt.Key_Z, Qt.ControlModifier)
+            compare(undoSpy.count, 1)
+            keyClick(Qt.Key_Z, Qt.ControlModifier | Qt.ShiftModifier)
+            compare(redoSpy.count, 1)
+            const search = findChild(dialog, "sequenceSearch")
+            search.forceActiveFocus()
+            keyClick(Qt.Key_A)
+            compare(search.text, "a")
+            keyClick(Qt.Key_Z, Qt.ControlModifier)
+            compare(search.text, "")
+            compare(undoSpy.count, 1, "Text undo must stay in the editor")
             dialog.close()
         }
 
