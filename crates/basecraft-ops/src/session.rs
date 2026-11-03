@@ -100,13 +100,18 @@ struct DerivedTarget {
     _evidence: std::fs::File,
 }
 
+enum ReplayMode {
+    Live,
+    Historical,
+}
+
 pub struct Session {
     root: PathBuf,
     storage_root: PathBuf,
     provenance_policy: basecraft_platform::settings::ProvenancePolicy,
     local_provenance_root: PathBuf,
     tracked: bool,
-    replaying: bool,
+    replay_mode: ReplayMode,
     memory_objects: Mutex<std::collections::HashMap<String, Vec<u8>>>,
     events: Vec<LogEntry>,
     id: String,
@@ -137,7 +142,7 @@ impl Session {
             provenance_policy: basecraft_platform::settings::ProvenancePolicy::Portable,
             local_provenance_root: root.join(".basecraft/provenance"),
             tracked: true,
-            replaying: false,
+            replay_mode: ReplayMode::Live,
             memory_objects: Mutex::new(std::collections::HashMap::new()),
             events: Vec::new(),
             root,
@@ -204,7 +209,7 @@ impl Session {
     /// Historical replay uses recorded plan results, without consulting today's source files.
     pub(crate) fn replay_session(root: &Path) -> Self {
         let mut session = Self::unlogged(root);
-        session.replaying = true;
+        session.replay_mode = ReplayMode::Historical;
         session
     }
 
@@ -2216,7 +2221,7 @@ impl Session {
     }
 
     pub fn apply_as(&mut self, doc: DocId, op: Op, actor: Actor) -> Result<Outcome> {
-        if !self.replaying
+        if matches!(self.replay_mode, ReplayMode::Live)
             && let Op::SubmissionEdit { edit } = &op
             && let basecraft_protocol::submission::SubmissionEdit::ApplyInclusion { plan } =
                 edit.as_ref()

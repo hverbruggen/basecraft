@@ -941,10 +941,10 @@ fn cached_review_invalidates_source_metadata_and_relevant_settings() {
     let plan = submission::plan_inclusion(&session, doc, &inclusion_rule()).unwrap();
     let taxa = root.path().join("metadata/taxa.tsv");
     let old_taxa = std::fs::read_to_string(&taxa).unwrap();
-    assert!(old_taxa.contains("Caulerpa taxifolia"));
+    assert!(old_taxa.contains("Caulerpa webbiana"));
     std::fs::write(
         &taxa,
-        old_taxa.replace("Caulerpa taxifolia", "Caulerpa changed"),
+        old_taxa.replace("Caulerpa webbiana", "Caulerpa changed"),
     )
     .unwrap();
     let external =
@@ -977,7 +977,7 @@ fn cached_review_invalidates_source_metadata_and_relevant_settings() {
     std::fs::write(root.path().join("18S.afa"), ">changed\nACTG\n").unwrap();
     let next =
         submission::review_submission_cached(root.path(), &sub, &submitter(), &mut cache).unwrap();
-    assert!(next.prepared.records.is_empty());
+    assert_eq!(next.prepared.records, []);
     assert!(
         next.prepared
             .issues

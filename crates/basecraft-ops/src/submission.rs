@@ -453,7 +453,7 @@ pub fn review_submission_cached_with_stage(
     }
     let document = sub.source.as_ref().map_or("", |s| s.document.as_str());
     let mut sequence_settings = sub.clone();
-    sequence_settings.publication = Default::default();
+    sequence_settings.publication = basecraft_protocol::submission::Publication::default();
     sequence_settings.submission_details = None;
     sequence_settings.publication_differs = false;
     sequence_settings.selection_confirmation = None;

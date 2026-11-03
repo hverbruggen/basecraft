@@ -543,7 +543,7 @@ pub fn selection(
     };
     match input {
         Some(IdentifierSource::Identifier) => {
-            add(record, "whole identifier (unverified heuristic)".into())
+            add(record, "whole identifier (unverified heuristic)".into());
         }
         Some(IdentifierSource::Field { separator, index }) => {
             if index > 0
@@ -1943,7 +1943,7 @@ mod redesign_tests {
         .unwrap();
         let (decision, _, evidence) = selection(&sub, name, &ProjectMetadata::default(), "x");
         assert_eq!(decision, Decision::New);
-        assert!(evidence.is_empty());
+        assert_eq!(evidence, []);
     }
     #[test]
     fn author_line_errors_and_legitimate_names_keep_order() {

@@ -276,20 +276,18 @@ impl qobject::SubmissionController {
         if self.rust().review_active {
             return;
         }
-        let (project, sub, package_path) = match (&self.rust().session, self.rust().doc) {
-            (Some(session), Some(doc)) => (
-                session.root().to_path_buf(),
-                session.submission(doc).clone(),
-                self.rust().package_path(),
-            ),
-            _ => {
-                self.as_mut()
-                    .set_review(qs(&json!({"rows": [], "issues": []})));
-                self.as_mut().set_package(qs(&Value::Null));
-                self.set_reviewing(false);
-                return;
-            }
+        let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) else {
+            self.as_mut()
+                .set_review(qs(&json!({"rows": [], "issues": []})));
+            self.as_mut().set_package(qs(&Value::Null));
+            self.set_reviewing(false);
+            return;
         };
+        let (project, sub, package_path) = (
+            session.root().to_path_buf(),
+            session.submission(doc).clone(),
+            self.rust().package_path(),
+        );
         let epoch = self.rust().review_epoch;
         let mut cache = self
             .as_mut()
@@ -319,7 +317,7 @@ impl qobject::SubmissionController {
                     });
                 };
                 let review = match submission::review_submission_cached_with_stage(
-                    &project, &sub, &submitter, &mut cache, &stage,
+                    &project, &sub, &submitter, &mut cache, stage,
                 ) {
                     Ok(review) => {
                         let preparation_seconds = started.elapsed().as_secs_f64();
