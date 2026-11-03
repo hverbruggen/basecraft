@@ -53,6 +53,8 @@ Item {
                     Item { id: primerDialog; property string proposal: "" }
                     QtObject {
                         id: ctl
+                        property bool retainAllowed: true
+                        property string retainedPrefix: ""
                         property bool accept: true
                         property bool review_mode: true
                         property bool busy: false
@@ -67,7 +69,7 @@ Item {
                             message = accept ? (stage === "prepare" || stage === "single" ? "Processing AB1 with Tracy" : "Aligning with MAFFT") : "Submission failed"
                             return accept
                         }
-                        function retain_reference(anchor, source) { return source }
+                        function retain_reference(anchor, source) { return !retainAllowed ? "" : source.indexOf(retainedPrefix) === 0 ? source : retainedPrefix + source }
                         function prepare_reads(paths, cutoff) { return submit("prepare", {paths: JSON.parse(paths), cutoff: cutoff}) }
                         function single_review(cutoff) { return submit("single", cutoff) }
                         function open_file(path) { opens++; return true }
@@ -116,6 +118,30 @@ Item {
             compare(scene.reviewReference, "requested reference")
             compare(scene.pendingReview, null)
             verify(!activity.visible)
+            scene.destroy()
+        }
+        function test_reference_retained_before_dispatch_and_reused_on_retry() {
+            const scene = harness()
+            scene.backend.retainedPrefix = "retained/"
+            scene.startReview(["one", "two"], "snapshot", null)
+            compare(scene.pendingReview.reference, "retained/snapshot")
+            scene.complete("prepare", true)
+            compare(scene.backend.requests[1].data, "retained/snapshot")
+            scene.complete("orient", false)
+            scene.retryReview()
+            compare(scene.pendingReview.reference, "retained/snapshot")
+            scene.complete("prepare", true)
+            scene.complete("orient", true)
+            compare(scene.backend.requests[4].data, "retained/snapshot")
+            scene.destroy()
+        }
+        function test_reference_capture_failure_does_not_submit() {
+            const scene = harness()
+            scene.backend.retainAllowed = false
+            scene.startReview(["one", "two"], "missing snapshot", null)
+            compare(scene.backend.requests.length, 0)
+            compare(scene.pendingReview, null)
+            verify(scene.failedReview !== null)
             scene.destroy()
         }
         function test_failure_retains_request_and_retry() {

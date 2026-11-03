@@ -1,4 +1,4 @@
-property bool speciesDone: figures.completed
+property bool speciesDone: figures.completed && !trace.busy
 Item {
     id: figures
     property bool completed: false
@@ -12,10 +12,11 @@ Item {
     DelimitationController { id: delimitation }
     SangerController { id: trace }
     Timer {
-        interval: 10; repeat: true; running: delimitation.busy
+        interval: 10; repeat: true; running: delimitation.busy || trace.busy
         onTriggered: {
+            if (trace.busy) trace.poll_stage()
             delimitation.poll_job()
-            if (!delimitation.busy) {
+            if (!delimitation.busy && !figures.completed) {
                 if (delimitation.preview_json !== figures.savedPreview) {
                     console.error("Rejected edits/cancellation lost the cut preview"); Qt.exit(2); return
                 }
@@ -50,6 +51,18 @@ Item {
             for (const invalid of [0, -1, NaN, Infinity, 1500.5, 10001])
                 controller.export_figure_png(prefix + "-protected.png", 2, true, invalid)
         }
+        // Real alignment controller owns and deletes its temporary snapshots.
+        const snapshot = alignment.review_snapshot()
+        const original = alignment.read_sequence_file(snapshot)
+        check(original.length > 0, "Alignment snapshot required")
+        const retained = trace.retain_reference(folder + "/trace.ab1", snapshot)
+        check(retained.length > 0 && retained !== snapshot, "Reference must transfer to shared evidence")
+        check(trace.prepare_reads(JSON.stringify([folder + "/trace.ab1", folder + "/missing.ab1"]), 20), "Preparation must be accepted")
+        check(alignment.review_snapshot() !== snapshot, "Snapshot replacement required")
+        check(alignment.read_sequence_file(snapshot) === "", "Original snapshot must have been removed")
+        check(alignment.read_sequence_file(retained) === original, "Initial request reference lost during preparation")
+        trace.cancel_stage()
+        check(trace.busy, "Real cancellation stays busy until terminal completion")
         check(delimitation.attach_tree(folder + "/time-tree.nwk", true), "Time tree attach failed")
         delimitation.preview_cut(0.5)
         savedPreview = delimitation.preview_json
