@@ -110,13 +110,29 @@ FocusScope {
 
     readonly property var traceRows: ctl.trace_lanes.length ? JSON.parse(ctl.trace_lanes) : []
     property var returnAlignment: null
+    // This is the failed command's input/context, separate from the installed
+    // document. Background messages cannot acknowledge a failed request.
+    property var failedReview: null
+    property string preparationError: ""
+    function retryReview() {
+        const request = failedReview
+        if (request) startReview(request.paths, request.reference, request.target, request.cutoff)
+    }
     function startReview(paths, reference, target, cutoff = 20) {
         sourceInitialized = true
+        const ready = paths.length > 1
+            ? ctl.prepare_reads(JSON.stringify(paths), cutoff)
+            : paths.length === 1 && ctl.open_file(paths[0]) && (cutoff === 20 || ctl.single_review(cutoff))
+        if (!ready) {
+            failedReview = {paths: paths.slice(), reference: reference, target: target, cutoff: cutoff}
+            preparationError = ctl.message
+            return
+        }
+        failedReview = null
+        preparationError = ""
         returnAlignment = target
         reviewReference = reference
-        if (!ctl.open_file(paths[0])) return
-        const ready = paths.length === 1 ? (cutoff === 20 || ctl.single_review(cutoff)) : ctl.draft_consensus(JSON.stringify(paths.slice(1)), cutoff)
-        if (ready && reference.length && ctl.orient_review(reference)) ctl.place_alignment(reference)
+        if (reference.length && ctl.orient_review(reference)) ctl.place_alignment(reference)
     }
     function signalSettings() {
         signalDialog.paths = JSON.parse(ctl.input_paths)
@@ -319,9 +335,43 @@ FocusScope {
         }
     }
 
+    Pane {
+        id: preparationFailure
+        objectName: "tracePreparationFailure"
+        anchors.top: parent.top
+        width: parent.width
+        visible: doc.failedReview !== null
+        height: visible ? failureContent.implicitHeight + topPadding + bottomPadding : 0
+        ColumnLayout {
+            id: failureContent
+            width: parent.width
+            Label {
+                Layout.fillWidth: true
+                text: "Trace review preparation failed. No new draft was created." + (ctl.review_mode ? " The existing review remains open below." : "")
+                wrapMode: Text.Wrap
+            }
+            AppErrorLabel {
+                Layout.fillWidth: true
+                text: doc.preparationError
+                wrapMode: Text.Wrap
+            }
+            Label {
+                Layout.fillWidth: true
+                text: doc.failedReview ? doc.failedReview.paths.join("\n") : ""
+                textFormat: Text.PlainText
+                wrapMode: Text.WrapAnywhere
+            }
+            RowLayout {
+                AppButton { objectName: "retryTraceReview"; text: "Retry selected reads"; onClicked: doc.retryReview() }
+                AppButton { objectName: "dismissTraceFailure"; text: "Dismiss"; onClicked: { doc.failedReview = null; doc.preparationError = "" } }
+            }
+        }
+    }
+
     Flickable {
         id: viewport
         anchors.fill: parent
+        anchors.topMargin: preparationFailure.height
         anchors.bottomMargin: cutoffBar.height + (ctl.review_mode && ctl.hscroll_size < 0.999 ? 14 : 0)
         contentWidth: width
         contentHeight: view.height

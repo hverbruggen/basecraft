@@ -105,6 +105,13 @@ pub mod qobject {
             additional_paths_json: &QString,
             signal_threshold: i32,
         ) -> bool;
+        /// Prepare a complete multi-read selection without first installing a single read.
+        #[qinvokable]
+        fn prepare_reads(
+            self: Pin<&mut SangerController>,
+            paths_json: &QString,
+            signal_threshold: i32,
+        ) -> bool;
         #[qinvokable]
         fn open_review(self: Pin<&mut SangerController>, path: &QString) -> bool;
         #[qinvokable]
@@ -322,6 +329,26 @@ fn review_view(draft: &SangerDraft) -> Result<SangerReviewView, String> {
     // calls cannot silently substitute for the recorded Tracy call mapping.
     let traces = verified_traces(draft)?;
     SangerReviewView::new(draft.clone(), traces)
+}
+
+fn load_draft_review(path: &Path) -> Result<(SangerReviewView, SangerReviewSession), String> {
+    let mut session = SangerReviewSession::new(path)?;
+    // Opening evidence is inspection. Re-running Tracy to enrich older
+    // evidence must be an explicit analysis, never a passive-open write.
+    let mut view = session_view(&session)?;
+    let calls = (0..view.draft.columns.len())
+        .map(|i| view.assessment(i).call)
+        .collect();
+    session.apply(ReviewOp::Evaluate {
+        version: 2,
+        settings: view.review_settings.clone(),
+        calls,
+        reference: None,
+    })?;
+    if let Some(i) = (0..view.draft.columns.len()).find(|&i| view.requires_review(i)) {
+        view.select_column(i);
+    }
+    Ok((view, session))
 }
 
 // All explicit Sanger tool invocations share the same durable reservation and
@@ -716,27 +743,13 @@ impl qobject::SangerController {
     }
 
     fn install_draft_run(mut self: std::pin::Pin<&mut Self>, run: &SangerRun, path: &Path) -> bool {
-        if !self
-            .as_mut()
-            .open_draft(&QString::from(path.to_string_lossy().as_ref()))
-        {
-            return false;
-        }
-        self.as_mut().set_dirty(true);
-        let result = self
-            .as_mut()
-            .rust_mut()
-            .review_session
-            .as_mut()
-            .ok_or_else(|| "No review is open".to_string())
-            .and_then(|session| session.attach_run(run));
-        if let Err(error) = result {
-            self.as_mut().set_message_kind(QString::from("fail"));
-            self.as_mut().set_message(QString::from(error));
-            return false;
-        }
-        self.refresh();
-        true
+        // Verify sources, evaluation and run attachment before replacing the
+        // installed session (including its manual decisions, masks and undo).
+        let result = load_draft_review(path).and_then(|(review, mut session)| {
+            session.attach_run(run)?;
+            Ok((review, session))
+        });
+        self.as_mut().install_review_result(path, result, true)
     }
 
     pub fn orient_review(mut self: std::pin::Pin<&mut Self>, alignment: &QString) -> bool {
@@ -1000,27 +1013,18 @@ impl qobject::SangerController {
         }
     }
 
-    pub fn open_draft(mut self: std::pin::Pin<&mut Self>, path: &QString) -> bool {
+    pub fn open_draft(self: std::pin::Pin<&mut Self>, path: &QString) -> bool {
         let path = PathBuf::from(path.to_string());
-        let result = (|| -> Result<(SangerReviewView, SangerReviewSession), String> {
-            let mut session = SangerReviewSession::new(&path)?;
-            // Opening evidence is inspection. Re-running Tracy to enrich older
-            // evidence must be an explicit analysis, never a passive-open write.
-            let mut view = session_view(&session)?;
-            let calls = (0..view.draft.columns.len())
-                .map(|i| view.assessment(i).call)
-                .collect();
-            session.apply(ReviewOp::Evaluate {
-                version: 2,
-                settings: view.review_settings.clone(),
-                calls,
-                reference: None,
-            })?;
-            if let Some(i) = (0..view.draft.columns.len()).find(|&i| view.requires_review(i)) {
-                view.select_column(i);
-            }
-            Ok((view, session))
-        })();
+        let result = load_draft_review(&path);
+        self.install_review_result(&path, result, false)
+    }
+
+    fn install_review_result(
+        mut self: std::pin::Pin<&mut Self>,
+        path: &Path,
+        result: Result<(SangerReviewView, SangerReviewSession), String>,
+        dirty: bool,
+    ) -> bool {
         match result {
             Ok((mut review, session)) => {
                 self.as_mut().cancel_calls();
@@ -1033,7 +1037,7 @@ impl qobject::SangerController {
 
                     r.trace = None;
                 }
-                self.as_mut().set_dirty(false);
+                self.as_mut().set_dirty(dirty);
                 self.as_mut()
                     .set_file_path(QString::from(path.to_string_lossy().as_ref()));
                 self.as_mut().set_message(QString::default());
@@ -1090,10 +1094,8 @@ impl qobject::SangerController {
         additional_paths_json: &QString,
         signal_threshold: i32,
     ) -> bool {
-        let result = (|| -> Result<(SangerRun, PathBuf), String> {
-            if !(1..=90).contains(&signal_threshold) {
-                return Err("Signal cutoff must be between 1 and 90 percent".into());
-            }
+        // Keep the existing additional-read API, sharing the full-selection path.
+        let paths = (|| -> Result<Vec<String>, String> {
             let source = self
                 .rust()
                 .review_session
@@ -1103,11 +1105,41 @@ impl qobject::SangerController {
                 .working_draft()?
                 .inputs[0]
                 .path
-                .clone();
-            let mut paths = vec![source.to_string_lossy().into_owned()];
+                .to_string_lossy()
+                .into_owned();
+            let mut paths = vec![source];
             let additional: Vec<String> = serde_json::from_str(&additional_paths_json.to_string())
                 .map_err(|e| e.to_string())?;
             paths.extend(additional);
+            Ok(paths)
+        })();
+        match paths {
+            Ok(paths) => self.prepare_reads(
+                &QString::from(serde_json::json!(paths).to_string()),
+                signal_threshold,
+            ),
+            Err(error) => {
+                self.as_mut().set_message_kind(QString::from("fail"));
+                self.as_mut().set_message(QString::from(error));
+                false
+            }
+        }
+    }
+
+    pub fn prepare_reads(
+        mut self: std::pin::Pin<&mut Self>,
+        paths_json: &QString,
+        signal_threshold: i32,
+    ) -> bool {
+        // A pending/active single-read result must not replace this request's
+        // status or attach to a subsequently installed multi-read session.
+        self.as_mut().cancel_calls();
+        let result = (|| -> Result<(SangerRun, PathBuf), String> {
+            if !(1..=90).contains(&signal_threshold) {
+                return Err("Signal cutoff must be between 1 and 90 percent".into());
+            }
+            let paths: Vec<String> =
+                serde_json::from_str(&paths_json.to_string()).map_err(|e| e.to_string())?;
             if !(2..=3).contains(&paths.len()) {
                 return Err("Exactly two or three AB1 reads are required".into());
             }
@@ -1137,7 +1169,7 @@ impl qobject::SangerController {
                 loaded
             }
             Err(error) => {
-                self.as_mut().set_message_kind(QString::from("error"));
+                self.as_mut().set_message_kind(QString::from("fail"));
                 self.as_mut().set_message(QString::from(&error));
                 false
             }

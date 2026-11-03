@@ -199,6 +199,35 @@ fn main() {
             sanger.cancel_calls();
             check(!sanger.calling, "Cancel must detach queued work");
             check(sanger.review_set("edit", "G"), "Instrument review edit failed");
+            check(sanger.mask_ends(2, sanger.consensus_columns - 1), "Mask failed");
+            const decision = sanger.review_decision;
+            const masks = sanger.mask_settings;
+            const file = sanger.file_path;
+            // A queued first-read caller must not run after a failed pair.
+            check(sanger.open_file(file), "Reopen for queued calling failed");
+            check(sanger.calling, "Reopen should queue calls");
+            check(!sanger.prepare_reads(JSON.stringify([file, file]), 0), "Invalid cutoff must fail");
+            check(!sanger.calling, "Pair preparation must detach queued calling");
+            const error = sanger.message;
+            sanger.poll_calls();
+            check(sanger.message === error, "Late first-read polling replaced pair failure");
+            // Restore a manual edit/mask, then fail preparation repeatedly.
+            check(sanger.review_set("edit", "G"), "Second edit failed");
+            check(sanger.mask_ends(2, sanger.consensus_columns - 1), "Second mask failed");
+            const edited = sanger.record_revision();
+            const missingPair = JSON.stringify([file, file + ".missing"]);
+            check(!sanger.prepare_reads(missingPair, 20), "Missing pair input must fail");
+            check(!sanger.prepare_reads(missingPair, 20), "Retry must retain explicit failure");
+            check(sanger.file_path === file, "Failed pair changed document identity");
+            check(sanger.record_revision() === edited, "Failed pair changed review revision");
+            check(sanger.review_decision === decision, "Failed pair changed manual decision");
+            check(sanger.mask_settings === masks, "Failed pair changed masks");
+            check(sanger.dirty, "Failed pair cleared dirty state");
+            check(sanger.message_kind === "fail", "Pair error must use failure status");
+            sanger.review_undo();
+            check(sanger.mask_settings !== masks, "Failed pair lost mask undo");
+            sanger.review_redo();
+            check(sanger.mask_settings === masks, "Failed pair lost mask redo");
             check(sanger.save_review({}), "Review save failed");
             check(reopened.open_file({}), "Normal open of saved review failed");
             check(reopened.review_decision.indexOf("G") >= 0, "Manual decision lost on reopen");
