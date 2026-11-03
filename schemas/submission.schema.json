@@ -184,7 +184,7 @@
           "type": "string"
         },
         "middle": {
-          "description": "Middle initials, without the first name's, such as `M.`.",
+          "description": "Middle names or initials, without the first name's, such as `Marie` or `M.R.`.\nBare uppercase runs (`MR`) retain their legacy initials meaning; uppercase full names are ambiguous.",
           "type": "string"
         }
       },
