@@ -1532,11 +1532,13 @@ ApplicationWindow {
         pkg: JSON.parse(submissions.package || "null")
         geneticCodes: JSON.parse(submissions.genetic_codes())
         path: submissions.path
-        message: submissionJobs.busy ? "Validating with table2asn" : submissions.message
+        message: submissionJobs.busy ? submissionJobs.message : submissions.message
         messageKind: submissions.message_kind
         canUndo: submissions.can_undo
         canRedo: submissions.can_redo
         validating: submissionJobs.busy
+        reviewStage: submissions.review_stage
+        validationStage: submissionJobs.message
         reviewing: submissions.reviewing
         parseAuthors: text => JSON.parse(submissions.preview_authors(text))
         onDetailsRequested: details => submissions.set_details(details)

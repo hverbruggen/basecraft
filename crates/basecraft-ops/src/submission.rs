@@ -372,6 +372,18 @@ pub fn review_submission_cached(
     submitter: &Submitter,
     cache: &mut ReviewCache,
 ) -> Result<Review> {
+    review_submission_cached_with_stage(project, sub, submitter, cache, |_| {})
+}
+
+/// Same cached review with factual, optional stage reporting; no progress percentages.
+pub fn review_submission_cached_with_stage(
+    project: &Path,
+    sub: &Submission,
+    submitter: &Submitter,
+    cache: &mut ReviewCache,
+    mut stage: impl FnMut(&str),
+) -> Result<Review> {
+    stage("Reading source sequences and specimen metadata");
     let manifest = crate::metadata::manifest_path(project);
     let metadata_stamp = metadata_evidence(project)?;
     let metadata_hash = if manifest.exists() {
@@ -455,12 +467,15 @@ pub fn review_submission_cached(
     let mut prepared = if let Some((key, prepared)) = &cache.prepared
         && key == &prepared_key
     {
+        stage("Reusing sequence annotations and reading frames");
         prepared.clone()
     } else {
+        stage("Preparing sequence annotations and reading frames");
         let prepared = model::prepare(sub, &rows, meta, document);
         cache.prepared = Some((prepared_key, prepared.clone()));
         prepared
     };
+    stage("Checking submission details and contact");
     model::citation_issues(sub, &mut prepared.issues);
     for missing in submitter.missing() {
         prepared.issues.push(local(

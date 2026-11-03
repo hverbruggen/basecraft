@@ -29,6 +29,7 @@ pub mod qobject {
         #[qml_element]
         #[qproperty(QString, project_dir)]
         #[qproperty(QString, path)]
+        #[qproperty(QString, review_stage)]
         #[qproperty(bool, reviewing)]
         #[qproperty(bool, available)]
         #[qproperty(QString, document)]
@@ -110,6 +111,7 @@ pub struct SubmissionRust {
     project_dir: QString,
     path: QString,
     available: bool,
+    review_stage: QString,
     reviewing: bool,
     review_active: bool,
     review_epoch: u64,
@@ -298,6 +300,7 @@ impl qobject::SubmissionController {
         self.as_mut().rust_mut().review_active = true;
         self.as_mut().set_reviewing(true);
         let thread = self.qt_thread();
+        let progress_thread = thread.clone();
         // Reuse the shared panic/ownership-safe background continuation. The live
         // owner stays on Qt; this detached owner contains no mutable user state.
         let worker = Session::detached(&project);
@@ -306,11 +309,21 @@ impl qobject::SubmissionController {
             move |_| {
                 let started = std::time::Instant::now();
                 let submitter = submission::submitter_preference().unwrap_or_default();
-                let review = match submission::review_submission_cached(
-                    &project, &sub, &submitter, &mut cache,
+                let stage = |stage: &str| {
+                    let stage = stage.to_string();
+                    let _ = progress_thread.queue(move |mut this| {
+                        if this.rust().review_epoch == epoch && this.rust().review_active {
+                            this.as_mut()
+                                .set_review_stage(QString::from(stage.as_str()));
+                        }
+                    });
+                };
+                let review = match submission::review_submission_cached_with_stage(
+                    &project, &sub, &submitter, &mut cache, &stage,
                 ) {
                     Ok(review) => {
                         let preparation_seconds = started.elapsed().as_secs_f64();
+                        stage("Formatting sequence and issue tables");
                         let conversion = std::time::Instant::now();
                         let view = review_view(&review);
                         if std::env::var_os("BASECRAFT_SUBMISSION_TIMINGS").is_some() {

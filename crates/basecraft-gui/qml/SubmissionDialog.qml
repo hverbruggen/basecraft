@@ -29,6 +29,8 @@ AppDialog {
     // A table2asn job is running.
     property bool validating: false
     property bool reviewing: false
+    property string reviewStage: "Reviewing submission"
+    property string validationStage: "Validating with table2asn"
     property var inclusionPlan: null
     property var inclusionPresets: []
     property var parseAuthors: function (text) {
@@ -279,7 +281,7 @@ AppDialog {
             visible: dialog.reviewing
             busy: dialog.reviewing
             cancellable: false
-            workingText: "Reviewing sequence selection, annotations and submission details"
+            workingText: dialog.reviewStage
         }
         TabBar {
             id: tabs
@@ -1097,7 +1099,7 @@ AppDialog {
                             Layout.fillWidth: true
                             busy: dialog.validating
                             visible: busy
-                            workingText: "Validating with table2asn"
+                            workingText: dialog.validationStage
                             cancelText: "Stop validation"
                             onCancelRequested: dialog.cancelValidationRequested()
                         }
