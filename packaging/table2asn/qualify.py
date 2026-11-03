@@ -61,23 +61,30 @@ def write_json(path, value):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, required=True)
-    parser.add_argument("--table2asn", type=Path, required=True)
+    selection = parser.add_mutually_exclusive_group(required=True)
+    selection.add_argument("--table2asn", type=Path)
+    selection.add_argument("--provision-runtime", action="store_true")
+    parser.add_argument("--plugins", type=Path, help="Exact bundled plugin directory to qualify")
     parser.add_argument("--root", type=Path, required=True)
     args = parser.parse_args()
-    binary, tool, root = args.binary.resolve(strict=True), args.table2asn.resolve(strict=True), args.root.resolve()
+    binary, root = args.binary.resolve(strict=True), args.root.resolve()
+    tool = args.table2asn.resolve(strict=True) if args.table2asn else None
     root.mkdir(parents=True, exist_ok=False)
     (root / "DEMO-ONLY.txt").write_text(NOTICE)
     checkout = Path(__file__).resolve().parents[2]
     fixtures = checkout / "testdata/fixtures/submission"
+    for key in ("BASECRAFT_TABLE2ASN", "BASECRAFT_RUNTIME_EXECUTABLES"):
+        os.environ.pop(key, None)
+    if tool:
+        os.environ["BASECRAFT_TABLE2ASN"] = str(tool)
     os.environ.update(BASECRAFT_PROFILE_DIR=str(root / "profile"),
-                      BASECRAFT_PLUGINS=str(checkout / "plugins"),
-                      BASECRAFT_TABLE2ASN=str(tool), BASECRAFT_PYTHON=sys.executable,
+                      BASECRAFT_PLUGINS=str((args.plugins or checkout / "plugins").resolve()),
+                      BASECRAFT_PYTHON=sys.executable,
                       PYTHONDONTWRITEBYTECODE="1")
     receipt = {"status": "incomplete", "demo_only": True, "binary": str(binary),
                "binary_sha256": digest(binary), "qualifier_sha256": digest(Path(__file__)),
                "sdk_sha256": digest(Path(sys.modules[Session.__module__].__file__)),
-               "python": sys.executable, "table2asn": str(tool),
-               "table2asn_sha256": digest(tool), "cases": []}
+               "python": sys.executable, "provisioned_runtime": args.provision_runtime, "cases": []}
     transcript = root / "commands.jsonl"
 
     def record(kind, request, response):
@@ -86,7 +93,7 @@ def main():
 
     def cli(*arguments, refusal=False, json_result=True):
         command = [str(binary), *map(str, arguments)]
-        done = subprocess.run(command, capture_output=True, text=True, timeout=180, check=False)
+        done = subprocess.run(command, capture_output=True, text=True, timeout=1800, check=False)
         record("cli", command, {"exit": done.returncode, "stdout": done.stdout, "stderr": done.stderr})
         if refusal:
             assert done.returncode != 0 and "confirm" in done.stderr.lower(), done.stderr
@@ -94,6 +101,17 @@ def main():
         assert done.returncode == 0, (command, done.stderr)
         return json.loads(done.stdout) if json_result else done.stdout
 
+    if args.provision_runtime:
+        cli("plugins", "provision-bundled", "basecraft.table2asn")
+        index = json.loads((root / "profile/config/plugins-v1.json").read_text())
+        runtimes = [runtime for runtime in index["runtimes"].values()
+                    if "table2asn" in runtime["executables"]]
+        assert len(runtimes) == 1, runtimes
+        runtime = runtimes[0]
+        receipt["runtime"] = runtime
+        tool = Path(runtime["root"]) / ".pixi/envs/default/bin/table2asn"
+        assert digest(tool) == runtime["executable_digests"]["table2asn"]
+    receipt.update(table2asn=str(tool), table2asn_sha256=digest(tool))
     version = subprocess.run([str(tool), "-version"], capture_output=True, text=True,
                              timeout=60, check=True)
     receipt["table2asn_version_output"] = version.stdout + version.stderr

@@ -49,6 +49,14 @@ fn registry(root: &Path, tool: &Path) -> Registry {
     for file in ["plugin.toml", "operations.json"] {
         std::fs::copy(source.join(file), dir.join(file)).unwrap();
     }
+    // This adapter fixture deliberately injects a test executable. Frozen real
+    // installation is qualified separately; never solve dependencies in tests.
+    let manifest = std::fs::read_to_string(dir.join("plugin.toml")).unwrap();
+    std::fs::write(
+        dir.join("plugin.toml"),
+        manifest.split("\n[runtime]").next().unwrap(),
+    )
+    .unwrap();
     std::fs::copy(
         source.join("table2asn_plugin.py"),
         dir.join("real_plugin.py"),

@@ -14,6 +14,10 @@ use crate::{Error, Manifest, Result};
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct RuntimeSpec {
+    /// Empty preserves existing all-platform declarations. Other targets keep
+    /// the plugin's unmanaged behavior; no substitute package is provisioned.
+    #[serde(default)]
+    pub platforms: Vec<String>,
     #[serde(default = "channels")]
     pub channels: Vec<String>,
     #[serde(default)]
@@ -50,15 +54,29 @@ fn name(value: &str) -> bool {
         && value != ".."
 }
 impl RuntimeSpec {
+    pub fn supports(&self, platform: &str) -> bool {
+        self.platforms.is_empty() || self.platforms.iter().any(|p| p == platform)
+    }
+
     pub fn validate(&self) -> Result<()> {
+        if self.platforms.len() > 5
+            || self.platforms.iter().any(|p| {
+                !matches!(
+                    p.as_str(),
+                    "linux-64" | "linux-aarch64" | "osx-64" | "osx-arm64" | "win-64"
+                )
+            })
+        {
+            return Err(Error::Protocol("invalid runtime target platforms".into()));
+        }
         if self.channels.is_empty()
             || self.channels.len() > 16
-            || self.channels.iter().any(|c| !name(c))
+            || self.channels.iter().any(|c| !channel(c))
             || self.dependencies.len() + self.pypi_dependencies.len() > 256
             || self.executables.len() > 128
             || self.executables.iter().any(|c| !name(c))
         {
-            return Err(Error::Protocol("invalid runtime channels/dependency/command limits (channels must be named channels)".into()));
+            return Err(Error::Protocol("invalid runtime channels/dependency/command limits (channels must be named or absolute local file channels)".into()));
         }
         for (package, version) in self.dependencies.iter().chain(&self.pypi_dependencies) {
             if !name(package)
@@ -123,18 +141,12 @@ impl RuntimeSpec {
         dependencies
             .entry("numpy".into())
             .or_insert_with(|| "*".into());
-        let platform = match (std::env::consts::OS, std::env::consts::ARCH) {
-            ("linux", "x86_64") => "linux-64",
-            ("linux", "aarch64") => "linux-aarch64",
-            ("macos", "aarch64") => "osx-arm64",
-            ("macos", "x86_64") => "osx-64",
-            ("windows", "x86_64") => "win-64",
-            _ => {
-                return Err(Error::Protocol(
-                    "managed plugin runtime unsupported on this platform".into(),
-                ));
-            }
-        };
+        let platform = current_platform();
+        if platform == "unsupported" || !self.supports(platform) {
+            return Err(Error::Protocol(
+                "managed plugin runtime unsupported on this platform".into(),
+            ));
+        }
         let value = serde_json::json!({
             "workspace":{"name":"basecraft-plugin", "channels":self.channels,"platforms":[platform]},
             "dependencies": dependencies,
@@ -142,6 +154,40 @@ impl RuntimeSpec {
         });
         let value = toml::Value::try_from(&value).map_err(|e| Error::Protocol(e.to_string()))?;
         toml::to_string(&value).map_err(|e| Error::Protocol(e.to_string()))
+    }
+}
+
+// A local feedback channel is data for Pixi's frozen installer, never a shell
+// command. Remote URLs, URI authorities, query/fragment/escaped paths and path
+// traversal are deliberately outside this contract.
+fn channel(value: &str) -> bool {
+    if name(value) {
+        return true;
+    }
+    let path = value.strip_prefix("file://").unwrap_or(value);
+    path.starts_with('/')
+        && !path.starts_with("//")
+        && path.len() <= 4096
+        && path
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"/-_.".contains(&b))
+        && Path::new(path).components().all(|c| {
+            matches!(
+                c,
+                std::path::Component::RootDir | std::path::Component::Normal(_)
+            )
+        })
+        && path.split('/').all(|c| c != "." && c != "..")
+}
+
+pub fn current_platform() -> &'static str {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("linux", "x86_64") => "linux-64",
+        ("linux", "aarch64") => "linux-aarch64",
+        ("macos", "aarch64") => "osx-arm64",
+        ("macos", "x86_64") => "osx-64",
+        ("windows", "x86_64") => "win-64",
+        _ => "unsupported",
     }
 }
 

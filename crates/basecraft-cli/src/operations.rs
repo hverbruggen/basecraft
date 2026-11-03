@@ -25,6 +25,11 @@ pub enum PluginsCommand {
     Install {
         directory: PathBuf,
     },
+    /// Provision frozen dependencies for the exact installed bundled plugin.
+    /// Deployment runs this before launch; discovery never installs anything.
+    ProvisionBundled {
+        id: String,
+    },
     Disable {
         id: String,
     },
@@ -109,6 +114,10 @@ pub fn plugins(command: PluginsCommand) -> Result<()> {
             eprintln!("{}", registry::INSTALL_WARNING);
             let id = registry::install(&config, &directory)?;
             json!({"installed":id})
+        }
+        PluginsCommand::ProvisionBundled { id } => {
+            registry::provision_bundled(&config, &id)?;
+            json!({"provisioned":id})
         }
         PluginsCommand::RegisterEditable { directory } => {
             eprintln!("{}", registry::INSTALL_WARNING);

@@ -419,3 +419,42 @@ fn bundled_runtime_requires_frozen_lock_and_rejects_traversal() {
             .contains("package-relative")
     );
 }
+
+#[test]
+fn local_channels_are_data_only_and_target_gating_is_explicit() {
+    use basecraft_plugin_host::runtime::RuntimeSpec;
+    for channel in [
+        "conda-forge",
+        "/media/runtime/channel",
+        "file:///media/runtime/channel",
+    ] {
+        let spec: RuntimeSpec = toml::from_str(&format!(
+            "channels = [{channel:?}]\nplatforms = [\"linux-64\"]\n"
+        ))
+        .unwrap();
+        spec.validate().unwrap();
+        assert!(spec.supports("linux-64"));
+        assert!(!spec.supports("win-64"));
+    }
+    for channel in [
+        "https://example.org/channel",
+        "file://server/channel",
+        "relative/channel",
+        "file:///media/../private",
+        "/media/./channel",
+        "file:///media/%2e%2e",
+        "/media/channel?query",
+        "/media/channel#fragment",
+        "/media/$(command)",
+    ] {
+        let spec: RuntimeSpec = toml::from_str(&format!("channels = [{channel:?}]\n")).unwrap();
+        assert!(spec.validate().is_err(), "{channel}");
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let source = source(temp.path(), "[runtime]\nplatforms = [\"osx-arm64\"]\n");
+    if basecraft_plugin_host::runtime::current_platform() != "osx-arm64" {
+        assert!(Manifest::load(&source).unwrap().runtime.is_none());
+    }
+    std::fs::write(source.join("plugin.toml"), "invalid").unwrap();
+    assert!(Manifest::load(&source).is_err());
+}

@@ -284,6 +284,9 @@ impl Manifest {
         m.dir = dir.to_path_buf();
         if let Some(runtime) = &m.runtime {
             runtime.validate()?;
+            if !runtime.supports(crate::runtime::current_platform()) {
+                m.runtime = None;
+            }
         }
         if m.schema == 2 {
             if !m.operations.is_empty() {
