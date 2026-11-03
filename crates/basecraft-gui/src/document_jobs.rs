@@ -430,6 +430,7 @@ impl BackgroundDocumentJob {
 
 #[cfg(test)]
 mod background_tests {
+    #[allow(unused_imports)] // harness=false application_bootstrap includes this module.
     use super::*;
 
     #[test]

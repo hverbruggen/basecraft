@@ -1,10 +1,32 @@
+property bool speciesDone: figures.completed
 Item {
+    id: figures
+    property bool completed: false
+    property string savedPreview: ""
+    property string savedWorkspace: ""
+    property string savedDisplay: ""
     property string folder: FIGURE_TEST_FOLDER
     GenomeController { id: genome }
     AlignmentController { id: alignment }
     TreeController { id: tree }
     DelimitationController { id: delimitation }
     SangerController { id: trace }
+    Timer {
+        interval: 10; repeat: true; running: delimitation.busy
+        onTriggered: {
+            delimitation.poll_job()
+            if (!delimitation.busy) {
+                if (delimitation.preview_json !== figures.savedPreview) {
+                    console.error("Rejected edits/cancellation lost the cut preview"); Qt.exit(2); return
+                }
+                delimitation.save_cut("Cut after cancellation")
+                if (delimitation.preview_json !== "[]") {
+                    console.error("Session was not restored after cancellation"); Qt.exit(2); return
+                }
+                figures.completed = true
+            }
+        }
+    }
     Component.onCompleted: {
         function check(value, message) { if (!value) { console.error(message); Qt.exit(2) } }
         check(genome.open_file(folder + "/sequence.fasta"), "Figure genome open failed")
@@ -28,5 +50,24 @@ Item {
             for (const invalid of [0, -1, NaN, Infinity, 1500.5, 10001])
                 controller.export_figure_png(prefix + "-protected.png", 2, true, invalid)
         }
+        check(delimitation.attach_tree(folder + "/time-tree.nwk", true), "Time tree attach failed")
+        delimitation.preview_cut(0.5)
+        savedPreview = delimitation.preview_json
+        savedWorkspace = delimitation.workspace_json
+        savedDisplay = delimitation.display_path
+        check(JSON.parse(savedPreview).length > 0, "Cut preview required")
+        delimitation.run_analysis("asap", folder + "/alignment.afa", false, "{}")
+        check(delimitation.busy, "Registered analysis must own session")
+        delimitation.save_cut("Cut during analysis")
+        check(delimitation.message.indexOf("running") >= 0, "Busy cut needs useful refusal")
+        check(!delimitation.attach_tree(folder + "/tree.nwk", false), "Busy tree attachment must refuse")
+        check(!delimitation.save_as(folder + "/busy.spart"), "Busy save must refuse")
+        delimitation.undo()
+        delimitation.redo()
+        delimitation.preview_cut(0.2)
+        check(delimitation.preview_json === savedPreview, "Busy operations changed preview")
+        check(delimitation.workspace_json === savedWorkspace, "Busy operations changed workspace")
+        check(delimitation.display_path === savedDisplay, "Busy attachment changed display")
+        delimitation.cancel_job()
     }
 }

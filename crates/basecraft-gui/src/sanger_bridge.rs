@@ -120,6 +120,13 @@ pub mod qobject {
             additional_paths_json: &QString,
             signal_threshold: i32,
         ) -> bool;
+        /// Retain the request reference before starting any asynchronous stage.
+        #[qinvokable]
+        fn retain_reference(
+            self: Pin<&mut SangerController>,
+            anchor: &QString,
+            source: &QString,
+        ) -> QString;
         /// Prepare a complete multi-read selection without first installing a single read.
         #[qinvokable]
         fn prepare_reads(
@@ -387,6 +394,9 @@ impl qobject::SangerController {
 
     pub fn cancel_calls(mut self: std::pin::Pin<&mut Self>) {
         self.as_mut().rust_mut().pending_calls = false;
+        if self.rust().stage.is_none() {
+            self.as_mut().set_calling(false);
+        }
         self.cancel_stage();
     }
 
@@ -1029,6 +1039,29 @@ impl qobject::SangerController {
         }
     }
 
+    pub fn retain_reference(
+        mut self: std::pin::Pin<&mut Self>,
+        anchor: &QString,
+        source: &QString,
+    ) -> QString {
+        if self.rust().stage.is_some() {
+            return QString::default();
+        }
+        match work::retain_reference(
+            Path::new(&anchor.to_string()),
+            Path::new(&source.to_string()),
+        ) {
+            Ok(path) => QString::from(path.to_string_lossy().as_ref()),
+            Err(error) => {
+                self.as_mut().set_message_kind(QString::from("fail"));
+                self.set_message(QString::from(format!(
+                    "Cannot retain review reference: {error}"
+                )));
+                QString::default()
+            }
+        }
+    }
+
     pub fn prepare_reads(
         mut self: std::pin::Pin<&mut Self>,
         paths_json: &QString,
@@ -1037,6 +1070,9 @@ impl qobject::SangerController {
         // Invalid paired requests also supersede queued automatic calling, so
         // a later timer cannot replace their failure with single-read success.
         self.as_mut().rust_mut().pending_calls = false;
+        if self.rust().stage.is_none() {
+            self.as_mut().set_calling(false);
+        }
         // A selected pair supersedes automatic single-read calling. Detaching
         // its receiver prevents a late single completion masking pair failure.
         if self

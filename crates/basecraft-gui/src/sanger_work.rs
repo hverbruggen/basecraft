@@ -14,6 +14,42 @@ use std::sync::{
     mpsc,
 };
 
+/// Explicit request evidence uses the shared preserve-copy ledger. The returned
+/// verified path outlives source-controller snapshots, failed stages and retries.
+/// Capture occurs before dispatch: a worker must never race snapshot disposal.
+pub(super) fn retain_reference(anchor: &Path, source: &Path) -> Result<PathBuf, String> {
+    (|| -> basecraft_ops::Result<PathBuf> {
+        // A retry already names shared retained evidence; verify and reuse it.
+        if source
+            .file_name()
+            .is_some_and(|name| name == "preserved-input")
+            && let Some(directory) = source.parent()
+            && directory.join("input.json").is_file()
+        {
+            let input = basecraft_ops::input_evidence::read_input(directory)?;
+            if let Some(reference) = input.source.as_ref() {
+                return basecraft_ops::input_evidence::verified_source(directory, reference);
+            }
+        }
+        let hash = basecraft_io::hash_file(source)?;
+        let run = basecraft_ops::input_evidence::reference_input_with_dependencies(
+            anchor,
+            source,
+            &hash,
+            &[],
+            "GUI Sanger reference",
+        )?;
+        basecraft_ops::input_evidence::preserve_input(run.directory())?;
+        let input = basecraft_ops::input_evidence::read_input(run.directory())?;
+        let reference = input
+            .source
+            .as_ref()
+            .ok_or_else(|| std::io::Error::other("Missing reference evidence"))?;
+        basecraft_ops::input_evidence::verified_source(run.directory(), reference)
+    })()
+    .map_err(|e| e.to_string())
+}
+
 pub(super) enum Request {
     Prepare(Vec<PathBuf>, u32),
     Orient(PathBuf),
@@ -319,6 +355,7 @@ fn execute(
 
 #[cfg(test)]
 mod tests {
+    #[allow(unused_imports)] // harness=false application_bootstrap includes this module.
     use super::*;
 
     #[test]
@@ -361,18 +398,31 @@ mod tests {
         reads.sort();
         assert_eq!(reads.len(), 2);
         let reference = reference.unwrap();
+        let original_hash = basecraft_io::hash_file(&reference).unwrap();
+        let frozen = retain_reference(&reads[0], &reference).unwrap();
         let flag = AtomicBool::new(false);
-        let prepared = execute(Request::Prepare(reads.clone(), 20), None, &flag)
+        let preparation = start(Request::Prepare(reads.clone(), 20), None).unwrap();
+        // Dispose the alignment-owned snapshot before observing first completion.
+        std::fs::remove_file(&reference).unwrap();
+        assert_eq!(basecraft_io::hash_file(&frozen).unwrap(), original_hash);
+        assert_eq!(retain_reference(&reads[0], &frozen).unwrap(), frozen);
+        let prepared = preparation
+            .receiver
+            .recv()
+            .unwrap()
             .unwrap_or_else(|e| panic!("prepare: {e}"));
         assert_eq!(prepared.session.draft.inputs.len(), 2);
         let oriented = execute(
-            Request::Orient(reference.clone()),
+            Request::Orient(frozen.clone()),
             Some(prepared.session),
             &flag,
         )
         .unwrap_or_else(|e| panic!("orient: {e}"));
+        // A replacement source between stages must not change the request.
+        std::fs::write(&reference, ">replacement\nAAAA\n").unwrap();
+        assert_eq!(basecraft_io::hash_file(&frozen).unwrap(), original_hash);
         let mut placed = execute(
-            Request::Place(reference.clone()),
+            Request::Place(frozen.clone()),
             Some(oriented.session),
             &flag,
         )
@@ -391,7 +441,11 @@ mod tests {
         let view = session_view(&reopened).unwrap();
         assert_eq!(view.draft.consensus, placed.view.draft.consensus);
         assert_eq!(reopened.unresolved(), placed.session.unresolved());
-        assert!(reopened.placement().unwrap().unwrap().source_path.is_file());
+        let placement = reopened.placement().unwrap().unwrap();
+        assert_eq!(
+            basecraft_io::hash_file(&placement.source_path).unwrap(),
+            original_hash
+        );
         assert_eq!(
             reopened.draft.columns.len(),
             placed.session.draft.columns.len()

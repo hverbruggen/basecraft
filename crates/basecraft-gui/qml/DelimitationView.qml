@@ -199,6 +199,7 @@ FocusScope {
         }
         RowLayout {
             objectName: "thresholdCut"
+            enabled: !ctl.busy
             visible: doc.tool === "cut"
             Layout.fillWidth: true
             Layout.leftMargin: 8

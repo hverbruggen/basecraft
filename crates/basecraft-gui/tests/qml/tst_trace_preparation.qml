@@ -67,6 +67,7 @@ Item {
                             message = accept ? (stage === "prepare" || stage === "single" ? "Processing AB1 with Tracy" : "Aligning with MAFFT") : "Submission failed"
                             return accept
                         }
+                        function retain_reference(anchor, source) { return source }
                         function prepare_reads(paths, cutoff) { return submit("prepare", {paths: JSON.parse(paths), cutoff: cutoff}) }
                         function single_review(cutoff) { return submit("single", cutoff) }
                         function open_file(path) { opens++; return true }

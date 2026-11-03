@@ -1336,7 +1336,7 @@ ApplicationWindow {
                     RibbonGroup {
                         title: "Tools"
                         ModeButton { commandId: "species.select-tool"; text: "Select"; tip: "Click a node to select its clade, or a bar to select a species"; iconName: "selection"; enabled: window.speciesView !== null; active: window.speciesView !== null && window.speciesView.tool === "select"; onInvoked: window.speciesView.setTool("select") }
-                        ModeButton { commandId: "species.threshold-cut"; text: "Threshold"; tip: window.speciesView !== null && !window.current.can_cut ? "Needs an ultrametric display tree (all tips the same distance from the root)" : "Drag a threshold across the tree and save the species it defines"; iconName: "tree-threshold"; enabled: window.speciesView !== null && window.current.can_cut; active: window.speciesView !== null && window.speciesView.tool === "cut"; onInvoked: window.speciesView.setTool("cut") }
+                        ModeButton { commandId: "species.threshold-cut"; text: "Threshold"; tip: window.speciesView !== null && !window.current.can_cut ? "Needs an ultrametric display tree (all tips the same distance from the root)" : "Drag a threshold across the tree and save the species it defines"; iconName: "tree-threshold"; enabled: window.speciesView !== null && !window.current.busy && window.current.can_cut; active: window.speciesView !== null && window.speciesView.tool === "cut"; onInvoked: window.speciesView.setTool("cut") }
                         RibbonButton { commandId: "species.display"; text: "Attach"; tip: window.speciesView !== null && window.current.display_path.length ? "A display tree is attached" : "Attach or build a display tree"; iconName: "tree"; enabled: window.speciesView !== null && !window.current.busy && !window.current.display_path.length; onInvoked: window.beginDelimitation("view") }
                     }
                     Item { Layout.fillWidth: true }
@@ -2745,7 +2745,17 @@ ApplicationWindow {
                 const err = c.save_feature(-1, JSON.stringify({ kind: "misc_feature", location: arg("--add"), qualifiers: [{ key: "label", value: "partial test" }] }))
                 if (err.length > 0) console.log("add failed:", err)
             }
-            if (arg("--extract")) console.log("extracted:", c.extract_selection(), "|", c.message)
+            if (arg("--extract")) {
+                const completed = function(path) {
+                    c.extractionFinished.disconnect(completed)
+                    console.log("extracted:", path, "|", c.message)
+                }
+                c.extractionFinished.connect(completed)
+                if (!c.extract_selection()) {
+                    c.extractionFinished.disconnect(completed)
+                    console.log("extraction rejected:", c.message)
+                }
+            }
             if (arg("--hover")) {
                 const h = arg("--hover").split(",")
                 if (window.traceOpen) window.traceDocument.hoverAt(Number(h[0]), Number(h[1]))

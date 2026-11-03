@@ -173,6 +173,13 @@ FocusScope {
         sourceInitialized = true
         if (ctl.calling) ctl.cancel_calls()
         pendingReview = {paths: paths.slice(), reference: reference, target: target, cutoff: cutoff, stage: "", cancelled: false}
+        // Freeze through the backend's shared evidence owner before dispatch.
+        // Retain this path in failedReview too, so retries use the same bytes.
+        if (reference.length) {
+            const retained = ctl.retain_reference(paths[0], reference)
+            if (!retained.length) { failReview(); return }
+            pendingReview.reference = retained
+        }
         if (paths.length > 1) { submitReviewStage("prepare"); return }
         if (!ctl.open_file(paths[0])) { failReview(); return }
         if (cutoff !== 20) {

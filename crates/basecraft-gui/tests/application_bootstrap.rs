@@ -305,6 +305,13 @@ fn main() {
                 .as_slice(),
         ),
         (
+            "time-tree.nwk",
+            include_bytes!(
+                "../../../testdata/fixtures/compact/species-delimitation/time-binary.nwk"
+            )
+            .as_slice(),
+        ),
+        (
             "tree.nwk",
             include_bytes!(
                 "../../../testdata/fixtures/compact/species-delimitation/substitutions.nwk"
@@ -345,7 +352,7 @@ fn main() {
              OperationPickerDialog {{}} \
              OperationParameters {{ schema: ({{type: 'object', properties: {{age: {{type: 'number'}}}}, required: ['age']}}) }} \
              {sanger_qml} {figure_qml} \
-             Timer {{ interval: 1; running: sangerDone; onTriggered: Qt.quit() }} }}",
+             Timer {{ interval: 1; running: sangerDone && speciesDone; onTriggered: Qt.quit() }} }}",
         )),
         &QUrl::default(),
     );
