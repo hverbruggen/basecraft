@@ -13,14 +13,13 @@ import copy
 import hashlib
 import json
 import os
-from pathlib import Path
 import selectors
 import shutil
 import subprocess
 import sys
 import time
 import tomllib
-
+from pathlib import Path
 
 FAKE_TABLE2ASN = r"""#!/bin/sh
 if [ "$1" = "-version" ]; then echo "table2asn: 0.0.test"; exit 0; fi
@@ -616,7 +615,7 @@ def main():
             refused = subprocess.run([str(binary), "submission", "export", document,
                                       "--output", str(cli_project / "unconfirmed"),
                                       "--project", str(cli_project)], cwd=root, env=sub_env,
-                                     capture_output=True, text=True, timeout=90)
+                                     capture_output=True, text=True, timeout=90, check=False)
             assert refused.returncode != 0 and "confirm" in refused.stderr.lower(), refused.stderr
             assert not (cli_project / "unconfirmed").exists()
             sub_cli("submission", "edit", document, json.dumps({
