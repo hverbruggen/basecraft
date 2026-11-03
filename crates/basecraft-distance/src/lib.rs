@@ -325,7 +325,8 @@ pub fn estimate(
             )
         }
     };
-    Some((d, var.max(0.25 / (valid as f64).powi(2))))
+    // Adding zero turns -0 from identical sequences into 0, which other software can read.
+    Some((d + 0., var.max(0.25 / (valid as f64).powi(2))))
 }
 fn pool(threads: usize) -> Result<rayon::ThreadPool> {
     if threads == 0 {
@@ -342,6 +343,16 @@ impl DistanceMatrix {
         min_overlap: u64,
         threads: usize,
     ) -> Result<Self> {
+        Self::calculate_retaining(a, model, min_overlap, threads, true)
+    }
+    /// Without variances, the result can't be cached or used for MVR* or bootstrap.
+    pub fn calculate_retaining(
+        a: &Alignment,
+        model: Model,
+        min_overlap: u64,
+        threads: usize,
+        variances_needed: bool,
+    ) -> Result<Self> {
         if min_overlap == 0 {
             return Err("minimum overlap must be at least one".into());
         }
@@ -353,7 +364,7 @@ impl DistanceMatrix {
             let packed = map(n, threads > 1, |i| optimized::pack_fast(&a.sequences[i]));
             // Zeroed pages are touched first by the workers that fill them.
             let mut distances = vec![0.; len];
-            let mut variances = vec![0.; len];
+            let mut variances = vec![0.; if variances_needed { len } else { 0 }];
             let mut shared_sites = vec![0; len];
             let kernel = basecraft_platform::cpu::pair_counts();
             fill_pairs(
@@ -382,7 +393,8 @@ impl DistanceMatrix {
         if i == j {
             return Some(0.);
         }
-        let d = self.distances[index(i, j)];
+        // Older caches can hold -0.
+        let d = self.distances[index(i, j)] + 0.;
         d.is_finite().then_some(d)
     }
     pub fn validate(&self) -> Result<()> {
@@ -396,7 +408,7 @@ impl DistanceMatrix {
             || self.columns == 0
             || self.min_overlap == 0
             || self.distances.len() != len
-            || self.variances.len() != len
+            || (self.variances.len() != len && !self.variances.is_empty())
             || self.shared_sites.len() != len
         {
             return Err("invalid distance cache schema or dimensions".into());
@@ -409,17 +421,15 @@ impl DistanceMatrix {
         {
             return Err("invalid cache labels".into());
         }
+        let retained = !self.variances.is_empty();
         for k in 0..len {
             let d = self.distances[k];
-            let v = self.variances[k];
+            let v = if retained { self.variances[k] } else { f64::NAN };
             if self.shared_sites[k] > self.columns as u64
                 || d.is_infinite()
                 || v.is_infinite()
-                || d.is_finite()
-                    && (d < 0.
-                        || !v.is_finite()
-                        || v <= 0.
-                        || self.shared_sites[k] < self.min_overlap)
+                || d.is_finite() && (d < 0. || self.shared_sites[k] < self.min_overlap)
+                || retained && d.is_finite() && (!v.is_finite() || v <= 0.)
                 || d.is_nan() && v.is_finite()
             {
                 return Err("invalid cache estimate or overlap".into());
@@ -434,6 +444,9 @@ impl DistanceMatrix {
     }
     pub fn write(&self, path: &Path) -> Result<()> {
         self.validate()?;
+        if self.variances.is_empty() && !self.distances.is_empty() {
+            return Err("distance cache requires variances".into());
+        }
         write_json(path, self)
     }
     pub fn matches(&self, a: &Alignment, model: Model, min_overlap: u64) -> bool {
@@ -463,27 +476,43 @@ impl DistanceMatrix {
         out.flush()?;
         Ok(())
     }
-    pub fn tree(&self, method: Method, threads: usize) -> Result<TreeResult> {
-        self.validate()?;
-        let n = self.names.len();
-        let pool = pool(threads)?;
-        // A complete matrix is already the triangle the search needs.
-        if n >= 3
+    fn searchable_as_is(&self, method: Method) -> bool {
+        self.names.len() >= 3
             && matches!(method, Method::Sorted | Method::Njstar)
             && self.distances.iter().all(|x| x.is_finite())
-        {
-            let (t, st) = pool.install(|| {
-                optimized::tree(self.distances.clone(), &self.names, threads > 1, 512, false)
-            });
-            return Ok(TreeResult {
-                trees: vec![t],
-                components: 1,
-                unresolved: false,
-                details: vec![
-                    json!({"completion":{},"search_s":st.search_s,"update_s":st.update_s,"q_evaluations":st.evaluated}),
-                ],
-            });
+    }
+    // A complete matrix is already the triangle the search needs.
+    fn search(&self, d: Vec<f64>, threads: usize) -> Result<TreeResult> {
+        let (t, st) = pool(threads)?
+            .install(|| optimized::tree(d, &self.names, threads > 1, 512, false));
+        Ok(TreeResult {
+            trees: vec![t],
+            components: 1,
+            unresolved: false,
+            details: vec![
+                json!({"completion":{},"search_s":st.search_s,"update_s":st.update_s,"q_evaluations":st.evaluated}),
+            ],
+        })
+    }
+    /// Takes the distances instead of copying them, for a caller that no longer needs them.
+    pub fn take_tree(&mut self, method: Method, threads: usize) -> Result<TreeResult> {
+        self.validate()?;
+        if self.searchable_as_is(method) {
+            let d = std::mem::take(&mut self.distances);
+            return self.search(d, threads);
         }
+        self.tree(method, threads)
+    }
+    pub fn tree(&self, method: Method, threads: usize) -> Result<TreeResult> {
+        self.validate()?;
+        if method == Method::Mvrstar && self.variances.is_empty() {
+            return Err("MVR* requires retained variances".into());
+        }
+        if self.searchable_as_is(method) {
+            return self.search(self.distances.clone(), threads);
+        }
+        let n = self.names.len();
+        let pool = pool(threads)?;
         let full = |values: &[f64]| {
             pool.install(|| {
                 let mut d = vec![0.; n * n];
@@ -559,7 +588,7 @@ impl DistanceMatrix {
                             if i == j {
                                 0.
                             } else {
-                                self.variances[index(i, j)]
+                                self.variances.get(index(i, j)).copied().unwrap_or(f64::NAN)
                             }
                         })
                     })
@@ -856,6 +885,192 @@ mod tests {
                 y.tree(Method::Sorted, 4).unwrap().trees
             );
         }
+    }
+    // Plain NJ over all pairs, sharing nothing with the search but the tie rule and format.
+    fn exhaustive_nj(triangle: &[f64], names: &[String]) -> String {
+        let n = names.len();
+        let at = |i: usize, j: usize| triangle[index(i, j)];
+        let mut d = vec![vec![0.; n]; n];
+        for i in 0..n {
+            for j in 0..n {
+                if i != j {
+                    d[i][j] = at(i, j);
+                }
+            }
+        }
+        let mut text: Vec<_> = names.iter().map(|s| format!("'{s}'")).collect();
+        let mut alive: Vec<usize> = (0..n).collect();
+        let mut s: Vec<f64> = (0..n).map(|i| d[i].iter().sum()).collect();
+        while alive.len() > 3 {
+            let m = alive.len();
+            let mut best = Best::none();
+            for (k, &j) in alive.iter().enumerate() {
+                for &i in &alive[..k] {
+                    let q = (m - 2) as f64 * d[j][i] - s[i] - s[j];
+                    best = best.min(Best { q, i, j });
+                }
+            }
+            let (x, y) = (best.i, best.j);
+            let xy = d[x][y];
+            let limb = 0.5 * xy + (s[x] - s[y]) / (2. * (m - 2) as f64);
+            text[x] = format!("({}:{limb:.12},{}:{:.12})", text[x], text[y], xy - limb);
+            alive.retain(|&i| i != y);
+            let mut total = vec![];
+            for &i in &alive {
+                if i != x {
+                    let (dx, dy) = (d[i][x], d[i][y]);
+                    let v = 0.5 * (dx + dy) - 0.5 * xy;
+                    s[i] += v - dx - dy;
+                    d[i][x] = v;
+                    d[x][i] = v;
+                    total.push(v);
+                }
+            }
+            s[x] = total.iter().sum();
+        }
+        let (a, b, c) = (alive[0], alive[1], alive[2]);
+        let la = (d[a][b] + d[a][c] - d[b][c]) / 2.;
+        format!(
+            "({}:{la:.12},{}:{:.12},{}:{:.12});\n",
+            text[a],
+            text[b],
+            d[a][b] - la,
+            text[c],
+            d[a][c] - la
+        )
+    }
+    fn random_matrix(n: usize, state: &mut u64, kind: usize) -> Vec<f64> {
+        let mut next = move || {
+            *state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            (*state >> 32) as f64 / f64::from(u32::MAX)
+        };
+        // Points on a line give an additive metric; duplicates and rounding give ties.
+        let line: Vec<_> = (0..n).map(|_| next()).collect();
+        let mut d = Vec::with_capacity(n * (n - 1) / 2);
+        for i in 1..n {
+            for j in 0..i {
+                d.push(match kind {
+                    0 => next(),
+                    1 => (next() * 4.).floor() / 4.,
+                    2 => (line[i] - line[j]).abs(),
+                    3 => ((line[i] - line[j]).abs() * 8.).floor() / 8.,
+                    // Mostly metric with occasional large violations.
+                    4 => (line[i] - line[j]).abs() + if next() < 0.02 { 5. } else { 0. },
+                    // Star tree: every pair at the same distance.
+                    5 => 0.1,
+                    // Many exact duplicates.
+                    _ => {
+                        if i % 5 == j % 5 {
+                            0.
+                        } else {
+                            0.1 + 0.01 * ((i % 5) + (j % 5)) as f64
+                        }
+                    }
+                });
+            }
+        }
+        d
+    }
+    #[test]
+    fn search_matches_exhaustive_nj_byte_for_byte() {
+        let mut state = 20_261_103_u64;
+        let pool = pool(4).unwrap();
+        for n in [4, 5, 19, 63, 64, 65, 130, 257] {
+            for kind in 0..7 {
+                let d = random_matrix(n, &mut state, kind);
+                let names = (0..n).map(|i| format!("s{i}")).collect::<Vec<_>>();
+                let expected = exhaustive_nj(&d, &names);
+                let serial = optimized::tree(d.clone(), &names, false, 0, true);
+                // A zero cutoff forces the parallel batches regardless of size.
+                let parallel = pool.install(|| optimized::tree(d, &names, true, 0, true));
+                assert_eq!(serial.1.mismatches, 0, "n {n} kind {kind}");
+                assert_eq!(parallel.1.mismatches, 0, "n {n} kind {kind}");
+                assert_eq!(serial.0, expected, "n {n} kind {kind}");
+                assert_eq!(parallel.0, expected, "n {n} kind {kind}");
+            }
+        }
+    }
+    #[test]
+    fn filled_pairs_match_each_pair_counted_alone() {
+        let mut state = 41_u64;
+        let mut next = move |limit: u64| {
+            state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            (state >> 33) % limit
+        };
+        // Long rows give short runs of partners and short rows give long ones.
+        for (n, width) in [(3, 7), (40, 65), (300, 657), (90, 8000), (600, 64)] {
+            let base: Vec<u8> = (0..width).map(|_| b"ACGT"[next(4) as usize]).collect();
+            let a = Alignment {
+                names: (0..n).map(|i| format!("s{i}")).collect(),
+                sequences: (0..n)
+                    .map(|_| {
+                        base.iter()
+                            .map(|&c| match next(40) {
+                                0 => b'-',
+                                1 => b'N',
+                                2 => b"ACGT"[next(4) as usize],
+                                _ => c,
+                            })
+                            .collect()
+                    })
+                    .collect(),
+            };
+            let packed: Vec<_> = a.sequences.iter().map(|s| optimized::pack_fast(s)).collect();
+            for model in [Model::P, Model::Jc69, Model::K2p] {
+                for threads in [1, 3] {
+                    let m = DistanceMatrix::calculate(&a, model, 2, threads).unwrap();
+                    for i in 1..n {
+                        for j in 0..i {
+                            let (valid, ts, tv) = counts(&packed[i], &packed[j]);
+                            let k = index(i, j);
+                            assert_eq!(m.shared_sites[k], valid);
+                            let expected = (valid >= 2)
+                                .then(|| estimate(model, valid, ts, tv))
+                                .flatten();
+                            assert_eq!(
+                                m.distances[k].to_bits(),
+                                expected.map_or(f64::NAN, |e| e.0).to_bits()
+                            );
+                            assert_eq!(
+                                m.variances[k].to_bits(),
+                                expected.map_or(f64::NAN, |e| e.1).to_bits()
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+    #[test]
+    fn identical_sequences_export_plain_zero() {
+        let a = Alignment {
+            names: vec!["a".into(), "b".into(), "c".into()],
+            sequences: vec![b"ACGTACGT".to_vec(), b"ACGTACGT".to_vec(), b"ACGTACGA".to_vec()],
+        };
+        let dir = tempfile::tempdir().unwrap();
+        for model in [Model::P, Model::Jc69, Model::K2p] {
+            let mut m = DistanceMatrix::calculate(&a, model, 1, 1).unwrap();
+            assert_eq!(m.distances[0].to_bits(), 0_f64.to_bits());
+            // Caches written before this fix hold -0.
+            m.distances[0] = -0.;
+            let path = dir.path().join("m.tsv");
+            m.export_tsv(&path).unwrap();
+            assert!(!fs::read_to_string(&path).unwrap().contains("-0.0"));
+        }
+    }
+    #[test]
+    fn variance_free_matrix_builds_the_same_tree_and_refuses_caching() {
+        let a = alignment();
+        let full = DistanceMatrix::calculate(&a, Model::Jc69, 1, 2).unwrap();
+        let mut lean = DistanceMatrix::calculate_retaining(&a, Model::Jc69, 1, 2, false).unwrap();
+        assert_eq!(full.distances, lean.distances);
+        assert!(lean.variances.is_empty());
+        assert!(lean.tree(Method::Mvrstar, 1).is_err());
+        let dir = tempfile::tempdir().unwrap();
+        assert!(lean.write(&dir.path().join("x.json")).is_err());
+        let expected = full.tree(Method::Sorted, 1).unwrap().trees;
+        assert_eq!(lean.take_tree(Method::Sorted, 2).unwrap().trees, expected);
+        assert!(lean.distances.is_empty());
     }
     #[test]
     fn exact_search_on_nonmetric_matrices() {

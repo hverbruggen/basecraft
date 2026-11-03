@@ -122,12 +122,14 @@ fn run(a: &Args) -> Result<()> {
         }
     }
     let mut cached = false;
-    let alignment = a
+    let mut alignment = a
         .input
         .as_ref()
         .map(|input| Alignment::read(input))
         .transpose()?;
-    let matrix = if let Some(alignment) = &alignment {
+    // Variances serve only the cache, MVR* and bootstrap.
+    let variances_needed = a.cache.is_some() || a.bootstrap > 0 || a.method == Method::Mvrstar;
+    let mut matrix = if let Some(alignment) = &alignment {
         let saved = a
             .cache
             .as_ref()
@@ -138,7 +140,13 @@ fn run(a: &Args) -> Result<()> {
             cached = true;
             m
         } else {
-            DistanceMatrix::calculate(alignment, a.model, a.min_overlap, threads)?
+            DistanceMatrix::calculate_retaining(
+                alignment,
+                a.model,
+                a.min_overlap,
+                threads,
+                variances_needed,
+            )?
         }
     } else {
         cached = true;
@@ -149,6 +157,24 @@ fn run(a: &Args) -> Result<()> {
         )?
     };
     let distance_s = start.elapsed().as_secs_f64();
+    if a.bootstrap == 0 {
+        alignment = None;
+    }
+    let zero_overlap = matrix.shared_sites.iter().filter(|&&n| n == 0).count();
+    let short_overlap = matrix
+        .shared_sites
+        .iter()
+        .filter(|&&n| n > 0 && n < matrix.min_overlap)
+        .count();
+    let saturated = matrix
+        .distances
+        .iter()
+        .zip(&matrix.shared_sites)
+        .filter(|(d, s)| !d.is_finite() && **s >= matrix.min_overlap)
+        .count();
+    // Nothing after the tree reads the distances unless these outputs were requested.
+    let distances_needed =
+        (a.cache.is_some() && !cached) || a.matrix.is_some() || a.groups.is_some();
     // Finish calculations before writing any requested artifacts.
     let (tree, bootstrap_report) = if a.bootstrap > 0 {
         let result = bootstrap(
@@ -180,7 +206,13 @@ fn run(a: &Args) -> Result<()> {
         (
             a.tree
                 .as_ref()
-                .map(|_| matrix.tree(a.method, tt))
+                .map(|_| {
+                    if distances_needed {
+                        matrix.tree(a.method, tt)
+                    } else {
+                        matrix.take_tree(a.method, tt)
+                    }
+                })
                 .transpose()?,
             None,
         )
@@ -219,7 +251,7 @@ fn run(a: &Args) -> Result<()> {
         }
         Ok(())
     })();
-    let mut result = json!({"tool":"basecraft-distance","version":env!("CARGO_PKG_VERSION"),"model":matrix.model,"method":a.method,"min_overlap":matrix.min_overlap,"gap_policy":matrix.gap_policy,"input_hash":matrix.input_hash,"cache_reused":cached,"sequences":matrix.names.len(),"columns":matrix.columns,"distance_threads":threads,"tree_threads":tt,"distance_s":distance_s,"total_s":start.elapsed().as_secs_f64(),"zero_overlap_pairs":matrix.shared_sites.iter().filter(|&&n|n==0).count(),"short_overlap_pairs":matrix.shared_sites.iter().filter(|&&n|n>0&&n<matrix.min_overlap).count(),"saturated_pairs":matrix.distances.iter().zip(&matrix.shared_sites).filter(|(d,s)|!d.is_finite()&&**s>=matrix.min_overlap).count(),"tree":tree,"bootstrap":bootstrap_report});
+    let mut result = json!({"tool":"basecraft-distance","version":env!("CARGO_PKG_VERSION"),"model":matrix.model,"method":a.method,"min_overlap":matrix.min_overlap,"gap_policy":matrix.gap_policy,"input_hash":matrix.input_hash,"cache_reused":cached,"sequences":matrix.names.len(),"columns":matrix.columns,"distance_threads":threads,"tree_threads":tt,"distance_s":distance_s,"total_s":start.elapsed().as_secs_f64(),"zero_overlap_pairs":zero_overlap,"short_overlap_pairs":short_overlap,"saturated_pairs":saturated,"tree":tree,"bootstrap":bootstrap_report});
     if let Some(report) = &bootstrap_report
         && report.support_withheld
     {
