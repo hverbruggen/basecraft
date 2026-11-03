@@ -1,5 +1,7 @@
 //! Counting kernels chosen for the running CPU. A distributed binary can't assume hardware
 //! popcount, and without it counting is much slower. Every path returns identical integers.
+// Bodies must inline to compile with each kernel's CPU features.
+#![allow(clippy::inline_always, clippy::many_single_char_names)]
 
 /// Packed DNA columns of one sequence: low bit, high bit and valid-site mask.
 #[derive(Clone, Copy)]
@@ -16,8 +18,13 @@ pub type MaskedPairCounts = fn(Words<'_>, Words<'_>, &[u64]) -> (u64, u64, u64);
 #[inline(always)]
 fn counts(a: Words<'_>, b: Words<'_>) -> (u64, u64, u64) {
     let n = a.lo.len();
-    let (a_hi, a_valid, b_lo, b_hi, b_valid) =
-        (&a.hi[..n], &a.valid[..n], &b.lo[..n], &b.hi[..n], &b.valid[..n]);
+    let (a_hi, a_valid, b_lo, b_hi, b_valid) = (
+        &a.hi[..n],
+        &a.valid[..n],
+        &b.lo[..n],
+        &b.hi[..n],
+        &b.valid[..n],
+    );
     let (mut valid, mut ts, mut tv) = (0, 0, 0);
     for k in 0..n {
         let mask = a_valid[k] & b_valid[k];
@@ -133,7 +140,9 @@ mod tests {
         let mut state = seed;
         (0..n)
             .map(|_| {
-                state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+                state = state
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1);
                 state ^ (state >> 29)
             })
             .collect()
@@ -145,8 +154,16 @@ mod tests {
             let (al, ah, av) = (words(1, n), words(2, n), words(3, n));
             let (bl, bh, bv) = (words(4, n), words(5, n), words(6, n));
             let sites = words(7, n);
-            let a = Words { lo: &al, hi: &ah, valid: &av };
-            let b = Words { lo: &bl, hi: &bh, valid: &bv };
+            let a = Words {
+                lo: &al,
+                hi: &ah,
+                valid: &av,
+            };
+            let b = Words {
+                lo: &bl,
+                hi: &bh,
+                valid: &bv,
+            };
             // A word-at-a-time count is the reference for all kernels.
             let (mut valid, mut ts, mut tv) = (0, 0, 0);
             let (mut m_valid, mut m_ts, mut m_tv) = (0, 0, 0);

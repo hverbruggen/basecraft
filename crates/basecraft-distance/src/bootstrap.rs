@@ -1,7 +1,5 @@
 //! Exact ordinary site bootstrap. No pair-pattern cache or candidate-tree approximation.
-use crate::{
-    Alignment, DistanceMatrix, Method, Packed, Result, TreeResult, optimized, pool,
-};
+use crate::{Alignment, DistanceMatrix, Method, Packed, Result, TreeResult, optimized, pool};
 use basecraft_io::newick::{ParsedTree, parse_newick};
 use rayon::prelude::*;
 use serde::Serialize;
@@ -267,7 +265,11 @@ fn counted_matrix(
             packed,
             original.model,
             original.min_overlap,
-            (&mut result.distances, &mut result.variances, &mut result.shared_sites),
+            (
+                &mut result.distances,
+                &mut result.variances,
+                &mut result.shared_sites,
+            ),
             counts,
         );
     });

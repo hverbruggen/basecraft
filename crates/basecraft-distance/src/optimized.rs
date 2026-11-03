@@ -3,11 +3,15 @@
 //! Dynamic NJ (Clausen 2023, Bioinformatics 39:btac774) caches each row's smallest Q and
 //! rescans only rows that could hold the next minimum. Its proof needs the triangle
 //! inequality, which corrected and pairwise-deleted distances can break. This guard is our
-//! addition, and README.md lists every source. After joining x and y, with
-//! a_i = (D_ix + D_iy) / 2, every surviving pair changes by exactly
-//!     Q'_ij - Q_ij = a_i + a_j + D_xy - D_ij
-//! so for any finite matrix row r's old pairs change by at least
-//!     a_r + min(a_j, j < r) + D_xy - max(D_rj, j < r).
+//! addition, and README.md lists every source. After joining x and y, every surviving
+//! pair changes by exactly the first line below, so for any finite matrix row r's old
+//! pairs change by at least the second:
+//!
+//! ```text
+//! Q'_ij - Q_ij = a_i + a_j + D_xy - D_ij, where a_i = (D_ix + D_iy) / 2
+//! a_r + min(a_j, j < r) + D_xy - max(D_rj, j < r)
+//! ```
+//!
 //! Lowering the cached bound by that amount when it is negative keeps it valid without
 //! assuming a metric. Results are the same joins as an exhaustive search over every
 //! pair, including ties, which break on (Q, smaller slot, larger slot).
@@ -25,15 +29,22 @@ struct RowScan {
     max_d: f64,
 }
 /// Smallest Q in one row, lowest slot on a tie. Dead partners have s = -inf, so Q = +inf.
+// Comparing Q exactly is the point: it finds the entry that produced the minimum.
+#[allow(clippy::float_cmp)]
 fn scan_row(row: &[f64], s: &[f64], c: f64, sr: f64) -> RowScan {
     let mut best = f64::INFINITY;
     let mut best_block = usize::MAX;
     let mut max_d = f64::NEG_INFINITY;
-    for (k, (ds, ss)) in row.chunks(BLOCK).zip(s[..row.len()].chunks(BLOCK)).enumerate() {
+    for (k, (ds, ss)) in row
+        .chunks(BLOCK)
+        .zip(s[..row.len()].chunks(BLOCK))
+        .enumerate()
+    {
         let mut low = [f64::INFINITY; LANES];
         let mut high = [f64::NEG_INFINITY; LANES];
-        let lanes = ds.chunks_exact(LANES).zip(ss.chunks_exact(LANES));
-        for (d, si) in lanes {
+        let (d_lanes, d_tail) = ds.as_chunks::<LANES>();
+        let (s_lanes, s_tail) = ss.as_chunks::<LANES>();
+        for (d, si) in d_lanes.iter().zip(s_lanes) {
             for l in 0..LANES {
                 let q = c * d[l] - si[l] - sr;
                 low[l] = if q < low[l] { q } else { low[l] };
@@ -42,8 +53,7 @@ fn scan_row(row: &[f64], s: &[f64], c: f64, sr: f64) -> RowScan {
         }
         let mut block = low.into_iter().fold(f64::INFINITY, f64::min);
         max_d = high.into_iter().fold(max_d, f64::max);
-        let tail = ds.len() - ds.len() % LANES;
-        for (&d, &si) in ds[tail..].iter().zip(&ss[tail..]) {
+        for (&d, &si) in d_tail.iter().zip(s_tail) {
             block = block.min(c * d - si - sr);
             max_d = max_d.max(d);
         }
@@ -191,15 +201,19 @@ pub(super) fn tree(
         let scan = |r: usize| scan_row(&view[index(r, 0)..index(r, 0) + r], sums, c, sums[r]);
         let mut next = 0;
         while next < wanted.len() && wanted[next].0 <= best.q + pad {
-            let entries: usize = wanted[next..(next + batch).min(wanted.len())].iter().map(|w| w.1).sum();
-            let found: Vec<(usize, RowScan)> = if parallel && m >= cutoff && (cutoff == 0 || entries >= PARALLEL_ENTRIES) {
-                wanted[next..(next + batch).min(wanted.len())]
-                    .par_iter()
-                    .map(|&(_, r)| (r, scan(r)))
-                    .collect()
-            } else {
-                vec![(wanted[next].1, scan(wanted[next].1))]
-            };
+            let entries: usize = wanted[next..(next + batch).min(wanted.len())]
+                .iter()
+                .map(|w| w.1)
+                .sum();
+            let found: Vec<(usize, RowScan)> =
+                if parallel && m >= cutoff && (cutoff == 0 || entries >= PARALLEL_ENTRIES) {
+                    wanted[next..(next + batch).min(wanted.len())]
+                        .par_iter()
+                        .map(|&(_, r)| (r, scan(r)))
+                        .collect()
+                } else {
+                    vec![(wanted[next].1, scan(wanted[next].1))]
+                };
             next += found.len();
             for (r, row) in found {
                 st.evaluated += r as u64;
@@ -209,7 +223,11 @@ pub(super) fn tree(
                 partner_d[r] = row.d;
                 max_d[r] = row.max_d;
                 if row.j != NO_PARTNER {
-                    best = best.min(Best { q: row.q, i: row.j, j: r });
+                    best = best.min(Best {
+                        q: row.q,
+                        i: row.j,
+                        j: r,
+                    });
                 }
             }
         }
@@ -225,7 +243,10 @@ pub(super) fn tree(
                 }
             }
             st.max_q_error = st.max_q_error.max((best.q - reference.q).abs());
-            if best.q.to_bits() != reference.q.to_bits() || best.i != reference.i || best.j != reference.j {
+            if best.q.to_bits() != reference.q.to_bits()
+                || best.i != reference.i
+                || best.j != reference.j
+            {
                 st.mismatches += 1;
             }
         }

@@ -56,9 +56,7 @@ impl Alignment {
                 let width = sequences.first().map_or(0, Vec::len);
                 sequences.push(Vec::with_capacity(width));
             } else {
-                let sequence = sequences
-                    .last_mut()
-                    .ok_or("sequence before FASTA header")?;
+                let sequence = sequences.last_mut().ok_or("sequence before FASTA header")?;
                 let bytes = line.as_bytes();
                 let start = sequence.len();
                 if bytes.iter().any(u8::is_ascii_whitespace) {
@@ -158,7 +156,8 @@ fn fill_pairs(
         let last = (first + rows).min(n);
         let pairs = index(last, 0) - index(first, 0);
         let (d_head, d_tail) = std::mem::take(&mut ds).split_at_mut(pairs);
-        let (v_head, v_tail) = std::mem::take(&mut vs).split_at_mut(if keep_variances { pairs } else { 0 });
+        let (v_head, v_tail) =
+            std::mem::take(&mut vs).split_at_mut(if keep_variances { pairs } else { 0 });
         let (s_head, s_tail) = std::mem::take(&mut ss).split_at_mut(pairs);
         (ds, vs, ss) = (d_tail, v_tail, s_tail);
         tasks.push((first, last, d_head, v_head, s_head));
@@ -174,11 +173,13 @@ fn fill_pairs(
                     let (valid, ts, tv) = counts(&packed[i], &packed[j]);
                     let k = row + j;
                     ss[k] = valid;
-                    let slot = &mut memo[(valid as usize)
+                    let hash = valid
                         .wrapping_mul(31)
-                        .wrapping_add((ts as usize).wrapping_mul(7))
-                        .wrapping_add(tv as usize)
-                        & (MEMO - 1)];
+                        .wrapping_add(ts.wrapping_mul(7))
+                        .wrapping_add(tv);
+                    // The mask keeps this far below usize::MAX on every target.
+                    #[allow(clippy::cast_possible_truncation)]
+                    let slot = &mut memo[(hash & (MEMO as u64 - 1)) as usize];
                     if slot.0 != valid || slot.1 != ts || slot.2 != tv {
                         let (d, v) = if valid >= min_overlap {
                             estimate(model, valid, ts, tv).unwrap_or((f64::NAN, f64::NAN))
@@ -438,7 +439,11 @@ impl DistanceMatrix {
         let retained = !self.variances.is_empty();
         for k in 0..len {
             let d = self.distances[k];
-            let v = if retained { self.variances[k] } else { f64::NAN };
+            let v = if retained {
+                self.variances[k]
+            } else {
+                f64::NAN
+            };
             if self.shared_sites[k] > self.columns as u64
                 || d.is_infinite()
                 || v.is_infinite()
@@ -532,8 +537,10 @@ impl DistanceMatrix {
             return Err("distance cache is truncated or has the wrong size".into());
         }
         let float = |part: &[u8]| -> Vec<f64> {
-            part.chunks_exact(8)
-                .map(|b| f64::from_le_bytes(b.try_into().unwrap_or([0; 8])))
+            part.as_chunks::<8>()
+                .0
+                .iter()
+                .map(|b| f64::from_le_bytes(*b))
                 .collect()
         };
         Ok(Self {
@@ -547,8 +554,10 @@ impl DistanceMatrix {
             distances: float(&body[..floats]),
             variances: float(&body[floats..2 * floats]),
             shared_sites: body[2 * floats..]
-                .chunks_exact(4)
-                .map(|b| u64::from(u32::from_le_bytes(b.try_into().unwrap_or([0; 4]))))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|b| u64::from(u32::from_le_bytes(*b)))
                 .collect(),
         })
     }
@@ -604,8 +613,8 @@ impl DistanceMatrix {
     }
     // A complete matrix is already the triangle the search needs.
     fn search(&self, d: Vec<f64>, threads: usize) -> Result<TreeResult> {
-        let (t, st) = pool(threads)?
-            .install(|| optimized::tree(d, &self.names, threads > 1, 512, false));
+        let (t, st) =
+            pool(threads)?.install(|| optimized::tree(d, &self.names, threads > 1, 512, false));
         Ok(TreeResult {
             trees: vec![t],
             components: 1,
@@ -862,6 +871,11 @@ pub fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
     Ok(())
 }
 #[cfg(test)]
+#[allow(
+    clippy::needless_range_loop,
+    clippy::manual_midpoint,
+    clippy::cast_possible_truncation
+)]
 mod tests {
     use super::*;
     fn alignment() -> Alignment {
@@ -1062,7 +1076,9 @@ mod tests {
     }
     fn random_matrix(n: usize, state: &mut u64, kind: usize) -> Vec<f64> {
         let mut next = move || {
-            *state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            *state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
             (*state >> 32) as f64 / f64::from(u32::MAX)
         };
         // Points on a line give an additive metric; duplicates and rounding give ties.
@@ -1115,7 +1131,9 @@ mod tests {
     fn filled_pairs_match_each_pair_counted_alone() {
         let mut state = 41_u64;
         let mut next = move |limit: u64| {
-            state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
             (state >> 33) % limit
         };
         // Long rows give short runs of partners and short rows give long ones.
@@ -1136,7 +1154,11 @@ mod tests {
                     })
                     .collect(),
             };
-            let packed: Vec<_> = a.sequences.iter().map(|s| optimized::pack_fast(s)).collect();
+            let packed: Vec<_> = a
+                .sequences
+                .iter()
+                .map(|s| optimized::pack_fast(s))
+                .collect();
             for model in [Model::P, Model::Jc69, Model::K2p] {
                 for threads in [1, 3] {
                     let m = DistanceMatrix::calculate(&a, model, 2, threads).unwrap();
@@ -1183,7 +1205,10 @@ mod tests {
         let old = dir.path().join("m.json");
         m.write(&old).unwrap();
         assert!(fs::read(&old).unwrap().starts_with(b"{"));
-        assert_eq!(DistanceMatrix::read(&old).unwrap().shared_sites, m.shared_sites);
+        assert_eq!(
+            DistanceMatrix::read(&old).unwrap().shared_sites,
+            m.shared_sites
+        );
         let whole = fs::read(&path).unwrap();
         fs::write(&path, &whole[..whole.len() - 1]).unwrap();
         assert!(DistanceMatrix::read(&path).is_err());
@@ -1205,7 +1230,11 @@ mod tests {
         let a = Alignment {
             names: (0..300).map(|i| format!("s{i}")).collect(),
             sequences: (0..300_u32)
-                .map(|i| (0..40_u32).map(|k| b"ACGT-"[((i * k + i) % 5) as usize]).collect())
+                .map(|i| {
+                    (0..40_u32)
+                        .map(|k| b"ACGT-"[((i * k + i) % 5) as usize])
+                        .collect()
+                })
                 .collect(),
         };
         let m = DistanceMatrix::calculate(&a, Model::Jc69, 1, 2).unwrap();
@@ -1223,7 +1252,11 @@ mod tests {
     fn identical_sequences_export_plain_zero() {
         let a = Alignment {
             names: vec!["a".into(), "b".into(), "c".into()],
-            sequences: vec![b"ACGTACGT".to_vec(), b"ACGTACGT".to_vec(), b"ACGTACGA".to_vec()],
+            sequences: vec![
+                b"ACGTACGT".to_vec(),
+                b"ACGTACGT".to_vec(),
+                b"ACGTACGA".to_vec(),
+            ],
         };
         let dir = tempfile::tempdir().unwrap();
         for model in [Model::P, Model::Jc69, Model::K2p] {
@@ -1242,13 +1275,13 @@ mod tests {
         let full = DistanceMatrix::calculate(&a, Model::Jc69, 1, 2).unwrap();
         let mut lean = DistanceMatrix::calculate_retaining(&a, Model::Jc69, 1, 2, false).unwrap();
         assert_eq!(full.distances, lean.distances);
-        assert!(lean.variances.is_empty());
+        assert_eq!(lean.variances, Vec::<f64>::new());
         assert!(lean.tree(Method::Mvrstar, 1).is_err());
         let dir = tempfile::tempdir().unwrap();
         assert!(lean.write(&dir.path().join("x.json")).is_err());
         let expected = full.tree(Method::Sorted, 1).unwrap().trees;
         assert_eq!(lean.take_tree(Method::Sorted, 2).unwrap().trees, expected);
-        assert!(lean.distances.is_empty());
+        assert_eq!(lean.distances, Vec::<f64>::new());
     }
     #[test]
     fn exact_search_on_nonmetric_matrices() {
