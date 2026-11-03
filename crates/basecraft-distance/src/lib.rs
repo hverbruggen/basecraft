@@ -304,6 +304,29 @@ mod nullable {
             .collect())
     }
 }
+/// Expands a triangle to a square within one allocation, mirroring in tiles so both sides
+/// of each copy stay in cache. The diagonal is zero.
+fn square_from_triangle(mut d: Vec<f64>, n: usize) -> Vec<f64> {
+    const TILE: usize = 64;
+    d.resize(n * n, 0.);
+    for i in (1..n).rev() {
+        let start = index(i, 0);
+        d.copy_within(start..start + i, i * n);
+        // Bytes left behind are overwritten by earlier rows or by mirroring.
+        d[i * n + i] = 0.;
+    }
+    d[0] = 0.;
+    for rows in (0..n).step_by(TILE) {
+        for columns in (rows..n).step_by(TILE) {
+            for j in columns..(columns + TILE).min(n) {
+                for i in rows..(rows + TILE).min(n).min(j) {
+                    d[i * n + j] = d[j * n + i];
+                }
+            }
+        }
+    }
+    d
+}
 fn index(i: usize, j: usize) -> usize {
     let (x, y) = (i.max(j), i.min(j));
     // Row 0 has no pairs but still has a start offset.
@@ -660,12 +683,33 @@ impl DistanceMatrix {
             ],
         })
     }
+    fn complete_upgma(&self, method: Method) -> bool {
+        self.names.len() >= 3
+            && method == Method::Upgma
+            && self.distances.iter().all(|x| x.is_finite())
+    }
+    fn upgma_search(&self, d: Vec<f64>) -> TreeResult {
+        let start = Instant::now();
+        let tree = upgma::tree(square_from_triangle(d, self.names.len()), &self.names);
+        TreeResult {
+            trees: vec![tree],
+            components: 1,
+            unresolved: false,
+            details: vec![
+                json!({"algorithm":"nearest-neighbor chain", "weighting":"cluster size", "rooted":true, "search_s":start.elapsed().as_secs_f64()}),
+            ],
+        }
+    }
     /// Takes the distances instead of copying them, for a caller that no longer needs them.
     pub fn take_tree(&mut self, method: Method, threads: usize) -> Result<TreeResult> {
         self.validate()?;
         if self.searchable_as_is(method) {
             let d = std::mem::take(&mut self.distances);
             return self.search(d, threads);
+        }
+        if self.complete_upgma(method) {
+            let d = std::mem::take(&mut self.distances);
+            return Ok(self.upgma_search(d));
         }
         self.tree(method, threads)
     }
@@ -676,6 +720,9 @@ impl DistanceMatrix {
         }
         if self.searchable_as_is(method) {
             return self.search(self.distances.clone(), threads);
+        }
+        if self.complete_upgma(method) {
+            return Ok(self.upgma_search(self.distances.clone()));
         }
         let n = self.names.len();
         let pool = pool(threads)?;
@@ -736,8 +783,9 @@ impl DistanceMatrix {
                 if !complete {
                     return Err("UPGMA requires complete distances within each connected component; choose another model or improve overlap".into());
                 }
+                let start = Instant::now();
                 result.trees.push(upgma::tree(dm, &names));
-                result.details.push(json!({"algorithm":"nearest-neighbor chain", "weighting":"cluster size", "rooted":true}));
+                result.details.push(json!({"algorithm":"nearest-neighbor chain", "weighting":"cluster size", "rooted":true, "search_s":start.elapsed().as_secs_f64()}));
             } else if complete && method != Method::Mvrstar {
                 let triangle: Vec<_> = (1..size)
                     .flat_map(|i| dm[i * size..i * size + i].iter().copied())
@@ -1419,6 +1467,20 @@ mod tests {
         let text = String::from_utf8(text).unwrap();
         assert_eq!(text.lines().count(), 301);
         assert!(text.starts_with("sequence\ts0\ts1\t"));
+    }
+    #[test]
+    fn square_matches_reading_each_pair() {
+        for n in [3, 4, 63, 64, 65, 130, 200] {
+            let triangle: Vec<_> = (0..n * (n - 1) / 2).map(|k| k as f64 + 1.).collect();
+            let square = square_from_triangle(triangle.clone(), n);
+            assert_eq!(square.len(), n * n);
+            for i in 0..n {
+                for j in 0..n {
+                    let expected = if i == j { 0. } else { triangle[index(i, j)] };
+                    assert_eq!(square[i * n + j].to_bits(), expected.to_bits(), "n {n}");
+                }
+            }
+        }
     }
     #[test]
     fn identical_sequences_export_plain_zero() {

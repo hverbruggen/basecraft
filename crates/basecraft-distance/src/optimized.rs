@@ -24,16 +24,16 @@ const BLOCK: usize = 64;
 const LANES: usize = 4;
 // Enough rows to pay for a parallel batch.
 const PARALLEL_ENTRIES: usize = 1 << 17;
-struct RowScan {
-    q: f64,
-    j: usize,
+pub(super) struct RowScan {
+    pub(super) q: f64,
+    pub(super) j: usize,
     d: f64,
     max_d: f64,
 }
 /// Smallest Q in one row, lowest slot on a tie. Dead partners have s = -inf, so Q = +inf.
 // Comparing Q exactly is the point: it finds the entry that produced the minimum.
 #[allow(clippy::float_cmp)]
-fn scan_row(row: &[f64], s: &[f64], c: f64, sr: f64) -> RowScan {
+pub(super) fn scan_row(row: &[f64], s: &[f64], c: f64, sr: f64) -> RowScan {
     let mut best = f64::INFINITY;
     let mut best_block = usize::MAX;
     let mut max_d = f64::NEG_INFINITY;
@@ -85,11 +85,11 @@ fn scan_row(row: &[f64], s: &[f64], c: f64, sr: f64) -> RowScan {
     }
 }
 // Arena avoids copying a growing Newick subtree after every ladder join.
-struct Node {
-    text: Option<String>,
-    edges: Vec<(usize, f64)>,
+pub(super) struct Node {
+    pub(super) text: Option<String>,
+    pub(super) edges: Vec<(usize, f64)>,
 }
-fn emit(nodes: &[Node], root: usize) -> String {
+pub(super) fn emit(nodes: &[Node], root: usize) -> String {
     enum Event {
         Node(usize),
         Text(String),
