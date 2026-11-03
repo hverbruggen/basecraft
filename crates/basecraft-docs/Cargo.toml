@@ -12,6 +12,7 @@ license.workspace = true
 basecraft-io.workspace = true
 basecraft-protocol.workspace = true
 basecraft-query.workspace = true
+regex = "1"
 serde.workspace = true
 serde_json.workspace = true
 

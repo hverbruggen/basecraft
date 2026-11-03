@@ -1532,11 +1532,22 @@ ApplicationWindow {
         pkg: JSON.parse(submissions.package || "null")
         geneticCodes: JSON.parse(submissions.genetic_codes())
         path: submissions.path
-        message: submissionJobs.busy ? "Validating with table2asn" : submissions.message
+        message: submissionJobs.busy ? submissionJobs.message : submissions.message
         messageKind: submissions.message_kind
         canUndo: submissions.can_undo
         canRedo: submissions.can_redo
         validating: submissionJobs.busy
+        reviewStage: submissions.review_stage
+        validationStage: submissionJobs.message
+        reviewing: submissions.reviewing
+        parseAuthors: text => JSON.parse(submissions.preview_authors(text))
+        onDetailsRequested: details => submissions.set_details(details)
+        onInclusionPreviewRequested: rule => { inclusionPlan = JSON.parse(submissions.preview_inclusion(rule)) }
+        onInclusionPresetsRequested: save => {
+            const result = JSON.parse(specimenMetadata.inclusion_presets(save))
+            presetError = result.error || ""
+            if (!result.error) inclusionPresets = result
+        }
         onEditRequested: edit => submissions.edit(edit)
         onPublicationRequested: (title, authors) => submissions.set_publication(title, authors)
         onDecisionRequested: (record, decision, accession) => submissions.set_decision(record, decision, accession)
@@ -1816,8 +1827,8 @@ ApplicationWindow {
     Shortcut { sequence: "Ctrl+W"; onActivated: if (openFiles.count > 0) window.closeTab(tabs.currentIndex) }
     // Undo and redo reach the open document wherever the focus is; a text
     // field being edited keeps its own. Trace review has its own undo.
-    Shortcut { sequence: "Ctrl+Z"; enabled: window.current !== null && !window.traceOpen; onActivated: window.current.undo() }
-    Shortcut { sequences: ["Ctrl+Shift+Z", "Ctrl+Y"]; enabled: window.current !== null && !window.traceOpen; onActivated: window.current.redo() }
+    Shortcut { sequence: "Ctrl+Z"; enabled: !submissionDialog.opened && window.current !== null && !window.traceOpen; onActivated: window.current.undo() }
+    Shortcut { sequences: ["Ctrl+Shift+Z", "Ctrl+Y"]; enabled: !submissionDialog.opened && window.current !== null && !window.traceOpen; onActivated: window.current.redo() }
     FileDialog {
         id: saveDialog
         property int index: -1

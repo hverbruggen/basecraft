@@ -506,6 +506,45 @@
         "taxon"
       ]
     },
+    "IdentifierSource": {
+      "description": "Identifier fields use the same literal splitting primitive as metadata header imports.\nSubmission rules always use the FASTA identifier, never the full description header.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string",
+              "const": "identifier"
+            }
+          },
+          "required": [
+            "source"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "index": {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            },
+            "separator": {
+              "type": "string"
+            },
+            "source": {
+              "type": "string",
+              "const": "field"
+            }
+          },
+          "required": [
+            "source",
+            "separator",
+            "index"
+          ]
+        }
+      ]
+    },
     "ImportSettings": {
       "description": "Saved import settings, so a project's next import repeats its last one.",
       "type": "object",
@@ -516,6 +555,12 @@
             "$ref": "#/$defs/HeaderPattern"
           }
         },
+        "inclusion_rules": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/InclusionRule"
+          }
+        },
         "spreadsheet_mappings": {
           "type": "array",
           "items": {
@@ -524,6 +569,61 @@
         }
       }
     },
+    "InclusionAction": {
+      "type": "string",
+      "enum": [
+        "include",
+        "exclude",
+        "unchanged"
+      ]
+    },
+    "InclusionRule": {
+      "type": "object",
+      "properties": {
+        "case_sensitive": {
+          "type": "boolean",
+          "default": false
+        },
+        "input": {
+          "$ref": "#/$defs/IdentifierSource"
+        },
+        "matching": {
+          "$ref": "#/$defs/InclusionAction"
+        },
+        "mode": {
+          "$ref": "#/$defs/MatchMode"
+        },
+        "name": {
+          "type": "string"
+        },
+        "nonmatching": {
+          "$ref": "#/$defs/InclusionAction"
+        },
+        "override_manual": {
+          "type": "boolean",
+          "default": false
+        },
+        "pattern": {
+          "type": "string"
+        },
+        "trim": {
+          "type": "boolean",
+          "default": false
+        },
+        "unresolved": {
+          "$ref": "#/$defs/InclusionAction",
+          "default": "unchanged"
+        }
+      },
+      "required": [
+        "name",
+        "input",
+        "mode",
+        "pattern",
+        "matching",
+        "nonmatching"
+      ]
+    },
     "JobStatus": {
       "type": "string",
       "enum": [
@@ -531,6 +631,17 @@
         "failed",
         "cancelled",
         "unavailable"
+      ]
+    },
+    "MatchMode": {
+      "type": "string",
+      "enum": [
+        "exact",
+        "contains",
+        "starts",
+        "ends",
+        "wildcard",
+        "regex"
       ]
     },
     "MissingReason": {

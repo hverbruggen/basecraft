@@ -14,6 +14,19 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 #[derive(Subcommand)]
 pub enum SubmissionCommand {
+    /// Preview a configurable identifier inclusion rule (JSON, @file or stdin -). Writes nothing.
+    InclusionPreview {
+        file: PathBuf,
+        rule: String,
+        #[arg(long, default_value = ".")]
+        project: PathBuf,
+    },
+    /// Save a named inclusion rule in the project's import presets.
+    InclusionPreset {
+        rule: String,
+        #[arg(long, default_value = ".")]
+        project: PathBuf,
+    },
     /// Create a submission document (`NAME.submission.json`) for an
     /// alignment inside the project.
     New {
@@ -38,7 +51,7 @@ pub enum SubmissionCommand {
         #[arg(long, default_value = ".")]
         project: PathBuf,
     },
-    /// Apply one `submission.edit` (JSON, such as
+    /// Apply one `submission.edit` (JSON, @file, or - for stdin; such as
     /// `{"action":"set_rows","rows":[{"record":"x","decision":"exclude"}]}`)
     /// and save.
     Edit {
@@ -102,6 +115,18 @@ pub enum SubmissionCommand {
     },
 }
 
+/// Large reviewed plans exceed OS argument limits; accept exact JSON from a file/stdin too.
+fn json_argument(argument: &str) -> Result<String> {
+    let text = if argument == "-" {
+        std::io::read_to_string(std::io::stdin())?
+    } else if let Some(path) = argument.strip_prefix('@') {
+        std::fs::read_to_string(path)?
+    } else {
+        argument.to_string()
+    };
+    Ok(text)
+}
+
 fn open(project: &Path, file: &Path) -> Result<(basecraft_ops::Session, basecraft_ops::DocId)> {
     let project = project.canonicalize()?;
     let mut session = crate::script_session(&project)?;
@@ -129,6 +154,26 @@ macro_rules! json_out {
 
 pub fn run(command: SubmissionCommand) -> Result<()> {
     match command {
+        SubmissionCommand::InclusionPreview {
+            file,
+            rule,
+            project,
+        } => {
+            let (session, doc) = open(&project, &file)?;
+            json_out!(submission::plan_inclusion(
+                &session,
+                doc,
+                &serde_json::from_str(&json_argument(&rule)?)?
+            )?);
+        }
+        SubmissionCommand::InclusionPreset { rule, project } => {
+            let mut session = crate::script_session(&project.canonicalize()?)?;
+            submission::save_inclusion_preset(
+                &mut session,
+                serde_json::from_str(&json_argument(&rule)?)?,
+            )?;
+            json_out!(serde_json::json!({"saved": true}));
+        }
         SubmissionCommand::New {
             file,
             alignment,
@@ -157,7 +202,7 @@ pub fn run(command: SubmissionCommand) -> Result<()> {
             edit,
             project,
         } => {
-            let edit: SubmissionEdit = serde_json::from_str(&edit)?;
+            let edit: SubmissionEdit = serde_json::from_str(&json_argument(&edit)?)?;
             let (mut session, doc) = open(&project, &file)?;
             submission::edit(&mut session, doc, edit)?;
             session.save(doc, None)?;

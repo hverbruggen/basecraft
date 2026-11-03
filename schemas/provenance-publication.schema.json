@@ -100,6 +100,49 @@
         "accession"
       ]
     },
+    "AccessionPolicy": {
+      "description": "Legacy suggestions are retained on old documents. Configured sources prevent\nspecimen identifiers elsewhere in a name from influencing inclusion suggestions.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "policy": {
+              "type": "string",
+              "const": "legacy_heuristic"
+            }
+          },
+          "required": [
+            "policy"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "include_metadata": {
+              "type": "boolean"
+            },
+            "input": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/IdentifierSource"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "policy": {
+              "type": "string",
+              "const": "configured"
+            }
+          },
+          "required": [
+            "policy",
+            "include_metadata"
+          ]
+        }
+      ]
+    },
     "Actor": {
       "description": "Who made a change: a person in the GUI (`human`), a script through the\nCLI or Python API (`script`), an assistant over MCP (`agent`), or a tool,\nplugin or outside program. New kinds are additive; older records keep\ntheir kinds.",
       "oneOf": [
@@ -705,6 +748,54 @@
         "input_bytes_available",
         "execution_specification_available",
         "replay_verified"
+      ]
+    },
+    "Decision": {
+      "description": "What to do with a row.",
+      "oneOf": [
+        {
+          "description": "A newly generated sequence, exported for submission.",
+          "type": "object",
+          "properties": {
+            "decision": {
+              "type": "string",
+              "const": "new"
+            }
+          },
+          "required": [
+            "decision"
+          ]
+        },
+        {
+          "description": "Already in an archive (a downloaded reference, or submitted\nbefore); not exported.",
+          "type": "object",
+          "properties": {
+            "accession": {
+              "type": "string"
+            },
+            "decision": {
+              "type": "string",
+              "const": "existing"
+            }
+          },
+          "required": [
+            "decision",
+            "accession"
+          ]
+        },
+        {
+          "description": "Left out of the submission.",
+          "type": "object",
+          "properties": {
+            "decision": {
+              "type": "string",
+              "const": "exclude"
+            }
+          },
+          "required": [
+            "decision"
+          ]
+        }
       ]
     },
     "DelimitationEdit": {
@@ -1505,6 +1596,45 @@
         "taxon"
       ]
     },
+    "IdentifierSource": {
+      "description": "Identifier fields use the same literal splitting primitive as metadata header imports.\nSubmission rules always use the FASTA identifier, never the full description header.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string",
+              "const": "identifier"
+            }
+          },
+          "required": [
+            "source"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "index": {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            },
+            "separator": {
+              "type": "string"
+            },
+            "source": {
+              "type": "string",
+              "const": "field"
+            }
+          },
+          "required": [
+            "source",
+            "separator",
+            "index"
+          ]
+        }
+      ]
+    },
     "ImportSettings": {
       "description": "Saved import settings, so a project's next import repeats its last one.",
       "type": "object",
@@ -1515,6 +1645,12 @@
             "$ref": "#/$defs/HeaderPattern"
           }
         },
+        "inclusion_rules": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/InclusionRule"
+          }
+        },
         "spreadsheet_mappings": {
           "type": "array",
           "items": {
@@ -1522,6 +1658,153 @@
           }
         }
       }
+    },
+    "InclusionAction": {
+      "type": "string",
+      "enum": [
+        "include",
+        "exclude",
+        "unchanged"
+      ]
+    },
+    "InclusionPlan": {
+      "type": "object",
+      "properties": {
+        "changed": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "fingerprint": {
+          "description": "Hash of target content, source bytes and metadata evidence; recomputed before apply.",
+          "type": "string"
+        },
+        "included": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "matching": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "preserved": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/InclusionPreviewRow"
+          }
+        },
+        "rule": {
+          "$ref": "#/$defs/InclusionRule"
+        },
+        "unresolved": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "rule",
+        "fingerprint",
+        "rows",
+        "matching",
+        "unresolved",
+        "preserved",
+        "changed",
+        "included"
+      ]
+    },
+    "InclusionPreviewRow": {
+      "type": "object",
+      "properties": {
+        "current": {
+          "$ref": "#/$defs/Decision"
+        },
+        "extracted": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "matched": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "preserved_manual": {
+          "type": "boolean"
+        },
+        "proposed": {
+          "$ref": "#/$defs/Decision"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "record": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "record",
+        "reason",
+        "preserved_manual",
+        "current",
+        "proposed"
+      ]
+    },
+    "InclusionRule": {
+      "type": "object",
+      "properties": {
+        "case_sensitive": {
+          "type": "boolean",
+          "default": false
+        },
+        "input": {
+          "$ref": "#/$defs/IdentifierSource"
+        },
+        "matching": {
+          "$ref": "#/$defs/InclusionAction"
+        },
+        "mode": {
+          "$ref": "#/$defs/MatchMode"
+        },
+        "name": {
+          "type": "string"
+        },
+        "nonmatching": {
+          "$ref": "#/$defs/InclusionAction"
+        },
+        "override_manual": {
+          "type": "boolean",
+          "default": false
+        },
+        "pattern": {
+          "type": "string"
+        },
+        "trim": {
+          "type": "boolean",
+          "default": false
+        },
+        "unresolved": {
+          "$ref": "#/$defs/InclusionAction",
+          "default": "unchanged"
+        }
+      },
+      "required": [
+        "name",
+        "input",
+        "mode",
+        "pattern",
+        "matching",
+        "nonmatching"
+      ]
     },
     "InputReference": {
       "type": "object",
@@ -3044,6 +3327,17 @@
             "description"
           ]
         }
+      ]
+    },
+    "MatchMode": {
+      "type": "string",
+      "enum": [
+        "exact",
+        "contains",
+        "starts",
+        "ends",
+        "wildcard",
+        "regex"
       ]
     },
     "MetadataEdit": {
@@ -4928,6 +5222,23 @@
           ]
         },
         {
+          "description": "Save annotation settings with type-specific drafts. Legacy `set_batch`\nretains its historical meaning so previously saved histories replay exactly.",
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "set_batch_draft"
+            },
+            "batch": {
+              "$ref": "#/$defs/BatchSettings"
+            }
+          },
+          "required": [
+            "action",
+            "batch"
+          ]
+        },
+        {
           "description": "Confirm or choose reading frames; `clear` forgets choices.",
           "type": "object",
           "properties": {
@@ -4984,6 +5295,64 @@
           "required": [
             "action",
             "publication"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "set_accession_policy"
+            },
+            "policy": {
+              "$ref": "#/$defs/AccessionPolicy"
+            }
+          },
+          "required": [
+            "action",
+            "policy"
+          ]
+        },
+        {
+          "description": "Both citations in one undoable change. Disabled custom publication values are retained.",
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "set_details"
+            },
+            "publication": {
+              "$ref": "#/$defs/Publication"
+            },
+            "publication_differs": {
+              "type": "boolean"
+            },
+            "submission": {
+              "$ref": "#/$defs/Publication"
+            }
+          },
+          "required": [
+            "action",
+            "submission",
+            "publication",
+            "publication_differs"
+          ]
+        },
+        {
+          "description": "Apply a reviewed rule. The shared ops boundary checks this plan against live inputs.",
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "apply_inclusion"
+            },
+            "plan": {
+              "$ref": "#/$defs/InclusionPlan"
+            }
+          },
+          "required": [
+            "action",
+            "plan"
           ]
         },
         {

@@ -362,6 +362,8 @@ impl RecordLink {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ImportSettings {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inclusion_rules: Vec<crate::submission::InclusionRule>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub header_patterns: Vec<HeaderPattern>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub spreadsheet_mappings: Vec<SpreadsheetMapping>,

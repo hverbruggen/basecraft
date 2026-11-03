@@ -14,6 +14,12 @@ fn fail<T>(message: impl Into<String>) -> Result<T, EditError> {
     Err(EditError(message.into()))
 }
 
+/// Literal fields, retaining empty positions. No quoting or escape syntax is interpreted.
+/// Metadata passes full headers; submission selection passes identifier text only.
+pub fn header_fields<'a>(text: &'a str, separator: &str) -> Option<Vec<&'a str>> {
+    (!separator.is_empty()).then(|| text.split(separator).collect())
+}
+
 /// The roster's ID column in tables and spreadsheets.
 pub const SPECIMEN_ID: &str = "specimen_id";
 
@@ -381,6 +387,18 @@ pub fn validate(meta: &ProjectMetadata) -> Result<(), EditError> {
         }
     }
     crate::metadata_consumers::validate_partitions(meta)?;
+    let mut rule_names = BTreeSet::new();
+    for rule in &meta.import.inclusion_rules {
+        if rule.name.trim().is_empty() || !rule_names.insert(&rule.name) {
+            return fail("inclusion presets need unique nonempty names");
+        }
+        crate::submission::inclusion_rows(
+            &basecraft_protocol::submission::Submission::default(),
+            rule,
+            &[],
+        )
+        .map_err(|error| EditError(error.0))?;
+    }
     for pattern in &meta.import.header_patterns {
         if pattern.separator.is_empty() || pattern.name.is_empty() {
             return fail("a header pattern needs a name and a separator");
