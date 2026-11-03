@@ -8,10 +8,12 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from difflib import SequenceMatcher
 from itertools import pairwise
 from pathlib import Path
@@ -172,6 +174,10 @@ def trace_calls(
         text=True,
         timeout=120,
         check=False,
+        # Each independent basecall gets one CPU; the pool itself consumes at
+        # most the host grant. Later consensus/assembly runs after the pool.
+        env=dict(os.environ, OMP_NUM_THREADS="1", OPENBLAS_NUM_THREADS="1",
+                 MKL_NUM_THREADS="1", NUMEXPR_NUM_THREADS="1", RAYON_NUM_THREADS="1"),
     )
     if run.returncode:
         raise RuntimeError(f"Tracy basecall failed: {run.stderr[-2000:]}")
@@ -228,7 +234,10 @@ def merge(
     minimum_overlap: int = 50,
     minimum_identity: float = 0.8,
     signal_threshold: int = 20,
+    workers: int = 1,
 ) -> dict:
+    if isinstance(workers, bool) or not isinstance(workers, int) or workers < 1:
+        raise ValueError("Worker allocation must be a positive integer")
     if len(paths) not in (1, 2, 3):
         raise ValueError(
             "Exactly 1, 2 or 3 Sanger reads are required; larger assemblies are unsupported"
@@ -271,10 +280,16 @@ def merge(
             alias = work / f"read_{i}.ab1"
             alias.symlink_to(source)
             aliases.append(alias.name)
-        calls = [
-            trace_calls(path, tracy, work / f"calls-{i}.json", signal_threshold)
-            for i, path in enumerate(resolved)
-        ]
+        # Independent basecalls share the host allocation. map preserves the
+        # submitted order even when later reads finish first. Every subprocess
+        # owns a separate output path; the pool is joined before scratch cleanup.
+        with ThreadPoolExecutor(max_workers=min(workers, len(resolved))) as pool:
+            calls = list(pool.map(
+                lambda item: trace_calls(
+                    item[1], tracy, work / f"calls-{item[0]}.json", signal_threshold
+                ),
+                enumerate(resolved),
+            ))
         if len(paths) == 1:
             left, right = calls[0]["signal_bounds"]
             consensus = calls[0]["sequence"][left:right]

@@ -10,16 +10,36 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 fn registry(root: &Path) -> Registry {
+    registry_retention(root, false)
+}
+fn registry_retention(root: &Path, retain: bool) -> Registry {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/registry-plugin");
+    let fixture = if retain {
+        let package = root.join("retained-fixture");
+        std::fs::create_dir(&package).unwrap();
+        for name in ["plugin.toml", "plugin.py", "operations.json"] {
+            std::fs::copy(fixture.join(name), package.join(name)).unwrap();
+        }
+        let mut contract: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(package.join("operations.json")).unwrap())
+                .unwrap();
+        contract["operations"][0]["inputs"]["sources"]["retain"] = json!(true);
+        std::fs::write(
+            package.join("operations.json"),
+            serde_json::to_vec(&contract).unwrap(),
+        )
+        .unwrap();
+        package
+    } else {
+        fixture
+    };
     let config = RegistryConfig {
         bundled: root.join("no-bundle"),
         packages: root.join("profile/plugins"),
         index: root.join("profile/index.json"),
     };
-    registry::install(
-        &config,
-        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/registry-plugin"),
-    )
-    .unwrap();
+    registry::install(&config, &fixture).unwrap();
     Registry::load(&config).unwrap()
 }
 fn request(mode: &str) -> OperationRequest {
@@ -1132,4 +1152,80 @@ fn tasks_refuse_document_publication_awaiting_owner_finalization() {
     assert!(temp.path().join("report.json").exists());
     assert!(!can_cancel_run(id));
     assert!(cancel_run(id).is_err());
+}
+
+#[test]
+fn retained_inputs_survive_job_drop_and_temporary_source_removal() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(temp.path().join("a.txt"), b"abc\n").unwrap();
+    std::fs::write(temp.path().join("b.txt"), b"xy\n").unwrap();
+    let registry = registry_retention(temp.path(), true);
+    let mut jobs = JobManager::default();
+    let accepted = jobs
+        .submit(
+            &registry,
+            request("normal"),
+            SessionPolicy::new(temp.path(), true).unwrap(),
+            "retained input test",
+        )
+        .unwrap();
+    let outcome = wait(&jobs, &accepted.run_id);
+    assert_eq!(outcome.state, RuntimeState::Completed, "{outcome:?}");
+    let execution: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(Path::new(outcome.evidence.as_ref().unwrap()).join("execution.json"))
+            .unwrap(),
+    )
+    .unwrap();
+    let inputs: Vec<_> = execution["context"]["inputs"]["sources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| std::path::PathBuf::from(v.as_str().unwrap()))
+        .collect();
+    drop(jobs);
+    std::fs::remove_file(temp.path().join("a.txt")).unwrap();
+    std::fs::remove_file(temp.path().join("b.txt")).unwrap();
+    assert_eq!(std::fs::read(&inputs[0]).unwrap(), b"abc\n");
+    assert_eq!(std::fs::read(&inputs[1]).unwrap(), b"xy\n");
+    let issues = basecraft_ops::provenance::verify(&temp.path().join("report.json")).unwrap();
+    assert!(issues.is_empty(), "{issues:?}");
+    std::fs::write(&inputs[0], b"damaged").unwrap();
+    assert!(
+        !basecraft_ops::provenance::verify(&temp.path().join("report.json"))
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn gui_scientific_calls_cannot_reintroduce_direct_plugin_invocation() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../basecraft-gui/src");
+    for entry in std::fs::read_dir(root).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_none_or(|e| e != "rs") {
+            continue;
+        }
+        let source = std::fs::read_to_string(&path).unwrap();
+        // The sole metadata query is off-thread engine discovery. Scientific
+        // calls must use registered operations, including newly added bridges.
+        let source = source.replace(".invoke(\"engines\",", ".metadata_query(");
+        assert!(
+            !source.contains(".invoke("),
+            "{} bypasses registered operations",
+            path.display()
+        );
+        assert!(
+            !source.contains("FileJob"),
+            "{} reintroduced the retired executor",
+            path.display()
+        );
+    }
+    let cli = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../basecraft-cli/src/main.rs"),
+    )
+    .unwrap();
+    assert!(
+        !cli.contains(".invoke("),
+        "CLI plugin entry must use the registered runner"
+    );
 }

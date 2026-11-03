@@ -6,6 +6,7 @@
 
 #[cxx_qt::bridge]
 pub mod qobject {
+    impl cxx_qt::Threading for GenomeController {}
     unsafe extern "C++" {
         include!("instanceview.h");
         fn configure_canvas_graphics();
@@ -31,6 +32,7 @@ pub mod qobject {
         #[qproperty(QString, background)]
         #[qproperty(QString, foreground)]
         #[qproperty(QString, accent)]
+        #[qproperty(bool, busy)]
         #[qproperty(bool, circular)]
         #[qproperty(QString, mode)]
         #[qproperty(QString, project_dir)]
@@ -203,12 +205,15 @@ pub mod qobject {
         #[qinvokable]
         fn has_selection(self: &GenomeController) -> bool;
         /// Write the selection, with its annotations, to a new GenBank file
-        /// next to the open one. Returns the new file's path, or empty.
+        /// next to the open one. Returns acceptance; extractionFinished carries the path.
         #[qinvokable]
-        fn extract_selection(self: Pin<&mut GenomeController>) -> QString;
+        fn extract_selection(self: Pin<&mut GenomeController>) -> bool;
         /// The same for the span of an annotation.
         #[qinvokable]
-        fn extract_feature(self: Pin<&mut GenomeController>, id: i32) -> QString;
+        fn extract_feature(self: Pin<&mut GenomeController>, id: i32) -> bool;
+        #[qsignal]
+        #[cxx_name = "extractionFinished"]
+        fn extraction_finished(self: Pin<&mut GenomeController>, path: QString);
         /// An annotation's own sequence: its parts joined in biological
         /// order, reverse-complemented on the reverse strand.
         #[qinvokable]
@@ -274,7 +279,7 @@ use basecraft_io::genbank::{format_location, parse_location};
 use basecraft_ops::{DocId, Session};
 use basecraft_protocol::{Feature, Location, Op, Qualifier, Strand};
 use basecraft_viewmodel::{Frame, GenomeView, Mode, Theme};
-use cxx_qt::CxxQtType;
+use cxx_qt::{CxxQtType, Threading};
 use cxx_qt_lib::{QByteArray, QString, QUrl};
 use serde_json::{Value, json};
 
@@ -376,6 +381,7 @@ pub struct ControllerRust {
     background: QString,
     foreground: QString,
     accent: QString,
+    busy: bool,
     circular: bool,
     mode: QString,
     project_dir: QString,
@@ -407,6 +413,7 @@ impl Default for ControllerRust {
             background: QString::default(),
             foreground: QString::default(),
             accent: QString::default(),
+            busy: false,
             circular: false,
             mode: QString::from("wrapped"),
             project_dir: QString::default(),
@@ -440,17 +447,49 @@ impl Default for ControllerRust {
 /// The desktop's monospace font: Omarchy's current font when available,
 /// else whatever fontconfig calls monospace.
 pub(crate) fn monospace_font() -> String {
-    static CACHE: std::sync::OnceLock<std::sync::Mutex<(std::time::Instant, String)>> =
+    // Never wait for a desktop helper from a controller/theme callback. A
+    // failed refresh leaves the last usable font in place; at most one helper
+    // is active process-wide.
+    struct Cache {
+        checked: std::time::Instant,
+        font: String,
+        pending: bool,
+    }
+    static CACHE: std::sync::OnceLock<std::sync::Arc<std::sync::Mutex<Cache>>> =
         std::sync::OnceLock::new();
-    let cache = CACHE
-        .get_or_init(|| std::sync::Mutex::new((std::time::Instant::now(), read_monospace_font())));
+    let cache = CACHE.get_or_init(|| {
+        std::sync::Arc::new(std::sync::Mutex::new(Cache {
+            checked: std::time::Instant::now(),
+            font: "monospace".into(),
+            pending: false,
+        }))
+    });
     let mut current = cache
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if current.0.elapsed() >= std::time::Duration::from_secs(2) {
-        *current = (std::time::Instant::now(), read_monospace_font());
+    if !current.pending
+        && (current.font == "monospace"
+            || current.checked.elapsed() >= std::time::Duration::from_secs(2))
+    {
+        current.pending = true;
+        current.checked = std::time::Instant::now();
+        let worker_cache = cache.clone();
+        if std::thread::Builder::new()
+            .name("desktop-font".into())
+            .spawn(move || {
+                let font = read_monospace_font();
+                let mut current = worker_cache
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                current.font = font;
+                current.pending = false;
+            })
+            .is_err()
+        {
+            current.pending = false;
+        }
     }
-    current.1.clone()
+    current.font.clone()
 }
 
 fn read_monospace_font() -> String {
@@ -535,26 +574,63 @@ impl qobject::GenomeController {
         url.to_local_file().unwrap_or_default()
     }
 
-    /// JSON map from method to null (engine ready) or the reason it cannot
-    /// run, as reported by the delimitation plugin's own adapters.
+    /// Availability is advisory; job execution always checks the engine again.
+    /// The first request starts a background discovery and returns no cached
+    /// diagnostics. Later requests reuse its report without blocking Qt.
     fn delimitation_engines(&self) -> QString {
-        let report = (|| -> Result<String, String> {
-            let manifest = basecraft_plugin_host::Manifest::load(&plugin_dir("delimitation"))
-                .map_err(|e| e.to_string())?;
-            let mut plugin = basecraft_plugin_host::PluginProcess::spawn(&manifest)
-                .map_err(|e| e.to_string())?;
-            let result = plugin
-                .invoke("engines", json!({}), None)
-                .map_err(|e| e.to_string())?;
-            result.message.ok_or_else(|| "No engine report".into())
-        })();
-        QString::from(&report.unwrap_or_else(|error| {
-            let reason = format!(
-                "Cannot check delimitation engines: {}",
-                error_summary(&error)
-            );
-            json!({"asap": reason, "ptp": reason, "mptp": reason}).to_string()
-        }))
+        struct Report {
+            checked: Instant,
+            value: Option<String>,
+            pending: bool,
+        }
+        static REPORT: std::sync::OnceLock<std::sync::Arc<std::sync::Mutex<Report>>> =
+            std::sync::OnceLock::new();
+        let report = REPORT.get_or_init(|| {
+            std::sync::Arc::new(std::sync::Mutex::new(Report {
+                checked: Instant::now(),
+                value: None,
+                pending: false,
+            }))
+        });
+        let mut current = report
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !current.pending
+            && (current.value.is_none()
+                || current.checked.elapsed() >= std::time::Duration::from_secs(2))
+        {
+            current.pending = true;
+            current.checked = Instant::now();
+            let result = report.clone();
+            let spawned = std::thread::Builder::new()
+                .name("engine-discovery".into())
+                .spawn(move || {
+                    let value = (|| -> Result<String, String> {
+                        let manifest =
+                            basecraft_plugin_host::Manifest::load(&plugin_dir("delimitation"))
+                                .map_err(|e| e.to_string())?;
+                        let mut plugin = basecraft_plugin_host::PluginProcess::spawn(&manifest)
+                            .map_err(|e| e.to_string())?;
+                        plugin
+                            .invoke("engines", json!({}), None)
+                            .map_err(|e| e.to_string())?
+                            .message
+                            .ok_or_else(|| "No engine report".into())
+                    })()
+                    .unwrap_or_else(|error| {
+                        json!({"asap":error,"ptp":error,"mptp":error}).to_string()
+                    });
+                    let mut current = result
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    current.value = Some(value);
+                    current.pending = false;
+                });
+            if spawned.is_err() {
+                current.pending = false;
+            }
+        }
+        QString::from(current.value.as_deref().unwrap_or("{}"))
     }
 
     fn parent_folder_url(&self, path: &QString) -> QUrl {
@@ -711,6 +787,10 @@ impl qobject::GenomeController {
     }
 
     pub fn open_file(mut self: Pin<&mut Self>, path: &QString) -> bool {
+        if self.rust().busy {
+            self.fail("Wait for the running operation before replacing this document");
+            return false;
+        }
         let path = PathBuf::from(path.to_string());
         let root = project_root(&path);
         let mut session = match Session::recoverable(&root) {
@@ -1590,31 +1670,62 @@ impl qobject::GenomeController {
             self.as_mut().notify("Select bases first");
             return QString::default();
         }
-        let started = Instant::now();
-        let msg = match self.as_mut().run_plugin(plugin, operation, params, range) {
-            Ok((added, known)) => {
-                let m = match (added, known) {
-                    (0, 0) => format!("No {many} found"),
-                    (0, _) => format!("No new {many}"),
-                    (1, _) => format!("Added 1 {one}"),
-                    (n, _) => format!("Added {n} {many}"),
-                };
-                let m = format!("{m}{}", took(started));
-                if added > 0 {
-                    self.as_mut().done(&m);
-                } else {
-                    self.as_mut().notify(&m);
-                }
-                m
-            }
-            Err(e) => {
-                let m = format!("{title} failed: {e}");
-                self.as_mut().fail(&m);
-                m
-            }
+        if self.rust().busy {
+            return QString::default();
+        }
+        let Some(doc) = self.rust().doc else {
+            return QString::default();
         };
-        self.as_mut().refresh();
-        QString::from(&msg)
+        let Some(session) = self.as_mut().rust_mut().session.take() else {
+            return QString::default();
+        };
+        self.as_mut().set_busy(true);
+        self.as_mut().notify(&format!("Running {title}"));
+        let started = Instant::now();
+        let (plugin, operation, title, one, many) = (
+            plugin.to_owned(),
+            operation.to_owned(),
+            title.to_owned(),
+            one.to_owned(),
+            many.to_owned(),
+        );
+        let qt_thread = self.qt_thread();
+        let spawn = crate::document_jobs::background_session(
+            session,
+            move |session| {
+                Self::run_plugin_in_session(session, doc, &plugin, &operation, params, range)
+            },
+            move |session, result| {
+                let _ = qt_thread.queue(move |mut this| {
+                    // Replacement is refused while the session is owned by this
+                    // continuation. A destroyed QObject simply drops this return.
+                    this.as_mut().rust_mut().session = Some(session);
+                    this.as_mut().set_busy(false);
+                    match result {
+                        Ok((added, known)) => {
+                            let message = match (added, known) {
+                                (0, 0) => format!("No {many} found"),
+                                (0, _) => format!("No new {many}"),
+                                (1, _) => format!("Added 1 {one}"),
+                                (n, _) => format!("Added {n} {many}"),
+                            };
+                            if added > 0 {
+                                this.as_mut().set_dirty(true);
+                            }
+                            this.as_mut().done(&format!("{message}{}", took(started)));
+                        }
+                        Err(error) => this.as_mut().fail(&format!("{title} failed: {error}")),
+                    }
+                    this.refresh();
+                });
+            },
+        );
+        if let Err((session, error)) = spawn {
+            self.as_mut().rust_mut().session = Some(*session);
+            self.as_mut().set_busy(false);
+            self.fail(&error);
+        }
+        QString::default()
     }
 
     /// Returns how many features were added and how many proposals were
@@ -1622,8 +1733,9 @@ impl qobject::GenomeController {
     /// through the shared job runner, so the run keeps its submitted snapshot,
     /// effective settings and package pins in the folder's hidden analysis
     /// store and records them in the document's history.
-    fn run_plugin(
-        mut self: Pin<&mut Self>,
+    fn run_plugin_in_session(
+        session: &mut Session,
+        doc: DocId,
         name: &str,
         operation: &str,
         mut params: serde_json::Value,
@@ -1659,11 +1771,6 @@ impl qobject::GenomeController {
             params["end"] = json!(b);
         }
         let outcome = {
-            let mut r = self.as_mut().rust_mut();
-            let r = &mut *r;
-            let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
-                return Err("no open file".into());
-            };
             let revision = session
                 .checked_sequence(doc)
                 .map_err(|e| e.to_string())?
@@ -1704,9 +1811,6 @@ impl qobject::GenomeController {
         let (applied, known) = outcome
             .proposals
             .map_or((0, 0), |p| (p.applied, p.rejected.len()));
-        if applied > 0 {
-            self.as_mut().set_dirty(true);
-        }
         Ok((applied, known))
     }
 
@@ -1741,71 +1845,101 @@ impl qobject::GenomeController {
         segments: &[(u64, u64)],
         reverse: bool,
         label: Option<&str>,
-    ) -> QString {
+    ) -> bool {
+        if self.rust().busy {
+            return false;
+        }
+        let Some(doc) = self.rust().doc else {
+            return false;
+        };
+        let Some(session) = self.as_mut().rust_mut().session.take() else {
+            return false;
+        };
         let source = PathBuf::from(self.rust().file_path.to_string());
-        let dir = source.parent().map(Path::to_path_buf).unwrap_or_default();
-        let stem = source.file_stem().map_or_else(
-            || "extract".to_string(),
-            |s| s.to_string_lossy().into_owned(),
-        );
-        let clean = |l: &str| {
-            l.chars()
-                .map(|c| {
-                    if c.is_alphanumeric() || "-_.".contains(c) {
-                        c
-                    } else {
-                        '_'
-                    }
-                })
-                .collect::<String>()
-        };
-        let base = match &label {
-            Some(l) => format!("{stem}_{}", clean(l)),
-            None if reverse => format!("{stem}_{}-{end}_rc", start + 1),
-            None => format!("{stem}_{}-{end}", start + 1),
-        };
-        let mut target = dir.join(format!("{base}.gb"));
-        let mut n = 2;
-        while target.exists() {
-            target = dir.join(format!("{base}_{n}.gb"));
-            n += 1;
-        }
+        let segments = segments.to_vec();
+        let label = label.map(str::to_owned);
+        self.as_mut().set_busy(true);
+        self.as_mut().notify("Extracting sequence");
+        let qt_thread = self.qt_thread();
         let started = Instant::now();
-        let result = {
-            let mut r = self.as_mut().rust_mut();
-            let r = &mut *r;
-            let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
-                return QString::default();
-            };
-            session.extract(doc, (start, end), segments, reverse, &target)
-        };
-        match result {
-            Ok(()) => {
-                self.as_mut().done(&format!(
-                    "Extracted {} bp{}",
-                    basecraft_viewmodel::genome::format_thousands(end - start),
-                    took(started)
-                ));
-                QString::from(&target.to_string_lossy().into_owned())
-            }
-            Err(e) => {
-                self.as_mut().fail(&format!("Extract failed: {e}"));
-                QString::default()
-            }
+        let spawn = crate::document_jobs::background_session(
+            session,
+            move |session| {
+                let dir = source.parent().map(Path::to_path_buf).unwrap_or_default();
+                let stem = source.file_stem().map_or_else(
+                    || "extract".to_string(),
+                    |s| s.to_string_lossy().into_owned(),
+                );
+                let clean = |l: &str| {
+                    l.chars()
+                        .map(|c| {
+                            if c.is_alphanumeric() || "-_.".contains(c) {
+                                c
+                            } else {
+                                '_'
+                            }
+                        })
+                        .collect::<String>()
+                };
+                let base = match &label {
+                    Some(l) => format!("{stem}_{}", clean(l)),
+                    None if reverse => format!("{stem}_{}-{end}_rc", start + 1),
+                    None => format!("{stem}_{}-{end}", start + 1),
+                };
+                let mut target = dir.join(format!("{base}.gb"));
+                let mut n = 2;
+                while target.exists() {
+                    target = dir.join(format!("{base}_{n}.gb"));
+                    n += 1;
+                }
+                session
+                    .extract(doc, (start, end), &segments, reverse, &target)
+                    .map_err(|e| e.to_string())?;
+                Ok(target)
+            },
+            move |session, result| {
+                let _ = qt_thread.queue(move |mut this| {
+                    this.as_mut().rust_mut().session = Some(session);
+                    this.as_mut().set_busy(false);
+                    match result {
+                        Ok(target) => {
+                            this.as_mut().done(&format!(
+                                "Extracted {} bp{}",
+                                basecraft_viewmodel::genome::format_thousands(end - start),
+                                took(started)
+                            ));
+                            this.extraction_finished(QString::from(
+                                target.to_string_lossy().as_ref(),
+                            ));
+                        }
+                        Err(error) => {
+                            this.as_mut().fail(&format!("Extract failed: {error}"));
+                            this.extraction_finished(QString::default());
+                        }
+                    }
+                });
+            },
+        );
+        if let Err((session, error)) = spawn {
+            self.as_mut().rust_mut().session = Some(*session);
+            self.as_mut().set_busy(false);
+            self.fail(&error);
+            return false;
         }
+        true
     }
 
     /// Extract the selection. A selected annotation is extracted as itself:
     /// spliced if it has several parts, reverse-complemented if it lies on
     /// the reverse strand.
-    pub fn extract_selection(mut self: Pin<&mut Self>) -> QString {
+    pub fn extract_selection(mut self: Pin<&mut Self>) -> bool {
         let (selection, selected) = {
             let v = &self.rust().view;
             (v.selection, v.selected)
         };
         let Some((a, b)) = selection else {
             self.as_mut().notify("Select bases to extract");
-            return QString::default();
+            return false;
         };
         if let Some(FeatureId(id)) = selected
             && let Ok(id) = i32::try_from(id)
@@ -1815,9 +1949,9 @@ impl qobject::GenomeController {
         self.extract_range((a, b), &[], false, None)
     }
 
-    pub fn extract_feature(self: Pin<&mut Self>, id: i32) -> QString {
+    pub fn extract_feature(self: Pin<&mut Self>, id: i32) -> bool {
         let Ok(fid) = u32::try_from(id) else {
-            return QString::default();
+            return false;
         };
         let info = self
             .with_doc(|s, d| {
@@ -1838,7 +1972,7 @@ impl qobject::GenomeController {
                 let segs = if segs.len() > 1 { segs } else { Vec::new() };
                 self.extract_range(bounds, &segs, reverse, label.as_deref())
             }
-            None => QString::default(),
+            None => false,
         }
     }
 

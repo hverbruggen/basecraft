@@ -81,7 +81,10 @@ pub mod qobject {
         #[qinvokable]
         fn accessible_page(self: &TreeController, page: i32) -> QString;
         #[qinvokable]
-        fn create_delimitation(self: Pin<&mut TreeController>, method: &QString) -> QString;
+        fn create_delimitation(self: Pin<&mut TreeController>, method: &QString) -> bool;
+        #[qsignal]
+        #[cxx_name = "workspaceCreated"]
+        fn workspace_created(self: Pin<&mut TreeController>, path: QString);
         #[qinvokable]
         fn open_file(self: Pin<&mut TreeController>, path: &QString) -> bool;
         #[qinvokable]
@@ -732,123 +735,105 @@ impl qobject::TreeController {
         if self.rust().busy {
             return;
         }
-        let submitted = (|| -> Result<_, String> {
-            let mut r = self.as_mut().rust_mut();
-            let r = &mut *r;
-            let (Some(session), Some(doc)) = (&mut r.session, r.doc) else {
-                return Err("No tree open".into());
-            };
-            let tree = session.tree(doc);
-            let taxa = r.view.selected_names(tree);
-            if taxa.is_empty() {
-                return Err("Select one or more clades first".into());
-            }
-            let tree_path = PathBuf::from(r.file_path.to_string());
-            let link = basecraft_ops::links::AlignmentLink::read_view(&tree_path)
-                .map_err(|e| format!("Link an alignment first: {e}"))?;
-            let input = link
-                .checked_snapshot(&tree_path, tree)
-                .map_err(|e| e.to_string())?;
-            let output =
-                basecraft_plugin_host::file_tool::output_beside(&tree_path, "clade", "afa");
-            let registry = RegistryConfig::discover()
-                .and_then(|c| Registry::load(&c))
-                .map_err(|e| e.to_string())?;
-            let policy = SessionPolicy::new(session.root(), true).map_err(|e| e.to_string())?;
-            let destination = output
-                .strip_prefix(&policy.root)
-                .map_err(|e| e.to_string())?
-                .to_string_lossy()
-                .into_owned();
-            let request = OperationRequest {
-                operation: "basecraft.clade-alignment/extract@1".into(),
-                inputs: [
-                    (
-                        "alignment".into(),
-                        vec![InputReference::File {
-                            path: input.to_string_lossy().into_owned(),
-                        }],
-                    ),
-                    (
-                        "selection_tree".into(),
-                        vec![InputReference::Document {
-                            doc: doc.0.to_string(),
-                            generation: session.generation(doc),
-                            revision: session.revision(doc),
-                        }],
-                    ),
-                ]
-                .into(),
-                parameters: json!({"taxa":taxa}),
-                destinations: [("artifacts/clade.afa".into(), destination)].into(),
-                pins: None,
-                request_key: None,
-                target: None,
-            };
-            let mut jobs = JobManager::default().with_task_cancellation();
-            let accepted = jobs
-                .submit_in_session(&registry, request, policy, "GUI", session)
-                .map_err(|e| e.to_string())?;
-            Ok((
-                jobs,
-                accepted.run_id,
-                session.id().to_owned(),
-                output,
-                link.source_changed(),
-            ))
-        })();
-        let (jobs, run_id, session_id, output, source_changed) = match submitted {
-            Ok(work) => work,
-            Err(error) => {
-                self.fail(&format!("Cannot extract clades: {error}"));
-                return;
-            }
+        let Some(doc) = self.rust().doc else {
+            return;
         };
+        let taxa = self
+            .rust()
+            .session
+            .as_ref()
+            .map(|session| self.rust().view.selected_names(session.tree(doc)))
+            .unwrap_or_default();
+        if taxa.is_empty() {
+            self.fail("Select one or more clades first");
+            return;
+        }
+        let Some(session) = self.as_mut().rust_mut().session.take() else {
+            return;
+        };
+        let tree_path = PathBuf::from(self.rust().file_path.to_string());
         self.as_mut().set_busy(true);
-        self.as_mut().notify("Extracting the selected clades…");
+        self.as_mut().notify("Extracting selected clades");
         let qt_thread = self.qt_thread();
-        std::thread::spawn(move || {
-            // Execution belongs to the shared runner. Its document continuation
-            // returns to the owning session thread, as for other document jobs.
-            loop {
-                match jobs.get(&run_id) {
-                    Ok(outcome)
-                        if outcome.state.terminal()
-                            || outcome.state == RuntimeState::Finalizing =>
-                    {
-                        break;
-                    }
-                    Err(_) => break,
-                    _ => std::thread::sleep(std::time::Duration::from_millis(10)),
+        let spawn = crate::document_jobs::background_session(
+            session,
+            move |session| {
+                let tree = session.tree(doc);
+                let link = basecraft_ops::links::AlignmentLink::read_view(&tree_path)
+                    .map_err(|e| format!("Link an alignment first: {e}"))?;
+                let input = link
+                    .checked_snapshot(&tree_path, tree)
+                    .map_err(|e| e.to_string())?;
+                let output =
+                    basecraft_plugin_host::file_tool::output_beside(&tree_path, "clade", "afa");
+                let registry = RegistryConfig::discover()
+                    .and_then(|c| Registry::load(&c))
+                    .map_err(|e| e.to_string())?;
+                let policy = SessionPolicy::new(session.root(), true).map_err(|e| e.to_string())?;
+                let destination = output
+                    .strip_prefix(&policy.root)
+                    .map_err(|e| e.to_string())?
+                    .to_string_lossy()
+                    .into_owned();
+                let request = OperationRequest {
+                    operation: "basecraft.clade-alignment/extract@1".into(),
+                    inputs: [
+                        (
+                            "alignment".into(),
+                            vec![InputReference::File {
+                                path: input.to_string_lossy().into_owned(),
+                            }],
+                        ),
+                        (
+                            "selection_tree".into(),
+                            vec![InputReference::Document {
+                                doc: doc.0.to_string(),
+                                generation: session.generation(doc),
+                                revision: session.revision(doc),
+                            }],
+                        ),
+                    ]
+                    .into(),
+                    parameters: json!({"taxa":taxa}),
+                    destinations: [("artifacts/clade.afa".into(), destination)].into(),
+                    pins: None,
+                    request_key: None,
+                    target: None,
+                };
+                let mut jobs = JobManager::default().with_task_cancellation();
+                let accepted = jobs
+                    .submit_in_session(&registry, request, policy, "GUI", session)
+                    .map_err(|e| e.to_string())?;
+                let outcome = jobs
+                    .wait_in_session(&accepted.run_id, session, &|| false)
+                    .map_err(|e| e.to_string())?;
+                if outcome.state != RuntimeState::Completed {
+                    return Err(format!(
+                        "run ended {:?}: {:?}",
+                        outcome.state, outcome.errors
+                    ));
                 }
-            }
-            let _ = qt_thread.queue(move |mut this| {
+                Ok((output, link.source_changed()))
+            },
+            move |session, result| {
+                let _ = qt_thread.queue(move |mut this| {
+                this.as_mut().rust_mut().session = Some(session);
                 this.as_mut().set_busy(false);
-                let result = (|| -> Result<_, String> {
-                    let mut r = this.as_mut().rust_mut();
-                    let Some(session) = &mut r.session else {
-                        let _ = jobs.cancel(&run_id);
-                        return Err("Tree was closed; retained artifacts remain in Tasks".into());
-                    };
-                    if session.id() != session_id {
-                        let _ = jobs.cancel(&run_id);
-                        return Err("Tree was replaced; retained artifacts remain in Tasks".into());
-                    }
-                    let outcome = jobs.wait_in_session(&run_id, session, &|| false).map_err(|e| e.to_string())?;
-                    if outcome.state != RuntimeState::Completed {
-                        return Err(format!("run ended {:?}: {:?}", outcome.state, outcome.errors));
-                    }
-                    Ok(())
-                })();
                 match result {
-                    Ok(()) => {
+                    Ok((output, source_changed)) => {
                         this.as_mut().done(if source_changed { "Opened clades from the retained alignment snapshot; the source file has changed" } else { "Opened alignment for the selected clades" });
-                        this.file_created(QString::from(&output.to_string_lossy().into_owned()));
+                        this.file_created(QString::from(output.to_string_lossy().as_ref()));
                     }
                     Err(error) => this.fail(&format!("Cannot extract clades: {error}")),
                 }
             });
-        });
+            },
+        );
+        if let Err((session, error)) = spawn {
+            self.as_mut().rust_mut().session = Some(*session);
+            self.as_mut().set_busy(false);
+            self.fail(&error);
+        }
     }
 
     pub fn highlight_taxa(mut self: Pin<&mut Self>, names: &QString) {
@@ -876,27 +861,55 @@ impl qobject::TreeController {
         }
     }
 
-    pub fn create_delimitation(mut self: Pin<&mut Self>, method: &QString) -> QString {
-        let result = {
-            let mut r = self.as_mut().rust_mut();
-            let r = &mut *r;
-            r.session
-                .as_mut()
-                .zip(r.doc)
-                .ok_or_else(|| "No source open".to_string())
-                .and_then(|(s, d)| {
-                    crate::delimitation_bridge::create_workspace(s, d, &method.to_string())
-                })
-        };
-        match result {
-            Ok(path) => QString::from(path),
-            Err(error) => {
-                self.fail(&error);
-                QString::default()
-            }
+    pub fn create_delimitation(mut self: Pin<&mut Self>, method: &QString) -> bool {
+        if self.rust().busy {
+            return false;
         }
+        let Some(doc) = self.rust().doc else {
+            return false;
+        };
+        let Some(session) = self.as_mut().rust_mut().session.take() else {
+            return false;
+        };
+        let method = method.to_string();
+        self.as_mut().set_busy(true);
+        self.as_mut().notify("Creating species workspace");
+        let qt_thread = self.qt_thread();
+        let spawn = crate::document_jobs::background_session(
+            session,
+            move |session| {
+                crate::delimitation_bridge::create_workspace_in_session(session, doc, &method)
+            },
+            move |session, result| {
+                let _ = qt_thread.queue(move |mut this| {
+                    this.as_mut().rust_mut().session = Some(session);
+                    this.as_mut().set_busy(false);
+                    match result {
+                        Ok(path) => {
+                            this.as_mut().done("Species workspace created");
+                            this.workspace_created(QString::from(path));
+                        }
+                        Err(error) => {
+                            this.as_mut().fail(&error);
+                            this.workspace_created(QString::default());
+                        }
+                    }
+                });
+            },
+        );
+        if let Err((session, error)) = spawn {
+            self.as_mut().rust_mut().session = Some(*session);
+            self.as_mut().set_busy(false);
+            self.fail(&error);
+            return false;
+        }
+        true
     }
     pub fn open_file(mut self: Pin<&mut Self>, path: &QString) -> bool {
+        if self.rust().busy {
+            self.fail("Wait for the running operation before replacing this document");
+            return false;
+        }
         let path = PathBuf::from(path.to_string());
         let mut session = match Session::recoverable(project_root(&path)) {
             Ok(session) => session,
@@ -1036,6 +1049,9 @@ impl qobject::TreeController {
     }
 
     pub fn show_tree(mut self: Pin<&mut Self>, path: &QString, edits: &QString) -> bool {
+        if self.rust().busy {
+            return false;
+        }
         let edits: Vec<TreeDrawingEdit> = match serde_json::from_str(&edits.to_string()) {
             Ok(edits) => edits,
             Err(e) => {

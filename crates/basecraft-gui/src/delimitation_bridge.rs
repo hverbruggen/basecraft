@@ -170,7 +170,8 @@ use basecraft_protocol::{
 use basecraft_viewmodel::delimitation::{self, Selection};
 
 use crate::document_jobs::{
-    DocumentJob, bundled, declared_parameters, failure, input_role, primary_member, result_file,
+    BackgroundDocumentJob as DocumentJob, bundled, declared_parameters, failure, input_role,
+    primary_member, result_file,
 };
 
 /// A registered analysis running for this workspace; dropping it cancels it.
@@ -394,6 +395,10 @@ impl qobject::DelimitationController {
     }
     #[allow(clippy::many_single_char_names)]
     pub fn open_file(mut self: Pin<&mut Self>, path: &QString) -> bool {
+        if self.rust().busy {
+            self.fail("Wait for the running operation before replacing this document");
+            return false;
+        }
         let p = PathBuf::from(path.to_string());
         let result = (|| -> basecraft_ops::Result<_> {
             let mut s = Session::recoverable(crate::bridge::project_root(&p))?;
@@ -1748,9 +1753,9 @@ impl qobject::DelimitationController {
         let submitted = {
             let mut state = self.as_mut().rust_mut();
             let state = &mut *state;
-            match state.session.as_mut().zip(state.doc) {
-                Some((session, doc)) => DocumentJob::submit_files(
-                    session,
+            match state.doc {
+                Some(doc) => DocumentJob::submit_files(
+                    &mut state.session,
                     doc,
                     &operation,
                     [(role, vec![analysis_input])].into(),
@@ -1791,10 +1796,10 @@ impl qobject::DelimitationController {
         let polled = {
             let mut state = self.as_mut().rust_mut();
             let state = &mut *state;
-            let (Some(analysis), Some(session)) = (&state.analysis, &mut state.session) else {
+            let Some(analysis) = &state.analysis else {
                 return;
             };
-            analysis.job.poll(session)
+            analysis.job.poll(&mut state.session)
         };
         let outcome = match polled {
             Ok(Some(outcome)) => outcome,
@@ -1970,13 +1975,8 @@ impl qobject::DelimitationController {
         true
     }
     pub fn cancel_job(self: Pin<&mut Self>) {
-        let result = self
-            .rust()
-            .analysis
-            .as_ref()
-            .map(|analysis| analysis.job.cancel());
-        if let Some(Err(e)) = result {
-            self.fail(&e);
+        if let Some(analysis) = &self.rust().analysis {
+            analysis.job.cancel();
         }
     }
     pub fn poll_job(mut self: Pin<&mut Self>) {
@@ -2130,7 +2130,7 @@ fn generated_workspace(name: &str) -> bool {
 }
 
 /// Entry actions run the same registered operation as the CLI, Python and MCP.
-pub(crate) fn create_workspace(
+pub(crate) fn create_workspace_in_session(
     session: &mut Session,
     doc: DocId,
     method: &str,
@@ -2145,7 +2145,7 @@ pub(crate) fn create_workspace(
             "workspace_alignment"
         },
     );
-    let job = DocumentJob::submit(
+    let job = crate::document_jobs::DocumentJob::submit(
         session,
         doc,
         &operation,

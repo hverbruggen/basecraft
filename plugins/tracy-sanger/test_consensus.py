@@ -6,6 +6,7 @@ import json
 import subprocess
 import tempfile
 import unittest
+import threading
 from pathlib import Path
 from unittest.mock import patch
 
@@ -134,8 +135,19 @@ class NativeCallsTests(unittest.TestCase):
             for i, read in enumerate(reads):
                 read.write_bytes(b"ABIF" + bytes([i]))
 
+            rendezvous = None
+            outputs = set()
+            output_lock = threading.Lock()
             def run(argv, **kwargs):
                 if argv[1] == "basecall":
+                    if rendezvous is not None:
+                        # Fails if the pair was serialized. Unique outputs and
+                        # input ordering must survive concurrent completion.
+                        with output_lock:
+                            output = argv[argv.index("-o") + 1]
+                            self.assertNotIn(output, outputs)
+                            outputs.add(output)
+                        rendezvous.wait(timeout=5)
                     raw = self.raw()
                     if argv[-1] == str(reads[1]):
                         raw["primarySeq"], raw["secondarySeq"] = "ATG", "ATA"
@@ -148,8 +160,10 @@ class NativeCallsTests(unittest.TestCase):
                 return subprocess.CompletedProcess(argv, 0, "synthetic", "")
 
             with patch("consensus.shutil.which", return_value=str(engine)), patch("consensus.subprocess.run", side_effect=run):
-                for count in (1, 2):
-                    result = merge(reads[:count], engine, root / str(count), 1)
+                for count, workers in ((1, 1), (2, 1), (2, 2)):
+                    rendezvous = threading.Barrier(2) if workers == 2 else None
+                    destination = root / f"{count}-{workers}"
+                    result = merge(reads[:count], engine, destination, 1, workers=workers)
                     self.assertEqual(result["consensus"], "CAT")
                     self.assertEqual(result["conflict_columns"], 0)
                     self.assertEqual(result["inputs"][0]["calls"]["secondary_sequence"], "TAT")
@@ -159,8 +173,13 @@ class NativeCallsTests(unittest.TestCase):
                         self.assertEqual(reverse["calls"]["sequence"], "ATG")
                         self.assertEqual(reverse["calls"]["secondary_sequence"], "ATA")
                         self.assertEqual(reverse["calls"]["positions"], [1, 3, 5])
-                    stored = json.loads((root / str(count) / "evidence.json").read_text())
+                    stored = json.loads((destination / "evidence.json").read_text())
                     self.assertEqual(stored, result)
+                self.assertEqual(
+                    json.loads((root / "2-1" / "evidence.json").read_text()),
+                    json.loads((root / "2-2" / "evidence.json").read_text()),
+                    "Concurrent basecalling must preserve scientific evidence exactly",
+                )
 
 
 if __name__ == "__main__":
