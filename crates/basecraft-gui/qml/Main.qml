@@ -295,39 +295,75 @@ ApplicationWindow {
     }
 
     property var delimitationSource: null
+    property var delimitationDocument: null
+    property var delimitationRequest: null
+    function documentIsOpen(document, controller, path) {
+        if (!document || !controller || controller.file_path !== path) return false
+        for (let i = 0; i < openFiles.count; ++i)
+            if (docs.itemAt(i) === document && document.controller === controller) return true
+        return false
+    }
+    function retireDelimitationDocument(document) {
+        if (delimitationDocument === document) {
+            delimitationSource = null
+            delimitationDocument = null
+        }
+        if (delimitationRequest && delimitationRequest.document === document)
+            delimitationRequest = null
+    }
     function beginDelimitation(method) {
-        if (!current || current.busy || !(alignmentOpen || treeOpen || delimitationOpen)) return
+        if (delimitationRequest || !current || current.busy || !(alignmentOpen || treeOpen || delimitationOpen)) return
         if (method === "asap" && !alignmentOpen && !(delimitationOpen && current.linked_alignment.length)) return
         delimitationSource = current
+        delimitationDocument = docs.itemAt(tabs.currentIndex)
         speciesDialog.engineProblems = method === "ptp" ? JSON.parse(shell.delimitation_engines()) : ({})
         speciesDialog.show(method, alignmentOpen ? current.file_path : current.linked_alignment || "",
             treeOpen ? current.file_path : delimitationOpen ? current.display_path : "")
+    }
+    function requestDelimitation(method, input, rooted, settings, displayMethod) {
+        const source = delimitationSource
+        const document = delimitationDocument
+        if (delimitationRequest || !source || !document || source.busy || !documentIsOpen(document, source, document.path)) return
+        if (document.kind === "delimitation") {
+            document.startAnalysis(method, input, rooted, settings, displayMethod)
+            return
+        }
+        if (document.kind !== "alignment" && document.kind !== "tree") return
+        // Only request context lives here. The backend owns the frozen input,
+        // execution state and created workspace, including failure diagnostics.
+        delimitationRequest = {source: source, document: document, path: source.file_path,
+            method: method, input: input, rooted: rooted, settings: settings, displayMethod: displayMethod,
+            usesOpenAlignment: document.kind === "alignment" && input === source.file_path}
+        if (!source.create_delimitation(method)) delimitationRequest = null
+    }
+    function completeDelimitation(request, path) {
+        if (!request || request !== delimitationRequest) return
+        delimitationRequest = null
+        if (!path.length || !documentIsOpen(request.document, request.source, request.path)) return
+        // Never reuse or overwrite an already opened result (including edits).
+        for (let i = 0; i < openFiles.count; ++i)
+            if (openFiles.get(i).path === path) return
+        openFiles.append({path: path, dirty: false, kind: "delimitation"})
+        const document = docs.itemAt(openFiles.count - 1)
+        Qt.callLater(() => {
+            if (!documentIsOpen(request.document, request.source, request.path) ||
+                    !document || !documentIsOpen(document, document.controller, path)) return
+            document.draft = true
+            document.startAnalysis(request.method,
+                request.usesOpenAlignment ? document.controller.linked_alignment : request.input,
+                request.rooted, request.settings, request.displayMethod)
+        })
+    }
+    Connections {
+        target: window.delimitationRequest ? window.delimitationRequest.source : null
+        function onWorkspaceCreated(path) { window.completeDelimitation(window.delimitationRequest, path) }
     }
     DelimitationAnalysisDialog {
         id: speciesDialog
         pathResolver: shell
         workers: window.localCpuThreads
-        onRequested: (method, input, rooted, settings, displayMethod) => {
-            const source = window.delimitationSource
-            if (!source) return
-            if (window.delimitationOpen && source === window.current) {
-                docs.itemAt(tabs.currentIndex).startAnalysis(method, input, rooted, settings, displayMethod)
-                return
-            }
-            const usesOpenAlignment = window.alignmentOpen && input === source.file_path
-            const path = source.create_delimitation(method)
-            if (!path.length) return
-            window.openPath(path)
-            const index = tabs.currentIndex
-            Qt.callLater(() => {
-                const document = docs.itemAt(index)
-                if (document && document.kind === "delimitation") {
-                    document.draft = true
-                    window.ribbonTabName = "Delimitation"
-                    document.startAnalysis(method, usesOpenAlignment ? document.controller.linked_alignment : input, rooted, settings, displayMethod)
-                }
-            })
-        }
+        onRequested: (method, input, rooted, settings, displayMethod) =>
+            window.requestDelimitation(method, input, rooted, settings, displayMethod)
     }
     DelimitationController { id: combineController }
     FileDialog {
@@ -1045,11 +1081,13 @@ ApplicationWindow {
                         RibbonButton { commandId: "ribbon.annotate-open-reading-frames";
                             text: "ORFs"
                             tip: "Annotate open reading frames"
+                            enabled: window.current && !window.current.busy
                             onInvoked: orfDialog.search(false)
                         }
                         RibbonButton { commandId: "ribbon.annotate-protein-coding-genes-with-prodigal";
                             text: "Prodigal"
                             tip: "Annotate protein-coding genes with Prodigal"
+                            enabled: window.current && !window.current.busy
                             onInvoked: genesDialog.predict(false)
                         }
                     }
@@ -1568,14 +1606,22 @@ ApplicationWindow {
         id: orfDialog
         initialFocusItem: codons
         property bool inSelection: false
-        function search(selectionOnly) { inSelection = selectionOnly; open() }
+        property var source: null
+        property string sourcePath: ""
+        function search(selectionOnly) {
+            if (!window.current || window.current.busy) return
+            source = window.current
+            sourcePath = source.file_path
+            inSelection = selectionOnly
+            open()
+        }
         title: inSelection ? "Find open reading frames in the selection" : "Find open reading frames"
         modal: true
         standardButtons: Dialog.Ok | Dialog.Cancel
         onOpened: codons.forceActiveFocus()
         onAccepted: {
             window.orfMinCodons = codons.value
-            window.current.find_orfs(codons.value, orfDialog.inSelection)
+            if (source && source.file_path === sourcePath && !source.busy) source.find_orfs(codons.value, orfDialog.inSelection)
         }
         body: ColumnLayout {
             spacing: 8
@@ -1606,9 +1652,14 @@ ApplicationWindow {
         id: genesDialog
         initialFocusItem: codeBox
         property bool inSelection: false
+        property var source: null
+        property string sourcePath: ""
         function predict(selectionOnly) {
+            if (!window.current || window.current.busy) return
+            source = window.current
+            sourcePath = source.file_path
             inSelection = selectionOnly
-            const code = window.current.genetic_code()
+            const code = source.genetic_code()
             let i = 0
             for (let k = 0; k < geneticCodes.count; k++)
                 if (geneticCodes.get(k).code === code) i = k
@@ -1619,7 +1670,7 @@ ApplicationWindow {
         modal: true
         standardButtons: Dialog.Ok | Dialog.Cancel
         onOpened: codeBox.forceActiveFocus()
-        onAccepted: window.current.predict_genes(geneticCodes.get(codeBox.currentIndex).code, inSelection)
+        onAccepted: if (source && source.file_path === sourcePath && !source.busy) source.predict_genes(geneticCodes.get(codeBox.currentIndex).code, inSelection)
         body: ColumnLayout {
             spacing: 8
             RowLayout {
@@ -1922,7 +1973,7 @@ ApplicationWindow {
                 objectName: "documentActivity"
                 Layout.fillWidth: true
                 readonly property var controller: window.current
-                busy: !!controller && (window.alignmentOpen || window.treeOpen) && controller.busy
+                busy: !!controller && (window.currentKind === "sequence" || window.alignmentOpen || window.treeOpen) && controller.busy
                 visible: busy
                 workingText: busy ? (window.alignmentOpen && controller.bootstrap_running
                     ? controller.bootstrap_status : controller.message) || "Working" : ""
@@ -1942,7 +1993,10 @@ ApplicationWindow {
                     id: docs
                     model: openFiles
                     onItemAdded: Qt.callLater(window.refreshCurrent)
-                    onItemRemoved: Qt.callLater(window.refreshCurrent)
+                    onItemRemoved: (index, item) => {
+                        window.retireDelimitationDocument(item)
+                        Qt.callLater(window.refreshCurrent)
+                    }
                     // Each file opens in the editor for what it holds.
                     delegate: DelegateChooser {
                         role: "kind"
@@ -2111,8 +2165,8 @@ ApplicationWindow {
         Item { text: "Extract as new sequence"; visible: !menu.onAnnotation; enabled: menu.info.selection; onTriggered: window.current.extract_selection() }
         Item { text: "Zoom to selection"; visible: !menu.onAnnotation; enabled: menu.info.selection; onTriggered: window.current.zoom_to_selection() }
         Item { text: "BLAST selection at NCBI"; visible: !menu.onAnnotation; enabled: menu.info.selection; onTriggered: window.beginBlast("selection") }
-        Item { text: "Find ORFs in selection…"; visible: !menu.onAnnotation; enabled: menu.info.selection; onTriggered: orfDialog.search(true) }
-        Item { text: "Predict genes in selection…"; visible: !menu.onAnnotation; enabled: menu.info.selection; onTriggered: genesDialog.predict(true) }
+        Item { text: "Find ORFs in selection…"; visible: !menu.onAnnotation; enabled: menu.info.selection && window.current && !window.current.busy; onTriggered: orfDialog.search(true) }
+        Item { text: "Predict genes in selection…"; visible: !menu.onAnnotation; enabled: menu.info.selection && window.current && !window.current.busy; onTriggered: genesDialog.predict(true) }
     }
 
     // Alignment context menu: what applies to the cells, rows or columns

@@ -191,8 +191,46 @@ fn main() {
         r#"
         SangerController {{ id: sanger }}
         SangerController {{ id: reopened }}
+        property bool sangerDone: false
+        property int pairFailures: 0
+        property string pairFile: ""
+        property string editedRevision: ""
+        property string manualDecision: ""
+        property string manualMasks: ""
+        function check(value, message) {{ if (!value) {{ console.error(message); Qt.exit(2) }} }}
+        Timer {{ interval: 10; repeat: true; running: sanger.busy; onTriggered: sanger.poll_stage() }}
+        Connections {{
+            target: sanger
+            function onStageFinished(stage, success, payload) {{
+                check(stage === "prepare" && !success && payload === "", "Missing pair must finish with prepare failure");
+                check(!sanger.busy && !sanger.calling, "Failed pair must clear activity");
+                check(sanger.file_path === pairFile && sanger.review_mode, "Failed pair changed document identity");
+                check(sanger.record_revision() === editedRevision, "Failed pair changed review revision");
+                check(sanger.review_decision === manualDecision, "Failed pair changed manual decision");
+                check(sanger.mask_settings === manualMasks && sanger.dirty, "Failed pair changed masks or dirty state");
+                check(sanger.message_kind === "fail" && sanger.message.length > 0, "Pair error must be explicit");
+                const pairError = sanger.message;
+                sanger.poll_calls();
+                sanger.poll_stage();
+                check(sanger.message === pairError && !sanger.calling, "Late polling replaced pair failure");
+                pairFailures++;
+                if (pairFailures === 1) {{
+                    check(sanger.prepare_reads(JSON.stringify([pairFile, pairFile + ".missing"]), 20), "Retry must be accepted asynchronously");
+                    check(sanger.busy, "Accepted retry must show activity");
+                    return;
+                }}
+                check(pairFailures === 2, "Unexpected duplicate pair completion");
+                sanger.review_undo();
+                check(sanger.mask_settings !== manualMasks, "Failed pair lost mask undo");
+                sanger.review_redo();
+                check(sanger.mask_settings === manualMasks, "Failed pair lost mask redo");
+                check(sanger.save_review({}), "Review save failed");
+                check(reopened.open_file({}), "Normal open of saved review failed");
+                check(reopened.review_decision.indexOf("G") >= 0, "Manual decision lost on reopen");
+                sangerDone = true;
+            }}
+        }}
         Component.onCompleted: {{
-            function check(value, message) {{ if (!value) {{ console.error(message); Qt.exit(2) }} }}
             check(sanger.open_file({}), "AB1 open failed");
             check(sanger.review_mode, "AB1 must enter review immediately");
             check(sanger.calling, "Alternative calling must be queued");
@@ -238,28 +276,21 @@ fn main() {
             // Restore a manual edit/mask, then fail preparation repeatedly.
             check(sanger.review_set("edit", "G"), "Second edit failed");
             check(sanger.mask_ends(2, sanger.consensus_columns - 1), "Second mask failed");
-            const edited = sanger.record_revision();
+            editedRevision = sanger.record_revision();
+            pairFile = file;
+            manualDecision = decision;
+            manualMasks = masks;
+            check(!sanger.prepare_reads("not-json", 20), "Malformed pair JSON must reject immediately");
+            check(!sanger.prepare_reads(JSON.stringify([file]), 20), "Invalid read count must reject immediately");
+            check(!sanger.busy, "Rejected input must not start work");
             const missingPair = JSON.stringify([file, file + ".missing"]);
-            check(!sanger.prepare_reads(missingPair, 20), "Missing pair input must fail");
-            check(!sanger.prepare_reads(missingPair, 20), "Retry must retain explicit failure");
-            check(sanger.file_path === file, "Failed pair changed document identity");
-            check(sanger.record_revision() === edited, "Failed pair changed review revision");
-            check(sanger.review_decision === decision, "Failed pair changed manual decision");
-            check(sanger.mask_settings === masks, "Failed pair changed masks");
-            check(sanger.dirty, "Failed pair cleared dirty state");
-            check(sanger.message_kind === "fail", "Pair error must use failure status");
-            sanger.review_undo();
-            check(sanger.mask_settings !== masks, "Failed pair lost mask undo");
-            sanger.review_redo();
-            check(sanger.mask_settings === masks, "Failed pair lost mask redo");
-            check(sanger.save_review({}), "Review save failed");
-            check(reopened.open_file({}), "Normal open of saved review failed");
-            check(reopened.review_decision.indexOf("G") >= 0, "Manual decision lost on reopen");
+            check(sanger.prepare_reads(missingPair, 20), "Missing pair must be accepted for asynchronous preparation");
+            check(sanger.busy, "Accepted pair must show activity until completion");
         }}
     "#,
-        serde_json::to_string(&trace_path).unwrap(),
         serde_json::to_string(&saved_path).unwrap(),
-        serde_json::to_string(&saved_path).unwrap()
+        serde_json::to_string(&saved_path).unwrap(),
+        serde_json::to_string(&trace_path).unwrap()
     );
     let figure_folder = tempfile::tempdir().expect("figure export folder");
     for (name, bytes) in [
@@ -314,7 +345,7 @@ fn main() {
              OperationPickerDialog {{}} \
              OperationParameters {{ schema: ({{type: 'object', properties: {{age: {{type: 'number'}}}}, required: ['age']}}) }} \
              {sanger_qml} {figure_qml} \
-             Timer {{ interval: 1; running: true; onTriggered: Qt.quit() }} }}",
+             Timer {{ interval: 1; running: sangerDone; onTriggered: Qt.quit() }} }}",
         )),
         &QUrl::default(),
     );
