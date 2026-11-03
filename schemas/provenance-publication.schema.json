@@ -5222,6 +5222,23 @@
           ]
         },
         {
+          "description": "Save annotation settings with type-specific drafts. Legacy `set_batch`\nretains its historical meaning so previously saved histories replay exactly.",
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "set_batch_draft"
+            },
+            "batch": {
+              "$ref": "#/$defs/BatchSettings"
+            }
+          },
+          "required": [
+            "action",
+            "batch"
+          ]
+        },
+        {
           "description": "Confirm or choose reading frames; `clear` forgets choices.",
           "type": "object",
           "properties": {
