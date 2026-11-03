@@ -306,7 +306,8 @@ mod nullable {
 }
 fn index(i: usize, j: usize) -> usize {
     let (x, y) = (i.max(j), i.min(j));
-    x * (x - 1) / 2 + y
+    // Row 0 has no pairs but still has a start offset.
+    x * x.saturating_sub(1) / 2 + y
 }
 /// Distance and delta-method variance; None means saturation or no comparable sites.
 pub fn estimate(
