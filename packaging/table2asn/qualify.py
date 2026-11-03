@@ -110,7 +110,11 @@ def main():
         runtime = runtimes[0]
         receipt["runtime"] = runtime
         tool = Path(runtime["root"]) / ".pixi/envs/default/bin/table2asn"
-        assert digest(tool) == runtime["executable_digests"]["table2asn"]
+        # Host receipts use the shared BLAKE3 content hash; this harness retains
+        # SHA256 separately for the measured native artifact identity.
+        artifact = json.loads((checkout / "packaging/table2asn/linux-64.json").read_text())
+        assert digest(tool) == artifact["tool"]["installed_executable_sha256"]
+        assert runtime["reported_versions"]["table2asn"] == "table2asn: 1.30.0"
     receipt.update(table2asn=str(tool), table2asn_sha256=digest(tool))
     version = subprocess.run([str(tool), "-version"], capture_output=True, text=True,
                              timeout=60, check=True)
