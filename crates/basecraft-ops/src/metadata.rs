@@ -372,6 +372,9 @@ pub fn create(project: &Path) -> Result<PathBuf> {
 /// `create_missing` is set. Without metadata files and without
 /// `create_missing`, returns `None`.
 pub fn open(session: &mut Session, create_missing: bool) -> Result<Option<crate::DocId>> {
+    if let Some(doc) = session.project_metadata_id() {
+        return Ok(Some(doc));
+    }
     let manifest = manifest_path(session.root());
     if !manifest.is_file() {
         if !create_missing {

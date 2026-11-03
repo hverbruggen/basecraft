@@ -1074,6 +1074,7 @@ fn inclusion_presets_reuse_the_open_metadata_owner_and_preserve_pending_edits() 
             },
         )
         .unwrap();
+    assert_eq!(metadata::open(&mut session, false).unwrap(), Some(doc));
     let rule = inclusion_rule();
     submission::save_inclusion_preset(&mut session, rule.clone()).unwrap();
     assert_eq!(
