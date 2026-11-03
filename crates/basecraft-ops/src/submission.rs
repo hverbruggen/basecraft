@@ -172,10 +172,13 @@ pub fn plan_inclusion_submission(
             "Source changed; choose it again before previewing inclusion",
         ));
     }
+    let metadata_stamp = metadata_evidence(project)?;
     let (meta, metadata_hash) = project_metadata(project)?;
     let rows = read_rows(&project.join(&source.document))?;
     // Detect replacement between hashing and reading; immutable byte input is cached by GUI review separately.
-    if basecraft_io::hash_file(&project.join(&source.document))? != hash {
+    if basecraft_io::hash_file(&project.join(&source.document))? != hash
+        || metadata_evidence(project)? != metadata_stamp
+    {
         return Err(invalid("Source changed while planning"));
     }
     let records: Vec<_> = rows
@@ -194,6 +197,7 @@ pub fn plan_inclusion_submission(
             sub,
             hash,
             metadata_hash,
+            metadata_stamp,
         ))?),
         matching: rows.iter().filter(|r| r.matched == Some(true)).count(),
         unresolved: rows.iter().filter(|r| r.matched.is_none()).count(),
@@ -270,6 +274,32 @@ pub fn read_rows(path: &Path) -> Result<Vec<SourceRow>> {
         .collect()
 }
 
+/// Exact input evidence includes externally edited TSV tables, not only the manifest.
+fn metadata_evidence(project: &Path) -> Result<Option<String>> {
+    let manifest = crate::metadata::manifest_path(project);
+    if !manifest.exists() {
+        return Ok(None);
+    }
+    let hashes = crate::metadata::files(&manifest)
+        .iter()
+        .map(|path| {
+            basecraft_io::hash_file(path).map(|hash| {
+                (
+                    path.file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned(),
+                    hash,
+                )
+            })
+        })
+        .collect::<basecraft_io::Result<Vec<_>>>()?;
+    Ok(Some(basecraft_io::hash_bytes(&serde_json::to_vec(&(
+        "submission-metadata-inputs-v1",
+        hashes,
+    ))?)))
+}
+
 /// The project metadata as saved, and its manifest's hash; empty metadata
 /// when the project has none.
 pub fn project_metadata(project: &Path) -> Result<(ProjectMetadata, Option<String>)> {
@@ -277,8 +307,13 @@ pub fn project_metadata(project: &Path) -> Result<(ProjectMetadata, Option<Strin
     if !manifest.is_file() {
         return Ok((ProjectMetadata::default(), None));
     }
+    let before = metadata_evidence(project)?;
+    let manifest_hash = basecraft_io::hash_file(&manifest)?;
     let opened = crate::metadata::load(&manifest)?;
-    Ok((opened.metadata, Some(basecraft_io::hash_file(&manifest)?)))
+    if metadata_evidence(project)? != before {
+        return Err(invalid("Metadata changed while reading"));
+    }
+    Ok((opened.metadata, Some(manifest_hash)))
 }
 
 /// The submitter preference, from the user's settings.
@@ -338,6 +373,7 @@ pub fn review_submission_cached(
     cache: &mut ReviewCache,
 ) -> Result<Review> {
     let manifest = crate::metadata::manifest_path(project);
+    let metadata_stamp = metadata_evidence(project)?;
     let metadata_hash = if manifest.exists() {
         Some(basecraft_io::hash_file(&manifest)?)
     } else {
@@ -346,13 +382,13 @@ pub fn review_submission_cached(
     if cache
         .metadata
         .as_ref()
-        .is_none_or(|(hash, _)| hash != &metadata_hash)
+        .is_none_or(|(hash, _)| hash != &metadata_stamp)
     {
         let (metadata, read_hash) = project_metadata(project)?;
-        if read_hash != metadata_hash {
+        if read_hash != metadata_hash || metadata_evidence(project)? != metadata_stamp {
             return Err(invalid("Metadata changed while reading"));
         }
-        cache.metadata = Some((metadata_hash.clone(), metadata));
+        cache.metadata = Some((metadata_stamp.clone(), metadata));
     }
     let meta = cache
         .metadata
@@ -414,7 +450,7 @@ pub fn review_submission_cached(
     let prepared_key = basecraft_io::hash_bytes(&serde_json::to_vec(&(
         &sequence_settings,
         &source_hash,
-        &metadata_hash,
+        &metadata_stamp,
     ))?);
     let mut prepared = if let Some((key, prepared)) = &cache.prepared
         && key == &prepared_key

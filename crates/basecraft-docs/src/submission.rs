@@ -89,6 +89,16 @@ pub fn validate(sub: &Submission) -> Result<(), EditError> {
     {
         return Err(err("the source alignment needs a path and a hash"));
     }
+    if let basecraft_protocol::submission::AccessionPolicy::Configured {
+        input: Some(IdentifierSource::Field { separator, index }),
+        ..
+    } = &sub.accession_policy
+        && (separator.is_empty() || *index == 0)
+    {
+        return Err(err(
+            "Choose an accession separator and one-based field index",
+        ));
+    }
     let batch = &sub.batch;
     if genetic_code::code(batch.genetic_code).is_none() {
         return Err(err(format!(

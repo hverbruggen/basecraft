@@ -151,18 +151,17 @@ pub(crate) fn authors_text(authors: &[Author]) -> String {
 /// row they concern so selecting one selects the row.
 pub(crate) fn review_view(review: &Review) -> Value {
     let p = &review.prepared;
-    let positions: std::collections::BTreeMap<_, _> = p
-        .records
-        .iter()
-        .enumerate()
-        .map(|(i, r)| (r.record.as_str(), i))
-        .collect();
-    let mut counts = vec![(0usize, 0usize); p.records.len()];
+    let mut positions = std::collections::BTreeMap::new();
+    let mut counts = std::collections::BTreeMap::<&str, (usize, usize)>::new();
+    for (index, record) in p.records.iter().enumerate() {
+        positions.entry(record.record.as_str()).or_insert(index);
+    }
     for issue in &p.issues {
-        if let Some(index) = issue.record.as_deref().and_then(|name| positions.get(name)) {
+        if let Some(record) = issue.record.as_deref() {
+            let count = counts.entry(record).or_default();
             match issue.severity {
-                basecraft_docs::submission::Severity::Blocking => counts[*index].0 += 1,
-                basecraft_docs::submission::Severity::Review => counts[*index].1 += 1,
+                basecraft_docs::submission::Severity::Blocking => count.0 += 1,
+                basecraft_docs::submission::Severity::Review => count.1 += 1,
                 _ => {}
             }
         }
@@ -170,8 +169,8 @@ pub(crate) fn review_view(review: &Review) -> Value {
     let rows: Vec<Value> = p
         .records
         .iter()
-        .enumerate()
-        .map(|(index, r)| {
+        .map(|r| {
+            let count = counts.get(r.record.as_str()).copied().unwrap_or_default();
             let (decision, accession) = match &r.decision {
                 Decision::New => ("new", r.accession.clone().unwrap_or_default()),
                 Decision::Existing { accession } => ("existing", accession.clone()),
@@ -185,8 +184,8 @@ pub(crate) fn review_view(review: &Review) -> Value {
                 "length": r.residues.len(), "trimmed": [r.trimmed.0, r.trimmed.1],
                 "feature": r.feature.as_ref().map(|f| f.kind.clone()).unwrap_or_default(),
                 "frame": r.frame,
-                "blocking": counts[index].0,
-                "review": counts[index].1})
+                "blocking": count.0,
+                "review": count.1})
         })
         .collect();
     let issues: Vec<Value> = p
@@ -337,6 +336,9 @@ impl qobject::SubmissionController {
                 let _ = thread.queue(move |mut this| {
                     this.as_mut().rust_mut().review_active = false;
                     let current = epoch == this.rust().review_epoch;
+                    if std::env::var_os("BASECRAFT_SUBMISSION_TIMINGS").is_some() {
+                        eprintln!("submission-review epoch={epoch} accepted={current}");
+                    }
                     match result {
                         Ok((review, package, cache, _seconds)) => {
                             this.as_mut().rust_mut().review_cache = Some(cache);

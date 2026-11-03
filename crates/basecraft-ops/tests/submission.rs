@@ -938,6 +938,32 @@ fn cached_review_invalidates_source_metadata_and_relevant_settings() {
             .iter()
             .any(|i| i.code == "no_title" || i.code == "no_authors")
     );
+    let plan = submission::plan_inclusion(&session, doc, &inclusion_rule()).unwrap();
+    let taxa = root.path().join("metadata/taxa.tsv");
+    let old_taxa = std::fs::read_to_string(&taxa).unwrap();
+    assert!(old_taxa.contains("Caulerpa taxifolia"));
+    std::fs::write(
+        &taxa,
+        old_taxa.replace("Caulerpa taxifolia", "Caulerpa changed"),
+    )
+    .unwrap();
+    let external =
+        submission::review_submission_cached(root.path(), &sub, &submitter(), &mut cache).unwrap();
+    assert_ne!(
+        external.prepared.records, next.prepared.records,
+        "Externally edited TSV invalidates cache without manifest edit"
+    );
+    assert!(
+        submission::edit(
+            &mut session,
+            doc,
+            SubmissionEdit::ApplyInclusion {
+                plan: Box::new(plan)
+            }
+        )
+        .is_err(),
+        "External TSV edits invalidate inclusion evidence"
+    );
     sub.batch.marker = Marker::Spacer {
         description: "Region".into(),
     };

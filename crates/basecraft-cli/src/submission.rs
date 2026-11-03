@@ -116,7 +116,7 @@ pub enum SubmissionCommand {
 }
 
 /// Large reviewed plans exceed OS argument limits; accept exact JSON from a file/stdin too.
-fn json_argument<T: serde::de::DeserializeOwned>(argument: &str) -> Result<T> {
+fn json_argument(argument: &str) -> Result<String> {
     let text = if argument == "-" {
         std::io::read_to_string(std::io::stdin())?
     } else if let Some(path) = argument.strip_prefix('@') {
@@ -124,7 +124,7 @@ fn json_argument<T: serde::de::DeserializeOwned>(argument: &str) -> Result<T> {
     } else {
         argument.to_string()
     };
-    Ok(serde_json::from_str(&text)?)
+    Ok(text)
 }
 
 fn open(project: &Path, file: &Path) -> Result<(basecraft_ops::Session, basecraft_ops::DocId)> {
@@ -163,12 +163,15 @@ pub fn run(command: SubmissionCommand) -> Result<()> {
             json_out!(submission::plan_inclusion(
                 &session,
                 doc,
-                &json_argument(&rule)?
+                &serde_json::from_str(&json_argument(&rule)?)?
             )?);
         }
         SubmissionCommand::InclusionPreset { rule, project } => {
             let mut session = crate::script_session(&project.canonicalize()?)?;
-            submission::save_inclusion_preset(&mut session, json_argument(&rule)?)?;
+            submission::save_inclusion_preset(
+                &mut session,
+                serde_json::from_str(&json_argument(&rule)?)?,
+            )?;
             json_out!(serde_json::json!({"saved": true}));
         }
         SubmissionCommand::New {
@@ -199,7 +202,7 @@ pub fn run(command: SubmissionCommand) -> Result<()> {
             edit,
             project,
         } => {
-            let edit: SubmissionEdit = json_argument(&edit)?;
+            let edit: SubmissionEdit = serde_json::from_str(&json_argument(&edit)?)?;
             let (mut session, doc) = open(&project, &file)?;
             submission::edit(&mut session, doc, edit)?;
             session.save(doc, None)?;

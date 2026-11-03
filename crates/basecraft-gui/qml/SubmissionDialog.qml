@@ -243,16 +243,6 @@ AppDialog {
     }
     onOpened: inclusionPresetsRequested("")
     onDocumentChanged: inclusionPlan = null
-    Shortcut {
-        sequences: [StandardKey.Undo]
-        enabled: dialog.opened && dialog.canUndo
-        onActivated: dialog.undoRequested()
-    }
-    Shortcut {
-        sequences: [StandardKey.Redo]
-        enabled: dialog.opened && dialog.canRedo
-        onActivated: dialog.redoRequested()
-    }
 
     function frameText(frame) {
         if (!frame)

@@ -387,6 +387,18 @@ pub fn validate(meta: &ProjectMetadata) -> Result<(), EditError> {
         }
     }
     crate::metadata_consumers::validate_partitions(meta)?;
+    let mut rule_names = BTreeSet::new();
+    for rule in &meta.import.inclusion_rules {
+        if rule.name.trim().is_empty() || !rule_names.insert(&rule.name) {
+            return fail("inclusion presets need unique nonempty names");
+        }
+        crate::submission::inclusion_rows(
+            &basecraft_protocol::submission::Submission::default(),
+            rule,
+            &[],
+        )
+        .map_err(|error| EditError(error.0))?;
+    }
     for pattern in &meta.import.header_patterns {
         if pattern.separator.is_empty() || pattern.name.is_empty() {
             return fail("a header pattern needs a name and a separator");
