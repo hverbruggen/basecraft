@@ -790,6 +790,20 @@ fn inclusion_preview_is_atomic_stale_safe_undoable_and_replayable() {
     .unwrap();
     let mut session = Session::new(root.path());
     let doc = submission::create(&mut session, Path::new("test.submission.json"), &fasta).unwrap();
+    submission::edit(
+        &mut session,
+        doc,
+        SubmissionEdit::SetBatchDraft {
+            batch: BatchSettings {
+                marker: Marker::Rrna {
+                    product: "18S ribosomal RNA".into(),
+                },
+                ..BatchSettings::default()
+            },
+        },
+    )
+    .unwrap();
+    assert!(session.submission(doc).marker_drafts.contains_key("rrna"));
     let plan = submission::plan_inclusion(&session, doc, &inclusion_rule()).unwrap();
     assert_eq!((plan.matching, plan.unresolved, plan.included), (1, 1, 2));
     assert_eq!(plan.rows[0].record, "a_b_HV00145_XX");
@@ -1091,4 +1105,22 @@ fn inclusion_presets_reuse_the_open_metadata_owner_and_preserve_pending_edits() 
     );
     assert_eq!(session.metadata(doc).import.inclusion_rules, []);
     assert!(replay::replay(root.path()).unwrap().ok());
+}
+
+#[test]
+fn published_legacy_submission_histories_keep_exact_save_hashes() {
+    let root = tempfile::tempdir().unwrap();
+    let fixture = fixtures().join("legacy-history");
+    let log = root.path().join(".basecraft/log/legacy");
+    let objects = root.path().join(".basecraft/objects");
+    std::fs::create_dir_all(&log).unwrap();
+    std::fs::create_dir_all(&objects).unwrap();
+    std::fs::copy(fixture.join("events.jsonl"), log.join("2026-11.jsonl")).unwrap();
+    for entry in std::fs::read_dir(fixture.join("objects")).unwrap() {
+        let entry = entry.unwrap();
+        std::fs::copy(entry.path(), objects.join(entry.file_name())).unwrap();
+    }
+    let report = replay::replay(root.path()).unwrap();
+    assert_eq!((report.sessions, report.entries), (2, 6));
+    assert!(report.ok(), "{:#?}", report.problems);
 }

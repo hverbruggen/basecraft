@@ -42,15 +42,15 @@ pub struct Submission {
     /// Absent in legacy documents: their publication is also the submission citation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub submission_details: Option<Publication>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub publication_differs: bool,
     /// Marker-specific drafts survive type switches without transferring scientific text.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub marker_drafts: BTreeMap<String, Marker>,
     /// Rule origin for explicit decisions; absent entries are manual/legacy decisions.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub row_rules: BTreeMap<String, InclusionRule>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "AccessionPolicy::is_legacy")]
     pub accession_policy: AccessionPolicy,
     /// Accessions returned by the archive, by record name.
     #[serde(default)]
@@ -371,6 +371,11 @@ pub enum SubmissionEdit {
     SetBatch {
         batch: BatchSettings,
     },
+    /// Save annotation settings with type-specific drafts. Legacy `set_batch`
+    /// retains its historical meaning so previously saved histories replay exactly.
+    SetBatchDraft {
+        batch: BatchSettings,
+    },
     /// Confirm or choose reading frames; `clear` forgets choices.
     SetFrames {
         #[serde(default)]
@@ -418,6 +423,12 @@ pub enum AccessionPolicy {
         input: Option<IdentifierSource>,
         include_metadata: bool,
     },
+}
+
+impl AccessionPolicy {
+    fn is_legacy(&self) -> bool {
+        matches!(self, Self::LegacyHeuristic)
+    }
 }
 
 /// Identifier fields use the same literal splitting primitive as metadata header imports.

@@ -174,11 +174,8 @@ pub fn marker_kind(marker: &Marker) -> &'static str {
 pub fn validate_citation(citation: &Publication) -> Result<(), EditError> {
     check_text("title", &citation.title, 2000)?;
     for (index, author) in citation.authors.iter().enumerate() {
-        if author.last.is_empty() || author.first.is_empty() {
-            return Err(err(format!(
-                "Author {} needs a surname and given name or initial",
-                index + 1
-            )));
+        if author.last.is_empty() {
+            return Err(err(format!("Author {} needs a surname", index + 1)));
         }
         check_text("author last name", &author.last, 100)?;
         check_text("author first name", &author.first, 100)?;
@@ -356,7 +353,8 @@ pub fn apply(sub: &mut Submission, edit: &SubmissionEdit) -> Result<(), EditErro
             }
             next.selection_confirmation = Some(selection_hash.clone());
         }
-        SubmissionEdit::SetBatch { batch } => {
+        SubmissionEdit::SetBatch { batch } => next.batch = batch.clone(),
+        SubmissionEdit::SetBatchDraft { batch } => {
             next.marker_drafts.insert(
                 marker_kind(&next.batch.marker).into(),
                 next.batch.marker.clone(),
@@ -2010,14 +2008,14 @@ mod redesign_tests {
         };
         apply(
             &mut sub,
-            &SubmissionEdit::SetBatch {
+            &SubmissionEdit::SetBatchDraft {
                 batch: rrna.clone(),
             },
         )
         .unwrap();
         apply(
             &mut sub,
-            &SubmissionEdit::SetBatch {
+            &SubmissionEdit::SetBatchDraft {
                 batch: BatchSettings {
                     marker: Marker::Coding {
                         gene: "tufA".into(),

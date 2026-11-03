@@ -150,7 +150,7 @@ AppDialog {
         const next = batchFromControls();
         if (JSON.stringify(next) !== JSON.stringify(batch))
             editRequested(JSON.stringify({
-                action: "set_batch",
+                action: "set_batch_draft",
                 batch: next
             }));
     }
@@ -206,7 +206,7 @@ AppDialog {
         const next = Object.assign({}, batch);
         next.marker = document.marker_drafts && document.marker_drafts[nextKind] ? document.marker_drafts[nextKind] : empty[nextKind];
         editRequested(JSON.stringify({
-            action: "set_batch",
+            action: "set_batch_draft",
             batch: next
         }));
     }
