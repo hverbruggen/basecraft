@@ -37,11 +37,11 @@ pub(super) fn tree(mut d: Vec<f64>, names: &[String]) -> String {
         };
         let height = d[i * n + j] / 2.;
         labels[i] = format!(
-            "({}:{:.12},{}:{:.12})",
+            "({}:{},{}:{})",
             labels[i],
-            height - heights[i],
+            crate::length_text(height - heights[i]),
             labels[j],
-            height - heights[j]
+            crate::length_text(height - heights[j])
         );
         let total = sizes[i] + sizes[j];
         let wi = sizes[i] as f64 / total as f64;
@@ -125,11 +125,11 @@ mod tests {
                 let (v, i, j) = best;
                 let h = v / 2.;
                 labels[i] = format!(
-                    "({}:{:.12},{}:{:.12})",
+                    "({}:{},{}:{})",
                     labels[i],
-                    h - heights[i],
+                    crate::length_text(h - heights[i]),
                     labels[j],
-                    h - heights[j]
+                    crate::length_text(h - heights[j])
                 );
                 heights[i] = h;
                 let members = std::mem::take(&mut clusters[j]);

@@ -719,11 +719,11 @@ impl DistanceMatrix {
             };
             if size == 2 {
                 result.trees.push(format!(
-                    "({}:{:.12},{}:{:.12});\n",
+                    "({}:{},{}:{});\n",
                     quote(&names[0]),
-                    dm[1] / 2.,
+                    length_text(dm[1] / 2.),
                     quote(&names[1]),
-                    dm[1] / 2.
+                    length_text(dm[1] / 2.)
                 ));
                 continue;
             }
@@ -1337,6 +1337,9 @@ mod tests {
         let names: Vec<_> = (0..4).map(|i| format!("s{i}")).collect();
         assert!(optimized::tree(vec![1e308; 6], &names, false, 512, false).is_err());
         assert!(optimized::tree(vec![f64::MAX; 6], &names, false, 512, true).is_err());
+        // A live row must never be mistaken for a dead one.
+        let five: Vec<_> = (0..5).map(|i| format!("s{i}")).collect();
+        assert!(optimized::tree(vec![-1e308; 10], &five, false, 512, false).is_err());
     }
     #[test]
     fn negative_zero_matches_plain_zero_in_the_search() {
@@ -1346,6 +1349,16 @@ mod tests {
         assert_eq!(plain.0, signed.0);
         assert_eq!(signed.1.mismatches, 0);
         assert!(!signed.0.contains("-0.0"));
+    }
+    #[test]
+    fn labels_from_old_negative_zero_caches_lose_the_sign() {
+        for n in [2, 8] {
+            let m = cache_with(vec![-0.; n * (n - 1) / 2]);
+            for method in [Method::Sorted, Method::Upgma, Method::Njstar] {
+                let trees = m.tree(method, 1).unwrap().trees.concat();
+                assert!(!trees.contains("-0.0"), "n {n} {method:?}: {trees}");
+            }
+        }
     }
     #[test]
     fn caches_without_variances_are_refused_when_read() {

@@ -79,11 +79,14 @@ TREES = {"sorted": ("exact neighbor joining (Saitou and Nei 1987; Studier and Ke
          "fourpoint": ("neighbor joining after a synchronous, uncapped variant of four-point completion of missing distances, without weighted least-squares refinement (Landry et al. 1996; Makarenkov and Lapointe 2004)", NJ + FAST_NJ + [
              "Landry PA, Lapointe FJ, Kirsch JAW. 1996. Estimating phylogenies from lacunose distance matrices: additive is superior to ultrametric estimation. Mol Biol Evol 13:818-823.",
              "Makarenkov V, Lapointe FJ. 2004. A weighted least-squares approach for inferring phylogenies from incomplete distance matrices. Bioinformatics 20:2113-2121."]),
-         "upgma": ("UPGMA (Sokal and Michener 1958)", ["Sokal RR, Michener CD. 1958. A statistical method for evaluating systematic relationships. Univ Kansas Sci Bull 38:1409-1438."])}
-BOOTSTRAP = "Felsenstein J. 1985. Confidence limits on phylogenies: an approach using the bootstrap. Evolution 39:783-791."
+         "upgma": ("UPGMA (Sokal and Michener 1958), using a nearest-neighbor chain (Murtagh 1983)", [
+             "Sokal RR, Michener CD. 1958. A statistical method for evaluating systematic relationships. Univ Kansas Sci Bull 38:1409-1438.",
+             "Murtagh F. 1983. A survey of recent advances in hierarchical clustering algorithms. Comput J 26:354-359."])}
+BOOTSTRAP = ["Felsenstein J. 1985. Confidence limits on phylogenies: an approach using the bootstrap. Evolution 39:783-791.",
+             "Steele GL, Lea D, Flood CH. 2014. Fast splittable pseudorandom number generators. Proc OOPSLA, 453-472."]
 
 
-def methods(kind, model, method, min_overlap, bootstrap):
+def methods(kind, model, method, min_overlap, bootstrap, dynamic_search=True):
     """Scientific description and citations for this run, carried into the Methods text."""
     name, cited = MODELS[model]
     text = (f"Pairwise {name} were calculated with basecraft-distance, excluding gaps and ambiguous sites "
@@ -93,11 +96,17 @@ def methods(kind, model, method, min_overlap, bootstrap):
     if kind == "tree":
         tree_text, tree_cited = TREES[method]
         text += f". The tree was inferred by {tree_text}"
-        citations += tree_cited
+        # NJ* only reaches the dynamic search for components with complete distances.
+        citations += [c for c in tree_cited if dynamic_search or c not in FAST_NJ]
         if bootstrap:
-            text += f", with {bootstrap} ordinary site bootstrap replicates (Felsenstein 1985)"
-            citations.append(BOOTSTRAP)
+            text += f", with {bootstrap} ordinary site bootstrap replicates (Felsenstein 1985), resampled with SplitMix64 (Steele et al. 2014)"
+            citations += BOOTSTRAP
     return {"description": text, "citations": citations}
+
+
+def used_dynamic_search(metadata):
+    details = (metadata.get("tree") or {}).get("details") or []
+    return any("q_evaluations" in detail for detail in details)
 
 
 def resolved_parameters(kind, model, method, params, bootstrap):
@@ -119,7 +128,7 @@ def cache_identity(path):
     except (OSError, ValueError) as error:
         raise ValueError("Distance cache input can't be read; calculate a fresh cache") from error
     if not isinstance(saved, dict):
-        raise ValueError("Distance cache input can't be read; calculate a fresh cache")
+        raise ValueError("Distance cache input can't be read; calculate a fresh cache")  # noqa: TRY004
     return saved.get("basecraft_identity")
 
 
@@ -246,7 +255,7 @@ def invoke(kind, params):
             "tool": {"name": "basecraft-distance", "version": metadata["version"]},
             "execution": {"argv": args, "resolved_parameters": resolved_parameters(kind, model, method, params, bootstrap),
                           "preprocessing": ["Gaps and ambiguous sites excluded pairwise"], "environment": {},
-                          "methods_template": f"basecraft.distance.{kind}.v1", "methods": methods(kind, model, method, params.get("min_overlap", 1), bootstrap)}}
+                          "methods_template": f"basecraft.distance.{kind}.v1", "methods": methods(kind, model, method, params.get("min_overlap", 1), bootstrap, used_dynamic_search(metadata))}}
 
 
 @plugin.operation("tree")

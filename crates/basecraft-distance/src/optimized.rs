@@ -152,6 +152,10 @@ pub(super) fn tree(
         *v += 0.;
     }
     let mut s = row_sums(&d, n);
+    // -inf marks a dead row, so an overflowed sum must never enter the search.
+    if s.iter().any(|v| !v.is_finite()) {
+        return Err(TOO_LARGE.into());
+    }
     let mut nodes: Vec<_> = names
         .iter()
         .map(|s| Node {
@@ -184,6 +188,9 @@ pub(super) fn tree(
             .filter(|v| v.is_finite())
             .fold(0_f64, |a, &b| a.max(b.abs()));
         let pad = 16. * f64::EPSILON * (1. + c * d_limit + 2. * s_limit);
+        if !pad.is_finite() {
+            return Err(TOO_LARGE.into());
+        }
         let mut best = Best::none();
         for r in 0..slots {
             let p = partner[r];

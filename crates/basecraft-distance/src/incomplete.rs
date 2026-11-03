@@ -361,12 +361,13 @@ pub(super) fn direct(
         let (a, b, c) = (ids[0], ids[1], ids[2]);
         let la = (d[a * n + b] + d[a * n + c] - d[b * n + c]) / 2.;
         vec![format!(
-            "({}:{la:.12},{}:{:.12},{}:{:.12});\n",
+            "({}:{},{}:{},{}:{});\n",
             nodes[a],
+            crate::length_text(la),
             nodes[b],
-            d[a * n + b] - la,
+            crate::length_text(d[a * n + b] - la),
             nodes[c],
-            d[a * n + c] - la
+            crate::length_text(d[a * n + c] - la)
         )]
     } else {
         ids.iter().map(|&i| format!("{};\n", nodes[i])).collect()

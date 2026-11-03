@@ -51,8 +51,8 @@ are missing, never zero. Protein correction models are not implemented.
 ## Trees and missing data
 
 - `sorted`: exact NJ, the default. It requires complete distances within each connected
-  component. The search now uses cached row bounds rather than sorted rows, and always
-  chooses the same joins as an exhaustive search, ties included. The name stays so saved
+  component. The search now uses cached row bounds rather than sorted rows, and chooses
+  the same joins as an exhaustive search in the same arithmetic, ties included. The name stays so saved
   settings and history keep their meaning.
 - `fourpoint`: experimental four-point completion followed by exact NJ; errors
   if completion cannot fill a connected component.
