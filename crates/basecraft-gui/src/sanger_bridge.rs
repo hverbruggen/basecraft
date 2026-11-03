@@ -1095,6 +1095,9 @@ impl qobject::SangerController {
         signal_threshold: i32,
     ) -> bool {
         // Keep the existing additional-read API, sharing the full-selection path.
+        // Detach earlier calls before source resolution or JSON validation can
+        // fail, so late results cannot replace this request's error.
+        self.as_mut().cancel_calls();
         let paths = (|| -> Result<Vec<String>, String> {
             let source = self
                 .rust()

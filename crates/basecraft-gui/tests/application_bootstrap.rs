@@ -206,6 +206,30 @@ fn main() {
             // A queued first-read caller must not run after a failed pair.
             check(sanger.open_file(file), "Reopen for queued calling failed");
             check(sanger.calling, "Reopen should queue calls");
+            // The legacy route must cancel before parsing additional reads,
+            // while retaining the current review and its undo history.
+            check(sanger.review_set("edit", "G"), "Legacy route edit failed");
+            check(sanger.mask_ends(2, sanger.consensus_columns - 1), "Legacy route mask failed");
+            const legacyRevision = sanger.record_revision();
+            check(sanger.calling, "Manual review should retain queued calls");
+            check(!sanger.draft_consensus("not-json", 20), "Malformed additional reads must fail");
+            check(!sanger.calling, "Legacy validation must detach queued calling");
+            const legacyError = sanger.message;
+            check(legacyError.length > 0 && sanger.message_kind === "fail", "Legacy error must be explicit");
+            sanger.poll_calls();
+            sanger.poll_calls();
+            check(!sanger.calling, "Late legacy polling restarted calls");
+            check(sanger.message === legacyError && sanger.message_kind === "fail", "Late polling replaced legacy failure");
+            check(sanger.file_path === file && sanger.review_mode, "Legacy failure changed document identity");
+            check(sanger.record_revision() === legacyRevision, "Legacy failure changed review revision");
+            check(sanger.review_decision === decision, "Legacy failure changed manual decision");
+            check(sanger.mask_settings === masks && sanger.dirty, "Legacy failure changed masks or dirty state");
+            sanger.review_undo();
+            check(sanger.mask_settings !== masks, "Legacy failure lost mask undo");
+            sanger.review_redo();
+            check(sanger.mask_settings === masks, "Legacy failure lost mask redo");
+            check(sanger.open_file(file), "Reopen after legacy failure failed");
+            check(sanger.calling, "Reopen after legacy failure should queue calls");
             check(!sanger.prepare_reads(JSON.stringify([file, file]), 0), "Invalid cutoff must fail");
             check(!sanger.calling, "Pair preparation must detach queued calling");
             const error = sanger.message;
