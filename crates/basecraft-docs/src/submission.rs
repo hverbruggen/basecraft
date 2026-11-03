@@ -179,7 +179,7 @@ pub fn validate_citation(citation: &Publication) -> Result<(), EditError> {
         }
         check_text("author last name", &author.last, 100)?;
         check_text("author first name", &author.first, 100)?;
-        check_text("author middle initials", &author.middle, 100)?;
+        check_text("author middle names or initials", &author.middle, 100)?;
     }
     Ok(())
 }
