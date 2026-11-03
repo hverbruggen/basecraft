@@ -1,5 +1,5 @@
 use basecraft_ops::{Session, files};
-use basecraft_protocol::Op;
+use basecraft_protocol::{Op, SupportKind};
 
 #[test]
 fn same_path_replacement_cannot_reuse_tree_metadata() {
@@ -15,7 +15,7 @@ fn same_path_replacement_cannot_reuse_tree_metadata() {
                 name: "Imported".into(),
                 source: "source".into(),
                 values: vec![None, Some("42".into())],
-                kind: Default::default(),
+                kind: SupportKind::default(),
             },
         )
         .unwrap();
@@ -205,7 +205,7 @@ fn imported_support_partial_removal_undo_save_reopen_and_redo() {
     );
     let input =
         basecraft_ops::input_evidence::read_input(&provenance::bundle_for_result(&target)).unwrap();
-    assert!(input.extra["upstream"].as_array().unwrap().is_empty());
+    assert_eq!(input.extra["upstream"].as_array().unwrap().as_slice(), []);
     session.undo(doc).unwrap();
     session.save(doc, None).unwrap();
     assert!(
@@ -247,7 +247,7 @@ fn annotation(start: u64) -> Op {
                 start + 2,
                 basecraft_protocol::Strand::Forward,
             ),
-            qualifiers: Default::default(),
+            qualifiers: Vec::new(),
         },
     }
 }
@@ -409,11 +409,10 @@ fn extraction_is_reference_first_and_packages_exact_source_and_mapping() {
     let package = dir.path().join("package");
     provenance::package(&result, &package).unwrap();
     std::fs::write(&source, ">gene\nTTTTTTTT\n").unwrap();
-    assert!(!provenance::verify(&result).unwrap().is_empty());
-    assert!(
-        provenance::verify(&package.join("extract.gb"))
-            .unwrap()
-            .is_empty()
+    assert_ne!(provenance::verify(&result).unwrap(), Vec::<String>::new());
+    assert_eq!(
+        provenance::verify(&package.join("extract.gb")).unwrap(),
+        Vec::<String>::new()
     );
 }
 
