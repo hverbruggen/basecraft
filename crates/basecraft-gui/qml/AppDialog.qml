@@ -13,8 +13,9 @@ Dialog {
     anchors.centerIn: Overlay.overlay
     implicitWidth: Math.max(implicitContentWidth + leftPadding + rightPadding,
         implicitHeaderWidth, implicitFooterWidth)
-    width: Math.max(0, Math.min(implicitWidth,
-        Overlay.overlay ? Overlay.overlay.width - 32 : implicitWidth))
+    readonly property real maximumDialogWidth: hostWindow ? hostWindow.width * 0.9 : 1080
+    readonly property real maximumContentWidth: Math.max(0, maximumDialogWidth - leftPadding - rightPadding)
+    width: Math.max(0, Math.min(implicitWidth, maximumDialogWidth))
     height: Math.max(0, Math.min(implicitHeight,
         Overlay.overlay ? Overlay.overlay.height - 32 : implicitHeight))
     // Dialog's Escape handling calls reject(), including for Close-only dialogs.

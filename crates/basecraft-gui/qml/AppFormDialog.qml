@@ -25,8 +25,8 @@ AppDialog {
         // field widths, even though sections span both columns.
         return Math.ceil(Math.max(sections, fields) + captions + 12)
     }
-    readonly property real preferredFormWidth: Math.min(naturalFormWidth, metrics.averageCharacterWidth * 76)
-    // Bound natural form width by a readable line length, scaled with the font.
+    readonly property real preferredFormWidth: Math.min(naturalFormWidth, maximumContentWidth)
+    // Keep small forms compact; allow wider forms up to the shared window-relative limit.
     implicitWidth: Math.max(implicitHeaderWidth, implicitFooterWidth,
         preferredFormWidth + leftPadding + rightPadding)
     function inheritLabelFonts() {

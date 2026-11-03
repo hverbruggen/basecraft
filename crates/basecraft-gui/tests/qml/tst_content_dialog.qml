@@ -30,6 +30,16 @@ Item {
     TestCase {
         name: "ContentDialog"
         when: windowShown
+        function test_window_relative_width_limit() {
+            failOnWarning(/Binding loop/)
+            const dialog = createTemporaryObject(contentComponent, root)
+            dialog.open()
+            tryCompare(dialog, "opened", true)
+            tryVerify(() => Math.abs(dialog.width - dialog.hostWindow.width * 0.9) < 1)
+            findChild(dialog.body, "explanation").text = "Short explanation"
+            tryVerify(() => dialog.width < dialog.hostWindow.width * 0.9)
+            dialog.close()
+        }
         function test_reveal_after_content_reflow() {
             const dialog = createTemporaryObject(contentComponent, root, {trailingContent: true})
             dialog.open()
