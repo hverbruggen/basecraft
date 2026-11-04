@@ -99,12 +99,16 @@ class NativeRetention(AllocationContract):
         self.assertTrue(retained["path"].endswith(".partial.nex"))
         self.assertIn(retained["path"], result["outputs"])
         self.assertEqual(Path(retained["path"]).read_text().count("TREE replicate_"), report["completed"])
+        described = result["execution"]["methods"]["description"]
+        self.assertIn(f"{report['completed']} completed, {report['failed_replicates']} failed", described)
+        self.assertIn("support was withheld", described)
         cancel = self.root / "cancel"
         cancel.touch()
         params = dict(self.params, cancel_file=str(cancel),
                       analysis_artifacts=dict(self.allocation, run_id="cancelled"))
-        invoke("tree", params)
+        result = invoke("tree", params)
         self.assertEqual(self.report()["replicate_trees"]["status"], "cancelled")
+        self.assertIn("was cancelled", result["execution"]["methods"]["description"])
         self.input.write_text(">a\nAAA---\n>b\n---AAA\n")
         params = dict(self.params, analysis_artifacts=dict(self.allocation, run_id="disconnected"))
         with self.assertRaisesRegex(RuntimeError, "complete tree"):

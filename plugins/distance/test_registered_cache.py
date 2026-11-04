@@ -73,6 +73,23 @@ class MethodsTextTest(unittest.TestCase):
         boot = distance_plugin.methods("tree", "p", "sorted", 1, 100)
         self.assertIn("Felsenstein", "\n".join(boot["citations"]))
         self.assertIn("Steele", "\n".join(boot["citations"]))
+        self.assertIn("with 100 ordinary site bootstrap replicates", boot["description"])
+
+    def test_bootstrap_text_reports_what_ran(self):
+        def text(**report):
+            base = {"requested": 10, "attempted": 10, "completed": 10, "failed_replicates": 0,
+                    "support_withheld": False, "cancelled": False}
+            return distance_plugin.methods("tree", "p", "sorted", 1, 10, True, {**base, **report})
+        self.assertIn("with 10 ordinary site bootstrap replicates", text()["description"])
+        partial = text(completed=8, failed_replicates=2, support_withheld=True)
+        self.assertIn("was incomplete (10 replicates requested, 10 attempted, 8 completed, 2 failed)", partial["description"])
+        self.assertIn("support was withheld", partial["description"])
+        self.assertNotIn("with 10 ordinary", partial["description"])
+        cancelled = text(attempted=3, completed=3, support_withheld=True, cancelled=True)
+        self.assertIn("was cancelled (10 replicates requested, 3 attempted, 3 completed, 0 failed)", cancelled["description"])
+        for result in (partial, cancelled):
+            self.assertIn("Felsenstein", "\n".join(result["citations"]))
+            self.assertIn("Steele", "\n".join(result["citations"]))
         unsearched = distance_plugin.methods("tree", "p", "sorted", 1, 0, False)
         self.assertNotIn("Clausen", unsearched["description"])
         self.assertNotIn("Clausen", "\n".join(unsearched["citations"]))

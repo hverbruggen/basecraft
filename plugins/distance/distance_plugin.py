@@ -86,7 +86,18 @@ BOOTSTRAP = ["Felsenstein J. 1985. Confidence limits on phylogenies: an approach
              "Steele GL, Lea D, Flood CH. 2014. Fast splittable pseudorandom number generators. Proc OOPSLA, 453-472."]
 
 
-def methods(kind, model, method, min_overlap, bootstrap, dynamic_search=True):
+def bootstrap_methods(requested, report):
+    """Describe the replicates that actually ran, and say so when support was withheld."""
+    if not report or not report["support_withheld"]:
+        count = report["completed"] if report else requested
+        return f", with {count} ordinary site bootstrap replicates (Felsenstein 1985), resampled with SplitMix64 (Steele et al. 2014)"
+    outcome = "was cancelled" if report["cancelled"] else "was incomplete"
+    return (f". Ordinary site bootstrap (Felsenstein 1985), resampled with SplitMix64 (Steele et al. 2014), {outcome} "
+            f"({report['requested']} replicates requested, {report['attempted']} attempted, {report['completed']} completed, "
+            f"{report['failed_replicates']} failed), so bootstrap support was withheld from the tree")
+
+
+def methods(kind, model, method, min_overlap, bootstrap, dynamic_search=True, bootstrap_report=None):
     """Scientific description and citations for this run, carried into the Methods text."""
     name, cited = MODELS[model]
     text = (f"Pairwise {name} were calculated with basecraft-distance, excluding gaps and ambiguous sites "
@@ -101,7 +112,7 @@ def methods(kind, model, method, min_overlap, bootstrap, dynamic_search=True):
         # NJ* only reaches the dynamic search for components with complete distances.
         citations += [c for c in tree_cited if dynamic_search or c not in FAST_NJ]
         if bootstrap:
-            text += f", with {bootstrap} ordinary site bootstrap replicates (Felsenstein 1985), resampled with SplitMix64 (Steele et al. 2014)"
+            text += bootstrap_methods(bootstrap, bootstrap_report)
             citations += BOOTSTRAP
     return {"description": text, "citations": citations}
 
@@ -257,7 +268,7 @@ def invoke(kind, params):
             "tool": {"name": "basecraft-distance", "version": metadata["version"]},
             "execution": {"argv": args, "resolved_parameters": resolved_parameters(kind, model, method, params, bootstrap),
                           "preprocessing": ["Gaps and ambiguous sites excluded pairwise"], "environment": {},
-                          "methods_template": f"basecraft.distance.{kind}.v1", "methods": methods(kind, model, method, params.get("min_overlap", 1), bootstrap, used_dynamic_search(metadata))}}
+                          "methods_template": f"basecraft.distance.{kind}.v1", "methods": methods(kind, model, method, params.get("min_overlap", 1), bootstrap, used_dynamic_search(metadata), bootstrap_report)}}
 
 
 @plugin.operation("tree")
