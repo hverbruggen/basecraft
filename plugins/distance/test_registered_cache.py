@@ -76,8 +76,17 @@ class MethodsTextTest(unittest.TestCase):
         self.assertIn("with 100 ordinary site bootstrap replicates", boot["description"])
 
     def test_methods_state_the_tie_rule(self):
-        for method in ("sorted", "njstar", "mvrstar", "fourpoint"):
+        for method in ("sorted", "fourpoint"):
             self.assertIn("ties were settled by input order", distance_plugin.methods("tree", "p", method, 1, 0)["description"])
+        for method in ("njstar", "mvrstar"):
+            text = distance_plugin.methods("tree", "p", method, 1, 0)["description"]
+            self.assertIn("At steps with incomplete distances", text)
+            self.assertIn("ordered by Q then input order", text)
+            self.assertIn("fraction of satisfied quartet comparisons, the number of comparisons", text)
+            self.assertIn("taxa with asymmetric distance availability, and the summed quartet margin", text)
+            self.assertIn("remaining ties used shortlist order", text)
+            self.assertIn("At steps with complete distances, the lowest Q was selected", text)
+            self.assertNotIn(distance_plugin.JOIN_TIES, text)
         upgma = distance_plugin.methods("tree", "p", "upgma", 1, 0)["description"]
         self.assertIn("chain's previous cluster, then input order", upgma)
         self.assertIn("can depend on sequence order", distance_plugin.methods("tree", "p", "sorted", 1, 100)["description"])
