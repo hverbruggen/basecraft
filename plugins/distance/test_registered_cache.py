@@ -75,6 +75,14 @@ class MethodsTextTest(unittest.TestCase):
         self.assertIn("Steele", "\n".join(boot["citations"]))
         self.assertIn("with 100 ordinary site bootstrap replicates", boot["description"])
 
+    def test_methods_state_the_tie_rule(self):
+        for method in ("sorted", "njstar", "mvrstar", "fourpoint"):
+            self.assertIn("ties were settled by input order", distance_plugin.methods("tree", "p", method, 1, 0)["description"])
+        upgma = distance_plugin.methods("tree", "p", "upgma", 1, 0)["description"]
+        self.assertIn("chain's previous cluster, then input order", upgma)
+        self.assertIn("can depend on sequence order", distance_plugin.methods("tree", "p", "sorted", 1, 100)["description"])
+        self.assertNotIn("ties", distance_plugin.methods("matrix", "p", "sorted", 1, 0)["description"])
+
     def test_bootstrap_text_reports_what_ran(self):
         def text(**report):
             base = {"requested": 10, "attempted": 10, "completed": 10, "failed_replicates": 0,

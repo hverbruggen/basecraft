@@ -82,6 +82,10 @@ TREES = {"sorted": ("exact neighbor joining (Saitou and Nei 1987; Studier and Ke
          "upgma": ("UPGMA (Sokal and Michener 1958), using a nearest-neighbor chain (Murtagh 1983)", [
              "Sokal RR, Michener CD. 1958. A statistical method for evaluating systematic relationships. Univ Kansas Sci Bull 38:1409-1438.",
              "Murtagh F. 1983. A survey of recent advances in hierarchical clustering algorithms. Comput J 26:354-359."])}
+JOIN_TIES = ("Joins were compared in double-precision arithmetic and ties were settled by input order, "
+             "so tied parts of the tree can depend on sequence order")
+UPGMA_TIES = ("Merges were compared in double-precision arithmetic and ties were settled by the chain's previous "
+              "cluster, then input order, so tied parts of the tree can depend on sequence order")
 BOOTSTRAP = ["Felsenstein J. 1985. Confidence limits on phylogenies: an approach using the bootstrap. Evolution 39:783-791.",
              "Steele GL, Lea D, Flood CH. 2014. Fast splittable pseudorandom number generators. Proc OOPSLA, 453-472."]
 
@@ -114,6 +118,7 @@ def methods(kind, model, method, min_overlap, bootstrap, dynamic_search=True, bo
         if bootstrap:
             text += bootstrap_methods(bootstrap, bootstrap_report)
             citations += BOOTSTRAP
+        text += f". {UPGMA_TIES if method == 'upgma' else JOIN_TIES}"
     return {"description": text, "citations": citations}
 
 
