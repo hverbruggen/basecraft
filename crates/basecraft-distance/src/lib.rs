@@ -1390,6 +1390,41 @@ mod tests {
         assert!(optimized::tree(vec![-1e308; 10], &five, false, 512, false).is_err());
     }
     #[test]
+    fn a_row_sum_that_overflows_during_a_join_is_reported() {
+        // Join slots 0 and 1. Slot 2's sum takes 0.8e308, and slot 3 is a dead row.
+        let run = |row_sum: f64| {
+            let mut d = vec![0., -0.8e308, -0.8e308, 0., 0., 0.];
+            let mut s = [0., 0., row_sum, f64::NEG_INFINITY];
+            let mut lower = [0.; 4];
+            let mut exact = [false; 4];
+            let mut partner = [usize::MAX; 4];
+            let mut max_d = [0.; 4];
+            let mut new_d = vec![];
+            let mut d_limit = 0.;
+            let join = optimized::Join {
+                x: 0,
+                y: 1,
+                xy: 0.,
+                pad: 0.,
+            };
+            let finite = optimized::update_rows(
+                join,
+                &mut d,
+                &mut s,
+                &mut lower,
+                &mut exact,
+                &mut partner,
+                &mut max_d,
+                &mut new_d,
+                &mut d_limit,
+            );
+            (finite, new_d.len())
+        };
+        assert_eq!(run(1.), (true, 1));
+        assert_eq!(run(1.2e308), (false, 1));
+        assert_eq!(run(f64::NAN), (false, 1));
+    }
+    #[test]
     fn negative_zero_matches_plain_zero_in_the_search() {
         let names: Vec<_> = (0..8).map(|i| format!("s{i}")).collect();
         let plain = optimized::tree(vec![0.; 28], &names, false, 512, true).unwrap();

@@ -276,37 +276,19 @@ pub(super) fn tree(
         });
         roots[x] = nodes.len() - 1;
         new_d.clear();
-        let mut a_min = f64::INFINITY;
-        for r in 0..slots {
-            if r == x || r == y || s[r] == f64::NEG_INFINITY {
-                continue;
-            }
-            let at_x = index(r, x);
-            let dx = d[at_x];
-            let dy = d[index(r, y)];
-            let a = 0.5 * (dx + dy);
-            let v = a - 0.5 * xy;
-            s[r] += v - dx - dy;
-            if !s[r].is_finite() {
-                return Err(TOO_LARGE.into());
-            }
-            d[at_x] = v;
-            d_limit = d_limit.max(v.abs());
-            new_d.push((r, v));
-            // Old pairs of row r are its partners below r, other than x and y.
-            let step = a + a_min + xy - max_d[r];
-            if step < 0. {
-                lower[r] += step;
-            }
-            lower[r] -= pad;
-            exact[r] = false;
-            if partner[r] == x || partner[r] == y {
-                partner[r] = NO_PARTNER;
-            }
-            if r > x {
-                max_d[r] = max_d[r].max(v);
-            }
-            a_min = a_min.min(a);
+        let finite = update_rows(
+            Join { x, y, xy, pad },
+            &mut d,
+            &mut s[..slots],
+            &mut lower[..slots],
+            &mut exact[..slots],
+            &mut partner[..slots],
+            &mut max_d[..slots],
+            &mut new_d,
+            &mut d_limit,
+        );
+        if !finite {
+            return Err(TOO_LARGE.into());
         }
         s[x] = new_d.iter().map(|v| v.1).sum();
         if !s[x].is_finite() {
@@ -378,6 +360,65 @@ pub(super) fn tree(
         edges: vec![(roots[a], la), (roots[b], ab - la), (roots[c], ac - la)],
     });
     Ok((emit(&nodes, nodes.len() - 1), st))
+}
+#[derive(Clone, Copy)]
+pub(super) struct Join {
+    pub(super) x: usize,
+    pub(super) y: usize,
+    pub(super) xy: f64,
+    pub(super) pad: f64,
+}
+/// One join's changes to every live row. Returns false if any row sum stopped being finite,
+/// and the caller then refuses the join. Nothing in this loop reads a sum it has just
+/// written, so a bad sum can't spread before that check.
+// Out of line on purpose: inside tree() this loop ran about 25% slower on large matrices.
+// Preserve reference arithmetic order, as in tree().
+#[allow(clippy::too_many_arguments, clippy::manual_midpoint)]
+#[inline(never)]
+pub(super) fn update_rows(
+    join: Join,
+    d: &mut [f64],
+    s: &mut [f64],
+    lower: &mut [f64],
+    exact: &mut [bool],
+    partner: &mut [usize],
+    max_d: &mut [f64],
+    new_d: &mut Vec<(usize, f64)>,
+    d_limit: &mut f64,
+) -> bool {
+    let Join { x, y, xy, pad } = join;
+    let mut finite = true;
+    let mut a_min = f64::INFINITY;
+    for r in 0..s.len() {
+        if r == x || r == y || s[r] == f64::NEG_INFINITY {
+            continue;
+        }
+        let at_x = index(r, x);
+        let dx = d[at_x];
+        let dy = d[index(r, y)];
+        let a = 0.5 * (dx + dy);
+        let v = a - 0.5 * xy;
+        s[r] += v - dx - dy;
+        finite &= s[r].is_finite();
+        d[at_x] = v;
+        *d_limit = d_limit.max(v.abs());
+        new_d.push((r, v));
+        // Old pairs of row r are its partners below r, other than x and y.
+        let step = a + a_min + xy - max_d[r];
+        if step < 0. {
+            lower[r] += step;
+        }
+        lower[r] -= pad;
+        exact[r] = false;
+        if partner[r] == x || partner[r] == y {
+            partner[r] = NO_PARTNER;
+        }
+        if r > x {
+            max_d[r] = max_d[r].max(v);
+        }
+        a_min = a_min.min(a);
+    }
+    finite
 }
 pub(super) fn pack_fast(s: &[u8]) -> Packed {
     let mut lut = [4u8; 256];
