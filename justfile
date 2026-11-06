@@ -5,7 +5,7 @@ testdata_dir := env("BASECRAFT_TESTDATA", home_directory() / ".cache/basecraft-t
 default:
     @just --list
 
-# Build on build-host, test locally, and publish the executable used by the launcher.
+# Build on the build host, test locally, and publish the executable used by the launcher.
 test-build jobs="24":
     python3 tools/test_build.py --jobs {{jobs}}
 

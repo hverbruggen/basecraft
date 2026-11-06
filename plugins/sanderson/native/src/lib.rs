@@ -413,7 +413,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "build-host scaling benchmark; run separately from routine tests"]
+    #[ignore = "scaling benchmark; run separately from routine tests"]
     fn benchmark_objective_against_direct_reference() {
         let path = std::env::var("BASECRAFT_SANDERSON_BENCH_REQUEST").expect("fixture path");
         let request = std::fs::read_to_string(path).unwrap();

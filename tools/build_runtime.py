@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Snapshot installed Arch build packages for an offline build-host container.
+"""Snapshot installed Arch build packages for an offline the build host container.
 
 Only package-owned /usr files and the selected Rust toolchain are exported.
 No home configuration, credentials, project data or host /etc is included.

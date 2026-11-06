@@ -1,11 +1,8 @@
-# Keep build output out of the synced folder. Cargo doesn't expand ~ here,
-# so this path is specific to this machine. Override with CARGO_TARGET_DIR.
-[build]
-target-dir = "/private/local-path"
+# Set personal build storage in $CARGO_HOME/config.toml or CARGO_TARGET_DIR.
 
 # cxx-qt finds Qt through qmake. Arch ships Qt 6's as qmake6.
 [env]
-QMAKE = "/usr/bin/qmake6"
+QMAKE = "qmake6"
 
 # Select Rust's bundled LLD explicitly. This also prevents Qt's build helper
 # from falling back to the deprecated Gold linker on this Linux target.

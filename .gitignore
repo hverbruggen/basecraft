@@ -1,9 +1,6 @@
-# Build output and environments normally live in ~/.cache (see
-# .cargo/config.toml and .pixi/config.toml). These catch anything that
-# lands in the repo anyway, e.g. when CARGO_TARGET_DIR is overridden.
+# Build output and environments; personal storage overrides belong in user config.
 target/
 .pixi/*
-!.pixi/config.toml
 
 # Rust
 *.profraw

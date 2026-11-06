@@ -67,7 +67,7 @@ ape comparison and its model differences.
 
 `native/` is an isolated Rust crate with its own lockfile while
 WF-0017/coordinator owns the root Cargo workspace and lockfile. Standalone
-numerical compilation and validation ran on build-host; the private worker
+numerical compilation and validation ran on the build host; the private worker
 report records the exact source, checks and measurements. The committed
 `native/validated-engine.json` pins that executable and the method source.
 The plugin requires `bin/basecraft-sanderson-native` and `bin/engine.json` in
@@ -79,7 +79,7 @@ The package stage is intentionally separate from the shared build tool:
 ```sh
 python3 plugins/sanderson/native/tools/stage_package.py \
   --package /disposable/bundle/plugins/sanderson \
-  --binary /validated/build-host/basecraft-sanderson-native
+  --binary /path/to/validated/basecraft-sanderson-native
 ```
 
 Stage **after** the build copies `source/plugins` into its disposable bundle

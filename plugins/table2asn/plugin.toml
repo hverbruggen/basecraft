@@ -12,13 +12,12 @@ operation = "python:table2asn_plugin.py"
 [environment]
 conda = ["bioconda::table2asn"]
 
-# Linux feedback deployment only. The immutable file channel is local to the
-# authorized workstation; public cross-machine distribution is pending.
-# Other platforms retain the legacy unmanaged behavior above.
+# A qualified deployment adds its channels and frozen lock at packaging time.
+# The source checkout intentionally has no machine-specific deployment lock.
+# See packaging/table2asn/README.md; no unpinned runtime is installed.
 [runtime]
 platforms = ["linux-64"]
-channels = ["file:///private/local-path", "conda-forge"]
-lock = "pixi.lock"
+channels = ["conda-forge"]
 executables = ["table2asn"]
 
 [runtime.dependencies]

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Prepare and score deterministic native PL vs ape::chronos benchmark cases.
 
-All timed runs belong on build-host under the shared lock. This helper does no
+All timed runs belong on the build host under the shared lock. This helper does no
 compilation. R/ape is a benchmark-only comparator and is never a plugin engine.
 """
 

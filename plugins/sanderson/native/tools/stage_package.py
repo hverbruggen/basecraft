@@ -2,7 +2,7 @@
 """Stage an already validated native binary into an isolated Sanderson package.
 
 This script never builds or installs dependencies. Pass a disposable package
-copy and the executable from the matching build-host validation receipt.
+copy and the executable from the matching validation receipt.
 """
 
 import argparse

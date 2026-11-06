@@ -260,20 +260,25 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "external instrument fixtures: set BASECRAFT_TESTDATA and run with --ignored"]
     fn fixtures_from_three_abi_instruments() {
-        let dir = Path::new(
-            "/private/local-path",
-        );
+        let dir = std::env::var_os("BASECRAFT_TESTDATA")
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("HOME")
+                    .map(|home| std::path::PathBuf::from(home).join(".cache/basecraft-testdata"))
+            })
+            .expect("set BASECRAFT_TESTDATA to the provisioned test-data root")
+            .join("sanger/biopython/fa5f1daee5ead8f44a5560f958c1aea63fc34353");
         for (file, calls, samples) in [
             ("310.ab1", 868, 9826),
             ("3100.ab1", 795, 10303),
             ("3730.ab1", 1165, 16302),
         ] {
             let path = dir.join(file);
-            if !path.exists() {
-                continue;
-            }
-            let trace = open(&path).unwrap();
+            let trace = open(&path).unwrap_or_else(|error| {
+                panic!("required external fixture {}: {error}", path.display())
+            });
             assert_eq!(trace.display_calls().bases.len(), calls);
             assert_eq!(trace.samples(), samples);
             assert!(trace.display_calls().qualities.is_some());

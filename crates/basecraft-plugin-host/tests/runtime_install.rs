@@ -421,6 +421,37 @@ fn bundled_runtime_requires_frozen_lock_and_rejects_traversal() {
 }
 
 #[test]
+fn source_table2asn_requires_qualified_deployment_without_running_pixi() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut config = config(temp.path());
+    config.bundled = temp.path().join("bundled");
+    let plugin = config.bundled.join("table2asn");
+    std::fs::create_dir_all(&plugin).unwrap();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/table2asn");
+    for file in ["plugin.toml", "operations.json", "table2asn_plugin.py"] {
+        std::fs::copy(source.join(file), plugin.join(file)).unwrap();
+    }
+    let manifest = Manifest::load(&plugin).unwrap();
+    let Some(runtime) = manifest.runtime else {
+        return; // The pinned runtime is currently Linux x86_64 only.
+    };
+    assert!(runtime.lock.is_none());
+    let error = registry::provision_bundled_with_pixi(
+        &config,
+        "basecraft.table2asn",
+        Path::new("/must-not-run-pixi"),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains("stage a qualified deployment package"),
+        "{error}"
+    );
+    assert!(!config.index.exists());
+    assert!(!config.packages.exists());
+}
+
+#[test]
 fn local_channels_are_data_only_and_target_gating_is_explicit() {
     use basecraft_plugin_host::runtime::RuntimeSpec;
     for channel in [

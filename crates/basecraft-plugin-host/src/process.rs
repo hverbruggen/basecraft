@@ -48,19 +48,8 @@ pub fn python_interpreter() -> PathBuf {
     if let Some(python) = crate::installation::bundled_python() {
         return python;
     }
-    let pixi_envs = std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache/pixi/envs"));
-    if let Some(dir) = pixi_envs
-        && let Ok(entries) = std::fs::read_dir(&dir)
-    {
-        for e in entries.flatten() {
-            let name = e.file_name();
-            if name.to_string_lossy().starts_with("basecraft-") {
-                let py = e.path().join("envs/default/bin/python");
-                if py.exists() {
-                    return py;
-                }
-            }
-        }
+    if let Some(python) = crate::installation::source_python() {
+        return python;
     }
     PathBuf::from("python3")
 }

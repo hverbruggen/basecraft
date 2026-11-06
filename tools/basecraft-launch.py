@@ -58,8 +58,10 @@ def main():
     env.setdefault("BASECRAFT_PYTHONPATH", str(bundle / "python/src"))
     env.setdefault("BASECRAFT_DISTANCE", str(bundle / "bin/basecraft-distance"))
     env.setdefault("BASECRAFT_DELIMITATION", str(bundle / "bin/basecraft-delimitation"))
-    environment = Path(manifest["python_environment"])
-    if (environment / "python").is_file():
+    local_receipt = bundle.with_name(bundle.name + ".local.json")
+    deployment = json.loads(local_receipt.read_text()) if local_receipt.exists() else manifest
+    environment = Path(deployment["python_environment"]) if deployment.get("python_environment") else None
+    if environment is not None and (environment / "python").is_file():
         env.setdefault("BASECRAFT_PYTHON", str(environment / "python"))
         env["PATH"] = str(environment) + os.pathsep + env.get("PATH", "")
     tracy = Path.home() / ".cache/basecraft/tools/tracy"

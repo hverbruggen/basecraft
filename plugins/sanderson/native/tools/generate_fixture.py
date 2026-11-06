@@ -1,6 +1,6 @@
 """Write deterministic native PL fixtures outside the synced checkout.
 
-Example: python3 generate_fixture.py --tips 64 --kind nonclock --out /media/.../SCI-0011/medium
+Example: python3 generate_fixture.py --tips 64 --kind nonclock --out /path/to/fixtures/medium
 """
 
 import argparse

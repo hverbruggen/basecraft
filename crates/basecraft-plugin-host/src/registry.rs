@@ -441,7 +441,7 @@ pub fn provision_bundled_with_pixi(config: &RegistryConfig, id: &str, pixi: &Pat
         .ok_or_else(|| Error::Protocol("bundled package has no declared runtime".into()))?;
     if spec.lock.is_none() {
         return Err(Error::Protocol(
-            "bundled dependencies require a frozen runtime lock; no latest fallback".into(),
+            "bundled dependencies require a frozen runtime lock; stage a qualified deployment package before provisioning (see its packaging documentation); no latest fallback".into(),
         ));
     }
     let digest = package_digest(&manifest.dir)?;

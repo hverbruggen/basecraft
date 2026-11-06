@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Paired, alternating-order native binary timing on one fixed request.
 
-Run on build-host under the shared lock. Each pair reverses process order; the
+Run on the build host under the shared lock. Each pair reverses process order; the
 output must be byte-identical, so timing cannot mask a numerical difference.
 """
 

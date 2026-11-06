@@ -11,10 +11,17 @@
   "binary_sha256": "2dab23de3137a7c627a9973b2879143f19961a239b2855d8924ef303fe3a73a6",
   "source_sha256": {
     "Cargo.toml": "f1b33c599dda97065866e9c5b6fb15b499702f4436cfd3024d4f652e68e16762",
-    "src/lib.rs": "e75e8abaa82c75fe71695b6ffb48f272537c926a83377830ddc255858c3a7453",
+    "src/lib.rs": "855d89c7055959dc110057ae7abc0fcf9ee9b9f51ee04d1923a09ca9e5734d09",
     "src/main.rs": "a743dffa12ab8f339d012a5238e031b0665ce224360726c6092a313725e64eeb",
     "src/model.rs": "74de7fc7be0c63d9f237d19662c277425eaada99a62b460d8713dc0ee7c730e6",
     "src/objective.rs": "e7c6067fea526b38567697b6ca6fac9262ae2ea0a806bdac52347437b3984709",
     "src/reference.rs": "11370b41f941d8f20b20e68811238521aa6e7286af94a9a9b7ccd55f604e4805"
+  },
+  "source_normalization": {
+    "description": "Only the ignored benchmark label was generalized; production source bytes are unchanged. Before/after release builds are byte-identical under the same toolchain and build path. The original qualified binary remains selected.",
+    "validation_source_sha256": {
+      "src/lib.rs": "e75e8abaa82c75fe71695b6ffb48f272537c926a83377830ddc255858c3a7453"
+    },
+    "comparison_binary_sha256": "6c4864a8d061481b54b8291e251a744cc4e7578617b45dcdaf0686082e68ef3a"
   }
 }

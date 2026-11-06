@@ -36,7 +36,7 @@ native timing wraps each whole subprocess and its JSON transport. Docker and
 R startup are excluded from ape time, making small-tree elapsed comparisons
 conservative for native Rust. The ape container is limited to one CPU and
 BLAS/OpenMP threads to one; the native solver is serial. All timed runs occur
-serially on build-host under the shared compile lock. The scripts record raw
+serially on the build host under the shared compile lock. The scripts record raw
 times, binary/request hashes, and individual result diagnostics in task-owned
 storage outside synced source. The SCI-0011 worker report contains exact
 environment, commands, receipts, results and scientific qualifications.

@@ -18,7 +18,7 @@ by version/build. Use Rattler-Build0.80.0; its install verifies artifact hashes.
 Run `verify-build-lock.py` against the actual Rattler build directory to verify
 that both installed environments match the retained hashes and identities.
 
-All configure/compiler probes/builds run on build-host under the shared
+All configure/compiler probes/builds run on the build host under the shared
 `~/.cache/basecraft-test-builds/compile.lock`, with external output and TMP.
 Example (absolute task-owned paths, no application directory build output):
 
@@ -60,22 +60,38 @@ RPATH) is only baseline evidence. It is not repackaged or selected here.
 
 ## Frozen shared runtime and deployment
 
-`plugins/table2asn/plugin.toml` declares a runtime only for `linux-64`.
-`plugins/table2asn/pixi.lock` is generated from RuntimeSpec's manifest:
-workspace `basecraft-plugin`, same ordered channels/platform, declared
-basecraft-table2asn dependency, and SDK defaults Python>=3.11,<3.14,
-pyarrow and numpy. The lock freezes their complete transitive closure and
-artifact hashes. The SDK itself is the matching bundled `python/src`, not an
-unrelated PyPI package; host process setup supplies that SDK via PYTHONPATH.
-There are no Pixi tasks, shell activation scripts or custom downloader.
+The source plugin declares the pinned Linux runtime requirements but deliberately
+contains no deployment lock or private channel. Discovery reports the runtime as
+unavailable until a qualified deployment is staged and provisioned. Attempting
+bundled provisioning without a frozen lock fails; it never installs latest or
+silently selects a tool from PATH. Public channel hosting is still pending.
 
-This phase uses a retained immutable **local SSD file channel**:
-`file:///private/local-path`.
-It is intentionally specific to this workstation. A file URL is not a public
-channel or evidence of cross-machine portability. Keep this directory and
-locked artifacts available; never overwrite a package under its existing
-version/build. A changed release requires a new retained artifact/channel and
-lock. Conda-forge dependencies have exact URLs and SHA256 in the frozen lock.
+Keep the qualified deployment's `plugin.toml` and `pixi.lock` outside the checkout.
+`linux-64.json` records the qualified lock's hash and package identity without
+its machine-specific location. Prepare a **copy** of the plugin for deployment:
+
+```sh
+python3 packaging/table2asn/stage_deployment.py \
+  --deployment /path/to/private/deployment \
+  --plugin /path/to/candidate/plugins/table2asn
+```
+
+The stager verifies the retained lock hash, unchanged runtime requirements,
+package content hash and matching plugin identity before copying the deployment
+manifest and lock. It refuses to modify the source plugin. The normal shared
+installer subsequently verifies that the lock matches the manifest and installs
+with `pixi install --locked`; no dependency solving or fallback is introduced.
+A changed package or qualified lock requires renewed qualification and metadata.
+
+For feedback packaging, supply `--table2asn-deployment` to `tools/test_build.py`
+or set `BASECRAFT_TABLE2ASN_DEPLOYMENT` in your private build environment.
+The deployment manifest/lock are local deployment files: do not redistribute
+ones containing private channels. Public release packaging needs a qualified
+public channel and regenerated frozen lock first.
+
+The lock freezes all transitive artifacts and SDK Python dependencies. The SDK
+itself is the matching bundled `python/src`, supplied through PYTHONPATH.
+There are no Pixi tasks, shell activation scripts or custom downloader.
 
 The coordinator runs this against the **final bundled plugins**, using the
 same profile/config locations that normal GUI/CLI launch will use, before the

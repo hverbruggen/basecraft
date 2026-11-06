@@ -23,18 +23,20 @@ class DeliveryTests(unittest.TestCase):
             (root / "crates").mkdir()
             (root / "crates/lib.rs").write_text("first")
             (root / ".env").write_text("private test value")
+            (root / "AGENTS.md").write_text("private machine instructions")
             with (
                 patch.object(test_build, "REPO", root),
                 patch.object(
                     test_build.subprocess,
                     "check_output",
-                    return_value=b"crates/lib.rs\0.env\0",
+                    return_value=b"crates/lib.rs\0.env\0AGENTS.md\0",
                 ),
             ):
                 one = root / "one"
                 one.mkdir()
                 _, source, first = test_build.snapshot(one)
                 self.assertFalse((source / ".env").exists())
+                self.assertFalse((source / "AGENTS.md").exists())
                 self.assertEqual((source / "crates/lib.rs").read_text(), "first")
                 (root / "crates/lib.rs").write_text("other")
                 two = root / "two"
@@ -97,6 +99,42 @@ class DeliveryTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 1)
             self.assertIn("No published test build", result.stderr)
+
+    def test_private_deployment_receipt_stays_outside_build_info(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            release = root / "release"
+            (release / "bin").mkdir(parents=True)
+            python = root / "private-environment/python"
+            python.parent.mkdir()
+            python.touch()
+            gui = release / "bin/basecraft-gui"
+            gui.write_text("#!/usr/bin/python3\nimport os\nprint(os.environ['BASECRAFT_PYTHON'])\n")
+            gui.chmod(0o755)
+            manifest = {"schema_version": 2, "commit": "test-source"}
+            (release / "build.json").write_text(json.dumps(manifest))
+            release.with_name("release.local.json").write_text(json.dumps({
+                "python_environment": str(python.parent), "built_on": "private-builder"
+            }))
+            switch_link(root / "current", release)
+            env = dict(os.environ, BASECRAFT_BUILDS=str(root), PATH="/no-compiler")
+            env.pop("BASECRAFT_PYTHON", None)
+            result = subprocess.run([sys.executable, str(LAUNCHER)], env=env,
+                                    capture_output=True, text=True, check=True)
+            self.assertEqual(result.stdout.strip(), str(python))
+            info = subprocess.run([sys.executable, str(LAUNCHER), "--build-info"], env=env,
+                                  capture_output=True, text=True, check=True)
+            self.assertEqual(json.loads(info.stdout), manifest)
+            self.assertNotIn(directory, info.stdout)
+            self.assertNotIn("private-builder", info.stdout)
+
+    def test_remote_host_is_explicit_before_any_build_work(self):
+        env = dict(os.environ)
+        env.pop("BASECRAFT_BUILD_HOST", None)
+        result = subprocess.run([sys.executable, str(Path(test_build.__file__))], env=env,
+                                capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("supply an SSH host", result.stderr)
 
     def test_switch_preserves_complete_old_release(self):
         with tempfile.TemporaryDirectory() as directory:

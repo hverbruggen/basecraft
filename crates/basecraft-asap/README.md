@@ -22,7 +22,7 @@ On 10000 sequences the parallel stream took 2.4 s on 16 threads, against 20 s
 for the reference stream. Earlier datasets gave 6.5 to 11 times the
 single-thread speed.
 
-Historical reference comparisons and measurements were run on build-host on
+Historical reference comparisons and measurements were run on the build host on
 2026-10-17. Across 12 dataset/model combinations, native reference-stream
 candidate outputs matched the reference exactly on both reference and
 Basecraft-supplied distance matrices. The 50-seed comparison below covers two
@@ -34,7 +34,7 @@ adapter is part of the current plugin.
 
 ## Parallel against reference
 
-Seeds 1 to 50 per stream on two JC69 matrices, build-host, 2026-10-18.
+Seeds 1 to 50 per stream on two JC69 matrices, the build host, 2026-10-18.
 
 | | Astraptes, 332 seqs, 38 nodes | Halimeda, 583 seqs, 140 nodes |
 |---|---|---|

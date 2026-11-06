@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build on build-host with the local ABI, validate locally, publish atomically."""
+"""Build on an explicit remote host, validate locally, publish atomically."""
 
 import argparse
 import fcntl
@@ -83,7 +83,6 @@ def snapshot(destination):
                 ".rustfmt.toml",
                 ".cargo/config.toml",
                 "README.md",
-                "AGENTS.md",
                 "LICENSE",
             } and name.split("/")[0] not in {
                 "crates",
@@ -92,6 +91,7 @@ def snapshot(destination):
                 "vendor",
                 "testdata",
                 "tools",
+                "packaging",
             }:
                 continue
             path = REPO / name
@@ -125,7 +125,11 @@ def switch_link(link, target):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--host", default="build-host.example.invalid")
+    parser.add_argument("--host", default=os.environ.get("BASECRAFT_BUILD_HOST"),
+                        help="SSH build host (or BASECRAFT_BUILD_HOST)")
+    parser.add_argument("--table2asn-deployment", type=Path,
+                        default=os.environ.get("BASECRAFT_TABLE2ASN_DEPLOYMENT"),
+                        help="Private directory containing the qualified manifest and lock")
     parser.add_argument("--jobs", type=int, default=24)
     parser.add_argument(
         "--ribbon-screenshots", action="store_true",
@@ -136,6 +140,13 @@ def main():
         default=Path(os.environ.get("BASECRAFT_BUILD_ROOT", Path.home() / ".cache/basecraft/builds")),
     )
     args = parser.parse_args()
+    if not args.host or args.host.startswith("-") or any(c.isspace() for c in args.host):
+        parser.error("supply an SSH host with --host or BASECRAFT_BUILD_HOST")
+    if not args.table2asn_deployment:
+        parser.error("supply --table2asn-deployment; see packaging/table2asn/README.md")
+    for name in ("plugin.toml", "pixi.lock"):
+        if not (args.table2asn_deployment / name).is_file():
+            parser.error(f"table2asn deployment is missing {name}")
     if not 1 <= args.jobs <= 24:
         parser.error("--jobs must be between 1 and 24")
     if output("uname", "-m") != "x86_64":
@@ -261,6 +272,9 @@ sha256sum {" ".join(BINARIES)} > SHA256SUMS
         if digest(bundle / "bin" / name) != expected.get(name):
             raise RuntimeError(f"Transfer checksum mismatch: {name}")
     shutil.copytree(source / "plugins", bundle / "plugins")
+    run(["python3", source / "packaging/table2asn/stage_deployment.py",
+         "--deployment", args.table2asn_deployment,
+         "--plugin", bundle / "plugins/table2asn"])
     shutil.copytree(source / "python", bundle / "python")
     shutil.copytree(
         source / "crates/basecraft-gui/licenses", bundle / "share/licenses/basecraft-gui"
@@ -310,15 +324,13 @@ sha256sum {" ".join(BINARIES)} > SHA256SUMS
          "--bundle", bundle, "--root", checks / "sanderson"],
         env=dict(os.environ, PYTHONPATH=str(bundle / "python/src")))
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "source_sha256": source_hash,
         "branch": branch,
         "commit": commit,
-        "built_on": args.host,
         "runtime": runtime_metadata,
         "runtime_id": runtime_id,
         "published_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "python_environment": str((REPO / ".pixi/envs/default/bin").resolve()),
         "binaries": expected,
         "validation": [
             "remote core tests",
@@ -332,9 +344,17 @@ sha256sum {" ".join(BINARIES)} > SHA256SUMS
         ],
         "engines": engines,
         "bundled_tools": bundled_tools,
+        "ptp_receipt_sha256": digest(Path(ptp_receipt)),
+        "sanderson_receipt_sha256": digest(checks / "sanderson/receipt.json"),
+        "sanderson_engine": engine_identity,
+    }
+    local_receipt = {
+        "source_sha256": source_hash,
+        "commit": commit,
+        "built_on": args.host,
+        "python_environment": str((REPO / ".pixi/envs/default/bin").resolve()),
         "ptp_receipt": ptp_receipt,
         "sanderson_receipt": str(checks / "sanderson/receipt.json"),
-        "sanderson_engine": engine_identity,
         "logs": str(stage),
     }
     (bundle / "build.json").write_text(json.dumps(manifest, indent=2) + "\n")
@@ -342,6 +362,10 @@ sha256sum {" ".join(BINARIES)} > SHA256SUMS
     releases.mkdir(exist_ok=True)
     release = releases / (source_hash[:20] + "-" + str(time.time_ns()))
     bundle.rename(release)
+    # Local paths/host names are deployment state, outside the exportable bundle.
+    release.with_name(release.name + ".local.json").write_text(
+        json.dumps(local_receipt, indent=2) + "\n"
+    )
     previous = root / "current"
     if previous.is_symlink():
         switch_link(root / "previous", previous.resolve(strict=True))

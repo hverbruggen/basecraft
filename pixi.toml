@@ -1,6 +1,6 @@
 # Python tooling and the bio tools used in tests. Rust comes from rustup and
-# Qt from the system packages. Environments are detached to ~/.cache/pixi/envs
-# (see .pixi/config.toml) to keep them out of the synced folder.
+# Qt from the system packages. Configure detached environments in user-level
+# Pixi configuration when build storage must live outside the checkout.
 [workspace]
 name = "basecraft"
 channels = ["conda-forge", "bioconda"]

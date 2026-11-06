@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-# Build only on build-host, under the workspace's shared compile.lock.
+# Build only on the build host, under the workspace's shared compile.lock.
 export CFLAGS="$CFLAGS -march=x86-64 -mtune=generic"
 export CXXFLAGS="$CXXFLAGS -march=x86-64 -mtune=generic"
 export CMAKE_PREFIX_PATH="$PREFIX"

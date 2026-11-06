@@ -2,7 +2,7 @@
 
 The user lifted the hold for this standalone crate; broader Basecraft
 integration and package builds remain held. All compilation and Rust tests run
-on build-host under the shared compile lock, with at most 24 combined cores,
+on the build host under the shared compile lock, with at most 24 combined cores,
 an isolated build profile, and both
 `CARGO_TARGET_DIR` and `TMPDIR` outside the synced checkout. Coordinate the
 standalone `native/Cargo.toml` and its resolved lockfile with WF-0017 before
@@ -12,7 +12,7 @@ worker report records the executed commands and receipts.
 
 1. Freeze the exact SCI-0011 commit and toolchain. Resolve/check the pinned
    `argmin=0.11.0`, `argmin-math=0.5.1`, `statrs=0.18.0` dependency tree and
-   licenses. Build and test the standalone manifest on build-host with the
+   licenses. Build and test the standalone manifest on the build host with the
    shared lock and external target/temp storage:
 
    ```sh

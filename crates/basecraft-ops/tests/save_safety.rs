@@ -193,7 +193,7 @@ fn fill(folder: &Path) -> PathBuf {
 /// Tests filling the shared small file system take turns.
 static FULL_DISK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// Real ENOSPC on a small dedicated file system. The focused build-host runner
+/// Real ENOSPC on a small dedicated file system. The focused the build host runner
 /// mounts one and sets this variable; without it there is nothing to fill.
 fn full_disk_folder(name: &str) -> Option<PathBuf> {
     let root = std::env::var_os("BASECRAFT_TEST_FULL_DIR")?;
