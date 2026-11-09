@@ -81,17 +81,23 @@ fn prepare(root: &Path, registry: &Registry, jobs: &mut JobManager) -> Operation
     assert_eq!(outcome.state, RuntimeState::Completed, "{outcome:?}");
     outcome
 }
-fn start(root: &Path, cancel: bool) -> (JobManager, String, PathBuf) {
+fn start(root: &Path, cancel: bool, explicit: bool) -> (JobManager, String, PathBuf) {
     let registry = registry(root);
     let mut jobs = JobManager::default();
     let prepared = prepare(root, &registry, &mut jobs);
     let plan = prepared.data.as_ref().unwrap();
     // The selected snapshot stays the same even after an original-source edit.
     std::fs::write(root.join("source.fa"), b"later edits").unwrap();
-    let policy = SessionPolicy::new(root, true)
-        .unwrap()
-        .with_runtime_credential("BASECRAFT_ZENODO_TOKEN", "synthetic-runtime-secret".into())
-        .unwrap();
+    let mut policy = SessionPolicy::new(root, true).unwrap();
+    if explicit {
+        policy = policy
+            .with_runtime_credential(
+                registry.resolve("basecraft.zenodo/draft@1", None).unwrap(),
+                "zenodo_access",
+                "synthetic-runtime-secret".into(),
+            )
+            .unwrap();
+    }
     assert!(!format!("{policy:?}").contains("synthetic-runtime-secret"));
     let request=serde_json::from_value(json!({"operation":"basecraft.zenodo/draft@1","inputs":{"files":[{"kind":"file","path":plan["files"][0]["snapshot"]}],"selection":[{"kind":"file","path":prepared.artifacts[0].path}]},"parameters":{"title":if cancel {"cancel"} else {"Synthetic dataset"},"description":"Fixture only","creators":"Example, A.","license":"cc-by-4.0"}})).unwrap();
     let accepted = jobs.submit(&registry, request, policy, "test").unwrap();
@@ -104,7 +110,7 @@ fn start(root: &Path, cancel: bool) -> (JobManager, String, PathBuf) {
 #[test]
 fn zenodo_shared_runner_preserves_snapshots_and_never_records_token() {
     let temp = tempfile::tempdir().unwrap();
-    let (jobs, id, evidence) = start(temp.path(), false);
+    let (jobs, id, evidence) = start(temp.path(), false, true);
     let outcome = wait(&jobs, &id);
     assert_eq!(outcome.state, RuntimeState::Completed, "{outcome:?}");
     assert_eq!(outcome.data.as_ref().unwrap()["status"], "draft_ready");
@@ -123,7 +129,7 @@ fn zenodo_shared_runner_preserves_snapshots_and_never_records_token() {
 #[test]
 fn zenodo_cancel_retains_remote_identity_and_repair_does_not_resubmit() {
     let temp = tempfile::tempdir().unwrap();
-    let (jobs, id, evidence) = start(temp.path(), true);
+    let (jobs, id, evidence) = start(temp.path(), true, true);
     let deadline = Instant::now() + Duration::from_secs(60);
     while !evidence.join("progress").is_file() {
         assert!(Instant::now() < deadline);
@@ -148,4 +154,31 @@ fn zenodo_cancel_retains_remote_identity_and_repair_does_not_resubmit() {
     let repaired = jobs.repair(&id).unwrap();
     assert_eq!(repaired.state, RuntimeState::Completed, "{repaired:?}");
     assert_eq!(repaired.data.as_ref().unwrap()["draft_id"], 123);
+}
+
+#[test]
+fn zenodo_headless_ambient_provider_delivers_only_to_accepted_bundled_draft() {
+    if std::env::var_os("BASECRAFT_ZENODO_TEST_CHILD").is_none() {
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "zenodo_headless_ambient_provider_delivers_only_to_accepted_bundled_draft",
+            ])
+            .env("BASECRAFT_ZENODO_TEST_CHILD", "1")
+            .env("BASECRAFT_ZENODO_TOKEN", "synthetic-runtime-secret")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        return;
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let (jobs, id, evidence) = start(temp.path(), false, false);
+    let outcome = wait(&jobs, &id);
+    assert_eq!(outcome.state, RuntimeState::Completed, "{outcome:?}");
+    assert_eq!(outcome.data.as_ref().unwrap()["status"], "draft_ready");
+    assert!(
+        !std::fs::read_to_string(evidence.join("execution.json"))
+            .unwrap()
+            .contains("synthetic-runtime-secret")
+    );
 }

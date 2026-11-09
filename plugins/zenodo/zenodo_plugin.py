@@ -212,8 +212,13 @@ def upload(parameters, context, transport=request, token=None):
     previous = context["inputs"].get("resume", [])
     if previous:
         saved = load(previous[0])
-        if any(saved.get(key) != receipt[key] for key in ("schema", "service", "selection", "metadata", "files")):
-            raise ValueError("Retry must use the exact previous selection, service and metadata")
+        # Only a definitive no-side-effect rejection can accept corrected
+        # metadata. Keep the prepared bytes and service fixed for every retry.
+        rejected_before_creation = saved.get("status") == "not_sent" and saved.get("draft_id") is None
+        identity_keys = ("schema", "service", "selection", "files")
+        if (any(saved.get(key) != receipt[key] for key in identity_keys)
+                or (not rejected_before_creation and saved.get("metadata") != receipt["metadata"])):
+            raise ValueError("Retry must use the exact previous selection, service and metadata unless creation was definitively rejected")
         identifier = saved.get("draft_id")
         if type(identifier) is int and identifier > 0:
             receipt["draft_id"] = identifier

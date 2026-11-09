@@ -343,8 +343,19 @@ impl qobject::AppOperations {
                         let registry = Registry::load(&RegistryConfig::discover()?)?;
                         let mut policy = SessionPolicy::new(&root, true)?;
                         if let Some(token) = credential {
-                            policy =
-                                policy.with_runtime_credential("BASECRAFT_ZENODO_TOKEN", token)?;
+                            let recipient = registry.resolve("basecraft.zenodo/draft@1", None)?;
+                            if recipient.package.origin
+                                != basecraft_plugin_host::registry::Origin::Bundled
+                            {
+                                return Err(basecraft_plugin_host::Error::Protocol(
+                                    "unexpected credential package".into(),
+                                ));
+                            }
+                            policy = policy.with_runtime_credential(
+                                recipient,
+                                "zenodo_access",
+                                token,
+                            )?;
                         }
                         let mut jobs = JobManager::default().with_task_cancellation();
                         let accepted = jobs.submit(

@@ -21,8 +21,9 @@ AppFormDialog {
     property var submittedMetadata: ({})
     property var openExternal: url => Qt.openUrlExternally(url)
     readonly property bool ready: preview.files !== undefined && selectionPath.length > 0
-    readonly property bool canRetry: attempted && resumePath.length > 0 && (receipt.draft_id > 0 || receipt.status === "not_sent") && receipt.status !== "draft_ready"
-    readonly property bool frozenMetadata: attempted
+    readonly property bool rejectedBeforeCreation: attempted && resumePath.length > 0 && receipt.status === "not_sent" && receipt.draft_id === null
+    readonly property bool canRetry: attempted && resumePath.length > 0 && (receipt.draft_id > 0 || rejectedBeforeCreation) && receipt.status !== "draft_ready"
+    readonly property bool frozenMetadata: attempted && (backend.busy || !rejectedBeforeCreation)
     signal chooseFiles()
 
     function filesInput(paths) { return paths.map(path => ({kind: "file", path: path})) }
@@ -48,7 +49,7 @@ AppFormDialog {
     function start() {
         error = ""
         if (!ready || backend.busy || (attempted && !canRetry)) return
-        const parameters = attempted ? submittedMetadata : settings()
+        const parameters = frozenMetadata ? submittedMetadata : settings()
         if (!parameters.title || !parameters.description || !parameters.creators || !parameters.license || !token.text.trim()) {
             error = "Enter a title, description, creators, license and access token."
             return
@@ -108,7 +109,7 @@ AppFormDialog {
     TextArea { id: creators; objectName: "zenodoCreators"; Kirigami.FormData.label: "Creator &names:"; placeholderText: "Family name, Given name\nOne creator per line"; enabled: !dialog.frozenMetadata; clip: true; wrapMode: TextEdit.Wrap; Layout.preferredHeight: dialog.font.pixelSize * 4; Accessible.name: "Creator names, one per line" }
     TextField { id: license; objectName: "zenodoLicense"; Kirigami.FormData.label: "&License:"; text: "cc-by-4.0"; enabled: !dialog.frozenMetadata; Accessible.name: "Zenodo license identifier" }
     AppComboBox { id: access; objectName: "zenodoAccess"; Kirigami.FormData.label: "File access:"; model: ["Open after publication", "Closed files"]; enabled: !dialog.frozenMetadata; Accessible.name: "File access after publication" }
-    AppComboBox { id: service; objectName: "zenodoService"; Kirigami.FormData.label: "Service:"; model: ["Sandbox (test service)", "Zenodo (production)"]; enabled: !dialog.frozenMetadata; Accessible.name: "Zenodo service" }
+    AppComboBox { id: service; objectName: "zenodoService"; Kirigami.FormData.label: "Service:"; model: ["Sandbox (test service)", "Zenodo (production)"]; enabled: !dialog.attempted; Accessible.name: "Zenodo service" }
     Label { Kirigami.FormData.isSection: true; text: "Dataset metadata becomes public under CC0 when published, including for closed files. Review the license and access choice before publication."; wrapMode: Text.Wrap; Layout.preferredWidth: dialog.font.pixelSize * 37 }
     TextField { id: token; objectName: "zenodoToken"; Kirigami.FormData.label: "&Access token:"; echoMode: TextInput.Password; enabled: !dialog.backend.busy; Accessible.name: "Runtime access token, never saved" }
     Label { Kirigami.FormData.isSection: true; text: "Token needs deposit:write for the selected service. It is cleared after each attempt and is never saved. Create tokens in your Zenodo account settings."; wrapMode: Text.Wrap; Layout.preferredWidth: dialog.font.pixelSize * 37 }

@@ -43,6 +43,7 @@ pub struct PluginProcess {
     rx: Receiver,
     next_id: u64,
     cpu_budget: usize,
+    credentials: crate::policy::RuntimeCredentials,
     _socket_dir: tempfile::TempDir,
 }
 
@@ -146,6 +147,15 @@ impl PluginProcess {
         listener.set_nonblocking(true)?;
         let mut command = Command::new(python);
         crate::runtime::configure_command(&mut command, manifest, python)?;
+        // Ambient credentials are input to host providers, never implicit grants
+        // to child code (including legacy/direct spawn and initialization).
+        for (name, _) in std::env::vars_os() {
+            if name.to_str().is_some_and(|name| {
+                crate::policy::credential_environment(&name.to_ascii_uppercase())
+            }) {
+                command.env_remove(name);
+            }
+        }
         command.envs(&credentials.0);
         for name in [
             "BASECRAFT_CPU_THREADS",
@@ -281,6 +291,7 @@ impl PluginProcess {
             ),
             next_id: 1,
             cpu_budget,
+            credentials: credentials.clone(),
             _socket_dir: dir,
         };
         let (result, _) = p.call("initialize", json!({ "protocol": PROTOCOL_VERSION }), &[])?;
@@ -395,7 +406,8 @@ impl PluginProcess {
                 Err(error) => return Err(error.into()),
             }
         };
-        let raw: Value = serde_json::from_slice(&reply)?;
+        let mut raw: Value = serde_json::from_slice(&reply)?;
+        self.credentials.redact_json(&mut raw);
         let msg: Message = serde_json::from_value(raw.clone())?;
         if msg.jsonrpc != "2.0"
             || msg.method.is_some()
@@ -676,8 +688,10 @@ impl PluginProcess {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         (
-            String::from_utf8_lossy(&capture.stdout).into_owned(),
-            String::from_utf8_lossy(&capture.stderr).into_owned(),
+            self.credentials
+                .redact(&String::from_utf8_lossy(&capture.stdout)),
+            self.credentials
+                .redact(&String::from_utf8_lossy(&capture.stderr)),
         )
     }
 }

@@ -298,6 +298,13 @@ pub fn validate_contract(plugin: &str, contract: &OperationContract) -> Result<(
         }) {
             return Err(invalid("unsupported required host feature"));
         }
+        if descriptor.credentials.len() > 8
+            || descriptor.credentials.iter().any(|(name, environment)| {
+                !valid_name(name) || !crate::policy::credential_environment(environment)
+            })
+        {
+            return Err(invalid("invalid runtime credential declaration"));
+        }
         if descriptor.inputs.len() > MAX_BINDINGS || descriptor.outputs.len() > MAX_BINDINGS {
             return Err(invalid("binding count limit exceeded"));
         }

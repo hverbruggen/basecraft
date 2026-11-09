@@ -478,3 +478,39 @@ even if their names and inputs match. Preserve Copy stores matching original byt
 once per analysis in a leaf input ledger; other backing references use existing
 verified ledger delegation toward that owner.
 Legacy registered ownership is derived only from declared reference-ledger ancestry.
+
+
+## Runtime credentials
+
+An operation may declare an optional `credentials` map from logical names to
+reserved environment variables, for example:
+
+```json
+"credentials": {"zenodo_access": "BASECRAFT_ZENODO_TOKEN"}
+```
+
+Names use ordinary operation-binding syntax; environment names must match
+`BASECRAFT_*_TOKEN` using uppercase ASCII letters, digits and underscores. At most
+eight declarations are allowed. A declaration expresses a need and **does not
+authorize access**. No secret belongs in parameters, request keys, settings,
+provenance, manifests or any JSON schema. Schemas contain names only.
+
+Host callers explicitly grant runtime values using
+`SessionPolicy::with_runtime_credential(resolved_operation, logical_name, value)`.
+The grant binds the operation ID, package digest and descriptor digest frozen at
+acceptance. It does not transfer to a sibling operation, a replacement package or
+another descriptor. This is extensible to explicitly authorized third-party code;
+a plugin cannot self-authorize by declaring an environment name. Existing generic
+CLI/Python/MCP routes need no credential parameter. The bundled Zenodo adapter has
+a narrow headless compatibility provider for `BASECRAFT_ZENODO_TOKEN`; it checks
+the reserved bundled origin and declaration and pins the grant during acceptance.
+Other automatic providers require separate host authorization, not a plugin ID
+string alone.
+
+Every plugin process strips inherited Basecraft credential variables before
+initialization, then receives only grants for that accepted recipient. Direct and
+legacy process launches have no grants. Other environment/runtime configuration
+is preserved. Granted values are redacted from host-captured stdout/stderr and
+RPC replies before execution evidence/error/result persistence. This boundary is
+not an OS sandbox: an explicitly credentialed trusted plugin can use the granted
+secret and must not write it to its own artifacts or transmit it elsewhere.

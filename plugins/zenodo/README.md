@@ -35,7 +35,9 @@ can delay cancellation; cancellation takes effect before the next request/chunk.
 
 Each attempt writes a JSON recovery receipt into its normal owned run. It records
 selection identity, metadata, service, deposit ID, verified uploads and uncertain
-requests. Retry retained draft requires the same selection and metadata, retrieves
+requests. After a definitive rejection with no draft ID, metadata can be corrected in
+place while keeping the prepared selection and service fixed. Unknown creation
+and existing drafts keep metadata frozen. Retry retained draft requires the same selection and metadata, retrieves
 that draft and skips matching remote size/MD5. It refuses different bytes,
 additional files, published deposits and edited metadata. It never automatically
 overwrites or retries HTTP requests. Lost create responses leave
@@ -55,7 +57,13 @@ For headless clients, inject `BASECRAFT_ZENODO_TOKEN` through runtime environmen
 secret handling before starting the CLI or MCP server. Python's
 `basecraft.operations` starts that server as a child. Do not put literal tokens in
 shell history. The GUI injects its value into the accepted child process only,
-using the host's opaque memory-only credential override.
+using the host's memory-only grant bound to the accepted operation and exact
+package/descriptor digests. The documented ambient token is a compatibility
+provider for the reserved bundled Zenodo draft operation only; declarations or
+matching names in another plugin do not grant access. Every other plugin launch,
+including initialization and direct/legacy launches, strips Basecraft credential
+variables. Granted token values are redacted from captured output and RPC replies.
+This is credential hygiene, not an OS sandbox for explicitly trusted plugin code.
 
 Prepare request (paths relative to the current project):
 
