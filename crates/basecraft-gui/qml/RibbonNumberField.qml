@@ -9,6 +9,12 @@ Item {
     property alias to: box.to
     property real value: 0
     property bool fractional: false
+    property string disabledReason
+    readonly property string effectiveTip: !enabled && disabledReason.length ? disabledReason : tip
+    HoverHandler { id: tipHover }
+    ToolTip.text: effectiveTip
+    ToolTip.visible: effectiveTip.length > 0 && (tipHover.hovered || box.activeFocus)
+    ToolTip.delay: 400
     property string tip
     signal edited(real value)
     // As tall as a ribbon button, so captions across the ribbon line up.
@@ -61,8 +67,6 @@ Item {
         onValueModified: field.edited(field.fractional
             ? Math.max(0.000001, Math.min(to, field.value + value - Math.round(field.value))) : value)
         Accessible.name: field.tip.length ? field.tip : caption.text
-        ToolTip.text: field.tip
-        ToolTip.visible: field.tip.length > 0 && hovered
-        ToolTip.delay: 400
+        Accessible.description: field.effectiveTip
     }
 }

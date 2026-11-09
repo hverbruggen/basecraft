@@ -7,6 +7,7 @@ import org.kde.kirigami.layouts as KirigamiLayouts
 Control {
     id: group
     RibbonMetrics { id: metrics; control: group }
+    property string disabledReason
     property string title
     property alias actions: toolbar.actions
     // Controls in this slot keep their natural size, including editable fields.

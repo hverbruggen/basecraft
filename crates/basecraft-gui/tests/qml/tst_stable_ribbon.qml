@@ -73,9 +73,22 @@ Item {
                     QtObject { id: submissionJobs; property bool busy: false }
                     ${host.source.slice(tabsStart, tabsEnd)}
                     ${declarations}
+                    ${host.block("function disabledReasonFor(")}
                     ${components}
                     ${ribbon}
                 }`, host, Qt.resolvedUrl("stableRibbonHarness.qml"))
+        }
+        function test_disabled_prerequisite_messages() {
+            const scene = productionRibbon()
+            scene.currentKind = "alignment"
+            scene.current = {busy: true, gap_column_count: 0, zoom_text: "100 %"}
+            verify(scene.disabledReasonFor("species.gmyc-workspace").includes("Wait"))
+            scene.current = {busy: false, unresolved: 2, review_mode: true, gap_column_count: 0, zoom_text: "100 %", calling: false, call_sets: "[]", selected_call_set: ""}
+            scene.currentKind = "trace"
+            scene.traceDocument = {working: false, traceRows: [{}], returnAlignment: null}
+            verify(scene.disabledReasonFor("ribbon.export-the-edited-consensus-as-fasta").includes("Resolve"))
+            verify(scene.disabledReasonFor("trace.cancel-calls").includes("Compute"))
+            scene.destroy()
         }
         function test_production_pages_and_applicability_data() {
             return [

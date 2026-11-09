@@ -16,6 +16,7 @@ RibbonGroup {
         iconName: "clade-annotate"
         tip: "Name the selected clade, with a bar or a coloured field"
         keys: "Enter"
+        disabledReason: !group.controller ? "Open a tree to work with its clades" : "Select a clade in the tree to use this command"
         enabled: group.controller !== null && group.controller.has_selection === true
         onInvoked: group.annotateRequested()
     }
@@ -27,6 +28,7 @@ RibbonGroup {
         text: "Flip"
         iconName: "tree-flip"
         tip: "Reverse the order of the branches in the selected subtree (for a tip, its parent's)"
+        disabledReason: !group.controller ? "Open a tree to work with its clades" : "Select a clade in the tree to use this command"
         enabled: group.controller !== null && group.controller.has_selection === true
         onInvoked: group.controller.rotate()
     }

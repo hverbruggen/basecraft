@@ -23,6 +23,7 @@ RibbonGroup {
             + (group.linkedPath.length ? "Linked alignment: " + group.linkedPath + "\n" : "")
             + (group.sourcePath.length ? "Original analysis source: " + group.sourcePath + "\n" : "")
             + "Choose an alignment for viewing and selection. Identifiers are validated; the original analysis source is retained."
+        disabledReason: !group.controller ? "Open a tree to work with its alignment" : group.controller.busy ? "Wait for the tree operation to finish" : "Select one or more clades to extract their aligned rows"
         enabled: group.controller !== null && !group.controller.busy
         onInvoked: group.linkRequested(group.controller)
     }
@@ -34,6 +35,7 @@ RibbonGroup {
         text: "Clade"
         iconName: "selection"
         tip: "Create clade alignment from selected clades without realigning; Ctrl-click to select multiple clades"
+        disabledReason: !group.controller ? "Open a tree to work with its alignment" : group.controller.busy ? "Wait for the tree operation to finish" : "Select one or more clades to extract their aligned rows"
         enabled: group.controller !== null && !group.controller.busy && group.controller.has_selection === true
         onInvoked: group.controller.extract_clade_alignment()
     }

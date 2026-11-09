@@ -17,6 +17,7 @@ AppRibbonButton {
         customization: button.customization
         text: button.text.length ? button.text : button.tip
         tooltip: button.tip
+        disabledReason: button.inheritedDisabledReason || button.disabledReason
         iconName: button.iconName
         enabled: button.enabled && button.visible
         onTriggered: button.invoked()

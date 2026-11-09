@@ -474,6 +474,7 @@ ApplicationWindow {
 
     AppCommand {
         id: installedOperationsCommand
+        disabledReason: window.disabledReasonFor(commandId)
         customization: window.customization
         commandId: "tools.installed-operations"
         text: "Installed operations…"
@@ -484,6 +485,7 @@ ApplicationWindow {
     }
     AppCommand {
         id: openCommand
+        disabledReason: window.disabledReasonFor(commandId)
         customization: window.customization
         commandId: "file.open"
         text: "Open…"
@@ -494,6 +496,7 @@ ApplicationWindow {
     }
     AppCommand {
         id: saveCommand
+        disabledReason: window.disabledReasonFor(commandId)
         customization: window.customization
         commandId: "file.save"
         text: "Save"
@@ -505,6 +508,7 @@ ApplicationWindow {
     }
     AppCommand {
         id: saveAsCommand
+        disabledReason: window.disabledReasonFor(commandId)
         customization: window.customization
         commandId: "file.save-as"
         text: "Save as…"
@@ -516,6 +520,7 @@ ApplicationWindow {
     }
     AppCommand {
         id: projectCommand
+        disabledReason: window.disabledReasonFor(commandId)
         customization: window.customization
         commandId: "project.open"
         text: "Open project…"
@@ -525,6 +530,7 @@ ApplicationWindow {
     }
     AppCommand {
         id: shortcutsCommand
+        disabledReason: window.disabledReasonFor(commandId)
         customization: window.customization
         commandId: "help.shortcuts"
         text: "Keyboard shortcuts…"
@@ -534,6 +540,7 @@ ApplicationWindow {
     }
     AppCommand {
         id: aboutCommand
+        disabledReason: window.disabledReasonFor(commandId)
         customization: window.customization
         commandId: "help.about"
         text: "About Basecraft…"
@@ -544,6 +551,7 @@ ApplicationWindow {
 
     AppCommand {
         id: preferencesCommand
+        disabledReason: window.disabledReasonFor(commandId)
         customization: window.customization
         commandId: "application.preferences"
         text: "Preferences…"
@@ -553,6 +561,7 @@ ApplicationWindow {
     }
     AppCommand {
         id: textRepresentationCommand
+        disabledReason: window.disabledReasonFor(commandId)
         customization: window.customization
         commandId: "view.text"
         text: "Text representation…"
@@ -564,6 +573,7 @@ ApplicationWindow {
     }
     AppCommand {
         id: contextShortcutsCommand
+        disabledReason: window.disabledReasonFor(commandId)
         customization: window.customization
         commandId: "help.context-shortcuts"
         text: "Shortcuts…"
@@ -573,6 +583,7 @@ ApplicationWindow {
     }
     AppCommand {
         id: learnCommand
+        disabledReason: window.disabledReasonFor(commandId)
         customization: window.customization
         commandId: "help.learn"
         text: "Learn"
@@ -581,6 +592,7 @@ ApplicationWindow {
     }
     AppCommand {
         id: exportSvgCommand
+        disabledReason: window.disabledReasonFor(commandId)
         customization: window.customization
         commandId: "ribbon.export-an-editable-svg-of-this-view"
         text: "Export SVG…"
@@ -591,6 +603,7 @@ ApplicationWindow {
     }
     AppCommand {
         id: exportPngCommand
+        disabledReason: window.disabledReasonFor(commandId)
         customization: window.customization
         commandId: "figure.export-png"
         text: "Export PNG"
@@ -659,6 +672,7 @@ ApplicationWindow {
     }
     AppCommand {
         id: historyCommand
+        disabledReason: window.disabledReasonFor(commandId)
         customization: window.customization
         commandId: "provenance.history"
         text: "Provenance"
@@ -669,6 +683,7 @@ ApplicationWindow {
     }
     AppCommand {
         id: methodsCommand
+        disabledReason: tooltip
         customization: window.customization
         commandId: "provenance.methods"
         text: "Methods"
@@ -679,6 +694,7 @@ ApplicationWindow {
     }
     AppCommand {
         id: showProvenanceCommand
+        disabledReason: window.disabledReasonFor(commandId)
         customization: window.customization
         commandId: "provenance.show-files"
         text: "Record folder"
@@ -693,6 +709,7 @@ ApplicationWindow {
     }
     AppCommand {
         id: verifyProvenanceCommand
+        disabledReason: window.disabledReasonFor(commandId)
         customization: window.customization
         commandId: "provenance.verify"
         text: "Verify…"
@@ -702,6 +719,7 @@ ApplicationWindow {
     }
     AppCommand {
         id: packageCommand
+        disabledReason: window.disabledReasonFor(commandId)
         customization: window.customization
         commandId: "provenance.package"
         text: "Package for reproduction…"
@@ -711,6 +729,7 @@ ApplicationWindow {
     }
     AppCommand {
         id: recoverCommand
+        disabledReason: window.disabledReasonFor(commandId)
         customization: window.customization
         commandId: "file.recover-work"
         text: "Recover work…"
@@ -805,8 +824,54 @@ ApplicationWindow {
         return "info"
     }
 
+    // Presentation only: availability stays with each existing command/control.
+    function disabledReasonFor(id) {
+        if (id.startsWith("metadata.") || id.startsWith("submission.")) {
+            if (!shell.project_dir.length) return "Choose a project folder with File > Project to use project data"
+            if (["metadata.import-headers", "metadata.template"].includes(id)) return "Open a FASTA file to use its records"
+            if (id === "submission.new") return "Open a marker alignment to start a submission"
+            if (submissionJobs.busy) return "Wait for submission validation to finish"
+            return "Start or open a GenBank submission in this project"
+        }
+        if (id.startsWith("species.")) {
+            if (id.startsWith("species.asap-") && !alignmentOpen && !(current && current.linked_alignment)) return "Open an alignment or link one to the species workspace to run ASAP"
+            if (/^species\.(gmyc|ptp|manual|asap)-/.test(id)) return current && current.busy ? "Wait for the current analysis to finish" : "Open an alignment, tree or species workspace to delimit species"
+            if (id.startsWith("species.combine-")) return "Open a document, then choose species workspaces to combine"
+            if (!speciesView) return "Open a species delimitation workspace to use this command"
+            if (current.busy) return "Wait for the workspace operation to finish"
+            if (id === "species.roster-links") return "Choose a project folder and open its specimen metadata table to link records"
+            if (id === "species.threshold-cut") return "Attach an ultrametric display tree to enable threshold selection"
+            if (id === "species.display") return "A display tree is already attached; use the workspace's tree view"
+            if (id === "species.layout") return "Choose at least one hypothesis in Columns to lay out its bars"
+            if (id === "species.support-style") return "Attach a display tree with support values to style support"
+            return "Attach a display tree to the species workspace to show it"
+        }
+        if (id === "help.learn") return "Manual pages are not written yet"
+        if (id === "file.recover-work") return "Wait for the current provenance operation to finish"
+        if (!current) return "Open a document to use this command"
+        if ((id.startsWith("provenance.") || id === "file.recover-work") && provenance.busy) return "Wait for the current provenance operation to finish"
+        if (id === "trace.cancel-calls") return "Compute alternative trace calls before cancelling them"
+        if (traceOpen && traceDocument && traceDocument.working) return "Wait for trace processing to finish"
+        if (current.busy || current.calling) return "Wait for the current operation to finish"
+        if (traceOpen && !current.review_mode) return "Open a Sanger review to edit or export its reviewed consensus"
+        if (id === "trace.compute-calls" || id === "ribbon.combine-up-to-three-reads") return "Open a single-read Sanger review to compute calls or draft additional reads"
+        if (id === "ribbon.choose-alignment-context") return "This review already has alignment context; open a standalone review to choose context"
+        if (id.includes("edited-consensus")) {
+            if (current.unresolved > 0) return "Resolve or accept every remaining review issue before exporting the consensus"
+            return "Choose alignment context for this review before adding its consensus"
+        }
+        if (id.includes("delete-columns-containing-only-gaps")) return "This alignment has no all-gap columns to delete"
+        if (id.includes("which-support-values")) return "Use Support > Add to add tree support values before styling them"
+        if (id === "ribbon.zoom-to-the-selection") return "Open a sequence or alignment and select a region to zoom to it"
+        if (id === "tree.rate-smoothing") return "Save the tree to a file before smoothing its rates"
+        if (id === "file.save-as" && traceOpen) return "Open a Sanger review to save review decisions; a raw trace cannot be saved as a new document"
+        if (!currentPath.length) return "Save the document to a file before using this command"
+        return "Open a compatible document to use this command"
+    }
+
     component RibbonButton: AppCommandButton {
         customization: window.customization
+        disabledReason: window.disabledReasonFor(commandId)
         enabled: window.current !== null
         iconName: window.ribbonIconFor(commandId)
         Component.onCompleted: window.registerRibbonCommand(commandAction)
@@ -941,7 +1006,7 @@ ApplicationWindow {
                     spacing: 6 * window.ribbonSizeFactor
                     RibbonGroup {
                         title: "Project"
-                        AppRibbonButton { action: projectCommand; visible: projectCommand.visible; text: "Open/New"; iconName: "project"; tip: projectCommand.tooltip }
+                        AppRibbonButton { action: projectCommand; visible: projectCommand.visible; text: "Open/New"; iconName: "project"; tip: projectCommand.effectiveTooltip }
                         AppRibbonButton {
                             id: recentProjectButton
                             text: "Recent"
@@ -968,15 +1033,15 @@ ApplicationWindow {
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
                         title: "File"
-                        AppRibbonButton { action: saveCommand; visible: saveCommand.visible; iconName: "save"; tip: saveCommand.tooltip }
-                        AppRibbonButton { action: saveAsCommand; visible: saveAsCommand.visible; iconName: "save-as"; tip: saveAsCommand.tooltip }
+                        AppRibbonButton { action: saveCommand; visible: saveCommand.visible; iconName: "save"; tip: saveCommand.effectiveTooltip }
+                        AppRibbonButton { action: saveAsCommand; visible: saveAsCommand.visible; iconName: "save-as"; tip: saveAsCommand.effectiveTooltip }
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup { title: "Document record"; actions: [historyCommand, methodsCommand] }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
                         title: "Recovery"
-                        AppRibbonButton { action: recoverCommand; visible: recoverCommand.visible; iconName: "history"; tip: recoverCommand.tooltip }
+                        AppRibbonButton { action: recoverCommand; visible: recoverCommand.visible; iconName: "history"; tip: recoverCommand.effectiveTooltip }
                     }
                     Item { Layout.fillWidth: true }
                     HelpGroup {}
@@ -986,6 +1051,7 @@ ApplicationWindow {
                     spacing: 6 * window.ribbonSizeFactor
                     RibbonGroup {
                         title: "Zoom"
+                        disabledReason: window.delimitationOpen ? "Attach a display tree to the species workspace to zoom it" : "Open a document to zoom its view"
                         enabled: (window.delimitationOpen ? window.speciesTree : window.current) !== null
                         RibbonButton { commandId: "ribbon.zoom-out"; iconName: "zoom-out"; tip: "Zoom out"; keys: "Ctrl+−"; onInvoked: (window.delimitationOpen ? window.speciesTree : window.current).zoom_out() }
                         RibbonButton { commandId: "ribbon.zoom-in"; iconName: "zoom-in"; tip: "Zoom in"; keys: "Ctrl++"; onInvoked: (window.delimitationOpen ? window.speciesTree : window.current).zoom_in() }
@@ -1001,6 +1067,7 @@ ApplicationWindow {
                             objectName: "zoomPercentage"
                             label: "%"
                             tip: "Zoom percentage"
+                            disabledReason: window.delimitationOpen ? "Attach a display tree to zoom it" : "Open a document to change its zoom"
                             readonly property var controller: window.delimitationOpen ? window.speciesTree : window.current
                             from: 0; to: 20000
                             value: controller ? parseFloat(controller.zoom_text) : 100
@@ -1015,11 +1082,14 @@ ApplicationWindow {
                     RibbonGroup {
                         title: "Show"
                         // Only sequences have a GC plot.
+                        disabledReason: "Open a sequence to use this group"
                         enabled: window.currentKind === "sequence"
                         AppCheckBox {
                             text: "GC content"
-                            ToolTip.text: "Show the GC content plot"
-                            ToolTip.visible: hovered
+                            HoverHandler { id: gcTipHover }
+                            Accessible.description: ToolTip.text
+                            ToolTip.text: enabled ? "Show the GC content plot" : "Open a sequence to show its GC content plot"
+                            ToolTip.visible: gcTipHover.hovered || activeFocus
                             ToolTip.delay: 400
                             checked: window.showGc
                             focusPolicy: Qt.StrongFocus
@@ -1029,8 +1099,8 @@ ApplicationWindow {
                     Item { Layout.fillWidth: true }
                     RibbonGroup {
                         title: "Figure"
-                        AppRibbonButton { action: exportSvgCommand; visible: exportSvgCommand.visible; text: "SVG"; iconName: "save-as"; tip: exportSvgCommand.tooltip }
-                        AppRibbonButton { action: exportPngCommand; visible: exportPngCommand.visible; text: "PNG"; iconName: "figure-export"; tip: exportPngCommand.tooltip }
+                        AppRibbonButton { action: exportSvgCommand; visible: exportSvgCommand.visible; text: "SVG"; iconName: "save-as"; tip: exportSvgCommand.effectiveTooltip }
+                        AppRibbonButton { action: exportPngCommand; visible: exportPngCommand.visible; text: "PNG"; iconName: "figure-export"; tip: exportPngCommand.effectiveTooltip }
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup { title: "Text"; actions: [textRepresentationCommand] }
@@ -1040,6 +1110,7 @@ ApplicationWindow {
                 RibbonPage {
                     spacing: 6 * window.ribbonSizeFactor
                     RibbonGroup {
+                        disabledReason: "Open a sequence to use this group"
                         enabled: window.currentKind === "sequence"
                         title: "Annotation"
                         RibbonButton { commandId: "ribbon.annotate-the-selection"; text: "Add"; iconName: "annotation-add"; tip: "Annotate the selection"; keys: "Ctrl+N"; onInvoked: editor.openNew() }
@@ -1058,6 +1129,7 @@ ApplicationWindow {
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
+                        disabledReason: "Open a sequence to use this group"
                         enabled: window.currentKind === "sequence"
                         title: "Go to"
                         RibbonButton { commandId: "ribbon.select-the-previous-annotation"; text: "Previous"; iconName: "left"; tip: "Select the previous annotation"; onInvoked: window.current.step_feature(false) }
@@ -1065,6 +1137,7 @@ ApplicationWindow {
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
+                        disabledReason: "Open a sequence to use this group"
                         enabled: window.currentKind === "sequence"
                         title: "Sequence"
                         RibbonButton { commandId: "ribbon.copy-the-selected-annotation-s-sequence";
@@ -1081,6 +1154,7 @@ ApplicationWindow {
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
+                        disabledReason: "Open a sequence to use this group"
                         enabled: window.currentKind === "sequence"
                         title: "Find"
                         RibbonButton { commandId: "sequence.blast"; text: "BLAST"; tip: "Submit sequence queries to NCBI and open browser results"; iconName: "search"; onInvoked: window.beginBlast("whole") }
@@ -1121,6 +1195,7 @@ ApplicationWindow {
                 RibbonPage {
                     spacing: 6 * window.ribbonSizeFactor
                     RibbonGroup {
+                        disabledReason: "Open an alignment to use this group"
                         enabled: window.alignmentOpen
                         title: "Editing mode"
                         ModeButton { commandId: "ribbon.insert-typing-inserts-bases-the-rest-of-the-row";
@@ -1142,6 +1217,7 @@ ApplicationWindow {
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
+                        disabledReason: "Open an alignment to use this group"
                         enabled: window.alignmentOpen
                         title: "Columns"
                         RibbonButton { commandId: "ribbon.delete-columns-containing-only-gaps-across-all-rows-including";
@@ -1155,6 +1231,7 @@ ApplicationWindow {
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
+                        disabledReason: "Open an alignment to use this group"
                         enabled: window.alignmentOpen
                         title: "Rows"
                         RibbonButton { commandId: "ribbon.move-the-selected-rows-up"; text: "Up"; iconName: "up"; tip: "Move the selected rows up"; keys: "Alt+↑"; onInvoked: window.current.move_rows(true) }
@@ -1164,12 +1241,14 @@ ApplicationWindow {
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
+                        disabledReason: "Open an alignment to use this group"
                         enabled: window.alignmentOpen
                         title: "Find"
                         RibbonButton { commandId: "alignment.blast"; text: "BLAST"; tip: "Submit selected or all FASTA rows to NCBI"; iconName: "search"; onInvoked: window.beginBlast("all") }
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
+                        disabledReason: "Open an alignment to use this group"
                         enabled: window.alignmentOpen
                         title: "Align"
                         RibbonButton { commandId: "ribbon.realign-the-sequences-with-mafft-default-settings-into-a";
@@ -1189,6 +1268,7 @@ ApplicationWindow {
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
+                        disabledReason: "Open an alignment to use this group"
                         enabled: window.alignmentOpen
                         title: "Add sequence"
                         RibbonButton { commandId: "ribbon.type-a-new-sequence-or-paste-fasta"; text: "Type/paste"; iconName: "new-file"; tip: "Type a new sequence or paste FASTA"; enabled: window.current !== null && !window.current.busy; onInvoked: docs.itemAt(tabs.currentIndex).addText() }
@@ -1211,6 +1291,7 @@ ApplicationWindow {
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
+                        disabledReason: "Open a tree to use this group"
                         enabled: window.treeOpen
                         title: "Clock"
                         RibbonButton {
@@ -1240,6 +1321,7 @@ ApplicationWindow {
                     ToolSeparator { Layout.fillHeight: true }
                     // Support values: everything but Add is greyed while the tree has none.
                     RibbonGroup {
+                        disabledReason: "Open a tree to use this group"
                         enabled: window.treeOpen
                         id: supportGroup
                         title: "Support"
@@ -1249,6 +1331,7 @@ ApplicationWindow {
                             objectName: "supportFont"
                             label: "Size"
                             tip: "Support value size in pixels"
+                            disabledReason: window.treeOpen ? "Use Support > Add to add tree support values before resizing them" : "Open a tree to resize support values"
                             from: 6; to: 30
                             value: window.treeOpen && window.current ? window.current.support_font : 10
                             enabled: supportGroup.hasSupport
@@ -1271,6 +1354,7 @@ ApplicationWindow {
                 RibbonPage {
                     spacing: 6 * window.ribbonSizeFactor
                     RibbonGroup {
+                        disabledReason: "Open an alignment to use this group"
                         enabled: window.alignmentOpen
                         title: "Distance tree"
                         Repeater {
@@ -1287,6 +1371,7 @@ ApplicationWindow {
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
+                        disabledReason: "Open an alignment to use this group"
                         enabled: window.alignmentOpen
                         title: "Maximum likelihood"
                         RibbonButton { commandId: "ribbon.infer-a-tree-with-fasttree-standard-settings-gtr-for";
@@ -1353,6 +1438,7 @@ ApplicationWindow {
                     spacing: 6 * window.ribbonSizeFactor
                     RibbonGroup {
                         title: "Calls"
+                        disabledReason: !window.traceOpen || !window.current || !window.current.review_mode ? "Open a Sanger review to use this group" : "Wait for trace processing to finish"
                         enabled: window.traceOpen && window.current && window.current.review_mode && window.traceDocument && !window.traceDocument.working
                         AppComboBox {
                             id: traceCallSets
@@ -1362,14 +1448,17 @@ ApplicationWindow {
                             valueRole: "id"
                             currentIndex: window.traceOpen && window.current ? model.findIndex(row => row.id === window.current.selected_call_set) : -1
                             onActivated: window.current.select_calls(currentValue)
-                            ToolTip.text: "Each call set retains its own reviewed decisions. Computed calls are an alternative, not a guarantee of greater accuracy."
-                            ToolTip.visible: hovered
+                            HoverHandler { id: callSetTipHover }
+                            Accessible.description: ToolTip.text
+                            ToolTip.text: !enabled ? (!window.traceOpen || !window.current || !window.current.review_mode ? "Open a Sanger review to choose a call set" : "Wait for trace processing to finish") : "Each call set retains its own reviewed decisions. Computed calls are an alternative, not a guarantee of greater accuracy."
+                            ToolTip.visible: callSetTipHover.hovered || activeFocus
                         }
                         RibbonButton { commandId: "trace.compute-calls"; text: "Compute"; tip: "Compute or reuse alternative Tracy calls"; enabled: window.current && !window.current.calling && window.traceDocument && window.traceDocument.traceRows.length === 1; onInvoked: window.current.compute_calls() }
                         RibbonButton { commandId: "trace.cancel-calls"; text: "Cancel"; tip: "Cancel background calling; keep the current review"; enabled: window.current && window.current.calling; onInvoked: window.current.cancel_calls() }
                     }
                     RibbonGroup {
                         title: "Issues"
+                        disabledReason: !window.traceOpen || !window.current || !window.current.review_mode ? "Open a Sanger review to use this group" : "Wait for trace processing to finish"
                         enabled: window.traceOpen && window.traceDocument && !window.traceDocument.working
                         RibbonButton { commandId: "ribbon.previous-unresolved-issue"; iconName: "previous"; tip: "Previous unresolved issue"; keys: "Alt+← or ["; enabled: (window.traceOpen && window.current && window.current.review_mode); onInvoked: window.traceDocument.issue(false) }
                         RibbonButton { commandId: "ribbon.next-unresolved-issue"; iconName: "next"; tip: "Next unresolved issue"; keys: "Alt+→ or ]"; enabled: (window.traceOpen && window.current && window.current.review_mode); onInvoked: window.traceDocument.issue(true) }
@@ -1380,12 +1469,14 @@ ApplicationWindow {
                     }
                     RibbonGroup {
                         title: "Masking"
+                        disabledReason: !window.traceOpen || !window.current || !window.current.review_mode ? "Open a Sanger review to use this group" : "Wait for trace processing to finish"
                         enabled: window.traceOpen && window.current && window.current.review_mode && window.traceDocument && !window.traceDocument.working
                         RibbonButton { commandId: "ribbon.choose-the-consensus-range-to-keep-in-exports"; text: "Mask ends"; tip: "Choose the consensus range to keep in exports"; keys: "Ctrl+Alt+M"; onInvoked: window.traceDocument.maskEnds() }
                         RibbonButton { commandId: "ribbon.find-partial-terminal-primer-candidates-and-mask-them"; text: "Set primers"; tip: "Find partial terminal primer candidates and mask them"; keys: "Ctrl+Alt+P"; onInvoked: window.traceDocument.setPrimers() }
                     }
                     RibbonGroup {
                         title: "Export consensus"
+                        disabledReason: !window.traceOpen || !window.current || !window.current.review_mode ? "Open a Sanger review to use this group" : "Wait for trace processing to finish"
                         enabled: window.traceOpen && window.current && window.current.review_mode && window.traceDocument && !window.traceDocument.working
                         ExportConsensusButton { commandId: "ribbon.add-the-edited-consensus-to-its-alignment"; text: "to alignment"; tip: "Add the edited consensus to its alignment"; keys: "Ctrl+Shift+A"; enabled: window.traceDocument !== null && window.traceDocument.returnAlignment !== null && window.current && window.current.unresolved === 0; onInvoked: window.traceDocument.addToAlignment() }
                         ExportConsensusButton { commandId: "ribbon.export-the-edited-consensus-as-fasta"; text: "to fasta"; tip: "Export the edited consensus as FASTA"; keys: "Ctrl+Shift+E"; enabled: window.current && window.current.unresolved === 0; onInvoked: window.traceDocument.exportConsensus() }

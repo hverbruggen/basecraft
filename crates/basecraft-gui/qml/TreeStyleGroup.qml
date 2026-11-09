@@ -21,6 +21,7 @@ RibbonGroup {
         tip: "Tip name size in pixels"
         from: 6; to: 40
         value: group.controller ? group.controller.tip_font : 13
+        disabledReason: group.treePage ? "Open a tree to change its style" : "Attach a display tree to the species workspace to change its style"
         enabled: group.controller !== null
         onEdited: value => group.controller.set_sizes(value, 0, 0)
     }
@@ -33,6 +34,7 @@ RibbonGroup {
         text: "Labels"
         tip: "Compose tree tip labels from specimen metadata"
         visible: group.treePage
+        disabledReason: group.treePage ? "Open a tree to change its style" : "Attach a display tree to the species workspace to change its style"
         enabled: group.controller !== null
         onInvoked: group.labelsRequested()
     }
@@ -43,6 +45,7 @@ RibbonGroup {
         text: "Small on top"
         iconName: "tree-small-on-top"
         tooltip: "Order every clade's branches by size, smallest first"
+        disabledReason: group.treePage ? "Open a tree to change its style" : "Attach a display tree to the species workspace to change its style"
         enabled: group.controller !== null
         onTriggered: group.controller.ladderize(true)
     }
@@ -53,6 +56,7 @@ RibbonGroup {
         text: "Large on top"
         iconName: "tree-large-on-top"
         tooltip: "Order every clade's branches by size, largest first"
+        disabledReason: group.treePage ? "Open a tree to change its style" : "Attach a display tree to the species workspace to change its style"
         enabled: group.controller !== null
         onTriggered: group.controller.ladderize(false)
     }
@@ -64,6 +68,7 @@ RibbonGroup {
         text: "Order"
         iconName: "tree-small-on-top"
         tip: "Order every clade's branches by size"
+        disabledReason: group.treePage ? "Open a tree to change its style" : "Attach a display tree to the species workspace to change its style"
         enabled: group.controller !== null
         onInvoked: orderMenu.popup(order, 0, order.height)
         RibbonMenu {
@@ -81,6 +86,7 @@ RibbonGroup {
         text: "Extra"
         iconName: "tree-style"
         tip: "Branch width, clade label direction and the scale bar"
+        disabledReason: group.treePage ? "Open a tree to change its style" : "Attach a display tree to the species workspace to change its style"
         enabled: group.controller !== null
         onInvoked: group.extraRequested()
     }

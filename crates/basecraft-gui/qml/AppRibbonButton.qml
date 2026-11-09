@@ -15,6 +15,17 @@ ToolButton {
         border.color: button.visualFocus ? button.palette.highlight : "transparent"
         radius: 3
     }
+    property string disabledReason: action && action.disabledReason !== undefined ? action.disabledReason : ""
+    readonly property string inheritedDisabledReason: {
+        for (let owner = parent; owner; owner = owner.parent) {
+            if (owner instanceof RibbonGroup && !owner.enabled && owner.disabledReason.length)
+                return owner.disabledReason
+        }
+        return ""
+    }
+    readonly property string effectiveTip: !enabled && (inheritedDisabledReason || disabledReason).length
+        ? inheritedDisabledReason || disabledReason : tip
+    HoverHandler { id: tipHover }
     property string tip
     property string keys
     property string badge
@@ -25,8 +36,9 @@ ToolButton {
     readonly property real captionBaseline: contentItem.y + caption.y + caption.baselineOffset
     readonly property real symbolHeight: Math.max(metrics.symbolHeight, icon.height)
     Accessible.name: text.length ? text : tip
-    ToolTip.text: keys.length ? tip + "   " + keys : tip
-    ToolTip.visible: (hovered || activeFocus) && tip.length > 0
+    Accessible.description: effectiveTip
+    ToolTip.text: keys.length ? effectiveTip + "   " + keys : effectiveTip
+    ToolTip.visible: (tipHover.hovered || activeFocus) && effectiveTip.length > 0
     ToolTip.delay: 400
     // Keyboard access without taking editor focus on a mouse click.
     focusPolicy: Qt.TabFocus

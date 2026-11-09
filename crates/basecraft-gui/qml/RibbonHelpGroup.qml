@@ -30,7 +30,10 @@ Control {
         icon.width: 16 * metrics.factor
         icon.height: 16 * metrics.factor
         focusPolicy: Qt.TabFocus
-        ToolTip.visible: (hovered || activeFocus) && description.length > 0
+        HoverHandler { id: utilityHover }
+        Accessible.description: ToolTip.text
+        ToolTip.text: action && action.effectiveTooltip !== undefined ? action.effectiveTooltip : description
+        ToolTip.visible: (utilityHover.hovered || activeFocus) && ToolTip.text.length > 0
         ToolTip.delay: 400
     }
 
@@ -85,6 +88,7 @@ Control {
                 objectName: "ribbonFigureExport"
                 iconName: "figure-export"
                 description: "Export figure"
+                ToolTip.text: enabled ? "Export this view as SVG or PNG" : "Open a document to export its figure"
                 enabled: !!root.exportSvgAction && root.exportSvgAction.enabled
                 Accessible.role: Accessible.ButtonMenu
                 onClicked: exportMenu.popup(exportButton, 0, height)
