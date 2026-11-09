@@ -191,7 +191,7 @@ impl SangerReviewView {
         Ok(())
     }
 
-    /// Find supplies display-column spans plus its existing find_row_y geometry.
+    /// Find supplies display-column spans plus its existing `find_row_y` geometry.
     /// This avoids a second interpretation of visual sequence-row ordinals.
     pub fn overview_match_at(
         &self,
@@ -271,7 +271,7 @@ impl SangerReviewView {
         // Sample the waveform through existing draft/display event anchors.
         // Missing event positions never gain synthetic coordinates or peaks.
         for (read, lane) in self.lanes.iter().enumerate() {
-            let points = n.saturating_mul(8).min(1024).max(2);
+            let points = n.saturating_mul(8).clamp(2, 1024);
             let mut values = Vec::with_capacity(points);
             let reverse = self.draft.inputs[read].orientation == Orientation::Reverse;
             for p in 0..points {
@@ -295,11 +295,13 @@ impl SangerReviewView {
                     };
                     Some(std::array::from_fn::<_, 4, _>(|c| {
                         let channel = if reverse { 3 - c } else { c };
-                        lane.trace.channels[channel]
-                            .get(sample)
-                            .copied()
-                            .unwrap_or(0)
-                            .max(0) as f64
+                        f64::from(
+                            lane.trace.channels[channel]
+                                .get(sample)
+                                .copied()
+                                .unwrap_or(0)
+                                .max(0),
+                        )
                     }))
                 })();
                 values.push(value);

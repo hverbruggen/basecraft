@@ -143,14 +143,16 @@ pub fn trace(trace: &basecraft_io::abif::Trace, theme: &Theme) -> Miniature {
         return out;
     }
     let points = n.min(1024);
-    let maximum = trace
-        .channels
-        .iter()
-        .flatten()
-        .copied()
-        .max()
-        .unwrap_or(1)
-        .max(1) as f64;
+    let maximum = f64::from(
+        trace
+            .channels
+            .iter()
+            .flatten()
+            .copied()
+            .max()
+            .unwrap_or(1)
+            .max(1),
+    );
     for (channel, color) in trace
         .channels
         .iter()
@@ -160,8 +162,8 @@ pub fn trace(trace: &basecraft_io::abif::Trace, theme: &Theme) -> Miniature {
             let a = i * n / points;
             let b = (i + 1) * n / points;
             let bucket = &channel[a..b];
-            let low = bucket.iter().copied().min().unwrap_or(0).max(0) as f64;
-            let high = bucket.iter().copied().max().unwrap_or(0).max(0) as f64;
+            let low = f64::from(bucket.iter().copied().min().unwrap_or(0).max(0));
+            let high = f64::from(bucket.iter().copied().max().unwrap_or(0).max(0));
             let x = (i as f64 + 0.5) / points as f64;
             out.line(
                 [
