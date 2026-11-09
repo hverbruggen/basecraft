@@ -43,7 +43,11 @@ fn bundle_python_at(root: &Path) -> Option<PathBuf> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => metadata,
         Err(_) => return None,
     };
-    let python = Path::new(deployment["python_environment"].as_str()?).join("python");
+    let python = Path::new(deployment["python_environment"].as_str()?).join(if cfg!(windows) {
+        "python.exe"
+    } else {
+        "python"
+    });
     python.is_file().then_some(python)
 }
 
@@ -73,16 +77,25 @@ mod tests {
     fn source_python_belongs_to_the_selected_checkout() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("checkout");
-        let other = temp.path().join("other/.pixi/envs/default/bin");
-        std::fs::create_dir_all(&other).unwrap();
-        std::fs::write(other.join("python"), "").unwrap();
+        let relative = if cfg!(windows) {
+            ".pixi/envs/default/python.exe"
+        } else {
+            ".pixi/envs/default/bin/python"
+        };
+        let other = temp.path().join("other").join(relative);
+        std::fs::create_dir_all(other.parent().unwrap()).unwrap();
+        std::fs::write(&other, "").unwrap();
         assert!(source_python_at(&root).is_none());
-        let bin = root.join(".pixi/envs/default/bin");
-        std::fs::create_dir_all(&bin).unwrap();
-        std::fs::write(bin.join("python"), "").unwrap();
-        assert_eq!(source_python_at(&root), Some(bin.join("python")));
+        let python = root.join(relative);
+        std::fs::create_dir_all(python.parent().unwrap()).unwrap();
+        std::fs::write(&python, "").unwrap();
+        assert_eq!(
+            source_python_at(&root),
+            Some(python.canonicalize().unwrap())
+        );
     }
 
+    #[cfg(unix)]
     #[test]
     fn detached_source_environment_and_private_bundle_receipt() {
         let temp = tempfile::tempdir().unwrap();
@@ -102,5 +115,17 @@ mod tests {
         std::fs::remove_file(temp.path().join("release.local.json")).unwrap();
         std::fs::write(root.join("build.json"), receipt.to_string()).unwrap();
         assert_eq!(bundle_python_at(&root), Some(detached.join("python")));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn portable_bundle_python_needs_no_developer_receipt() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("portable bundle");
+        let python = root.join("runtime/python.exe");
+        std::fs::create_dir_all(python.parent().unwrap()).unwrap();
+        assert!(bundle_python_at(&root).is_none());
+        std::fs::write(&python, "").unwrap();
+        assert_eq!(bundle_python_at(&root), Some(python));
     }
 }
