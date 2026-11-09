@@ -94,10 +94,10 @@ ApplicationWindow {
     readonly property bool treeOpen: currentKind === "tree"
     readonly property bool delimitationOpen: currentKind === "delimitation"
     readonly property bool traceOpen: currentKind === "trace"
-    readonly property var ribbonTabs: ["File", "View", "Annotations", "Alignment", "Phylogeny", "Tree", "Delimitation", "Trace", "Data submission", "Help"]
+    readonly property var ribbonTabs: ["File", "View", "Annotations", "Alignment", "Phylogeny", "Tree", "Delimitation", "Trace", "Export", "Help"]
     readonly property string ribbonTab: ribbonTabs.includes(ribbonTabName) ? ribbonTabName : "File"
     // Each tab's panel in the ribbon's stack.
-    readonly property var ribbonPanels: ({ "File": 0, "View": 1, "Annotations": 2, "Help": 3, "Alignment": 4, "Tree": 5, "Phylogeny": 6, "Delimitation": 7, "Trace": 8, "Data submission": 9 })
+    readonly property var ribbonPanels: ({ "File": 0, "View": 1, "Annotations": 2, "Help": 3, "Alignment": 4, "Tree": 5, "Phylogeny": 6, "Delimitation": 7, "Trace": 8, "Export": 9 })
     // Only the wrapped layout is offered for now; files always open in it.
 
     readonly property int availableCpuThreads: shell.available_cpu_threads()
@@ -273,15 +273,15 @@ ApplicationWindow {
 
     // Open a file in a tab, or switch to its tab if it's already open.
     function openPath(path) {
-        // The specimen table is project data, edited on the Data submission tab.
+        // The specimen table is project data, edited on the Export tab.
         if (shell.file_kind(path) === "metadata") {
-            ribbonTabName = "Data submission"
+            ribbonTabName = "Export"
             specimenTable.open()
             return
         }
-        // Submissions are project documents edited on the Data submission tab.
+        // Submissions are project documents edited on the Export tab.
         if (shell.file_kind(path) === "submission") {
-            ribbonTabName = "Data submission"
+            ribbonTabName = "Export"
             window.openSubmission(path)
             return
         }
@@ -1097,12 +1097,6 @@ ApplicationWindow {
                         }
                     }
                     Item { Layout.fillWidth: true }
-                    RibbonGroup {
-                        title: "Figure"
-                        AppRibbonButton { action: exportSvgCommand; visible: exportSvgCommand.visible; text: "SVG"; iconName: "save-as"; tip: exportSvgCommand.effectiveTooltip }
-                        AppRibbonButton { action: exportPngCommand; visible: exportPngCommand.visible; text: "PNG"; iconName: "figure-export"; tip: exportPngCommand.effectiveTooltip }
-                    }
-                    ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup { title: "Text"; actions: [textRepresentationCommand] }
                     HelpGroup {}
                 }
@@ -1486,9 +1480,15 @@ ApplicationWindow {
                     HelpGroup {}
                 }
 
-                // Data submission: the project's specimen table and its imports.
+                // Export: figures, specimen preparation and the complete GenBank workflow.
                 RibbonPage {
                     spacing: 6 * window.ribbonSizeFactor
+                    RibbonGroup {
+                        title: "Figure"
+                        AppRibbonButton { action: exportSvgCommand; visible: exportSvgCommand.visible; text: "SVG"; iconName: "save-as"; tip: exportSvgCommand.effectiveTooltip }
+                        AppRibbonButton { action: exportPngCommand; visible: exportPngCommand.visible; text: "PNG"; iconName: "figure-export"; tip: exportPngCommand.effectiveTooltip }
+                    }
+                    ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
                         title: "Specimens"
                         RibbonButton { commandId: "metadata.table"; text: "Table"; iconName: "matrix"; tip: shell.project_dir.length ? "The project's specimens, identifications and collection data" : "Choose a project folder first"; enabled: shell.project_dir.length > 0; onInvoked: specimenTable.open() }
@@ -1533,7 +1533,7 @@ ApplicationWindow {
 
     ShortcutsDialog { id: shortcuts; commands: window.applicationCommands }
 
-    // The project's specimen metadata (Data submission tab). It follows the
+    // The project's specimen metadata (Export tab). It follows the
     // project folder; opening a project never creates metadata files.
     MetadataController { id: specimenMetadata }
     readonly property string metadataProject: shell.project_dir
@@ -1588,7 +1588,7 @@ ApplicationWindow {
             metadataReview.show(JSON.parse(specimenMetadata.plan), metadataImport.mode === "headers" ? "pattern" : "mapping")
         }
     }
-    // GenBank marker submissions (Data submission tab). table2asn runs as a
+    // GenBank marker submissions (Export tab). table2asn runs as a
     // registered operation on its own job runner, like BLAST.
     SubmissionController { id: submissions }
     Connections {

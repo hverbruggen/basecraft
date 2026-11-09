@@ -78,9 +78,9 @@ Item {
                     ${ribbon}
                 }`, host, Qt.resolvedUrl("stableRibbonHarness.qml"))
         }
-        function test_view_figure_export_reuses_actions() {
+        function test_export_tab_reuses_actions_and_retains_submission() {
             const scene = productionRibbon()
-            scene.ribbonTabName = "View"
+            scene.ribbonTabName = "Export"
             findChild(scene, "applicationRibbon").width = 1200
             verify(waitForPolish(scene.Window.window))
             function captioned(item, text) {
@@ -105,6 +105,12 @@ Item {
             compare(svgCount, 1)
             compare(pngCount, 1)
             verify(findChild(scene, "ribbonFigureExport"), "Utility export remains present")
+            function containsCommand(item, id) {
+                return item.commandId === id || (item.children || []).some(child => containsCommand(child, id))
+            }
+            const page = findChild(scene, "applicationRibbon").currentPage
+            for (const id of ["metadata.table", "metadata.import-headers", "metadata.import-sheet", "metadata.template", "submission.new", "submission.open", "submission.prepare", "submission.validate", "submission.submitter"])
+                verify(containsCommand(page, id), "Export retains " + id)
             scene.destroy()
         }
         function test_disabled_prerequisite_messages() {
@@ -133,7 +139,7 @@ Item {
             const ribbon = findChild(scene, "applicationRibbon")
             ribbon.width = data.width
             scene.ribbonSizeFactor = data.factor
-            compare(scene.ribbonTabs, ["File", "View", "Annotations", "Alignment", "Phylogeny", "Tree", "Delimitation", "Trace", "Data submission", "Help"])
+            compare(scene.ribbonTabs, ["File", "View", "Annotations", "Alignment", "Phylogeny", "Tree", "Delimitation", "Trace", "Export", "Help"])
             scene.ribbonTabName = "Phylogeny"
             for (const kind of ["", "sequence", "alignment", "tree", "delimitation", "trace"]) {
                 scene.currentKind = kind
@@ -152,12 +158,12 @@ Item {
                         if (name === "Delimitation" && command.commandId === "species.gmyc-workspace") compare(command.enabled, ["alignment", "tree", "delimitation"].includes(kind))
                         if (name === "Delimitation" && command.commandId === "species.asap-workspace") compare(command.enabled, kind === "alignment")
                         if (name === "Trace" && command.commandId === "ribbon.choose-the-terminal-signal-percentage-for-a-new-draft") compare(command.enabled, kind === "trace")
-                        if (name === "Data submission" && command.commandId === "metadata.table") verify(command.enabled)
-                        if (name === "Data submission" && command.commandId === "metadata.import-headers") compare(command.enabled, kind === "alignment")
-                        if (name === "Data submission" && command.commandId === "metadata.template") compare(command.enabled, kind === "alignment")
-                        if (name === "Data submission" && command.commandId === "submission.new") compare(command.enabled, kind === "alignment")
-                        if (name === "Data submission" && command.commandId === "submission.open") verify(command.enabled)
-                        if (name === "Data submission" && command.commandId === "submission.validate") compare(command.enabled, kind === "alignment")
+                        if (name === "Export" && command.commandId === "metadata.table") verify(command.enabled)
+                        if (name === "Export" && command.commandId === "metadata.import-headers") compare(command.enabled, kind === "alignment")
+                        if (name === "Export" && command.commandId === "metadata.template") compare(command.enabled, kind === "alignment")
+                        if (name === "Export" && command.commandId === "submission.new") compare(command.enabled, kind === "alignment")
+                        if (name === "Export" && command.commandId === "submission.open") verify(command.enabled)
+                        if (name === "Export" && command.commandId === "submission.validate") compare(command.enabled, kind === "alignment")
                     }
                     scene.ribbonTabName = "View"
                     verify(waitForPolish(scene.Window.window))

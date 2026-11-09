@@ -1028,7 +1028,7 @@ AppDialog {
                         }))
                     }
                     Label {
-                        text: "Submitter contact details are independent; set them with Data submission > Submitter."
+                        text: "Submitter contact details are independent; set them with Export > Submitter."
                         wrapMode: Text.Wrap
                         Layout.fillWidth: true
                     }
