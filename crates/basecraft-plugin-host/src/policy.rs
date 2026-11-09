@@ -65,7 +65,8 @@ impl std::fmt::Debug for CredentialGrant {
 }
 
 pub(crate) fn credential_environment(name: &str) -> bool {
-    name.starts_with("BASECRAFT_")
+    name != "BASECRAFT_TOKEN"
+        && name.starts_with("BASECRAFT_")
         && name.ends_with("_TOKEN")
         && name
             .bytes()
@@ -123,7 +124,11 @@ impl SessionPolicy {
         value: String,
     ) -> Result<Self> {
         operation.package.verify()?;
-        if !operation.descriptor.credentials.contains_key(name)
+        if operation
+            .descriptor
+            .credentials
+            .get(name)
+            .is_none_or(|environment| !credential_environment(environment))
             || value.is_empty()
             || value.len() > 8192
             || value.contains(['\0', '\r', '\n'])
