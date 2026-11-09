@@ -12,7 +12,8 @@ Kirigami.Action {
     property string defaultShortcut: ""
     shortcut: customization.shortcuts && customization.shortcuts[commandId] !== undefined
         ? customization.shortcuts[commandId] : defaultShortcut
-    visible: !customization.ribbon_hidden || customization.ribbon_hidden.indexOf(commandId) < 0
+    property bool contextVisible: true
+    visible: contextVisible && (!customization.ribbon_hidden || customization.ribbon_hidden.indexOf(commandId) < 0)
     property string disabledReason
     readonly property string effectiveTooltip: !enabled && disabledReason.length ? disabledReason : tooltip
     property string iconName

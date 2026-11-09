@@ -33,7 +33,7 @@ RibbonGroup {
         objectName: "metadataTipLabels"
         text: "Labels"
         tip: "Compose tree tip labels from specimen metadata"
-        visible: group.treePage
+        contextVisible: group.treePage
         disabledReason: group.treePage ? "Open a tree to change its style" : "Attach a display tree to the species workspace to change its style"
         enabled: group.controller !== null
         onInvoked: group.labelsRequested()

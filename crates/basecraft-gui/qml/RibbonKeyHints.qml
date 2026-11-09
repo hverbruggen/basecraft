@@ -152,6 +152,8 @@ Item {
             if (!popupContext() && (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab)) {
                 for (let item = hostWindow.activeFocusItem; item; item = item.parent) {
                     if (item === tabBar) { ribbon.enter(event.key === Qt.Key_Backtab || !!(event.modifiers & Qt.ShiftModifier)); event.accepted = true; return }
+                    const group = ribbon.groups().find(g => g.entries().includes(item))
+                    if (group) { ribbon.browsingGroup = group; ribbon.moveGroup(event.key === Qt.Key_Backtab || !!(event.modifiers & Qt.ShiftModifier)); event.accepted = true; return }
                 }
             }
             const target = dialogs.length && event.modifiers === Qt.AltModifier ? dialogTargets.find(t => t.key === event.text.toUpperCase()) : null

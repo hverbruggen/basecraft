@@ -53,6 +53,7 @@ Control {
     padding: 0
     Item {
         id: body
+        readonly property var ribbonGroupOwner: group
         readonly property font font: group.font
         readonly property real ribbonSizeFactor: metrics.factor
         readonly property real baseFontPixelSize: metrics.baseFontPixelSize

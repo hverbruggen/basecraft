@@ -152,6 +152,9 @@ Item {
                 for (const dark of [false,true]) {
                     ribbon.palette.buttonText = dark ? "#eeeeee" : "#222222"
                     ribbon.palette.window = dark ? "#222222" : "#ffffff"
+                    ribbon.palette.button = dark ? "#333333" : "#eeeeee"
+                    ribbon.palette.base = ribbon.palette.button
+                    ribbon.palette.text = ribbon.palette.buttonText
                     ribbon.palette.windowText = ribbon.palette.buttonText
                     ribbon.background.color = ribbon.palette.window
                     verify(waitForPolish(scene.Window.window))
@@ -235,6 +238,13 @@ Item {
                     scene.ribbonTabName = name
                     verify(waitForPolish(scene.Window.window))
                     const height = ribbon.height
+                    const keys = ribbon.groups().reduce((result,g) => result.concat(g.entries().map(c => {
+                        const command = c.commandAction || c.action
+                        return command && command.keyHint ? command.keyHint : c.keyHint || ""
+                    })),[])
+                    verify(keys.every(key => key.length > 0), name + " gives every control an access key")
+                    for (let i=0;i<keys.length;i++) for (let j=i+1;j<keys.length;j++)
+                        verify(!keys[i].startsWith(keys[j]) && !keys[j].startsWith(keys[i]), name + " has unambiguous keys: " + keys[i] + "/" + keys[j])
                     tryVerify(() => !ribbon.overflowing, 2000, name + " fits without horizontal scrolling: " + ribbon.pageWidth + "/" + ribbon.availableWidth + " " + JSON.stringify(ribbon.groups().map(g=>({title:g.title, mode:g.presentation, width:g.implicitWidth}))))
                     for (const command of scene.commands) {
                         if (name === "Sequence" && command.commandId === "ribbon.annotate-the-selection") compare(command.enabled, kind === "sequence")

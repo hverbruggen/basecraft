@@ -131,6 +131,9 @@ Item {
             verify(input !== browser)
             keyClick(Qt.Key_Left)
             compare(host.Window.window.activeFocusItem,input)
+            wait(10)
+            keyClick(Qt.Key_Tab)
+            compare(ribbon.browsingGroup,commands)
         }
         function test_menu_levels_and_command_identity() {
             ribbon.width = 80

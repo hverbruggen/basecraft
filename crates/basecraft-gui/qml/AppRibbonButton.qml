@@ -26,8 +26,8 @@ ToolButton {
     property string disabledReason: action && action.disabledReason !== undefined ? action.disabledReason : ""
     readonly property string inheritedDisabledReason: {
         for (let owner = parent; owner; owner = owner.parent) {
-            if (owner instanceof RibbonGroup && !owner.enabled && owner.disabledReason.length)
-                return owner.disabledReason
+            const group = owner instanceof RibbonGroup ? owner : owner.ribbonGroupOwner
+            if (group && !group.enabled && group.disabledReason.length) return group.disabledReason
         }
         return ""
     }

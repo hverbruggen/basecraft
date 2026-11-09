@@ -2,6 +2,8 @@
 
 // Stable access keys belong to the command registry, independent of layout or captions.
 var defaults = {
+    "file.new-sequence": "N",
+    "view.find": "N",
     "trace.keep-from": "KF",
     "trace.keep-through": "KT",
     "ribbon.order-every-clade-s-branches-by-size-smallest-first": "S",
@@ -111,6 +113,8 @@ var defaults = {
 function keyFor(id) { return defaults[id] || "" }
 
 var scopes = {
+    "file.new-sequence": "File",
+    "view.find": "View",
     "trace.keep-from": "Trace",
     "trace.keep-through": "Trace",
     "ribbon.order-every-clade-s-branches-by-size-smallest-first": "Tree order menu",

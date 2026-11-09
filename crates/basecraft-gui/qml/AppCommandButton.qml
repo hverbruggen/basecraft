@@ -6,6 +6,7 @@ AppRibbonButton {
     id: button
     required property string commandId
     property var customization: ({shortcuts: {}, ribbon_hidden: []})
+    property alias contextVisible: command.contextVisible
     readonly property alias commandAction: command
     signal invoked()
     text: ""
