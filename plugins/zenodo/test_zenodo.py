@@ -27,7 +27,7 @@ class Zenodo(unittest.TestCase):
                            "license": "cc-by-4.0", "service": "sandbox", "access_right": "open"}
         self.calls = []
         self.remote = {"id": 123, "submitted": False, "metadata": z.metadata(self.parameters),
-                       "links": {"bucket": "https://sandbox.zenodo.org/api/files/test-bucket"}, "files": []}
+                       "links": {"bucket": "https://sandbox.zenodo.org/api/files/test-bucket", "html": "https://sandbox.zenodo.org/deposit/123"}, "files": []}
 
     def transport(self, method, url, token, context, **kwargs):
         self.calls.append((method, url, kwargs))
@@ -62,6 +62,7 @@ class Zenodo(unittest.TestCase):
         self.assertEqual(data["status"], "draft_ready")
         self.assertEqual([call[0] for call in self.calls], ["POST", "PUT"])
         self.assertEqual(data["draft_id"], 123)
+        self.assertEqual(data["url"], "https://sandbox.zenodo.org/deposit/123")
         self.assertNotIn("doi", data)
         self.assertNotIn("private-test-token", Path(self.context["outputs"]["receipt"]).read_text())
         self.assertNotIn("actions/publish", json.dumps(self.calls))

@@ -217,7 +217,7 @@ def upload(parameters, context, transport=request, token=None):
         identifier = saved.get("draft_id")
         if type(identifier) is int and identifier > 0:
             receipt["draft_id"] = identifier
-            receipt["url"] = f"{origin}/uploads/{identifier}"
+            receipt["url"] = f"{origin}/deposit/{identifier}"
         elif identifier is not None or saved.get("status") != "not_sent":
             raise ValueError("Creation status unknown: inspect your Zenodo uploads; do not create another draft automatically")
     output = context["outputs"]["receipt"]
@@ -232,7 +232,7 @@ def upload(parameters, context, transport=request, token=None):
             identifier = remote.get("id")
             if type(identifier) is not int or identifier <= 0:
                 raise RemoteError("Zenodo did not return a valid draft identity")
-            receipt.update(draft_id=identifier, url=f"{origin}/uploads/{identifier}", status="draft_partial",
+            receipt.update(draft_id=identifier, url=f"{origin}/deposit/{identifier}", status="draft_partial",
                            message="Draft created; uploading files")
             save(output, receipt)  # Retain identity before inspecting any other response field.
         else:
@@ -240,6 +240,12 @@ def upload(parameters, context, transport=request, token=None):
             remote = transport("GET", f"{origin}/api/deposit/depositions/{receipt['draft_id']}", token, context)
         if remote.get("id") != receipt["draft_id"] or remote.get("submitted") is not False:
             raise RemoteError("The retained deposit is no longer an editable draft; nothing overwritten")
+        html = remote.get("links", {}).get("html")
+        if html:
+            link = safe_url(html, origin, "/")
+            if urlsplit(link).path.rstrip("/") not in (f"/deposit/{receipt['draft_id']}", f"/uploads/{receipt['draft_id']}"):
+                raise RemoteError("Zenodo returned a mismatched draft link")
+            receipt["url"] = link
         # Do not overwrite another editor's metadata during resume.
         actual = remote.get("metadata", {})
         if any(actual.get(key) != value for key, value in meta.items()):
