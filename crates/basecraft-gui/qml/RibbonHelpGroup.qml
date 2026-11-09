@@ -16,7 +16,7 @@ Control {
     readonly property bool darkBackground: 0.2126 * backgroundColor.r
         + 0.7152 * backgroundColor.g + 0.0722 * backgroundColor.b < 0.5
     RibbonMetrics { id: metrics; control: root }
-    readonly property real buttonSide: Math.ceil(Math.max(20 * metrics.factor, metrics.symbolHeight + 4 * metrics.factor))
+    readonly property real buttonSide: Math.ceil(Math.max(24 * metrics.factor, metrics.symbolHeight + 4 * metrics.factor))
     padding: 0
     implicitWidth: contents.implicitWidth
     implicitHeight: contents.implicitHeight
@@ -55,6 +55,7 @@ Control {
                 UtilityButton {
                     id: methodsButton
                     objectName: "ribbonMethods"
+                property string utilityKey: "1"
                     anchors.fill: parent
                     action: root.methodsAction
                     iconName: "methods-export"
@@ -69,15 +70,16 @@ Control {
             }
             UtilityButton {
                 objectName: "ribbonHelpShortcuts"
+                property string utilityKey: "2"
                 action: root.shortcutsAction
                 iconName: "keyboard"
                 description: "Keyboard shortcuts for this tab"
             }
             UtilityButton {
                 objectName: "ribbonHelpAbout"
+                property string utilityKey: "3"
                 action: root.aboutAction
-                iconName: "basecraft-colour"
-                icon.color: "transparent"
+                iconName: "basecraft-monochrome"
                 icon.width: 20 * metrics.factor
                 icon.height: 20 * metrics.factor
                 padding: 0
@@ -86,6 +88,7 @@ Control {
             UtilityButton {
                 id: exportButton
                 objectName: "ribbonFigureExport"
+                property string utilityKey: "4"
                 iconName: "figure-export"
                 description: "Export figure"
                 ToolTip.text: enabled ? "Export this view as SVG or PNG" : "Open a document to export its figure"
@@ -101,6 +104,7 @@ Control {
             }
             UtilityButton {
                 objectName: "ribbonHelpDocumentation"
+                property string utilityKey: "5"
                 action: root.learnAction
                 iconName: "book"
                 description: "Manual"
@@ -108,6 +112,7 @@ Control {
             }
             UtilityButton {
                 objectName: "ribbonHelpPreferences"
+                property string utilityKey: "6"
                 action: root.preferencesAction
                 iconName: "settings"
                 icon.color: root.darkBackground ? palette.buttonText : "#666666"

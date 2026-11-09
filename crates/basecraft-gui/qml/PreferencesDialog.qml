@@ -126,6 +126,28 @@ AppFormDialog {
                     dialog.change("shortcut", { id: row.modelData.commandId, value: text })
                 }
             }
+            TextField {
+                id: hintEditor
+                property string validationMessage: ""
+                visible: row.modelData.defaultKeyHint.length > 0
+                Layout.preferredWidth: 60
+                maximumLength: 2
+                text: row.modelData.keyHint
+                Accessible.name: row.modelData.text + " access key"
+                Accessible.description: validationMessage
+                ToolTip.text: validationMessage
+                ToolTip.visible: activeFocus && validationMessage.length > 0
+                onEditingFinished: {
+                    const key = text.toUpperCase()
+                    const conflict = dialog.commands.some(c => c !== row.modelData && c.hintScope === row.modelData.hintScope && c.keyHint.length && (c.keyHint.startsWith(key) || key.startsWith(c.keyHint)))
+                    if (conflict || !/^[A-IXK-W][A-Z]?$/.test(key)) {
+                        validationMessage = conflict ? "Access key conflicts in this tab" : "Use one or two letters; do not start with J, Y or Z"
+                        return
+                    }
+                    validationMessage = ""
+                    dialog.change("keyHint", {id:row.modelData.commandId, value:key})
+                }
+            }
             AppCheckBox {
                 text: "Show"
                 checked: row.modelData.visible

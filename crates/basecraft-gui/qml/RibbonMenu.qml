@@ -3,6 +3,7 @@ import QtQuick.Controls.Basic
 
 // Fit ribbon menus to their labels, without Basic's fixed minimum width.
 Menu {
+    onOpened: if (Window.window && Window.window.ribbonNavigation) Window.window.ribbonNavigation.menuOpened(this)
     property real sizeFactor: 1
     implicitWidth: {
         let widest = 0

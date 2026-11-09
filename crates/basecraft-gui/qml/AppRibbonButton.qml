@@ -15,6 +15,14 @@ ToolButton {
         border.color: button.visualFocus ? button.palette.highlight : "transparent"
         radius: 3
     }
+    readonly property bool ribbonControl: true
+    readonly property var ribbonGroup: {
+        for (let owner = parent; owner; owner = owner.parent) if (owner instanceof RibbonGroup) return owner
+        return null
+    }
+    readonly property bool compact: ribbonGroup && ribbonGroup.presentation === 1
+    readonly property real expandedWidth: Math.max(32 * sizeFactor, Math.max(symbols.implicitWidth, caption.implicitWidth) + leftPadding + rightPadding)
+    readonly property real compactWidth: Math.max(24 * sizeFactor, symbols.implicitWidth + leftPadding + rightPadding)
     property string disabledReason: action && action.disabledReason !== undefined ? action.disabledReason : ""
     readonly property string inheritedDisabledReason: {
         for (let owner = parent; owner; owner = owner.parent) {
@@ -45,7 +53,8 @@ ToolButton {
     // Keep labels subordinate to the icon, and make the whole tile clickable.
     display: iconName.length ? AbstractButton.TextUnderIcon : AbstractButton.TextOnly
     font.pixelSize: metrics.captionPixelSize
-    implicitWidth: Math.max(32 * sizeFactor, contentItem.implicitWidth + leftPadding + rightPadding)
+    implicitWidth: compact ? compactWidth : expandedWidth
+    implicitHeight: metrics.tileHeight
     icon.source: iconName.length ? Qt.resolvedUrl("../icons/" + iconName + ".svg") : ""
     icon.width: symbolSize * sizeFactor
     icon.height: symbolSize * sizeFactor
@@ -72,7 +81,7 @@ ToolButton {
             id: caption
             anchors.horizontalCenter: parent.horizontalCenter
             y: symbols.visible ? symbols.implicitHeight + 2 * button.sizeFactor : 0
-            visible: button.captionText.length > 0
+            visible: !button.compact && button.captionText.length > 0
             text: button.captionText
             font: button.font
             color: button.palette.buttonText

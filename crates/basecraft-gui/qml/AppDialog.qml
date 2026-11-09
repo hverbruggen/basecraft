@@ -110,8 +110,14 @@ Dialog {
         function onAboutToShow() {
             dialog.previousFocusItem = dialog.hostWindow ? dialog.hostWindow.activeFocusItem : null
         }
-        function onOpened() { Qt.callLater(dialog.focusInitialControl) }
+        function onOpened() {
+            Qt.callLater(dialog.focusInitialControl)
+            if (dialog.hostWindow && dialog.hostWindow.ribbonNavigation)
+                Qt.callLater(() => dialog.hostWindow.ribbonNavigation.registerDialog(dialog))
+        }
         function onClosed() {
+            if (dialog.hostWindow && dialog.hostWindow.ribbonNavigation)
+                dialog.hostWindow.ribbonNavigation.unregisterDialog(dialog)
             const target = dialog.usable(dialog.returnFocusItem) ? dialog.returnFocusItem
                 : dialog.previousFocusItem
             // An accept/reject handler can open the next popup before closed

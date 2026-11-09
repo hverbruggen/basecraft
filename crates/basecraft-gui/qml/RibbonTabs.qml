@@ -25,6 +25,14 @@ TabBar {
         if (!rebuilding && currentIndex >= 0 && currentIndex < names.length)
             selected(names[currentIndex])
     })
+    signal enterRibbon(bool backward)
+    signal escapeRequested()
+    Keys.onPressed: event => {
+        if (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) {
+            enterRibbon(event.key === Qt.Key_Backtab || !!(event.modifiers & Qt.ShiftModifier))
+            event.accepted = true
+        } else if (event.key === Qt.Key_Escape) { escapeRequested(); event.accepted = true }
+    }
     background: Item {}
     Repeater {
         model: tabs.names

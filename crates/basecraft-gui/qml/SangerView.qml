@@ -92,10 +92,6 @@ FocusScope {
     Shortcut { sequence: "Ctrl+Shift+E"; enabled: doc.visible && !doc.working && ctl.review_mode && ctl.unresolved === 0; onActivated: doc.exportConsensus() }
     Shortcut { sequence: "Ctrl+Shift+C"; enabled: doc.visible && !doc.working && ctl.review_mode && ctl.unresolved === 0; onActivated: doc.copyConsensus() }
     Shortcut { sequence: "Ctrl+Shift+A"; enabled: doc.visible && !doc.working && ctl.review_mode && ctl.unresolved === 0 && doc.returnAlignment !== null; onActivated: doc.addToAlignment() }
-    Shortcut { sequence: "Ctrl+Alt+A"; enabled: doc.visible && !doc.working && ctl.review_mode && doc.returnAlignment === null; onActivated: doc.alignmentContext() }
-    Shortcut { sequence: "Ctrl+Alt+D"; enabled: doc.visible && !doc.working && traceRows.length === 1; onActivated: doc.draftReads() }
-    Shortcut { sequence: "Ctrl+Alt+Home"; enabled: doc.visible && !doc.working && ctl.review_mode; onActivated: doc.setMaskStart(ctl.selected_column) }
-    Shortcut { sequence: "Ctrl+Alt+End"; enabled: doc.visible && !doc.working && ctl.review_mode; onActivated: doc.setMaskEnd(ctl.selected_column) }
 
     function setMaskStart(column) {
         const mask = JSON.parse(ctl.mask_settings)
@@ -347,8 +343,6 @@ FocusScope {
             }
         }
     }
-    Shortcut { sequence: "Ctrl+Alt+M"; enabled: doc.visible && !doc.working && ctl.review_mode; onActivated: doc.maskEnds() }
-    Shortcut { sequence: "Ctrl+Alt+P"; enabled: doc.visible && !doc.working && ctl.review_mode; onActivated: doc.setPrimers() }
     SangerController { id: ctl }
     Connections { target: ctl; function onStageFinished(stage, success, payload) { doc.reviewStageFinished(stage, success, payload) } }
     Timer { interval: 200; repeat: true; running: ctl.busy; onTriggered: ctl.poll_stage() }
@@ -574,13 +568,13 @@ FocusScope {
             MenuSeparator {}
             MenuItem {
                 id: maskStartItem
-                text: "Keep from here    Ctrl+Alt+Home"
+                text: "Keep from here"
                 enabled: maskMenu.column <= (maskMenu.mask.end || ctl.consensus_columns)
                 onTriggered: doc.setMaskStart(maskMenu.column)
             }
             MenuItem {
                 id: maskEndItem
-                text: "Keep through here    Ctrl+Alt+End"
+                text: "Keep through here"
                 enabled: maskMenu.column >= (maskMenu.mask.start || 0) + 1
                 onTriggered: doc.setMaskEnd(maskMenu.column)
             }

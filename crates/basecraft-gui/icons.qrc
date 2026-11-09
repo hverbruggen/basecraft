@@ -73,5 +73,22 @@
     <file>branding/wordmark-dark.png</file>
     <file>branding/wordmark-light.png</file>
     <file>qml/AsciiArt.js</file>
+    <file>icons/tree-midpoint.svg</file>
+    <file>icons/tree-variance.svg</file>
+    <file>icons/tree-clock.svg</file>
+    <file>icons/tree-fast.svg</file>
+    <file>icons/tree-infer.svg</file>
+    <file>icons/gene-orf.svg</file>
+    <file>icons/gene-predict.svg</file>
+    <file>icons/trace-compute.svg</file>
+    <file>icons/trace-cancel.svg</file>
+    <file>icons/trace-draft.svg</file>
+    <file>icons/trace-mask.svg</file>
+    <file>icons/trace-primer.svg</file>
+    <file>icons/trace-cutoff.svg</file>
+    <file>icons/hypothesis-combine.svg</file>
+    <file>icons/hypothesis-manual.svg</file>
+    <file>icons/support-add.svg</file>
+    <file>icons/rename.svg</file>
   </qresource>
 </RCC>

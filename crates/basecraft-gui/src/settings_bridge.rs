@@ -107,6 +107,18 @@ fn change(key: &str, value: &serde_json::Value) -> Result<Change, String> {
                 _ => return Err("shortcut requires a string or null".into()),
             },
         },
+        "keyHint" => Change::KeyHint {
+            id: value
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .ok_or("access key requires a command ID")?
+                .into(),
+            value: match value.get("value") {
+                Some(serde_json::Value::Null) => None,
+                Some(serde_json::Value::String(value)) => Some(value.to_uppercase()),
+                _ => return Err("access key requires a string or null".into()),
+            },
+        },
         "ribbonCommandHidden" => Change::RibbonCommandHidden {
             id: value
                 .get("id")
