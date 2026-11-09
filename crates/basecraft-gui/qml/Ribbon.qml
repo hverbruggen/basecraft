@@ -34,11 +34,7 @@ Control {
         const others = Array.from(currentPage.children).filter(c => !(c instanceof RibbonGroup) && !(c instanceof ToolSeparator) && !c.Layout.fillWidth)
         // Capture ownership before changing presentation hides a focused item.
         const focused = Window.window ? Window.window.activeFocusItem : null
-        const focusedGroup = list.find(g => {
-            for (let item = focused; item; item = item.parent)
-                if (item.ribbonGroupOwner === g || item === g.collapseControl) return true
-            return false
-        })
+        const focusedGroup = list.find(g => g.containsControl(focused))
         const modes = list.map(() => 0)
         const widths = list.map(g => [g.expandedWidth, g.compactGroupWidth, g.collapsedWidth])
         let showSeparators = true
@@ -68,13 +64,29 @@ Control {
 
     onPageWidthChanged: Qt.callLater(adapt)
     onAvailableWidthChanged: Qt.callLater(adapt)
-    onCurrentPageChanged: { browsingControl = null; Qt.callLater(adapt) }
+    onCurrentPageChanged: {
+        const focused = Window.window ? Window.window.activeFocusItem : null
+        let leavingRibbon = browser.activeFocus
+        browsingControl = null
+        browsingGroup = null
+        for (const page of stack.children) {
+            if (page === currentPage) continue
+            for (const group of page.children) {
+                if (!(group instanceof RibbonGroup)) continue
+                leavingRibbon = leavingRibbon || group.containsControl(focused)
+                group.close()
+            }
+        }
+        if (leavingRibbon) escapeRequested()
+        Qt.callLater(adapt)
+    }
     onRibbonSizeFactorChanged: Qt.callLater(adapt)
     Component.onCompleted: Qt.callLater(adapt)
     function browse(group, index) {
-        if (!group) return
+        if (!group || !groups().includes(group)) return
         const entries = group.entries()
         if (!entries.length) return
+        for (const previous of groups()) if (previous !== group) previous.close()
         browsingGroup = group
         browsingControl = entries[(index + entries.length) % entries.length]
         if (group.presentation === 2) group.open()

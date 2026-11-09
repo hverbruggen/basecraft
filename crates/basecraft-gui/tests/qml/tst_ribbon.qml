@@ -24,6 +24,7 @@ Item {
     }
     Ribbon {
         id: ribbon
+        onEscapeRequested: editor.forceActiveFocus()
         width: 1000
         height: implicitHeight
         baseFontPixelSize: host.textSize
@@ -93,6 +94,27 @@ Item {
                 RibbonGroup {
                     objectName: "fractionalGroup"
                     title: ""
+                }
+            }
+        }
+    }
+    Component {
+        id: numericRibbon
+        Ribbon {
+            y: 150
+            width: 40
+            height: implicitHeight
+            RibbonPage {
+                RibbonGroup {
+                    objectName: "numericGroup"
+                    title: "Zoom"
+                    RibbonNumberField {
+                        objectName: "numericField"
+                        label: "%"
+                        value: 100
+                        from: 1; to: 200
+                        onEdited: next => value = next
+                    }
                 }
             }
         }
@@ -215,6 +237,90 @@ Item {
             verify(browser.activeFocus && control.visible)
             compare(ribbon.browsingControl, control)
             compare(ribbon.height, height)
+        }
+        function test_expanding_active_popup_editor_retains_editing_focus() {
+            ribbon.width = 256
+            tryCompare(fields, "presentation", 2)
+            ribbon.browse(fields, 0)
+            const popup = findChild(fields, "ribbonGroupOverflow")
+            tryVerify(() => popup.visible && workers.visible)
+            keyClick(Qt.Key_Return)
+            tryVerify(() => workers.activeFocus && workers.visible)
+            const input = host.Window.window.activeFocusItem
+            verify(input && input.visible)
+            workers.value = 4
+            ribbon.width = 1600
+            tryCompare(fields, "presentation", 0)
+            tryVerify(() => !popup.visible)
+            tryVerify(() => input.activeFocus && input.visible, 1000, "keep the actual popup editor focused after expansion")
+            keyClick(Qt.Key_Up)
+            compare(workers.value, 5, "the original numeric editor still handles arrows")
+        }
+        function test_expanding_popup_ribbon_number_keeps_editing_focus() {
+            const control = createTemporaryObject(numericRibbon, host)
+            verify(control)
+            const group = findChild(control, "numericGroup")
+            const field = findChild(control, "numericField")
+            tryCompare(group, "presentation", 2)
+            control.browse(group, 0)
+            tryVerify(() => field.visible)
+            keyClick(Qt.Key_Return)
+            const input = host.Window.window.activeFocusItem
+            verify(input && input.visible && input !== findChild(control, "ribbonBrowser"))
+            control.width = 1000
+            tryCompare(group, "presentation", 0)
+            tryVerify(() => input.visible && input.activeFocus)
+            keyClick(Qt.Key_Up)
+            compare(field.value, 101, "production number field retains its own key handling")
+        }
+        function test_page_change_closes_previous_popup_and_clears_context_data() {
+            return [{tag: "browser", editing: false}, {tag: "popup-editor", editing: true}]
+        }
+        function test_page_change_closes_previous_popup_and_clears_context(data) {
+            ribbon.width = 256
+            tryCompare(fields, "presentation", 2)
+            ribbon.browse(fields, 0)
+            const popup = findChild(fields, "ribbonGroupOverflow")
+            tryVerify(() => popup.visible && workers.visible)
+            if (data.editing) {
+                keyClick(Qt.Key_Return)
+                tryVerify(() => workers.activeFocus && workers.visible)
+            } else verify(findChild(ribbon, "ribbonBrowser").activeFocus)
+            ribbon.currentIndex = 1
+            tryVerify(() => !popup.visible, 1000, "old page popups must close")
+            compare(ribbon.browsingControl, null)
+            compare(ribbon.browsingGroup, null)
+            tryVerify(() => editor.visible && editor.activeFocus)
+            verify(!fields.visible)
+            ribbon.browse(fields, 0)
+            verify(!popup.visible, "a stale old-page browse request cannot reopen its popup")
+            compare(ribbon.browsingGroup, null)
+            ribbon.currentIndex = 0
+            verify(waitForPolish(ribbon.Window.window))
+            verify(!popup.visible, "returning to a page must not reopen its stale popup")
+        }
+        function test_moving_between_groups_closes_previous_popup_data() {
+            return [{tag: "browser", direct: false}, {tag: "direct-popup", direct: true}]
+        }
+        function test_moving_between_groups_closes_previous_popup(data) {
+            ribbon.width = 128
+            tryCompare(actions, "presentation", 2)
+            tryCompare(fields, "presentation", 2)
+            if (data.direct) actions.open()
+            else ribbon.browse(actions, 0)
+            const first = findChild(actions, "ribbonGroupOverflow")
+            const next = findChild(fields, "ribbonGroupOverflow")
+            tryVerify(() => first.visible)
+            if (data.direct) ribbon.browse(fields, 0)
+            else keyClick(Qt.Key_Tab)
+            tryVerify(() => !first.visible && next.visible)
+            compare(ribbon.browsingGroup, fields)
+            compare(ribbon.browsingControl, workers)
+            verify(findChild(ribbon, "ribbonBrowser").activeFocus)
+            keyClick(Qt.Key_Backtab)
+            tryVerify(() => first.visible && !next.visible)
+            compare(ribbon.browsingGroup, actions)
+            verify(findChild(ribbon, "ribbonBrowser").activeFocus)
         }
         function test_fractional_caption_width_data() {
             // Exercise both sides of half a pixel independently of installed fonts.
