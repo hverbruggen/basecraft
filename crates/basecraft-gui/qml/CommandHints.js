@@ -3,7 +3,7 @@
 // Stable access keys belong to the command registry, independent of layout or captions.
 var defaults = {
     "file.new-sequence": "N",
-    "export.zenodo": "Z",
+    "export.zenodo": "U",
     "view.find": "D",
     "trace.keep-from": "KF",
     "trace.keep-through": "KT",
