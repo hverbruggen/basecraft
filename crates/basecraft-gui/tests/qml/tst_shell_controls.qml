@@ -43,7 +43,10 @@ Item {
             verify((Math.max(fg, bg) + 0.05) / (Math.min(fg, bg) + 0.05) >= 4.5)
             verify(tab.height >= metrics.height && tab.height <= metrics.height + 8)
             verify(command.height >= metrics.height && command.height <= Math.max(16, metrics.height) + 8, `height ${command.height}, font ${metrics.height}, content ${command.contentItem.implicitHeight}`)
-            verify(more.height <= 26)
+            verify(command.height >= 24, "text-only ribbon commands retain a usable target")
+            verify(command.height >= command.contentItem.implicitHeight + command.topPadding + command.bottomPadding,
+                   "explicit fonts must fit without clipping")
+            verify(more.height >= 24 && more.height <= 26)
         }
     }
 }

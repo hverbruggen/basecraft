@@ -135,15 +135,22 @@ Item {
             controller.busy = true
             verify(!link.enabled && !extract.enabled)
         }
+        function owner(button) {
+            for (const group of [root, clade, order, alignment])
+                if (group.entries().includes(button)) return group
+            return null
+        }
         function test_caption_alignment(data) {
             ribbon.width = data.width
             const controls = buttons()
             for (const button of controls) button.font.pixelSize = data.font
             verify(waitForPolish(ribbon.Window.window))
-            const reference = controls[0].mapToItem(ribbon, 0, controls[0].captionBaseline).y
+            const expanded = controls.filter(button => owner(button).presentation === 0)
+            const reference = expanded.length ? expanded[0].mapToItem(ribbon, 0, expanded[0].captionBaseline).y : 0
             for (const button of controls) {
-                fuzzyCompare(button.mapToItem(ribbon, 0, button.captionBaseline).y, reference, 0.5,
-                             "tree action captions share a baseline")
+                if (owner(button).presentation === 0)
+                    fuzzyCompare(button.mapToItem(ribbon, 0, button.captionBaseline).y, reference, 0.5,
+                                 "expanded tree action captions share a baseline")
                 compare(button.symbolHeight, controls[0].symbolHeight)
                 const expectedSize = button.objectName === "manualRoot" ? 10.4 : 16
                 const icon = findChild(button, "ribbonSymbolIcon")
@@ -154,9 +161,12 @@ Item {
                 verify(button.width >= button.implicitWidth)
             }
             if (data.width === 240) {
-                verify(ribbon.overflowing)
-                controls[controls.length - 1].forceActiveFocus(Qt.TabFocusReason)
-                tryVerify(() => ribbon.scrollPosition > 0)
+                verify(!ribbon.overflowing)
+                verify([root, clade, order, alignment].some(group => group.presentation === 2))
+                ribbon.browse(alignment, 1)
+                compare(ribbon.browsingControl, controls[controls.length - 1])
+                verify(controls[controls.length - 1].visible)
+                alignment.close()
             }
         }
     }

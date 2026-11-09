@@ -26,7 +26,7 @@ Control {
     function entries() {
         const result = []
         function visit(item) {
-            if (item.ribbonControl === true || item instanceof RibbonNumberField || item instanceof T.CheckBox || item instanceof T.ComboBox) {
+            if (item.ribbonControl === true || item instanceof RibbonNumberField || item instanceof T.CheckBox || item instanceof T.ComboBox || item instanceof T.SpinBox) {
                 const command = item.commandAction || item.action
                 if (!command || command.visible !== false) result.push(item)
                 return
@@ -36,6 +36,7 @@ Control {
         visit(row)
         return result
     }
+    onPresentationChanged: if (presentation !== 2) close()
     property alias collapseControl: collapseButton
     function close() { overflow.close() }
     function open() { if (presentation === 2) overflow.open() }

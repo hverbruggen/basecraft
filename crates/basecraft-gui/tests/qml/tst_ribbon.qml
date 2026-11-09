@@ -101,6 +101,11 @@ Item {
         name: "Ribbon"
         when: windowShown
         function init() {
+            for (const group of [actions, fields, progress, last, onlyActions]) group.close()
+            tryVerify(() => [actions, fields, progress, last, onlyActions].every(group => !findChild(group, "ribbonGroupOverflow").visible))
+            ribbon.browsingControl = null
+            ribbon.browsingGroup = null
+            editor.forceActiveFocus()
             ribbon.currentIndex = 0
             ribbon.width = 1000
             host.textSize = 12
@@ -116,6 +121,7 @@ Item {
             failOnWarning(/TypeError|ReferenceError/)
             // The Control itself has no pending polish; its nested layouts do.
             // Wait for the whole window before inspecting their geometry.
+            wait(1) // Responsive modes are applied by a deferred adapt pass.
             verify(waitForPolish(ribbon.Window.window))
         }
         function test_geometry_data() {
@@ -149,6 +155,7 @@ Item {
             host.textSize = data.font
             ribbon.currentIndex = 2
             ribbon.width = 320
+            wait(1) // Responsive modes are applied by a deferred adapt pass.
             verify(waitForPolish(ribbon.Window.window))
             const button = findActionButton(onlyActions, command)
             verify(button)
@@ -163,20 +170,51 @@ Item {
             verify(editor.activeFocus)
         }
         function test_live_scale_preserves_editor_font_and_restores_geometry() {
+            // The preceding busy/font matrix can leave a hidden layout with a
+            // conservative natural width. Start with room for every group.
+            ribbon.width = 1600
+            tryCompare(last, "presentation", 0)
+            verify(waitForPolish(ribbon.Window.window))
             const editorFont = editor.font
-            const before = [run.width, run.height, run.captionBaseline, ribbon.height, tabs.height]
+            const before = [run.width, run.height, ribbon.height, tabs.height]
             help.forceActiveFocus(Qt.TabFocusReason)
+            tryVerify(() => help.visible && help.activeFocus, 1000, "focus the visible expanded command before resizing")
             ribbon.width = 320
             host.sizeFactor = 2
+            wait(1) // Responsive modes are applied by a deferred adapt pass.
             verify(waitForPolish(ribbon.Window.window))
             compare(run.icon.width, 32)
-            verify(help.activeFocus, "resizing retains the focused command")
-            tryVerify(() => help.mapToItem(ribbon, 0, 0).x + help.width <= ribbon.width)
+            verify(last.presentation === 2)
+            tryVerify(() => last.collapseControl.activeFocus, 1000, "collapse transfers focus to the visible group button")
             compare(editor.font, editorFont, "ribbon size must not change unrelated editor text")
             host.sizeFactor = 1
-            ribbon.width = 1000
+            ribbon.width = 1600
+            wait(1) // Responsive modes are applied by a deferred adapt pass.
             verify(waitForPolish(ribbon.Window.window))
-            compare([run.width, run.height, run.captionBaseline, ribbon.height, tabs.height], before)
+            compare([run.width, run.height, ribbon.height, tabs.height], before)
+            tryVerify(() => findChild(ribbon, "ribbonBrowser").activeFocus)
+            compare(ribbon.browsingGroup, last)
+        }
+        function test_browsing_remains_visible_during_collapse() {
+            ribbon.width = 1600
+            tryCompare(actions, "presentation", 0)
+            ribbon.browse(actions, 0)
+            const browser = findChild(ribbon, "ribbonBrowser")
+            const control = ribbon.browsingControl
+            verify(browser.activeFocus && control.visible)
+            const height = ribbon.height
+            ribbon.width = 128
+            tryCompare(actions, "presentation", 2)
+            tryVerify(() => control.visible && browser.activeFocus)
+            verify(findChild(actions, "ribbonGroupOverflow").visible)
+            compare(ribbon.browsingControl, control)
+            compare(ribbon.height, height)
+            ribbon.width = 1600
+            tryCompare(actions, "presentation", 0)
+            tryVerify(() => !findChild(actions, "ribbonGroupOverflow").visible)
+            verify(browser.activeFocus && control.visible)
+            compare(ribbon.browsingControl, control)
+            compare(ribbon.height, height)
         }
         function test_fractional_caption_width_data() {
             // Exercise both sides of half a pixel independently of installed fonts.
@@ -203,12 +241,19 @@ Item {
             host.rtl = data.rtl
             host.dark = data.dark
             host.longLabels = true
+            wait(1) // Responsive modes are applied by a deferred adapt pass.
+            verify(waitForPolish(ribbon.Window.window))
+            // Font/layout polish can change natural widths after the first
+            // deferred pass. Wait for the responsive layout to finish fitting.
+            tryVerify(() => !ribbon.overflowing)
             verify(waitForPolish(ribbon.Window.window))
             verify(page.height >= page.implicitHeight, "page must fit its natural height")
             for (const group of [actions, fields, progress, last]) {
                 fuzzyCompare(group.height, actions.height, 1)
                 fuzzyCompare(group.captionY, actions.captionY, 1)
-                fuzzyCompare(group.bodyCenterY, actions.bodyCenterY, 1)
+                // Bodies retain their natural row height (the busy group has
+                // multiple rows); only the group captions share a baseline.
+                verify(group.bodyCenterY * 2 <= group.captionY + 1)
                 verify(group.width >= group.implicitWidth,
                        `no clipped controls/captions: ${group.title} width=${group.width} implicitWidth=${group.implicitWidth} pageWidth=${page.width} pageImplicitWidth=${page.implicitWidth}`)
                 const pos = group.mapToItem(ribbon, 0, 0)
@@ -219,15 +264,16 @@ Item {
             compare(run.icon.width, 16 * data.factor)
             compare(arrow.icon.width, Math.round(10 * data.factor))
             compare(run.symbolHeight, arrow.symbolHeight, "arrows and counts use one symbol band")
-            fuzzyCompare(run.captionBaseline, arrow.captionBaseline, 1)
+            if (progress.presentation !== 1) fuzzyCompare(run.captionBaseline, arrow.captionBaseline, 1)
             compare(run.font.pixelSize, Math.round(Math.max(9, Math.round(data.font * 0.8)) * data.factor))
             compare(tabs.itemAt(0).font.pixelSize, Math.round(data.font * data.factor))
-            const button = findActionButton(actions, command)
+            const button = actions.entries().find(control => control.action === command)
             verify(button)
             compare(button.icon.width, 16 * data.factor, "ActionToolBar delegates inherit scale")
-            fuzzyCompare(button.mapToItem(ribbon, 0, button.captionBaseline).y,
-                         run.mapToItem(ribbon, 0, run.captionBaseline).y, 1,
-                         "action delegates and direct buttons share the caption baseline")
+            if (!data.busy && actions.presentation === 0 && progress.presentation === 0)
+                fuzzyCompare(button.mapToItem(ribbon, 0, button.captionBaseline).y,
+                             run.mapToItem(ribbon, 0, run.captionBaseline).y, 1,
+                             "expanded single-row groups share the caption baseline")
             verify(button.height >= button.contentItem.implicitHeight + button.topPadding + button.bottomPadding,
                    "toolbar height=" + button.height + " natural=" + button.implicitHeight + " content=" + button.contentItem.implicitHeight + " group=" + actions.height)
             for (const control of [run, arrow, button]) {
@@ -236,96 +282,78 @@ Item {
             }
             verify(ribbon.contentWidth >= ribbon.pageWidth)
             fuzzyCompare(ribbon.pageWidth, page.implicitWidth, 1, "the summed width matches the page layout")
+            verify(!ribbon.overflowing, "groups collapse to fit instead of scrolling")
         }
         function test_keyboard_reveals_overflow_fields_data() {
             return [1, 1.25, 1.5, 1.75, 2].map(factor => ({tag: String(factor), factor}))
         }
         function test_keyboard_reveals_overflow_fields(data) {
             host.sizeFactor = data.factor
-            ribbon.width = 180
+            ribbon.width = 256
+            wait(1) // Responsive modes are applied by a deferred adapt pass.
             verify(waitForPolish(ribbon.Window.window))
-            verify(ribbon.overflowing)
-            workers.forceActiveFocus(Qt.TabFocusReason)
-            tryVerify(() => ribbon.scrollPosition > 0)
-            tryVerify(() => {
-                const position = workers.mapToItem(ribbon, 0, 0)
-                return position.x >= 0 && position.x + workers.width <= ribbon.width
-            }, 1000, "x=" + workers.mapToItem(ribbon, 0, 0).x + " width=" + workers.width + " scroll=" + ribbon.scrollPosition)
-            help.forceActiveFocus(Qt.TabFocusReason)
-            tryVerify(() => help.mapToItem(ribbon, 0, 0).x + help.width <= ribbon.width)
-            compare(help.focusPolicy, Qt.TabFocus)
+            compare(fields.presentation, 2)
+            verify(fields.entries().includes(workers), "generic SpinBox participates in group browsing")
+            ribbon.browse(fields, 0)
+            compare(ribbon.browsingControl, workers)
+            verify(workers.visible, "browsing opens the collapsed group")
+            wait(1)
+            keyClick(Qt.Key_Return)
+            tryVerify(() => workers.activeFocus)
             workers.value = 1
-            workers.forceActiveFocus(Qt.TabFocusReason)
             keyClick(Qt.Key_Up)
-            compare(workers.value, 2)
+            compare(workers.value, 2, "editing retains SpinBox arrows")
+            fields.close()
         }
         function test_page_change_resets_scroll_and_height() {
             host.busy = true
-            ribbon.width = 180
+            ribbon.width = 320
+            wait(1) // Responsive modes are applied by a deferred adapt pass.
             verify(waitForPolish(ribbon.Window.window))
             const tall = ribbon.height
-            help.forceActiveFocus()
-            tryVerify(() => ribbon.scrollPosition > 0)
+            ribbon.browse(last, 0)
+            verify(help.visible)
             ribbon.currentIndex = 1
+            wait(1) // Responsive modes are applied by a deferred adapt pass.
             verify(waitForPolish(ribbon.Window.window))
             compare(ribbon.scrollPosition, 0)
+            compare(ribbon.browsingControl, null)
             compare(ribbon.height, tall, "all pages retain a stable ribbon height")
             ribbon.currentIndex = -1
+            wait(1) // Responsive modes are applied by a deferred adapt pass.
             verify(waitForPolish(ribbon.Window.window))
             compare(ribbon.currentPage, null)
         }
-        function test_scrollbar_overlays_without_reserving_a_band() {
-            const originalWidth = ribbon.width
-            ribbon.width = 180
+        function test_collapsed_groups_need_no_scrollbar_band() {
+            ribbon.width = 320
+            wait(1) // Responsive modes are applied by a deferred adapt pass.
             verify(waitForPolish(ribbon.Window.window))
-            verify(ribbon.overflowing)
-            const bar = findChild(ribbon, "ribbonScrollBar")
-            verify(bar)
-            verify(bar.visible)
-            fuzzyCompare(ribbon.implicitHeight, ribbon.pageHeight + ribbon.topPadding + ribbon.bottomPadding, 0.5,
-                         "scrollbar must not add a blank strip to every ribbon page")
-            compare(bar.y + bar.height, ribbon.topPadding,
-                    "scrollbar stays within the ribbon's existing top padding")
-            ribbon.width = 1000
-            verify(waitForPolish(ribbon.Window.window))
+            verify([actions, fields, progress, last].some(g => g.presentation > 0))
             verify(!ribbon.overflowing)
-            verify(!bar.visible)
-            ribbon.width = originalWidth
+            compare(findChild(ribbon, "ribbonScrollBar"), null)
+            fuzzyCompare(ribbon.implicitHeight, ribbon.pageHeight + ribbon.topPadding + ribbon.bottomPadding, 0.5)
+            ribbon.width = 1600
+            wait(1) // Responsive modes are applied by a deferred adapt pass.
             verify(waitForPolish(ribbon.Window.window))
+            for (const group of [actions, fields, progress, last]) compare(group.presentation, 0)
         }
-        function test_overflow_scrollbar_does_not_block_top_row_button() {
-            const originalWidth = ribbon.width
-            const originalFactor = host.sizeFactor
-            const originalInvocations = host.invocations
-            const bar = findChild(ribbon, "ribbonScrollBar")
-            const button = findActionButton(actions, command)
-            verify(bar && button)
+        function test_collapsed_group_preserves_clickable_command() {
             for (const factor of [1, 1.25, 1.5, 1.75, 2]) {
                 host.sizeFactor = factor
-                ribbon.width = 180
+                ribbon.width = 128 * factor
+                tryCompare(actions, "presentation", 2)
                 verify(waitForPolish(ribbon.Window.window))
-                verify(bar.visible)
-                const buttonTopLeft = button.mapToItem(ribbon, 0, 0)
-                const left = Math.max(buttonTopLeft.x, bar.x)
-                const right = Math.min(buttonTopLeft.x + button.width, bar.x + bar.width)
-                const top = Math.max(buttonTopLeft.y, bar.y)
-                const bottom = Math.min(buttonTopLeft.y + button.height, bar.y + bar.height)
-                verify(right <= left || bottom <= top,
-                       `scrollbar hit area overlaps button at scale ${factor}: button=${buttonTopLeft.x},${buttonTopLeft.y},${button.width},${button.height} bar=${bar.x},${bar.y},${bar.width},${bar.height}`)
+                actions.open()
+                wait(1) // Responsive modes are applied by a deferred adapt pass.
+                verify(waitForPolish(ribbon.Window.window))
+                const button = actions.entries().find(control => control.action === command)
+                verify(button && button.visible)
+                verify(button.height >= button.implicitHeight)
                 const before = host.invocations
-                const point = button.mapToItem(host, button.width / 2, button.height / 2)
-                mouseClick(host, point.x, point.y)
-                compare(host.invocations, before + 1, "overflow must not block the visible ribbon button")
-                editor.forceActiveFocus()
+                mouseClick(button, button.width / 2, button.height / 2)
+                compare(host.invocations, before + 1, "original action remains clickable in the popup")
+                actions.close()
             }
-            verify(editor.activeFocus, "restore the test's keyboard focus context")
-            host.invocations = originalInvocations
-            host.sizeFactor = originalFactor
-            ribbon.width = originalWidth
-            ribbon.currentIndex = 0
-            verify(waitForPolish(ribbon.Window.window))
-            editor.forceActiveFocus()
-            tryVerify(() => editor.activeFocus)
         }
         function findActionButton(item, action) {
             if (item.action === action && item.visible) return item

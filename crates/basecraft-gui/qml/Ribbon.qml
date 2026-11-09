@@ -32,6 +32,13 @@ Control {
         if (!currentPage) return
         const separators = Array.from(currentPage.children).filter(c => c instanceof ToolSeparator)
         const others = Array.from(currentPage.children).filter(c => !(c instanceof RibbonGroup) && !(c instanceof ToolSeparator) && !c.Layout.fillWidth)
+        // Capture ownership before changing presentation hides a focused item.
+        const focused = Window.window ? Window.window.activeFocusItem : null
+        const focusedGroup = list.find(g => {
+            for (let item = focused; item; item = item.parent)
+                if (item.ribbonGroupOwner === g || item === g.collapseControl) return true
+            return false
+        })
         const modes = list.map(() => 0)
         const widths = list.map(g => [g.expandedWidth, g.compactGroupWidth, g.collapsedWidth])
         let showSeparators = true
@@ -50,6 +57,13 @@ Control {
         }
         separators.forEach(c=>c.visible=showSeparators)
         list.forEach((g,i)=>g.presentation=modes[i])
+        if (focusedGroup) {
+            if (focusedGroup.presentation === 2 && !focused.visible)
+                focusedGroup.collapseControl.forceActiveFocus(Qt.TabFocusReason)
+            else if (focused === focusedGroup.collapseControl && focusedGroup.presentation !== 2)
+                browse(focusedGroup, 0)
+        }
+        if (browser.activeFocus && browsingGroup && browsingGroup.presentation === 2) browsingGroup.open()
     }
 
     onPageWidthChanged: Qt.callLater(adapt)
