@@ -929,15 +929,11 @@ impl Session {
         overwrite: bool,
         history_only: bool,
     ) -> Result<()> {
-        if self.docs[id.0].accepted_hashes.is_empty() && path.is_none() {
+        let new_sequence = self.docs[id.0].accepted_hashes.is_empty();
+        if new_sequence && path.is_none() {
             return Err(invalid(
                 "Choose a destination with Save as for this new sequence",
             ));
-        }
-        if self.docs[id.0].accepted_hashes.is_empty() {
-            if let Some(target) = path {
-                crate::save_guard::Revision::check(None, target)?;
-            }
         }
         let path = path.filter(|p| !self.is_own_file(id, p));
         let target = path.map_or_else(|| self.resolve(&self.docs[id.0].key), Path::to_path_buf);
@@ -956,7 +952,7 @@ impl Session {
         } else {
             None
         };
-        if !overwrite && path.is_some() {
+        if new_sequence || (!overwrite && path.is_some()) {
             crate::save_guard::Revision::check(None, &target)?;
         }
         let _evidence_lock = crate::input_evidence::lock()?;

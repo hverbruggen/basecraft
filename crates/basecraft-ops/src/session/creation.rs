@@ -1,5 +1,7 @@
 //! New sequences share the ordinary session, typed history, save and recovery owners.
-use super::*;
+use super::{
+    DocId, Loaded, Op, OpResult, Opened, Result, SequenceDoc, Session, Slot, files, invalid,
+};
 use std::sync::Arc;
 
 impl Session {
