@@ -7,6 +7,8 @@ Item {
     id: host
     width: 1000; height: 500
     property int runs: 0
+    property bool showGc: false
+    property int toggles: 0
     property string selected: "File"
     Shortcut { sequence: "Ctrl+K"; onActivated: host.runs += 100 }
     TextField { id: editor; y: 250; width: 250 }
@@ -62,6 +64,7 @@ Item {
                 id: zoom
                 title: "Zoom"
                 RibbonNumberField { id: number; label: "%"; tip: "Zoom percentage"; value: 100; from: 1; to: 200 }
+                AppCheckBox { id: gcToggle; text: "GC content"; property string keyHint: "H"; onToggled: { host.showGc=checked; host.toggles++ } }
             }
         }
     }
@@ -84,6 +87,7 @@ Item {
         function init() {
             failOnWarning(/Binding loop|TypeError|ReferenceError/)
             hints.stop(false); host.runs = 0
+            gcToggle.checked=false; host.showGc=false; host.toggles=0
             ribbon.width = 950; commands.presentation = 0
             editor.text = ""; editor.forceActiveFocus(); wait(10)
         }
@@ -134,6 +138,30 @@ Item {
             wait(10)
             keyClick(Qt.Key_Tab)
             compare(ribbon.browsingGroup,commands)
+        }
+        function test_checkbox_activation_updates_state_once() {
+            keyClick(Qt.Key_F10); keyClick(Qt.Key_F); tryCompare(hints,"level",2)
+            keyClick(Qt.Key_H)
+            compare(gcToggle.checked,true); compare(host.showGc,true); compare(host.toggles,1)
+            ribbon.browse(zoom,1)
+            keyClick(Qt.Key_Space)
+            compare(gcToggle.checked,false); compare(host.showGc,false); compare(host.toggles,2)
+        }
+        function test_control_held_before_alt_is_not_alt_alone() {
+            keyPress(Qt.Key_Control)
+            keyPress(Qt.Key_Alt,Qt.ControlModifier)
+            keyRelease(Qt.Key_Alt,Qt.ControlModifier)
+            keyRelease(Qt.Key_Control)
+            compare(hints.level,0)
+        }
+        function test_number_escape_reverts_and_returns_to_document() {
+            ribbon.browse(zoom,0); keyClick(Qt.Key_Return)
+            const input = host.Window.window.activeFocusItem
+            input.text="150"
+            keyClick(Qt.Key_Escape)
+            verify(editor.activeFocus)
+            compare(number.value,100)
+            keyClick(Qt.Key_A); compare(editor.text,"a")
         }
         function test_menu_levels_and_command_identity() {
             ribbon.width = 80

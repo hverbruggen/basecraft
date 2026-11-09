@@ -59,6 +59,7 @@ Item {
             Keys.onEscapePressed: {
                 text = field.fractional ? String(field.value) : box.textFromValue(box.value, box.locale)
                 focus = false
+                if (metrics.ribbon && metrics.ribbon.escapeRequested) metrics.ribbon.escapeRequested()
             }
             onEditingFinished: {
                 if (acceptableInput) field.edited(field.fractional ? Number(text) : box.valueFromText(text, box.locale))

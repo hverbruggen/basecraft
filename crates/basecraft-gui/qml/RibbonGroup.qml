@@ -54,6 +54,10 @@ Control {
     Item {
         id: body
         readonly property var ribbonGroupOwner: group
+        function escapeRequested() {
+            group.close()
+            if (metrics.ribbon && metrics.ribbon.escapeRequested) metrics.ribbon.escapeRequested()
+        }
         readonly property font font: group.font
         readonly property real ribbonSizeFactor: metrics.factor
         readonly property real baseFontPixelSize: metrics.baseFontPixelSize

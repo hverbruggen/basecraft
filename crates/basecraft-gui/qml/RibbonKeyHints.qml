@@ -143,8 +143,9 @@ Item {
     Keys.onShortcutOverride: event => { if (level) event.accepted = true }
     Keys.onPressed: event => {
         if (event.key === Qt.Key_Alt && event.modifiers !== Qt.GroupSwitchModifier && !event.isAutoRepeat) {
-            mnemonicsVisible = dialogs.length > 0
-            altAlone = !popupContext(); event.accepted = false; return
+            const alone = (event.modifiers & ~Qt.AltModifier) === 0
+            mnemonicsVisible = alone && dialogs.length > 0
+            altAlone = alone && !popupContext(); event.accepted = false; return
         }
         if (event.key !== Qt.Key_Alt) altAlone = false
         if (!level && event.key === Qt.Key_F10 && !event.modifiers && !popupContext()) { start(); event.accepted = true; return }
