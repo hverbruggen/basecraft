@@ -17,6 +17,7 @@ Item {
         }
         return source.slice(begin, end)
     }
+    Component { id: menuHookComponent; Connections { property var hints; function onOpened() { hints.menuOpened(target) } } }
     Component { id: hintsComponent; RibbonKeyHints {} }
     Component { id: tabsComponent; RibbonTabs {} }
     Component { id: inputComponent; TextField {} }
@@ -71,6 +72,9 @@ Item {
                     property bool showGc: true
                     property var customization: ({shortcuts: {}, ribbon_hidden: []})
                     property var recentProjects: []
+                    property string selectedProject: ""
+                    function fileName(path) { return path.split("/").pop() }
+                    function selectProject(path) { selectedProject=path }
                     property var commands: []
                     function registerRibbonCommand(c) { commands.push(c) }
                     ${host.block("function ribbonIconFor(")}
@@ -132,6 +136,31 @@ Item {
             verify(hints.explanation.includes("Resolve"))
             compare(input.text,"")
             hints.stop(true)
+            scene.destroy()
+        }
+        function test_recent_project_menu_hint_journey() {
+            const scene = productionRibbon()
+            scene.recentProjects=["/project/one", "/project/two"]
+            const ribbon = findChild(scene,"applicationRibbon")
+            ribbon.width=1600
+            const bar=tabsComponent.createObject(scene,{names:scene.ribbonTabs, selectedName:scene.ribbonTab})
+            bar.selected.connect(name=>scene.ribbonTabName=name)
+            const input=inputComponent.createObject(scene,{y:300,width:200})
+            const hints=hintsComponent.createObject(scene,{hostWindow:scene.Window.window, tabBar:bar, ribbon:ribbon})
+            const menu=findChild(scene,"recentProjectMenu")
+            verify(menu instanceof RibbonMenu,"Recent uses the production shared menu hook")
+            // Substitute the ApplicationWindow host registration in this Item fixture.
+            menuHookComponent.createObject(scene,{target:menu, hints:hints})
+            input.forceActiveFocus(); wait(20)
+            keyClick(Qt.Key_F10); keyClick(Qt.Key_F); tryCompare(hints,"level",2)
+            keyClick(Qt.Key_R); keyClick(Qt.Key_C); tryCompare(hints,"level",3)
+            compare(hints.targets.length,2)
+            keyClick(Qt.Key_Escape); compare(hints.level,2)
+            keyClick(Qt.Key_R); keyClick(Qt.Key_C); tryCompare(hints,"level",3)
+            keyClick(Qt.Key_A)
+            compare(scene.selectedProject,"/project/one")
+            compare(hints.level,0)
+            compare(input.text,"")
             scene.destroy()
         }
         function test_ribbon_visual_evidence() {

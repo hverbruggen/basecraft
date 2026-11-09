@@ -120,7 +120,7 @@ Item {
         let entries = []
         for (let i = 0; i < menu.count; ++i) {
             const item = menu.itemAt(i)
-            if (item && item.visible) entries.push({item:item, key:commandKey(item) || "ABCDEFGHIKLMNOPQRSTUVWX"[i]})
+            if (item && item.visible) entries.push({item:item, key:commandKey(item) || "ABCDEFGHIKLMNOPQRSTUVWX"[entries.length]})
         }
         targets = entries
     }
