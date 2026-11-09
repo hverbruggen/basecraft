@@ -321,5 +321,21 @@ mod tests {
             })
             .count();
         assert_eq!(segments, 16);
+        let quads = frame
+            .floats()
+            .as_chunks::<{ crate::frame::FLOATS_PER_INSTANCE }>()
+            .0;
+        for base in b"ACGT" {
+            assert!(
+                quads
+                    .iter()
+                    .any(|q| q[14] == 0.0 && q[8..12] == Theme::default().residue(*base))
+            );
+        }
+        assert!(
+            quads
+                .iter()
+                .any(|q| q[14] > 0.0 && q[8..12] == Theme::default().residue(b'A'))
+        );
     }
 }
