@@ -374,7 +374,7 @@ impl qobject::AppOperations {
                                     if file.take(4096).read_to_string(&mut stage).is_ok()
                                         && !stage.trim().is_empty()
                                     {
-                                        let _ = qt_thread.queue(move |mut state| {
+                                        let _ = qt_thread.queue(move |state| {
                                             state.set_message(QString::from(stage.trim()));
                                         });
                                     }

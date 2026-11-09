@@ -211,9 +211,9 @@ class Zenodo(unittest.TestCase):
         self.assertIn("Authentication expired", receipt["message"])
         self.assertNotIn("private-test-token", json.dumps(receipt))
         connection.getresponse.return_value.status = 302
-        with patch.object(z.http.client, "HTTPSConnection", return_value=connection):
-            with self.assertRaisesRegex(z.RemoteError, "HTTP 302"):
-                z.request("GET", "https://sandbox.zenodo.org/api/deposit/depositions/1", "private-test-token", self.context)
+        with (patch.object(z.http.client, "HTTPSConnection", return_value=connection),
+              self.assertRaisesRegex(z.RemoteError, "HTTP 302")):
+            z.request("GET", "https://sandbox.zenodo.org/api/deposit/depositions/1", "private-test-token", self.context)
 
 
 if __name__ == "__main__":
