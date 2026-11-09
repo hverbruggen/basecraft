@@ -183,6 +183,33 @@ pub fn trace(trace: &basecraft_io::abif::Trace, theme: &Theme) -> Miniature {
 mod tests {
     use super::*;
     #[test]
+    fn overview_circular_feature_segments_keep_the_origin_split() {
+        use basecraft_protocol::{Feature, Location, Segment, Strand};
+        let d = basecraft_docs::SequenceDoc::new(
+            "circular",
+            std::sync::Arc::new(vec![b'A'; 100]),
+            vec![Feature {
+                kind: "gene".into(),
+                location: Location {
+                    segments: vec![
+                        Segment::new(80, 100, Strand::Forward),
+                        Segment::new(0, 10, Strand::Forward),
+                    ],
+                    unordered: false,
+                },
+                qualifiers: vec![],
+            }],
+            true,
+        );
+        let out = sequence(&d, &Theme::default());
+        assert_eq!(out.shapes.len(), 3);
+        assert!((out.shapes[1].x - 0.8).abs() < 1e-6);
+        assert!((out.shapes[1].w - 0.2).abs() < 1e-6);
+        assert_eq!(out.shapes[2].x, 0.0);
+        assert!((out.shapes[2].w - 0.1).abs() < 1e-6);
+    }
+
+    #[test]
     fn overview_match_spans_and_trace_calls_keep_native_coordinates() {
         assert!(MatchMark::span(0, 0, 20, 0.0, 1.0).is_none());
         assert!(MatchMark::span(1, 4, 3, 0.0, 1.0).is_none());
@@ -236,6 +263,7 @@ mod tests {
                 .iter()
                 .all(|m| [m.x, m.y, m.w, m.h].iter().all(|v| v.is_finite()))
         );
+        assert!(trace_match(&trace, 0, 1).is_none());
         trace.channels = std::array::from_fn(|_| vec![]);
         assert!(super::trace(&trace, &Theme::default()).shapes.is_empty());
     }
@@ -277,7 +305,7 @@ impl MatchMark {
 /// Find on a single trace reports display-call indices, never raw sample indices.
 /// Missing positions produce no mark. Inclusive last event becomes half-open.
 pub fn trace_match(trace: &basecraft_io::abif::Trace, start: u64, end: u64) -> Option<MatchMark> {
-    if start >= end {
+    if start >= end || trace.call_sets.is_empty() {
         return None;
     }
     let calls = trace.display_calls();
