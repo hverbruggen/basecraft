@@ -125,7 +125,7 @@ AppDialog {
                                 Accessible.name: text
                                 onClicked: dialog.selectedId = modelData.id
                             }
-                            Label { anchors.centerIn: parent; visible: historyList.count === 0; text: "No recorded changes for this revision."; wrapMode: Text.Wrap; width: parent.width }
+                            EmptyView { anchors.centerIn: parent; visible: historyList.count === 0; message: "No recorded changes for this revision. Document edits and analyses appear here when recorded; enable All recorded events to include related attempts."; width: parent.width }
                         }
                     }
                     ScrollView {

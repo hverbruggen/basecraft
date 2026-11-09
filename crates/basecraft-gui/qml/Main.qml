@@ -488,7 +488,7 @@ ApplicationWindow {
         commandId: "file.open"
         text: "Open…"
         iconName: "open"
-        tooltip: "Open a sequence or alignment file"
+        tooltip: "Open a sequence, alignment, trace, tree, review, species workspace, specimen table or submission"
         defaultShortcut: "Ctrl+O"
         onTriggered: openDialog.open()
     }
@@ -2098,14 +2098,18 @@ ApplicationWindow {
                 onOpenRecent: path => window.selectProject(path)
             }
 
-            Label {
+            Item {
                 visible: openFiles.count === 0 && shell.project_dir.length > 0
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                horizontalAlignment: Text.AlignHCenter
-                verticalAlignment: Text.AlignVCenter
-                text: "Open a sequence or an alignment from the files on the left"
-                opacity: 0.6
+                EmptyView {
+                    objectName: "emptyProjectDocuments"
+                    anchors.centerIn: parent
+                    width: Math.min(parent.width, 48 * font.pixelSize)
+                    message: "Open a sequence, alignment, chromatogram trace, tree, Sanger review, species delimitation workspace, specimen metadata table or GenBank submission. Choose a file on the left, or use Open to browse another folder."
+                    action: openCommand
+                    actionText: "Open"
+                }
             }
 
             // The status line belongs to the open file, under it only.

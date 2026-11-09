@@ -34,7 +34,11 @@ AppDialog {
     contentItem: ColumnLayout {
         AppCheckBox { id: previousRuns; text: "Include retained runs from earlier sessions"; onToggled: dialog.refreshJobs() }
         Label { text: dialog.jobData.error || (dialog.jobData.warnings || []).join("\n"); Layout.fillWidth: true; wrapMode: Text.Wrap; visible: text.length > 0 }
-        Label { text: "No tasks or notifications this session."; visible: !(dialog.jobData.jobs || []).length && !dialog.notices.length }
+        EmptyView {
+            Layout.fillWidth: true
+            visible: !(dialog.jobData.jobs || []).length && !dialog.notices.length
+            message: "Tasks and notifications appear here when you run an analysis. Open a document and choose an analysis from its ribbon tab, or include retained runs from earlier sessions."
+        }
         ScrollView {
             Layout.fillWidth: true; Layout.fillHeight: true; contentWidth: availableWidth
             ColumnLayout {

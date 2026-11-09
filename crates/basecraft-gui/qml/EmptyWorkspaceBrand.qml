@@ -30,13 +30,11 @@ Item {
             Accessible.role: Accessible.Graphic
             Accessible.name: "Basecraft"
         }
-        AppButton {
-            objectName: "startOpenProject"
-            Layout.alignment: Qt.AlignHCenter
-            text: "Open project directory"
-            icon.source: Qt.resolvedUrl("../icons/project.svg")
-            icon.color: palette.buttonText
-            onClicked: root.openProject()
+        EmptyView {
+            Layout.fillWidth: true
+            actionObjectName: "startOpenProject"
+            actionText: "Open project directory"
+            onActivated: root.openProject()
         }
         Label {
             text: "Recent projects"
