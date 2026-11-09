@@ -9,7 +9,7 @@ Item {
     readonly property var cases: [
         {controller: findGenome, file: "/sequence.fasta", query: "A"},
         {controller: findAlignment, file: "/alignment.afa", query: "specimen"},
-        {controller: findTree, file: "/tree.nwk", query: "specimen"},
+        {controller: findTree, file: "/time-tree.nwk", query: "specimen"},
         {controller: findTrace, file: "/trace.ab1", query: "A"}
     ]
     readonly property var current: cases[index].controller
