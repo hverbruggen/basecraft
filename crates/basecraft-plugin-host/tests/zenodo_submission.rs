@@ -11,7 +11,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const MOCK: &str = r#"
+const MOCK: &str = r"
 import os, time
 from pathlib import Path
 import zenodo_impl as z
@@ -38,7 +38,7 @@ def draft(snapshot, params, context):
     return z.upload(params, context, transport)
 z.plugin._context_ops['draft']=draft
 z.plugin.run()
-"#;
+";
 fn registry(root: &Path) -> Registry {
     let dir = root.join("bundle/zenodo");
     std::fs::create_dir_all(&dir).unwrap();
