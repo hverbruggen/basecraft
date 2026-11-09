@@ -496,11 +496,11 @@ impl qobject::SangerController {
                 {
                     let mut r = self.as_mut().rust_mut();
                     completed.view.resize(r.view.width, r.view.height);
+                    r.overview_cache = basecraft_viewmodel::overview::Cache::default();
                     r.review = Some(completed.view);
                     r.review_session = Some(completed.session);
                     if name == "prepare" {
                         r.review_path = None;
-                        r.overview_cache = basecraft_viewmodel::overview::Cache::default();
                         r.trace = None;
                     }
                 }
@@ -560,6 +560,7 @@ impl qobject::SangerController {
                 {
                     let mut r = self.as_mut().rust_mut();
                     view.resize(r.view.width, r.view.height);
+                    r.overview_cache = basecraft_viewmodel::overview::Cache::default();
                     r.review = Some(view);
                 }
                 self.as_mut().set_dirty(true);
@@ -805,7 +806,8 @@ impl qobject::SangerController {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
             if let Some(review) = &r.review {
-                review.overview(&r.theme).json()
+                r.overview_cache
+                    .get(review.overview_key(&r.theme), || review.overview(&r.theme))
             } else if let Some(trace) = &r.trace {
                 let key = format!("{}:{:?}", r.file_path, r.theme);
                 r.overview_cache.get(key, || {
