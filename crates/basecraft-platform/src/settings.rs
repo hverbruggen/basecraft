@@ -638,7 +638,10 @@ mod tests {
     fn data_palette_preference_round_trips_and_preserves_unknown_settings() {
         let temp = tempfile::tempdir().unwrap();
         let store = SettingsStore::new(temp.path().join("preferences.toml"));
-        assert!(store.load().unwrap().ui.data_color_scheme == DataColorScheme::DesktopTheme);
+        assert_eq!(
+            store.load().unwrap().ui.data_color_scheme,
+            DataColorScheme::DesktopTheme
+        );
         assert!(
             !store.path.exists(),
             "Viewing defaults must not write settings"
@@ -651,13 +654,13 @@ mod tests {
         store
             .update(Change::DataColorScheme(DataColorScheme::ColorBlindFriendly))
             .unwrap();
-        assert!(
+        assert_eq!(
             SettingsStore::new(store.path.clone())
                 .load()
                 .unwrap()
                 .ui
-                .data_color_scheme
-                == DataColorScheme::ColorBlindFriendly
+                .data_color_scheme,
+            DataColorScheme::ColorBlindFriendly
         );
         store.update(Change::ShowGc(false)).unwrap();
         assert_eq!(
@@ -670,7 +673,10 @@ mod tests {
         store
             .update(Change::DataColorScheme(DataColorScheme::DesktopTheme))
             .unwrap();
-        assert!(store.load().unwrap().ui.data_color_scheme == DataColorScheme::DesktopTheme);
+        assert_eq!(
+            store.load().unwrap().ui.data_color_scheme,
+            DataColorScheme::DesktopTheme
+        );
         std::fs::write(
             &store.path,
             "schema_version = 1\n[ui]\ndata_color_scheme = 'unknown'\n",
