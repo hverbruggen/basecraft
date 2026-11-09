@@ -26,6 +26,9 @@
     <file>icons/tree-style.svg</file>
     <file>icons/matrix.svg</file>
     <file>icons/align.svg</file>
+    <file>icons/consensus-to-alignment.svg</file>
+    <file>icons/fasta-document.svg</file>
+    <file>icons/clipboard.svg</file>
     <file>icons/trim.svg</file>
     <file>icons/delete.svg</file>
     <file>icons/delimitation.svg</file>

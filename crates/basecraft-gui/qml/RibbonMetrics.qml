@@ -24,7 +24,7 @@ QtObject {
         font.styleName: metrics.sourceFont.styleName
         font.pixelSize: metrics.captionPixelSize
     }
-    readonly property real symbolHeight: Math.max(16 * factor, Math.ceil(captionMetrics.height))
+    readonly property real symbolHeight: Math.max((ribbon ? ribbon.symbolBandSize : 16) * factor, Math.ceil(captionMetrics.height))
     // Shared tile: symbol band, caption, two-pixel gap and six-pixel padding.
     // ActionToolBar must reserve this height rather than constraining its tiles.
     readonly property real tileHeight: symbolHeight + Math.ceil(captionMetrics.height) + 8 * factor

@@ -880,6 +880,10 @@ ApplicationWindow {
     // A ribbon button that shows whether its mode is on.
     component ExportConsensusButton: RibbonButton {
         id: consensusExportButton
+        // Six characters on the FASTA header need a 24 px symbol band. Keep
+        // the three consensus symbols/captions aligned at every ribbon scale.
+        symbolSize: 24
+        Accessible.name: tip
         background: Rectangle {
             radius: 3
             color: Qt.alpha(shell.foreground, consensusExportButton.pressed ? 0.14 : consensusExportButton.hovered ? 0.10 : 0.05)
@@ -998,6 +1002,9 @@ ApplicationWindow {
             id: ribbon
             ribbonSizeFactor: window.ribbonSizeFactor
             objectName: "applicationRibbon"
+            // Reserve the FASTA icon's readable band on every tab so switching
+            // to/from the review never changes ribbon height.
+            symbolBandSize: 24
             Layout.fillWidth: true
             currentIndex: window.ribbonPanels[window.ribbonTab]
             background: Rectangle { color: Qt.alpha(shell.foreground, 0.025) }
@@ -1230,7 +1237,7 @@ ApplicationWindow {
                         title: "Rows"
                         RibbonButton { commandId: "ribbon.move-the-selected-rows-up"; text: "Up"; iconName: "up"; tip: "Move the selected rows up"; keys: "Alt+↑"; onInvoked: window.current.move_rows(true) }
                         RibbonButton { commandId: "ribbon.move-the-selected-rows-down"; text: "Down"; iconName: "down"; tip: "Move the selected rows down"; keys: "Alt+↓"; onInvoked: window.current.move_rows(false) }
-                        RibbonButton { commandId: "ribbon.rename-the-cursor-s-row"; text: "Name"; tip: "Rename the cursor's row"; keys: "F2"; onInvoked: renameDialog.askRow() }
+                        RibbonButton { commandId: "ribbon.rename-the-cursor-s-row"; text: "Rename"; tip: "Rename the cursor's row"; Accessible.name: tip; keys: "F2"; onInvoked: renameDialog.askRow() }
                         RibbonButton { commandId: "ribbon.delete-the-selected-rows"; text: "Delete"; iconName: "delete"; tip: "Delete the selected rows"; onInvoked: window.current.remove_rows() }
                     }
                     ToolSeparator { Layout.fillHeight: true }
@@ -1472,9 +1479,9 @@ ApplicationWindow {
                         title: "Export consensus"
                         disabledReason: !window.traceOpen || !window.current || !window.current.review_mode ? "Open a Sanger review to use this group" : "Wait for trace processing to finish"
                         enabled: window.traceOpen && window.current && window.current.review_mode && window.traceDocument && !window.traceDocument.working
-                        ExportConsensusButton { commandId: "ribbon.add-the-edited-consensus-to-its-alignment"; text: "to alignment"; tip: "Add the edited consensus to its alignment"; keys: "Ctrl+Shift+A"; enabled: window.traceDocument !== null && window.traceDocument.returnAlignment !== null && window.current && window.current.unresolved === 0; onInvoked: window.traceDocument.addToAlignment() }
-                        ExportConsensusButton { commandId: "ribbon.export-the-edited-consensus-as-fasta"; text: "to fasta"; tip: "Export the edited consensus as FASTA"; keys: "Ctrl+Shift+E"; enabled: window.current && window.current.unresolved === 0; onInvoked: window.traceDocument.exportConsensus() }
-                        ExportConsensusButton { commandId: "ribbon.copy-the-edited-consensus-as-fasta"; text: "to clipboard"; tip: "Copy the edited consensus as FASTA"; keys: "Ctrl+Shift+C"; enabled: window.current && window.current.unresolved === 0; onInvoked: window.traceDocument.copyConsensus() }
+                        ExportConsensusButton { commandId: "ribbon.add-the-edited-consensus-to-its-alignment"; text: "Alignment"; iconName: "consensus-to-alignment"; tip: "Add the edited consensus to its alignment"; keys: "Ctrl+Shift+A"; enabled: window.traceDocument !== null && window.traceDocument.returnAlignment !== null && window.current && window.current.unresolved === 0; onInvoked: window.traceDocument.addToAlignment() }
+                        ExportConsensusButton { commandId: "ribbon.export-the-edited-consensus-as-fasta"; text: "Save"; iconName: "fasta-document"; tip: "Export the edited consensus as FASTA"; keys: "Ctrl+Shift+E"; enabled: window.current && window.current.unresolved === 0; onInvoked: window.traceDocument.exportConsensus() }
+                        ExportConsensusButton { commandId: "ribbon.copy-the-edited-consensus-as-fasta"; text: "Copy"; iconName: "clipboard"; tip: "Copy the edited consensus as FASTA"; keys: "Ctrl+Shift+C"; enabled: window.current && window.current.unresolved === 0; onInvoked: window.traceDocument.copyConsensus() }
                     }
                     Item { Layout.fillWidth: true }
                     HelpGroup {}

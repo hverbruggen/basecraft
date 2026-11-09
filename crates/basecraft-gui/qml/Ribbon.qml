@@ -7,6 +7,8 @@ import org.kde.kirigami as Kirigami
 Control {
     id: ribbon
     property real ribbonSizeFactor: 1
+    // A page with a detailed symbol can reserve the same band on every tab.
+    property real symbolBandSize: 16
     property real baseFontPixelSize: Window.window && Window.window.font ? Window.window.font.pixelSize : 12
     font.pixelSize: baseFontPixelSize * ribbonSizeFactor
     default property alias pages: stack.data
