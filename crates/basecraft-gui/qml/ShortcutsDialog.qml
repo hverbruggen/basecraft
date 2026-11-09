@@ -123,7 +123,7 @@ AppDialog {
         clip: true
         ColumnLayout {
             width: dialog.availableWidth
-            spacing: 14
+            spacing: dialog.font.pixelSize * 1.2
             Repeater {
                 model: dialog.opened ? dialog.shown() : []
                 ColumnLayout {
@@ -133,12 +133,15 @@ AppDialog {
                     Label {
                         text: modelData.name
                         font.bold: true
+                        font.pixelSize: dialog.font.pixelSize * 1.12
                         color: palette.windowText
                     }
                     GridLayout {
+                        Layout.fillWidth: true
+                        Layout.leftMargin: dialog.font.pixelSize
                         columns: 2
-                        columnSpacing: 16
-                        rowSpacing: 3
+                        columnSpacing: dialog.font.pixelSize * 1.3
+                        rowSpacing: dialog.font.pixelSize * 0.3
                         Repeater {
                             model: modelData.keys
                             delegate: Label {
