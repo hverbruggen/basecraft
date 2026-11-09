@@ -1,7 +1,7 @@
 //! Screening for the optional data palette, not a claim of accessibility.
 //! Machado et al. full-severity protan/deutan matrices, in linear sRGB:
-//! https://www.inf.ufrgs.br/~oliveira/pubs_files/CVD_Simulation/CVD_Simulation.html
-//! Okabe–Ito source colours: https://jfly.uni-koeln.de/color/
+//! <https://www.inf.ufrgs.br/~oliveira/pubs_files/CVD_Simulation/CVD_Simulation.html>
+//! Okabe–Ito source colours: <https://jfly.uni-koeln.de/color/>
 use super::{Rgba, Theme};
 
 // Identity, protanopia, deuteranopia. No new dependency or analysis operation.
@@ -64,17 +64,17 @@ fn contrast(color: Rgba, theme: &Theme) -> f32 {
         })
         .fold(f32::INFINITY, f32::min)
 }
-fn lab([r, g, b]: [f32; 3]) -> [f32; 3] {
-    let f = |v: f32| {
+fn lab([red, green, blue]: [f32; 3]) -> [f32; 3] {
+    let transform = |v: f32| {
         if v > 216. / 24_389. {
             v.cbrt()
         } else {
             v * 841. / 108. + 4. / 29.
         }
     };
-    let x = f((0.412_456_4 * r + 0.357_576_1 * g + 0.180_437_5 * b) / 0.95047);
-    let y = f(0.212_672_9 * r + 0.715_152_2 * g + 0.072_175 * b);
-    let z = f((0.019_333_9 * r + 0.119_192 * g + 0.950_304_1 * b) / 1.08883);
+    let x = transform((0.412_456_4 * red + 0.357_576_1 * green + 0.180_437_5 * blue) / 0.95047);
+    let y = transform(0.212_672_9 * red + 0.715_152_2 * green + 0.072_175 * blue);
+    let z = transform((0.019_333_9 * red + 0.119_192 * green + 0.950_304_1 * blue) / 1.08883);
     [116. * y - 16., 500. * (x - y), 200. * (y - z)]
 }
 fn separation(colors: [Rgba; 4]) -> f32 {
