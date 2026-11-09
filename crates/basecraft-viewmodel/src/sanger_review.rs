@@ -16,6 +16,7 @@ use basecraft_io::abif::Trace;
 const NAMES: f32 = 180.0;
 const ROW: f32 = 24.0;
 const REFERENCE_ROW: f32 = 20.0;
+const OVERVIEW_COLUMNS: usize = 512;
 
 #[derive(Clone, Debug)]
 pub struct ReadLane {
@@ -210,6 +211,47 @@ impl SangerReviewView {
         )
     }
 
+    /// Content identity for the existing miniature cache. Immutable signal/call
+    /// sources are replaced with the review (the controller resets its cache).
+    /// Sample only the same bounded consensus/display columns as the miniature;
+    /// unsampled edits cannot change its image. Reference revisions and palette
+    /// changes invalidate independently. Viewport and selection are excluded.
+    pub fn overview_key(&self, theme: &Theme) -> String {
+        use std::hash::{Hash, Hasher};
+        let mut key = std::collections::hash_map::DefaultHasher::new();
+        format!("{theme:?}").hash(&mut key);
+        let n = self.columns.len();
+        n.hash(&mut key);
+        self.consensus.len().hash(&mut key);
+        let count = n.min(OVERVIEW_COLUMNS);
+        for p in 0..count {
+            let column = &self.columns[p * n / count];
+            column.source.hash(&mut key);
+            column.draft.hash(&mut key);
+            column
+                .draft
+                .and_then(|i| self.consensus.get(i))
+                .hash(&mut key);
+        }
+        self.alignment.is_some().hash(&mut key);
+        if let Some(context) = &self.alignment {
+            context.placement.source_sha256.hash(&mut key);
+            context.alignment.version().hash(&mut key);
+            context.alignment.width().hash(&mut key);
+            context.alignment.row_count().hash(&mut key);
+            context.representatives.len().hash(&mut key);
+            for representative in &context.representatives {
+                representative.row.hash(&mut key);
+            }
+        }
+        self.lanes.len().hash(&mut key);
+        for lane in &self.lanes {
+            lane.height.to_bits().hash(&mut key);
+            lane.gain.to_bits().hash(&mut key);
+        }
+        format!("review:{:016x}", key.finish())
+    }
+
     /// Miniature rows use the same display columns and native event mapping.
     /// Unmapped calls remain blank; reverse reads use complementary channels.
     pub fn overview(&self, theme: &Theme) -> crate::overview::Miniature {
@@ -219,7 +261,7 @@ impl SangerReviewView {
             return out;
         }
         let height = f64::from(self.content_height().max(1.0));
-        let count = n.min(512);
+        let count = n.min(OVERVIEW_COLUMNS);
         let mut base = Vec::with_capacity(1);
         for p in 0..count {
             let col = p * n / count;
@@ -1239,6 +1281,70 @@ mod tests {
         view.attach_alignment(placement, AlignmentDoc::new("reference", rows))
             .unwrap();
     }
+    #[test]
+    fn overview_cache_reuses_refreshes_and_invalidates_content_reference_palette_geometry() {
+        let mut view = review(true);
+        let mut theme = Theme::default();
+        let mut cache = crate::overview::Cache::default();
+        let builds = std::cell::Cell::new(0);
+        let mut refresh = |view: &SangerReviewView, theme: &Theme| {
+            cache.get(view.overview_key(theme), || {
+                builds.set(builds.get() + 1);
+                view.overview(theme)
+            })
+        };
+        let original = refresh(&view, &theme);
+        for i in 0..200 {
+            // The producer sees these refreshes whether QML shows or hides it.
+            view.selected = i % view.consensus.len();
+            view.hovered = Some(i % view.columns.len());
+            view.left = i as f64;
+            view.column_width = 12.0 + i as f32;
+            view.resize(600.0 + i as f32, 400.0 + i as f32);
+            assert_eq!(refresh(&view, &theme), original);
+        }
+        assert_eq!(builds.get(), 1, "navigation must not rebuild or serialize");
+        view.consensus[0] = b'T';
+        assert_ne!(refresh(&view, &theme), original);
+        assert_eq!(builds.get(), 2);
+        attach(&mut view);
+        refresh(&view, &theme);
+        assert_eq!(builds.get(), 3);
+        view.alignment.as_mut().unwrap().placement.source_sha256 = "b".repeat(64);
+        refresh(&view, &theme);
+        assert_eq!(builds.get(), 4);
+        theme.foreground = [0.9, 0.9, 0.9, 1.0];
+        refresh(&view, &theme);
+        assert_eq!(builds.get(), 5);
+        view.lanes[0].height += 20.0;
+        refresh(&view, &theme);
+        assert_eq!(builds.get(), 6);
+        view.lanes[0].gain += 0.5;
+        refresh(&view, &theme);
+        assert_eq!(builds.get(), 7);
+    }
+
+    #[test]
+    fn overview_key_samples_only_columns_that_can_change_the_miniature() {
+        let mut view = review(false);
+        view.columns = (0..2048)
+            .map(|i| ReviewColumn {
+                source: None,
+                draft: Some(i),
+            })
+            .collect();
+        view.consensus = vec![b'A'; 2048];
+        let theme = Theme::default();
+        let original = view.overview_key(&theme);
+        view.consensus[1] = b'C'; // Between the miniature's four-column samples.
+        assert_eq!(view.overview_key(&theme), original);
+        view.consensus[4] = b'C';
+        assert_ne!(view.overview_key(&theme), original);
+        let changed_content = view.overview_key(&theme);
+        view.columns[4].source = Some(42);
+        assert_ne!(view.overview_key(&theme), changed_content);
+    }
+
     #[test]
     fn overview_reverse_signal_shares_coordinates_and_missing_events_stay_blank() {
         let forward = review(false);
