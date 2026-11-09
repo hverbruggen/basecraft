@@ -19,6 +19,11 @@ AppDialog {
     // Keyboard only, grouped by ribbon tab; "Editing" has no tab of its
     // own and shows in the full list.
     readonly property var groups: [
+        { name: "Find", keys: [
+            ["Enter / Shift+Enter", "Next / previous match while typing in Find"],
+            ["Escape", "Close Find and return to the document"],
+            ["Clear the query", "Remove Find highlights without changing selection"],
+        ] },
         { name: "File", keys: [
             ["Ctrl+W", "Close the tab"],
             ["Ctrl+Q", "Quit, asking about unsaved changes"],

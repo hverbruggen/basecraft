@@ -101,6 +101,7 @@ fn main() {
         "qml/TreeAlignmentGroup.qml",
         "qml/PreferencesDialog.qml",
         "qml/AppCanvas.qml",
+        "qml/FindBar.qml",
         "qml/TextRepresentationDialog.qml",
         "qml/FocusScrollView.qml",
         "qml/AppErrorLabel.qml",

@@ -5,6 +5,29 @@ import Basecraft
 
 FocusScope {
     id: doc
+    property alias findBar: findBar
+    readonly property var findRows: new Set(findBar.result.rows || [])
+    function openFind() { findBar.openFind() }
+    FindBar {
+        id: findBar
+        inputHint: "Taxon name"
+        sequenceSearch: false
+        nameSearch: true
+        anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
+        controller: (doc.showGroups || !ctl.display_path.length ? ctl : tree)
+        documentFocusItem: (doc.showGroups || !ctl.display_path.length ? specimenList : treeCanvas)
+        activeDocument: doc.visible
+        onRevealed: match => {
+            if (doc.showGroups || !ctl.display_path.length) {
+                const row = specimens.itemAt(match.row)
+                if (row) {
+                    const p = row.mapToItem(specimenList, 0, 0)
+                    specimenScroll.contentItem.contentY = Math.max(0, Math.min(specimenScroll.contentItem.contentHeight-specimenScroll.height,p.y-specimenScroll.height/3))
+                }
+            }
+        }
+    }
+
     property var notificationSink: null
     Connections {
         target: ctl
@@ -186,6 +209,7 @@ FocusScope {
     Rectangle { anchors.fill: parent; color: doc.background }
     ColumnLayout {
         anchors.fill: parent
+        anchors.bottomMargin: findBar.height
         spacing: 4
         AppMessageBar {
             Layout.fillWidth: true
@@ -292,6 +316,7 @@ FocusScope {
                     }
                 }
                 TreeCanvas {
+                    findBar: doc.findBar
                     id: treeCanvas
                     anchors { left: parent.left; top: header.bottom; bottom: legend.top; right: parent.right }
                     controller: tree
@@ -335,11 +360,14 @@ FocusScope {
                     text: doc.columnInfo.legend.map(entry => entry.code + " " + entry.method).join("   ")
                 }
                 ScrollView {
+                    id: specimenScroll
                     anchors.fill: parent
                     visible: !center.treeShown
                     contentWidth: availableWidth
                     ColumnLayout {
+                        id: specimenList
                         width: parent.width
+                        Keys.onEscapePressed: if (findBar.opened) findBar.closeFind()
                         TapHandler { acceptedButtons: Qt.RightButton; onTapped: treeMenu.openFor({}) }
                         Label { text: "Species hypotheses"; font.bold: true; color: doc.foreground }
                         Label { text: "Tick sequences, then right-click to group or name them as a species."; wrapMode: Text.Wrap; Layout.fillWidth: true; color: doc.foreground }
@@ -370,9 +398,13 @@ FocusScope {
                             }
                         }
                         Repeater {
+                            id: specimens
                             model: doc.workspace.specimens || []
                             delegate: AppCheckBox {
                                 required property var modelData
+                                required property int index
+                                property bool found: findBar.opened && findBar.controller === ctl && doc.findRows.has(index)
+                                background: Rectangle { visible: parent.found; color: "transparent"; border.color: doc.foreground; border.width: findBar.result.row === parent.index ? 2 : 1 }
                                 text: modelData.label
                                 checked: doc.selection.includes(modelData.id)
                                 onClicked: ctl.highlight_taxa(JSON.stringify(checked ? doc.selection.concat([modelData.id]) : doc.selection.filter(id => id !== modelData.id)))

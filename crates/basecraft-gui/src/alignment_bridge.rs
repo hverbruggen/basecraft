@@ -55,6 +55,11 @@ pub mod qobject {
         fn file_created(self: Pin<&mut AlignmentController>, path: QString);
 
         #[qinvokable]
+        fn find_query(self: Pin<&mut AlignmentController>, query: &QString, reverse: bool);
+        #[qinvokable]
+        fn find_poll(self: Pin<&mut AlignmentController>, direction: i32) -> QString;
+
+        #[qinvokable]
         fn document_record(self: &AlignmentController) -> QString;
         #[qinvokable]
         fn record_revision(self: &AlignmentController) -> QString;
@@ -330,6 +335,8 @@ const KEY_SPACE: i32 = 0x20;
 // Independent Qt properties plus the background scan state.
 #[allow(clippy::struct_excessive_bools)]
 pub struct AlignmentRust {
+    find: basecraft_viewmodel::find::Session,
+    find_status_revision: u64,
     frame: QByteArray,
     last_taxa: String,
     status: QString,
@@ -400,6 +407,8 @@ impl Drop for ActiveTool {
 impl Default for AlignmentRust {
     fn default() -> Self {
         let mut c = Self {
+            find: basecraft_viewmodel::find::Session::default(),
+            find_status_revision: u64::MAX,
             frame: QByteArray::default(),
             last_taxa: String::new(),
             status: QString::default(),
@@ -490,7 +499,10 @@ impl qobject::AlignmentController {
                 return;
             };
             let d = session.alignment(doc);
+            r.find
+                .invalidate(&crate::find_bridge::document_key(session, doc));
             r.view.build(d, &r.theme, &mut r.scratch);
+            r.view.draw_find(&r.find, &r.theme, &mut r.scratch);
             (
                 r.scratch.to_bytes(),
                 r.view.status(d),
@@ -1912,4 +1924,38 @@ fn component_trees(tool: &ActiveTool, outcome: &OperationOutcome) -> Vec<PathBuf
                     .is_some_and(|name| name.to_string_lossy().starts_with(&prefix))
         })
         .collect()
+}
+
+crate::find_bridge::controller_find!(qobject::AlignmentController);
+
+impl qobject::AlignmentController {
+    fn find_update(mut self: std::pin::Pin<&mut Self>) {
+        let mut r = self.as_mut().rust_mut();
+        let r = &mut *r;
+        let (Some(session), Some(doc)) = (&r.session, r.doc) else {
+            return;
+        };
+        let key = crate::find_bridge::document_key(session, doc);
+        let d = session.alignment(doc);
+        r.find.update(key, || {
+            basecraft_viewmodel::find::Input::Alignment(d.snapshot())
+        });
+    }
+    fn find_reveal(mut self: std::pin::Pin<&mut Self>) {
+        let mut r = self.as_mut().rust_mut();
+        let r = &mut *r;
+        let (Some(session), Some(doc), Some(hit)) = (&r.session, r.doc, r.find.hit()) else {
+            return;
+        };
+        let d = session.alignment(doc);
+        r.view.sync(d);
+        let start = r.view.start;
+        r.view.reveal((hit.row, hit.start));
+        if hit.kind == basecraft_viewmodel::find::Kind::Name {
+            r.view.start = start;
+        }
+    }
+    fn find_y(&self) -> f32 {
+        0.0
+    }
 }

@@ -45,6 +45,11 @@ pub mod qobject {
         type GenomeController = super::ControllerRust;
 
         #[qinvokable]
+        fn find_query(self: Pin<&mut GenomeController>, query: &QString, reverse: bool);
+        #[qinvokable]
+        fn find_poll(self: Pin<&mut GenomeController>, direction: i32) -> QString;
+
+        #[qinvokable]
         fn document_record(self: &GenomeController) -> QString;
         #[qinvokable]
         fn record_revision(self: &GenomeController) -> QString;
@@ -371,6 +376,8 @@ pub(crate) const CTRL: i32 = 0x0400_0000;
 pub(crate) const ALT: i32 = 0x0800_0000;
 
 pub struct ControllerRust {
+    find: basecraft_viewmodel::find::Session,
+    find_status_revision: u64,
     frame: QByteArray,
     status: QString,
     title: QString,
@@ -403,6 +410,8 @@ pub struct ControllerRust {
 impl Default for ControllerRust {
     fn default() -> Self {
         let mut c = Self {
+            find: basecraft_viewmodel::find::Session::default(),
+            find_status_revision: u64::MAX,
             frame: QByteArray::default(),
             status: QString::default(),
             title: QString::from("Basecraft"),
@@ -715,7 +724,10 @@ impl qobject::GenomeController {
                 return;
             };
             let d = session.doc(doc);
+            r.find
+                .invalidate(&crate::find_bridge::document_key(session, doc));
             r.view.build(d, &r.theme, &mut r.scratch);
+            r.view.draw_find(d.len(), &r.find, &r.theme, &mut r.scratch);
             (r.scratch.to_bytes(), r.view.status(d))
         };
         let (zoom, (pos, size)) = {
@@ -2318,6 +2330,35 @@ fn feature_from_json(text: &str) -> Result<Feature, String> {
         location,
         qualifiers,
     })
+}
+
+crate::find_bridge::controller_find!(qobject::GenomeController);
+
+impl qobject::GenomeController {
+    fn find_update(mut self: std::pin::Pin<&mut Self>) {
+        let mut r = self.as_mut().rust_mut();
+        let r = &mut *r;
+        let (Some(session), Some(doc)) = (&r.session, r.doc) else {
+            return;
+        };
+        let key = crate::find_bridge::document_key(session, doc);
+        let d = session.doc(doc);
+        r.find.update(key, || {
+            basecraft_viewmodel::find::Input::Sequence(d.clone())
+        });
+    }
+    fn find_reveal(mut self: std::pin::Pin<&mut Self>) {
+        let mut r = self.as_mut().rust_mut();
+        let r = &mut *r;
+        let (Some(session), Some(doc), Some(hit)) = (&r.session, r.doc, r.find.hit()) else {
+            return;
+        };
+        let d = session.doc(doc);
+        r.view.reveal(hit.start, d.len());
+    }
+    fn find_y(&self) -> f32 {
+        0.0
+    }
 }
 
 #[cfg(test)]

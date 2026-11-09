@@ -1961,6 +1961,79 @@ pub fn format_thousands(n: u64) -> String {
     out
 }
 
+impl GenomeView {
+    pub fn draw_find(
+        &self,
+        len: u64,
+        find: &crate::find::Session,
+        theme: &Theme,
+        frame: &mut Frame,
+    ) {
+        for (i, hit) in find.results.hits.iter().enumerate() {
+            let current = i == find.current;
+            if hit.kind == crate::find::Kind::Annotation {
+                for &(bounds, id, _) in &self.hits {
+                    if id.0 as usize == hit.row {
+                        crate::find::outline(
+                            frame,
+                            (
+                                bounds[0],
+                                bounds[1],
+                                bounds[2] - bounds[0],
+                                bounds[3] - bounds[1],
+                            ),
+                            theme,
+                            current,
+                        );
+                    }
+                }
+            }
+            if self.mode == Mode::Circular {
+                let r = self.radius();
+                let a = Self::angle(hit.start as f64, len);
+                let b = Self::angle(hit.end as f64, len).max(a + 0.003);
+                arc(
+                    frame,
+                    self.centre(),
+                    a,
+                    b,
+                    r - 3.0,
+                    r + 3.0,
+                    theme.foreground,
+                );
+                if current {
+                    arc(frame, self.centre(), a, b, r - 7.0, r - 5.0, theme.accent);
+                }
+                continue;
+            }
+            let mut draw = |start: u64, end: u64, oy: f32| {
+                let a = hit.start.max(start);
+                let b = hit.end.min(end);
+                if a >= b {
+                    return;
+                }
+                let x = ((a - start) as f64 / self.bp_per_px) as f32;
+                let w = ((b - a) as f64 / self.bp_per_px) as f32;
+                crate::find::outline(frame, (x, oy + SEQ_Y, w.max(2.0), SEQ_H), theme, current);
+            };
+            if self.mode == Mode::Wrapped {
+                if let Some(wrap) = &self.wrap {
+                    for line in self.visible_lines() {
+                        draw(
+                            line as u64 * wrap.line_bp,
+                            ((line + 1) as u64 * wrap.line_bp).min(len),
+                            wrap.offsets[line] - self.scroll_y,
+                        );
+                    }
+                }
+            } else {
+                let (a, b) = self.visible_range(len);
+                draw(a, b, 0.0);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

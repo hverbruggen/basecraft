@@ -9,6 +9,19 @@ import Basecraft
 // for through signals, as in DocumentView.
 FocusScope {
     id: doc
+    property alias findBar: findBar
+    function openFind() { findBar.openFind() }
+    FindBar {
+        id: findBar
+        inputHint: "Taxon name or motif"
+        sequenceSearch: true
+        nameSearch: true
+        anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
+        controller: ctl
+        documentFocusItem: view
+        activeDocument: doc.visible
+    }
+
     property var notificationSink: null
     Connections {
         target: ctl
@@ -130,7 +143,7 @@ FocusScope {
         accessibleTitle: "Alignment editor"
         accessibleSummary: ctl.status
         anchors.fill: parent
-        anchors.bottomMargin: hbar.visible ? hbar.height : 0
+        anchors.bottomMargin: findBar.height + (hbar.visible ? hbar.height : 0)
         clearColor: ctl.background
         fontFamily: ctl.mono_font
         instances: ctl.frame
@@ -227,6 +240,7 @@ FocusScope {
         }
 
         Keys.onPressed: (event) => {
+            if (event.key === Qt.Key_Escape && findBar.opened) { findBar.closeFind(); event.accepted = true; return }
             if (!view.renderingAvailable) { event.accepted = false; return }
             const ctrl = event.modifiers & Qt.ControlModifier
             if (ctrl && event.key === Qt.Key_B) { doc.toggleSidebar(); event.accepted = true; return }

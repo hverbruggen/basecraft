@@ -15,6 +15,7 @@ mod bridge;
 mod delimitation_bridge;
 mod document_jobs;
 mod figure_png;
+mod find_bridge;
 mod metadata_bridge;
 mod operations_bridge;
 mod provenance_bridge;

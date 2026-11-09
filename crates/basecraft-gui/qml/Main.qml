@@ -124,7 +124,7 @@ ApplicationWindow {
             Qt.callLater(publishRibbonCommands)
         }
     }
-    readonly property var applicationCommands: [openCommand, saveCommand, saveAsCommand, projectCommand, shortcutsCommand, aboutCommand, preferencesCommand, textRepresentationCommand, contextShortcutsCommand, learnCommand, exportSvgCommand, exportPngCommand, historyCommand, methodsCommand, showProvenanceCommand, verifyProvenanceCommand, packageCommand, recoverCommand, installedOperationsCommand].concat(ribbonCommands)
+    readonly property var applicationCommands: [findCommand, openCommand, saveCommand, saveAsCommand, projectCommand, shortcutsCommand, aboutCommand, preferencesCommand, textRepresentationCommand, contextShortcutsCommand, learnCommand, exportSvgCommand, exportPngCommand, historyCommand, methodsCommand, showProvenanceCommand, verifyProvenanceCommand, packageCommand, recoverCommand, installedOperationsCommand].concat(ribbonCommands)
     property var recentProjects: []
     property string recentProjectsError: ""
     function updateRecentProjects(reply) {
@@ -558,6 +558,20 @@ ApplicationWindow {
         iconName: "settings"
         tooltip: "Appearance, files, compute, ribbon and shortcuts"
         onTriggered: preferencesDialog.open()
+    }
+    AppCommand {
+        id: findCommand
+        customization: window.customization
+        commandId: "view.find"
+        text: "Find"
+        iconName: "search"
+        tooltip: "Find names or sequence motifs in this document"
+        defaultShortcut: "Ctrl+F"
+        enabled: window.current !== null
+        onTriggered: {
+            const document = docs.itemAt(tabs.currentIndex)
+            if (document && document.openFind) document.openFind()
+        }
     }
     AppCommand {
         id: textRepresentationCommand
@@ -1104,7 +1118,7 @@ ApplicationWindow {
                         }
                     }
                     Item { Layout.fillWidth: true }
-                    RibbonGroup { title: "Text"; actions: [textRepresentationCommand] }
+                    RibbonGroup { title: "Find and text"; actions: [findCommand, textRepresentationCommand] }
                     HelpGroup {}
                 }
 

@@ -7,6 +7,7 @@ AppCanvas {
     id: view
         accessibleTitle: "Tree editor"
         accessibleSummary: treeController.status
+    property var findBar: null
     required property var controller
     readonly property var treeController: controller
     property bool annotationEnabled: true
@@ -124,6 +125,7 @@ AppCanvas {
         }
 
         Keys.onPressed: (event) => {
+            if (event.key === Qt.Key_Escape && view.findBar && view.findBar.opened) { view.findBar.closeFind(); event.accepted = true; return }
             if (!view.renderingAvailable) { event.accepted = false; return }
             const ctrl = event.modifiers & Qt.ControlModifier
             if (ctrl && event.key === Qt.Key_B) { view.toggleSidebar(); event.accepted = true; return }

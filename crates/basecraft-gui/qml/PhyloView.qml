@@ -7,6 +7,19 @@ import Basecraft
 // for through signals, as in the other editors.
 FocusScope {
     id: doc
+    property alias findBar: findBar
+    function openFind() { findBar.openFind() }
+    FindBar {
+        id: findBar
+        inputHint: "Taxon name"
+        sequenceSearch: false
+        nameSearch: true
+        anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
+        controller: ctl
+        documentFocusItem: view
+        activeDocument: doc.visible
+    }
+
     property var notificationSink: null
     Connections {
         target: ctl
@@ -44,6 +57,8 @@ FocusScope {
     TreeCanvas {
         id: view
         anchors.fill: parent
+        anchors.bottomMargin: findBar.height
+        findBar: doc.findBar
         controller: ctl
         onContextMenu: (info) => doc.contextMenu(info)
         onToggleSidebar: doc.toggleSidebar()
