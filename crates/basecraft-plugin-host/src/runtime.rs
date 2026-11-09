@@ -561,6 +561,7 @@ pub fn configure_command(command: &mut Command, manifest: &Manifest, python: &Pa
             paths.push(bin.join("Library/bin"));
         }
     }
+    #[cfg(windows)]
     if let Ok(executable) = std::env::current_exe()
         && let Some(bin) = executable.parent()
     {

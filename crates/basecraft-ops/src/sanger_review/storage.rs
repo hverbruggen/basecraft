@@ -606,10 +606,7 @@ impl SangerReviewSession {
             .sources
             .iter()
             .find(|s| {
-                (s.original == placement.source_path
-                    || inputs::relative(&s.original, &placement.source_path)
-                        .is_ok_and(|path| path.is_empty())
-                    || same_file(&s.original, &placement.source_path).unwrap_or(false))
+                placement_source_matches(&s.original, &placement.source_path)
                     && s.sha256.eq_ignore_ascii_case(&placement.source_sha256)
             })
             .ok_or("Placement source differs from registered alignment")?;
@@ -636,10 +633,7 @@ impl SangerReviewSession {
             .sources
             .iter()
             .find(|s| {
-                (s.original == placement.source_path
-                    || inputs::relative(&s.original, &placement.source_path)
-                        .is_ok_and(|path| path.is_empty())
-                    || same_file(&s.original, &placement.source_path).unwrap_or(false))
+                placement_source_matches(&s.original, &placement.source_path)
                     && s.sha256.eq_ignore_ascii_case(&placement.source_sha256)
             })
             .ok_or("Placement input reference is missing")?;
@@ -993,6 +987,21 @@ fn relocate_stored(
         }
     }
     Ok(())
+}
+
+fn placement_source_matches(original: &Path, placed: &Path) -> bool {
+    if original == placed {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        // Windows canonicalization adds verbatim prefixes; equivalent spellings
+        // must still resolve to the registered source. Hash checks follow this.
+        inputs::relative(original, placed).is_ok_and(|path| path.is_empty())
+            || same_file(original, placed).unwrap_or(false)
+    }
+    #[cfg(not(windows))]
+    false
 }
 
 fn same_file(a: &Path, b: &Path) -> crate::Result<bool> {
