@@ -36,9 +36,27 @@ Control {
         visit(row)
         return result
     }
-    onPresentationChanged: if (presentation !== 2) close()
+    function containsControl(item) {
+        for (let owner = item; owner; owner = owner.parent)
+            if (owner === body || owner === collapseButton) return true
+        return false
+    }
+    onPresentationChanged: if (presentation !== 2) close(true)
     property alias collapseControl: collapseButton
-    function close() { overflow.close() }
+    function close(restoreEditor = false) {
+        const window = Window.window
+        const focused = window ? window.activeFocusItem : null
+        const editing = restoreEditor && overflow.visible && containsControl(focused) && focused !== collapseButton
+        overflow.close()
+        // Closing a Popup restores its old focus scope. Once its body has
+        // returned inline, restore the editor that was active during resize.
+        const afterClose = window ? window.activeFocusItem : null
+        if (editing) Qt.callLater(() => {
+            if (group.visible && presentation !== 2 && focused.visible && focused.enabled
+                    && (window.activeFocusItem === afterClose || window.activeFocusItem === focused))
+                focused.forceActiveFocus(Qt.OtherFocusReason)
+        })
+    }
     function open() { if (presentation === 2) overflow.open() }
     property string title
     property alias actions: toolbar.actions
