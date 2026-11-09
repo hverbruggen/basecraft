@@ -1287,11 +1287,15 @@ impl SangerReviewView {
                     bases: columns
                         .iter()
                         .map(|c| {
-                            c.draft
-                                .and_then(|i| {
-                                    draft.columns[i].support.iter().find(|s| s.read == read + 1)
-                                })
-                                .map_or(b' ', |s| s.base as u8)
+                            // Reference-only columns are layout gaps; absent read
+                            // coverage at a draft column must still break motifs.
+                            c.draft.map_or(b'-', |i| {
+                                draft.columns[i]
+                                    .support
+                                    .iter()
+                                    .find(|s| s.read == read + 1)
+                                    .map_or(b' ', |s| s.base as u8)
+                            })
                         })
                         .collect(),
                 });
@@ -1478,6 +1482,76 @@ mod tests {
                 .iter()
                 .any(|h| h.label.starts_with("Reference:"))
         );
+    }
+
+    #[test]
+    fn find_reference_attachment_preserves_read_motifs() {
+        let mut view = review(false);
+        let before = crate::find::search(
+            view.find_input(),
+            "AC",
+            false,
+            &std::sync::atomic::AtomicBool::new(false),
+        );
+        assert_eq!(before.hits.len(), 3);
+        attach(&mut view);
+        let rows = find_rows(&view);
+        let draft_row = rows
+            .iter()
+            .position(|r| r.name == "Draft consensus")
+            .unwrap();
+        for (read, row) in rows[draft_row + 1..].iter().enumerate() {
+            assert_eq!(row.id, draft_row + 1 + read);
+            assert_eq!(row.bases, b"A--C");
+        }
+        let after = crate::find::search(
+            crate::find::Input::Rows(rows),
+            "AC",
+            false,
+            &std::sync::atomic::AtomicBool::new(false),
+        );
+        for (offset, original) in before.hits.iter().enumerate() {
+            let hit = after
+                .hits
+                .iter()
+                .find(|h| h.label == original.label)
+                .unwrap();
+            assert_eq!(hit.row, draft_row + offset);
+            assert_eq!((original.start, original.end), (0, 2));
+            assert_eq!((hit.start, hit.end), (0, 4));
+        }
+    }
+
+    #[test]
+    fn find_missing_read_coverage_breaks_motifs() {
+        let original = review(false);
+        let mut draft = original.draft;
+        // A genuine draft column has support in read 2, but none in read 1.
+        let mut middle = draft.columns[0].clone();
+        middle.column = 2;
+        middle.consensus = 'G';
+        middle.support.retain(|s| s.read == 2);
+        middle.support[0].base = 'G';
+        draft.columns.insert(1, middle);
+        draft.columns[2].column = 3;
+        draft.consensus = "AGC".into();
+        draft.consensus_length = 3;
+        draft.aligned_columns = 3;
+        let calls = draft.inputs[1].calls.as_mut().unwrap();
+        calls.sequence = "AGC".into();
+        calls.positions = vec![10, 35, 60];
+        calls.scores = vec![25, 30, 35];
+        let traces = original.lanes.into_iter().map(|lane| lane.trace).collect();
+        let view = SangerReviewView::new(draft, traces).unwrap();
+        let rows = find_rows(&view);
+        assert_eq!(rows[1].bases, b"A C");
+        let result = crate::find::search(
+            crate::find::Input::Rows(rows),
+            "AC",
+            false,
+            &std::sync::atomic::AtomicBool::new(false),
+        );
+        assert_eq!(result.hits, []);
     }
 
     fn attach(view: &mut SangerReviewView) {
