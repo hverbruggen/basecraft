@@ -79,10 +79,14 @@ Item {
                 document.forceActiveFocus()
                 waitForRendering(overview)
                 const marker = findChild(overview, "overviewViewport")
-                const p = marker.mapToItem(overview, 0, 0)
-                const image = grabImage(overview)
-                compare(image.pixel(Math.round(p.x), Math.round(p.y)), overview.foreground)
-                compare(image.pixel(overview.width - 4, overview.height - 4), overview.backgroundColor)
+                // QtTest crops in logical coordinates from a physical image.
+                // Grab the host and sample inside the outline, away from corners.
+                const p = marker.mapToItem(host, 1, marker.height / 2)
+                const background = overview.mapToItem(host, overview.width / 2, overview.height / 2)
+                const image = grabImage(host)
+                const dpr = overview.Screen.devicePixelRatio
+                compare(image.pixel(Math.floor(p.x * dpr), Math.floor(p.y * dpr)), overview.foreground)
+                compare(image.pixel(Math.floor(background.x * dpr), Math.floor(background.y * dpr)), overview.backgroundColor)
             }
         }
         function test_optional_find_input_and_theme() {
