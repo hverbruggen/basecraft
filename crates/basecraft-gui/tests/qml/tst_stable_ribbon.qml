@@ -78,6 +78,35 @@ Item {
                     ${ribbon}
                 }`, host, Qt.resolvedUrl("stableRibbonHarness.qml"))
         }
+        function test_view_figure_export_reuses_actions() {
+            const scene = productionRibbon()
+            scene.ribbonTabName = "View"
+            findChild(scene, "applicationRibbon").width = 1200
+            verify(waitForPolish(scene.Window.window))
+            function captioned(item, text) {
+                if (item.text === text && item.action !== undefined) return item
+                for (const child of item.children || []) {
+                    const found = captioned(child, text)
+                    if (found) return found
+                }
+                return null
+            }
+            const svg = captioned(scene, "SVG")
+            const png = captioned(scene, "PNG")
+            verify(svg && png)
+            compare(svg.action.commandId, "test.exportSvgCommand")
+            compare(png.action.commandId, "test.exportPngCommand")
+            let svgCount = 0, pngCount = 0
+            svg.action.triggered.connect(() => svgCount++)
+            png.action.triggered.connect(() => pngCount++)
+            mouseClick(svg)
+            png.forceActiveFocus()
+            keyClick(Qt.Key_Space)
+            compare(svgCount, 1)
+            compare(pngCount, 1)
+            verify(findChild(scene, "ribbonFigureExport"), "Utility export remains present")
+            scene.destroy()
+        }
         function test_disabled_prerequisite_messages() {
             const scene = productionRibbon()
             scene.currentKind = "alignment"
