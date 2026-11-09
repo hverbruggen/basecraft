@@ -483,6 +483,7 @@ impl qobject::SangerController {
                     r.review_session = Some(completed.session);
                     if name == "prepare" {
                         r.review_path = None;
+                        r.overview_cache = basecraft_viewmodel::overview::Cache::default();
                         r.trace = None;
                     }
                 }
@@ -911,6 +912,7 @@ impl qobject::SangerController {
                     let mut r = self.as_mut().rust_mut();
                     view.resize(r.view.width, r.view.height);
                     // Keep the raw trace for the existing multi-read draft action.
+                    r.overview_cache = basecraft_viewmodel::overview::Cache::default();
                     r.trace = view.lanes.first().map(|lane| lane.trace.clone());
                     r.review = Some(view);
                     r.review_session = Some(session);
@@ -962,6 +964,7 @@ impl qobject::SangerController {
                     r.review_session = Some(session);
                     r.review_path = None;
 
+                    r.overview_cache = basecraft_viewmodel::overview::Cache::default();
                     r.trace = None;
                 }
                 self.as_mut().set_dirty(dirty);
@@ -1002,6 +1005,7 @@ impl qobject::SangerController {
                     r.review_session = Some(session);
                     r.review_path = if recovered { None } else { Some(path.clone()) };
 
+                    r.overview_cache = basecraft_viewmodel::overview::Cache::default();
                     r.trace = None;
                 }
                 self.as_mut().set_dirty(recovered);

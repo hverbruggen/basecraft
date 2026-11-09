@@ -60,6 +60,7 @@ Item {
                     property bool traceOpen: currentKind === "trace"
                     property bool alignmentInsert: true
                     property bool showGc: true
+                    property bool overviewEnabled: true
                     property var customization: ({shortcuts: {}, ribbon_hidden: []})
                     property var recentProjects: []
                     property var commands: []

@@ -20,6 +20,7 @@ Item {
         name: "DocumentOverview"
         when: windowShown
         function init() {
+            overview.font.pixelSize = 14
             overview.shown = true
             overview.viewportWidth = 0.2; overview.viewportHeight = 0.3
             overview.viewportX = 0.1; overview.viewportY = 0.2
@@ -62,6 +63,27 @@ Item {
             overview.font.pixelSize = 30
             verify(overview.implicitHeight >= 2 * overview.lineHeight)
             verify(overview.implicitHeight > before)
+        }
+        function test_tiny_marker_stays_inside_at_last_coordinate() {
+            overview.viewportWidth = 0.00001; overview.viewportHeight = 0.00001
+            overview.viewportX = 0.99999; overview.viewportY = 0.99999
+            const marker = findChild(overview, "overviewViewport")
+            verify(marker.x + marker.width <= overview.availableWidth)
+            verify(marker.y + marker.height <= overview.availableHeight)
+        }
+        function test_rendered_viewport_outline_light_and_dark() {
+            for (const dark of [false, true]) {
+                overview.miniature = '{"shapes":[]}'
+                overview.foreground = dark ? "#ffffff" : "#000000"
+                overview.backgroundColor = dark ? "#000000" : "#ffffff"
+                document.forceActiveFocus()
+                waitForRendering(overview)
+                const marker = findChild(overview, "overviewViewport")
+                const p = marker.mapToItem(overview, 0, 0)
+                const image = grabImage(overview)
+                compare(image.pixel(Math.round(p.x), Math.round(p.y)), overview.foreground)
+                compare(image.pixel(overview.width - 4, overview.height - 4), overview.backgroundColor)
+            }
         }
         function test_optional_find_input_and_theme() {
             overview.matchMarks = [{x:0.4,y:0,width:0.01,height:1}]

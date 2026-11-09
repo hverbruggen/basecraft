@@ -194,7 +194,7 @@ FocusScope {
         shown: doc.overviewEnabled
         circular: ctl.mode === "circular"
         miniature: ctl.overview_content
-        foreground: ctl.foreground; backgroundColor: ctl.background
+        foreground: ctl.foreground; backgroundColor: ctl.background; accent: ctl.accent
         documentItem: view
         viewportX: ctl.overview_pos; viewportWidth: ctl.overview_size
         onPanRequested: (x, y) => ctl.overview_scroll_to(x)

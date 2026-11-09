@@ -33,6 +33,12 @@ Control {
     Accessible.name: qsTr("Document overview")
     Accessible.description: qsTr("Click to centre the view. Arrow keys pan; Escape returns to the document.")
     Accessible.role: Accessible.Pane
+    Accessible.focusable: true
+    Accessible.focused: activeFocus
+    hoverEnabled: true
+    ToolTip.text: Accessible.description
+    ToolTip.visible: hovered
+    ToolTip.delay: 600
     FontMetrics { id: metrics; font: overview.font }
     function bounded(value, span) { return Math.max(0, Math.min(1 - Math.max(0, Math.min(1, span)), value)) }
     function pan(x, y) {
@@ -74,7 +80,9 @@ Control {
                     } else c.fillRect(mark.x * width, mark.y * height, Math.max(1, mark.w * width), Math.max(1, mark.h * height))
                 }
                 c.fillStyle = overview.accent
-                for (const mark of overview.matchMarks) {
+                const markStride = Math.max(1, Math.ceil(overview.matchMarks.length / 8192))
+                for (let i = 0; i < overview.matchMarks.length; i += markStride) {
+                    const mark = overview.matchMarks[i]
                     if (isFinite(mark.x) && isFinite(mark.y))
                         c.fillRect(mark.x * width, mark.y * height,
                                    Math.max(2, (mark.width || 0) * width), Math.max(2, (mark.height || 0) * height))
@@ -84,10 +92,10 @@ Control {
         Rectangle {
             id: marker
             objectName: "overviewViewport"
-            x: overview.bounded(overview.viewportX, overview.viewportWidth) * surface.width
-            y: overview.bounded(overview.viewportY, overview.viewportHeight) * surface.height
-            width: Math.max(2, Math.min(1, overview.viewportWidth) * surface.width)
-            height: Math.max(2, Math.min(1, overview.viewportHeight) * surface.height)
+            x: Math.min(Math.max(0, surface.width - width), overview.bounded(overview.viewportX, overview.viewportWidth) * surface.width)
+            y: Math.min(Math.max(0, surface.height - height), overview.bounded(overview.viewportY, overview.viewportHeight) * surface.height)
+            width: Math.min(surface.width, Math.max(2, Math.min(1, overview.viewportWidth) * surface.width))
+            height: Math.min(surface.height, Math.max(2, Math.min(1, overview.viewportHeight) * surface.height))
             color: "transparent"
             border.width: 2
             border.color: overview.foreground

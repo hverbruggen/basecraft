@@ -134,19 +134,20 @@ pub fn sequence(doc: &basecraft_docs::SequenceDoc, theme: &Theme) -> Miniature {
     out
 }
 
-/// Whole native read. A bounded set of sample points; never scans the signal on pan.
+/// Whole native read as a bounded min/max envelope. Computed once per source
+/// and palette by the controller cache, so narrow peaks survive downsampling.
 pub fn trace(trace: &basecraft_io::abif::Trace, theme: &Theme) -> Miniature {
     let mut out = Miniature::default();
     let n = trace.samples();
-    if n < 2 {
+    if n == 0 {
         return out;
     }
     let points = n.min(1024);
-    let max = (0..points)
-        .flat_map(|i| {
-            let sample = i * (n - 1) / (points - 1);
-            trace.channels.iter().map(move |c| c[sample])
-        })
+    let maximum = trace
+        .channels
+        .iter()
+        .flatten()
+        .copied()
         .max()
         .unwrap_or(1)
         .max(1) as f64;
@@ -155,15 +156,19 @@ pub fn trace(trace: &basecraft_io::abif::Trace, theme: &Theme) -> Miniature {
         .iter()
         .zip(crate::sanger::signal_colors(theme))
     {
-        for i in 1..points {
-            let a = (i - 1) * (n - 1) / (points - 1);
-            let b = i * (n - 1) / (points - 1);
+        for i in 0..points {
+            let a = i * n / points;
+            let b = (i + 1) * n / points;
+            let bucket = &channel[a..b];
+            let low = bucket.iter().copied().min().unwrap_or(0).max(0) as f64;
+            let high = bucket.iter().copied().max().unwrap_or(0).max(0) as f64;
+            let x = (i as f64 + 0.5) / points as f64;
             out.line(
                 [
-                    (i - 1) as f64 / (points - 1) as f64,
-                    0.95 - channel[a].max(0) as f64 / max * 0.9,
-                    i as f64 / (points - 1) as f64,
-                    0.95 - channel[b].max(0) as f64 / max * 0.9,
+                    x,
+                    0.95 - low / maximum * 0.9,
+                    x,
+                    0.95 - high / maximum * 0.9,
                 ],
                 color,
             );
@@ -175,6 +180,27 @@ pub fn trace(trace: &basecraft_io::abif::Trace, theme: &Theme) -> Miniature {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn overview_match_spans_and_trace_calls_keep_native_coordinates() {
+        assert!(MatchMark::span(0, 0, 20, 0.0, 1.0).is_none());
+        assert!(MatchMark::span(1, 4, 3, 0.0, 1.0).is_none());
+        let trace = basecraft_io::abif::Trace {
+            channels: std::array::from_fn(|_| vec![0; 100]),
+            call_sets: vec![basecraft_io::abif::CallSet {
+                number: 1,
+                bases: b"ACG".to_vec(),
+                positions: vec![10, 20, 90],
+                qualities: None,
+            }],
+            channel_order: *b"ACGT",
+        };
+        let mark = trace_match(&trace, 0, 2).unwrap();
+        assert!((mark.x - 0.1).abs() < 1e-6);
+        assert!((mark.width - 0.11).abs() < 1e-6);
+        assert!(trace_match(&trace, 0, 4).is_none());
+        assert!(trace_match(&trace, 3, 3).is_none());
+    }
+
     #[test]
     fn cache_reuses_content_until_source_or_palette_changes() {
         let mut cache = Cache::default();
@@ -201,7 +227,7 @@ mod tests {
             channel_order: *b"ACGT",
         };
         let result = super::trace(&trace, &Theme::default());
-        assert_eq!(result.shapes.len(), 4 * 1023);
+        assert_eq!(result.shapes.len(), 4 * 1024);
         assert!(
             result
                 .shapes
@@ -211,4 +237,57 @@ mod tests {
         trace.channels = std::array::from_fn(|_| vec![]);
         assert!(super::trace(&trace, &Theme::default()).shapes.is_empty());
     }
+}
+
+/// Optional Find mark, ready for DocumentOverview.matchMarks. Match identity,
+/// ordering, reverse-strand semantics and current-result state stay in Find.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+pub struct MatchMark {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+impl MatchMark {
+    /// A zero-based half-open span. Empty/missing spans have no invented mark.
+    pub fn span(start: u64, end: u64, total: u64, y: f64, height: f64) -> Option<Self> {
+        if total == 0
+            || start >= end
+            || end > total
+            || !y.is_finite()
+            || !height.is_finite()
+            || y < 0.0
+            || height <= 0.0
+            || y + height > 1.000_001
+        {
+            return None;
+        }
+        Some(Self {
+            x: start as f64 / total as f64,
+            y,
+            width: (end - start) as f64 / total as f64,
+            height,
+        })
+    }
+}
+
+/// Find on a single trace reports display-call indices, never raw sample indices.
+/// Missing positions produce no mark. Inclusive last event becomes half-open.
+pub fn trace_match(trace: &basecraft_io::abif::Trace, start: u64, end: u64) -> Option<MatchMark> {
+    if start >= end {
+        return None;
+    }
+    let calls = trace.display_calls();
+    let a = *calls.positions.get(usize::try_from(start).ok()?)?;
+    let b = *calls
+        .positions
+        .get(usize::try_from(end.checked_sub(1)?).ok()?)?;
+    MatchMark::span(
+        u64::from(a),
+        u64::from(b) + 1,
+        trace.samples() as u64,
+        0.0,
+        1.0,
+    )
 }

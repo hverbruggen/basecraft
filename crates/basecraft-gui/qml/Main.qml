@@ -259,7 +259,7 @@ ApplicationWindow {
         let active = -1
         for (let i = 0; i < regions.length; ++i) {
             for (let item = window.activeFocusItem; item; item = item.parent) {
-                if (item === regions[i]) { active = i; break }
+                if (item === regions[i] || (item.objectName === "documentOverview" && item.documentItem === regions[i])) { active = i; break }
             }
         }
         if (active < 0) return

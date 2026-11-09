@@ -35,9 +35,9 @@ AppCanvas {
             anchors { top: view.top; bottom: view.bottom; left: view.right }
             width: visible ? implicitWidth : 0
             vertical: true
-            shown: view.overviewEnabled
+            shown: view.overviewEnabled && view.visible
             miniature: treeController.overview_content
-            foreground: treeController.foreground; backgroundColor: treeController.background
+            foreground: treeController.foreground; backgroundColor: treeController.background; accent: treeController.accent
             documentItem: view
             viewportX: treeController.hscroll_pos; viewportY: treeController.vscroll_pos
             viewportWidth: treeController.hscroll_size; viewportHeight: treeController.vscroll_size

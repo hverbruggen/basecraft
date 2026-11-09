@@ -421,6 +421,26 @@ impl AlignmentView {
     }
 
     /// Horizontal scroll bar position and size, as fractions.
+    /// Find Name hits identify the whole row; Sequence hits retain gapped columns.
+    pub fn overview_match(
+        &self,
+        row: usize,
+        start: u64,
+        end: u64,
+        name: bool,
+    ) -> Option<crate::overview::MatchMark> {
+        if row >= self.rows || self.rows == 0 {
+            return None;
+        }
+        crate::overview::MatchMark::span(
+            if name { 0 } else { start },
+            if name { self.cols.max(1) } else { end },
+            self.cols.max(1),
+            row as f64 / self.rows as f64,
+            1.0 / self.rows as f64,
+        )
+    }
+
     pub fn hscroll(&self) -> (f64, f64) {
         let cols = self.cols.max(1) as f64;
         let span = f64::from(self.grid_width()) / self.px_per_col;
@@ -1440,6 +1460,12 @@ mod tests {
         let mut v = view(&d);
         let selection = v.selection;
         let cursor = v.cursor;
+        let name = v.overview_match(10, 0, 0, true).unwrap();
+        assert_eq!(name.x, 0.0);
+        assert_eq!(name.width, 1.0);
+        assert!(name.y > 0.0);
+        assert!(v.overview_match(200, 0, 1, false).is_none());
+        assert!(v.overview_match(1, 0, 0, false).is_none());
         v.hscroll_to(1.0);
         v.vscroll_to(1.0);
         assert_eq!(v.selection, selection);

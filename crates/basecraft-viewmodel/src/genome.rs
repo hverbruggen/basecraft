@@ -510,6 +510,11 @@ impl GenomeView {
         format!("{level} · {} shown", format_length(shown))
     }
 
+    /// Both motif and annotation hits already carry document residue bounds.
+    pub fn overview_match(start: u64, end: u64, len: u64) -> Option<crate::overview::MatchMark> {
+        crate::overview::MatchMark::span(start, end, len, 0.0, 1.0)
+    }
+
     pub fn overview_fraction(&self, len: u64) -> (f64, f64) {
         if len == 0 || self.mode == Mode::Circular {
             return (0.0, 1.0);

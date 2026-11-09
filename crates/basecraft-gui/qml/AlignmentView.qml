@@ -246,7 +246,7 @@ FocusScope {
         anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
         shown: doc.overviewEnabled
         miniature: ctl.overview_content
-        foreground: ctl.foreground; backgroundColor: ctl.background
+        foreground: ctl.foreground; backgroundColor: ctl.background; accent: ctl.accent
         documentItem: view
         viewportX: ctl.hscroll_pos; viewportY: ctl.vscroll_pos
         viewportWidth: ctl.hscroll_size; viewportHeight: ctl.vscroll_size
