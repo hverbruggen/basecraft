@@ -22,6 +22,7 @@ pub enum Lifecycle {
     Ordinary,
     ExternalSubmission,
     RetainedReceipt,
+    RemoteDraft,
 }
 
 impl Lifecycle {
@@ -31,6 +32,7 @@ impl Lifecycle {
             match operation.id.as_str() {
                 "basecraft.blast/submit@1" => Self::ExternalSubmission,
                 "basecraft.blast/receipt@1" => Self::RetainedReceipt,
+                "basecraft.zenodo/draft@1" => Self::RemoteDraft,
                 _ => Self::Ordinary,
             }
         } else {
@@ -41,6 +43,10 @@ impl Lifecycle {
     pub fn external(self) -> bool {
         self == Self::ExternalSubmission
     }
+    pub fn remote_draft(self) -> bool {
+        self == Self::RemoteDraft
+    }
+
     /// Reuse shared artifact and input-ledger verification for a retained read.
     /// Changed original sources are diagnostics, not a reason to lose a valid RID.
     pub fn verify_retained(
@@ -91,6 +97,10 @@ impl Lifecycle {
             // Bounds shutdown as well as normal invocations. Cooperative adapter
             // cancellation preserves the cancel/accept race and a returned RID.
             process.runtime_limit(Some(Duration::from_secs(35)));
+        } else if self.remote_draft() {
+            // Cooperatively cancel between HTTP chunks/requests so a remote
+            // draft identity is retained. Socket operations have a 30s timeout.
+            process.runtime_limit(Some(Duration::from_secs(3600)));
         } else {
             process.cancellation(cancelled);
         }

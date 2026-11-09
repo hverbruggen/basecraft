@@ -9,11 +9,21 @@ use basecraft_protocol::operation::{InputReference, MAX_INPUT_FILES, OperationRe
 
 use crate::{Error, Result, registry::RegisteredOperation};
 
+/// Runtime-only credentials never enter requests, execution records or Debug output.
+#[derive(Clone, Default)]
+pub(crate) struct RuntimeCredentials(pub(crate) BTreeMap<String, String>);
+impl std::fmt::Debug for RuntimeCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RuntimeCredentials([redacted])")
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct SessionPolicy {
     pub root: PathBuf,
     pub document_write: bool,
     pub artifact_write: bool,
+    pub(crate) runtime_credentials: RuntimeCredentials,
 }
 
 #[derive(Debug)]
@@ -46,7 +56,23 @@ impl SessionPolicy {
             root,
             document_write: writable,
             artifact_write: writable,
+            runtime_credentials: RuntimeCredentials::default(),
         })
+    }
+
+    /// Explicit runtime input, scoped to this accepted session's child process.
+    /// Values must never be placed in operation parameters or persisted settings.
+    pub fn with_runtime_credential(mut self, name: &str, value: String) -> Result<Self> {
+        if !name.starts_with("BASECRAFT_")
+            || !name.ends_with("_TOKEN")
+            || !name.bytes().all(|b| b.is_ascii_uppercase() || b == b'_')
+            || value.len() > 8192
+            || value.contains(['\0', '\r', '\n'])
+        {
+            return Err(denied("invalid runtime credential"));
+        }
+        self.runtime_credentials.0.insert(name.into(), value);
+        Ok(self)
     }
 
     pub fn permits(&self, operation: &RegisteredOperation) -> bool {

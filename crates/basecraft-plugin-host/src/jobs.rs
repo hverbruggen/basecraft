@@ -742,7 +742,7 @@ fn execute(job: &Job) {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .effective_parameters = job.prepared.effective_parameters();
-    if job.prepared.lifecycle.external() {
+    if job.prepared.lifecycle.external() || job.prepared.lifecycle.remote_draft() {
         if let Err(error) = job.prepared.submission_identity(&result) {
             fail(
                 job,
@@ -783,7 +783,7 @@ fn execute(job: &Job) {
         .outcome
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if job.prepared.lifecycle.external() {
+    if job.prepared.lifecycle.external() || job.prepared.lifecycle.remote_draft() {
         // Preserve the validated remote identity before local publication. Late
         // cancellation is partial, repairable locally, never an external undo.
         outcome.data = result.data.as_deref().cloned();

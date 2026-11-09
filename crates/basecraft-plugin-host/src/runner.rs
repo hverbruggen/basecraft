@@ -1123,7 +1123,7 @@ impl PreparedOperation {
         }
         self.operation.package.verify()?;
         let contact = self.lifecycle.reserve(&cancelled)?;
-        let mut process = PluginProcess::spawn_accepted(
+        let mut process = PluginProcess::spawn_with_credentials(
             &self.operation.package.manifest,
             self.operation
                 .package
@@ -1131,6 +1131,7 @@ impl PreparedOperation {
                 .as_deref()
                 .ok_or_else(|| Error::Protocol("plugin runtime is unavailable".into()))?,
             permit.threads(),
+            &self.policy.runtime_credentials,
         )?;
         self.lifecycle.configure(&mut process, cancelled);
         let mut context = self.context.clone();
@@ -1159,7 +1160,7 @@ impl PreparedOperation {
         let contact_evidence = contact
             .as_ref()
             .map_or(Ok(()), crate::lifecycle::ContactPermit::complete);
-        if self.lifecycle.external() && result.is_err() {
+        if (self.lifecycle.external() || self.lifecycle.remote_draft()) && result.is_err() {
             let receipt = Path::new(&self.context.outputs["receipt"]);
             if receipt.is_file() {
                 result = (|| -> Result<InvokeResult> {
