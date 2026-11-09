@@ -279,6 +279,11 @@ impl SangerView {
     }
 }
 
+/// Palette shared by detail traces, review lanes and miniatures.
+pub(crate) fn signal_colors(theme: &Theme) -> [Rgba; 4] {
+    (*b"ACGT").map(|base| theme.residue(base))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -387,9 +392,4 @@ mod tests {
             );
         }
     }
-}
-
-/// Palette shared by detail traces, review lanes and miniatures.
-pub(crate) fn signal_colors(theme: &Theme) -> [Rgba; 4] {
-    (*b"ACGT").map(|base| theme.residue(base))
 }
