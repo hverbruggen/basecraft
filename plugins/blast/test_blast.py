@@ -150,8 +150,22 @@ class Submission(unittest.TestCase):
             run.return_value = subprocess.CompletedProcess([], 0, "QBlastInfoBegin", "")
             self.assertEqual(blast._post_windows({"CMD": "Put"}), "QBlastInfoBegin")
             run.return_value = subprocess.CompletedProcess([], 1, "", "network failure")
-            with self.assertRaisesRegex(RuntimeError, "submission status unknown"):
+            with self.assertRaisesRegex(ConnectionError, "submission status unknown"):
                 blast._post_windows({"CMD": "Put"})
+
+    def test_windows_worker_failure_retains_unknown_receipt_without_retry(self):
+        failed = subprocess.CompletedProcess([], 1, "", "connection reset after upload")
+        with patch.object(blast.subprocess, "run", return_value=failed) as run:
+            result = blast.submit_prepared(self.params, self.context, blast._post_windows)
+            run.assert_called_once()
+        receipt = json.loads((self.root / "receipt").read_text())
+        self.assertEqual(receipt, result["data"])
+        self.assertEqual(receipt["status"], "unknown")
+        self.assertEqual((receipt["rid"], receipt["url"]), ("", ""))
+        self.assertIn("Do not automatically resubmit", receipt["message"])
+        self.assertIn("connection reset after upload", receipt["message"])
+        self.assertEqual(result["artifacts"], [{"role": "receipt", "path": "."}])
+        self.assertEqual(blast.inspect_retained(receipt, self.plan), receipt)
 
 
 if __name__ == "__main__":

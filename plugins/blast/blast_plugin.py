@@ -44,7 +44,7 @@ def _post_windows(fields):
     except subprocess.TimeoutExpired as error:
         raise DeadlineError("whole BLAST POST deadline exceeded; submission status unknown") from error
     if result.returncode:
-        raise RuntimeError("BLAST transport failed; submission status unknown: " + result.stderr[:2048])
+        raise ConnectionError("BLAST transport failed; submission status unknown: " + result.stderr[:2048])
     return result.stdout
 
 
