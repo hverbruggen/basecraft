@@ -184,15 +184,14 @@ impl ArtifactRun {
         if !metadata.is_file() || metadata.file_type().is_symlink() {
             return Err(invalid("staged artifact must be an ordinary file"));
         }
-        std::fs::File::open(&source)?.sync_all()?;
+        basecraft_platform::files::sync_file(&source)?;
         let destination = self.destination(location, name)?;
         std::fs::hard_link(&source, &destination)?;
-        std::fs::File::open(
+        basecraft_platform::files::sync_directory(
             destination
                 .parent()
                 .ok_or_else(|| invalid("artifact has no parent"))?,
-        )?
-        .sync_all()?;
+        )?;
         // Keep the pending hardlink if cleanup fails; publication already succeeded.
         let _ = std::fs::remove_file(source);
         Ok(destination)
@@ -220,7 +219,7 @@ impl ArtifactRun {
         candidate
             .persist_noclobber(destination)
             .map_err(|e| e.error)?;
-        std::fs::File::open(parent)?.sync_all()?;
+        basecraft_platform::files::sync_directory(parent)?;
         Ok(())
     }
 }
@@ -448,7 +447,7 @@ impl ArtifactRun {
         }
         let destination = self.artifact(name)?;
         basecraft_platform::atomic::rename_noreplace(&source, &destination)?;
-        std::fs::File::open(self.directory())?.sync_all()?;
+        basecraft_platform::files::sync_directory(self.directory())?;
         Ok(destination)
     }
 }

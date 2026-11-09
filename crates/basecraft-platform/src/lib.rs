@@ -12,6 +12,9 @@ pub mod interrupt;
 pub mod paths;
 #[cfg(unix)]
 pub mod process;
+#[cfg(windows)]
+#[path = "process_windows.rs"]
+pub mod process;
 pub mod settings;
 pub mod shm;
 

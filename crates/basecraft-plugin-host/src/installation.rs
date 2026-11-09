@@ -26,6 +26,13 @@ pub fn bundled_python() -> Option<PathBuf> {
 }
 
 fn bundle_python_at(root: &Path) -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        let portable = root.join("runtime/python.exe");
+        if portable.is_file() {
+            return Some(portable);
+        }
+    }
     let metadata: serde_json::Value =
         serde_json::from_slice(&std::fs::read(root.join("build.json")).ok()?).ok()?;
     // Local deployment locations are kept beside, not inside, exported bundles.

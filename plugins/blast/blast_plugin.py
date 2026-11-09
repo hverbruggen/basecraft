@@ -9,6 +9,8 @@ import os
 import re
 import signal
 import ssl
+import subprocess
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlencode
@@ -30,10 +32,36 @@ def _deadline(_signum, _frame):
     raise DeadlineError("whole BLAST POST deadline exceeded")
 
 
+def _post_windows(fields):
+    # A child process bounds DNS/TLS/upload/read together; timeout kills and
+    # waits for it before returning unknown. Query bytes stay off the command line.
+    try:
+        result = subprocess.run(
+            [sys.executable, str(Path(__file__).resolve()), "--post-worker"],
+            input=json.dumps(fields), capture_output=True, text=True, encoding="utf-8",
+            timeout=POST_SECONDS, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except subprocess.TimeoutExpired as error:
+        raise DeadlineError("whole BLAST POST deadline exceeded; submission status unknown") from error
+    if result.returncode:
+        raise RuntimeError("BLAST transport failed; submission status unknown: " + result.stderr[:2048])
+    return result.stdout
+
+
 def post(fields):
-    """Alarm bounds DNS, TLS, upload and slow response together in SDK main thread."""
+    """Bound DNS, TLS, upload and response as one non-retried POST."""
+    if os.name == "nt":
+        return _post_windows(fields)
     previous = signal.signal(signal.SIGALRM, _deadline)
     signal.setitimer(signal.ITIMER_REAL, POST_SECONDS)
+    try:
+        return _post_request(fields)
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+
+
+def _post_request(fields):
     connection = None
     try:
         connection = http.client.HTTPSConnection("blast.ncbi.nlm.nih.gov", timeout=POST_SECONDS,
@@ -53,8 +81,6 @@ def post(fields):
     finally:
         if connection is not None:
             connection.close()
-        signal.setitimer(signal.ITIMER_REAL, 0)
-        signal.signal(signal.SIGALRM, previous)
 
 
 def parse_response(text):
@@ -178,4 +204,8 @@ def receipt(_snapshot, _parameters, context):
 
 
 if __name__ == "__main__":
-    plugin.run()
+    if sys.argv[1:] == ["--post-worker"]:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stdout.write(_post_request(json.load(sys.stdin)))
+    else:
+        plugin.run()

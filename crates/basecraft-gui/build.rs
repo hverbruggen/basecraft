@@ -181,4 +181,11 @@ fn main() {
         })
     };
     builder.build();
+    // GNU import libraries must follow the generated static bridge archives.
+    // rustc-link-arg preserves that final ordering for the MinGW linker.
+    if std::env::var("TARGET").is_ok_and(|target| target.ends_with("windows-gnu")) {
+        for module in ["Quick", "Qml", "QuickControls2", "Widgets", "Gui", "Core"] {
+            println!("cargo::rustc-link-arg=-lQt6{module}");
+        }
+    }
 }

@@ -173,8 +173,11 @@ pub fn stamp(path: &Path) -> Result<FileStamp> {
         use std::os::unix::fs::MetadataExt;
         (Some(metadata.dev()), Some(metadata.ino()))
     };
-    #[cfg(not(unix))]
-    let (device, inode) = (None, None);
+    #[cfg(windows)]
+    let (device, inode) = {
+        let (device, inode) = basecraft_platform::files::identity(path)?;
+        (Some(device), Some(inode))
+    };
     Ok(FileStamp {
         size: metadata.len(),
         modified_seconds: time.as_secs(),
@@ -189,7 +192,24 @@ pub fn stamp(path: &Path) -> Result<FileStamp> {
 pub fn relative(base: &Path, target: &Path) -> Result<String> {
     let a: Vec<_> = base.components().collect();
     let b: Vec<_> = target.components().collect();
-    let common = a.iter().zip(&b).take_while(|(x, y)| x == y).count();
+    let same = |x: &Component<'_>, y: &Component<'_>| {
+        if x == y {
+            return true;
+        }
+        #[cfg(windows)]
+        if let (Component::Prefix(x), Component::Prefix(y)) = (x, y) {
+            use std::path::Prefix::{Disk, UNC, VerbatimDisk, VerbatimUNC};
+            return match (x.kind(), y.kind()) {
+                (Disk(a) | VerbatimDisk(a), Disk(b) | VerbatimDisk(b)) => {
+                    a.eq_ignore_ascii_case(&b)
+                }
+                (UNC(a, b) | VerbatimUNC(a, b), UNC(c, d) | VerbatimUNC(c, d)) => a == c && b == d,
+                _ => false,
+            };
+        }
+        false
+    };
+    let common = a.iter().zip(&b).take_while(|(x, y)| same(x, y)).count();
     if common == 0 {
         return target
             .to_str()
@@ -826,7 +846,7 @@ pub fn resolve(conflict: &EvidenceConflict, policy: SavePolicy) -> Result<()> {
                         candidate
                             .persist_noclobber(&destination)
                             .map_err(|e| e.error)?;
-                        std::fs::File::open(&affected.run)?.sync_all()?;
+                        basecraft_platform::files::sync_directory(&affected.run)?;
                         copied
                     };
                     preserved.insert(reference.hash.clone(), affected.run.clone());
@@ -1324,9 +1344,8 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
     if destination.exists() {
         return Err(invalid("package destination appeared during export"));
     }
-    // Reserve the destination atomically; rename replaces only our empty slot.
-    std::fs::create_dir(destination)?;
-    std::fs::rename(staging.path(), destination)?;
+    // Publish a new directory without replacing a destination created concurrently.
+    basecraft_platform::atomic::rename_noreplace(staging.path(), destination)?;
     Ok(())
 }
 
@@ -1831,5 +1850,33 @@ mod store_scan_tests {
         assert!(conflicts_in(&source, &[store.into()]).is_err());
         assert!(store.is_dir());
         assert_eq!(std::fs::read_to_string(&source).unwrap(), "(a:1,b:1);");
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_paths {
+    #[test]
+    fn relative_paths_compare_windows_volume_spellings_without_io() {
+        use std::path::Path;
+        assert_eq!(
+            super::relative(
+                Path::new(r"\\?\C:\work\package"),
+                Path::new(r"C:\work\package\artifacts\data")
+            )
+            .unwrap(),
+            r"artifacts\data"
+        );
+        assert_eq!(
+            super::relative(
+                Path::new(r"\\?\UNC\server\share\base"),
+                Path::new(r"\\server\share\other")
+            )
+            .unwrap(),
+            r"..\other"
+        );
+        assert_eq!(
+            super::relative(Path::new(r"C:\base"), Path::new(r"D:\target")).unwrap(),
+            r"D:\target"
+        );
     }
 }

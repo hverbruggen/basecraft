@@ -579,7 +579,20 @@ fn configured_python(origin: Origin) -> Option<PathBuf> {
     let selected = if origin == Origin::Bundled {
         crate::process::python_interpreter()
     } else {
-        std::env::var_os("BASECRAFT_PYTHON").map_or_else(|| PathBuf::from("python3"), PathBuf::from)
+        std::env::var_os("BASECRAFT_PYTHON").map_or_else(
+            || {
+                #[cfg(windows)]
+                if let Some(python) = crate::installation::bundled_python() {
+                    return python;
+                }
+                PathBuf::from(if cfg!(windows) {
+                    "python.exe"
+                } else {
+                    "python3"
+                })
+            },
+            PathBuf::from,
+        )
     };
     if selected.is_absolute() {
         return selected.canonicalize().ok().filter(|p| p.is_file());

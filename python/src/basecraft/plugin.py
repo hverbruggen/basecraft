@@ -55,7 +55,7 @@ class Snapshot:
             import pyarrow as pa
             from pyarrow import ipc
 
-            mm = mmap.mmap(self._fds[which], 0, prot=mmap.PROT_READ)
+            mm = mmap.mmap(self._fds[which], 0, access=mmap.ACCESS_READ)
             self._maps[which] = mm
             self._tables[which] = ipc.open_stream(pa.py_buffer(mm)).read_all()
         return self._tables[which]
@@ -236,13 +236,28 @@ class Plugin:
         return invoke
 
     def run(self) -> None:
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.connect(os.environ["BASECRAFT_SOCKET"])
+        portable = "BASECRAFT_TCP" in os.environ
+        if portable:
+            host, port = os.environ["BASECRAFT_TCP"].rsplit(":", 1)
+            if host != "127.0.0.1":
+                raise ValueError("plugin transport must be loopback")
+            token = os.environ.pop("BASECRAFT_TOKEN").encode("ascii")
+            if len(token) != 52:
+                raise ValueError("invalid plugin transport token")
+            sock = socket.create_connection((host, int(port)), timeout=20)
+            sock.sendall(token)
+            sock.settimeout(None)
+        else:
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            sock.connect(os.environ["BASECRAFT_SOCKET"])
         buf = b""
         fds: list[int] = []
         while True:
             while b"\n" not in buf:
-                data, new_fds, _flags, _addr = socket.recv_fds(sock, 1 << 16, MAX_FDS)
+                if portable:
+                    data, new_fds = sock.recv(1 << 16), []
+                else:
+                    data, new_fds, _flags, _addr = socket.recv_fds(sock, 1 << 16, MAX_FDS)
                 if not data:
                     return
                 buf += data
@@ -252,7 +267,26 @@ class Plugin:
             line, buf = buf.split(b"\n", 1)
             msg = json.loads(line)
             n = msg.get("fds", 0)
-            mine, fds = fds[:n], fds[n:]
+            if not isinstance(n, int) or not 0 <= n <= MAX_FDS:
+                raise ValueError("invalid buffer count")
+            if portable:
+                buffers = msg.get("buffers", [])
+                if not isinstance(buffers, list) or len(buffers) != n:
+                    raise ValueError("invalid snapshot buffers")
+                mine = []
+                try:
+                    for path in buffers:
+                        if not isinstance(path, str) or not os.path.isabs(path):
+                            raise ValueError("invalid snapshot path")
+                        mine.append(os.open(path, os.O_RDONLY | getattr(os, "O_BINARY", 0)))
+                except BaseException:
+                    for fd in mine:
+                        os.close(fd)
+                    raise
+            else:
+                if n > len(fds):
+                    raise ValueError("missing snapshot buffers")
+                mine, fds = fds[:n], fds[n:]
             reply: dict[str, Any] = {"jsonrpc": "2.0", "id": msg.get("id")}
             try:
                 reply["result"] = self._dispatch(msg.get("method"), msg.get("params"), mine)

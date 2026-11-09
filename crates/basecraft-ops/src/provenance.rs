@@ -622,6 +622,6 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
     if destination.exists() {
         return Err(invalid("package destination appeared during export"));
     }
-    std::fs::rename(staging.path(), destination)?;
+    basecraft_platform::atomic::rename_noreplace(staging.path(), destination)?;
     Ok(())
 }

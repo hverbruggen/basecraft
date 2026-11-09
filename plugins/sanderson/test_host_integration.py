@@ -43,7 +43,7 @@ def main():
     project = root / "project"
     project.mkdir()
     source = "(((t1:0.075,t2:0.075):0.05,(t3:0.075,t4:0.075):0.05):0.05,((t5:0.075,t6:0.075):0.05,(t7:0.075,t8:0.075):0.05):0.05);\n"
-    (project / "tree.nwk").write_text(source)
+    (project / "tree.nwk").write_bytes(source.encode("utf-8"))
     source_hash = hashlib.sha256(source.encode()).hexdigest()
     env = dict(os.environ, BASECRAFT=str(host), BASECRAFT_PLUGINS=str(bundled),
                BASECRAFT_PROFILE_DIR=str(root / "profile"), BASECRAFT_PYTHON=sys.executable,

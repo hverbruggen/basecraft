@@ -165,7 +165,7 @@ fn retained(run: &ArtifactRun, path: &Path, index: usize) -> crate::Result<Artif
     if std::fs::symlink_metadata(path)?.file_type().is_symlink() {
         return Err(invalid("Sanger support is a symlink"));
     }
-    std::fs::File::open(path)?.sync_all()?;
+    basecraft_platform::files::sync_file(path)?;
     Ok(ArtifactRevision {
         id: format!("{}:support:{index}", run.id()),
         logical_name: name.to_string_lossy().into_owned(),
@@ -606,7 +606,10 @@ impl SangerReviewSession {
             .sources
             .iter()
             .find(|s| {
-                s.original == placement.source_path
+                (s.original == placement.source_path
+                    || inputs::relative(&s.original, &placement.source_path)
+                        .is_ok_and(|path| path.is_empty())
+                    || same_file(&s.original, &placement.source_path).unwrap_or(false))
                     && s.sha256.eq_ignore_ascii_case(&placement.source_sha256)
             })
             .ok_or("Placement source differs from registered alignment")?;
@@ -633,7 +636,10 @@ impl SangerReviewSession {
             .sources
             .iter()
             .find(|s| {
-                s.original == placement.source_path
+                (s.original == placement.source_path
+                    || inputs::relative(&s.original, &placement.source_path)
+                        .is_ok_and(|path| path.is_empty())
+                    || same_file(&s.original, &placement.source_path).unwrap_or(false))
                     && s.sha256.eq_ignore_ascii_case(&placement.source_sha256)
             })
             .ok_or("Placement input reference is missing")?;
@@ -1003,6 +1009,13 @@ fn same_file(a: &Path, b: &Path) -> crate::Result<bool> {
         use std::os::unix::fs::MetadataExt;
         return Ok(a.dev() == b.dev() && a.ino() == b.ino());
     }
+    #[cfg(windows)]
+    if let (Ok(a), Ok(b)) = (
+        basecraft_platform::files::identity(a),
+        basecraft_platform::files::identity(b),
+    ) {
+        return Ok(a == b);
+    }
     Ok(false)
 }
 
@@ -1204,7 +1217,10 @@ mod tests {
                 .path
                 .canonicalize()
                 .unwrap(),
-            moved.join(trace.file_name().unwrap())
+            moved
+                .join(trace.file_name().unwrap())
+                .canonicalize()
+                .unwrap()
         );
         assert_eq!(reopened.decision(0), Some(&ReviewChoice::Edit('G')));
         reopened.apply(ReviewOp::Undo).unwrap();
@@ -1339,7 +1355,10 @@ mod tests {
         assert!(review.save(&target).is_err());
         assert_eq!(std::fs::read(target.join("unrelated")).unwrap(), b"keep");
         let recovered = SangerReviewSession::load(review.recovery.as_ref().unwrap()).unwrap();
-        assert_eq!(recovered.storage_anchor().parent().unwrap(), tmp.path());
+        assert_eq!(
+            recovered.storage_anchor().parent().unwrap(),
+            tmp.path().canonicalize().unwrap()
+        );
         assert_eq!(recovered.recovery_path(), review.recovery.as_deref());
         assert_eq!(recovered.events(), review.events());
         assert_eq!(recovered.decision(0), Some(&ReviewChoice::Edit('G')));

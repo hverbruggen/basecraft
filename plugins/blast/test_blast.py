@@ -1,6 +1,8 @@
 """Transport contract tests: synthetic data only, never contact NCBI."""
 import hashlib
 import json
+import os
+import subprocess
 import tempfile
 import time
 import unittest
@@ -106,6 +108,7 @@ class Submission(unittest.TestCase):
         with self.assertRaises(ValueError):
             blast.inspect_retained(dict(receipt,url="https://example.org"),self.plan)
 
+    @unittest.skipIf(os.name == "nt", "Windows uses an owned timeout-bounded child instead of SIGALRM")
     def test_whole_post_deadline_interrupts_hung_read(self):
         with patch.object(blast.http.client,"HTTPSConnection") as connection, patch.object(blast,"POST_SECONDS",0.03):
             response = connection.return_value.getresponse.return_value
@@ -125,15 +128,30 @@ class Submission(unittest.TestCase):
                 self.size = size
                 return b"x" * size
         response = Response()
-        with patch.object(blast.http.client, "HTTPSConnection") as connection, patch.object(blast.signal, "setitimer") as timer:
+        with patch.object(blast.http.client, "HTTPSConnection") as connection:
             connection.return_value.getresponse.return_value = response
             with self.assertRaisesRegex(ValueError, "exceeds"):
-                blast.post({"CMD": "Put"})
+                blast._post_request({"CMD": "Put"})
             self.assertEqual(response.size, blast.MAX_RESPONSE + 1)
-            self.assertEqual(timer.call_args_list[0].args[1], blast.POST_SECONDS)
-            self.assertEqual(timer.call_args_list[-1].args[1], 0)
         with self.assertRaises(blast.DeadlineError):
             blast._deadline(None, None)
+
+    def test_windows_worker_timeout_is_unknown_without_retry(self):
+        with patch.object(blast.subprocess, "run", side_effect=subprocess.TimeoutExpired("worker", 30)) as run:
+            with self.assertRaises(blast.DeadlineError):
+                blast._post_windows({"CMD": "Put", "QUERY": "ACGT"})
+            run.assert_called_once()
+            self.assertNotIn("ACGT", str(run.call_args.args[0]))
+            self.assertEqual(json.loads(run.call_args.kwargs["input"])["QUERY"], "ACGT")
+            self.assertEqual(run.call_args.kwargs["timeout"], blast.POST_SECONDS)
+
+    def test_windows_worker_returns_response_and_reports_failure(self):
+        with patch.object(blast.subprocess, "run") as run:
+            run.return_value = subprocess.CompletedProcess([], 0, "QBlastInfoBegin", "")
+            self.assertEqual(blast._post_windows({"CMD": "Put"}), "QBlastInfoBegin")
+            run.return_value = subprocess.CompletedProcess([], 1, "", "network failure")
+            with self.assertRaisesRegex(RuntimeError, "submission status unknown"):
+                blast._post_windows({"CMD": "Put"})
 
 
 if __name__ == "__main__":

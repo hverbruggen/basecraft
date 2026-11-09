@@ -3,6 +3,7 @@
 import hashlib
 import json
 import math
+import os
 import subprocess
 import tempfile
 import time
@@ -54,11 +55,12 @@ def _parameters(parameters, keys, labels):
 
 def _binary(package=None):
     package = Path(package) if package is not None else Path(__file__).resolve().parent
-    path = package / "bin" / "basecraft-sanderson-native"
+    path = package / "bin" / ("basecraft-sanderson-native.exe" if os.name == "nt" else "basecraft-sanderson-native")
     if not path.is_file():
         raise RuntimeError("Native Sanderson PL engine is not packaged")
     try:
-        expected = json.loads((package / "native" / "validated-engine.json").read_text())
+        identity = "validated-engine-windows.json" if os.name == "nt" else "validated-engine.json"
+        expected = json.loads((package / "native" / identity).read_text())
         staged = json.loads((package / "bin" / "engine.json").read_text())
     except (OSError, ValueError) as error:
         raise RuntimeError("Native Sanderson PL engine identity is missing or invalid") from error

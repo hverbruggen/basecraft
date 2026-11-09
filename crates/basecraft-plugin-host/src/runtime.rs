@@ -3,8 +3,10 @@ use std::collections::BTreeMap;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::process::Command;
+use std::process::Stdio;
+use std::time::Duration;
+use std::time::Instant;
 
 use basecraft_platform::process::OwnedProcess;
 use serde::{Deserialize, Serialize};
@@ -323,13 +325,14 @@ pub fn pixi() -> PathBuf {
     if let Some(path) = std::env::var_os("BASECRAFT_PIXI") {
         return path.into();
     }
+    let name = if cfg!(windows) { "pixi.exe" } else { "pixi" };
     if let Ok(exe) = std::env::current_exe()
         && let Some(bin) = exe.parent()
-        && bin.join("pixi").is_file()
+        && bin.join(name).is_file()
     {
-        return bin.join("pixi");
+        return bin.join(name);
     }
-    PathBuf::from("pixi")
+    PathBuf::from(name)
 }
 
 /// Every attempt has its final prefix from the start: conda prefixes cannot be
@@ -550,6 +553,16 @@ pub fn configure_command(command: &mut Command, manifest: &Manifest, python: &Pa
         .map_or_else(Vec::new, |runtime| environment_paths(&runtime.root));
     if python.is_absolute()
         && let Some(bin) = python.parent()
+    {
+        paths.push(bin.to_owned());
+        #[cfg(windows)]
+        {
+            paths.push(bin.join("Scripts"));
+            paths.push(bin.join("Library/bin"));
+        }
+    }
+    if let Ok(executable) = std::env::current_exe()
+        && let Some(bin) = executable.parent()
     {
         paths.push(bin.to_owned());
     }

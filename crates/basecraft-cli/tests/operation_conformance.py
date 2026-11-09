@@ -13,7 +13,8 @@ import copy
 import hashlib
 import json
 import os
-import selectors
+import queue
+import threading
 import shutil
 import subprocess
 import sys
@@ -44,9 +45,15 @@ class Mcp:
                                         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.serial = 0
         self.notifications = []
-        self.pending = bytearray()
-        self.selector = selectors.DefaultSelector()
-        self.selector.register(self.process.stdout, selectors.EVENT_READ)
+        self.lines = queue.Queue()
+        def read_lines():
+            while True:
+                line = self.process.stdout.readline(8 * 1024 * 1024 + 1)
+                self.lines.put(line)
+                if not line:
+                    return
+        self.reader = threading.Thread(target=read_lines, daemon=True)
+        self.reader.start()
         self.call("initialize", {"protocolVersion": "2025-11-25", "capabilities": {},
                                  "clientInfo": {"name": "conformance", "version": "1"}})
         self.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
@@ -56,15 +63,9 @@ class Mcp:
         self.process.stdin.flush()
 
     def read(self, deadline):
-        while b"\n" not in self.pending:
-            remaining = deadline - time.monotonic()
-            assert remaining > 0 and self.selector.select(remaining), "MCP response timeout"
-            chunk = os.read(self.process.stdout.fileno(), 65536)
-            assert chunk, "MCP disconnected"
-            self.pending.extend(chunk)
-            assert len(self.pending) <= 8 * 1024 * 1024, "MCP frame too large"
-        line, _, tail = self.pending.partition(b"\n")
-        self.pending = bytearray(tail)
+        line = self.lines.get(timeout=max(0.001, deadline - time.monotonic()))
+        assert line, "MCP disconnected"
+        assert len(line) <= 8 * 1024 * 1024 and line.endswith(b"\n"), "MCP frame too large"
         return json.loads(line)
 
     def call(self, method, params=None, error=False):
@@ -113,7 +114,7 @@ class Mcp:
             if self.process.poll() is None:
                 self.process.kill()
                 self.process.wait()
-            self.selector.close()
+            self.reader.join(timeout=1)
             self.process.stdout.close()
             self.process.stderr.close()
 
@@ -571,9 +572,21 @@ def main():
         fixture_manifest = "\n".join(fixture_lines) + "\n"
         assert tomllib.loads(fixture_manifest) == expected
         manifest.write_text(fixture_manifest)
-        fake = root / "fake-table2asn"
-        fake.write_text(FAKE_TABLE2ASN)
-        fake.chmod(0o755)
+        if os.name == "nt":
+            fake = root / "fake-table2asn.cmd"
+            helper = root / "fake-table2asn.py"
+            helper.write_text("import pathlib,sys\n"
+                "if sys.argv[1:] == ['-version']: print('table2asn: 0.0.test'); sys.exit(0)\n"
+                "out=pathlib.Path(sys.argv[sys.argv.index('-outdir')+1])\n"
+                "name=next(s[1:].split()[0] for s in pathlib.Path('submission.fsa').read_text().splitlines() if s.startswith('>'))\n"
+                "(out/'submission.sqn').write_text('Seq-submit ::= {}\\n')\n"
+                "(out/'submission.val').write_text(f'Error: valid [SEQ_DESCR.BadGeoLocNameCode] Bad geo_loc_name BIOSEQ: lcl|{name}: raw\\n')\n"
+                "(out/'submission.gbf').write_text(f'LOCUS {name}\\n')\n")
+            fake.write_text(f'@"{sys.executable}" "{helper}" %*\n')
+        else:
+            fake = root / "fake-table2asn"
+            fake.write_text(FAKE_TABLE2ASN)
+            fake.chmod(0o755)
         sub_env = dict(env, BASECRAFT_PLUGINS=str(bundle), BASECRAFT_TABLE2ASN=str(fake))
         saved_environment = dict(os.environ)
         os.environ.update(sub_env)

@@ -1,8 +1,14 @@
 //! A running plugin process.
 
+#[cfg(windows)]
+use crate::windows_transport::{BorrowedFd, OwnedFd, Receiver};
 use basecraft_platform::process::OwnedProcess;
 use std::io::Read;
-use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
+#[cfg(windows)]
+use std::net::TcpListener;
+#[cfg(unix)]
+use std::os::fd::{BorrowedFd, OwnedFd};
+#[cfg(unix)]
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -12,6 +18,7 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
 use basecraft_platform::fdpass::{self, Receiver};
 use basecraft_protocol::plugin::{Invoke, InvokeResult, Message, PROTOCOL_VERSION, PluginInfo};
 use serde_json::{Value, json};
@@ -114,8 +121,14 @@ impl PluginProcess {
         let dir = tempfile::Builder::new()
             .prefix("basecraft-plugin")
             .tempdir()?;
+        #[cfg(unix)]
         let socket = dir.path().join("rpc.sock");
+        #[cfg(unix)]
         let listener = UnixListener::bind(&socket)?;
+        #[cfg(windows)]
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
+        #[cfg(windows)]
+        let token = format!("{}{}", ulid::Ulid::generate(), ulid::Ulid::generate());
         listener.set_nonblocking(true)?;
         let mut command = Command::new(python);
         crate::runtime::configure_command(&mut command, manifest, python)?;
@@ -137,12 +150,21 @@ impl PluginProcess {
             .env("TMPDIR", dir.path())
             .env("TMP", dir.path())
             .env("TEMP", dir.path())
-            .env("BASECRAFT_SOCKET", &socket)
             .env("PYTHONPATH", sdk_path())
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .current_dir(manifest.dir.canonicalize()?);
+        #[cfg(unix)]
+        command
+            .env("BASECRAFT_SOCKET", &socket)
+            .env_remove("BASECRAFT_TCP")
+            .env_remove("BASECRAFT_TOKEN");
+        #[cfg(windows)]
+        command
+            .env("BASECRAFT_TCP", listener.local_addr()?.to_string())
+            .env("BASECRAFT_TOKEN", &token)
+            .env_remove("BASECRAFT_SOCKET");
         let mut child = OwnedProcess::spawn(&mut command).map_err(|e| {
             Error::Protocol(format!(
                 "cannot start plugin {} with interpreter {}: {e}",
@@ -160,10 +182,52 @@ impl PluginProcess {
         }
         let stream = loop {
             match listener.accept() {
-                Ok((s, _)) => break s,
+                Ok((s, _)) => {
+                    #[cfg(windows)]
+                    let mut s = s;
+                    #[cfg(windows)]
+                    {
+                        // Winsock accept inherits the listener's nonblocking mode.
+                        // Switch before authentication, not just after it succeeds.
+                        s.set_nonblocking(false)?;
+                        // The new process can be descheduled between connect and
+                        // sending its token. A polling interval is too short for
+                        // this one-time authentication read under Windows load.
+                        s.set_read_timeout(Some(Duration::from_secs(2)))?;
+                        let mut supplied = vec![0; token.len()];
+                        if s.read_exact(&mut supplied).is_err() || supplied != token.as_bytes() {
+                            if started.elapsed() > CONNECT_TIMEOUT {
+                                return Err(Error::Timeout(manifest.id.clone()));
+                            }
+                            continue;
+                        }
+                    }
+                    break s;
+                }
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                     if child.exited()? {
-                        return Err(Error::Exited(manifest.id.clone()));
+                        let status = child.finish()?;
+                        let drain = Instant::now();
+                        while capture_workers.iter().any(|worker| !worker.is_finished())
+                            && drain.elapsed() < Duration::from_secs(1)
+                        {
+                            std::thread::sleep(Duration::from_millis(5));
+                        }
+                        for worker in capture_workers {
+                            if worker.is_finished() {
+                                let _ = worker.join();
+                            }
+                        }
+                        let output = capture
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        return Err(Error::Protocol(format!(
+                            "plugin {} exited before connecting ({status}): {}",
+                            manifest.id,
+                            String::from_utf8_lossy(
+                                &output.stderr[..output.stderr.len().min(8192)]
+                            )
+                        )));
                     }
                     if started.elapsed() > CONNECT_TIMEOUT {
                         child.terminate();
@@ -227,7 +291,15 @@ impl PluginProcess {
     ) -> Result<(Value, Vec<OwnedFd>)> {
         let id = self.next_id;
         self.next_id += 1;
-        let mut line = serde_json::to_vec(&Message::request(id, method, params, fds.len()))?;
+        let message = Message::request(id, method, params, fds.len());
+        #[cfg(unix)]
+        let mut line = serde_json::to_vec(&message)?;
+        #[cfg(windows)]
+        let mut line = {
+            let mut value = serde_json::to_value(&message)?;
+            value["buffers"] = serde_json::to_value(fds)?;
+            serde_json::to_vec(&value)?
+        };
         if line.len() > basecraft_protocol::operation::MAX_FRAME_BYTES
             || fds.len() > basecraft_protocol::operation::MAX_FDS
         {
@@ -236,7 +308,13 @@ impl PluginProcess {
             ));
         }
         line.push(b'\n');
+        #[cfg(unix)]
         fdpass::send(self.rx.stream(), &line, fds)?;
+        #[cfg(windows)]
+        {
+            use std::io::Write;
+            self.rx.stream().write_all(&line)?;
+        }
         let reply = loop {
             if self.cancel_path.as_ref().is_some_and(|path| path.exists()) {
                 return Err(Error::Protocol("cancelled".into()));
@@ -428,7 +506,7 @@ impl PluginProcess {
             context: None,
         };
         let fds: Vec<BorrowedFd<'_>> = snapshot
-            .map(|s| vec![s.residues.as_fd(), s.features.as_fd()])
+            .map(|s| vec![s.residues.transport_handle(), s.features.transport_handle()])
             .unwrap_or_default();
         let (result, _) = self.call("invoke", serde_json::to_value(req)?, &fds)?;
         Ok(serde_json::from_value(result)?)
@@ -468,7 +546,7 @@ impl PluginProcess {
             context: Some(context),
         };
         let fds: Vec<_> = snapshot
-            .map(|s| vec![s.residues.as_fd(), s.features.as_fd()])
+            .map(|s| vec![s.residues.transport_handle(), s.features.transport_handle()])
             .unwrap_or_default();
         let (result, received) = self.call("invoke", serde_json::to_value(request)?, &fds)?;
         if !received.is_empty() {

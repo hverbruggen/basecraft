@@ -92,14 +92,10 @@ impl Revision {
                     "save target is a symbolic link; choose a direct new destination",
                 ));
             }
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::MetadataExt;
-                if metadata.nlink() > 1 {
-                    return Err(invalid(
-                        "save target has hard links; choose a new destination",
-                    ));
-                }
+            if basecraft_platform::files::link_count(target)? > 1 {
+                return Err(invalid(
+                    "save target has hard links; choose a new destination",
+                ));
             }
         }
         let target = target_path(target)?;
@@ -127,6 +123,19 @@ impl Revision {
 #[cfg(test)]
 mod tests {
     use basecraft_protocol::Op;
+
+    #[test]
+    fn hard_link_destination_is_rejected_on_every_platform() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source");
+        let alias = directory.path().join("alias");
+        std::fs::write(&source, b"preserve").unwrap();
+        let revision = super::Revision::accepted(&source, b"preserve").unwrap();
+        std::fs::hard_link(&source, &alias).unwrap();
+        let error = super::Revision::check(Some(&revision), &source).unwrap_err();
+        assert!(error.to_string().contains("hard links"));
+        assert_eq!(std::fs::read(&alias).unwrap(), b"preserve");
+    }
 
     #[test]
     fn concurrent_saver_is_refused_and_edits_remain_saveable() {

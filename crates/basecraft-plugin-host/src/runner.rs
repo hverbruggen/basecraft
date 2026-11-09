@@ -1,8 +1,8 @@
 //! Registered-operation preparation, execution and validated finalization: the
 //! one route every interface uses to run an analysis. Host workflows run their
 //! stages through registered child jobs with the same lifecycle as other runs.
+use basecraft_platform::files::{identity, link_count};
 use std::collections::{BTreeMap, BTreeSet};
-use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{
     Arc,
@@ -1166,7 +1166,7 @@ impl PreparedOperation {
                     let metadata = receipt.symlink_metadata()?;
                     if !metadata.is_file()
                         || metadata.file_type().is_symlink()
-                        || metadata.nlink() != 1
+                        || link_count(receipt)? != 1
                     {
                         return Err(Error::Protocol(
                             "unsafe retained receipt; submission status unknown".into(),
@@ -1259,7 +1259,9 @@ impl PreparedOperation {
         )?)?;
         let receipt = Path::new(&self.context.outputs["receipt"]);
         if let Ok(metadata) = receipt.symlink_metadata()
-            && (!metadata.is_file() || metadata.file_type().is_symlink() || metadata.nlink() != 1)
+            && (!metadata.is_file()
+                || metadata.file_type().is_symlink()
+                || link_count(receipt)? != 1)
         {
             return Err(Error::Protocol(
                 "unsafe allocated receipt; submission status unknown".into(),
@@ -1335,7 +1337,7 @@ impl PreparedOperation {
             let metadata = path.symlink_metadata()?;
             if !metadata.is_file()
                 || metadata.file_type().is_symlink()
-                || metadata.nlink() != 1
+                || link_count(&path)? != 1
                 || !paths.insert(path.clone())
             {
                 return Err(Error::Protocol(
@@ -1486,7 +1488,7 @@ impl PreparedOperation {
                 verify_collection(&staging, &expected)?;
                 input_evidence::write_json(&intent, &json!({"schema":1,"members":expected}))?;
                 for path in expected.keys() {
-                    std::fs::File::open(staging.join(path))?.sync_all()?;
+                    basecraft_platform::files::sync_file(&staging.join(path))?;
                 }
                 self.run.publish_collection(role)?;
             }
@@ -2215,7 +2217,7 @@ fn verify_collection(root: &Path, expected: &BTreeMap<PathBuf, String>) -> Resul
     }
     for (relative, hash) in expected {
         let path = root.join(relative);
-        if path.symlink_metadata()?.nlink() != 1
+        if link_count(&path)? != 1
             || basecraft_io::hash_file(&path).map_err(basecraft_ops::Error::from)? != *hash
         {
             return Err(Error::Protocol(
@@ -2232,12 +2234,12 @@ fn verify_member_receipt(destination: &Path, hash: &str, intent: &Path) -> Resul
     let metadata = std::fs::symlink_metadata(destination)?;
     if !metadata.is_file()
         || metadata.file_type().is_symlink()
-        || metadata.nlink() != 1
+        || link_count(destination)? != 1
         || receipt["schema"] != 1
         || receipt["destination"] != json!(destination)
         || receipt["hash"] != hash
-        || receipt["device"].as_u64() != Some(metadata.dev())
-        || receipt["inode"].as_u64() != Some(metadata.ino())
+        || receipt["device"].as_u64() != Some(identity(destination)?.0)
+        || receipt["inode"].as_u64() != Some(identity(destination)?.1)
         || receipt["size"].as_u64() != Some(metadata.len())
         || basecraft_io::hash_file(destination).map_err(basecraft_ops::Error::from)? != hash
     {
@@ -2265,7 +2267,7 @@ fn export_member(source: &Path, destination: &Path, hash: &str, intent: &Path) -
     input_evidence::write_json(
         intent,
         &json!({"schema":1,"destination":destination,
-        "hash":hash,"device":metadata.dev(),"inode":metadata.ino(),"size":metadata.len()}),
+        "hash":hash,"device":identity(pending.path())?.0,"inode":identity(pending.path())?.1,"size":metadata.len()}),
     )?;
     basecraft_platform::atomic::rename_noreplace(pending.path(), destination).map_err(|error| {
         if error.kind() == std::io::ErrorKind::AlreadyExists {
@@ -2274,7 +2276,7 @@ fn export_member(source: &Path, destination: &Path, hash: &str, intent: &Path) -
             error.into()
         }
     })?;
-    std::fs::File::open(parent)?.sync_all()?;
+    basecraft_platform::files::sync_directory(parent)?;
     Ok(())
 }
 
@@ -2298,10 +2300,10 @@ fn export_collection(
         if basecraft_io::hash_file(&target).map_err(basecraft_ops::Error::from)? != *hash {
             return Err(Error::Protocol("collection changed during export".into()));
         }
-        std::fs::File::open(target)?.sync_all()?;
+        basecraft_platform::files::sync_file(&target)?;
     }
     basecraft_platform::atomic::rename_noreplace(pending.path(), destination)?;
-    std::fs::File::open(parent)?.sync_all()?;
+    basecraft_platform::files::sync_directory(parent)?;
     Ok(())
 }
 

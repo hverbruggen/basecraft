@@ -1,8 +1,8 @@
 //! Caller-owned path/effect restrictions, shared by all operation adapters.
 //! This constrains host actions; trusted plugin code is not OS-sandboxed.
 
+use basecraft_platform::files::{identity, link_count};
 use std::collections::{BTreeMap, BTreeSet};
-use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 
 use basecraft_protocol::operation::{InputReference, MAX_INPUT_FILES, OperationRequest};
@@ -111,7 +111,7 @@ impl SessionPolicy {
             }
         } else {
             let metadata = path.metadata()?;
-            if !metadata.is_file() || metadata.nlink() != 1 {
+            if !metadata.is_file() || link_count(&path)? != 1 {
                 return Err(denied(
                     "input must be a regular file without hardlink aliases",
                 ));
@@ -176,8 +176,7 @@ impl SessionPolicy {
                     }
                 };
                 let path = self.path(path, false)?;
-                let metadata = path.metadata()?;
-                if !identities.insert((metadata.dev(), metadata.ino())) {
+                if !identities.insert(identity(&path)?) {
                     return Err(denied("input aliases another input"));
                 }
                 files.push(path);
