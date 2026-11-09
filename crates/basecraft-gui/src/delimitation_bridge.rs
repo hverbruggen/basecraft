@@ -217,7 +217,7 @@ pub struct DelimitationRust {
     bar_columns: QString,
     palette: Vec<String>,
     // Modification time of the theme file last applied; empty before the first read.
-    theme_stamp: String,
+    theme_stamp: crate::bridge::ThemeStamp,
     session: Option<Session>,
     doc: Option<DocId>,
     selection: Selection,
@@ -252,7 +252,7 @@ impl Default for DelimitationRust {
             display_revision: 0,
             bar_columns: QString::from("[]"),
             palette: delimitation::palette(&basecraft_viewmodel::Theme::default()),
-            theme_stamp: String::new(),
+            theme_stamp: crate::bridge::ThemeStamp::default(),
             session: None,
             doc: None,
             selection: Selection::default(),
@@ -1194,7 +1194,7 @@ impl qobject::DelimitationController {
     pub fn export_figure(self: Pin<&mut Self>, path: &QString, _scope: i32, publication: bool) {
         // The comparison figure is always complete: every visible column and tip.
         let theme = if publication {
-            basecraft_viewmodel::Theme::publication()
+            crate::bridge::publication_theme()
         } else {
             crate::bridge::load_theme()
                 .map(|(theme, _)| theme)
@@ -1210,7 +1210,7 @@ impl qobject::DelimitationController {
         width: f64,
     ) {
         let theme = if publication {
-            basecraft_viewmodel::Theme::publication()
+            crate::bridge::publication_theme()
         } else {
             crate::bridge::load_theme()
                 .map(|(theme, _)| theme)
@@ -2059,11 +2059,7 @@ impl qobject::DelimitationController {
         }
     }
     pub fn check_theme(mut self: Pin<&mut Self>) {
-        let stamp = format!(
-            "{:?}",
-            crate::bridge::omarchy_theme_path()
-                .and_then(|path| std::fs::metadata(path).and_then(|m| m.modified()).ok())
-        );
+        let stamp = crate::bridge::theme_stamp();
         if self.rust().theme_stamp == stamp {
             return;
         }

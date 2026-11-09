@@ -396,7 +396,7 @@ pub struct ControllerRust {
     doc: Option<DocId>,
     view: GenomeView,
     theme: Theme,
-    theme_stamp: Option<SystemTime>,
+    theme_stamp: ThemeStamp,
     scratch: Frame,
 }
 
@@ -427,7 +427,7 @@ impl Default for ControllerRust {
             doc: None,
             view: GenomeView::new(800.0, 600.0),
             theme: Theme::default(),
-            theme_stamp: None,
+            theme_stamp: ThemeStamp::default(),
             scratch: Frame::new(),
         };
         started();
@@ -509,11 +509,52 @@ pub(crate) fn omarchy_theme_path() -> Option<PathBuf> {
     p.exists().then_some(p)
 }
 
-pub(crate) fn load_theme() -> Option<(Theme, Option<SystemTime>)> {
-    let path = omarchy_theme_path()?;
-    let text = std::fs::read_to_string(&path).ok()?;
-    let stamp = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
-    Some((Theme::from_omarchy(&text), stamp))
+/// Existing appearance invalidation also watches application palette preferences.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ThemeStamp {
+    desktop: Option<SystemTime>,
+    preferences: Option<SystemTime>,
+}
+
+pub(crate) fn theme_stamp() -> ThemeStamp {
+    let modified = |path| std::fs::metadata(path).and_then(|m| m.modified()).ok();
+    ThemeStamp {
+        desktop: omarchy_theme_path().and_then(modified),
+        preferences: basecraft_platform::paths::AppPaths::discover()
+            .ok()
+            .and_then(|p| modified(p.preferences())),
+    }
+}
+
+fn color_blind_friendly() -> bool {
+    basecraft_platform::paths::AppPaths::discover()
+        .ok()
+        .and_then(|p| {
+            basecraft_platform::settings::SettingsStore::new(p.preferences())
+                .load()
+                .ok()
+        })
+        .is_some_and(|p| p.ui.color_blind_friendly)
+}
+
+pub(crate) fn load_theme() -> Option<(Theme, ThemeStamp)> {
+    // Absent desktop configuration still gets the optional light data palette.
+    // Failed preferences retain the existing usable default; AppSettings owns
+    // startup/update error presentation and never overwrites a damaged file.
+    basecraft_platform::paths::AppPaths::discover().ok()?;
+    let stamp = theme_stamp();
+    let theme = omarchy_theme_path()
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .map(|text| Theme::from_omarchy(&text))
+        .unwrap_or_default();
+    Some((
+        theme.with_color_blind_friendly(color_blind_friendly()),
+        stamp,
+    ))
+}
+
+pub(crate) fn publication_theme() -> Theme {
+    Theme::publication().with_color_blind_friendly(color_blind_friendly())
 }
 
 pub(crate) fn css(c: [f32; 4]) -> String {
@@ -738,7 +779,7 @@ impl qobject::GenomeController {
                 return Ok(());
             };
             let theme = if publication {
-                Theme::publication()
+                publication_theme()
             } else {
                 r.theme.clone()
             };
@@ -1302,10 +1343,7 @@ impl qobject::GenomeController {
             self.as_mut().set_mono_font(font);
         }
 
-        let Some(path) = omarchy_theme_path() else {
-            return;
-        };
-        let stamp = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+        let stamp = theme_stamp();
         if stamp == self.rust().theme_stamp {
             return;
         }

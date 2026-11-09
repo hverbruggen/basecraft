@@ -13,7 +13,15 @@ Item {
         property string snapshot: JSON.stringify({ui: {show_gc: true, sidebar_open: true, orf_min_codons: 100, alignment_insert: true}, files: {provenance: "portable", recovery: true}, compute: {local_cpu_threads: 4}, customization: {shortcuts: {}, ribbon_hidden: []}})
         property string lastKey
         property var lastValue
-        function update(key, value) { lastKey = key; lastValue = JSON.parse(value); return true }
+        function update(key, value) {
+            lastKey = key; lastValue = JSON.parse(value)
+            if (key === "colorBlindFriendly") {
+                const prefs = JSON.parse(snapshot)
+                prefs.ui.color_blind_friendly = lastValue
+                snapshot = JSON.stringify(prefs)
+            }
+            return true
+        }
         function reload() { return true }
     }
     AppCommand {
@@ -36,6 +44,34 @@ Item {
     TestCase {
         name: "Preferences"
         when: windowShown
+        function test_colour_palette_keyboard_and_reopen() {
+            editor.forceActiveFocus()
+            preferences.open()
+            tryCompare(preferences, "opened", true)
+            wait(0)
+            const palette = findChild(preferences, "colorBlindFriendly")
+            verify(palette)
+            verify(!palette.checked, "The ordinary theme is the default")
+            palette.forceActiveFocus()
+            tryCompare(palette, "activeFocus", true)
+            keyClick(Qt.Key_Space)
+            compare(store.lastKey, "colorBlindFriendly")
+            compare(store.lastValue, true)
+            keyClick(Qt.Key_Escape)
+            tryCompare(preferences, "opened", false)
+            tryCompare(editor, "activeFocus", true)
+            preferences.open()
+            tryCompare(preferences, "opened", true)
+            wait(0)
+            verify(palette.checked)
+            palette.forceActiveFocus()
+            tryCompare(palette, "activeFocus", true)
+            keyClick(Qt.Key_Space)
+            compare(store.lastValue, false)
+            keyClick(Qt.Key_Escape)
+            tryCompare(preferences, "opened", false)
+            tryCompare(editor, "activeFocus", true)
+        }
         function test_escape_does_not_commit_pending_number_data() {
             return ["interfaceFontSize", "ribbonSize", "orfMinCodons", "localCpuThreads"].map(name => ({tag: name}))
         }

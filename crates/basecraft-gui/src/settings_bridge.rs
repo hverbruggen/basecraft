@@ -74,6 +74,7 @@ fn change(key: &str, value: &serde_json::Value) -> Result<Change, String> {
             .ok_or_else(|| format!("{key} requires a positive integer"))
     };
     Ok(match key {
+        "colorBlindFriendly" => Change::ColorBlindFriendly(boolean()?),
         "showGc" => Change::ShowGc(boolean()?),
         "sidebarOpen" => Change::SidebarOpen(boolean()?),
         "orfMinCodons" => Change::OrfMinCodons(integer()?),
@@ -538,6 +539,8 @@ mod tests {
             let ribbon = change("ribbonSizePercent", &serde_json::json!(size)).unwrap();
             assert!(Preferences::default().resolve_session(&[ribbon]).is_err());
         }
+        assert!(change("colorBlindFriendly", &serde_json::json!(true)).is_ok());
+        assert!(change("colorBlindFriendly", &serde_json::json!("true")).is_err());
         assert!(change("showGc", &serde_json::json!(true)).is_ok());
         assert!(change("showGc", &serde_json::json!("true")).is_err());
         assert!(change("localCpuThreads", &serde_json::json!(-1)).is_err());

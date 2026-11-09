@@ -224,7 +224,7 @@ use basecraft_viewmodel::{Frame, Theme, svg};
 use cxx_qt::CxxQtType;
 use cxx_qt_lib::{QByteArray, QString};
 
-use crate::bridge::{css, load_theme, monospace_font, omarchy_theme_path};
+use crate::bridge::{css, load_theme, monospace_font, theme_stamp};
 
 // Independent generated QML properties describe document state and caller activity.
 #[allow(clippy::struct_excessive_bools)]
@@ -274,13 +274,14 @@ pub struct SangerRust {
     review_path: Option<PathBuf>,
     view: SangerView,
     theme: Theme,
-    theme_stamp: Option<std::time::SystemTime>,
+    theme_stamp: crate::bridge::ThemeStamp,
     scratch: Frame,
 }
 
 impl Default for SangerRust {
     fn default() -> Self {
-        let (theme, theme_stamp) = load_theme().unwrap_or_else(|| (Theme::default(), None));
+        let (theme, theme_stamp) = load_theme()
+            .unwrap_or_else(|| (Theme::default(), crate::bridge::ThemeStamp::default()));
         Self {
             frame: QByteArray::default(),
             status: QString::default(),
@@ -1597,10 +1598,7 @@ impl qobject::SangerController {
         if font != self.rust().mono_font {
             self.as_mut().set_mono_font(font);
         }
-        let Some(path) = omarchy_theme_path() else {
-            return;
-        };
-        let stamp = std::fs::metadata(path).and_then(|m| m.modified()).ok();
+        let stamp = theme_stamp();
         if stamp == self.rust().theme_stamp {
             return;
         }
@@ -1826,7 +1824,7 @@ impl qobject::SangerController {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
             let theme = if publication {
-                Theme::publication()
+                crate::bridge::publication_theme()
             } else {
                 r.theme.clone()
             };

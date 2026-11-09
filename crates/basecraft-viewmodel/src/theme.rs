@@ -3,8 +3,12 @@
 
 use crate::frame::{Rgba, hex};
 
+mod color_vision;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Theme {
+    /// Optional shared data colours, in species-palette order; UI colours stay intact.
+    pub data_colors: Option<[Rgba; 8]>,
     pub dark: bool,
     pub background: Rgba,
     pub surface: Rgba,
@@ -28,6 +32,7 @@ impl Default for Theme {
     fn default() -> Self {
         let c = |s| hex(s).unwrap_or([0.5, 0.5, 0.5, 1.0]);
         Self {
+            data_colors: None,
             dark: false,
             background: c("#f4f1ea"),
             surface: c("#e8e3d8"),
@@ -50,6 +55,27 @@ impl Default for Theme {
 }
 
 impl Theme {
+    /// Apply an application display preference without changing scientific data.
+    #[must_use]
+    pub fn with_color_blind_friendly(mut self, enabled: bool) -> Self {
+        self.data_colors = enabled.then(|| color_vision::palette(&self));
+        self
+    }
+
+    /// Shared data category colours, also consumed by species groups/overviews.
+    pub fn data_palette(&self) -> [Rgba; 8] {
+        self.data_colors.unwrap_or([
+            self.blue,
+            self.red,
+            self.green,
+            self.orange,
+            self.magenta,
+            self.cyan,
+            self.yellow,
+            self.brown,
+        ])
+    }
+
     /// Explicit publication palette; screen exports retain the current theme by default.
     #[must_use]
     pub fn publication() -> Self {
@@ -138,11 +164,12 @@ impl Theme {
 
     /// Residue colour: the usual A green, C blue, G amber, T red.
     pub fn residue(&self, b: u8) -> Rgba {
+        let [blue, red, green, _, _, _, yellow, _] = self.data_palette();
         match b.to_ascii_uppercase() {
-            b'A' => self.green,
-            b'C' => self.blue,
-            b'G' => self.yellow,
-            b'T' | b'U' => self.red,
+            b'A' => green,
+            b'C' => blue,
+            b'G' => yellow,
+            b'T' | b'U' => red,
             b'-' => self.background,
             _ => self.muted,
         }
@@ -152,15 +179,16 @@ impl Theme {
     /// blue, positive red, negative magenta, polar green, and their own
     /// colours for cysteine, glycine, proline and the aromatic H and Y.
     pub fn amino(&self, b: u8) -> Rgba {
+        let [blue, red, green, orange, magenta, cyan, yellow, brown] = self.data_palette();
         match b.to_ascii_uppercase() {
-            b'A' | b'I' | b'L' | b'M' | b'F' | b'W' | b'V' => self.blue,
-            b'K' | b'R' => self.red,
-            b'E' | b'D' => self.magenta,
-            b'N' | b'Q' | b'S' | b'T' => self.green,
-            b'C' => self.orange,
-            b'G' => self.yellow,
-            b'P' => self.brown,
-            b'H' | b'Y' => self.cyan,
+            b'A' | b'I' | b'L' | b'M' | b'F' | b'W' | b'V' => blue,
+            b'K' | b'R' => red,
+            b'E' | b'D' => magenta,
+            b'N' | b'Q' | b'S' | b'T' => green,
+            b'C' => orange,
+            b'G' => yellow,
+            b'P' => brown,
+            b'H' | b'Y' => cyan,
             b'-' | b'.' => self.background,
             _ => self.muted,
         }

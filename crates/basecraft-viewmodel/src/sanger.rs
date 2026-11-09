@@ -307,35 +307,40 @@ mod tests {
             samples_per_pixel: 0.5,
             ..SangerView::default()
         };
-        let mut frame = Frame::new();
-        view.build(&trace, &Theme::default(), &mut frame);
-        let segments = frame
-            .floats()
-            .as_chunks::<{ crate::frame::FLOATS_PER_INSTANCE }>()
-            .0
-            .iter()
-            .filter(|q| {
-                q[14] == 0.0
-                    && (q[0] - q[2]).abs() > f32::EPSILON
-                    && (q[1] - q[3]).abs() > f32::EPSILON
-            })
-            .count();
-        assert_eq!(segments, 16);
-        let quads = frame
-            .floats()
-            .as_chunks::<{ crate::frame::FLOATS_PER_INSTANCE }>()
-            .0;
-        for base in b"ACGT" {
+        for theme in [
+            Theme::default(),
+            Theme::default().with_color_blind_friendly(true),
+        ] {
+            let mut frame = Frame::new();
+            view.build(&trace, &theme, &mut frame);
+            let segments = frame
+                .floats()
+                .as_chunks::<{ crate::frame::FLOATS_PER_INSTANCE }>()
+                .0
+                .iter()
+                .filter(|q| {
+                    q[14] == 0.0
+                        && (q[0] - q[2]).abs() > f32::EPSILON
+                        && (q[1] - q[3]).abs() > f32::EPSILON
+                })
+                .count();
+            assert_eq!(segments, 16);
+            let quads = frame
+                .floats()
+                .as_chunks::<{ crate::frame::FLOATS_PER_INSTANCE }>()
+                .0;
+            for base in b"ACGT" {
+                assert!(
+                    quads
+                        .iter()
+                        .any(|q| q[14] == 0.0 && q[8..12] == theme.residue(*base))
+                );
+            }
             assert!(
                 quads
                     .iter()
-                    .any(|q| q[14] == 0.0 && q[8..12] == Theme::default().residue(*base))
+                    .any(|q| q[14] > 0.0 && q[8..12] == theme.residue(b'A'))
             );
         }
-        assert!(
-            quads
-                .iter()
-                .any(|q| q[14] > 0.0 && q[8..12] == Theme::default().residue(b'A'))
-        );
     }
 }

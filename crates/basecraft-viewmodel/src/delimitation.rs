@@ -30,18 +30,7 @@ const FIRST_GAP: f32 = 10.0;
 /// Theme colours in the order groups receive them.
 #[must_use]
 pub fn palette(theme: &Theme) -> Vec<String> {
-    [
-        theme.blue,
-        theme.red,
-        theme.green,
-        theme.orange,
-        theme.magenta,
-        theme.cyan,
-        theme.yellow,
-        theme.brown,
-    ]
-    .map(hex)
-    .to_vec()
+    theme.data_palette().map(hex).to_vec()
 }
 
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -401,16 +390,21 @@ mod tests {
             columns(&spaced, 10.0)[1].x,
             10.0 + MIN_BAR_WIDTH as f32 + 3.0
         );
-        let colors = palette(&Theme::default());
-        let columns = tip_columns(&work, &tips(&["a", "b", "c", "d"]), &colors);
-        assert_eq!(columns[0].tips["a"][0].color, "#123456");
-        assert!(
-            columns[1]
-                .tips
-                .values()
-                .flatten()
-                .all(|band| colors.contains(&band.color))
-        );
+        for theme in [
+            Theme::default(),
+            Theme::default().with_color_blind_friendly(true),
+        ] {
+            let colors = palette(&theme);
+            let columns = tip_columns(&work, &tips(&["a", "b", "c", "d"]), &colors);
+            assert_eq!(columns[0].tips["a"][0].color, "#123456");
+            assert!(
+                columns[1]
+                    .tips
+                    .values()
+                    .flatten()
+                    .all(|band| colors.contains(&band.color))
+            );
+        }
     }
 
     #[test]

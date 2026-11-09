@@ -288,7 +288,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
-use std::time::{Instant, SystemTime};
+use std::time::Instant;
 
 use basecraft_docs::AlignmentDoc;
 use basecraft_ops::{DocId, Session};
@@ -309,7 +309,7 @@ use crate::bridge::{
     ALT, CTRL, KEY_0, KEY_BACKSPACE, KEY_DELETE, KEY_DOWN, KEY_END, KEY_EQUAL, KEY_ESCAPE,
     KEY_HOME, KEY_LEFT, KEY_MINUS, KEY_PAGE_DOWN, KEY_PAGE_UP, KEY_PLUS, KEY_RIGHT, KEY_UP, KEY_Y,
     KEY_Z, SHIFT, WHEEL_ZOOM, ZOOM_STEP, css, file_name, load_theme, memory_text, monospace_font,
-    omarchy_theme_path, plugin_dir, project_root, took,
+    plugin_dir, project_root, theme_stamp, took,
 };
 
 const KEY_A: i32 = 0x41;
@@ -366,7 +366,7 @@ pub struct AlignmentRust {
     doc: Option<DocId>,
     view: AlignmentView,
     theme: Theme,
-    theme_stamp: Option<SystemTime>,
+    theme_stamp: crate::bridge::ThemeStamp,
     scratch: Frame,
 }
 
@@ -435,7 +435,7 @@ impl Default for AlignmentRust {
             doc: None,
             view: AlignmentView::new(800.0, 600.0),
             theme: Theme::default(),
-            theme_stamp: None,
+            theme_stamp: crate::bridge::ThemeStamp::default(),
             scratch: Frame::new(),
         };
         if let Some((theme, stamp)) = load_theme() {
@@ -671,7 +671,7 @@ impl qobject::AlignmentController {
                 return Ok(());
             };
             let theme = if publication {
-                Theme::publication()
+                crate::bridge::publication_theme()
             } else {
                 r.theme.clone()
             };
@@ -1083,10 +1083,7 @@ impl qobject::AlignmentController {
             self.as_mut().set_mono_font(font);
         }
 
-        let Some(path) = omarchy_theme_path() else {
-            return;
-        };
-        let stamp = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+        let stamp = theme_stamp();
         if stamp == self.rust().theme_stamp {
             return;
         }

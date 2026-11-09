@@ -40,6 +40,8 @@ pub struct Preferences {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Ui {
+    /// Optional data palette; its light/dark variant follows the active theme.
+    pub color_blind_friendly: bool,
     pub show_gc: bool,
     pub sidebar_open: bool,
     pub orf_min_codons: u32,
@@ -56,6 +58,7 @@ pub struct Ui {
 impl Default for Ui {
     fn default() -> Self {
         Self {
+            color_blind_friendly: false,
             show_gc: true,
             sidebar_open: true,
             orf_min_codons: 100,
@@ -418,6 +421,7 @@ pub fn canonical_shortcut(value: &str) -> Result<String, Error> {
 /// Each variant changes one field, preventing stale whole-file replacement.
 #[derive(Debug, Clone)]
 pub enum Change {
+    ColorBlindFriendly(bool),
     ShowGc(bool),
     SidebarOpen(bool),
     OrfMinCodons(u32),
@@ -448,6 +452,7 @@ impl Change {
     }
     fn apply(self, prefs: &mut Preferences) {
         match self {
+            Self::ColorBlindFriendly(v) => prefs.ui.color_blind_friendly = v,
             Self::ShowGc(v) => prefs.ui.show_gc = v,
             Self::SidebarOpen(v) => prefs.ui.sidebar_open = v,
             Self::OrfMinCodons(v) => prefs.ui.orf_min_codons = v,
@@ -622,6 +627,43 @@ fn merge(destination: &mut toml::Value, source: toml::Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn data_palette_preference_round_trips_and_preserves_unknown_settings() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = SettingsStore::new(temp.path().join("preferences.toml"));
+        assert!(!store.load().unwrap().ui.color_blind_friendly);
+        assert!(
+            !store.path.exists(),
+            "Viewing defaults must not write settings"
+        );
+        std::fs::write(
+            &store.path,
+            "schema_version = 1\n[ui]\nfuture_setting = 17\n",
+        )
+        .unwrap();
+        store.update(Change::ColorBlindFriendly(true)).unwrap();
+        assert!(
+            SettingsStore::new(store.path.clone())
+                .load()
+                .unwrap()
+                .ui
+                .color_blind_friendly
+        );
+        store.update(Change::ShowGc(false)).unwrap();
+        assert!(store.load().unwrap().ui.color_blind_friendly);
+        let raw: toml::Value =
+            toml::from_str(&std::fs::read_to_string(&store.path).unwrap()).unwrap();
+        assert_eq!(raw["ui"]["future_setting"].as_integer(), Some(17));
+        store.update(Change::ColorBlindFriendly(false)).unwrap();
+        assert!(!store.load().unwrap().ui.color_blind_friendly);
+        std::fs::write(
+            &store.path,
+            "schema_version = 1\n[ui]\ncolor_blind_friendly = 'yes'\n",
+        )
+        .unwrap();
+        assert!(store.load().is_err());
+    }
+
     #[test]
     fn submitter_round_trips_validates_and_keeps_other_fields() {
         let temp = tempfile::tempdir().unwrap();

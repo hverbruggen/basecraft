@@ -64,6 +64,18 @@ AppFormDialog {
         onValueModified: dialog.change("inputBoxHeight", value)
     }
     AppButton { objectName: "resetControlSizes"; text: "Use default control sizes (14 and 20 px)"; onClicked: { dialog.change("tickBoxSize", 14); dialog.change("inputBoxHeight", 20) } }
+    AppCheckBox {
+        objectName: "colorBlindFriendly"
+        text: "Colour-blind-friendly data colours"
+        Accessible.description: "Uses the light or dark variant of the active appearance for residues, traces and species groups. Labels still identify the data."
+        checked: dialog.values.ui ? !!dialog.values.ui.color_blind_friendly : false
+        onToggled: dialog.change("colorBlindFriendly", checked)
+    }
+    Label {
+        text: "The data palette follows the current light or dark appearance. Suitable theme colours are used where possible, with an Okabe–Ito fallback. Letters and species labels remain the identifiers; custom species colours are retained."
+        wrapMode: Text.Wrap
+        Layout.fillWidth: true
+    }
     AppCheckBox { text: "Show GC content"; checked: dialog.values.ui ? dialog.values.ui.show_gc : true; onToggled: dialog.change("showGc", checked) }
     AppCheckBox { text: "Open files sidebar"; checked: dialog.values.ui ? dialog.values.ui.sidebar_open : true; onToggled: dialog.change("sidebarOpen", checked) }
     PreferenceSpinBox { objectName: "orfMinCodons"; Kirigami.FormData.label: "Minimum ORF (codons):"; from: 1; to: 1000000; editable: true; value: dialog.values.ui ? dialog.values.ui.orf_min_codons : 100; onValueModified: dialog.change("orfMinCodons", value) }
