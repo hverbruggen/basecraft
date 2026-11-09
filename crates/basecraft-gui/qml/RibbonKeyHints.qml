@@ -18,6 +18,8 @@ Item {
     property var previousForwarding: []
     property bool altAlone: false
     property var menu: null
+    property var menuParentTargets: []
+    property int menuParentLevel: 2
     property var group: null
     property string explanation: ""
     property var dialogs: []
@@ -56,7 +58,14 @@ Item {
             observed.Keys.forwardTo = [hints].concat(previousForwarding)
         }
     }
-    Connections { target: hints.hostWindow; function onActiveFocusItemChanged() { hints.watch() } }
+    Connections { target: hints.hostWindow; function onActiveFocusItemChanged() { if (hints) Qt.callLater(hints.watch) } }
+    Connections {
+        target: hints.observed ? hints.observed.Keys : null
+        function onShortcutOverride(event) {
+            if (hints.level) event.accepted = true
+            else if (event.key !== Qt.Key_Alt) hints.altAlone = false
+        }
+    }
     Component.onCompleted: watch()
     Component.onDestruction: if (observed) observed.Keys.forwardTo = previousForwarding
     function popupContext() {
@@ -99,12 +108,15 @@ Item {
     }
     function stop(restore) {
         level = 0; targets = []; prefix = ""; explanation = ""
+        if (group) { group.close(); group = null }
         if (restore && invoker && invoker.visible && invoker.enabled) invoker.forceActiveFocus(Qt.OtherFocusReason)
     }
     function menuOpened(openedMenu) {
         if (!level) return
+        menuParentTargets = targets
+        menuParentLevel = level
         menu = openedMenu
-        level = 3; prefix = ""
+        level = group ? 4 : 3; prefix = ""
         let entries = []
         for (let i = 0; i < menu.count; ++i) {
             const item = menu.itemAt(i)
@@ -137,6 +149,11 @@ Item {
         if (event.key !== Qt.Key_Alt) altAlone = false
         if (!level && event.key === Qt.Key_F10 && !event.modifiers && !popupContext()) { start(); event.accepted = true; return }
         if (!level) {
+            if (!popupContext() && (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab)) {
+                for (let item = hostWindow.activeFocusItem; item; item = item.parent) {
+                    if (item === tabBar) { ribbon.enter(event.key === Qt.Key_Backtab || !!(event.modifiers & Qt.ShiftModifier)); event.accepted = true; return }
+                }
+            }
             const target = dialogs.length && event.modifiers === Qt.AltModifier ? dialogTargets.find(t => t.key === event.text.toUpperCase()) : null
             if (target && target.item.enabled) { ribbon.activate(target.item); event.accepted = true }
             else event.accepted = false
@@ -144,7 +161,7 @@ Item {
         }
         event.accepted = true
         if (event.key === Qt.Key_Escape) {
-            if (menu) { menu.close(); menu = null; page() }
+            if (menu) { menu.close(); menu = null; level = menuParentLevel; targets = menuParentTargets; prefix = "" }
             else if (level === 3) { if (group) group.close(); page() }
             else if (level === 2) showTabs()
             else stop(true)
@@ -168,10 +185,12 @@ Item {
     }
     // Sibling overlay items never intercept pointer input.
     Repeater {
+        parent: hints.level >= 3 ? hints.hostWindow.Overlay.overlay : hints
+        z: 1000
         model: hints.level ? hints.targets : []
         delegate: Label {
             required property var modelData
-            readonly property point position: modelData.item.mapToItem(hints, 0, 0)
+            readonly property point position: modelData.item.mapToItem(parent, 0, 0)
             x: position.x + Math.max(0, (modelData.item.width - width)/2)
             y: position.y + modelData.item.height - height / 2
             z: 100
@@ -184,11 +203,13 @@ Item {
         }
     }
     Repeater {
+        parent: hints.hostWindow.Overlay.overlay
+        z: 1000
         model: hints.mnemonicsVisible ? hints.dialogTargets.filter(t => t.label && t.label.text) : []
         delegate: Rectangle {
             required property var modelData
             readonly property var label: modelData.label
-            readonly property point position: label.mapToItem(hints, 0, 0)
+            readonly property point position: label.mapToItem(parent, 0, 0)
             readonly property int letterIndex: label.text.toUpperCase().indexOf(modelData.key)
             FontMetrics { id: labelMetrics; font: label.font }
             x: position.x + (label.horizontalAlignment === Text.AlignHCenter ? (label.width - labelMetrics.advanceWidth(label.text))/2 : 0) + labelMetrics.advanceWidth(label.text.slice(0,letterIndex))

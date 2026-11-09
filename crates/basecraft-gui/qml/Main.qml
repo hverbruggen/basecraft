@@ -70,7 +70,7 @@ ApplicationWindow {
     property alias ribbonNavigation: ribbonHints
     RibbonKeyHints {
         id: ribbonHints
-        parent: Overlay.overlay
+        parent: window.contentItem
         anchors.fill: parent
         z: 1000
         hostWindow: window
@@ -1047,7 +1047,7 @@ ApplicationWindow {
                         AppRibbonButton { action: projectCommand; visible: projectCommand.visible; text: "Open/New"; iconName: "project"; tip: projectCommand.effectiveTooltip }
                         AppRibbonButton {
                             id: recentProjectButton
-                            property string keyHint: "R"
+                            property string keyHint: "RC"
                             text: "Recent"
                             iconName: "project"
                             tip: "Open a recent project"

@@ -29,27 +29,30 @@ Control {
     function groups() { return currentPage ? Array.from(currentPage.children).filter(c => c instanceof RibbonGroup && c.visible) : [] }
     function adapt() {
         const list = groups()
-        list.forEach(g => g.presentation = 0)
         if (!currentPage) return
-        for (const child of currentPage.children) if (child instanceof ToolSeparator) child.visible = true
-        let total = () => {
-            let sum = 0
-            for (const child of currentPage ? currentPage.children : [])
-                if (child.visible && !child.Layout.fillWidth) sum += child.implicitWidth
-            return sum + Math.max(0, currentPage.children.filter(c => c.visible).length - 1) * currentPage.spacing
+        const separators = Array.from(currentPage.children).filter(c => c instanceof ToolSeparator)
+        const others = Array.from(currentPage.children).filter(c => !(c instanceof RibbonGroup) && !(c instanceof ToolSeparator) && !c.Layout.fillWidth)
+        const modes = list.map(() => 0)
+        const widths = list.map(g => [g.expandedWidth, g.compactGroupWidth, g.collapsedWidth])
+        let showSeparators = true
+        function total() {
+            const count = list.length + others.length + Array.from(currentPage.children).filter(c=>c.Layout.fillWidth).length + (showSeparators ? separators.length : 0)
+            return widths.reduce((sum,w,i) => sum+w[modes[i]],0) + others.reduce((sum,c)=>sum+c.implicitWidth,0)
+                + (showSeparators ? separators.reduce((sum,c)=>sum+c.implicitWidth,0) : 0) + Math.max(0,count-1)*currentPage.spacing
         }
-        // Low priorities collapse first; retain common edit/navigation controls.
-        if (total() > availableWidth) {
-            for (const child of currentPage.children) if (child instanceof ToolSeparator) child.visible = false
-        }
-        const ordered = list.slice().sort((a,b) => a.collapsePriority - b.collapsePriority || list.indexOf(b) - list.indexOf(a))
+        if (total() > availableWidth - 4 * ribbonSizeFactor) showSeparators = false
+        const ordered = list.map((g,i)=>i).sort((a,b)=>list[a].collapsePriority-list[b].collapsePriority || b-a)
         for (const stage of [1,2]) {
-            for (const group of ordered) {
-                if (total() <= availableWidth) break
-                group.presentation = stage
+            for (const index of ordered) {
+                if (total() <= availableWidth - 4 * ribbonSizeFactor) break
+                modes[index] = stage
             }
         }
+        separators.forEach(c=>c.visible=showSeparators)
+        list.forEach((g,i)=>g.presentation=modes[i])
     }
+
+    onPageWidthChanged: Qt.callLater(adapt)
     onAvailableWidthChanged: Qt.callLater(adapt)
     onCurrentPageChanged: { browsingControl = null; Qt.callLater(adapt) }
     onRibbonSizeFactorChanged: Qt.callLater(adapt)
@@ -98,7 +101,7 @@ Control {
             event.accepted = true
         }
         Rectangle {
-            parent: Overlay.overlay
+            parent: ribbon.browsingGroup && ribbon.browsingGroup.presentation === 2 ? Overlay.overlay : browser
             z: 999
             readonly property var targetControl: ribbon.browsingControl
             readonly property point position: targetControl ? targetControl.mapToItem(parent, 0, 0) : Qt.point(0,0)

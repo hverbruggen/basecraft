@@ -42,7 +42,7 @@ Item {
         }
         function test_new_ribbon_icons_render() {
             icon.color = "red"
-            for (const name of ["provenance", "text-representation", "annotation-add", "annotation-edit", "annotation-delete", "tree", "tree-flip", "tree-small-on-top", "tree-large-on-top", "matrix", "align", "trim", "waveform", "consensus-to-alignment", "fasta-document", "clipboard"]) {
+            for (const name of ["provenance", "text-representation", "annotation-add", "annotation-edit", "annotation-delete", "tree", "tree-flip", "tree-small-on-top", "tree-large-on-top", "matrix", "align", "trim", "waveform", "consensus-to-alignment", "fasta-document", "clipboard", "tree-midpoint", "tree-variance", "tree-clock", "tree-fast", "tree-infer", "gene-orf", "gene-predict", "trace-compute", "trace-cancel", "trace-draft", "trace-mask", "trace-primer", "trace-cutoff", "hypothesis-combine", "hypothesis-manual", "support-add", "rename"]) {
                 icon.name = name
                 tryVerify(() => coloredPixels(grabImage(parent), 255, 0) > 20, 1000, name + " did not render")
             }

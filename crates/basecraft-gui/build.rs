@@ -87,7 +87,6 @@ fn main() {
         "qml/RibbonTabs.qml",
         "qml/Ribbon.qml",
         "qml/RibbonKeyHints.qml",
-        "qml/CommandHints.js",
         "qml/RibbonMetrics.qml",
         "qml/AppCommand.qml",
         "qml/AppCommandButton.qml",

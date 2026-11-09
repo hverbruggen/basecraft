@@ -90,5 +90,6 @@
     <file>icons/hypothesis-manual.svg</file>
     <file>icons/support-add.svg</file>
     <file>icons/rename.svg</file>
+    <file>qml/CommandHints.js</file>
   </qresource>
 </RCC>

@@ -3,7 +3,6 @@ import QtQuick.Controls.Basic
 import QtQuick.Templates as T
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
-import org.kde.kirigami.layouts as KirigamiLayouts
 
 Control {
     id: group
@@ -11,11 +10,18 @@ Control {
     property string disabledReason
     property int presentation: 0
     property int collapsePriority: ["Annotation", "Rows", "Zoom", "Issues", "File", "GenBank"].includes(title) ? 100 : ["Align", "Root", "Calls", "Figure"].includes(title) ? 50 : 0
+    readonly property real compactGroupWidth: Math.ceil(Math.max(bodyWidth(true), caption.implicitWidth))
+    readonly property real collapsedWidth: 24 * metrics.factor
     readonly property real expandedWidth: Math.ceil(Math.max(bodyWidth(false), caption.implicitWidth))
+    onCompactGroupWidthChanged: if (metrics.ribbon && metrics.ribbon.adapt) Qt.callLater(metrics.ribbon.adapt)
     onExpandedWidthChanged: if (metrics.ribbon && metrics.ribbon.adapt) Qt.callLater(metrics.ribbon.adapt)
     function bodyWidth(compact) {
         const items = Array.from(row.children).filter(c => c === toolbar ? toolbar.actions.length > 0 : c.commandAction ? c.commandAction.visible : c.action ? c.action.visible : true)
-        return items.reduce((sum, c) => sum + (c.ribbonControl === true ? (compact ? c.compactWidth : c.expandedWidth) : c.implicitWidth), 0) + Math.max(0, items.length - 1) * row.spacing
+        return items.reduce((sum, c) => sum + (c === toolbar ? toolbarWidth(compact) : c.ribbonControl === true ? (compact ? c.compactWidth : c.expandedWidth) : c.implicitWidth), 0) + Math.max(0, items.length - 1) * row.spacing
+    }
+    function toolbarWidth(compact) {
+        const items = Array.from(toolbar.children).filter(c => c.ribbonControl === true && c.action && c.action.visible)
+        return items.reduce((sum,c) => sum + (compact ? c.compactWidth : c.expandedWidth),0) + Math.max(0,items.length-1)*toolbar.spacing
     }
     function entries() {
         const result = []
@@ -62,19 +68,21 @@ Control {
             width: implicitWidth
             height: implicitHeight
             spacing: metrics.groupSpacing
-            Kirigami.ActionToolBar {
+            RowLayout {
                 id: toolbar
-                // Keep fallback style minimums compact while reserving the full
-                // shared tile, including its caption and clickable padding.
-                implicitHeight: Math.max(24 * metrics.factor, toolbarMetrics.height + 6 * metrics.factor, metrics.tileHeight)
-                heightMode: KirigamiLayouts.ToolBarLayout.AlwaysFill
-                FontMetrics { id: toolbarMetrics; font: toolbar.font }
+                property var actions: []
+                spacing: metrics.groupSpacing
                 visible: actions.length > 0
-                Layout.fillWidth: false
-                Layout.preferredWidth: implicitWidth
-                Layout.minimumWidth: implicitWidth
-                // The page scrolls as a whole; fields never disappear into menus.
-                overflowIconName: Qt.resolvedUrl("../icons/more.svg").toString()
+                Repeater {
+                    model: toolbar.actions
+                    AppRibbonButton {
+                        required property var modelData
+                        action: modelData
+                        visible: modelData.visible
+                        iconName: modelData.iconName
+                        tip: modelData.effectiveTooltip
+                    }
+                }
             }
         }
     }

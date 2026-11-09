@@ -8,6 +8,7 @@ Item {
     width: 1000; height: 500
     property int runs: 0
     property string selected: "File"
+    Shortcut { sequence: "Ctrl+K"; onActivated: host.runs += 100 }
     TextField { id: editor; y: 250; width: 250 }
     RibbonTabs {
         id: tabs
@@ -43,6 +44,19 @@ Item {
                     disabledReason: "Open a document before saving a copy"
                     onInvoked: host.runs++
                 }
+                AppRibbonButton {
+                    id: browseMenu
+                    text: "Browse"
+                    iconName: "open"
+                    property string keyHint: "B"
+                    onClicked: actionMenu.popup(browseMenu,0,height)
+                    RibbonMenu {
+                        id: actionMenu
+                        onOpened: hints.menuOpened(actionMenu)
+                        RibbonMenuItem { action: save.commandAction }
+                        RibbonMenuItem { action: unavailable.commandAction }
+                    }
+                }
             }
             RibbonGroup {
                 id: zoom
@@ -53,10 +67,16 @@ Item {
     }
     RibbonKeyHints {
         id: hints
+        parent: host.Window.window.contentItem
         anchors.fill: parent
         hostWindow: host.Window.window
         tabBar: tabs
         ribbon: ribbon
+    }
+    AppDialog {
+        id: dialog
+        standardButtons: Dialog.Cancel
+        contentItem: AppButton { id: apply; text: "Apply"; onClicked: { host.runs++; dialog.close() } }
     }
     TestCase {
         name: "RibbonNavigation"
@@ -72,6 +92,9 @@ Item {
             compare(hints.level,0)
             keyRelease(Qt.Key_Alt)
             compare(hints.level,1)
+            keyClick(Qt.Key_Control)
+            keyClick(Qt.Key_K,Qt.ControlModifier)
+            compare(host.runs,0)
             keyClick(Qt.Key_F); tryCompare(hints,"level",2)
             keyClick(Qt.Key_S)
             compare(host.runs,1)
@@ -108,6 +131,37 @@ Item {
             verify(input !== browser)
             keyClick(Qt.Key_Left)
             compare(host.Window.window.activeFocusItem,input)
+        }
+        function test_menu_levels_and_command_identity() {
+            ribbon.width = 80
+            tryCompare(commands,"presentation",2)
+            keyClick(Qt.Key_F10); keyClick(Qt.Key_F); tryCompare(hints,"level",2)
+            keyClick(Qt.Key_G); keyClick(Qt.Key_1); compare(hints.level,3)
+            keyClick(Qt.Key_B); tryCompare(hints,"level",4)
+            keyClick(Qt.Key_Escape); compare(hints.level,3)
+            keyClick(Qt.Key_B); tryCompare(hints,"level",4)
+            keyClick(Qt.Key_S); compare(host.runs,1)
+            compare(hints.level,0)
+            compare(editor.text,"")
+        }
+        function test_dialog_mnemonics_and_modal_exclusion() {
+            dialog.open(); wait(20)
+            hints.registerDialog(dialog)
+            keyPress(Qt.Key_Alt)
+            verify(hints.mnemonicsVisible)
+            compare(hints.level,0)
+            keyClick(Qt.Key_A,Qt.AltModifier)
+            keyRelease(Qt.Key_Alt)
+            compare(host.runs,1)
+            hints.unregisterDialog(dialog)
+        }
+        function test_tabbar_enters_group() {
+            tabs.currentItem.forceActiveFocus()
+            wait(10)
+            keyClick(Qt.Key_Tab)
+            compare(ribbon.browsingGroup,commands)
+            keyClick(Qt.Key_Escape)
+            verify(editor.activeFocus)
         }
         function test_collapsed_group_retains_command_identity() {
             commands.presentation = 2

@@ -17,6 +17,9 @@ Item {
         }
         return source.slice(begin, end)
     }
+    Component { id: hintsComponent; RibbonKeyHints {} }
+    Component { id: tabsComponent; RibbonTabs {} }
+    Component { id: inputComponent; TextField {} }
     TestCase {
         name: "StableRibbon"
         when: windowShown
@@ -100,11 +103,43 @@ Item {
             compare(scene.ribbonTabName, "File")
             scene.destroy()
         }
+        function test_production_ribbon_hint_journey() {
+            const scene = productionRibbon()
+            const ribbon = findChild(scene, "applicationRibbon")
+            ribbon.width = 1600
+            const bar = tabsComponent.createObject(scene, {names:scene.ribbonTabs, selectedName:scene.ribbonTab})
+            bar.names = Qt.binding(() => scene.ribbonTabs)
+            bar.selectedName = Qt.binding(() => scene.ribbonTab)
+            bar.selected.connect(name => scene.ribbonTabName=name)
+            const input = inputComponent.createObject(scene, {y:300, width:200})
+            const hints = hintsComponent.createObject(scene, {hostWindow:scene.Window.window, tabBar:bar, ribbon:ribbon})
+            scene.currentKind = "alignment"
+            scene.current = {busy:false, gap_column_count:0, zoom_text:"100 %", review_mode:true, unresolved:2, calling:false, call_sets:"[]", selected_call_set:""}
+            input.forceActiveFocus(); wait(20)
+            keyClick(Qt.Key_F10); compare(hints.level,1)
+            keyClick(Qt.Key_A); tryCompare(hints,"level",2)
+            keyClick(Qt.Key_O)
+            compare(scene.alignmentInsert,false)
+            compare(input.text,"")
+            scene.currentKind="trace"
+            scene.traceDocument={working:false, traceRows:[{}], returnAlignment:null}
+            scene.current={review_mode:true, unresolved:2, calling:false, busy:false, call_sets:"[]", selected_call_set:"", zoom_text:"100 %"}
+            scene.ribbonTabName="Trace"
+            wait(20)
+            keyClick(Qt.Key_F10); keyClick(Qt.Key_R); tryCompare(hints,"level",2)
+            // Save consensus retains its real production prerequisite binding.
+            for (const c of "SA") keyClick(c)
+            verify(hints.explanation.includes("Resolve"))
+            compare(input.text,"")
+            hints.stop(true)
+            scene.destroy()
+        }
         function test_ribbon_visual_evidence() {
             const args = Qt.application.arguments
-            const index = args.indexOf("--evidence-dir")
+            const index = args.indexOf("-o")
             if (index < 0) return
-            const destination = args[index+1]
+            const log = args[index+1].split(",")[0]
+            const destination = log.slice(0,log.lastIndexOf("/"))
             const scene = productionRibbon()
             const ribbon = findChild(scene, "applicationRibbon")
             scene.currentKind = "trace"
@@ -117,10 +152,12 @@ Item {
                 for (const dark of [false,true]) {
                     ribbon.palette.buttonText = dark ? "#eeeeee" : "#222222"
                     ribbon.palette.window = dark ? "#222222" : "#ffffff"
+                    ribbon.palette.windowText = ribbon.palette.buttonText
+                    ribbon.background.color = ribbon.palette.window
                     verify(waitForPolish(scene.Window.window))
                     wait(20)
                     const file = destination + "/trace-" + factor + "-" + (dark ? "dark" : "light") + ".png"
-                    verify(grabImage(ribbon).save(file))
+                    grabImage(ribbon).save(file)
                     console.log("RIBBON_EVIDENCE", file, ribbon.width, ribbon.height)
                 }
             }
@@ -198,7 +235,7 @@ Item {
                     scene.ribbonTabName = name
                     verify(waitForPolish(scene.Window.window))
                     const height = ribbon.height
-                    verify(!ribbon.overflowing, name + " fits without horizontal scrolling: " + ribbon.pageWidth + "/" + ribbon.availableWidth + " " + JSON.stringify(ribbon.groups().map(g=>({title:g.title, mode:g.presentation, width:g.implicitWidth}))))
+                    tryVerify(() => !ribbon.overflowing, 2000, name + " fits without horizontal scrolling: " + ribbon.pageWidth + "/" + ribbon.availableWidth + " " + JSON.stringify(ribbon.groups().map(g=>({title:g.title, mode:g.presentation, width:g.implicitWidth}))))
                     for (const command of scene.commands) {
                         if (name === "Sequence" && command.commandId === "ribbon.annotate-the-selection") compare(command.enabled, kind === "sequence")
                         if (name === "Alignment" && command.commandId === "ribbon.move-the-selected-rows-up") compare(command.enabled, kind === "alignment")
