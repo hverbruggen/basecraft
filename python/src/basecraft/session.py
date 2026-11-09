@@ -348,6 +348,10 @@ class Session:
             arguments["path"] = str(path)
         return self.call("save", arguments)
 
+    def create_sequence(self, name, sequence):
+        """Create an unsaved IUPAC DNA sequence; save it to a new .gb path."""
+        return self.call("sequence_create", {"name": str(name), "sequence": str(sequence)})
+
     def document_record(self, document):
         """History and methods for this session's current revision, including unsaved edits."""
         return self.call("document_record", {"document": document})

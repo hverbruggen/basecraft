@@ -21,6 +21,7 @@ use crate::error::invalid;
 use crate::files::{self, HashingWriter, Loaded, Opened, OpenedAlignment, OpenedTree};
 use crate::log::LogWriter;
 
+mod creation;
 mod extraction;
 pub mod support_import;
 use crate::{Error, Result};
@@ -928,6 +929,12 @@ impl Session {
         overwrite: bool,
         history_only: bool,
     ) -> Result<()> {
+        let new_sequence = self.docs[id.0].accepted_hashes.is_empty();
+        if new_sequence && path.is_none() {
+            return Err(invalid(
+                "Choose a destination with Save as for this new sequence",
+            ));
+        }
         let path = path.filter(|p| !self.is_own_file(id, p));
         let target = path.map_or_else(|| self.resolve(&self.docs[id.0].key), Path::to_path_buf);
         let clean = (history_only || (self.log.is_some() && path.is_none()))
@@ -945,7 +952,7 @@ impl Session {
         } else {
             None
         };
-        if !overwrite && path.is_some() {
+        if new_sequence || (!overwrite && path.is_some()) {
             crate::save_guard::Revision::check(None, &target)?;
         }
         let _evidence_lock = crate::input_evidence::lock()?;
@@ -2807,6 +2814,7 @@ fn execute_sequence(doc: &mut SequenceDoc, op: &Op) -> Result<(Inverse, Option<F
         Op::SubmissionEdit { .. } => Err(invalid("this needs a submission document")),
         Op::JobFinished { .. } => Err(invalid("use log_job_finished")),
         Op::Open { .. }
+        | Op::CreateSequence { .. }
         | Op::Save { .. }
         | Op::Extract { .. }
         | Op::Export { .. }

@@ -277,6 +277,8 @@ impl Preferences {
         }
         let mut shortcuts = BTreeMap::new();
         let defaults = [
+            ("file.new-sequence", "Ctrl+N"),
+            ("ribbon.annotate-the-selection", "Ctrl+Shift+N"),
             ("file.open", "Ctrl+O"),
             ("file.save", "Ctrl+S"),
             ("file.save-as", "Ctrl+Shift+S"),
@@ -321,8 +323,6 @@ impl Preferences {
                 "Ctrl+Y",
                 "Ctrl+C",
                 "Ctrl+E",
-                "Ctrl+N",
-                "Ctrl+Shift+N",
                 "Ctrl+0",
                 "Ctrl+=",
                 "Ctrl+-",
@@ -634,6 +634,31 @@ fn merge(destination: &mut toml::Value, source: toml::Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn new_sequence_annotation_shortcuts_remap_and_detect_conflicts() {
+        let mut prefs = Preferences::default();
+        prefs
+            .customization
+            .shortcuts
+            .insert("ribbon.annotate-the-selection".into(), "Ctrl+J".into());
+        assert!(prefs.validate().is_ok());
+        prefs
+            .customization
+            .shortcuts
+            .insert("file.new-sequence".into(), "Ctrl+J".into());
+        assert!(prefs.validate().is_err());
+        prefs
+            .customization
+            .shortcuts
+            .insert("file.new-sequence".into(), "Ctrl+Shift+N".into());
+        assert!(prefs.validate().is_ok());
+        prefs
+            .customization
+            .shortcuts
+            .insert("ribbon.annotate-the-selection".into(), "Ctrl+N".into());
+        assert!(prefs.validate().is_ok());
+    }
+
     #[test]
     fn data_palette_preference_round_trips_and_preserves_unknown_settings() {
         let temp = tempfile::tempdir().unwrap();

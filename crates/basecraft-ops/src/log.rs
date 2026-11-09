@@ -404,6 +404,7 @@ fn feature_name(f: &basecraft_protocol::Feature) -> String {
 pub fn describe(op: &Op) -> String {
     match op {
         Op::Open { .. } => "Opened".into(),
+        Op::CreateSequence { name, .. } => format!("Created sequence {name}"),
         Op::Save { .. } => "Saved".into(),
         Op::Extract {
             start, end, path, ..

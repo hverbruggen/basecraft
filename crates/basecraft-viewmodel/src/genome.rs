@@ -18,7 +18,7 @@ use std::collections::{HashMap, HashSet};
 use std::f32::consts::{PI, TAU};
 
 use basecraft_docs::{FeatureId, SequenceDoc};
-use basecraft_protocol::{Feature, Strand};
+use basecraft_protocol::{Feature, Location, Segment, Strand};
 
 use crate::frame::{Frame, Rgba, text_width};
 use crate::theme::{Theme, alpha, mix};
@@ -835,6 +835,29 @@ impl GenomeView {
         self.cursor = Some(len);
     }
 
+    /// Suggest the annotation over the actual model selection, independent of
+    /// invocation keys or screen geometry. Multipart selections already carry
+    /// biological order, including a circular origin crossing.
+    pub fn new_feature_location(&self, len: u64) -> Location {
+        let strand = if self.selection.is_some() && self.selection_reverse {
+            Strand::Reverse
+        } else {
+            Strand::Forward
+        };
+        let (a, b) = self.selection.unwrap_or_else(|| {
+            let c = self.cursor.unwrap_or(0).min(len.saturating_sub(1));
+            (c, (c + 1).min(len))
+        });
+        let mut location = Location::simple(a, b, strand);
+        if let Some(parts) = &self.selection_parts {
+            location.segments = parts
+                .iter()
+                .map(|&(a, b)| Segment::new(a, b, strand))
+                .collect();
+        }
+        location
+    }
+
     /// Move the cursor by `delta` residues; with `extend`, grow the selection.
     pub fn move_cursor(&mut self, delta: i64, extend: bool, len: u64) {
         self.selection_parts = None;
@@ -850,6 +873,7 @@ impl GenomeView {
             self.selection_reverse = next < anchor;
         } else {
             self.selection = None;
+            self.selection_reverse = false;
         }
         self.cursor = Some(next);
         if self.mode != Mode::Circular {
@@ -2170,6 +2194,103 @@ mod tests {
         assert!((start + span - 1.0).abs() < 1e-6);
         v.mode = Mode::Circular;
         assert_eq!(v.overview_fraction(d.len()), (0.0, 1.0));
+    }
+
+    #[test]
+    fn annotation_defaults_follow_drag_and_keyboard_direction() {
+        let mut v = GenomeView::new(1000.0, 600.0);
+        v.mode = Mode::Linear;
+        v.fit(10_000);
+        for (start, end, strand) in [
+            (100.0, 200.0, Strand::Forward),
+            (200.0, 100.0, Strand::Reverse),
+        ] {
+            v.press(start, SEQ_Y + 5.0, false, 10_000);
+            v.drag_to(end, SEQ_Y + 5.0, 10_000);
+            v.release();
+            assert_eq!(
+                v.new_feature_location(10_000),
+                Location::simple(1000, 2000, strand)
+            );
+        }
+        v.selection = None;
+        v.cursor = Some(100);
+        v.move_cursor(-10, true, 10_000);
+        assert_eq!(
+            v.new_feature_location(10_000),
+            Location::simple(90, 100, Strand::Reverse)
+        );
+        v.move_cursor(20, true, 10_000);
+        assert_eq!(
+            v.new_feature_location(10_000),
+            Location::simple(100, 110, Strand::Forward)
+        );
+        v.move_cursor(10_000, false, 10_000);
+        assert_eq!(
+            v.new_feature_location(10_000),
+            Location::simple(9999, 10_000, Strand::Forward)
+        );
+    }
+
+    #[test]
+    fn annotation_defaults_use_wrapped_coordinates_and_circular_parts() {
+        let d = doc();
+        let mut v = GenomeView::new(1000.0, 400.0);
+        v.reset_zoom(d.len());
+        v.build(&d, &Theme::default(), &mut Frame::new());
+        let y0 = SEQ_Y + 5.0;
+        let y1 = v.wrap.as_ref().unwrap().offsets[1] + y0;
+        // Moving left on screen to the next row is still forward.
+        v.press(500.0, y0, false, d.len());
+        v.drag_to(100.0, y1, d.len());
+        let forward = v.new_feature_location(d.len());
+        assert_eq!(forward.strand(), Strand::Forward);
+        v.release();
+        v.press(100.0, y1, false, d.len());
+        v.drag_to(500.0, y0, d.len());
+        assert_eq!(v.new_feature_location(d.len()).bounds(), forward.bounds());
+        assert_eq!(v.new_feature_location(d.len()).strand(), Strand::Reverse);
+        // Circular pointer ranges use the same sorted genomic interval; a
+        // selected origin-spanning annotation retains its biological parts.
+        v.mode = Mode::Circular;
+        let (cx, cy) = v.centre();
+        let point = |bp| {
+            let a = GenomeView::angle(bp, d.len());
+            (cx + 100.0 * a.cos(), cy + 100.0 * a.sin())
+        };
+        let (x, y) = point(9900.0);
+        v.press(x, y, false, d.len());
+        let (x, y) = point(100.0);
+        v.drag_to(x, y, d.len());
+        assert_eq!(
+            v.new_feature_location(d.len()),
+            Location::simple(100, 9900, Strand::Reverse)
+        );
+        v.selection = Some((0, 10_000));
+        for (reverse, parts) in [
+            (false, vec![(9900, 10_000), (0, 100)]),
+            (true, vec![(0, 100), (9900, 10_000)]),
+        ] {
+            v.selection_reverse = reverse;
+            v.selection_parts = Some(parts.clone());
+            let location = v.new_feature_location(d.len());
+            assert_eq!(
+                location
+                    .segments
+                    .iter()
+                    .map(|s| (s.start, s.end))
+                    .collect::<Vec<_>>(),
+                parts
+            );
+            assert_eq!(
+                location.strand(),
+                if reverse {
+                    Strand::Reverse
+                } else {
+                    Strand::Forward
+                }
+            );
+        }
     }
 
     #[test]

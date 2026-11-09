@@ -62,6 +62,15 @@ pub mod qobject {
         #[qinvokable]
         fn open_file(self: Pin<&mut GenomeController>, path: &QString) -> bool;
         #[qinvokable]
+        fn new_sequence_error(self: &GenomeController, name: &QString, text: &QString) -> QString;
+        #[qinvokable]
+        fn create_sequence(
+            self: Pin<&mut GenomeController>,
+            name: &QString,
+            text: &QString,
+            root: &QString,
+        ) -> QString;
+        #[qinvokable]
         fn local_file_url(self: &GenomeController, path: &QString) -> QUrl;
         #[qinvokable]
         fn local_file_path(self: &GenomeController, url: &QUrl) -> QString;
@@ -374,7 +383,6 @@ pub(crate) const KEY_MINUS: i32 = 0x2d;
 pub(crate) const KEY_EQUAL: i32 = 0x3d;
 pub(crate) const KEY_0: i32 = 0x30;
 pub(crate) const KEY_A: i32 = 0x41;
-pub(crate) const KEY_N: i32 = 0x4e;
 pub(crate) const KEY_Y: i32 = 0x59;
 pub(crate) const KEY_Z: i32 = 0x5a;
 pub(crate) const SHIFT: i32 = 0x0200_0000;
@@ -902,6 +910,51 @@ impl qobject::GenomeController {
         }
     }
 
+    pub fn new_sequence_error(&self, name: &QString, text: &QString) -> QString {
+        Session::validate_new_sequence(&name.to_string(), &text.to_string())
+            .err()
+            .map_or_else(QString::default, |error| QString::from(&error.to_string()))
+    }
+
+    /// Create in the ordinary recoverable session, without a source-file surrogate.
+    pub fn create_sequence(
+        mut self: Pin<&mut Self>,
+        name: &QString,
+        text: &QString,
+        root: &QString,
+    ) -> QString {
+        if self.rust().session.is_some() || self.rust().busy {
+            return QString::from("This controller already owns a document");
+        }
+        let result = (|| {
+            let root = if root.to_string().is_empty() {
+                std::env::current_dir().map_err(|e| e.to_string())?
+            } else {
+                PathBuf::from(root.to_string())
+            };
+            let mut session = Session::recoverable(&root).map_err(|e| e.to_string())?;
+            let doc = session
+                .create_sequence(&name.to_string(), &text.to_string())
+                .map_err(|e| e.to_string())?;
+            Ok::<_, String>((session, doc))
+        })();
+        let (session, doc) = match result {
+            Ok(created) => created,
+            Err(error) => return QString::from(&error),
+        };
+        {
+            let mut r = self.as_mut().rust_mut();
+            r.view.mode = Mode::Wrapped;
+            r.view.fit_doc(session.doc(doc));
+            r.session = Some(session);
+            r.doc = Some(doc);
+        }
+        self.as_mut().set_dirty(true);
+        self.as_mut().sync_mode();
+        self.as_mut().refresh();
+        QString::default()
+    }
+
     pub fn open_file(mut self: Pin<&mut Self>, path: &QString) -> bool {
         if self.rust().busy {
             self.fail("Wait for the running operation before replacing this document");
@@ -1188,26 +1241,6 @@ impl qobject::GenomeController {
             }
             KEY_0 if ctrl => {
                 self.as_mut().fit();
-                true
-            }
-            KEY_N if ctrl => {
-                if let Some((a, b)) = selection {
-                    let strand = if shift {
-                        Strand::Reverse
-                    } else {
-                        Strand::Forward
-                    };
-                    let feature = Feature {
-                        kind: "misc_feature".into(),
-                        location: Location::simple(a, b, strand),
-                        qualifiers: vec![Qualifier::new("note", "new feature")],
-                    };
-                    if let Some(out) = self.as_mut().edit(Op::FeatureAdd { feature }) {
-                        self.as_mut().rust_mut().view.selected = out.feature;
-                    }
-                } else {
-                    self.as_mut().notify("Select a range first to annotate it");
-                }
                 true
             }
             // F2 cycled layouts; only the wrapped layout is offered for now.
@@ -1662,31 +1695,7 @@ impl qobject::GenomeController {
     }
 
     pub fn new_feature_json(&self) -> QString {
-        let v = &self.rust().view;
-        let (a, b) = v.selection.unwrap_or_else(|| {
-            let c = v.cursor.unwrap_or(0);
-            (c, c + 1)
-        });
-        // A selection made right to left proposes the reverse strand.
-        let strand = if v.selection_reverse {
-            Strand::Reverse
-        } else {
-            Strand::Forward
-        };
-        let mut location = Location::simple(a, b.max(a + 1), strand);
-        // Selected parts (a spliced annotation) give a joined location, in
-        // biological order.
-        if let Some(parts) = &v.selection_parts {
-            let mut parts = parts.clone();
-            parts.sort_unstable();
-            if strand == Strand::Reverse {
-                parts.reverse();
-            }
-            location.segments = parts
-                .into_iter()
-                .map(|(s, e)| basecraft_protocol::Segment::new(s, e, strand))
-                .collect();
-        }
+        let location = self.rust().view.new_feature_location(self.len());
         let f = Feature {
             kind: "misc_feature".into(),
             location,
