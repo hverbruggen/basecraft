@@ -124,7 +124,7 @@ ApplicationWindow {
             Qt.callLater(publishRibbonCommands)
         }
     }
-    readonly property var applicationCommands: [openCommand, saveCommand, saveAsCommand, projectCommand, shortcutsCommand, aboutCommand, preferencesCommand, textRepresentationCommand, contextShortcutsCommand, learnCommand, exportSvgCommand, exportPngCommand, historyCommand, methodsCommand, showProvenanceCommand, verifyProvenanceCommand, packageCommand, recoverCommand, installedOperationsCommand].concat(ribbonCommands)
+    readonly property var applicationCommands: [newSequenceCommand, addAnnotationCommand, openCommand, saveCommand, saveAsCommand, projectCommand, shortcutsCommand, aboutCommand, preferencesCommand, textRepresentationCommand, contextShortcutsCommand, learnCommand, exportSvgCommand, exportPngCommand, historyCommand, methodsCommand, showProvenanceCommand, verifyProvenanceCommand, packageCommand, recoverCommand, installedOperationsCommand].concat(ribbonCommands)
     property var recentProjects: []
     property string recentProjectsError: ""
     function updateRecentProjects(reply) {
@@ -208,6 +208,7 @@ ApplicationWindow {
 
     function fileName(path) { return path.split("/").pop() }
     function activeFolder() {
+        if (currentPath.startsWith("untitled:")) return shell.project_dir.length ? shell.local_file_url(shell.project_dir) : StandardPaths.writableLocation(StandardPaths.DocumentsLocation)
         const path = traceOpen && current && current.export_path ? current.export_path : current && current.file_path ? current.file_path : currentPath
         return path.length ? shell.parent_folder_url(path) : shell.local_file_url(shell.project_dir)
     }
@@ -482,6 +483,68 @@ ApplicationWindow {
         tooltip: "Choose a compatible installed operation; other schemas remain available through the API"
         enabled: window.current !== null && window.currentPath.length > 0
         onTriggered: operationPicker.show(shell.project_dir.length ? shell.project_dir : shell.local_file_path(shell.parent_folder_url(window.currentPath)), window.currentPath, !!window.current.dirty)
+    }
+    AppCommand {
+        id: newSequenceCommand
+        customization: window.customization
+        commandId: "file.new-sequence"
+        text: "New"
+        tooltip: "New sequence"
+        iconName: "new-file"
+        defaultShortcut: "Ctrl+N"
+        onTriggered: newSequenceDialog.prepare("", "")
+    }
+    AppCommand {
+        id: addAnnotationCommand
+        customization: window.customization
+        commandId: "ribbon.annotate-the-selection"
+        text: "Add annotation"
+        tooltip: "Annotate the selection; right-to-left selection defaults to reverse strand"
+        iconName: "annotation-add"
+        defaultShortcut: "Ctrl+Shift+N"
+        enabled: window.currentKind === "sequence" && window.current !== null && !window.current.busy
+            && !(window.activeFocusItem && window.activeFocusItem.cursorPosition !== undefined)
+        onTriggered: editor.openNew()
+    }
+    property var pendingSequence: null
+    property int nextSequence: 0
+    AddSequenceDialog {
+        id: newSequenceDialog
+        controller: shell
+        newDocument: true
+        onInputError: message => validationMessage = message
+        onRejected: {
+            const pending = window.pendingSequence
+            window.pendingSequence = null
+            if (!pending) return
+            for (let i = 0; i < openFiles.count; ++i) {
+                if (openFiles.get(i).path === pending.path) { openFiles.remove(i); break }
+            }
+            tabs.currentIndex = pending.previous
+        }
+        onCreateRequested: (name, sequence) => {
+            if (window.pendingSequence) return
+            const error = shell.new_sequence_error(name, sequence)
+            if (error.length) { validationMessage = error; return }
+            const path = "untitled:" + (++window.nextSequence) + "/" + name.trim() + ".gb"
+            window.pendingSequence = {path: path, name: name, sequence: sequence, previous: tabs.currentIndex}
+            openFiles.append({path: path, dirty: false, kind: "sequence"})
+            tabs.currentIndex = openFiles.count - 1
+        }
+    }
+    function initializeSequence(document) {
+        const pending = window.pendingSequence
+        if (!pending || pending.path !== document.path) return
+        const error = document.controller.create_sequence(pending.name, pending.sequence, shell.project_dir)
+        window.pendingSequence = null
+        if (error.length) {
+            openFiles.remove(document.index)
+            tabs.currentIndex = pending.previous
+            newSequenceDialog.validationMessage = error
+            return
+        }
+        newSequenceDialog.accept()
+        Qt.callLater(() => { window.refreshCurrent(); document.view.forceActiveFocus() })
     }
     AppCommand {
         id: openCommand
@@ -1040,6 +1103,7 @@ ApplicationWindow {
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
                         title: "File"
+                        AppRibbonButton { action: newSequenceCommand; visible: newSequenceCommand.visible; iconName: "new-file"; tip: newSequenceCommand.effectiveTooltip }
                         AppRibbonButton { action: saveCommand; visible: saveCommand.visible; iconName: "save"; tip: saveCommand.effectiveTooltip }
                         AppRibbonButton { action: saveAsCommand; visible: saveAsCommand.visible; iconName: "save-as"; tip: saveAsCommand.effectiveTooltip }
                     }
@@ -1114,7 +1178,7 @@ ApplicationWindow {
                         disabledReason: "Open a sequence to use this group"
                         enabled: window.currentKind === "sequence"
                         title: "Annotation"
-                        RibbonButton { commandId: "ribbon.annotate-the-selection"; text: "Add"; iconName: "annotation-add"; tip: "Annotate the selection"; keys: "Ctrl+N"; onInvoked: editor.openNew() }
+                        AppRibbonButton { action: addAnnotationCommand; text: "Add"; visible: addAnnotationCommand.visible; iconName: "annotation-add"; tip: addAnnotationCommand.effectiveTooltip }
                         RibbonButton { commandId: "ribbon.edit-the-selected-annotation"; text: "Edit"; iconName: "annotation-edit"; tip: "Edit the selected annotation"; keys: "Enter"; onInvoked: editor.openSelected() }
                         RibbonButton { commandId: "ribbon.delete-the-selected-annotation";
                             text: "Delete"
@@ -1854,6 +1918,13 @@ ApplicationWindow {
     function saveDocument(index, path, continuation) {
         const d = docs.itemAt(index)
         if (!d) return
+        if (!path && openFiles.get(index).path.startsWith("untitled:")) {
+            saveDialog.index = index
+            saveDialog.continuation = continuation
+            saveDialog.selectedFile = shell.local_file_url(openFiles.get(index).path.split("/").pop())
+            saveDialog.open()
+            return
+        }
         const target = path || openFiles.get(index).path
         const conflict = JSON.parse(provenance.save_conflicts(target))
         if (conflict.error) { provenance.notification(target, conflict.error, "fail"); return }
@@ -1922,7 +1993,8 @@ ApplicationWindow {
         if (!window.current) return
         if (window.traceOpen) { window.traceDocument.saveReview(); return }
         saveDialog.index = tabs.currentIndex
-        saveDialog.selectedFile = shell.local_file_url(window.currentPath)
+        saveDialog.continuation = null
+        saveDialog.selectedFile = shell.local_file_url(window.currentPath.startsWith("untitled:") ? window.fileName(window.currentPath) : window.currentPath)
         saveDialog.open()
     }
 
@@ -1936,6 +2008,7 @@ ApplicationWindow {
     FileDialog {
         id: saveDialog
         property int index: -1
+        property var continuation: null
         title: "Save as"
         fileMode: FileDialog.SaveFile
         currentFolder: window.activeFolder()
@@ -1943,7 +2016,9 @@ ApplicationWindow {
         onAccepted: {
             const d = docs.itemAt(index)
             const path = window.localPath(selectedFile)
-            if (d) window.saveDocument(index, path, null)
+            const next = continuation
+            continuation = null
+            if (d) window.saveDocument(index, path, next)
         }
     }
 
@@ -2169,6 +2244,7 @@ ApplicationWindow {
                         }
                         DelegateChoice {
                             DocumentView {
+                                id: sequenceDocument
                                 notificationSink: provenance
                                 showGc: window.showGc
                                 defaultLayout: window.defaultLayout
@@ -2176,7 +2252,7 @@ ApplicationWindow {
                                 onContextMenu: (info) => { menu.info = info; menu.popup() }
                                 onEditFeature: (id) => editor.openFeature(id)
                                 onEditSelected: editor.openSelected()
-                                onNewAnnotation: editor.openNew()
+                                onInitializeNew: window.initializeSequence(sequenceDocument)
                                 onCopyText: (text) => clipboard.put(text)
                                 onToggleSidebar: window.sidebarOpen = !window.sidebarOpen
                             }
@@ -2274,7 +2350,7 @@ ApplicationWindow {
         Item { text: "Extract as new sequence"; visible: menu.onAnnotation; onTriggered: window.current.extract_feature(menu.info.feature) }
         Item { text: "Zoom to annotation"; visible: menu.onAnnotation; onTriggered: window.current.zoom_to_feature(menu.info.feature) }
 
-        Item { text: "Add annotation…"; visible: !menu.onAnnotation; enabled: menu.info.selection; onTriggered: editor.openNew() }
+        Item { text: "Add annotation…"; visible: !menu.onAnnotation; enabled: menu.info.selection; onTriggered: addAnnotationCommand.trigger() }
         Item {
             text: "Copy sequence (" + menu.info.length + " bp)"
             visible: !menu.onAnnotation

@@ -19,6 +19,10 @@ pub enum Op {
     /// from the same input.
     #[serde(rename = "doc.open")]
     Open { path: String },
+    /// Create an independent unsaved DNA sequence. The initial residues are
+    /// retained so recovery and replay do not need an external source file.
+    #[serde(rename = "doc.create_sequence")]
+    CreateSequence { name: String, residues: String },
     /// Save a document. Records the hash of each file written.
     #[serde(rename = "doc.save")]
     Save { path: String },
@@ -222,6 +226,7 @@ impl Op {
     pub fn name(&self) -> &'static str {
         match self {
             Op::Open { .. } => "doc.open",
+            Op::CreateSequence { .. } => "doc.create_sequence",
             Op::Save { .. } => "doc.save",
             Op::Extract { .. } => "doc.extract",
             Op::Export { .. } => "doc.export",

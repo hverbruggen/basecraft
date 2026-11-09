@@ -31,8 +31,6 @@ AppDialog {
             ["Page Up / Page Down", "Scroll a screen"],
         ] },
         { name: "Annotations", keys: [
-            ["Ctrl+N", "Annotate the selection"],
-            ["Ctrl+Shift+N", "Annotate the selection on the reverse strand"],
             ["Enter", "Edit the selected annotation"],
             ["Delete", "Delete the selected annotation"],
             ["Ctrl+A", "Select the whole sequence (sequence view focus)"],

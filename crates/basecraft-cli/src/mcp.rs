@@ -109,6 +109,7 @@ impl Server {
                 | "redo"
                 | "metadata_template"
                 | "submission_create"
+                | "sequence_create"
                 | "submission_export"
                 | "submission_validation_request"
                 | "submission_record_validation"
@@ -124,6 +125,13 @@ impl Server {
             "open" => {
                 let path = self.path(text(args, "path")?)?;
                 let doc = self.session.open(&path)?;
+                self.documents.insert(doc.0, doc);
+                Ok(self.state(doc))
+            }
+            "sequence_create" => {
+                let doc = self
+                    .session
+                    .create_sequence(text(args, "name")?, text(args, "sequence")?)?;
                 self.documents.insert(doc.0, doc);
                 Ok(self.state(doc))
             }
@@ -497,6 +505,7 @@ fn tools() -> Value {
         tool("provenance_inspect","Read the provenance publication of a saved project result.",json!({"path":string}), &["path"]),
         tool("provenance_verify","Check a saved result against its recorded hashes and retained inputs; runs no tools.",json!({"path":string}), &["path"]),
         tool("replay","Replay the project's operation log in a scratch session and report problems.",json!({}), &[]),
+        tool("sequence_create", "Create an independent unsaved DNA sequence from plain IUPAC text. Save to a new .gb destination with save; edit with apply. Requires writes.", json!({"name":string,"sequence":string}), &["name","sequence"]),
         tool("metadata_open","Open the project's specimen metadata (roster, taxa, identifications, record links, typed collection columns) as a document. With create, write empty tables first if the project has none. Edit it with apply and metadata.edit operations; save it with save.",json!({"create":{"type":"boolean"}}), &[]),
         tool("metadata_plan_headers","Plan, without applying, an import from structured FASTA headers. request: {document: project FASTA path, pattern: {name, separator, fields: [{role: specimen|taxon|record|ignore|column, column?}]}, options?: {create_specimens, overwrite}}. Returns {changes, issues, rows, matched}; apply the reviewed changes with apply {op: metadata.edit, params: {edit: {action: apply, changes}}}.",json!({"document":doc,"request":{"type":"object"}}), &["document","request"]),
         tool("metadata_plan_sheet","Plan, without applying, an import from a spreadsheet (.ods, .xlsx, .csv, .tsv). request: {path, mapping?: {header: {role, column?}} (guessed when omitted), document?: FASTA whose records the record column names, options?}. Returns the plan with the mapping used.",json!({"document":doc,"request":{"type":"object"}}), &["document","request"]),

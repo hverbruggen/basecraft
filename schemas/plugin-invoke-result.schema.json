@@ -2040,6 +2040,35 @@
           ]
         },
         {
+          "description": "Create an independent unsaved DNA sequence. The initial residues are\nretained so recovery and replay do not need an external source file.",
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "doc.create_sequence"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "residues": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "residues"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "params"
+          ]
+        },
+        {
           "description": "Save a document. Records the hash of each file written.",
           "type": "object",
           "properties": {

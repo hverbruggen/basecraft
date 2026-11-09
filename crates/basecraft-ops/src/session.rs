@@ -21,6 +21,7 @@ use crate::error::invalid;
 use crate::files::{self, HashingWriter, Loaded, Opened, OpenedAlignment, OpenedTree};
 use crate::log::LogWriter;
 
+mod creation;
 mod extraction;
 pub mod support_import;
 use crate::{Error, Result};
@@ -928,6 +929,16 @@ impl Session {
         overwrite: bool,
         history_only: bool,
     ) -> Result<()> {
+        if self.docs[id.0].accepted_hashes.is_empty() && path.is_none() {
+            return Err(invalid(
+                "Choose a destination with Save as for this new sequence",
+            ));
+        }
+        if self.docs[id.0].accepted_hashes.is_empty() {
+            if let Some(target) = path {
+                crate::save_guard::Revision::check(None, target)?;
+            }
+        }
         let path = path.filter(|p| !self.is_own_file(id, p));
         let target = path.map_or_else(|| self.resolve(&self.docs[id.0].key), Path::to_path_buf);
         let clean = (history_only || (self.log.is_some() && path.is_none()))
@@ -2807,6 +2818,7 @@ fn execute_sequence(doc: &mut SequenceDoc, op: &Op) -> Result<(Inverse, Option<F
         Op::SubmissionEdit { .. } => Err(invalid("this needs a submission document")),
         Op::JobFinished { .. } => Err(invalid("use log_job_finished")),
         Op::Open { .. }
+        | Op::CreateSequence { .. }
         | Op::Save { .. }
         | Op::Extract { .. }
         | Op::Export { .. }

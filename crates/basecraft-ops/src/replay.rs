@@ -59,6 +59,20 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut Report) -> Re
                 .problems
                 .push(format!("{} {} {}: {msg}", e.id, e.op.name(), e.doc));
         };
+        if let Op::CreateSequence { name, residues } = &e.op {
+            if !safe_key(&e.doc) {
+                problem("unsafe document identity".into());
+                continue;
+            }
+            match session.create_sequence_with_key(&e.doc, name, residues) {
+                Ok(id) if session.state(id) == e.state => {
+                    docs.insert(&e.doc, id);
+                }
+                Ok(_) => problem("created sequence state differs".into()),
+                Err(error) => problem(error.to_string()),
+            }
+            continue;
+        }
         if let Op::Open { path } = &e.op {
             if !safe_key(path) || !safe_key(&e.doc) || path != &e.doc {
                 problem("unsafe or inconsistent document identity".into());
@@ -308,6 +322,17 @@ fn recover_entries(
     let source_root = recorded_source_root(root)?;
     let mut documents = std::collections::BTreeMap::<String, DocId>::new();
     for entry in entries {
+        if let Op::CreateSequence { name, residues } = &entry.op {
+            if !safe_key(&entry.doc) {
+                return Err(crate::error::invalid("unsafe recovery document identity"));
+            }
+            let doc = session.create_sequence_with_key(&entry.doc, name, residues)?;
+            if session.state(doc) != entry.state {
+                return Err(crate::error::invalid("created sequence state differs"));
+            }
+            documents.insert(entry.doc.clone(), doc);
+            continue;
+        }
         if let Op::Open { path } = &entry.op {
             if !safe_key(path) || !safe_key(&entry.doc) || path != &entry.doc {
                 return Err(crate::error::invalid(

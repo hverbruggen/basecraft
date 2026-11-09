@@ -29,7 +29,7 @@ FocusScope {
 
     signal contextMenu(var info)
     signal editFeature(int id)
-    signal newAnnotation
+    signal initializeNew
     signal editSelected
     signal copyText(string text)
     signal toggleSidebar
@@ -40,7 +40,8 @@ FocusScope {
     Component.onCompleted: Qt.callLater(() => {
         ctl.resize(view.width, view.height)
         ctl.set_show_gc(doc.showGc)
-        ctl.open_file(doc.path)
+        if (doc.path.startsWith("untitled:")) doc.initializeNew()
+        else ctl.open_file(doc.path)
         if (doc.defaultLayout !== "wrapped") {
             ctl.switch_view(doc.defaultLayout)
             ctl.fit()
@@ -177,7 +178,6 @@ FocusScope {
             }
             if (ctrl && event.key === Qt.Key_B) { doc.toggleSidebar(); event.accepted = true; return }
             if (ctrl && event.key === Qt.Key_E) { ctl.extract_selection(); event.accepted = true; return }
-            if (ctrl && event.key === Qt.Key_N) { doc.newAnnotation(); event.accepted = true; return }
             if (ctrl && event.key === Qt.Key_C) {
                 const t = ctl.selection_text()
                 if (t.length > 0) doc.copyText(t)

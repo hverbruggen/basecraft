@@ -226,3 +226,17 @@ Registered `basecraft.clade-alignment/extract@1` keeps selected `taxa` and leave
 alignment columns unchanged. Its optional `selection_tree` input retains the
 tree that guided selection; the GUI supplies its exact current document
 revision, including unsaved edits. The alignment remains a separate input.
+
+### New sequence documents
+
+Create an independent DNA sequence with `basecraft new-sequence --name sample --sequence ACGTRYSWKMBDHVN --output sample.gb`. This validates plain IUPAC DNA
+text, ignores whitespace and refuses to overwrite an existing destination.
+RNA, protein and gapped input are rejected explicitly. The initial sequence is
+retained in the typed `doc.create_sequence` record for recovery and replay.
+
+In a writable Python session, `session.create_sequence("sample", "ACGT")`
+returns the new document's state. Use its `document` identifier with the existing
+edit and save methods; the first save needs a new `.gb` path. MCP exposes the
+same method as `sequence_create` with `name` and `sequence` arguments and requires
+`--allow-writes`. Creating a document does not create a source file; recovery
+follows the session's configured recovery policy.

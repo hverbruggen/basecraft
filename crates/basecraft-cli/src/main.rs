@@ -20,6 +20,16 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Create an independent DNA sequence as a new GenBank file.
+    NewSequence {
+        #[arg(long)]
+        name: String,
+        /// Plain IUPAC DNA text (whitespace is ignored).
+        #[arg(long)]
+        sequence: String,
+        #[arg(long)]
+        output: PathBuf,
+    },
     /// Manage trusted local plugin packages.
     Plugins {
         #[command(subcommand)]
@@ -290,6 +300,17 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 basecraft_ops::provenance::package(&result, &output)?;
             }
         },
+        Command::NewSequence {
+            name,
+            sequence,
+            output,
+        } => {
+            let output = std::path::absolute(output)?;
+            let mut session = script_session(output.parent().ok_or("Missing output folder")?)?;
+            let doc = session.create_sequence(&name, &sequence)?;
+            session.save_new(doc, Some(&output))?;
+            println!("Created {}", output.display());
+        }
         Command::Mcp {
             project,
             allow_writes,
