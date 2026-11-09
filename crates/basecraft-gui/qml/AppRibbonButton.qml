@@ -54,14 +54,15 @@ ToolButton {
     display: iconName.length ? AbstractButton.TextUnderIcon : AbstractButton.TextOnly
     font.pixelSize: metrics.captionPixelSize
     implicitWidth: compact ? compactWidth : expandedWidth
-    implicitHeight: metrics.tileHeight
+    implicitHeight: Math.max(iconName.length || badge.length ? metrics.tileHeight : 24 * sizeFactor,
+                             contentItem.implicitHeight + topPadding + bottomPadding)
     icon.source: iconName.length ? Qt.resolvedUrl("../icons/" + iconName + ".svg") : ""
     icon.width: symbolSize * sizeFactor
     icon.height: symbolSize * sizeFactor
     icon.color: palette.buttonText
     // Counts belong beside the symbol, leaving the action caption readable.
     contentItem: Item {
-        implicitWidth: Math.max(symbols.implicitWidth, caption.implicitWidth)
+        implicitWidth: Math.max(symbols.visible ? symbols.implicitWidth : 0, caption.visible ? caption.implicitWidth : 0)
         implicitHeight: (symbols.visible ? symbols.implicitHeight : 0) + (caption.visible ? caption.implicitHeight : 0) + (symbols.visible && caption.visible ? 2 * button.sizeFactor : 0)
         Item {
             id: symbols
