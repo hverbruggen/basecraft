@@ -41,7 +41,7 @@ pub struct Preferences {
 #[serde(default)]
 pub struct Ui {
     /// Optional data palette; its light/dark variant follows the active theme.
-    pub color_blind_friendly: bool,
+    pub data_color_scheme: DataColorScheme,
     pub show_gc: bool,
     pub sidebar_open: bool,
     pub orf_min_codons: u32,
@@ -58,7 +58,7 @@ pub struct Ui {
 impl Default for Ui {
     fn default() -> Self {
         Self {
-            color_blind_friendly: false,
+            data_color_scheme: DataColorScheme::default(),
             show_gc: true,
             sidebar_open: true,
             orf_min_codons: 100,
@@ -69,6 +69,13 @@ impl Default for Ui {
             input_box_height: 20,
         }
     }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum DataColorScheme {
+    #[default]
+    DesktopTheme,
+    ColorBlindFriendly,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
@@ -421,7 +428,7 @@ pub fn canonical_shortcut(value: &str) -> Result<String, Error> {
 /// Each variant changes one field, preventing stale whole-file replacement.
 #[derive(Debug, Clone)]
 pub enum Change {
-    ColorBlindFriendly(bool),
+    DataColorScheme(DataColorScheme),
     ShowGc(bool),
     SidebarOpen(bool),
     OrfMinCodons(u32),
@@ -452,7 +459,7 @@ impl Change {
     }
     fn apply(self, prefs: &mut Preferences) {
         match self {
-            Self::ColorBlindFriendly(v) => prefs.ui.color_blind_friendly = v,
+            Self::DataColorScheme(v) => prefs.ui.data_color_scheme = v,
             Self::ShowGc(v) => prefs.ui.show_gc = v,
             Self::SidebarOpen(v) => prefs.ui.sidebar_open = v,
             Self::OrfMinCodons(v) => prefs.ui.orf_min_codons = v,
@@ -631,7 +638,7 @@ mod tests {
     fn data_palette_preference_round_trips_and_preserves_unknown_settings() {
         let temp = tempfile::tempdir().unwrap();
         let store = SettingsStore::new(temp.path().join("preferences.toml"));
-        assert!(!store.load().unwrap().ui.color_blind_friendly);
+        assert!(store.load().unwrap().ui.data_color_scheme == DataColorScheme::DesktopTheme);
         assert!(
             !store.path.exists(),
             "Viewing defaults must not write settings"
@@ -641,24 +648,32 @@ mod tests {
             "schema_version = 1\n[ui]\nfuture_setting = 17\n",
         )
         .unwrap();
-        store.update(Change::ColorBlindFriendly(true)).unwrap();
+        store
+            .update(Change::DataColorScheme(DataColorScheme::ColorBlindFriendly))
+            .unwrap();
         assert!(
             SettingsStore::new(store.path.clone())
                 .load()
                 .unwrap()
                 .ui
-                .color_blind_friendly
+                .data_color_scheme
+                == DataColorScheme::ColorBlindFriendly
         );
         store.update(Change::ShowGc(false)).unwrap();
-        assert!(store.load().unwrap().ui.color_blind_friendly);
+        assert_eq!(
+            store.load().unwrap().ui.data_color_scheme,
+            DataColorScheme::ColorBlindFriendly
+        );
         let raw: toml::Value =
             toml::from_str(&std::fs::read_to_string(&store.path).unwrap()).unwrap();
         assert_eq!(raw["ui"]["future_setting"].as_integer(), Some(17));
-        store.update(Change::ColorBlindFriendly(false)).unwrap();
-        assert!(!store.load().unwrap().ui.color_blind_friendly);
+        store
+            .update(Change::DataColorScheme(DataColorScheme::DesktopTheme))
+            .unwrap();
+        assert!(store.load().unwrap().ui.data_color_scheme == DataColorScheme::DesktopTheme);
         std::fs::write(
             &store.path,
-            "schema_version = 1\n[ui]\ncolor_blind_friendly = 'yes'\n",
+            "schema_version = 1\n[ui]\ndata_color_scheme = 'unknown'\n",
         )
         .unwrap();
         assert!(store.load().is_err());

@@ -516,40 +516,58 @@ pub(crate) struct ThemeStamp {
     preferences: Option<SystemTime>,
 }
 
-pub(crate) fn theme_stamp() -> ThemeStamp {
+fn theme_stamp_at(desktop: Option<&Path>, preferences: Option<&Path>) -> ThemeStamp {
     let modified = |path| std::fs::metadata(path).and_then(|m| m.modified()).ok();
     ThemeStamp {
-        desktop: omarchy_theme_path().and_then(modified),
-        preferences: basecraft_platform::paths::AppPaths::discover()
-            .ok()
-            .and_then(|p| modified(p.preferences())),
+        desktop: desktop.and_then(modified),
+        preferences: preferences.and_then(modified),
     }
+}
+
+pub(crate) fn theme_stamp() -> ThemeStamp {
+    let preferences = basecraft_platform::paths::AppPaths::discover()
+        .ok()
+        .map(|p| p.preferences());
+    theme_stamp_at(omarchy_theme_path().as_deref(), preferences.as_deref())
+}
+
+fn color_blind_friendly_at(preferences: &Path) -> bool {
+    basecraft_platform::settings::SettingsStore::new(preferences.to_owned())
+        .load()
+        .ok()
+        .is_some_and(|p| {
+            p.ui.data_color_scheme
+                == basecraft_platform::settings::DataColorScheme::ColorBlindFriendly
+        })
 }
 
 fn color_blind_friendly() -> bool {
     basecraft_platform::paths::AppPaths::discover()
         .ok()
-        .and_then(|p| {
-            basecraft_platform::settings::SettingsStore::new(p.preferences())
-                .load()
-                .ok()
-        })
-        .is_some_and(|p| p.ui.color_blind_friendly)
+        .is_some_and(|p| color_blind_friendly_at(&p.preferences()))
+}
+
+fn load_theme_at(desktop: Option<&Path>, preferences: &Path) -> (Theme, ThemeStamp) {
+    // Capture before reading, so a concurrent update is seen on the next poll.
+    let stamp = theme_stamp_at(desktop, Some(preferences));
+    let theme = desktop
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .map(|text| Theme::from_omarchy(&text))
+        .unwrap_or_default();
+    (
+        theme.with_color_blind_friendly(color_blind_friendly_at(preferences)),
+        stamp,
+    )
 }
 
 pub(crate) fn load_theme() -> Option<(Theme, ThemeStamp)> {
     // Absent desktop configuration still gets the optional light data palette.
     // Failed preferences retain the existing usable default; AppSettings owns
     // startup/update error presentation and never overwrites a damaged file.
-    basecraft_platform::paths::AppPaths::discover().ok()?;
-    let stamp = theme_stamp();
-    let theme = omarchy_theme_path()
-        .and_then(|path| std::fs::read_to_string(path).ok())
-        .map(|text| Theme::from_omarchy(&text))
-        .unwrap_or_default();
-    Some((
-        theme.with_color_blind_friendly(color_blind_friendly()),
-        stamp,
+    let paths = basecraft_platform::paths::AppPaths::discover().ok()?;
+    Some(load_theme_at(
+        omarchy_theme_path().as_deref(),
+        &paths.preferences(),
     ))
 }
 
@@ -2307,6 +2325,37 @@ fn feature_from_json(text: &str) -> Result<Feature, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn data_palette_refresh_uses_preference_and_appearance_stamps() {
+        use basecraft_platform::settings::{Change, DataColorScheme, SettingsStore};
+        let temp = tempfile::tempdir().unwrap();
+        let preferences = temp.path().join("preferences.toml");
+        let desktop = temp.path().join("colors.toml");
+        let (normal, before) = load_theme_at(None, &preferences);
+        assert_eq!(normal, Theme::default());
+        assert!(!preferences.exists());
+        SettingsStore::new(preferences.clone())
+            .update(Change::DataColorScheme(DataColorScheme::ColorBlindFriendly))
+            .unwrap();
+        let (light, after) = load_theme_at(None, &preferences);
+        assert_ne!(before, after);
+        assert_eq!(light, Theme::default().with_color_blind_friendly(true));
+        std::fs::write(&desktop, "mode = \"dark\"\nbackground = \"#111111\"\ndark_background = \"#222222\"\ndarker_background = \"#333333\"\nselection = \"#444444\"\n").unwrap();
+        let (dark, stamp) = load_theme_at(Some(&desktop), &preferences);
+        assert!(dark.dark);
+        assert_ne!(stamp, after);
+        assert_ne!(dark.data_palette(), light.data_palette());
+        SettingsStore::new(preferences.clone())
+            .update(Change::DataColorScheme(DataColorScheme::DesktopTheme))
+            .unwrap();
+        assert!(
+            load_theme_at(Some(&desktop), &preferences)
+                .0
+                .data_colors
+                .is_none()
+        );
+    }
 
     #[test]
     fn error_summary_keeps_one_readable_line() {

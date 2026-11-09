@@ -68,7 +68,7 @@ AppFormDialog {
         objectName: "colorBlindFriendly"
         text: "Colour-blind-friendly data colours"
         Accessible.description: "Uses the light or dark variant of the active appearance for residues, traces and species groups. Labels still identify the data."
-        checked: dialog.values.ui ? !!dialog.values.ui.color_blind_friendly : false
+        checked: dialog.values.ui ? dialog.values.ui.data_color_scheme === "color-blind-friendly" : false
         onToggled: dialog.change("colorBlindFriendly", checked)
     }
     Label {

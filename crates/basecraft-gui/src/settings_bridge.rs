@@ -1,7 +1,7 @@
 //! QML boundary for the Qt-independent preferences service.
 use basecraft_platform::{
     paths::AppPaths,
-    settings::{Change, Preferences, SettingsStore},
+    settings::{Change, DataColorScheme, Preferences, SettingsStore},
 };
 use cxx_qt::CxxQtType;
 use cxx_qt_lib::QString;
@@ -74,7 +74,11 @@ fn change(key: &str, value: &serde_json::Value) -> Result<Change, String> {
             .ok_or_else(|| format!("{key} requires a positive integer"))
     };
     Ok(match key {
-        "colorBlindFriendly" => Change::ColorBlindFriendly(boolean()?),
+        "colorBlindFriendly" => Change::DataColorScheme(if boolean()? {
+            DataColorScheme::ColorBlindFriendly
+        } else {
+            DataColorScheme::DesktopTheme
+        }),
         "showGc" => Change::ShowGc(boolean()?),
         "sidebarOpen" => Change::SidebarOpen(boolean()?),
         "orfMinCodons" => Change::OrfMinCodons(integer()?),

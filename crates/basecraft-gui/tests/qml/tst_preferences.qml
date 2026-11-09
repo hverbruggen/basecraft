@@ -17,7 +17,7 @@ Item {
             lastKey = key; lastValue = JSON.parse(value)
             if (key === "colorBlindFriendly") {
                 const prefs = JSON.parse(snapshot)
-                prefs.ui.color_blind_friendly = lastValue
+                prefs.ui.data_color_scheme = lastValue ? "color-blind-friendly" : "desktop-theme"
                 snapshot = JSON.stringify(prefs)
             }
             return true
