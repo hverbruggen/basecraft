@@ -120,7 +120,7 @@ Item {
         let entries = []
         for (let i = 0; i < menu.count; ++i) {
             const item = menu.itemAt(i)
-            if (item && item.visible) entries.push({item:item, key:commandKey(item) || "ABCDEFGHIKLMNOPQRSTUVWX"[i]})
+            if (item && item.visible) entries.push({item:item, key:commandKey(item) || "ABCDEFGHIKLMNOPQRSTUVWX"[entries.length]})
         }
         targets = entries
     }
@@ -143,8 +143,9 @@ Item {
     Keys.onShortcutOverride: event => { if (level) event.accepted = true }
     Keys.onPressed: event => {
         if (event.key === Qt.Key_Alt && event.modifiers !== Qt.GroupSwitchModifier && !event.isAutoRepeat) {
-            mnemonicsVisible = dialogs.length > 0
-            altAlone = !popupContext(); event.accepted = false; return
+            const alone = (event.modifiers & ~Qt.AltModifier) === 0
+            mnemonicsVisible = alone && dialogs.length > 0
+            altAlone = alone && !popupContext(); event.accepted = false; return
         }
         if (event.key !== Qt.Key_Alt) altAlone = false
         if (!level && event.key === Qt.Key_F10 && !event.modifiers && !popupContext()) { start(); event.accepted = true; return }
@@ -152,6 +153,8 @@ Item {
             if (!popupContext() && (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab)) {
                 for (let item = hostWindow.activeFocusItem; item; item = item.parent) {
                     if (item === tabBar) { ribbon.enter(event.key === Qt.Key_Backtab || !!(event.modifiers & Qt.ShiftModifier)); event.accepted = true; return }
+                    const group = ribbon.groups().find(g => g.entries().includes(item))
+                    if (group) { ribbon.browsingGroup = group; ribbon.moveGroup(event.key === Qt.Key_Backtab || !!(event.modifiers & Qt.ShiftModifier)); event.accepted = true; return }
                 }
             }
             const target = dialogs.length && event.modifiers === Qt.AltModifier ? dialogTargets.find(t => t.key === event.text.toUpperCase()) : null

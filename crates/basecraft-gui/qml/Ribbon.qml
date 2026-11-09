@@ -79,6 +79,7 @@ Control {
         if (control.commandAction) control.commandAction.trigger()
         else if (control.action) control.action.trigger()
         else if (control instanceof RibbonNumberField) control.edit()
+        else if (control.click) control.click()
         else if (control.clicked) control.clicked()
         else { control.forceActiveFocus(Qt.TabFocusReason); if (control.toggle) control.toggle() }
     }

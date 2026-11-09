@@ -17,6 +17,7 @@ Item {
         }
         return source.slice(begin, end)
     }
+    Component { id: menuHookComponent; Connections { property var hints; function onOpened() { hints.menuOpened(target) } } }
     Component { id: hintsComponent; RibbonKeyHints {} }
     Component { id: tabsComponent; RibbonTabs {} }
     Component { id: inputComponent; TextField {} }
@@ -72,6 +73,9 @@ Item {
                     property bool overviewEnabled: true
                     property var customization: ({shortcuts: {}, ribbon_hidden: []})
                     property var recentProjects: []
+                    property string selectedProject: ""
+                    function fileName(path) { return path.split("/").pop() }
+                    function selectProject(path) { selectedProject=path }
                     property var commands: []
                     function registerRibbonCommand(c) { commands.push(c) }
                     ${host.block("function ribbonIconFor(")}
@@ -135,6 +139,31 @@ Item {
             hints.stop(true)
             scene.destroy()
         }
+        function test_recent_project_menu_hint_journey() {
+            const scene = productionRibbon()
+            scene.recentProjects=["/project/one", "/project/two"]
+            const ribbon = findChild(scene,"applicationRibbon")
+            ribbon.width=1600
+            const bar=tabsComponent.createObject(scene,{names:scene.ribbonTabs, selectedName:scene.ribbonTab})
+            bar.selected.connect(name=>scene.ribbonTabName=name)
+            const input=inputComponent.createObject(scene,{y:300,width:200})
+            const hints=hintsComponent.createObject(scene,{hostWindow:scene.Window.window, tabBar:bar, ribbon:ribbon})
+            const menu=findChild(scene,"recentProjectMenu")
+            verify(menu instanceof RibbonMenu,"Recent uses the production shared menu hook")
+            // Substitute the ApplicationWindow host registration in this Item fixture.
+            menuHookComponent.createObject(scene,{target:menu, hints:hints})
+            input.forceActiveFocus(); wait(20)
+            keyClick(Qt.Key_F10); keyClick(Qt.Key_F); tryCompare(hints,"level",2)
+            keyClick(Qt.Key_R); keyClick(Qt.Key_C); tryCompare(hints,"level",3)
+            compare(hints.targets.length,2)
+            keyClick(Qt.Key_Escape); compare(hints.level,2)
+            keyClick(Qt.Key_R); keyClick(Qt.Key_C); tryCompare(hints,"level",3)
+            keyClick(Qt.Key_A)
+            compare(scene.selectedProject,"/project/one")
+            compare(hints.level,0)
+            compare(input.text,"")
+            scene.destroy()
+        }
         function test_ribbon_visual_evidence() {
             const args = Qt.application.arguments
             const index = args.indexOf("-o")
@@ -153,6 +182,9 @@ Item {
                 for (const dark of [false,true]) {
                     ribbon.palette.buttonText = dark ? "#eeeeee" : "#222222"
                     ribbon.palette.window = dark ? "#222222" : "#ffffff"
+                    ribbon.palette.button = dark ? "#333333" : "#eeeeee"
+                    ribbon.palette.base = ribbon.palette.button
+                    ribbon.palette.text = ribbon.palette.buttonText
                     ribbon.palette.windowText = ribbon.palette.buttonText
                     ribbon.background.color = ribbon.palette.window
                     verify(waitForPolish(scene.Window.window))
@@ -236,6 +268,13 @@ Item {
                     scene.ribbonTabName = name
                     verify(waitForPolish(scene.Window.window))
                     const height = ribbon.height
+                    const keys = ribbon.groups().reduce((result,g) => result.concat(g.entries().map(c => {
+                        const command = c.commandAction || c.action
+                        return command && command.keyHint ? command.keyHint : c.keyHint || ""
+                    })),[])
+                    verify(keys.every(key => key.length > 0), name + " gives every control an access key")
+                    for (let i=0;i<keys.length;i++) for (let j=i+1;j<keys.length;j++)
+                        verify(!keys[i].startsWith(keys[j]) && !keys[j].startsWith(keys[i]), name + " has unambiguous keys: " + keys[i] + "/" + keys[j])
                     tryVerify(() => !ribbon.overflowing, 2000, name + " fits without horizontal scrolling: " + ribbon.pageWidth + "/" + ribbon.availableWidth + " " + JSON.stringify(ribbon.groups().map(g=>({title:g.title, mode:g.presentation, width:g.implicitWidth}))))
                     for (const command of scene.commands) {
                         if (name === "Sequence" && command.commandId === "ribbon.annotate-the-selection") compare(command.enabled, kind === "sequence")

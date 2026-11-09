@@ -1131,12 +1131,14 @@ ApplicationWindow {
                             tip: "Open a recent project"
                             Accessible.role: Accessible.ButtonMenu
                             onClicked: recentProjectMenu.popup(recentProjectButton, 0, height)
-                            Menu {
+                            RibbonMenu {
                                 id: recentProjectMenu
-                                MenuItem { text: "No recent projects"; enabled: false; visible: window.recentProjects.length === 0 }
+                                objectName: "recentProjectMenu"
+                                sizeFactor: window.ribbonSizeFactor
+                                RibbonMenuItem { sizeFactor: window.ribbonSizeFactor; text: "No recent projects"; enabled: false; visible: window.recentProjects.length === 0 }
                                 Repeater {
                                     model: window.recentProjects
-                                    MenuItem {
+                                    RibbonMenuItem { sizeFactor: window.ribbonSizeFactor;
                                         required property string modelData
                                         text: window.fileName(modelData)
                                         ToolTip.text: modelData
