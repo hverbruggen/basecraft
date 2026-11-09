@@ -534,8 +534,7 @@ pub(crate) fn theme_stamp() -> ThemeStamp {
 fn color_blind_friendly_at(preferences: &Path) -> bool {
     basecraft_platform::settings::SettingsStore::new(preferences.to_owned())
         .load()
-        .ok()
-        .is_some_and(|p| {
+        .is_ok_and(|p| {
             p.ui.data_color_scheme
                 == basecraft_platform::settings::DataColorScheme::ColorBlindFriendly
         })
@@ -543,8 +542,7 @@ fn color_blind_friendly_at(preferences: &Path) -> bool {
 
 fn color_blind_friendly() -> bool {
     basecraft_platform::paths::AppPaths::discover()
-        .ok()
-        .is_some_and(|p| color_blind_friendly_at(&p.preferences()))
+        .is_ok_and(|p| color_blind_friendly_at(&p.preferences()))
 }
 
 fn load_theme_at(desktop: Option<&Path>, preferences: &Path) -> (Theme, ThemeStamp) {
