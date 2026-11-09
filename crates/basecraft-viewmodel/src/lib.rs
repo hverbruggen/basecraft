@@ -5,6 +5,7 @@
 
 pub mod alignment;
 pub mod delimitation;
+pub mod find;
 pub mod frame;
 pub mod genome;
 pub mod sanger;

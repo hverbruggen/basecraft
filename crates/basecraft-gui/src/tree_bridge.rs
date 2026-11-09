@@ -62,6 +62,11 @@ pub mod qobject {
         /// Show the tree in `path` with `edits`, a JSON list of drawing
         /// edits, replayed on it. Nothing is written.
         #[qinvokable]
+        fn find_query(self: Pin<&mut TreeController>, query: &QString, reverse: bool);
+        #[qinvokable]
+        fn find_poll(self: Pin<&mut TreeController>, direction: i32) -> QString;
+
+        #[qinvokable]
         fn show_tree(self: Pin<&mut TreeController>, path: &QString, edits: &QString) -> bool;
         #[qsignal]
         #[cxx_name = "drawingEdited"]
@@ -270,6 +275,8 @@ use crate::bridge::{
 
 #[allow(clippy::struct_excessive_bools)]
 pub struct TreeRust {
+    find: basecraft_viewmodel::find::Session,
+    find_status_revision: u64,
     frame: QByteArray,
     canvas_geometry: QString,
     last_taxa: String,
@@ -315,6 +322,8 @@ pub struct TreeRust {
 impl Default for TreeRust {
     fn default() -> Self {
         let mut c = Self {
+            find: basecraft_viewmodel::find::Session::default(),
+            find_status_revision: u64::MAX,
             frame: QByteArray::default(),
             canvas_geometry: QString::from("{}"),
             last_taxa: String::new(),
@@ -515,7 +524,10 @@ impl qobject::TreeController {
                 return;
             };
             let d = session.tree(doc);
+            r.find
+                .invalidate(&crate::find_bridge::document_key(session, doc));
             r.view.build(d, &r.theme, &mut r.scratch);
+            r.view.draw_find(&r.find, &r.theme, &mut r.scratch);
             (
                 r.scratch.to_bytes(),
                 r.view.status(d),
@@ -1871,6 +1883,41 @@ impl qobject::TreeController {
 impl TreeRust {
     fn view_size(&self) -> (f32, f32) {
         self.view.size()
+    }
+}
+
+crate::find_bridge::controller_find!(qobject::TreeController);
+
+impl qobject::TreeController {
+    fn find_update(mut self: std::pin::Pin<&mut Self>) {
+        let mut r = self.as_mut().rust_mut();
+        let r = &mut *r;
+        let (Some(session), Some(doc)) = (&r.session, r.doc) else {
+            return;
+        };
+        let key = crate::find_bridge::document_key(session, doc);
+        let d = session.tree(doc);
+        r.find.update(key, || {
+            basecraft_viewmodel::find::Input::Names(
+                d.tips_in_order()
+                    .iter()
+                    .map(|&node| (node, d.node(node).name.clone()))
+                    .collect(),
+            )
+        });
+    }
+    fn find_reveal(mut self: std::pin::Pin<&mut Self>) {
+        let mut r = self.as_mut().rust_mut();
+        let r = &mut *r;
+        let (Some(session), Some(doc), Some(hit)) = (&r.session, r.doc, r.find.hit()) else {
+            return;
+        };
+        let d = session.tree(doc);
+        r.view.sync(d);
+        r.view.reveal_find(hit.row);
+    }
+    fn find_y(&self) -> f32 {
+        0.0
     }
 }
 

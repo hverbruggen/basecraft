@@ -766,6 +766,38 @@ pub fn tip_label(doc: &TreeDoc, name: &str) -> String {
         .unwrap_or_else(|| display_name(name))
 }
 
+impl TreeView {
+    pub fn reveal_find(&mut self, node: usize) {
+        self.reveal(node);
+        // Include the label even when a wide tree was horizontally panned.
+        if let Some(&x) = self.layout.x.get(node)
+            && (x < self.scroll_x || self.layout.label_end > self.scroll_x + self.width)
+        {
+            self.scroll_x = x - self.width * 0.25;
+            self.clamp_scroll();
+        }
+    }
+    pub fn draw_find(&self, find: &crate::find::Session, theme: &Theme, frame: &mut Frame) {
+        for (i, hit) in find.results.hits.iter().enumerate() {
+            let Some((x, y)) = self.node_position(hit.row) else {
+                continue;
+            };
+            let h = self.layout.row;
+            if y < 0.0 || y > self.height {
+                continue;
+            }
+            let x = x.max(0.0);
+            let end = (self.layout.label_end - self.scroll_x).min(self.width);
+            crate::find::outline(
+                frame,
+                (x, y - h * 0.5, end - x, h),
+                theme,
+                i == find.current,
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 fn layout(doc: &TreeDoc, width: f32, height: f32, row_zoom: f32, width_zoom: f32) -> Layout {
     layout_with(doc, &[], width, height, row_zoom, width_zoom)

@@ -1018,6 +1018,157 @@ fn segment(frame: &mut Frame, x0: f32, y0: f32, x1: f32, y1: f32, color: [f32; 4
     );
 }
 
+impl SangerReviewView {
+    /// Build a cheap immutable snapshot; reference consensus and display-row
+    /// materialization run on the Find worker, never on the GUI thread.
+    pub fn find_input(&self) -> crate::find::Input {
+        let alignment = self.alignment.as_ref().map(|context| {
+            (
+                context.alignment.snapshot(),
+                context
+                    .representatives
+                    .iter()
+                    .map(|r| r.row)
+                    .collect::<Vec<_>>(),
+            )
+        });
+        let columns = self.columns.clone();
+        let draft = self.draft.clone();
+        let consensus = self.consensus.clone();
+        let reads = self.lanes.len();
+        crate::find::Input::DeferredRows(Box::new(move |cancel| {
+            let mut rows = Vec::new();
+            if let Some((alignment, representatives)) = &alignment {
+                rows.push(crate::find::Row {
+                    id: rows.len(),
+                    name: "Reference consensus".into(),
+                    bases: columns
+                        .iter()
+                        .map(|c| {
+                            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                                return b' ';
+                            }
+                            c.source
+                                .and_then(|col| alignment.consensus_at(col as u64))
+                                .map_or(b'-', |c| c.residue)
+                        })
+                        .collect(),
+                });
+                for representative in representatives {
+                    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                        return Vec::new();
+                    }
+                    rows.push(crate::find::Row {
+                        id: rows.len(),
+                        name: format!("Reference: {}", alignment.row(*representative).name),
+                        bases: columns
+                            .iter()
+                            .map(|c| {
+                                c.source.map_or(b'-', |col| {
+                                    alignment.read(*representative, col as u64, col as u64 + 1)[0]
+                                })
+                            })
+                            .collect(),
+                    });
+                }
+            }
+            rows.push(crate::find::Row {
+                id: rows.len(),
+                name: "Draft consensus".into(),
+                bases: columns
+                    .iter()
+                    .map(|c| c.draft.map_or(b'-', |col| consensus[col]))
+                    .collect(),
+            });
+            for read in 0..reads {
+                rows.push(crate::find::Row {
+                    id: rows.len(),
+                    name: format!(
+                        "Read {}: {}",
+                        read + 1,
+                        draft.inputs[read]
+                            .path
+                            .file_stem()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                    ),
+                    bases: columns
+                        .iter()
+                        .map(|c| {
+                            c.draft
+                                .and_then(|i| {
+                                    draft.columns[i].support.iter().find(|s| s.read == read + 1)
+                                })
+                                .map_or(b' ', |s| s.base as u8)
+                        })
+                        .collect(),
+                });
+            }
+            rows
+        }))
+    }
+    /// Key only the data that determines Find positions/labels. Signal samples,
+    /// viewport, selection and review masks do not change searchable symbols.
+    pub fn find_key(&self) -> String {
+        let mut bytes = self.consensus.clone();
+        for column in &self.columns {
+            bytes.extend_from_slice(&column.source.unwrap_or(usize::MAX).to_le_bytes());
+            bytes.extend_from_slice(&column.draft.unwrap_or(usize::MAX).to_le_bytes());
+        }
+        for input in &self.draft.inputs {
+            let name = input.path.to_string_lossy();
+            bytes.extend_from_slice(&name.len().to_le_bytes());
+            bytes.extend_from_slice(name.as_bytes());
+        }
+        for column in &self.draft.columns {
+            bytes.extend_from_slice(&column.support.len().to_le_bytes());
+            for support in &column.support {
+                bytes.extend_from_slice(&support.read.to_le_bytes());
+                bytes.extend_from_slice(&(support.base as u32).to_le_bytes());
+            }
+        }
+        if let Some(context) = &self.alignment {
+            bytes.extend_from_slice(context.placement.source_sha256.as_bytes());
+            bytes.extend_from_slice(&context.alignment.version().to_le_bytes());
+            for row in &context.representatives {
+                bytes.extend_from_slice(&row.row.to_le_bytes());
+            }
+        }
+        basecraft_io::hash_bytes(&bytes)
+    }
+    pub fn find_row_y(&self, row: usize) -> f32 {
+        let references = self
+            .alignment
+            .as_ref()
+            .map_or(0, |a| 1 + a.representatives.len());
+        match row.cmp(&references) {
+            std::cmp::Ordering::Less => ROW + row as f32 * REFERENCE_ROW,
+            std::cmp::Ordering::Equal => self.consensus_y(),
+            std::cmp::Ordering::Greater => {
+                let read = row - references - 1;
+                self.lane_top(read) + self.lanes[read].height + 8.0
+            }
+        }
+    }
+    pub fn reveal_find(&mut self, position: u64) {
+        let visible = self.available() / f64::from(self.column_width);
+        self.left = position as f64 - visible * 0.25;
+        self.clamp();
+    }
+    pub fn draw_find(&self, find: &crate::find::Session, theme: &Theme, frame: &mut Frame) {
+        for (i, hit) in find.results.hits.iter().enumerate() {
+            let x = self.x(hit.start as f64).max(NAMES);
+            let end = self.x(hit.end as f64).min(self.width);
+            crate::find::outline(
+                frame,
+                (x, self.find_row_y(hit.row), end - x, ROW),
+                theme,
+                i == find.current,
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1025,6 +1176,47 @@ mod tests {
     use basecraft_io::abif::CallSet;
     use std::sync::Arc;
 
+    #[test]
+    fn find_review_rows_keep_identity_and_selection() {
+        let mut view = review(true);
+        let rows = find_rows(&view);
+        assert_eq!(rows.iter().map(|r| r.id).collect::<Vec<_>>(), vec![0, 1, 2]);
+        assert_eq!(rows[0].name, "Draft consensus");
+        assert!(rows[1].name.starts_with("Read 1:"));
+        assert!(rows[2].name.starts_with("Read 2:"));
+        let result = crate::find::search(
+            crate::find::Input::Rows(rows),
+            "AC",
+            false,
+            &std::sync::atomic::AtomicBool::new(false),
+        );
+        assert_eq!(
+            result.hits.iter().map(|h| h.row).collect::<Vec<_>>(),
+            vec![0, 1, 2]
+        );
+        view.selected = 1;
+        view.reveal_find(result.hits[2].start);
+        assert_eq!(view.selected, 1);
+        assert!(view.find_row_y(2) > view.find_row_y(1));
+        view.consensus[0] = b'T';
+        let result = crate::find::search(
+            crate::find::Input::Rows(find_rows(&view)),
+            "AC",
+            false,
+            &std::sync::atomic::AtomicBool::new(false),
+        );
+        assert_eq!(
+            result.hits.iter().map(|h| h.row).collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+    }
+
+    fn find_rows(view: &SangerReviewView) -> Vec<crate::find::Row> {
+        let crate::find::Input::DeferredRows(rows) = view.find_input() else {
+            panic!("review snapshot")
+        };
+        rows(&std::sync::atomic::AtomicBool::new(false))
+    }
     fn review(reverse: bool) -> SangerReviewView {
         let raw = serde_json::json!({
             "status":"draft_requires_review", "engine":"Tracy", "version_output":"test",
@@ -1061,6 +1253,34 @@ mod tests {
             .collect();
         SangerReviewView::new(serde_json::from_value(raw).unwrap(), traces).unwrap()
     }
+    #[test]
+    fn find_reference_rows_use_display_columns() {
+        let mut view = review(false);
+        attach(&mut view);
+        let rows = find_rows(&view);
+        assert_eq!(rows[0].name, "Reference consensus");
+        assert_eq!(rows[0].bases.len(), view.columns.len());
+        let consensus_row = rows
+            .iter()
+            .position(|r| r.name == "Draft consensus")
+            .unwrap();
+        let result = crate::find::search(
+            crate::find::Input::Rows(rows),
+            "AC",
+            false,
+            &std::sync::atomic::AtomicBool::new(false),
+        );
+        let hit = result.hits.iter().find(|h| h.row == consensus_row).unwrap();
+        assert_eq!((hit.start, hit.end), (0, 4));
+        assert_eq!(view.find_row_y(consensus_row), view.consensus_y());
+        assert!(
+            result
+                .hits
+                .iter()
+                .any(|h| h.label.starts_with("Reference:"))
+        );
+    }
+
     fn attach(view: &mut SangerReviewView) {
         let rows = vec![
             AlnRow::new("reference-a", Arc::new(b"A-GC".to_vec())),

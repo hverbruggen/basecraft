@@ -38,6 +38,11 @@ pub mod qobject {
         #[qproperty(QString, bar_columns)]
         type DelimitationController = super::DelimitationRust;
         #[qinvokable]
+        fn find_query(self: Pin<&mut DelimitationController>, query: &QString, reverse: bool);
+        #[qinvokable]
+        fn find_poll(self: Pin<&mut DelimitationController>, direction: i32) -> QString;
+
+        #[qinvokable]
         fn accessible_page(self: &DelimitationController, page: i32) -> QString;
         #[qinvokable]
         fn document_record(self: &DelimitationController) -> QString;
@@ -193,6 +198,8 @@ use std::{
 };
 
 pub struct DelimitationRust {
+    find: basecraft_viewmodel::find::Session,
+    find_status_revision: u64,
     workspace_json: QString,
     selection_json: QString,
     preview_json: QString,
@@ -229,6 +236,8 @@ pub struct DelimitationRust {
 impl Default for DelimitationRust {
     fn default() -> Self {
         Self {
+            find: basecraft_viewmodel::find::Session::default(),
+            find_status_revision: u64::MAX,
             workspace_json: QString::from("{}"),
             selection_json: QString::from("[]"),
             preview_json: QString::from("[]"),
@@ -2286,6 +2295,41 @@ fn root_tree_copy(
     // Keep only complete saves; a failed save cannot be fitted or attached.
     let _ = output.keep();
     Ok(target)
+}
+
+crate::find_bridge::controller_find!(qobject::DelimitationController);
+
+impl qobject::DelimitationController {
+    fn find_update(mut self: std::pin::Pin<&mut Self>) {
+        let mut r = self.as_mut().rust_mut();
+        let r = &mut *r;
+        let (Some(session), Some(doc)) = (&r.session, r.doc) else {
+            return;
+        };
+        let key = crate::find_bridge::document_key(session, doc);
+        let d = session.delimitation(doc);
+        r.find.update(key, || {
+            basecraft_viewmodel::find::Input::Names(
+                d.specimens
+                    .iter()
+                    .enumerate()
+                    .map(|(i, s)| (i, s.label.clone()))
+                    .collect(),
+            )
+        });
+    }
+    fn find_reveal(mut self: std::pin::Pin<&mut Self>) {
+        let mut r = self.as_mut().rust_mut();
+        let r = &mut *r;
+        let (Some(session), Some(doc), Some(hit)) = (&r.session, r.doc, r.find.hit()) else {
+            return;
+        };
+        let d = session.delimitation(doc);
+        let _ = (d, hit);
+    }
+    fn find_y(&self) -> f32 {
+        0.0
+    }
 }
 
 #[cfg(test)]

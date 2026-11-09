@@ -6,6 +6,22 @@ import Basecraft
 
 FocusScope {
     id: doc
+    property alias findBar: findBar
+    function openFind() { findBar.openFind() }
+    FindBar {
+        id: findBar
+        inputHint: "Sequence motif"
+        sequenceSearch: true
+        nameSearch: false
+        anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
+        controller: ctl
+        documentFocusItem: view
+        activeDocument: doc.visible
+        onRevealed: match => {
+            if (ctl.review_mode) viewport.contentY = Math.max(0, Math.min(viewport.contentHeight - viewport.height, match.y - viewport.height / 3))
+        }
+    }
+
     property var notificationSink: null
     Connections {
         target: ctl
@@ -546,7 +562,7 @@ FocusScope {
         id: viewport
         anchors.fill: parent
         anchors.topMargin: preparationFailure.height + traceActivity.height + reviewNavigation.height
-        anchors.bottomMargin: cutoffBar.height + (ctl.review_mode && ctl.hscroll_size < 0.999 ? 14 : 0)
+        anchors.bottomMargin: findBar.height + cutoffBar.height + (ctl.review_mode && ctl.hscroll_size < 0.999 ? 14 : 0)
         contentWidth: width
         contentHeight: view.height
         clip: true
@@ -668,6 +684,7 @@ FocusScope {
         }
         Binding { target: traceScroll; property: "position"; value: ctl.trace_scroll_pos; when: !traceScroll.pressed; restoreMode: Binding.RestoreNone }
         Keys.onPressed: (event) => {
+            if (event.key === Qt.Key_Escape && findBar.opened) { findBar.closeFind(); event.accepted = true; return }
             if (doc.working || !view.renderingAvailable) { event.accepted = false; return }
             if (ctl.review_mode && !(event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier)) &&
                     (event.key === Qt.Key_Delete || /^[ACGTNRYKMSWBDHV-]$/i.test(event.text))) {
@@ -695,7 +712,7 @@ FocusScope {
         anchors.leftMargin: 180
         anchors.right: parent.right
         anchors.bottom: parent.bottom
-        anchors.bottomMargin: cutoffBar.height
+        anchors.bottomMargin: findBar.height + cutoffBar.height
         size: ctl.hscroll_size
         minimumSize: 0.04
         onPositionChanged: if (pressed) ctl.hscroll_to(position)
@@ -703,6 +720,7 @@ FocusScope {
     Binding { target: reviewScroll; property: "position"; value: ctl.hscroll_pos; when: !reviewScroll.pressed; restoreMode: Binding.RestoreNone }
     Flickable {
         id: cutoffBar
+        anchors.bottomMargin: findBar.height
         objectName: "traceCutoffBar"
         visible: ctl.review_mode
         enabled: !doc.working

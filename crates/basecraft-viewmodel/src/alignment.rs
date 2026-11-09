@@ -1398,6 +1398,33 @@ fn outline(frame: &mut Frame, x: f32, y: f32, w: f32, h: f32, t: f32, color: Rgb
     frame.rect(x + w - t, y, t, h, color);
 }
 
+impl AlignmentView {
+    /// Transient Find outlines, deliberately separate from selection and exports.
+    pub fn draw_find(&self, find: &crate::find::Session, theme: &Theme, frame: &mut Frame) {
+        let top = self.header_height();
+        for (i, hit) in find.results.hits.iter().enumerate() {
+            let y = self.y_of(hit.row);
+            if y < top || y >= self.height {
+                continue;
+            }
+            let (x, end) = if hit.kind == crate::find::Kind::Name {
+                (0.0, self.name_width)
+            } else {
+                (
+                    self.x_of(hit.start as f64).max(self.name_width),
+                    self.x_of(hit.end as f64).min(self.width),
+                )
+            };
+            crate::find::outline(
+                frame,
+                (x, y, end - x, self.row_height().min(self.height - y)),
+                theme,
+                i == find.current,
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

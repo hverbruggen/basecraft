@@ -246,6 +246,50 @@ fn signal_segment(frame: &mut Frame, x0: f32, y0: f32, x1: f32, y1: f32, color: 
     );
 }
 
+impl SangerView {
+    pub fn reveal_find(&mut self, trace: &Trace, position: u64) {
+        if let Some(&sample) = trace.display_calls().positions.get(position as usize) {
+            self.start = f64::from(sample) - f64::from(self.width) * self.samples_per_pixel * 0.25;
+            self.clamp(trace);
+        }
+    }
+    pub fn draw_find(
+        &self,
+        trace: &Trace,
+        find: &crate::find::Session,
+        theme: &Theme,
+        frame: &mut Frame,
+    ) {
+        let positions = &trace.display_calls().positions;
+        let span = f64::from(self.width) * self.samples_per_pixel;
+        for (i, hit) in find.results.hits.iter().enumerate() {
+            let Some(&a) = positions.get(hit.start as usize) else {
+                continue;
+            };
+            let Some(&b) = positions.get(hit.end.saturating_sub(1) as usize) else {
+                continue;
+            };
+            for strip in 0..self.strip_count() {
+                let origin = self.start + strip as f64 * span;
+                let x = ((f64::from(a) - origin) / self.samples_per_pixel - 5.0).max(0.0) as f32;
+                let end = ((f64::from(b) - origin) / self.samples_per_pixel + 5.0)
+                    .min(f64::from(self.width)) as f32;
+                crate::find::outline(
+                    frame,
+                    (
+                        x,
+                        strip as f32 * self.strip_height(),
+                        end - x,
+                        self.strip_height() - 4.0,
+                    ),
+                    theme,
+                    i == find.current,
+                );
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

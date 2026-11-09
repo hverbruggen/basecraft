@@ -55,6 +55,11 @@ pub mod qobject {
         type SangerController = super::SangerRust;
 
         #[qinvokable]
+        fn find_query(self: Pin<&mut SangerController>, query: &QString, reverse: bool);
+        #[qinvokable]
+        fn find_poll(self: Pin<&mut SangerController>, direction: i32) -> QString;
+
+        #[qinvokable]
         fn poll_stage(self: Pin<&mut SangerController>);
         #[qinvokable]
         fn cancel_stage(self: Pin<&mut SangerController>);
@@ -229,6 +234,9 @@ use crate::bridge::{css, load_theme, monospace_font, omarchy_theme_path};
 // Independent generated QML properties describe document state and caller activity.
 #[allow(clippy::struct_excessive_bools)]
 pub struct SangerRust {
+    find: basecraft_viewmodel::find::Session,
+    find_status_revision: u64,
+    find_source_key: String,
     frame: QByteArray,
     status: QString,
     message: QString,
@@ -282,6 +290,9 @@ impl Default for SangerRust {
     fn default() -> Self {
         let (theme, theme_stamp) = load_theme().unwrap_or_else(|| (Theme::default(), None));
         Self {
+            find: basecraft_viewmodel::find::Session::default(),
+            find_status_revision: u64::MAX,
+            find_source_key: String::new(),
             frame: QByteArray::default(),
             status: QString::default(),
             message: QString::default(),
@@ -626,7 +637,12 @@ impl qobject::SangerController {
                             );
                     }
                 }
+                if r.find.active() {
+                    r.find_source_key = format!("{}:{}", r.file_path, review.find_key());
+                    r.find.invalidate(&r.find_source_key);
+                }
                 review.build(&r.theme, &mut r.scratch);
+                review.draw_find(&r.find, &r.theme, &mut r.scratch);
                 let zoom = basecraft_viewmodel::zoom::percent_text(
                     f64::from(review.column_width) / 12.0 * 100.0,
                 );
@@ -656,7 +672,13 @@ impl qobject::SangerController {
                 let Some(trace) = &r.trace else {
                     return;
                 };
+                if r.find.active() {
+                    let (key, _) = r.find_source();
+                    r.find_source_key = key;
+                    r.find.invalidate(&r.find_source_key);
+                }
                 r.view.build_wrapped(trace, &r.theme, &mut r.scratch);
+                r.view.draw_find(trace, &r.find, &r.theme, &mut r.scratch);
                 let calls = trace.display_calls();
                 let status = format!("Instrument calls · {} bases", calls.bases.len());
                 let zoom =
@@ -1932,4 +1954,59 @@ fn display_coordinate(value: f64) -> f32 {
 #[allow(clippy::cast_precision_loss)]
 fn display_count(value: usize) -> f64 {
     value as f64
+}
+
+crate::find_bridge::controller_find!(qobject::SangerController);
+
+impl SangerRust {
+    fn find_source(&self) -> (String, basecraft_viewmodel::find::Input) {
+        if let Some(review) = &self.review {
+            return (
+                format!("{}:{}", self.file_path, review.find_key()),
+                review.find_input(),
+            );
+        }
+        let rows = {
+            self.trace
+                .as_ref()
+                .map(|trace| {
+                    vec![basecraft_viewmodel::find::Row {
+                        id: 0,
+                        name: "Instrument calls".into(),
+                        bases: trace.display_calls().bases.clone(),
+                    }]
+                })
+                .unwrap_or_default()
+        };
+        let key = crate::find_bridge::rows_key(&rows, &self.file_path.to_string());
+        (key, basecraft_viewmodel::find::Input::Rows(rows))
+    }
+}
+impl qobject::SangerController {
+    fn find_update(mut self: std::pin::Pin<&mut Self>) {
+        if !self.rust().find.needs_update(&self.rust().find_source_key) {
+            return;
+        }
+        let (key, input) = self.rust().find_source();
+        self.as_mut().rust_mut().find.update(key, || input);
+    }
+    fn find_reveal(mut self: std::pin::Pin<&mut Self>) {
+        let mut r = self.as_mut().rust_mut();
+        let r = &mut *r;
+        let Some(hit) = r.find.hit() else {
+            return;
+        };
+        if let Some(review) = &mut r.review {
+            review.reveal_find(hit.start);
+        } else if let Some(trace) = &r.trace {
+            r.view.reveal_find(trace, hit.start);
+        }
+    }
+    fn find_y(&self) -> f32 {
+        let r = self.rust();
+        r.review
+            .as_ref()
+            .zip(r.find.hit())
+            .map_or(0.0, |(review, hit)| review.find_row_y(hit.row))
+    }
 }

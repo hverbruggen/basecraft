@@ -7,6 +7,19 @@ import Basecraft
 // for through signals.
 FocusScope {
     id: doc
+    property alias findBar: findBar
+    function openFind() { findBar.openFind() }
+    FindBar {
+        id: findBar
+        inputHint: "Motif or annotation name"
+        sequenceSearch: true
+        nameSearch: true
+        anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
+        controller: ctl
+        documentFocusItem: view
+        activeDocument: doc.visible
+    }
+
     property var notificationSink: null
     Connections {
         target: ctl
@@ -52,6 +65,7 @@ FocusScope {
         accessibleTitle: "Sequence editor"
         accessibleSummary: ctl.status
         anchors.fill: parent
+        anchors.bottomMargin: findBar.height
         clearColor: ctl.background
         fontFamily: ctl.mono_font
         instances: ctl.frame
@@ -170,6 +184,7 @@ FocusScope {
         }
 
         Keys.onPressed: (event) => {
+            if (event.key === Qt.Key_Escape && findBar.opened) { findBar.closeFind(); event.accepted = true; return }
             if (!view.renderingAvailable) { event.accepted = false; return }
             const ctrl = event.modifiers & Qt.ControlModifier
             if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && ctl.selected_feature() >= 0) {
