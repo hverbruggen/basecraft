@@ -1,0 +1,350 @@
+{
+  "schema": 1,
+  "operations": [
+    {
+      "version": "1.0.0",
+      "family": "file_analysis",
+      "outputs": {
+        "receipt": {
+          "media_type": "application/json",
+          "min": 1,
+          "max": 1,
+          "visibility": "result"
+        }
+      },
+      "effects": {
+        "document_write": false,
+        "artifact_write": true
+      },
+      "required_features": [
+        "operation-contract-v1"
+      ],
+      "name": "prepare",
+      "implementation": "prepare",
+      "title": "Prepare selected files for Zenodo",
+      "description": "Freeze selected saved bytes and return an exact names, sizes and SHA-256 preview. No network access.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "result": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "schema": {
+            "const": 1
+          },
+          "selection": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "files": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 100,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "maxLength": 255
+                },
+                "size": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "sha256": {
+                  "type": "string",
+                  "maxLength": 64
+                },
+                "md5": {
+                  "type": "string",
+                  "maxLength": 32
+                },
+                "snapshot": {
+                  "type": "string",
+                  "maxLength": 8192
+                }
+              },
+              "required": [
+                "name",
+                "size",
+                "sha256",
+                "md5",
+                "snapshot"
+              ]
+            }
+          },
+          "total_bytes": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "schema",
+          "selection",
+          "files",
+          "total_bytes"
+        ]
+      },
+      "inputs": {
+        "files": {
+          "view": "bytes",
+          "media_type": "application/octet-stream",
+          "min": 1,
+          "max": 100,
+          "retain": true
+        }
+      }
+    },
+    {
+      "version": "1.0.0",
+      "family": "file_analysis",
+      "outputs": {
+        "receipt": {
+          "media_type": "application/json",
+          "min": 1,
+          "max": 1,
+          "visibility": "result"
+        }
+      },
+      "effects": {
+        "document_write": false,
+        "artifact_write": true
+      },
+      "required_features": [
+        "operation-contract-v1"
+      ],
+      "name": "draft",
+      "implementation": "draft",
+      "title": "Create or resume a Zenodo draft",
+      "description": "Upload only an explicitly prepared selection to a draft. Never publishes. Runtime BASECRAFT_ZENODO_TOKEN only; no credentials in parameters. Retry supplies the retained receipt; uncertain creation must be reconciled on Zenodo.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 10000
+          },
+          "creators": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 25600
+          },
+          "license": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "service": {
+            "type": "string",
+            "enum": [
+              "sandbox",
+              "production"
+            ],
+            "default": "sandbox"
+          },
+          "access_right": {
+            "type": "string",
+            "enum": [
+              "open",
+              "closed"
+            ],
+            "default": "open"
+          }
+        },
+        "required": [
+          "title",
+          "description",
+          "creators",
+          "license"
+        ]
+      },
+      "result": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "schema": {
+            "const": 1
+          },
+          "status": {
+            "enum": [
+              "not_sent",
+              "creation_unknown",
+              "draft_partial",
+              "upload_unknown",
+              "draft_ready",
+              "cancelled"
+            ]
+          },
+          "service": {
+            "enum": [
+              "sandbox",
+              "production"
+            ]
+          },
+          "selection": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "title": {
+                "type": "string",
+                "maxLength": 1000
+              },
+              "description": {
+                "type": "string",
+                "maxLength": 10000
+              },
+              "creators": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 100,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "maxLength": 255
+                    }
+                  },
+                  "required": [
+                    "name"
+                  ]
+                }
+              },
+              "upload_type": {
+                "const": "dataset"
+              },
+              "access_right": {
+                "enum": [
+                  "open",
+                  "closed"
+                ]
+              },
+              "license": {
+                "type": "string",
+                "maxLength": 100
+              }
+            },
+            "required": [
+              "title",
+              "description",
+              "creators",
+              "upload_type",
+              "access_right"
+            ]
+          },
+          "draft_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "url": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "files": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 100,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "maxLength": 255
+                },
+                "size": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "sha256": {
+                  "type": "string",
+                  "maxLength": 64
+                },
+                "md5": {
+                  "type": "string",
+                  "maxLength": 32
+                }
+              },
+              "required": [
+                "name",
+                "size",
+                "sha256",
+                "md5"
+              ]
+            }
+          },
+          "uploaded": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "type": "string",
+              "maxLength": 255
+            }
+          },
+          "message": {
+            "type": "string",
+            "maxLength": 2048
+          }
+        },
+        "required": [
+          "schema",
+          "status",
+          "service",
+          "selection",
+          "metadata",
+          "draft_id",
+          "url",
+          "files",
+          "uploaded",
+          "message"
+        ]
+      },
+      "inputs": {
+        "files": {
+          "view": "bytes",
+          "media_type": "application/octet-stream",
+          "min": 1,
+          "max": 100,
+          "retain": true
+        },
+        "selection": {
+          "view": "bytes",
+          "media_type": "application/octet-stream",
+          "min": 1,
+          "max": 1,
+          "retain": true
+        },
+        "resume": {
+          "view": "bytes",
+          "media_type": "application/octet-stream",
+          "min": 0,
+          "max": 1,
+          "retain": true
+        }
+      }
+    }
+  ]
+}

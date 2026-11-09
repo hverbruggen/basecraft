@@ -55,6 +55,13 @@ pub mod qobject {
         #[qinvokable]
         fn submit(self: Pin<&mut AppOperations>, project: &QString, request: &QString) -> bool;
         #[qinvokable]
+        fn submit_zenodo(
+            self: Pin<&mut AppOperations>,
+            project: &QString,
+            request: &QString,
+            token: &QString,
+        ) -> bool;
+        #[qinvokable]
         fn poll(self: Pin<&mut AppOperations>);
         #[qinvokable]
         fn cancel(self: Pin<&mut AppOperations>);
@@ -272,9 +279,45 @@ impl qobject::AppOperations {
         })
     }
 
+    pub fn submit_zenodo(
+        self: Pin<&mut Self>,
+        project: &QString,
+        request: &QString,
+        token: &QString,
+    ) -> bool {
+        let root = PathBuf::from(project.to_string());
+        let request = request.to_string();
+        let token = token.to_string();
+        self.start_request_with_credential(
+            move || {
+                if request.len() > basecraft_protocol::operation::MAX_FRAME_BYTES {
+                    return Err(basecraft_plugin_host::Error::Protocol(
+                        "operation request exceeds byte limit".into(),
+                    ));
+                }
+                let value: Value = serde_json::from_str(&request)?;
+                if value["operation"] != "basecraft.zenodo/draft@1" {
+                    return Err(basecraft_plugin_host::Error::Protocol(
+                        "unexpected credential recipient".into(),
+                    ));
+                }
+                Ok((root, value))
+            },
+            Some(token),
+        )
+    }
+
     fn start_request(
+        self: Pin<&mut Self>,
+        prepare: impl FnOnce() -> basecraft_plugin_host::Result<(PathBuf, Value)> + Send + 'static,
+    ) -> bool {
+        self.start_request_with_credential(prepare, None)
+    }
+
+    fn start_request_with_credential(
         mut self: Pin<&mut Self>,
         prepare: impl FnOnce() -> basecraft_plugin_host::Result<(PathBuf, Value)> + Send + 'static,
+        credential: Option<String>,
     ) -> bool {
         if self.rust().busy {
             return false;
@@ -298,7 +341,11 @@ impl qobject::AppOperations {
                             ));
                         }
                         let registry = Registry::load(&RegistryConfig::discover()?)?;
-                        let policy = SessionPolicy::new(&root, true)?;
+                        let mut policy = SessionPolicy::new(&root, true)?;
+                        if let Some(token) = credential {
+                            policy =
+                                policy.with_runtime_credential("BASECRAFT_ZENODO_TOKEN", token)?;
+                        }
                         let mut jobs = JobManager::default().with_task_cancellation();
                         let accepted = jobs.submit(
                             &registry,
@@ -318,6 +365,20 @@ impl qobject::AppOperations {
                             let outcome = jobs.get(&accepted.run_id)?;
                             if outcome.state.terminal() {
                                 return Ok(outcome);
+                            }
+                            if let Some(evidence) = &outcome.evidence {
+                                let path = PathBuf::from(evidence).join("progress");
+                                if let Ok(file) = std::fs::File::open(path) {
+                                    use std::io::Read;
+                                    let mut stage = String::new();
+                                    if file.take(4096).read_to_string(&mut stage).is_ok()
+                                        && !stage.trim().is_empty()
+                                    {
+                                        let _ = qt_thread.queue(move |state| {
+                                            state.set_message(QString::from(stage.trim()));
+                                        });
+                                    }
+                                }
                             }
                             std::thread::sleep(std::time::Duration::from_millis(25));
                         }

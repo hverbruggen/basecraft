@@ -1584,6 +1584,11 @@ ApplicationWindow {
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup {
+                        title: "Zenodo"
+                        RibbonButton { commandId: "export.zenodo"; text: "Zenodo"; iconName: "save-as"; tip: shell.project_dir.length ? "Prepare selected saved files for a Zenodo draft" : "Choose a project folder first"; enabled: shell.project_dir.length > 0; onInvoked: { if (zenodoDialog.ready || zenodoJobs.busy || zenodoDialog.attempted) zenodoDialog.open(); else zenodoPicker.open() } }
+                    }
+                    ToolSeparator { Layout.fillHeight: true }
+                    RibbonGroup {
                         title: "Specimens"
                         RibbonButton { commandId: "metadata.table"; text: "Table"; iconName: "matrix"; tip: shell.project_dir.length ? "The project's specimens, identifications and collection data" : "Choose a project folder first"; enabled: shell.project_dir.length > 0; onInvoked: specimenTable.open() }
                     }
@@ -1626,6 +1631,23 @@ ApplicationWindow {
     OperationPickerDialog { id: operationPicker; onOpenResult: (path) => window.openPath(path) }
 
     ShortcutsDialog { id: shortcuts; commands: window.applicationCommands }
+
+    AppOperations { id: zenodoJobs }
+    ZenodoDialog { id: zenodoDialog; backend: zenodoJobs; onChooseFiles: zenodoPicker.open() }
+    FileDialog {
+        id: zenodoPicker
+        title: "Choose saved files for a Zenodo draft"
+        fileMode: FileDialog.OpenFiles
+        currentFolder: window.activeFolder()
+        onAccepted: {
+            let defaults = {}
+            if (submissions.available) {
+                const doc = JSON.parse(submissions.document || "{}")
+                defaults = {title: (doc.publication || {}).title || "", creators: doc.publication_authors_text || ""}
+            }
+            zenodoDialog.show(Array.from(selectedFiles, url => window.localPath(url)), shell.project_dir, defaults)
+        }
+    }
 
     // The project's specimen metadata (Export tab). It follows the
     // project folder; opening a project never creates metadata files.

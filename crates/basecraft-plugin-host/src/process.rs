@@ -87,6 +87,20 @@ impl PluginProcess {
         python: &Path,
         budget: usize,
     ) -> Result<Self> {
+        Self::spawn_with_credentials(
+            manifest,
+            python,
+            budget,
+            &crate::policy::RuntimeCredentials::default(),
+        )
+    }
+
+    pub(crate) fn spawn_with_credentials(
+        manifest: &Manifest,
+        python: &Path,
+        budget: usize,
+        credentials: &crate::policy::RuntimeCredentials,
+    ) -> Result<Self> {
         let python = if manifest.runtime.is_some() {
             let runtime = manifest.managed_runtime.as_ref().ok_or_else(|| {
                 Error::Protocol(
@@ -132,6 +146,7 @@ impl PluginProcess {
         listener.set_nonblocking(true)?;
         let mut command = Command::new(python);
         crate::runtime::configure_command(&mut command, manifest, python)?;
+        command.envs(&credentials.0);
         for name in [
             "BASECRAFT_CPU_THREADS",
             "OMP_NUM_THREADS",
