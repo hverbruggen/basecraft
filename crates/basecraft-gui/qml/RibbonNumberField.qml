@@ -1,9 +1,11 @@
 import QtQuick
+import "CommandHints.js" as CommandHints
 import QtQuick.Controls.Basic
 
 // A small captioned number box for the ribbon, such as a font size.
 Item {
     id: field
+    property string keyHint: objectName === "supportFont" ? "U" : "Q"
     property alias label: caption.text
     property alias from: box.from
     property alias to: box.to
@@ -16,6 +18,7 @@ Item {
     ToolTip.visible: effectiveTip.length > 0 && (tipHover.hovered || box.activeFocus)
     ToolTip.delay: 400
     property string tip
+    function edit() { box.contentItem.forceActiveFocus(Qt.TabFocusReason) }
     signal edited(real value)
     // As tall as a ribbon button, so captions across the ribbon line up.
     RibbonMetrics { id: metrics; control: field }

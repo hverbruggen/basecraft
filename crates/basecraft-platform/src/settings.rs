@@ -121,6 +121,8 @@ pub struct Customization {
     /// Stable command IDs; unknown IDs remain available after plugin removal.
     pub shortcuts: BTreeMap<String, String>,
     pub ribbon_hidden: Vec<String>,
+    /// Ribbon access keys, stored beside direct shortcut overrides.
+    pub key_hints: BTreeMap<String, String>,
 }
 /// The person submitting sequences and their affiliation, entered once
 /// and used for every submission (`.sbt` contact). Empty fields are unset.
@@ -262,6 +264,7 @@ impl Preferences {
         self.submitter.validate()?;
         if self.customization.shortcuts.len() > 4096
             || self.customization.ribbon_hidden.len() > 4096
+            || self.customization.key_hints.len() > 4096
         {
             return Err(Error::Invalid("too many customization entries".into()));
         }
@@ -270,9 +273,21 @@ impl Preferences {
             .shortcuts
             .keys()
             .chain(self.customization.ribbon_hidden.iter())
+            .chain(self.customization.key_hints.keys())
         {
             if id.is_empty() || id.len() > 256 || id.chars().any(char::is_control) {
                 return Err(Error::Invalid("invalid command ID".into()));
+            }
+        }
+        for value in self.customization.key_hints.values() {
+            if value.len() > 2
+                || value.is_empty()
+                || !value.bytes().all(|c| c.is_ascii_uppercase())
+                || value.starts_with(['J', 'Y', 'Z'])
+            {
+                return Err(Error::Invalid(
+                    "access keys need one or two uppercase letters, without J, Y or Z first".into(),
+                ));
             }
         }
         let mut shortcuts = BTreeMap::new();
@@ -443,6 +458,7 @@ pub enum Change {
     RememberWorkspace(bool),
     PersistentBrowsingIndexes(bool),
     Shortcut { id: String, value: Option<String> },
+    KeyHint { id: String, value: Option<String> },
     RibbonHidden(Vec<String>),
     RibbonCommandHidden { id: String, hidden: bool },
     ResetCustomization,
@@ -450,7 +466,9 @@ pub enum Change {
 }
 impl Change {
     fn validate(&self) -> Result<(), Error> {
-        if let Self::Shortcut { id, .. } | Self::RibbonCommandHidden { id, .. } = self
+        if let Self::Shortcut { id, .. }
+        | Self::KeyHint { id, .. }
+        | Self::RibbonCommandHidden { id, .. } = self
             && (id.is_empty() || id.len() > 256 || id.chars().any(char::is_control))
         {
             return Err(Error::Invalid("invalid command ID".into()));
@@ -478,6 +496,13 @@ impl Change {
                     prefs.customization.shortcuts.insert(id, v);
                 } else {
                     prefs.customization.shortcuts.remove(&id);
+                }
+            }
+            Self::KeyHint { id, value } => {
+                if let Some(value) = value {
+                    prefs.customization.key_hints.insert(id, value);
+                } else {
+                    prefs.customization.key_hints.remove(&id);
                 }
             }
             Self::RibbonHidden(v) => prefs.customization.ribbon_hidden = v,
@@ -588,6 +613,11 @@ impl SettingsStore {
             .and_then(toml::Value::as_table_mut)
         {
             customization.insert(
+                "key_hints".into(),
+                toml::Value::try_from(&prefs.customization.key_hints)
+                    .map_err(|e| Error::Invalid(e.to_string()))?,
+            );
+            customization.insert(
                 "shortcuts".into(),
                 toml::Value::try_from(&prefs.customization.shortcuts)
                     .map_err(|e| Error::Invalid(e.to_string()))?,
@@ -659,6 +689,51 @@ mod tests {
         assert!(prefs.validate().is_ok());
     }
 
+    #[test]
+    fn access_keys_migrate_preserve_and_reset() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("preferences.toml");
+        let store = SettingsStore::new(path);
+        let before = store.load().unwrap();
+        assert!(before.customization.key_hints.is_empty());
+        store
+            .update(Change::KeyHint {
+                id: "file.save".into(),
+                value: Some("SV".into()),
+            })
+            .unwrap();
+        assert_eq!(
+            store.load().unwrap().customization.key_hints["file.save"],
+            "SV"
+        );
+        assert!(
+            store
+                .update(Change::KeyHint {
+                    id: "file.save".into(),
+                    value: Some("ZA".into())
+                })
+                .is_err()
+        );
+        assert_eq!(
+            store.load().unwrap().customization.key_hints["file.save"],
+            "SV"
+        );
+        store
+            .update(Change::KeyHint {
+                id: "file.save".into(),
+                value: None,
+            })
+            .unwrap();
+        assert!(store.load().unwrap().customization.key_hints.is_empty());
+        store
+            .update(Change::KeyHint {
+                id: "missing.plugin".into(),
+                value: Some("PX".into()),
+            })
+            .unwrap();
+        store.update(Change::ResetCustomization).unwrap();
+        assert!(store.load().unwrap().customization.key_hints.is_empty());
+    }
     #[test]
     fn data_palette_preference_round_trips_and_preserves_unknown_settings() {
         let temp = tempfile::tempdir().unwrap();

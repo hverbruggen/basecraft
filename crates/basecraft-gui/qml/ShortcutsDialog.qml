@@ -35,7 +35,7 @@ AppDialog {
             ["Ctrl+0", "Fit the whole sequence"],
             ["Page Up / Page Down", "Scroll a screen"],
         ] },
-        { name: "Annotations", keys: [
+        { name: "Sequence", keys: [
             ["Enter", "Edit the selected annotation"],
             ["Delete", "Delete the selected annotation"],
             ["Ctrl+A", "Select the whole sequence (sequence view focus)"],
@@ -86,15 +86,10 @@ AppDialog {
             ["Ctrl+Shift+A", "Add consensus to the source alignment"],
             ["Ctrl+Shift+E", "Export consensus to FASTA"],
             ["Ctrl+Shift+C", "Copy consensus as FASTA"],
-            ["Ctrl+Alt+A", "Choose alignment context for a standalone review"],
-            ["Ctrl+Alt+D", "Draft a consensus from additional reads"],
             ["Ctrl+wheel", "Zoom the shared base axis"],
             ["Shift+wheel", "Scroll horizontally through consensus and traces"],
             ["Wheel", "Scroll vertically through taller traces"],
-            ["Ctrl+Alt+M", "Mask consensus ends"],
-            ["Ctrl+Alt+Home / Ctrl+Alt+End", "Keep from / through the selected consensus column"],
             ["Right-click a consensus position", "Set either end of the kept range here"],
-            ["Ctrl+Alt+P", "Set primers and find terminal candidates"],
         ] },
         { name: "Editing", keys: [
             ["Letters", "Type bases at the cursor, replacing a selection"],
@@ -113,7 +108,8 @@ AppDialog {
         const g = groups.filter(x => x.name === first)
         const shared = commands.filter(command => command.shortcut.toString().length)
             .map(command => [command.shortcut.toString(), command.text])
-        return [{ name: "Application commands", keys: shared }].concat(g.length ? g : groups)
+        const access = commands.filter(c => c.keyHint && (!first.length || c.hintScope === first)).map(c => [c.keyHint, c.text])
+        return [{name: "Ribbon navigation", keys: [["Alt (release alone), F10", "Show access keys; Escape returns one level"], ["F6", "Move between regions; ribbon starts on its tab bar"], ["Tab / Shift+Tab", "Next / previous ribbon group"], ["Arrows, Enter / Space", "Browse commands (including unavailable explanations), then invoke"], ["Escape", "Return to the document"]]}, { name: "Application commands", keys: shared }, {name:"Access keys", keys:access}].concat(g.length ? g : groups)
     }
 
     function show(name) {

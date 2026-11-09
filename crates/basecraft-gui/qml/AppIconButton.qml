@@ -3,6 +3,8 @@ import QtQuick.Controls.Basic
 
 ToolButton {
     id: button
+    implicitWidth: Math.max(24, implicitContentWidth + leftPadding + rightPadding)
+    implicitHeight: Math.max(24, implicitContentHeight + topPadding + bottomPadding)
     padding: 3
     background: Rectangle {
         color: Qt.alpha(button.palette.buttonText, button.down ? 0.14 : button.hovered ? 0.07 : 0)

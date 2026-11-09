@@ -26,7 +26,7 @@ RibbonGroup {
         commandId: "tree.midpoint_root"
         customization: group.customization
         text: "Midpoint"
-        iconName: "tree"
+        iconName: "tree-midpoint"
         tip: "Root halfway along a longest tip-to-tip branch-length path over the whole tree. Requires complete nonnegative lengths and unique tip names; does not infer dates or make the tree ultrametric."
         disabledReason: !group.treeOpen || !group.controller ? "Open a tree to change its root" : group.controller.busy ? "Wait for the tree operation to finish" : commandId === "ribbon.root-the-tree-on-the-branch-above-the-selection" ? "Select a clade or branch to reroot the tree" : "Use a tree with complete nonnegative branch lengths and unique tip names for automatic rooting"
         enabled: group.treeOpen && group.controller !== null && group.controller.can_auto_root === true && !group.controller.busy
@@ -38,7 +38,7 @@ RibbonGroup {
         commandId: "tree.minimum_variance_root"
         customization: group.customization
         text: "MRTTV"
-        iconName: "tree"
+        iconName: "tree-variance"
         tip: "Minimize unweighted root-to-tip path length variance over ALL tips, globally across branch interiors and nodes. Requires complete nonnegative lengths and unique tip names; does not infer dates or make the tree ultrametric."
         disabledReason: !group.treeOpen || !group.controller ? "Open a tree to change its root" : group.controller.busy ? "Wait for the tree operation to finish" : commandId === "ribbon.root-the-tree-on-the-branch-above-the-selection" ? "Select a clade or branch to reroot the tree" : "Use a tree with complete nonnegative branch lengths and unique tip names for automatic rooting"
         enabled: group.treeOpen && group.controller !== null && group.controller.can_auto_root === true && !group.controller.busy

@@ -1,4 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
-  <path d="M1 1H19L23 5V23H1ZM19 1V5H23" fill="none" stroke="currentColor" stroke-width="1" stroke-linejoin="round"/>
-  <path d="M2 7h1v1h-1zM3 8h1v1h-1zM4 9h1v1h-1zM3 10h1v1h-1zM2 11h1v1h-1zM6.5 7h1v1h-1zM7.5 7h1v1h-1zM5.5 8h1v1h-1zM6.5 9h1v1h-1zM7.5 10h1v1h-1zM5.5 11h1v1h-1zM6.5 11h1v1h-1zM10.0 7h1v1h-1zM9.0 8h1v1h-1zM11.0 8h1v1h-1zM9.0 9h1v1h-1zM10.0 9h1v1h-1zM11.0 9h1v1h-1zM9.0 10h1v1h-1zM10.0 11h1v1h-1zM11.0 11h1v1h-1zM13.5 7h1v1h-1zM12.5 8h1v1h-1zM14.5 8h1v1h-1zM13.5 9h1v1h-1zM14.5 9h1v1h-1zM14.5 10h1v1h-1zM14.5 11h1v1h-1zM16.0 7h1v1h-1zM16.0 8h1v1h-1zM16.0 9h1v1h-1zM16.0 10h1v1h-1zM16.0 11h1v1h-1zM17.5 7h1v1h-1zM18.5 7h1v1h-1zM17.5 8h1v1h-1zM19.5 8h1v1h-1zM17.5 9h1v1h-1zM19.5 9h1v1h-1zM17.5 10h1v1h-1zM19.5 10h1v1h-1zM17.5 11h1v1h-1zM18.5 11h1v1h-1zM7 16h1v1h-1zM8 16h1v1h-1zM6 17h1v1h-1zM7 18h1v1h-1zM8 19h1v1h-1zM6 20h1v1h-1zM7 20h1v1h-1zM10.5 16h1v1h-1zM9.5 17h1v1h-1zM11.5 17h1v1h-1zM9.5 18h1v1h-1zM10.5 18h1v1h-1zM11.5 18h1v1h-1zM9.5 19h1v1h-1zM10.5 20h1v1h-1zM11.5 20h1v1h-1zM14.0 16h1v1h-1zM13.0 17h1v1h-1zM15.0 17h1v1h-1zM14.0 18h1v1h-1zM15.0 18h1v1h-1zM15.0 19h1v1h-1zM15.0 20h1v1h-1z" fill="currentColor"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <path d="M1.5.5h9l4 4v11h-13zM10.5.5v4h4" fill="none" stroke="currentColor" stroke-linejoin="round"/>
+  <!-- Two FASTA lines: a header marker followed by a compact sequence motif. -->
+  <path d="m3 5 2 1.5L3 8M6.5 6.5h5M3 11h9" fill="none" stroke="currentColor" stroke-linecap="square"/>
 </svg>

@@ -17,6 +17,9 @@ Item {
         }
         return source.slice(begin, end)
     }
+    Component { id: hintsComponent; RibbonKeyHints {} }
+    Component { id: tabsComponent; RibbonTabs {} }
+    Component { id: inputComponent; TextField {} }
     TestCase {
         name: "StableRibbon"
         when: windowShown
@@ -34,7 +37,13 @@ Item {
             const ribbon = host.block("Ribbon {\n            id: ribbon")
             const components = host.source.slice(host.source.indexOf("    component RibbonButton:"), host.source.indexOf("    header: ColumnLayout"))
             const names = [...new Set((ribbon + components).match(/\b\w+Command\b/g))].filter(n => n !== "registerRibbonCommand")
-            const declarations = names.map(n => `AppCommand { id: ${n}; commandId: "test.${n}"; text: "${n}" }`).join("\n")
+            const declarations = names.map(n => {
+                const command = host.block("AppCommand {\n        id: " + n)
+                const id = /commandId: "([^"]+)"/.exec(command)
+                const text = /text: "([^"]+)"/.exec(command)
+                const icon = /iconName: "([^"]+)"/.exec(command)
+                return `AppCommand { id: ${n}; commandId: "${id[1]}"; text: "${text[1]}"; iconName: "${icon ? icon[1] : ""}" }`
+            }).join("\n")
             const tabsStart = host.source.indexOf("    readonly property var ribbonTabs:")
             const tabsEnd = host.source.indexOf("    // Only the wrapped", tabsStart)
             return Qt.createQmlObject(`
@@ -65,7 +74,7 @@ Item {
                     property var recentProjects: []
                     property var commands: []
                     function registerRibbonCommand(c) { commands.push(c) }
-                    function ribbonIconFor(id) { return "tree" }
+                    ${host.block("function ribbonIconFor(")}
                     QtObject { id: shell; property color foreground: "black"; property color background: "white"; property color accent: "blue"; property string project_dir: "/project" }
                     property string metadataFasta: currentKind === "alignment" ? "/project/rbcL.fasta" : ""
                     property var metadataLinks: currentKind === "alignment" ? ({records: 3, unlinked: ["a"]}) : ({})
@@ -78,6 +87,82 @@ Item {
                     ${components}
                     ${ribbon}
                 }`, host, Qt.resolvedUrl("stableRibbonHarness.qml"))
+        }
+        function test_contextual_selection_and_retention() {
+            const scene = productionRibbon()
+            compare(scene.ribbonTabs, ["File", "View", "Export"])
+            scene.currentKind = "sequence"
+            scene.ribbonTabName = "Sequence"
+            scene.currentKind = "alignment"
+            compare(scene.ribbonTabName, "Alignment")
+            compare(scene.ribbonTabs, ["File", "View", "Alignment", "Phylogeny", "Delimitation", "Export"])
+            scene.ribbonTabName = "Export"
+            scene.currentKind = "tree"
+            compare(scene.ribbonTabName, "Export")
+            scene.ribbonTabName = "Tree"
+            scene.currentKind = ""
+            compare(scene.ribbonTabName, "File")
+            scene.destroy()
+        }
+        function test_production_ribbon_hint_journey() {
+            const scene = productionRibbon()
+            const ribbon = findChild(scene, "applicationRibbon")
+            ribbon.width = 1600
+            const bar = tabsComponent.createObject(scene, {names:scene.ribbonTabs, selectedName:scene.ribbonTab})
+            bar.names = Qt.binding(() => scene.ribbonTabs)
+            bar.selectedName = Qt.binding(() => scene.ribbonTab)
+            bar.selected.connect(name => scene.ribbonTabName=name)
+            const input = inputComponent.createObject(scene, {y:300, width:200})
+            const hints = hintsComponent.createObject(scene, {hostWindow:scene.Window.window, tabBar:bar, ribbon:ribbon})
+            scene.currentKind = "alignment"
+            scene.current = {busy:false, gap_column_count:0, zoom_text:"100 %", review_mode:true, unresolved:2, calling:false, call_sets:"[]", selected_call_set:""}
+            input.forceActiveFocus(); wait(20)
+            keyClick(Qt.Key_F10); compare(hints.level,1)
+            keyClick(Qt.Key_A); tryCompare(hints,"level",2)
+            keyClick(Qt.Key_O)
+            compare(scene.alignmentInsert,false)
+            compare(input.text,"")
+            scene.currentKind="trace"
+            scene.traceDocument={working:false, traceRows:[{}], returnAlignment:null}
+            scene.current={review_mode:true, unresolved:2, calling:false, busy:false, call_sets:"[]", selected_call_set:"", zoom_text:"100 %"}
+            scene.ribbonTabName="Trace"
+            wait(20)
+            keyClick(Qt.Key_F10); keyClick(Qt.Key_R); tryCompare(hints,"level",2)
+            // Save consensus retains its real production prerequisite binding.
+            for (const c of "SA") keyClick(c)
+            verify(hints.explanation.includes("Resolve"))
+            compare(input.text,"")
+            hints.stop(true)
+            scene.destroy()
+        }
+        function test_ribbon_visual_evidence() {
+            const args = Qt.application.arguments
+            const index = args.indexOf("-o")
+            if (index < 0) return
+            const log = args[index+1].split(",")[0]
+            const destination = log.slice(0,log.lastIndexOf("/"))
+            const scene = productionRibbon()
+            const ribbon = findChild(scene, "applicationRibbon")
+            scene.currentKind = "trace"
+            scene.traceDocument = {working:false, traceRows:[{}], returnAlignment:null}
+            scene.current = {busy:false, review_mode:true, unresolved:0, calling:false, call_sets:"[]", selected_call_set:"", zoom_text:"100 %"}
+            scene.ribbonTabName = "Trace"
+            for (const factor of [1, 1.5]) {
+                scene.ribbonSizeFactor = factor
+                ribbon.width = 1200
+                for (const dark of [false,true]) {
+                    ribbon.palette.buttonText = dark ? "#eeeeee" : "#222222"
+                    ribbon.palette.window = dark ? "#222222" : "#ffffff"
+                    ribbon.palette.windowText = ribbon.palette.buttonText
+                    ribbon.background.color = ribbon.palette.window
+                    verify(waitForPolish(scene.Window.window))
+                    wait(20)
+                    const file = destination + "/trace-" + factor + "-" + (dark ? "dark" : "light") + ".png"
+                    grabImage(ribbon).save(file)
+                    console.log("RIBBON_EVIDENCE", file, ribbon.width, ribbon.height)
+                }
+            }
+            scene.destroy()
         }
         function test_export_tab_reuses_actions_and_retains_submission() {
             const scene = productionRibbon()
@@ -95,8 +180,8 @@ Item {
             const svg = captioned(scene, "SVG")
             const png = captioned(scene, "PNG")
             verify(svg && png)
-            compare(svg.action.commandId, "test.exportSvgCommand")
-            compare(png.action.commandId, "test.exportPngCommand")
+            compare(svg.action.commandId, "ribbon.export-an-editable-svg-of-this-view")
+            compare(png.action.commandId, "figure.export-png")
             let svgCount = 0, pngCount = 0
             svg.action.triggered.connect(() => svgCount++)
             png.action.triggered.connect(() => pngCount++)
@@ -140,19 +225,20 @@ Item {
             const ribbon = findChild(scene, "applicationRibbon")
             ribbon.width = data.width
             scene.ribbonSizeFactor = data.factor
-            compare(scene.ribbonTabs, ["File", "View", "Annotations", "Alignment", "Phylogeny", "Tree", "Delimitation", "Trace", "Export", "Help"])
+            compare(scene.ribbonTabs, ["File", "View", "Export"])
             scene.ribbonTabName = "Phylogeny"
             for (const kind of ["", "sequence", "alignment", "tree", "delimitation", "trace"]) {
                 scene.currentKind = kind
                 scene.traceDocument = kind === "trace" ? {working: false, traceRows: [{}], returnAlignment: null} : null
                 scene.current = kind ? {busy: false, dirty: false, gap_column_count: 2, tip_font: 13, support_font: 10, has_support: true, linked_alignment: "", zoom_text: "100 %", bootstrap_running: false, review_mode: true, unresolved: 0, calling: false, call_sets: "[]", selected_call_set: ""} : null
-                compare(scene.ribbonTab, "Phylogeny", "document switch retains tab")
+                verify(scene.ribbonTabs.includes(scene.ribbonTab))
                 for (const name of scene.ribbonTabs) {
                     scene.ribbonTabName = name
                     verify(waitForPolish(scene.Window.window))
                     const height = ribbon.height
+                    tryVerify(() => !ribbon.overflowing, 2000, name + " fits without horizontal scrolling: " + ribbon.pageWidth + "/" + ribbon.availableWidth + " " + JSON.stringify(ribbon.groups().map(g=>({title:g.title, mode:g.presentation, width:g.implicitWidth}))))
                     for (const command of scene.commands) {
-                        if (name === "Annotations" && command.commandId === "ribbon.annotate-the-selection") compare(command.enabled, kind === "sequence")
+                        if (name === "Sequence" && command.commandId === "ribbon.annotate-the-selection") compare(command.enabled, kind === "sequence")
                         if (name === "Alignment" && command.commandId === "ribbon.move-the-selected-rows-up") compare(command.enabled, kind === "alignment")
                         if (name === "Phylogeny" && command.commandId === "analysis.distance.nj") compare(command.enabled, kind === "alignment")
                         if (name === "Tree" && command.commandId === "ribbon.add-support-values-from-another-analysis-of-the-same") compare(command.enabled, kind === "tree")

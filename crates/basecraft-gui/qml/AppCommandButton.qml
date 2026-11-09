@@ -19,7 +19,7 @@ AppRibbonButton {
         tooltip: button.tip
         disabledReason: button.inheritedDisabledReason || button.disabledReason
         iconName: button.iconName
-        enabled: button.enabled && button.visible
+        enabled: button.enabled && command.visible
         onTriggered: button.invoked()
     }
 }

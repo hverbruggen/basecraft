@@ -68,6 +68,16 @@ ApplicationWindow {
     // Theme, font and project folder, whether or not a file is open.
     GenomeController { id: shell }
 
+    property alias ribbonNavigation: ribbonHints
+    RibbonKeyHints {
+        id: ribbonHints
+        parent: window.contentItem
+        anchors.fill: parent
+        z: 1000
+        hostWindow: window
+        tabBar: ribbonTabBar
+        ribbon: ribbon
+    }
     // Open files, one tab each.
     ListModel { id: openFiles }
 
@@ -95,10 +105,15 @@ ApplicationWindow {
     readonly property bool treeOpen: currentKind === "tree"
     readonly property bool delimitationOpen: currentKind === "delimitation"
     readonly property bool traceOpen: currentKind === "trace"
-    readonly property var ribbonTabs: ["File", "View", "Annotations", "Alignment", "Phylogeny", "Tree", "Delimitation", "Trace", "Export", "Help"]
+    readonly property var ribbonTabs: ["File", "View"].concat(
+        currentKind === "sequence" ? ["Sequence"] : alignmentOpen ? ["Alignment", "Phylogeny", "Delimitation"]
+        : treeOpen ? ["Tree", "Delimitation"] : delimitationOpen ? ["Delimitation"] : traceOpen ? ["Trace"] : [], ["Export"])
+    onRibbonTabsChanged: {
+        if (!ribbonTabs.includes(ribbonTabName)) ribbonTabName = ribbonTabs.length > 3 ? ribbonTabs[2] : "File"
+    }
     readonly property string ribbonTab: ribbonTabs.includes(ribbonTabName) ? ribbonTabName : "File"
     // Each tab's panel in the ribbon's stack.
-    readonly property var ribbonPanels: ({ "File": 0, "View": 1, "Annotations": 2, "Help": 3, "Alignment": 4, "Tree": 5, "Phylogeny": 6, "Delimitation": 7, "Trace": 8, "Export": 9 })
+    readonly property var ribbonPanels: ({ "File": 0, "View": 1, "Sequence": 2, "Alignment": 3, "Tree": 4, "Phylogeny": 5, "Delimitation": 6, "Trace": 7, "Export": 8 })
     // Only the wrapped layout is offered for now; files always open in it.
 
     readonly property int availableCpuThreads: shell.available_cpu_threads()
@@ -428,7 +443,6 @@ ApplicationWindow {
             openFiles.append({ path: paths[0], dirty: false, kind: "trace" })
             tabs.currentIndex = openFiles.count - 1
         } else window.openPath(paths[0])
-        ribbonTabName = "Trace"
         const traceDocument = docs.itemAt(tabs.currentIndex)
         Qt.callLater(() => {
             if (!traceDocument) return
@@ -883,6 +897,22 @@ ApplicationWindow {
     PreferencesDialog { id: preferencesDialog; settings: preferences; commands: window.applicationCommands; defaultFontSizePoints: window.defaultFontSizePoints }
 
     function ribbonIconFor(id) {
+        const specific = {
+            "ribbon.copy-the-selected-annotation-s-sequence": "clipboard",
+            "ribbon.save-the-selection-as-a-new-file": "selection",
+            "ribbon.rename-the-cursor-s-row": "rename",
+            "ribbon.annotate-open-reading-frames": "gene-orf",
+            "ribbon.annotate-protein-coding-genes-with-prodigal": "gene-predict",
+            "trace.compute-calls": "trace-compute",
+            "trace.cancel-calls": "trace-cancel",
+            "ribbon.combine-up-to-three-reads": "trace-draft",
+            "ribbon.choose-the-consensus-range-to-keep-in-exports": "trace-mask",
+            "ribbon.find-partial-terminal-primer-candidates-and-mask-them": "trace-primer",
+            "ribbon.choose-the-terminal-signal-percentage-for-a-new-draft": "trace-cutoff",
+            "ribbon.choose-alignment-context": "link",
+            "ribbon.add-support-values-from-another-analysis-of-the-same": "support-add"
+}
+        if (specific[id]) return specific[id]
         if (!id) return "info"
         if (id.includes("copy-") || id.includes("extract-")) return "selection"
         if (id.includes("export-") || id.includes("save-") || id.includes("package-")) return "save-as"
@@ -958,9 +988,8 @@ ApplicationWindow {
     // A ribbon button that shows whether its mode is on.
     component ExportConsensusButton: RibbonButton {
         id: consensusExportButton
-        // Six characters on the FASTA header need a 24 px symbol band. Keep
-        // the three consensus symbols/captions aligned at every ribbon scale.
-        symbolSize: 24
+        // The FASTA motif fits the shared compact symbol band.
+        symbolSize: 16
         Accessible.name: tip
         background: Rectangle {
             radius: 3
@@ -986,8 +1015,8 @@ ApplicationWindow {
         RibbonButton { commandId: "species.gmyc-" + speciesMethods.commandSuffix; text: "GMYC"; iconName: "tree-gmyc"; enabled: speciesMethods.canRun; onInvoked: window.beginDelimitation("gmyc") }
         RibbonButton { commandId: "species.asap-" + speciesMethods.commandSuffix; text: "ASAP"; iconName: "matrix-asap"; enabled: (window.alignmentOpen || (window.delimitationOpen && window.current && window.current.linked_alignment.length > 0)) && speciesMethods.canRun; onInvoked: window.beginDelimitation("asap") }
         RibbonButton { commandId: "species.ptp-" + speciesMethods.commandSuffix; text: "PTP"; iconName: "phylogram-ptp"; enabled: speciesMethods.canRun; onInvoked: window.beginDelimitation("ptp") }
-        RibbonButton { commandId: "species.manual-" + speciesMethods.commandSuffix; text: "Manual"; iconName: "tree-gmyc"; enabled: speciesMethods.canRun; onInvoked: window.beginDelimitation("manual") }
-        RibbonButton { commandId: "species.combine-" + speciesMethods.commandSuffix; text: "Combine"; iconName: "align"; onInvoked: combinePicker.open() }
+        RibbonButton { commandId: "species.manual-" + speciesMethods.commandSuffix; text: "Manual"; iconName: "hypothesis-manual"; enabled: speciesMethods.canRun; onInvoked: window.beginDelimitation("manual") }
+        RibbonButton { commandId: "species.combine-" + speciesMethods.commandSuffix; text: "Combine"; iconName: "hypothesis-combine"; onInvoked: combinePicker.open() }
     }
     component HelpGroup: RibbonHelpGroup {
         methodsAction: methodsCommand
@@ -1034,6 +1063,8 @@ ApplicationWindow {
                     id: ribbonTabBar
                     ribbonSizeFactor: window.ribbonSizeFactor
                     Layout.fillWidth: true
+                    onEnterRibbon: backward => ribbon.enter(backward)
+                    onEscapeRequested: if (window.currentView) window.currentView.forceActiveFocus()
                     names: window.ribbonTabs
                     selectedName: window.ribbonTab
                     onSelected: name => window.ribbonTabName = name
@@ -1080,9 +1111,9 @@ ApplicationWindow {
             id: ribbon
             ribbonSizeFactor: window.ribbonSizeFactor
             objectName: "applicationRibbon"
-            // Reserve the FASTA icon's readable band on every tab so switching
-            // to/from the review never changes ribbon height.
-            symbolBandSize: 24
+            onEscapeRequested: if (window.currentView) window.currentView.forceActiveFocus()
+            // Keep the same compact symbol band on every page.
+            symbolBandSize: 16
             Layout.fillWidth: true
             currentIndex: window.ribbonPanels[window.ribbonTab]
             background: Rectangle { color: Qt.alpha(shell.foreground, 0.025) }
@@ -1094,6 +1125,7 @@ ApplicationWindow {
                         AppRibbonButton { action: projectCommand; visible: projectCommand.visible; text: "Open/New"; iconName: "project"; tip: projectCommand.effectiveTooltip }
                         AppRibbonButton {
                             id: recentProjectButton
+                            property string keyHint: "RC"
                             text: "Recent"
                             iconName: "project"
                             tip: "Open a recent project"
@@ -1121,6 +1153,11 @@ ApplicationWindow {
                         AppRibbonButton { action: newSequenceCommand; visible: newSequenceCommand.visible; iconName: "new-file"; tip: newSequenceCommand.effectiveTooltip }
                         AppRibbonButton { action: saveCommand; visible: saveCommand.visible; iconName: "save"; tip: saveCommand.effectiveTooltip }
                         AppRibbonButton { action: saveAsCommand; visible: saveAsCommand.visible; iconName: "save-as"; tip: saveAsCommand.effectiveTooltip }
+                    }
+                    ToolSeparator { Layout.fillHeight: true }
+                    RibbonGroup {
+                        title: "Species workspaces"
+                        RibbonButton { commandId: "species.combine-project"; text: "Combine"; iconName: "hypothesis-combine"; enabled: true; tip: "Combine saved species hypotheses"; onInvoked: combinePicker.open() }
                     }
                     ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup { title: "Document record"; actions: [historyCommand, methodsCommand] }
@@ -1168,6 +1205,7 @@ ApplicationWindow {
                     RibbonGroup {
                         title: "Show"
                         AppCheckBox {
+                            property string keyHint: "V"
                             text: "Overview"
                             checked: window.overviewEnabled
                             enabled: window.current !== null
@@ -1178,6 +1216,7 @@ ApplicationWindow {
                             onToggled: window.overviewEnabled = checked
                         }
                         AppCheckBox {
+                            property string keyHint: "GC"
                             text: "GC content"
                             enabled: window.currentKind === "sequence"
                             HoverHandler { id: gcTipHover }
@@ -1258,22 +1297,6 @@ ApplicationWindow {
                             enabled: window.current && !window.current.busy
                             onInvoked: genesDialog.predict(false)
                         }
-                    }
-                    Item { Layout.fillWidth: true }
-                    HelpGroup {}
-                }
-
-                RibbonPage {
-                    spacing: 6 * window.ribbonSizeFactor
-                    RibbonGroup {
-                        title: "Learn"
-                        actions: [shortcutsCommand, aboutCommand]
-                    }
-                    ToolSeparator { Layout.fillHeight: true }
-                    RibbonGroup {
-                        title: "Online"
-                        RibbonButton { commandId: "ribbon.open-the-project-on-github"; text: "Project page"; iconName: "link"; tip: "Open the project on GitHub"; enabled: true; onInvoked: Qt.openUrlExternally("https://github.com/hverbruggen/basecraft") }
-                        RibbonButton { commandId: "ribbon.open-a-new-github-issue"; text: "Report a problem"; iconName: "bug"; tip: "Open a new GitHub issue"; enabled: true; onInvoked: Qt.openUrlExternally("https://github.com/hverbruggen/basecraft/issues/new") }
                     }
                     Item { Layout.fillWidth: true }
                     HelpGroup {}
@@ -1385,7 +1408,7 @@ ApplicationWindow {
                         RibbonButton {
                             commandId: "tree.rate-smoothing"
                             text: "PL"
-                            iconName: "tree"
+                            iconName: "tree-clock"
                             tip: "Smooth rates on the current rooted tree with Sanderson penalized likelihood"
                             enabled: window.treeOpen && window.current !== null && window.currentPath.length > 0
                             onInvoked: operationPicker.showOperation(shell.project_dir.length ? shell.project_dir : shell.local_file_path(shell.parent_folder_url(window.currentPath)), window.currentPath, !!window.current.dirty, "basecraft.sanderson/date_tree@1")
@@ -1463,14 +1486,14 @@ ApplicationWindow {
                         enabled: window.alignmentOpen
                         title: "Maximum likelihood"
                         RibbonButton { commandId: "ribbon.infer-a-tree-with-fasttree-standard-settings-gtr-for";
-                            iconName: "phylogram"
+                            iconName: "tree-fast"
                             text: window.current && window.current.busy ? "Running" : "FastTree"
                             enabled: window.current !== null && !window.current.busy
                             tip: "Infer a tree with FastTree: choose the model, rate variation and support values"
                             onInvoked: toolSettings.show(window.current, "fasttree", "tree")
                         }
                         RibbonButton { commandId: "ribbon.select-a-model-and-infer-a-maximum-likelihood-tree";
-                            iconName: "phylogram"
+                            iconName: "tree-infer"
                             text: "IQ-TREE"
                             enabled: window.current !== null && !window.current.busy
                             tip: "Infer a maximum-likelihood tree: choose the model, rate variation and branch support"
@@ -1530,6 +1553,7 @@ ApplicationWindow {
                         enabled: window.traceOpen && window.current && window.current.review_mode && window.traceDocument && !window.traceDocument.working
                         AppComboBox {
                             id: traceCallSets
+                            property string keyHint: "T"
                             Accessible.name: "Trace call set"
                             model: window.traceOpen && window.current ? JSON.parse(window.current.call_sets) : []
                             textRole: "label"
@@ -1551,16 +1575,18 @@ ApplicationWindow {
                         RibbonButton { commandId: "ribbon.previous-unresolved-issue"; iconName: "previous"; tip: "Previous unresolved issue"; keys: "Alt+← or ["; enabled: (window.traceOpen && window.current && window.current.review_mode); onInvoked: window.traceDocument.issue(false) }
                         RibbonButton { commandId: "ribbon.next-unresolved-issue"; iconName: "next"; tip: "Next unresolved issue"; keys: "Alt+→ or ]"; enabled: (window.traceOpen && window.current && window.current.review_mode); onInvoked: window.traceDocument.issue(true) }
                         RibbonButton { commandId: "ribbon.accept-this-base-and-go-to-the-next-issue"; text: "Accept"; iconName: "accept"; tip: "Accept this base and go to the next issue"; keys: "Alt+Enter"; enabled: (window.traceOpen && window.current && window.current.review_mode); onInvoked: window.traceDocument.accept() }
-                        RibbonButton { commandId: "ribbon.choose-alignment-context"; text: "Alignment"; tip: "Choose alignment context"; keys: "Ctrl+Alt+A"; enabled: (window.traceOpen && window.current && window.current.review_mode && window.traceDocument && window.traceDocument.returnAlignment === null); onInvoked: window.traceDocument.alignmentContext() }
-                        RibbonButton { commandId: "ribbon.combine-up-to-three-reads"; text: "Draft reads"; tip: "Combine up to three reads"; keys: "Ctrl+Alt+D"; enabled: (window.traceOpen && window.current && window.traceDocument && window.traceDocument.traceRows.length === 1); onInvoked: window.traceDocument.draftReads() }
+                        RibbonButton { commandId: "ribbon.choose-alignment-context"; text: "Alignment"; tip: "Choose alignment context"; enabled: (window.traceOpen && window.current && window.current.review_mode && window.traceDocument && window.traceDocument.returnAlignment === null); onInvoked: window.traceDocument.alignmentContext() }
+                        RibbonButton { commandId: "ribbon.combine-up-to-three-reads"; text: "Draft reads"; tip: "Combine up to three reads"; enabled: (window.traceOpen && window.current && window.traceDocument && window.traceDocument.traceRows.length === 1); onInvoked: window.traceDocument.draftReads() }
                         RibbonButton { commandId: "ribbon.choose-the-terminal-signal-percentage-for-a-new-draft"; text: "Signal cutoff"; tip: "Choose the terminal signal percentage for a new draft"; onInvoked: window.traceDocument.signalSettings() }
                     }
                     RibbonGroup {
                         title: "Masking"
                         disabledReason: !window.traceOpen || !window.current || !window.current.review_mode ? "Open a Sanger review to use this group" : "Wait for trace processing to finish"
                         enabled: window.traceOpen && window.current && window.current.review_mode && window.traceDocument && !window.traceDocument.working
-                        RibbonButton { commandId: "ribbon.choose-the-consensus-range-to-keep-in-exports"; text: "Mask ends"; tip: "Choose the consensus range to keep in exports"; keys: "Ctrl+Alt+M"; onInvoked: window.traceDocument.maskEnds() }
-                        RibbonButton { commandId: "ribbon.find-partial-terminal-primer-candidates-and-mask-them"; text: "Set primers"; tip: "Find partial terminal primer candidates and mask them"; keys: "Ctrl+Alt+P"; onInvoked: window.traceDocument.setPrimers() }
+                        RibbonButton { commandId: "ribbon.choose-the-consensus-range-to-keep-in-exports"; text: "Mask ends"; tip: "Choose the consensus range to keep in exports"; onInvoked: window.traceDocument.maskEnds() }
+                        RibbonButton { commandId: "ribbon.find-partial-terminal-primer-candidates-and-mask-them"; text: "Set primers"; tip: "Find partial terminal primer candidates and mask them"; onInvoked: window.traceDocument.setPrimers() }
+                        RibbonButton { commandId: "trace.keep-from"; text: "Keep from"; iconName: "trace-mask"; tip: "Keep from the selected consensus column"; onInvoked: window.traceDocument.setMaskStart(window.current.selected_column) }
+                        RibbonButton { commandId: "trace.keep-through"; text: "Keep through"; iconName: "trace-mask"; tip: "Keep through the selected consensus column"; onInvoked: window.traceDocument.setMaskEnd(window.current.selected_column) }
                     }
                     RibbonGroup {
                         title: "Export consensus"
