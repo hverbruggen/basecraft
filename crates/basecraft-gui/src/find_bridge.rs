@@ -78,3 +78,67 @@ macro_rules! controller_find {
     };
 }
 pub(crate) use controller_find;
+
+/// Keep miniature payloads bounded while always including the current result.
+pub fn overview_marks(
+    find: &Session,
+    mut project: impl FnMut(
+        &basecraft_viewmodel::find::Hit,
+    ) -> Option<basecraft_viewmodel::overview::MatchMark>,
+) -> String {
+    if !find.active() {
+        return "[]".into();
+    }
+    let stride = find.results.hits.len().div_ceil(4096).max(1);
+    let marks: Vec<_> = find
+        .results
+        .hits
+        .iter()
+        .step_by(stride)
+        .chain(find.hit())
+        .filter_map(&mut project)
+        .collect();
+    serde_json::to_string(&marks).unwrap_or_else(|_| "[]".into())
+}
+
+#[cfg(test)]
+mod overview_tests {
+    use super::*;
+    use basecraft_viewmodel::{
+        find::{Hit, Kind},
+        overview::MatchMark,
+    };
+
+    #[test]
+    fn find_overview_bounds_payload_and_keeps_current_hit() {
+        let mut find = Session::default();
+        find.set_query("A".into(), false);
+        find.results.hits = (0..100_000)
+            .map(|i| Hit {
+                row: i,
+                start: 1,
+                end: 2,
+                kind: Kind::Sequence,
+                reverse: false,
+                label: "row".into(),
+            })
+            .collect();
+        find.current = 99_999;
+        let json = overview_marks(&find, |hit| {
+            Some(MatchMark {
+                x: 0.0,
+                y: f64::from(u32::try_from(hit.row).unwrap()) / 100_000.0,
+                width: 1.0,
+                height: 0.00001,
+            })
+        });
+        let marks: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
+        assert!(marks.len() <= 4097);
+        assert_eq!(marks.last().unwrap()["y"], serde_json::json!(0.99999));
+        find.set_query(String::new(), false);
+        assert_eq!(
+            overview_marks(&find, |_| panic!("closed search must not project hits")),
+            "[]"
+        );
+    }
+}

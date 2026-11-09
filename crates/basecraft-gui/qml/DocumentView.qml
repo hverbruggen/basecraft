@@ -20,6 +20,7 @@ FocusScope {
         activeDocument: doc.visible
     }
 
+    property bool overviewEnabled: true
     property var notificationSink: null
     Connections {
         target: ctl
@@ -65,7 +66,7 @@ FocusScope {
         accessibleTitle: "Sequence editor"
         accessibleSummary: ctl.status
         anchors.fill: parent
-        anchors.bottomMargin: findBar.height
+        anchors.bottomMargin: findBar.height + (overview.visible ? overview.height : 0)
         clearColor: ctl.background
         fontFamily: ctl.mono_font
         instances: ctl.frame
@@ -200,5 +201,17 @@ FocusScope {
             }
             event.accepted = ctl.key(event.key, event.text, event.modifiers)
         }
+    }
+    DocumentOverview {
+        id: overview
+        anchors { left: parent.left; right: parent.right; bottom: findBar.top }
+        shown: doc.overviewEnabled
+        circular: ctl.mode === "circular"
+        miniature: ctl.overview_content
+        matchMarks: JSON.parse(ctl.overview_matches || "[]")
+        foreground: ctl.foreground; backgroundColor: ctl.background; accent: ctl.accent
+        documentItem: view
+        viewportX: ctl.overview_pos; viewportWidth: ctl.overview_size
+        onPanRequested: (x, y) => ctl.overview_scroll_to(x)
     }
 }

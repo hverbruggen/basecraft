@@ -5,6 +5,7 @@ import Basecraft
 // Shared tree rendering and navigation; the embedding workspace owns actions.
 AppCanvas {
     id: view
+    property bool overviewEnabled: true
         accessibleTitle: "Tree editor"
         accessibleSummary: treeController.status
     property var findBar: null
@@ -28,6 +29,23 @@ AppCanvas {
         readonly property real pixelRatio: Window.window ? Window.window.devicePixelRatio : 1
         onPixelRatioChanged: treeController.set_pixel_ratio(pixelRatio)
         Component.onCompleted: treeController.set_pixel_ratio(pixelRatio)
+
+        DocumentOverview {
+            id: overview
+            parent: view.parent
+            anchors { top: view.top; bottom: view.bottom; left: view.right }
+            width: visible ? implicitWidth : 0
+            vertical: true
+            shown: view.overviewEnabled && view.visible
+            miniature: treeController.overview_content
+            matchMarks: JSON.parse(treeController.overview_matches || "[]")
+            foreground: treeController.foreground; backgroundColor: treeController.background; accent: treeController.accent
+            documentItem: view
+            viewportX: treeController.hscroll_pos; viewportY: treeController.vscroll_pos
+            viewportWidth: treeController.hscroll_size; viewportHeight: treeController.vscroll_size
+            onPanRequested: (x, y) => { treeController.hscroll_to(x); treeController.vscroll_to(y) }
+        }
+        readonly property real overviewWidth: overview.width
 
         MouseArea {
             id: mouse

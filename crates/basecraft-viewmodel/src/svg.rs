@@ -19,7 +19,7 @@ pub fn escape(text: &str) -> String {
         .replace('\'', "&apos;")
 }
 
-fn color(c: &[f32]) -> String {
+pub(crate) fn color(c: &[f32]) -> String {
     format!(
         "#{:02x}{:02x}{:02x}",
         (c[0].clamp(0., 1.) * 255.).round() as u8,

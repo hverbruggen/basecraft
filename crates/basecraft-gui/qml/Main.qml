@@ -10,6 +10,7 @@ import Basecraft
 
 ApplicationWindow {
     id: window
+    property bool overviewEnabled: true
     width: 1200
     height: 760
     visible: true
@@ -258,7 +259,7 @@ ApplicationWindow {
         let active = -1
         for (let i = 0; i < regions.length; ++i) {
             for (let item = window.activeFocusItem; item; item = item.parent) {
-                if (item === regions[i]) { active = i; break }
+                if (item === regions[i] || (item.objectName === "documentOverview" && item.documentItem === regions[i])) { active = i; break }
             }
         }
         if (active < 0) return
@@ -1102,11 +1103,19 @@ ApplicationWindow {
                     // not offered for now; the wrapped layout is the view.
                     RibbonGroup {
                         title: "Show"
-                        // Only sequences have a GC plot.
-                        disabledReason: "Open a sequence to use this group"
-                        enabled: window.currentKind === "sequence"
+                        AppCheckBox {
+                            text: "Overview"
+                            checked: window.overviewEnabled
+                            enabled: window.current !== null
+                            HoverHandler { id: overviewTipHover }
+                            Accessible.description: ToolTip.text
+                            ToolTip.text: enabled ? "Show a compact navigator when the document extends beyond the view" : "Open a document to show its overview"
+                            ToolTip.visible: overviewTipHover.hovered || activeFocus
+                            onToggled: window.overviewEnabled = checked
+                        }
                         AppCheckBox {
                             text: "GC content"
+                            enabled: window.currentKind === "sequence"
                             HoverHandler { id: gcTipHover }
                             Accessible.description: ToolTip.text
                             ToolTip.text: enabled ? "Show the GC content plot" : "Open a sequence to show its GC content plot"
@@ -2132,6 +2141,7 @@ ApplicationWindow {
                         DelegateChoice {
                             roleValue: "trace"
                             SangerView {
+                                overviewEnabled: window.overviewEnabled
                                 notificationSink: provenance
                                 fileUrls: shell
                                 onCopyText: (text) => clipboard.put(text)
@@ -2142,6 +2152,7 @@ ApplicationWindow {
                         DelegateChoice {
                             roleValue: "alignment"
                             AlignmentView {
+                                overviewEnabled: window.overviewEnabled
                                 notificationSink: provenance
                                 fileUrls: shell
                                 insertMode: window.alignmentInsert
@@ -2163,6 +2174,7 @@ ApplicationWindow {
                             // Not "TreeView": that's Qt's, used by the
                             // files sidebar.
                             PhyloView {
+                                overviewEnabled: window.overviewEnabled
                                 id: treeDocument
                                 notificationSink: provenance
                                 onOpenFile: (path) => window.openPath(path)
@@ -2176,6 +2188,7 @@ ApplicationWindow {
                         DelegateChoice {
                             roleValue: "delimitation"
                             DelimitationView {
+                                overviewEnabled: window.overviewEnabled
                                 notificationSink: provenance
                                 onOpenFile: (path) => window.openPath(path)
                                 onDirtyChanged: openFiles.setProperty(index, "dirty", dirty)
@@ -2183,6 +2196,7 @@ ApplicationWindow {
                         }
                         DelegateChoice {
                             DocumentView {
+                                overviewEnabled: window.overviewEnabled
                                 notificationSink: provenance
                                 showGc: window.showGc
                                 defaultLayout: window.defaultLayout

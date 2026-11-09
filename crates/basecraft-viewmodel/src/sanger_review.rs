@@ -22,6 +22,8 @@ pub struct ReadLane {
     pub trace: Trace,
     /// Draft column -> Tracy basecall event in the original signal direction.
     pub column_events: Vec<Option<usize>>,
+    /// Cached exact warp anchors shared by detail and miniature rendering.
+    signal_anchors: Vec<(f64, f64)>,
     pub gain: f32,
     pub height: f32,
 }
@@ -99,6 +101,7 @@ impl SangerReviewView {
             lanes.push(ReadLane {
                 trace,
                 column_events,
+                signal_anchors: Vec::new(),
                 gain: 1.0,
                 height: 80.0,
             });
@@ -129,6 +132,7 @@ impl SangerReviewView {
             hovered: None,
             draft_display,
         };
+        result.rebuild_signal_anchors();
         result.select_column(selected);
         Ok(result)
     }
@@ -182,8 +186,150 @@ impl SangerReviewView {
         }
         self.columns = columns;
         self.alignment = Some(context);
+        self.rebuild_signal_anchors();
         self.select_column(self.selected);
         Ok(())
+    }
+
+    /// Find supplies display-column spans plus its existing `find_row_y` geometry.
+    /// This avoids a second interpretation of visual sequence-row ordinals.
+    pub fn overview_match_at(
+        &self,
+        start: u64,
+        end: u64,
+        row_y: f32,
+        row_height: f32,
+    ) -> Option<crate::overview::MatchMark> {
+        let height = f64::from(self.content_height().max(1.0));
+        crate::overview::MatchMark::span(
+            start,
+            end,
+            self.columns.len() as u64,
+            f64::from(row_y) / height,
+            f64::from(row_height) / height,
+        )
+    }
+
+    /// Miniature rows use the same display columns and native event mapping.
+    /// Unmapped calls remain blank; reverse reads use complementary channels.
+    pub fn overview(&self, theme: &Theme) -> crate::overview::Miniature {
+        let mut out = crate::overview::Miniature::default();
+        let n = self.columns.len();
+        if n == 0 {
+            return out;
+        }
+        let height = f64::from(self.content_height().max(1.0));
+        let count = n.min(512);
+        let mut base = Vec::with_capacity(1);
+        for p in 0..count {
+            let col = p * n / count;
+            let x = col as f64 / n as f64;
+            let width = 1.0 / count as f64;
+            let display = &self.columns[col];
+            if let (Some(context), Some(source)) = (&self.alignment, display.source) {
+                for (r, representative) in context.representatives.iter().enumerate() {
+                    base.clear();
+                    context.alignment.read_into(
+                        representative.row,
+                        source as u64,
+                        source as u64 + 1,
+                        &mut base,
+                    );
+                    if let Some(&b) = base
+                        .first()
+                        .filter(|&&b| !basecraft_docs::alignment::is_gap(b))
+                    {
+                        out.rect(
+                            [
+                                x,
+                                (f64::from(ROW + REFERENCE_ROW)
+                                    + r as f64 * f64::from(REFERENCE_ROW))
+                                    / height,
+                                width,
+                                f64::from(REFERENCE_ROW) * 0.7 / height,
+                            ],
+                            theme.residue(b),
+                        );
+                    }
+                }
+            }
+            let Some(draft) = display.draft else {
+                continue;
+            };
+            if let Some(&b) = self.consensus.get(draft) {
+                out.rect(
+                    [
+                        x,
+                        f64::from(self.consensus_y()) / height,
+                        width,
+                        f64::from(ROW) * 0.7 / height,
+                    ],
+                    base_color(b, theme),
+                );
+            }
+        }
+        // Sample the waveform through existing draft/display event anchors.
+        // Missing event positions never gain synthetic coordinates or peaks.
+        for (read, lane) in self.lanes.iter().enumerate() {
+            let points = n.saturating_mul(8).clamp(2, 1024);
+            let mut values = Vec::with_capacity(points);
+            let reverse = self.draft.inputs[read].orientation == Orientation::Reverse;
+            for p in 0..points {
+                let display = p as f64 / (points - 1) as f64 * n as f64;
+                let col = display.floor() as usize;
+                let value = (|| {
+                    let draft = self.columns.get(col)?.draft?;
+                    lane.column_events.get(draft).copied().flatten()?;
+                    let anchors = &lane.signal_anchors;
+                    let index = anchors.partition_point(|a| a.1 < display);
+                    let &(sa, ca) = anchors.get(index.checked_sub(1)?)?;
+                    let &(sb, cb) = anchors.get(index)?;
+                    if cb <= ca || sb <= sa {
+                        return None;
+                    }
+                    let sample = (sa + (sb - sa) * (display - ca) / (cb - ca)).round() as usize;
+                    let sample = if reverse {
+                        lane.trace.samples().checked_sub(sample + 1)?
+                    } else {
+                        sample
+                    };
+                    Some(std::array::from_fn::<_, 4, _>(|c| {
+                        let channel = if reverse { 3 - c } else { c };
+                        f64::from(
+                            lane.trace.channels[channel]
+                                .get(sample)
+                                .copied()
+                                .unwrap_or(0)
+                                .max(0),
+                        )
+                    }))
+                })();
+                values.push(value);
+            }
+            let maximum = values
+                .iter()
+                .flatten()
+                .flatten()
+                .copied()
+                .fold(1.0, f64::max);
+            let bottom = f64::from(self.lane_top(read) + lane.height) / height;
+            for p in 1..points {
+                if let (Some(a), Some(b)) = (&values[p - 1], &values[p]) {
+                    for c in 0..4 {
+                        out.line(
+                            [
+                                (p - 1) as f64 / (points - 1) as f64,
+                                bottom - a[c] / maximum * f64::from(lane.height) * 0.8 / height,
+                                p as f64 / (points - 1) as f64,
+                                bottom - b[c] / maximum * f64::from(lane.height) * 0.8 / height,
+                            ],
+                            base_color(b"ACGT"[c], theme),
+                        );
+                    }
+                }
+            }
+        }
+        out
     }
 
     pub fn reference_mask_bounds(&self) -> Option<(usize, usize)> {
@@ -801,6 +947,50 @@ impl SangerReviewView {
             );
         }
     }
+    fn rebuild_signal_anchors(&mut self) {
+        for (read, lane) in self.lanes.iter_mut().enumerate() {
+            let Some(calls) = &self.draft.inputs[read].calls else {
+                lane.signal_anchors.clear();
+                continue;
+            };
+            let reverse = self.draft.inputs[read].orientation == Orientation::Reverse;
+            let samples = lane.trace.samples();
+            let mut anchors: Vec<(f64, f64)> = lane
+                .column_events
+                .iter()
+                .enumerate()
+                .filter_map(|(i, event)| {
+                    event.map(|event| {
+                        let original = calls.positions[event] as usize;
+                        let sample = if reverse {
+                            samples - 1 - original
+                        } else {
+                            original
+                        };
+                        (sample as f64, self.draft_display[i] as f64 + 0.5)
+                    })
+                })
+                .collect();
+            if anchors.is_empty() {
+                lane.signal_anchors.clear();
+                continue;
+            }
+            let spacing = if anchors.len() > 1 {
+                (anchors[anchors.len() - 1].0 - anchors[0].0) / (anchors.len() - 1) as f64
+            } else {
+                12.0
+            };
+            let first = anchors[0];
+            let last = anchors[anchors.len() - 1];
+            anchors.insert(0, ((first.0 - spacing * 0.5).max(0.0), first.1 - 0.5));
+            anchors.push((
+                (last.0 + spacing * 0.5).min((samples - 1) as f64),
+                last.1 + 0.5,
+            ));
+            lane.signal_anchors = anchors;
+        }
+    }
+
     fn signal(
         &self,
         read: usize,
@@ -810,43 +1000,9 @@ impl SangerReviewView {
         theme: &Theme,
         frame: &mut Frame,
     ) {
-        let calls = self.draft.inputs[read]
-            .calls
-            .as_ref()
-            .expect("validated Tracy calls");
         let reverse = self.draft.inputs[read].orientation == Orientation::Reverse;
         let samples = lane.trace.samples();
-        let mut anchors: Vec<(f64, f64)> = lane
-            .column_events
-            .iter()
-            .enumerate()
-            .filter_map(|(i, event)| {
-                event.map(|event| {
-                    let original = calls.positions[event] as usize;
-                    let sample = if reverse {
-                        samples - 1 - original
-                    } else {
-                        original
-                    };
-                    (sample as f64, self.draft_display[i] as f64 + 0.5)
-                })
-            })
-            .collect();
-        if anchors.is_empty() {
-            return;
-        }
-        let spacing = if anchors.len() > 1 {
-            (anchors[anchors.len() - 1].0 - anchors[0].0) / (anchors.len() - 1) as f64
-        } else {
-            12.0
-        };
-        let first = anchors[0];
-        let last = anchors[anchors.len() - 1];
-        anchors.insert(0, ((first.0 - spacing * 0.5).max(0.0), first.1 - 0.5));
-        anchors.push((
-            (last.0 + spacing * 0.5).min((samples - 1) as f64),
-            last.1 + 0.5,
-        ));
+        let anchors = &lane.signal_anchors;
         let visible: Vec<_> = anchors
             .windows(2)
             .filter(|a| self.x(a[1].1) >= NAMES && self.x(a[0].1) <= self.width && a[1].0 > a[0].0)
@@ -993,7 +1149,7 @@ pub fn suggested_name(paths: &[std::path::PathBuf]) -> String {
     }
 }
 
-fn base_color(base: u8, theme: &Theme) -> [f32; 4] {
+pub(crate) fn base_color(base: u8, theme: &Theme) -> [f32; 4] {
     theme.residue(base)
 }
 fn segment(frame: &mut Frame, x0: f32, y0: f32, x1: f32, y1: f32, color: [f32; 4]) {
@@ -1129,6 +1285,13 @@ impl SangerReviewView {
             }
         }
         basecraft_io::hash_bytes(&bytes)
+    }
+    pub fn find_row_height(&self, row: usize) -> f32 {
+        let references = self
+            .alignment
+            .as_ref()
+            .map_or(0, |a| 1 + a.representatives.len());
+        if row < references { REFERENCE_ROW } else { ROW }
     }
     pub fn find_row_y(&self, row: usize) -> f32 {
         let references = self
@@ -1297,6 +1460,33 @@ mod tests {
         view.attach_alignment(placement, AlignmentDoc::new("reference", rows))
             .unwrap();
     }
+    #[test]
+    fn overview_reverse_signal_shares_coordinates_and_missing_events_stay_blank() {
+        let forward = review(false);
+        let reverse = review(true);
+        let theme = Theme::default();
+        let a = forward.overview(&theme).json();
+        let b = reverse.overview(&theme).json();
+        assert_eq!(a, b);
+        let mut missing = review(false);
+        for lane in &mut missing.lanes {
+            lane.column_events.fill(None);
+        }
+        missing.rebuild_signal_anchors();
+        assert!(missing.overview(&theme).shapes.iter().all(|s| !s.line));
+        attach(&mut missing);
+        let overview = missing.overview(&theme);
+        assert!(
+            overview
+                .shapes
+                .iter()
+                .all(|s| s.x >= 0.0 && s.x <= 1.0 && s.y >= 0.0 && s.y <= 1.0)
+        );
+        let selected = missing.selected;
+        missing.scroll_to(1.0);
+        assert_eq!(missing.selected, selected);
+    }
+
     #[test]
     fn navigation_uses_named_one_based_columns_and_preserves_selection_on_errors() {
         let mut view = review(true);

@@ -20,6 +20,7 @@ FocusScope {
         activeDocument: doc.visible
     }
 
+    property bool overviewEnabled: true
     property var notificationSink: null
     Connections {
         target: ctl
@@ -59,6 +60,8 @@ FocusScope {
         anchors.fill: parent
         anchors.bottomMargin: findBar.height
         findBar: doc.findBar
+        anchors.rightMargin: overviewWidth
+        overviewEnabled: doc.overviewEnabled
         controller: ctl
         onContextMenu: (info) => doc.contextMenu(info)
         onToggleSidebar: doc.toggleSidebar()

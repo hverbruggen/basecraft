@@ -28,6 +28,7 @@ FocusScope {
         }
     }
 
+    property bool overviewEnabled: true
     property var notificationSink: null
     Connections {
         target: ctl
@@ -317,6 +318,8 @@ FocusScope {
                 }
                 TreeCanvas {
                     findBar: doc.findBar
+                    overviewEnabled: doc.overviewEnabled
+                    anchors.rightMargin: overviewWidth
                     id: treeCanvas
                     anchors { left: parent.left; top: header.bottom; bottom: legend.top; right: parent.right }
                     controller: tree

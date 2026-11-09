@@ -22,6 +22,7 @@ FocusScope {
         activeDocument: doc.visible
     }
 
+    property bool overviewEnabled: true
     property var notificationSink: null
     Connections {
         target: ctl
@@ -143,7 +144,7 @@ FocusScope {
         accessibleTitle: "Alignment editor"
         accessibleSummary: ctl.status
         anchors.fill: parent
-        anchors.bottomMargin: findBar.height + (hbar.visible ? hbar.height : 0)
+        anchors.bottomMargin: findBar.height + (hbar.visible ? hbar.height : 0) + (overview.visible ? overview.height : 0)
         clearColor: ctl.background
         fontFamily: ctl.mono_font
         instances: ctl.frame
@@ -253,5 +254,17 @@ FocusScope {
             if (event.key === Qt.Key_Insert) { doc.toggleInsert(); event.accepted = true; return }
             event.accepted = ctl.busy || ctl.key(event.key, event.text, event.modifiers)
         }
+    }
+    DocumentOverview {
+        id: overview
+        anchors { left: parent.left; right: parent.right; bottom: findBar.top }
+        shown: doc.overviewEnabled
+        miniature: ctl.overview_content
+        matchMarks: JSON.parse(ctl.overview_matches || "[]")
+        foreground: ctl.foreground; backgroundColor: ctl.background; accent: ctl.accent
+        documentItem: view
+        viewportX: ctl.hscroll_pos; viewportY: ctl.vscroll_pos
+        viewportWidth: ctl.hscroll_size; viewportHeight: ctl.vscroll_size
+        onPanRequested: (x, y) => { ctl.hscroll_to(x); ctl.vscroll_to(y) }
     }
 }

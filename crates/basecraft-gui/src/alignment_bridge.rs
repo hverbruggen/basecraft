@@ -18,6 +18,8 @@ pub mod qobject {
     unsafe extern "RustQt" {
         #[qobject]
         #[qml_element]
+        #[qproperty(QString, overview_content)]
+        #[qproperty(QString, overview_matches)]
         #[qproperty(QByteArray, frame)]
         #[qproperty(QString, status)]
         #[qproperty(QString, message)]
@@ -337,6 +339,10 @@ const KEY_SPACE: i32 = 0x20;
 pub struct AlignmentRust {
     find: basecraft_viewmodel::find::Session,
     find_status_revision: u64,
+    overview_content: QString,
+    overview_matches: QString,
+    overview_match_cache: basecraft_viewmodel::overview::Cache,
+    overview_cache: basecraft_viewmodel::overview::Cache,
     frame: QByteArray,
     last_taxa: String,
     status: QString,
@@ -409,6 +415,10 @@ impl Default for AlignmentRust {
         let mut c = Self {
             find: basecraft_viewmodel::find::Session::default(),
             find_status_revision: u64::MAX,
+            overview_content: QString::from("{\"shapes\":[]}"),
+            overview_matches: QString::from("[]"),
+            overview_match_cache: basecraft_viewmodel::overview::Cache::default(),
+            overview_cache: basecraft_viewmodel::overview::Cache::default(),
             frame: QByteArray::default(),
             last_taxa: String::new(),
             status: QString::default(),
@@ -513,6 +523,33 @@ impl qobject::AlignmentController {
             )
         };
         self.as_mut().set_names_width(names);
+        let (overview, matches) = {
+            let mut r = self.as_mut().rust_mut();
+            let r = &mut *r;
+            let (Some(session), Some(doc)) = (&r.session, r.doc) else {
+                return;
+            };
+            let d = session.alignment(doc);
+            let key = format!("{}:{}:{:?}", session.id(), d.version(), r.theme);
+            let content = r.overview_cache.get(key.clone(), || {
+                basecraft_viewmodel::overview::alignment(d, &r.theme)
+            });
+            let matches =
+                r.overview_match_cache
+                    .get_json(format!("{key}:{}", r.find.revision()), || {
+                        crate::find_bridge::overview_marks(&r.find, |hit| {
+                            r.view.overview_match(
+                                hit.row,
+                                hit.start,
+                                hit.end,
+                                hit.kind == basecraft_viewmodel::find::Kind::Name,
+                            )
+                        })
+                    });
+            (content, matches)
+        };
+        self.as_mut().set_overview_content(QString::from(&overview));
+        self.as_mut().set_overview_matches(QString::from(&matches));
         self.as_mut().set_frame(QByteArray::from(bytes.as_slice()));
         self.as_mut().set_status(QString::from(&status));
         self.as_mut().set_zoom_text(QString::from(&zoom));

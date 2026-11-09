@@ -17,6 +17,8 @@ pub mod qobject {
     unsafe extern "RustQt" {
         #[qobject]
         #[qml_element]
+        #[qproperty(QString, overview_content)]
+        #[qproperty(QString, overview_matches)]
         #[qproperty(QByteArray, frame)]
         #[qproperty(QString, canvas_geometry)]
         #[qproperty(QString, status)]
@@ -277,6 +279,10 @@ use crate::bridge::{
 pub struct TreeRust {
     find: basecraft_viewmodel::find::Session,
     find_status_revision: u64,
+    overview_content: QString,
+    overview_matches: QString,
+    overview_match_cache: basecraft_viewmodel::overview::Cache,
+    overview_cache: basecraft_viewmodel::overview::Cache,
     frame: QByteArray,
     canvas_geometry: QString,
     last_taxa: String,
@@ -324,6 +330,10 @@ impl Default for TreeRust {
         let mut c = Self {
             find: basecraft_viewmodel::find::Session::default(),
             find_status_revision: u64::MAX,
+            overview_content: QString::from("{\"shapes\":[]}"),
+            overview_matches: QString::from("[]"),
+            overview_match_cache: basecraft_viewmodel::overview::Cache::default(),
+            overview_cache: basecraft_viewmodel::overview::Cache::default(),
             frame: QByteArray::default(),
             canvas_geometry: QString::from("{}"),
             last_taxa: String::new(),
@@ -553,6 +563,34 @@ impl qobject::TreeController {
         };
         self.as_mut()
             .set_canvas_geometry(QString::from(&geometry.to_string()));
+        let (overview, matches) = {
+            let mut r = self.as_mut().rust_mut();
+            let r = &mut *r;
+            let (Some(session), Some(doc)) = (&r.session, r.doc) else {
+                return;
+            };
+            let d = session.tree(doc);
+            let key = format!(
+                "{}:{}:{:?}:{:?}",
+                session.id(),
+                d.version(),
+                r.view.overview_key(),
+                r.theme
+            );
+            let content = r
+                .overview_cache
+                .get(key.clone(), || r.view.overview(d, &r.theme));
+            let matches =
+                r.overview_match_cache
+                    .get_json(format!("{key}:{}", r.find.revision()), || {
+                        crate::find_bridge::overview_marks(&r.find, |hit| {
+                            r.view.overview_match(hit.row)
+                        })
+                    });
+            (content, matches)
+        };
+        self.as_mut().set_overview_content(QString::from(&overview));
+        self.as_mut().set_overview_matches(QString::from(&matches));
         self.as_mut().set_frame(QByteArray::from(bytes.as_slice()));
         self.as_mut().set_status(QString::from(&status));
         self.as_mut().set_zoom_text(QString::from(&zoom));

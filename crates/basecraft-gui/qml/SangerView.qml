@@ -22,6 +22,7 @@ FocusScope {
         }
     }
 
+    property bool overviewEnabled: true
     property var notificationSink: null
     Connections {
         target: ctl
@@ -562,7 +563,7 @@ FocusScope {
         id: viewport
         anchors.fill: parent
         anchors.topMargin: preparationFailure.height + traceActivity.height + reviewNavigation.height
-        anchors.bottomMargin: findBar.height + cutoffBar.height + (ctl.review_mode && ctl.hscroll_size < 0.999 ? 14 : 0)
+        anchors.bottomMargin: findBar.height + cutoffBar.height + (overview.visible ? overview.height : 0) + (ctl.review_mode && ctl.hscroll_size < 0.999 ? 14 : 0)
         contentWidth: width
         contentHeight: view.height
         clip: true
@@ -743,4 +744,22 @@ FocusScope {
         }
     }
 
+    DocumentOverview {
+        id: overview
+        anchors { left: parent.left; right: parent.right; bottom: cutoffBar.top; bottomMargin: ctl.review_mode && ctl.hscroll_size < 0.999 ? 14 : 0 }
+        shown: doc.overviewEnabled
+        implicitHeight: Math.max(24, (ctl.review_mode ? 3 : 2) * lineHeight)
+        miniature: ctl.overview_content
+        matchMarks: JSON.parse(ctl.overview_matches || "[]")
+        foreground: ctl.foreground; backgroundColor: ctl.background; accent: ctl.accent
+        documentItem: view
+        viewportX: ctl.review_mode ? ctl.hscroll_pos : ctl.trace_scroll_pos
+        viewportWidth: ctl.review_mode ? ctl.hscroll_size : ctl.trace_scroll_size
+        viewportY: ctl.review_mode ? viewport.contentY / Math.max(1, viewport.contentHeight) : 0
+        viewportHeight: ctl.review_mode ? Math.min(1, viewport.height / Math.max(1, viewport.contentHeight)) : 1
+        onPanRequested: (x, y) => {
+            if (ctl.review_mode) { ctl.hscroll_to(x); viewport.contentY = y * viewport.contentHeight }
+            else ctl.scroll_trace(x)
+        }
+    }
 }

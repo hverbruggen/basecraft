@@ -147,7 +147,7 @@ impl SangerView {
         let h = self.height.max(1.0);
         frame.rect(0.0, 0.0, w, h, theme.background);
         frame.rect(0.0, HEADER, w, h - HEADER - FOOTER, theme.surface);
-        let colors: [Rgba; 4] = (*b"ACGT").map(|base| theme.residue(base));
+        let colors = signal_colors(theme);
         let signal_h = (h - HEADER - FOOTER - 12.0).max(1.0);
         let bottom = HEADER + signal_h;
         let first = self.start.max(0.0) as usize;
@@ -387,4 +387,9 @@ mod tests {
             );
         }
     }
+}
+
+/// Palette shared by detail traces, review lanes and miniatures.
+pub(crate) fn signal_colors(theme: &Theme) -> [Rgba; 4] {
+    (*b"ACGT").map(|base| theme.residue(base))
 }

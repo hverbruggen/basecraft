@@ -510,6 +510,44 @@ impl GenomeView {
         format!("{level} · {} shown", format_length(shown))
     }
 
+    /// Both motif and annotation hits already carry document residue bounds.
+    pub fn overview_match(start: u64, end: u64, len: u64) -> Option<crate::overview::MatchMark> {
+        crate::overview::MatchMark::span(start, end, len, 0.0, 1.0)
+    }
+
+    pub fn overview_fraction(&self, len: u64) -> (f64, f64) {
+        if len == 0 || self.mode == Mode::Circular {
+            return (0.0, 1.0);
+        }
+        if self.mode != Mode::Wrapped {
+            return self.scroll_fraction(len);
+        }
+        let lines = self.visible_lines();
+        let start = (lines.start as u64 * self.line_bp()).min(len);
+        let end = (lines.end as u64 * self.line_bp()).min(len);
+        (start as f64 / len as f64, (end - start) as f64 / len as f64)
+    }
+
+    pub fn overview_scroll_to(&mut self, fraction: f64, len: u64) {
+        if !fraction.is_finite() {
+            return;
+        }
+        if self.mode == Mode::Wrapped {
+            let line = (fraction.clamp(0.0, 1.0) * len as f64 / self.line_bp() as f64) as usize;
+            if let Some(wrap) = &self.wrap {
+                self.scroll_y = wrap
+                    .offsets
+                    .get(line)
+                    .copied()
+                    .unwrap_or_else(|| self.wrap_total());
+                self.auto_fit = false;
+                self.clamp_scroll();
+            }
+        } else if self.mode == Mode::Linear {
+            self.scroll_to(fraction, len);
+        }
+    }
+
     /// Scrollbar position and size, as fractions of the sequence.
     pub fn scroll_fraction(&self, len: u64) -> (f64, f64) {
         if self.mode == Mode::Wrapped {
@@ -2058,6 +2096,28 @@ mod tests {
             })
             .collect();
         SequenceDoc::new("t", Arc::new(seq), feats, true)
+    }
+
+    #[test]
+    fn overview_pan_uses_wrapped_bases_and_preserves_selection() {
+        let d = doc();
+        let mut v = GenomeView::new(300.0, 180.0);
+        v.mode = Mode::Wrapped;
+        let mut frame = Frame::new();
+        v.build(&d, &Theme::default(), &mut frame);
+        v.selection = Some((100, 200));
+        v.overview_scroll_to(0.5, d.len());
+        let (start, span) = v.overview_fraction(d.len());
+        assert!(start > 0.4 && start <= 0.5);
+        assert!(span > 0.0 && span < 1.0);
+        assert_eq!(v.selection, Some((100, 200)));
+        v.overview_scroll_to(f64::NAN, d.len());
+        assert_eq!(v.overview_fraction(d.len()), (start, span));
+        v.overview_scroll_to(1.0, d.len());
+        let (start, span) = v.overview_fraction(d.len());
+        assert!((start + span - 1.0).abs() < 1e-6);
+        v.mode = Mode::Circular;
+        assert_eq!(v.overview_fraction(d.len()), (0.0, 1.0));
     }
 
     #[test]

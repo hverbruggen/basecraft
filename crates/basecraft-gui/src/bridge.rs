@@ -21,6 +21,8 @@ pub mod qobject {
     unsafe extern "RustQt" {
         #[qobject]
         #[qml_element]
+        #[qproperty(QString, overview_content)]
+        #[qproperty(QString, overview_matches)]
         #[qproperty(QByteArray, frame)]
         #[qproperty(QString, status)]
         #[qproperty(QString, title)]
@@ -41,6 +43,8 @@ pub mod qobject {
         #[qproperty(bool, dirty)]
         #[qproperty(QString, zoom_text)]
         #[qproperty(f64, scroll_pos)]
+        #[qproperty(f64, overview_pos)]
+        #[qproperty(f64, overview_size)]
         #[qproperty(f64, scroll_size)]
         type GenomeController = super::ControllerRust;
 
@@ -227,6 +231,8 @@ pub mod qobject {
         fn blast_queries(self: &GenomeController, source: &QString, feature: i32) -> QString;
         /// Scroll the linear view to a fraction of the sequence.
         #[qinvokable]
+        fn overview_scroll_to(self: Pin<&mut GenomeController>, fraction: f64);
+        #[qinvokable]
         fn scroll_to(self: Pin<&mut GenomeController>, fraction: f64);
         /// Called repeatedly while a selection drag is near or past an edge;
         /// returns whether the view moved.
@@ -378,6 +384,10 @@ pub(crate) const ALT: i32 = 0x0800_0000;
 pub struct ControllerRust {
     find: basecraft_viewmodel::find::Session,
     find_status_revision: u64,
+    overview_content: QString,
+    overview_matches: QString,
+    overview_match_cache: basecraft_viewmodel::overview::Cache,
+    overview_cache: basecraft_viewmodel::overview::Cache,
     frame: QByteArray,
     status: QString,
     title: QString,
@@ -397,6 +407,8 @@ pub struct ControllerRust {
     dirty: bool,
     zoom_text: QString,
     scroll_pos: f64,
+    overview_pos: f64,
+    overview_size: f64,
     scroll_size: f64,
 
     session: Option<Session>,
@@ -412,6 +424,10 @@ impl Default for ControllerRust {
         let mut c = Self {
             find: basecraft_viewmodel::find::Session::default(),
             find_status_revision: u64::MAX,
+            overview_content: QString::from("{\"shapes\":[]}"),
+            overview_matches: QString::from("[]"),
+            overview_match_cache: basecraft_viewmodel::overview::Cache::default(),
+            overview_cache: basecraft_viewmodel::overview::Cache::default(),
             frame: QByteArray::default(),
             status: QString::default(),
             title: QString::from("Basecraft"),
@@ -431,6 +447,8 @@ impl Default for ControllerRust {
             dirty: false,
             zoom_text: QString::default(),
             scroll_pos: 0.0,
+            overview_pos: 0.0,
+            overview_size: 1.0,
             scroll_size: 1.0,
             session: None,
             doc: None,
@@ -741,9 +759,38 @@ impl qobject::GenomeController {
             };
             (zoom, scroll)
         };
+        let (overview, matches) = {
+            let mut r = self.as_mut().rust_mut();
+            let r = &mut *r;
+            let (Some(session), Some(doc)) = (&r.session, r.doc) else {
+                return;
+            };
+            let d = session.doc(doc);
+            let key = format!("{}:{}:{:?}", session.id(), d.version(), r.theme);
+            let content = r.overview_cache.get(key.clone(), || {
+                basecraft_viewmodel::overview::sequence(d, &r.theme)
+            });
+            let matches =
+                r.overview_match_cache
+                    .get_json(format!("{key}:{}", r.find.revision()), || {
+                        crate::find_bridge::overview_marks(&r.find, |hit| {
+                            basecraft_viewmodel::genome::GenomeView::overview_match(
+                                hit.start,
+                                hit.end,
+                                d.len(),
+                            )
+                        })
+                    });
+            (content, matches)
+        };
+        self.as_mut().set_overview_content(QString::from(&overview));
+        self.as_mut().set_overview_matches(QString::from(&matches));
         self.as_mut().set_frame(QByteArray::from(bytes.as_slice()));
         self.as_mut().set_status(QString::from(&status));
         self.as_mut().set_zoom_text(QString::from(&zoom));
+        let (overview_pos, overview_size) = self.rust().view.overview_fraction(self.len());
+        self.as_mut().set_overview_pos(overview_pos);
+        self.as_mut().set_overview_size(overview_size);
         self.as_mut().set_scroll_size(size);
         self.as_mut().set_scroll_pos(pos);
     }
@@ -2094,6 +2141,15 @@ impl qobject::GenomeController {
             .flatten()
             .unwrap_or_default();
         QString::from(&text)
+    }
+
+    pub fn overview_scroll_to(mut self: Pin<&mut Self>, fraction: f64) {
+        let len = self.len();
+        self.as_mut()
+            .rust_mut()
+            .view
+            .overview_scroll_to(fraction, len);
+        self.refresh();
     }
 
     pub fn scroll_to(mut self: Pin<&mut Self>, fraction: f64) {

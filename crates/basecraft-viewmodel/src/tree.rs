@@ -240,6 +240,78 @@ impl TreeView {
         }
     }
 
+    /// Find Name hits carry node identity, not a column-zero sequence span.
+    pub fn overview_match(&self, node: usize) -> Option<crate::overview::MatchMark> {
+        let (w, h) = (
+            f64::from(self.layout.width.max(1.0)),
+            f64::from(self.layout.height.max(1.0)),
+        );
+        let x = f64::from(*self.layout.x.get(node)?) / w;
+        let y = f64::from(*self.layout.y.get(node)? - self.layout.row / 2.0) / h;
+        let height = f64::from(self.layout.row) / h;
+        if !(0.0..=1.0).contains(&x) || y < 0.0 || y + height > 1.0 {
+            return None;
+        }
+        Some(crate::overview::MatchMark {
+            x,
+            y,
+            width: 1.0 - x,
+            height,
+        })
+    }
+
+    /// Simplified current layout, including the active owned species bands.
+    pub fn overview(&self, doc: &TreeDoc, theme: &Theme) -> crate::overview::Miniature {
+        let mut out = crate::overview::Miniature::default();
+        let (w, h) = (self.layout.width.max(1.0), self.layout.height.max(1.0));
+        let n = doc.nodes().len();
+        let stride = n.div_ceil(4096).max(1);
+        for i in (0..n).step_by(stride) {
+            if let Some(parent) = doc.node(i).parent {
+                let (x, y) = (self.layout.x[i], self.layout.y[i]);
+                let (px, py) = (self.layout.x[parent], self.layout.y[parent]);
+                out.line(
+                    [
+                        f64::from(px / w),
+                        f64::from(py / h),
+                        f64::from(px / w),
+                        f64::from(y / h),
+                    ],
+                    theme.foreground_muted,
+                );
+                out.line(
+                    [
+                        f64::from(px / w),
+                        f64::from(y / h),
+                        f64::from(x / w),
+                        f64::from(y / h),
+                    ],
+                    theme.foreground_muted,
+                );
+            }
+        }
+        let stride = self.layout.bars.len().div_ceil(4096).max(1);
+        for b in self.layout.bars.iter().step_by(stride) {
+            if let Some(color) = crate::frame::hex(&b.color) {
+                out.rect(
+                    [
+                        f64::from(b.x / w),
+                        f64::from(b.y / h),
+                        f64::from(b.w / w),
+                        f64::from(b.h / h),
+                    ],
+                    color,
+                );
+            }
+        }
+        out
+    }
+
+    /// Reuse the layout's existing invalidation key, excluding scroll position.
+    pub fn overview_key(&self) -> String {
+        format!("{:?}", self.layout_key)
+    }
+
     /// Every bar beside the tips, in content coordinates.
     pub fn bars(&self) -> &[PlacedBar] {
         &self.layout.bars
@@ -1679,6 +1751,45 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn overview_uses_current_layout_and_owned_band_colours() {
+        let d = tree("((A:1,B:2):1,C:3);");
+        let mut v = TreeView::new(400.0, 180.0);
+        v.set_columns(vec![TipColumn {
+            id: "species".into(),
+            tips: [(
+                "A".into(),
+                vec![TipBand {
+                    id: "group".into(),
+                    share: 1.0,
+                    width: 20.0,
+                    color: "#abcdef".into(),
+                    label: String::new(),
+                }],
+            )]
+            .into(),
+            ..TipColumn::default()
+        }]);
+        v.sync(&d);
+        let before = v.overview(&d, &Theme::default()).json();
+        assert!(before.contains("#abcdef"));
+        let key = v.overview_key();
+        assert!(v.overview_match(usize::MAX).is_none());
+        assert!(v.overview_match(d.root()).is_some());
+        v.hscroll_to(1.0);
+        v.vscroll_to(1.0);
+        assert_eq!(v.overview_key(), key);
+        assert_eq!(v.overview(&d, &Theme::default()).json(), before);
+        v.zoom_both(&d, 3.0);
+        assert_ne!(v.overview_key(), key);
+        assert!(
+            v.overview(&d, &Theme::default())
+                .shapes
+                .iter()
+                .all(|s| [s.x, s.y, s.w, s.h].iter().all(|v| v.is_finite()))
+        );
     }
 
     #[test]

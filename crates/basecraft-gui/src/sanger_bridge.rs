@@ -15,6 +15,8 @@ pub mod qobject {
     unsafe extern "RustQt" {
         #[qobject]
         #[qml_element]
+        #[qproperty(QString, overview_content)]
+        #[qproperty(QString, overview_matches)]
         #[qproperty(QByteArray, frame)]
         #[qproperty(QString, status)]
         #[qproperty(QString, message)]
@@ -237,6 +239,10 @@ pub struct SangerRust {
     find: basecraft_viewmodel::find::Session,
     find_status_revision: u64,
     find_source_key: String,
+    overview_content: QString,
+    overview_matches: QString,
+    overview_match_cache: basecraft_viewmodel::overview::Cache,
+    overview_cache: basecraft_viewmodel::overview::Cache,
     frame: QByteArray,
     status: QString,
     message: QString,
@@ -294,6 +300,10 @@ impl Default for SangerRust {
             find: basecraft_viewmodel::find::Session::default(),
             find_status_revision: u64::MAX,
             find_source_key: String::new(),
+            overview_content: QString::from("{\"shapes\":[]}"),
+            overview_matches: QString::from("[]"),
+            overview_match_cache: basecraft_viewmodel::overview::Cache::default(),
+            overview_cache: basecraft_viewmodel::overview::Cache::default(),
             frame: QByteArray::default(),
             status: QString::default(),
             message: QString::default(),
@@ -490,6 +500,7 @@ impl qobject::SangerController {
                     r.review_session = Some(completed.session);
                     if name == "prepare" {
                         r.review_path = None;
+                        r.overview_cache = basecraft_viewmodel::overview::Cache::default();
                         r.trace = None;
                     }
                 }
@@ -790,6 +801,47 @@ impl qobject::SangerController {
         self.as_mut().set_hscroll_size(hsize);
         self.as_mut().set_trace_scroll_pos(position);
         self.as_mut().set_trace_scroll_size(size);
+        let overview = {
+            let mut r = self.as_mut().rust_mut();
+            let r = &mut *r;
+            if let Some(review) = &r.review {
+                review.overview(&r.theme).json()
+            } else if let Some(trace) = &r.trace {
+                let key = format!("{}:{:?}", r.file_path, r.theme);
+                r.overview_cache.get(key, || {
+                    basecraft_viewmodel::overview::trace(trace, &r.theme)
+                })
+            } else {
+                "{\"shapes\":[]}".into()
+            }
+        };
+        let matches = {
+            let mut r = self.as_mut().rust_mut();
+            let r = &mut *r;
+            let geometry = r
+                .review
+                .as_ref()
+                .map(|v| (v.find_key(), v.content_height().to_bits()));
+            let key = format!("{}:{}:{geometry:?}", r.find_source_key, r.find.revision());
+            r.overview_match_cache.get_json(key, || {
+                crate::find_bridge::overview_marks(&r.find, |hit| {
+                    if let Some(review) = &r.review {
+                        review.overview_match_at(
+                            hit.start,
+                            hit.end,
+                            review.find_row_y(hit.row),
+                            review.find_row_height(hit.row),
+                        )
+                    } else {
+                        r.trace.as_ref().and_then(|trace| {
+                            basecraft_viewmodel::overview::trace_match(trace, hit.start, hit.end)
+                        })
+                    }
+                })
+            })
+        };
+        self.as_mut().set_overview_content(QString::from(&overview));
+        self.as_mut().set_overview_matches(QString::from(&matches));
         self.as_mut().set_frame(QByteArray::from(bytes.as_slice()));
         self.as_mut().set_status(QString::from(&status));
         self.as_mut().set_zoom_text(QString::from(&zoom));
@@ -914,6 +966,7 @@ impl qobject::SangerController {
                     let mut r = self.as_mut().rust_mut();
                     view.resize(r.view.width, r.view.height);
                     // Keep the raw trace for the existing multi-read draft action.
+                    r.overview_cache = basecraft_viewmodel::overview::Cache::default();
                     r.trace = view.lanes.first().map(|lane| lane.trace.clone());
                     r.review = Some(view);
                     r.review_session = Some(session);
@@ -965,6 +1018,7 @@ impl qobject::SangerController {
                     r.review_session = Some(session);
                     r.review_path = None;
 
+                    r.overview_cache = basecraft_viewmodel::overview::Cache::default();
                     r.trace = None;
                 }
                 self.as_mut().set_dirty(dirty);
@@ -1005,6 +1059,7 @@ impl qobject::SangerController {
                     r.review_session = Some(session);
                     r.review_path = if recovered { None } else { Some(path.clone()) };
 
+                    r.overview_cache = basecraft_viewmodel::overview::Cache::default();
                     r.trace = None;
                 }
                 self.as_mut().set_dirty(recovered);
