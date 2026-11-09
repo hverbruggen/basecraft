@@ -1027,6 +1027,12 @@ ApplicationWindow {
                         }
                     }
                     Item { Layout.fillWidth: true }
+                    RibbonGroup {
+                        title: "Figure"
+                        AppRibbonButton { action: exportSvgCommand; visible: exportSvgCommand.visible; text: "SVG"; iconName: "save-as"; tip: exportSvgCommand.tooltip }
+                        AppRibbonButton { action: exportPngCommand; visible: exportPngCommand.visible; text: "PNG"; iconName: "figure-export"; tip: exportPngCommand.tooltip }
+                    }
+                    ToolSeparator { Layout.fillHeight: true }
                     RibbonGroup { title: "Text"; actions: [textRepresentationCommand] }
                     HelpGroup {}
                 }
