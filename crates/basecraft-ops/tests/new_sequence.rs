@@ -58,7 +58,10 @@ fn new_sequence_validates_before_creating_and_replays_unsaved_edits() {
     );
     session.flush().unwrap();
     let recovery = session.recovery_root().to_owned();
-    assert!(replay::replay(&recovery).unwrap().problems.is_empty());
+    assert_eq!(
+        replay::replay(&recovery).unwrap().problems,
+        Vec::<String>::new()
+    );
     let restored = root.path().join("restored");
     let outputs = replay::recover(&recovery, &restored).unwrap();
     let mut recovered = Session::unlogged(&restored);
