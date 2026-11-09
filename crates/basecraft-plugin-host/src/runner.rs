@@ -321,6 +321,7 @@ impl PreparedOperation {
         registry: &crate::registry::Registry,
     ) -> Result<Self> {
         policy.check(&operation)?;
+        let policy = policy.capture_ambient_credential(&operation)?;
         let lifecycle = crate::lifecycle::Lifecycle::for_operation(&operation)?;
         let workflow_registry = if operation.descriptor.host_workflow.is_some() {
             registry.resolve("basecraft.delimitation/haplotypes@1", None)?;
@@ -1131,7 +1132,7 @@ impl PreparedOperation {
                 .as_deref()
                 .ok_or_else(|| Error::Protocol("plugin runtime is unavailable".into()))?,
             permit.threads(),
-            &self.policy.runtime_credentials,
+            &self.policy.credentials_for(&self.operation),
         )?;
         self.lifecycle.configure(&mut process, cancelled);
         let mut context = self.context.clone();

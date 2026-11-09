@@ -344,6 +344,9 @@
           "max": 1,
           "retain": true
         }
+      },
+      "credentials": {
+        "zenodo_access": "BASECRAFT_ZENODO_TOKEN"
       }
     }
   ]

@@ -61,6 +61,10 @@ Item {
             backend.busy = false
             backend.outcome = JSON.stringify({state: "completed", data: {status: "upload_unknown", draft_id: 123, url: "https://sandbox.zenodo.org/uploads/123", message: "Partial upload"}, artifacts: [{path: "/project/run/receipt"}]})
             d.completed(); verify(d.canRetry)
+            verify(!field(d, "zenodoTitle").enabled)
+            verify(!field(d, "zenodoLicense").enabled)
+            // Even a programmatic edit cannot change an existing draft retry.
+            field(d, "zenodoTitle").text = "Do not submit this change"
             field(d, "zenodoToken").text = "another-secret"
             d.start()
             compare(backend.requests[2].inputs.resume[0].path, "/project/run/receipt")
@@ -77,11 +81,34 @@ Item {
             compare(backend.requests[2].inputs.resume[0].path, "/project/run/receipt")
             backend.busy = false; d.close()
         }
+        function test_rejected_metadata_can_be_corrected_in_place() {
+            const d = dialog(); prepared(d); settings(d); d.start()
+            backend.busy = false
+            backend.outcome = JSON.stringify({state: "completed", data: {status: "not_sent", draft_id: null, message: "Metadata rejected"}, artifacts: [{path: "/project/run/receipt"}]})
+            d.completed(); verify(d.canRetry)
+            for (const name of ["zenodoTitle", "zenodoDescription", "zenodoCreators", "zenodoLicense", "zenodoAccess"]) verify(field(d, name).enabled)
+            verify(!field(d, "zenodoService").enabled)
+            field(d, "zenodoTitle").text = "Corrected title"
+            field(d, "zenodoLicense").text = "cc-zero"
+            field(d, "zenodoToken").text = "new-secret"
+            d.start()
+            compare(backend.requests.length, 3)
+            compare(backend.requests[2].parameters.title, "Corrected title")
+            compare(backend.requests[2].parameters.license, "cc-zero")
+            compare(backend.requests[2].inputs.selection[0].path, "/project/run/selection")
+            compare(backend.requests[2].inputs.files[0].path, "/project/run/snapshot")
+            compare(backend.requests[2].inputs.resume[0].path, "/project/run/receipt")
+            verify(!field(d, "zenodoTitle").enabled, "Freeze metadata during the corrected request")
+            d.start(); compare(backend.requests.length, 3)
+            backend.busy = false; d.close()
+        }
         function test_unknown_creation_never_blindly_retries() {
             const d = dialog(); prepared(d); settings(d); d.start()
             backend.busy = false
             backend.outcome = JSON.stringify({state: "completed", data: {status: "creation_unknown", draft_id: null, message: "Inspect Zenodo"}, artifacts: [{path: "/project/run/receipt"}]})
             d.completed(); verify(!d.canRetry)
+            verify(!field(d, "zenodoTitle").enabled)
+            verify(!field(d, "zenodoLicense").enabled)
             d.start(); compare(backend.requests.length, 2); d.close()
         }
         function test_keyboard_field_access_escape_cancels_and_clears_token() {

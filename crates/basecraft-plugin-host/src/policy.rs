@@ -9,7 +9,7 @@ use basecraft_protocol::operation::{InputReference, MAX_INPUT_FILES, OperationRe
 
 use crate::{Error, Result, registry::RegisteredOperation};
 
-/// Runtime-only credentials never enter requests, execution records or Debug output.
+/// Runtime-only process payload. Never serialized or printed by Debug.
 #[derive(Clone, Default)]
 pub(crate) struct RuntimeCredentials(pub(crate) BTreeMap<String, String>);
 impl std::fmt::Debug for RuntimeCredentials {
@@ -17,13 +17,67 @@ impl std::fmt::Debug for RuntimeCredentials {
         f.write_str("RuntimeCredentials([redacted])")
     }
 }
+impl RuntimeCredentials {
+    pub(crate) fn redact(&self, text: &str) -> String {
+        let mut values: Vec<_> = self.0.values().filter(|value| !value.is_empty()).collect();
+        values.sort_by_key(|value| std::cmp::Reverse(value.len()));
+        values.into_iter().fold(text.to_owned(), |text, value| {
+            text.replace(value.as_str(), "[redacted]")
+        })
+    }
+    pub(crate) fn redact_json(&self, value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::String(text) => *text = self.redact(text),
+            serde_json::Value::Array(values) => {
+                for value in values {
+                    self.redact_json(value);
+                }
+            }
+            serde_json::Value::Object(values) => {
+                *values = std::mem::take(values)
+                    .into_iter()
+                    .map(|(key, mut value)| {
+                        self.redact_json(&mut value);
+                        (self.redact(&key), value)
+                    })
+                    .collect();
+            }
+            _ => {}
+        }
+    }
+}
+
+#[derive(Clone)]
+struct CredentialGrant {
+    operation: String,
+    package_digest: String,
+    descriptor_digest: String,
+    name: String,
+    value: String,
+}
+impl std::fmt::Debug for CredentialGrant {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CredentialGrant")
+            .field("operation", &self.operation)
+            .field("value", &"[redacted]")
+            .finish_non_exhaustive()
+    }
+}
+
+pub(crate) fn credential_environment(name: &str) -> bool {
+    name.starts_with("BASECRAFT_")
+        && name.ends_with("_TOKEN")
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+}
 
 #[derive(Clone, Debug)]
 pub struct SessionPolicy {
     pub root: PathBuf,
     pub document_write: bool,
     pub artifact_write: bool,
-    pub(crate) runtime_credentials: RuntimeCredentials,
+    credential_grants: Vec<CredentialGrant>,
 }
 
 #[derive(Debug)]
@@ -56,23 +110,76 @@ impl SessionPolicy {
             root,
             document_write: writable,
             artifact_write: writable,
-            runtime_credentials: RuntimeCredentials::default(),
+            credential_grants: Vec::new(),
         })
     }
 
-    /// Explicit runtime input, scoped to this accepted session's child process.
-    /// Values must never be placed in operation parameters or persisted settings.
-    pub fn with_runtime_credential(mut self, name: &str, value: String) -> Result<Self> {
-        if !name.starts_with("BASECRAFT_")
-            || !name.ends_with("_TOKEN")
-            || !name.bytes().all(|b| b.is_ascii_uppercase() || b == b'_')
+    /// Grant a declared logical credential to this exact resolved operation and
+    /// package/descriptor digest. A declaration alone never grants ambient access.
+    pub fn with_runtime_credential(
+        mut self,
+        operation: &RegisteredOperation,
+        name: &str,
+        value: String,
+    ) -> Result<Self> {
+        operation.package.verify()?;
+        if !operation.descriptor.credentials.contains_key(name)
+            || value.is_empty()
             || value.len() > 8192
             || value.contains(['\0', '\r', '\n'])
         {
-            return Err(denied("invalid runtime credential"));
+            return Err(denied("invalid runtime credential grant"));
         }
-        self.runtime_credentials.0.insert(name.into(), value);
+        self.credential_grants.push(CredentialGrant {
+            operation: operation.id.clone(),
+            package_digest: operation.package.digest.clone(),
+            descriptor_digest: operation.descriptor_digest.clone(),
+            name: name.into(),
+            value,
+        });
         Ok(self)
+    }
+
+    /// Compatibility provider for the bundled Zenodo operation, not an arbitrary
+    /// package claiming its ID or declaring the same environment variable.
+    pub(crate) fn capture_ambient_credential(
+        self,
+        operation: &RegisteredOperation,
+    ) -> Result<Self> {
+        if operation.package.origin == crate::registry::Origin::Bundled
+            && operation.id == "basecraft.zenodo/draft@1"
+            && operation
+                .descriptor
+                .credentials
+                .get("zenodo_access")
+                .is_some_and(|name| name == "BASECRAFT_ZENODO_TOKEN")
+            && !self
+                .credential_grants
+                .iter()
+                .any(|grant| grant.matches(operation, "zenodo_access"))
+            && let Ok(value) = std::env::var("BASECRAFT_ZENODO_TOKEN")
+            && !value.is_empty()
+        {
+            return self.with_runtime_credential(operation, "zenodo_access", value);
+        }
+        Ok(self)
+    }
+
+    pub(crate) fn credentials_for(&self, operation: &RegisteredOperation) -> RuntimeCredentials {
+        RuntimeCredentials(
+            operation
+                .descriptor
+                .credentials
+                .iter()
+                .filter_map(|(name, environment)| {
+                    self.credential_grants
+                        .iter()
+                        .rev()
+                        .find(|grant| grant.matches(operation, name))
+                        .map(|grant| (environment.clone(), grant.value.clone()))
+                })
+                .collect(),
+        )
     }
 
     pub fn permits(&self, operation: &RegisteredOperation) -> bool {
@@ -271,4 +378,13 @@ pub fn is_workspace_destination(operation: &RegisteredOperation, key: &str) -> b
             operation.package.manifest.id.as_str(),
             "basecraft.delimitation" | "basecraft.host"
         )
+}
+
+impl CredentialGrant {
+    fn matches(&self, operation: &RegisteredOperation, name: &str) -> bool {
+        self.operation == operation.id
+            && self.package_digest == operation.package.digest
+            && self.descriptor_digest == operation.descriptor_digest
+            && self.name == name
+    }
 }

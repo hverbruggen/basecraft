@@ -113,6 +113,39 @@ class Zenodo(unittest.TestCase):
             self.upload()
         self.assertEqual(self.calls, [])
 
+    def test_definitive_metadata_rejection_accepts_corrected_metadata(self):
+        def reject(*args, **kwargs):
+            raise z.Rejected("Zenodo rejected the metadata")
+        self.assertEqual(self.upload(reject)["status"], "not_sent")
+        self.resume()
+        self.parameters.update(title="Corrected title", license="cc-zero")
+        self.remote["metadata"] = z.metadata(self.parameters)
+        receipt = self.upload()
+        self.assertEqual(receipt["status"], "draft_ready")
+        self.assertEqual(receipt["metadata"]["title"], "Corrected title")
+        self.assertEqual(self.calls[0][2]["body"]["metadata"]["license"], "cc-zero")
+        self.assertEqual([call[0] for call in self.calls], ["POST", "PUT"])
+
+    def test_definitive_rejection_still_requires_same_service_and_selection(self):
+        def reject(*args, **kwargs):
+            raise z.Rejected("Zenodo rejected the metadata")
+        self.upload(reject)
+        self.resume()
+        self.parameters["service"] = "production"
+        with self.assertRaisesRegex(ValueError, "exact previous"):
+            self.upload()
+        self.assertEqual(self.calls, [])
+
+    def test_unknown_creation_rejects_changed_metadata_without_network(self):
+        def uncertain(*args, **kwargs):
+            raise OSError("lost response")
+        self.upload(uncertain)
+        self.resume()
+        self.parameters["title"] = "Changed title"
+        with self.assertRaisesRegex(ValueError, "exact previous"):
+            self.upload()
+        self.assertEqual(self.calls, [])
+
     def test_no_automatic_remote_overwrite(self):
         self.upload()
         self.resume()
