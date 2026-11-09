@@ -236,7 +236,9 @@ retained in the typed `doc.create_sequence` record for recovery and replay.
 
 In a writable Python session, `session.create_sequence("sample", "ACGT")`
 returns the new document's state. Use its `document` identifier with the existing
-edit and save methods; the first save needs a new `.gb` path. MCP exposes the
+edit and save methods; save to a new `.gb` path. Saving writes a copy and does
+not bind the unsaved document ID to that destination. Reopen the saved file and
+use its returned document ID for subsequent edits and ordinary saves. MCP exposes the
 same method as `sequence_create` with `name` and `sequence` arguments and requires
 `--allow-writes`. Creating a document does not create a source file; recovery
 follows the session's configured recovery policy.
