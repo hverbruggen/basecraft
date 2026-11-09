@@ -13,8 +13,6 @@ basecraft-docs.workspace = true
 basecraft-io.workspace = true
 basecraft-protocol.workspace = true
 serde.workspace = true
-
-[dev-dependencies]
 serde_json.workspace = true
 
 [lints]

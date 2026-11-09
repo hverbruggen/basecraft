@@ -5,6 +5,7 @@ import Basecraft
 
 FocusScope {
     id: doc
+    property bool overviewEnabled: true
     property var notificationSink: null
     Connections {
         target: ctl
@@ -292,6 +293,8 @@ FocusScope {
                     }
                 }
                 TreeCanvas {
+                    overviewEnabled: doc.overviewEnabled
+                    anchors.rightMargin: overviewWidth
                     id: treeCanvas
                     anchors { left: parent.left; top: header.bottom; bottom: legend.top; right: parent.right }
                     controller: tree

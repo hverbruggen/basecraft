@@ -131,6 +131,7 @@ fn main() {
         "qml/FeatureEditor.qml",
         "qml/DocumentView.qml",
         "qml/AlignmentView.qml",
+        "qml/DocumentOverview.qml",
         "qml/SangerView.qml",
         "qml/PhyloView.qml",
         "qml/TreeCanvas.qml",

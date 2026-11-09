@@ -18,6 +18,7 @@ pub mod qobject {
     unsafe extern "RustQt" {
         #[qobject]
         #[qml_element]
+        #[qproperty(QString, overview_content)]
         #[qproperty(QByteArray, frame)]
         #[qproperty(QString, status)]
         #[qproperty(QString, message)]
@@ -330,6 +331,8 @@ const KEY_SPACE: i32 = 0x20;
 // Independent Qt properties plus the background scan state.
 #[allow(clippy::struct_excessive_bools)]
 pub struct AlignmentRust {
+    overview_content: QString,
+    overview_cache: basecraft_viewmodel::overview::Cache,
     frame: QByteArray,
     last_taxa: String,
     status: QString,
@@ -400,6 +403,8 @@ impl Drop for ActiveTool {
 impl Default for AlignmentRust {
     fn default() -> Self {
         let mut c = Self {
+            overview_content: QString::from("{\"shapes\":[]}"),
+            overview_cache: basecraft_viewmodel::overview::Cache::default(),
             frame: QByteArray::default(),
             last_taxa: String::new(),
             status: QString::default(),
@@ -501,6 +506,19 @@ impl qobject::AlignmentController {
             )
         };
         self.as_mut().set_names_width(names);
+        let overview = {
+            let mut r = self.as_mut().rust_mut();
+            let r = &mut *r;
+            let (Some(session), Some(doc)) = (&r.session, r.doc) else {
+                return;
+            };
+            let d = session.alignment(doc);
+            let key = format!("{}:{}:{:?}", session.id(), d.version(), &r.theme);
+            r.overview_cache.get(key, || {
+                basecraft_viewmodel::overview::alignment(d, &r.theme)
+            })
+        };
+        self.as_mut().set_overview_content(QString::from(&overview));
         self.as_mut().set_frame(QByteArray::from(bytes.as_slice()));
         self.as_mut().set_status(QString::from(&status));
         self.as_mut().set_zoom_text(QString::from(&zoom));

@@ -17,6 +17,7 @@ pub mod qobject {
     unsafe extern "RustQt" {
         #[qobject]
         #[qml_element]
+        #[qproperty(QString, overview_content)]
         #[qproperty(QByteArray, frame)]
         #[qproperty(QString, canvas_geometry)]
         #[qproperty(QString, status)]
@@ -270,6 +271,8 @@ use crate::bridge::{
 
 #[allow(clippy::struct_excessive_bools)]
 pub struct TreeRust {
+    overview_content: QString,
+    overview_cache: basecraft_viewmodel::overview::Cache,
     frame: QByteArray,
     canvas_geometry: QString,
     last_taxa: String,
@@ -315,6 +318,8 @@ pub struct TreeRust {
 impl Default for TreeRust {
     fn default() -> Self {
         let mut c = Self {
+            overview_content: QString::from("{\"shapes\":[]}"),
+            overview_cache: basecraft_viewmodel::overview::Cache::default(),
             frame: QByteArray::default(),
             canvas_geometry: QString::from("{}"),
             last_taxa: String::new(),
@@ -541,6 +546,23 @@ impl qobject::TreeController {
         };
         self.as_mut()
             .set_canvas_geometry(QString::from(&geometry.to_string()));
+        let overview = {
+            let mut r = self.as_mut().rust_mut();
+            let r = &mut *r;
+            let (Some(session), Some(doc)) = (&r.session, r.doc) else {
+                return;
+            };
+            let d = session.tree(doc);
+            let key = format!(
+                "{}:{}:{:?}:{:?}",
+                session.id(),
+                d.version(),
+                r.view.overview_key(),
+                &r.theme
+            );
+            r.overview_cache.get(key, || r.view.overview(d, &r.theme))
+        };
+        self.as_mut().set_overview_content(QString::from(&overview));
         self.as_mut().set_frame(QByteArray::from(bytes.as_slice()));
         self.as_mut().set_status(QString::from(&status));
         self.as_mut().set_zoom_text(QString::from(&zoom));

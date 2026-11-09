@@ -10,6 +10,7 @@ import Basecraft
 
 ApplicationWindow {
     id: window
+    property bool overviewEnabled: true
     width: 1200
     height: 760
     visible: true
@@ -1014,10 +1015,17 @@ ApplicationWindow {
                     // not offered for now; the wrapped layout is the view.
                     RibbonGroup {
                         title: "Show"
-                        // Only sequences have a GC plot.
-                        enabled: window.currentKind === "sequence"
+                        AppCheckBox {
+                            text: "Overview"
+                            checked: window.overviewEnabled
+                            enabled: window.current !== null
+                            ToolTip.text: "Show a compact navigator when the document extends beyond the view"
+                            ToolTip.visible: hovered
+                            onToggled: window.overviewEnabled = checked
+                        }
                         AppCheckBox {
                             text: "GC content"
+                            enabled: window.currentKind === "sequence"
                             ToolTip.text: "Show the GC content plot"
                             ToolTip.visible: hovered
                             ToolTip.delay: 400
@@ -2014,6 +2022,7 @@ ApplicationWindow {
                         DelegateChoice {
                             roleValue: "trace"
                             SangerView {
+                                overviewEnabled: window.overviewEnabled
                                 notificationSink: provenance
                                 fileUrls: shell
                                 onCopyText: (text) => clipboard.put(text)
@@ -2024,6 +2033,7 @@ ApplicationWindow {
                         DelegateChoice {
                             roleValue: "alignment"
                             AlignmentView {
+                                overviewEnabled: window.overviewEnabled
                                 notificationSink: provenance
                                 fileUrls: shell
                                 insertMode: window.alignmentInsert
@@ -2045,6 +2055,7 @@ ApplicationWindow {
                             // Not "TreeView": that's Qt's, used by the
                             // files sidebar.
                             PhyloView {
+                                overviewEnabled: window.overviewEnabled
                                 id: treeDocument
                                 notificationSink: provenance
                                 onOpenFile: (path) => window.openPath(path)
@@ -2058,6 +2069,7 @@ ApplicationWindow {
                         DelegateChoice {
                             roleValue: "delimitation"
                             DelimitationView {
+                                overviewEnabled: window.overviewEnabled
                                 notificationSink: provenance
                                 onOpenFile: (path) => window.openPath(path)
                                 onDirtyChanged: openFiles.setProperty(index, "dirty", dirty)
@@ -2065,6 +2077,7 @@ ApplicationWindow {
                         }
                         DelegateChoice {
                             DocumentView {
+                                overviewEnabled: window.overviewEnabled
                                 notificationSink: provenance
                                 showGc: window.showGc
                                 defaultLayout: window.defaultLayout

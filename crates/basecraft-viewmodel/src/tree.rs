@@ -240,6 +240,58 @@ impl TreeView {
         }
     }
 
+    /// Simplified current layout, including the active owned species bands.
+    pub fn overview(&self, doc: &TreeDoc, theme: &Theme) -> crate::overview::Miniature {
+        let mut out = crate::overview::Miniature::default();
+        let (w, h) = (self.layout.width.max(1.0), self.layout.height.max(1.0));
+        let n = doc.nodes().len();
+        let stride = n.div_ceil(4096).max(1);
+        for i in (0..n).step_by(stride) {
+            if let Some(parent) = doc.node(i).parent {
+                let (x, y) = (self.layout.x[i], self.layout.y[i]);
+                let (px, py) = (self.layout.x[parent], self.layout.y[parent]);
+                out.line(
+                    [
+                        f64::from(px / w),
+                        f64::from(py / h),
+                        f64::from(px / w),
+                        f64::from(y / h),
+                    ],
+                    theme.foreground_muted,
+                );
+                out.line(
+                    [
+                        f64::from(px / w),
+                        f64::from(y / h),
+                        f64::from(x / w),
+                        f64::from(y / h),
+                    ],
+                    theme.foreground_muted,
+                );
+            }
+        }
+        let stride = self.layout.bars.len().div_ceil(4096).max(1);
+        for b in self.layout.bars.iter().step_by(stride) {
+            if let Some(color) = crate::frame::hex(&b.color) {
+                out.rect(
+                    [
+                        f64::from(b.x / w),
+                        f64::from(b.y / h),
+                        f64::from(b.w / w),
+                        f64::from(b.h / h),
+                    ],
+                    color,
+                );
+            }
+        }
+        out
+    }
+
+    /// Reuse the layout's existing invalidation key, excluding scroll position.
+    pub fn overview_key(&self) -> String {
+        format!("{:?}", self.layout_key)
+    }
+
     /// Every bar beside the tips, in content coordinates.
     pub fn bars(&self) -> &[PlacedBar] {
         &self.layout.bars

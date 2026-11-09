@@ -7,6 +7,7 @@ import Basecraft
 // for through signals.
 FocusScope {
     id: doc
+    property bool overviewEnabled: true
     property var notificationSink: null
     Connections {
         target: ctl
@@ -52,6 +53,7 @@ FocusScope {
         accessibleTitle: "Sequence editor"
         accessibleSummary: ctl.status
         anchors.fill: parent
+        anchors.bottomMargin: overview.visible ? overview.height : 0
         clearColor: ctl.background
         fontFamily: ctl.mono_font
         instances: ctl.frame
@@ -185,5 +187,16 @@ FocusScope {
             }
             event.accepted = ctl.key(event.key, event.text, event.modifiers)
         }
+    }
+    DocumentOverview {
+        id: overview
+        anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
+        shown: doc.overviewEnabled
+        circular: ctl.mode === "circular"
+        miniature: ctl.overview_content
+        foreground: ctl.foreground; backgroundColor: ctl.background
+        documentItem: view
+        viewportX: ctl.overview_pos; viewportWidth: ctl.overview_size
+        onPanRequested: (x, y) => ctl.overview_scroll_to(x)
     }
 }

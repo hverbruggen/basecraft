@@ -1431,6 +1431,29 @@ mod tests {
     }
 
     #[test]
+    fn overview_sampling_is_bounded_and_pan_preserves_selection() {
+        let d = doc(200, 2000);
+        let theme = Theme::default();
+        let miniature = crate::overview::alignment(&d, &theme);
+        assert!(miniature.shapes.len() <= 32 * 512);
+        assert!(!miniature.shapes.is_empty());
+        let mut v = view(&d);
+        let selection = v.selection;
+        let cursor = v.cursor;
+        v.hscroll_to(1.0);
+        v.vscroll_to(1.0);
+        assert_eq!(v.selection, selection);
+        assert_eq!(v.cursor, cursor);
+        let (p, size) = v.hscroll();
+        assert!((p + size - 1.0).abs() < 1e-6);
+        assert!(
+            crate::overview::alignment(&doc(0, 0), &theme)
+                .shapes
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn visible_export_crops_blank_space_and_preserves_coordinates() {
         let d = doc(3, 20);
         let v = view(&d);

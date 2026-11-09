@@ -7,6 +7,7 @@ import Basecraft
 // for through signals, as in the other editors.
 FocusScope {
     id: doc
+    property bool overviewEnabled: true
     property var notificationSink: null
     Connections {
         target: ctl
@@ -44,6 +45,8 @@ FocusScope {
     TreeCanvas {
         id: view
         anchors.fill: parent
+        anchors.rightMargin: overviewWidth
+        overviewEnabled: doc.overviewEnabled
         controller: ctl
         onContextMenu: (info) => doc.contextMenu(info)
         onToggleSidebar: doc.toggleSidebar()

@@ -15,6 +15,7 @@ pub mod qobject {
     unsafe extern "RustQt" {
         #[qobject]
         #[qml_element]
+        #[qproperty(QString, overview_content)]
         #[qproperty(QByteArray, frame)]
         #[qproperty(QString, status)]
         #[qproperty(QString, message)]
@@ -229,6 +230,8 @@ use crate::bridge::{css, load_theme, monospace_font, omarchy_theme_path};
 // Independent generated QML properties describe document state and caller activity.
 #[allow(clippy::struct_excessive_bools)]
 pub struct SangerRust {
+    overview_content: QString,
+    overview_cache: basecraft_viewmodel::overview::Cache,
     frame: QByteArray,
     status: QString,
     message: QString,
@@ -282,6 +285,8 @@ impl Default for SangerRust {
     fn default() -> Self {
         let (theme, theme_stamp) = load_theme().unwrap_or_else(|| (Theme::default(), None));
         Self {
+            overview_content: QString::from("{\"shapes\":[]}"),
+            overview_cache: basecraft_viewmodel::overview::Cache::default(),
             frame: QByteArray::default(),
             status: QString::default(),
             message: QString::default(),
@@ -767,6 +772,21 @@ impl qobject::SangerController {
         self.as_mut().set_hscroll_size(hsize);
         self.as_mut().set_trace_scroll_pos(position);
         self.as_mut().set_trace_scroll_size(size);
+        let overview = {
+            let mut r = self.as_mut().rust_mut();
+            let r = &mut *r;
+            if let Some(review) = &r.review {
+                review.overview(&r.theme).json()
+            } else if let Some(trace) = &r.trace {
+                let key = format!("{}:{:?}", r.file_path, r.theme);
+                r.overview_cache.get(key, || {
+                    basecraft_viewmodel::overview::trace(trace, &r.theme)
+                })
+            } else {
+                "{\"shapes\":[]}".into()
+            }
+        };
+        self.as_mut().set_overview_content(QString::from(&overview));
         self.as_mut().set_frame(QByteArray::from(bytes.as_slice()));
         self.as_mut().set_status(QString::from(&status));
         self.as_mut().set_zoom_text(QString::from(&zoom));
