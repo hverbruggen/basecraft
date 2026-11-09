@@ -197,3 +197,46 @@ fn credential_scope_and_redaction() {
         evidence(&outcome);
     }
 }
+
+#[test]
+fn reserved_ipc_credential_is_rejected() {
+    use basecraft_plugin_host::contract;
+    use basecraft_protocol::operation::OperationContract;
+
+    let temp = tempfile::tempdir().unwrap();
+    let registry = fixture_registry(temp.path(), false, "Credential declaration");
+    let operation = registry
+        .resolve("org.example.credentials/inspect@1", None)
+        .unwrap();
+    let mut descriptor = OperationContract {
+        schema: 1,
+        operations: vec![operation.descriptor.clone()],
+    };
+    // The regular service token declaration and explicit pinned grant remain valid.
+    assert!(contract::validate_contract(&operation.package.manifest.id, &descriptor).is_ok());
+    assert!(
+        SessionPolicy::new(temp.path(), true)
+            .unwrap()
+            .with_runtime_credential(operation, "access", "synthetic-service-secret".into())
+            .is_ok()
+    );
+
+    descriptor.operations[0]
+        .credentials
+        .insert("access".into(), "BASECRAFT_TOKEN".into());
+    assert!(
+        contract::validate_contract(&operation.package.manifest.id, &descriptor).is_err(),
+        "IPC authentication must not be a public credential declaration"
+    );
+    // Defend the grant boundary too, even if a native caller bypasses registry
+    // declaration validation while constructing a resolved-operation value.
+    let mut invalid_recipient = operation.clone();
+    invalid_recipient.descriptor = descriptor.operations.remove(0);
+    assert!(
+        SessionPolicy::new(temp.path(), true)
+            .unwrap()
+            .with_runtime_credential(&invalid_recipient, "access", "synthetic-ipc-secret".into())
+            .is_err(),
+        "IPC authentication must not be grantable"
+    );
+}

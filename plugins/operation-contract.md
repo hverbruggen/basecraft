@@ -491,7 +491,8 @@ reserved environment variables, for example:
 
 Names use ordinary operation-binding syntax; environment names must match
 `BASECRAFT_*_TOKEN` using uppercase ASCII letters, digits and underscores. At most
-eight declarations are allowed. A declaration expresses a need and **does not
+eight declarations are allowed. The exact name `BASECRAFT_TOKEN` is reserved for
+IPC authentication and is rejected in both declarations and grants. A declaration expresses a need and **does not
 authorize access**. No secret belongs in parameters, request keys, settings,
 provenance, manifests or any JSON schema. Schemas contain names only.
 
