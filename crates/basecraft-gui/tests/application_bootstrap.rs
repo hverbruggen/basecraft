@@ -363,13 +363,17 @@ fn main() {
         "FIGURE_TEST_FOLDER",
         &serde_json::to_string(figure_folder.path()).unwrap(),
     );
+    let find_qml = include_str!("fixtures/find-overview-controllers.qml").replace(
+        "FIND_TEST_FOLDER",
+        &serde_json::to_string(figure_folder.path()).unwrap(),
+    );
     engine.pin_mut().load_data(
         &QByteArray::from(&format!(
             "import QtQuick; import Basecraft; Item {{ width: 800; height: 600; \
              OperationPickerDialog {{}} \
              OperationParameters {{ schema: ({{type: 'object', properties: {{age: {{type: 'number'}}}}, required: ['age']}}) }} \
-             {sanger_qml} {figure_qml} \
-             Timer {{ interval: 1; running: sangerDone && speciesDone; onTriggered: Qt.quit() }} }}",
+             {sanger_qml} {figure_qml} {find_qml} \
+             Timer {{ interval: 1; running: sangerDone && speciesDone && findDone; onTriggered: Qt.quit() }} }}",
         )),
         &QUrl::default(),
     );
