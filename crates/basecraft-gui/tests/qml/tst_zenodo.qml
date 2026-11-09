@@ -67,6 +67,16 @@ Item {
             compare(backend.requests[2].parameters.title, "Synthetic dataset")
             backend.busy = false; d.close()
         }
+        function test_rejected_authentication_can_retry_creation() {
+            const d = dialog(); prepared(d); settings(d); d.start()
+            backend.busy = false
+            backend.outcome = JSON.stringify({state: "completed", data: {status: "not_sent", draft_id: null, message: "Authentication expired"}, artifacts: [{path: "/project/run/receipt"}]})
+            d.completed(); verify(d.canRetry)
+            field(d, "zenodoToken").text = "new-secret"
+            d.start(); compare(backend.requests.length, 3)
+            compare(backend.requests[2].inputs.resume[0].path, "/project/run/receipt")
+            backend.busy = false; d.close()
+        }
         function test_unknown_creation_never_blindly_retries() {
             const d = dialog(); prepared(d); settings(d); d.start()
             backend.busy = false

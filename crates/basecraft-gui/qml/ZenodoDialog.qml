@@ -21,7 +21,7 @@ AppFormDialog {
     property var submittedMetadata: ({})
     property var openExternal: url => Qt.openUrlExternally(url)
     readonly property bool ready: preview.files !== undefined && selectionPath.length > 0
-    readonly property bool canRetry: attempted && receipt.draft_id > 0 && resumePath.length > 0 && receipt.status !== "draft_ready"
+    readonly property bool canRetry: attempted && resumePath.length > 0 && (receipt.draft_id > 0 || receipt.status === "not_sent") && receipt.status !== "draft_ready"
     readonly property bool frozenMetadata: attempted
     signal chooseFiles()
 
@@ -114,7 +114,7 @@ AppFormDialog {
     Label { Kirigami.FormData.isSection: true; text: "Token needs deposit:write for the selected service. It is cleared after each attempt and is never saved. Create tokens in your Zenodo account settings."; wrapMode: Text.Wrap; Layout.preferredWidth: dialog.font.pixelSize * 37 }
     AppButton {
         objectName: "zenodoCreateDraft"
-        text: dialog.attempted ? "&Retry retained draft" : "&Create draft"
+        text: dialog.attempted ? (dialog.receipt.draft_id > 0 ? "&Retry retained draft" : "&Retry draft creation") : "&Create draft"
         enabled: dialog.ready && !dialog.backend.busy && (!dialog.attempted || dialog.canRetry)
         onClicked: dialog.start()
     }

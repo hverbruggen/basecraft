@@ -123,7 +123,7 @@ fn zenodo_shared_runner_preserves_snapshots_and_never_records_token() {
 #[test]
 fn zenodo_cancel_retains_remote_identity_and_repair_does_not_resubmit() {
     let temp = tempfile::tempdir().unwrap();
-    let (mut jobs, id, evidence) = start(temp.path(), true);
+    let (jobs, id, evidence) = start(temp.path(), true);
     let deadline = Instant::now() + Duration::from_secs(60);
     while !evidence.join("progress").is_file() {
         assert!(Instant::now() < deadline);

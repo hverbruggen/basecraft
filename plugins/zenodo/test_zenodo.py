@@ -154,7 +154,7 @@ class Zenodo(unittest.TestCase):
             with self.assertRaises(ValueError):
                 z.metadata({**self.parameters, key: " "})
         self.parameters["access_right"] = "closed"
-        self.assertNotIn("license", z.metadata(self.parameters))
+        self.assertEqual(z.metadata(self.parameters)["license"], "cc-by-4.0")
         with self.assertRaises(ValueError):
             z.metadata({**self.parameters, "access_right": "restricted"})
 
@@ -189,6 +189,14 @@ class Zenodo(unittest.TestCase):
         self.assertEqual(connection.headers["Content-Type"], "application/octet-stream")
         self.assertNotIn("token", connection.path)
         self.assertNotIn("multipart", json.dumps(connection.headers))
+
+    def test_rejected_authentication_can_retry_without_uncertain_create(self):
+        def reject(*args, **kwargs):
+            raise z.Rejected("Authentication expired; enter a new token")
+        self.assertEqual(self.upload(reject)["status"], "not_sent")
+        self.resume()
+        self.assertEqual(self.upload()["status"], "draft_ready")
+        self.assertEqual([call[0] for call in self.calls], ["POST", "PUT"])
 
     def test_authentication_failure_and_redirect_never_followed(self):
         class Response:

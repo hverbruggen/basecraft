@@ -87,7 +87,12 @@ impl PluginProcess {
         python: &Path,
         budget: usize,
     ) -> Result<Self> {
-        Self::spawn_with_credentials(manifest, python, budget, &Default::default())
+        Self::spawn_with_credentials(
+            manifest,
+            python,
+            budget,
+            &crate::policy::RuntimeCredentials::default(),
+        )
     }
 
     pub(crate) fn spawn_with_credentials(

@@ -26,6 +26,10 @@ class RemoteError(Exception):
     pass
 
 
+class Rejected(RemoteError):
+    """Documented HTTP rejection proves that this request was not accepted."""
+
+
 def save(path, data):
     """Persist remote uncertainty/identity before proceeding to another request."""
     path = Path(path)
@@ -44,6 +48,14 @@ def save(path, data):
                 os.close(descriptor)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def load(path):
+    with Path(path).open("rb") as stream:
+        raw = stream.read(MAX_RESPONSE + 1)
+    if len(raw) > MAX_RESPONSE:
+        raise ValueError("Zenodo selection/recovery receipt exceeds the supported limit")
+    return json.loads(raw)
 
 
 def check_cancel(context):
@@ -119,9 +131,7 @@ def metadata(parameters):
     if access not in ("open", "closed"):
         raise ValueError("Only open or closed file access is supported")
     data = {"title": title, "description": description, "creators": [{"name": n} for n in creators],
-            "upload_type": "dataset", "access_right": access}
-    if access == "open":
-        data["license"] = license_id
+            "upload_type": "dataset", "access_right": access, "license": license_id}
     return data
 
 
@@ -161,7 +171,9 @@ def request(method, url, token, context, *, body=None, file=None, size=None):
         response = connection.getresponse()
         raw = response.read(MAX_RESPONSE + 1)
         if response.status in (401, 403):
-            raise RemoteError("Authentication expired or lacks deposit:write permission; enter a new token")
+            raise Rejected("Authentication expired or lacks deposit:write permission; enter a new token")
+        if response.status in (400, 422):
+            raise Rejected("Zenodo rejected the metadata or file; review required fields and the license identifier")
         if not 200 <= response.status < 300:
             raise RemoteError(f"Zenodo HTTP {response.status}; inspect the retained draft before retrying")
         if len(raw) > MAX_RESPONSE:
@@ -182,7 +194,7 @@ def upload(parameters, context, transport=request, token=None):
     token = os.environ.get("BASECRAFT_ZENODO_TOKEN", "") if token is None else token
     if not token or len(token) > 8192 or any(c in token for c in "\r\n\0"):
         raise ValueError("Enter a runtime Zenodo access token (not saved)")
-    plan = json.loads(Path(context["inputs"]["selection"][0]).read_text())
+    plan = load(context["inputs"]["selection"][0])
     paths = context["inputs"]["files"]
     if (plan.get("schema") != 1 or not 1 <= len(plan["files"]) <= 100
             or len(paths) != len(plan["files"]) or selection_id(plan["files"]) != plan["selection"]):
@@ -199,13 +211,15 @@ def upload(parameters, context, transport=request, token=None):
                "uploaded": [], "message": "No request sent"}
     previous = context["inputs"].get("resume", [])
     if previous:
-        saved = json.loads(Path(previous[0]).read_text())
+        saved = load(previous[0])
         if any(saved.get(key) != receipt[key] for key in ("schema", "service", "selection", "metadata", "files")):
             raise ValueError("Retry must use the exact previous selection, service and metadata")
-        if not isinstance(saved.get("draft_id"), int) or saved["draft_id"] <= 0:
+        identifier = saved.get("draft_id")
+        if type(identifier) is int and identifier > 0:
+            receipt["draft_id"] = identifier
+            receipt["url"] = f"{origin}/uploads/{identifier}"
+        elif identifier is not None or saved.get("status") != "not_sent":
             raise ValueError("Creation status unknown: inspect your Zenodo uploads; do not create another draft automatically")
-        receipt["draft_id"] = saved["draft_id"]
-        receipt["url"] = f"{origin}/uploads/{saved['draft_id']}"
     output = context["outputs"]["receipt"]
     save(output, receipt)
     try:
@@ -258,13 +272,16 @@ def upload(parameters, context, transport=request, token=None):
         receipt["message"] = "Cancelled. Remote changes remain; inspect this receipt before retrying."
         if receipt["status"] not in ("creation_unknown", "upload_unknown"):
             receipt["status"] = "cancelled"
+    except Rejected as error:
+        receipt["status"] = "draft_partial" if receipt["draft_id"] else "not_sent"
+        receipt["message"] = str(error)
     except RemoteError as error:
         # These messages are constructed locally from safe status codes, never
         # service response text, URLs or credential-bearing exception messages.
         receipt["message"] = str(error)
         if receipt["status"] not in ("creation_unknown", "upload_unknown"):
             receipt["status"] = "draft_partial" if receipt["draft_id"] else "not_sent"
-    except (OSError, ValueError, KeyError, TypeError, http.client.HTTPException):
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, http.client.HTTPException):
         # Exception/response text can contain credentials or user-controlled HTML.
         # Keep the structured identity, but never persist transport exception bodies.
         receipt["message"] = "Zenodo request failed or response was invalid. Check authentication, connectivity and the retained draft before retrying."
