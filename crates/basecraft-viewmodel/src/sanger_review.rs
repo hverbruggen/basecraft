@@ -994,13 +994,7 @@ pub fn suggested_name(paths: &[std::path::PathBuf]) -> String {
 }
 
 fn base_color(base: u8, theme: &Theme) -> [f32; 4] {
-    match base {
-        b'A' => [0.21, 0.72, 0.36, 1.0],
-        b'C' => [0.26, 0.53, 0.93, 1.0],
-        b'G' => theme.foreground,
-        b'T' => [0.91, 0.30, 0.27, 1.0],
-        _ => theme.foreground_muted,
-    }
+    theme.residue(base)
 }
 fn segment(frame: &mut Frame, x0: f32, y0: f32, x1: f32, y1: f32, color: [f32; 4]) {
     let length = (x1 - x0).hypot(y1 - y0).max(0.001);
@@ -1250,7 +1244,7 @@ mod tests {
                 .as_chunks::<{ crate::frame::FLOATS_PER_INSTANCE }>()
                 .0
                 .iter()
-                .find(|q| q[8..12] == base_color(b'A', &Theme::default()) && q[1] < 1.0)
+                .find(|q| q[8..12] == Theme::default().residue(b'A') && q[1] < 1.0)
                 .unwrap();
             assert!((peak[0] - view.x(0.5)).abs() < 1.0);
         }

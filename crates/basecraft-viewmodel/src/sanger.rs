@@ -147,12 +147,7 @@ impl SangerView {
         let h = self.height.max(1.0);
         frame.rect(0.0, 0.0, w, h, theme.background);
         frame.rect(0.0, HEADER, w, h - HEADER - FOOTER, theme.surface);
-        let colors: [Rgba; 4] = [
-            [0.21, 0.72, 0.36, 1.0],
-            [0.26, 0.53, 0.93, 1.0],
-            theme.foreground,
-            [0.91, 0.30, 0.27, 1.0],
-        ];
+        let colors: [Rgba; 4] = (*b"ACGT").map(|base| theme.residue(base));
         let signal_h = (h - HEADER - FOOTER - 12.0).max(1.0);
         let bottom = HEADER + signal_h;
         let first = self.start.max(0.0) as usize;
@@ -212,13 +207,7 @@ impl SangerView {
         });
         for i in at..end {
             let x = ((f64::from(calls.positions[i]) - self.start) / self.samples_per_pixel) as f32;
-            let color = match calls.bases[i] {
-                b'A' => colors[0],
-                b'C' => colors[1],
-                b'G' => colors[2],
-                b'T' => colors[3],
-                _ => theme.foreground_muted,
-            };
+            let color = theme.residue(calls.bases[i]);
             if i == self.selected {
                 frame.rect(x - 1.0, HEADER, 2.0, signal_h, theme.accent);
             }
