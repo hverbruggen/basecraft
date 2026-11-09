@@ -343,6 +343,14 @@ FocusScope {
                         TapHandler { acceptedButtons: Qt.RightButton; onTapped: treeMenu.openFor({}) }
                         Label { text: "Species hypotheses"; font.bold: true; color: doc.foreground }
                         Label { text: "Tick sequences, then right-click to group or name them as a species."; wrapMode: Text.Wrap; Layout.fillWidth: true; color: doc.foreground }
+                        EmptyView {
+                            Layout.fillWidth: true
+                            visible: doc.hypotheses.length === 0
+                            message: "Species hypotheses and their groups appear here. Create a hypothesis to start grouping sequences."
+                            actionText: "New hypothesis"
+                            enabled: !ctl.busy
+                            onActivated: doc.newHypothesis()
+                        }
                         Repeater {
                             model: doc.hypotheses.filter(h => (doc.workspace.view.visible || []).includes(h.id) || h.id === ctl.active_hypothesis)
                             delegate: ColumnLayout {
