@@ -169,6 +169,13 @@
             "type": "string"
           }
         },
+        "credentials": {
+          "description": "Logical credential name -> reserved runtime environment variable. This\ndeclares a need, never permission; host grants bind exact accepted code.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
         "description": {
           "type": "string"
         },
