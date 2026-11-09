@@ -692,7 +692,7 @@ impl qobject::GenomeController {
                 return;
             };
             let d = session.doc(doc);
-            let key = format!("{}:{}:{:?}", session.id(), d.version(), &r.theme);
+            let key = format!("{}:{}:{:?}", session.id(), d.version(), r.theme);
             r.overview_cache
                 .get(key, || basecraft_viewmodel::overview::sequence(d, &r.theme))
         };

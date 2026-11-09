@@ -558,7 +558,7 @@ impl qobject::TreeController {
                 session.id(),
                 d.version(),
                 r.view.overview_key(),
-                &r.theme
+                r.theme
             );
             r.overview_cache.get(key, || r.view.overview(d, &r.theme))
         };

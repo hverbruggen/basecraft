@@ -513,7 +513,7 @@ impl qobject::AlignmentController {
                 return;
             };
             let d = session.alignment(doc);
-            let key = format!("{}:{}:{:?}", session.id(), d.version(), &r.theme);
+            let key = format!("{}:{}:{:?}", session.id(), d.version(), r.theme);
             r.overview_cache.get(key, || {
                 basecraft_viewmodel::overview::alignment(d, &r.theme)
             })
