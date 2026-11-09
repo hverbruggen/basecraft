@@ -38,7 +38,7 @@ def _post_windows(fields):
     try:
         result = subprocess.run(
             [sys.executable, str(Path(__file__).resolve()), "--post-worker"],
-            input=json.dumps(fields), capture_output=True, text=True, encoding="utf-8",
+            input=json.dumps(fields), capture_output=True, text=True, encoding="utf-8", check=False,
             timeout=POST_SECONDS, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except subprocess.TimeoutExpired as error:
