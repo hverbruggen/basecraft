@@ -2027,8 +2027,15 @@ impl GenomeView {
                     }
                 }
             } else {
-                let (a, b) = self.visible_range(len);
-                draw(a, b, 0.0);
+                // Linear panning has a fractional origin, just like residue
+                // drawing. Clip in pixels rather than rounding that origin.
+                let x = self.x_of(hit.start as f64).max(0.0);
+                let end = self.x_of(hit.end.min(len) as f64).min(self.width);
+                if end > x {
+                    let w = (end - x).max(2.0).min(self.width);
+                    let x = x.min(self.width - w);
+                    crate::find::outline(frame, (x, SEQ_Y, w, SEQ_H), theme, current);
+                }
             }
         }
     }
@@ -2039,6 +2046,51 @@ mod tests {
     use super::*;
     use basecraft_protocol::{Location, Qualifier};
     use std::sync::Arc;
+
+    #[test]
+    fn find_linear_fractional_origin_and_viewport_clipping() {
+        let mut view = GenomeView::new(20.0, 500.0);
+        view.mode = Mode::Linear;
+        view.start = 10.75;
+        view.bp_per_px = 0.1;
+        let mut find = crate::find::Session::default();
+        find.results.hits.push(crate::find::Hit {
+            row: 0,
+            start: 11,
+            end: 12,
+            kind: crate::find::Kind::Sequence,
+            reverse: false,
+            label: "sequence".into(),
+        });
+        for (start, end, left, right) in [
+            (11, 12, view.x_of(11.0), view.x_of(12.0)),
+            (10, 11, 0.0, view.x_of(11.0)),
+            (12, 14, view.x_of(12.0), view.width),
+        ] {
+            find.results.hits[0].start = start;
+            find.results.hits[0].end = end;
+            let mut frame = Frame::new();
+            view.draw_find(1000, &find, &Theme::default(), &mut frame);
+            assert!((frame.floats()[0] - left).abs() < 0.01);
+            assert!((frame.floats()[2] - right).abs() < 0.01);
+            for quad in frame
+                .floats()
+                .as_chunks::<{ crate::frame::FLOATS_PER_INSTANCE }>()
+                .0
+            {
+                for x in quad[..8].iter().step_by(2) {
+                    assert!((0.0..=view.width).contains(x));
+                }
+            }
+        }
+        for (start, end) in [(0, 10), (13, 14)] {
+            find.results.hits[0].start = start;
+            find.results.hits[0].end = end;
+            let mut frame = Frame::new();
+            view.draw_find(1000, &find, &Theme::default(), &mut frame);
+            assert!(frame.is_empty());
+        }
+    }
 
     fn doc() -> SequenceDoc {
         let seq: Vec<u8> = b"ACGT".iter().copied().cycle().take(10_000).collect();
