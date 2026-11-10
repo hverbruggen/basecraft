@@ -7,6 +7,7 @@ Item {
     property int index: 0
     property int phase: 0
     property var beforeFind: ({})
+    property int originalCount: 0
     readonly property bool hasOverview: index !== 4
     readonly property var cases: [
         {controller: findGenome, file: "/sequence.fasta", query: "A"},
@@ -43,13 +44,25 @@ Item {
         require(current.open_file(folder + cases[index].file), "fixture open failed")
         if (index === 3) current.cancel_calls()
         if (hasOverview) current.resize(160, 100)
-        beforeFind = {dirty: current.dirty, revision: current.record_revision()}
+        if (index === 0 || index === 1) current.key(Qt.Key_A, "", Qt.ControlModifier)
+        beforeFind = {dirty: current.dirty, revision: current.record_revision(),
+            selection: index < 2 ? current.selection_text() : ""}
         // Replace a submitted scan before accepting its result.
         current.find_query("no-such-match!", false)
         current.find_poll(1)
         realFind.query = cases[index].query
         realFind.openFind()
         phase = 0
+    }
+    function finishCase() {
+        realFind.closeFind()
+        if (index === cases.length - 1) {
+            completed = true
+            console.log("Real Find/overview controller bindings passed")
+        } else {
+            index++
+            startCase()
+        }
     }
     Component.onCompleted: startCase()
     Timer {
@@ -78,6 +91,7 @@ Item {
                     findFlow.require(realFind.result.label === "specimen_01", "workspace first label changed")
                 }
                 findFlow.require(findFlow.current.dirty === findFlow.beforeFind.dirty && findFlow.current.record_revision() === findFlow.beforeFind.revision, "Find changed document state")
+                if (findFlow.index < 2) findFlow.require(findFlow.current.selection_text() === findFlow.beforeFind.selection, "Find replaced scientific selection")
                 const count = realFind.result.count
                 realFind.poll(1)
                 findFlow.require(realFind.result.current === (count > 1 ? 2 : 1), "next result did not follow shared Find order")
@@ -104,17 +118,26 @@ Item {
                 realFind.query = findFlow.cases[findFlow.index].query
                 realFind.openFind()
                 findFlow.phase = 2
-            } else {
+            } else if (findFlow.phase === 2) {
                 if (realFind.result.busy || realFind.result.count === 0) return
                 findFlow.require(realFind.result.current === 1, "replacement retained old result position")
-                realFind.closeFind()
-                if (findFlow.index === findFlow.cases.length - 1) {
-                    findFlow.completed = true
-                    console.log("Real Find/overview controller bindings passed")
-                } else {
-                    findFlow.index++
-                    findFlow.startCase()
-                }
+                if (findFlow.index === 0) {
+                    findFlow.originalCount = realFind.result.count
+                    findGenome.key(Qt.Key_A, "", Qt.ControlModifier)
+                    findGenome.key(Qt.Key_Delete, "", 0)
+                    realFind.poll(0)
+                    findFlow.phase = 3
+                } else findFlow.finishCase()
+            } else if (findFlow.phase === 3) {
+                if (realFind.result.busy) return
+                findFlow.require(realFind.result.count === 0, "edit retained old sequence hits")
+                findGenome.undo()
+                realFind.poll(0)
+                findFlow.phase = 4
+            } else {
+                if (realFind.result.busy || realFind.result.count === 0) return
+                findFlow.require(realFind.result.count === findFlow.originalCount, "undo did not restore Find hits")
+                findFlow.finishCase()
             }
         }
     }
