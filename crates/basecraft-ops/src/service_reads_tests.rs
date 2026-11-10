@@ -741,7 +741,7 @@ pub(super) mod locks {
                     *hook = Some(Box::new(move || {
                         ready_tx.send(()).unwrap();
                         go_rx.recv_timeout(Duration::from_secs(10)).unwrap();
-                    }))
+                    }));
                 });
                 let policy = Policy::new(&worker_context);
                 let result = worker_context.lock_evidence(&policy);
