@@ -15,7 +15,7 @@ use std::{hint::black_box, path::Path, sync::Arc, time::Instant};
 
 const WIDTH: f32 = 3840.0;
 const HEIGHT: f32 = 2160.0;
-const ZOOM: f64 = 8.0;
+const ZOOM: f32 = 8.0;
 const FRAMES: usize = 200;
 
 #[derive(Serialize, Deserialize)]
@@ -39,14 +39,14 @@ impl Document {
         match self {
             Self::Alignment(doc) => {
                 let mut view = AlignmentView::new(WIDTH, HEIGHT);
-                view.px_per_col = ZOOM;
+                view.px_per_col = f64::from(ZOOM);
                 view.sync(doc);
                 View::Alignment(view)
             }
             Self::Genome(_, mode) => {
                 let mut view = GenomeView::new(WIDTH, HEIGHT);
                 view.mode = *mode;
-                view.bp_per_px = 1.0 / ZOOM;
+                view.bp_per_px = 1.0 / f64::from(ZOOM);
                 View::Genome(view)
             }
         }
@@ -84,7 +84,7 @@ fn verify(frame: &Frame, view: &View) -> Result<()> {
         .iter()
         .filter(|q| {
             q[14] == 0.0
-                && (q[2] - q[0] - ZOOM as f32).abs() < 0.01
+                && (q[2] - q[0] - ZOOM).abs() < 0.01
                 && (q[5] - q[1] - residue_height).abs() < 0.01
         })
         .count();
@@ -205,10 +205,11 @@ pub fn run(scenario: &str, root: &Path) -> Result<()> {
     };
     let mut output_counts = Vec::with_capacity(frames);
     for index in 0..frames {
+        let fraction = f64::from(u32::try_from(index)?) / f64::from(u32::try_from(FRAMES - 1)?);
         if phase != "first" {
             let start = Instant::now();
             if phase == "scroll" {
-                doc.scroll(&mut view, index as f64 / (FRAMES - 1) as f64);
+                doc.scroll(&mut view, fraction);
             }
             doc.build(&mut view, &theme, &mut frame);
             duration_ns += start.elapsed().as_nanos();
@@ -221,7 +222,7 @@ pub fn run(scenario: &str, root: &Path) -> Result<()> {
         let mut reference = Frame::new();
         doc.build(&mut reference_view, &theme, &mut reference);
         if phase == "scroll" {
-            doc.scroll(&mut reference_view, index as f64 / (FRAMES - 1) as f64);
+            doc.scroll(&mut reference_view, fraction);
             doc.build(&mut reference_view, &theme, &mut reference);
         }
         if frame.floats() != reference.floats() {

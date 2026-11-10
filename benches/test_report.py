@@ -1,6 +1,15 @@
 """Reporting regressions; synthetic records test math/compatibility, never timings."""
 import copy
 import unittest
+from unittest.mock import patch
+from pathlib import Path
+import tempfile
+import subprocess
+import json
+import contextlib
+import io
+
+import run
 
 from run import compare, summarize
 
@@ -73,6 +82,29 @@ class ReportTests(unittest.TestCase):
                 summarize([sample, {**sample, **bad}])
         current["scenarios"][sample["scenario"]] = {"status": "failed_or_refused", "completed_samples": 2}
         self.assertEqual(compare(current, previous, budgets)["scenarios"][sample["scenario"]]["status"], "unavailable")
+
+    def test_failed_frame_child_is_retained_and_next_scenario_runs(self):
+        failed = "frame-first-alignment"
+        following = "frame-warm-alignment"
+        sample = {**self.sample(1000), "scenario": following, "operations": 1,
+                  "work": {"frames": 1}, "output_counts": [5000]}
+        with tempfile.TemporaryDirectory() as directory:
+            cache = Path(directory)
+            executable = cache / "binary"
+            executable.write_bytes(b"mock release binary")
+            argv = ["run.py", "--machine", "neutral", "--cache", directory,
+                    "--samples", "3", "--executable", str(executable),
+                    "--scenario", failed, "--scenario", following]
+            children = [subprocess.CompletedProcess([], 1, "", "geometry failed")] + [
+                subprocess.CompletedProcess([], 0, json.dumps(sample), "") for _ in range(3)]
+            with patch("sys.argv", argv), patch.object(run.subprocess, "check_output", side_effect=[b"", "a" * 40]), patch.object(run.subprocess, "run", side_effect=children), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(run.main(), 1)
+            report_path = next(cache.glob("interaction-*/report.json"))
+            report = json.loads(report_path.read_text())
+            self.assertEqual(report["scenarios"][failed]["status"], "failed_or_refused")
+            self.assertEqual(report["scenarios"][failed]["completed_samples"], 0)
+            self.assertEqual(report["scenarios"][following]["samples"], 3)
+            self.assertEqual((report_path.parent / f"{failed}-0/stderr.txt").read_text(), "geometry failed")
 
     def test_old_size_semantics_require_new_samples(self):
         old_sample = self.sample(1000)

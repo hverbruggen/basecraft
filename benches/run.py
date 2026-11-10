@@ -141,7 +141,7 @@ def main():
     report = {"schema_version": SCHEMA_VERSION, "source_commit": revision, "profile": "release",
               "machine": args.machine, "protocol": PROTOCOL, "runner_sha256": runner_hash,
               "executable_sha256": digest(executable), "date_utc": datetime.now(timezone.utc).isoformat(),
-              "cache": "warm; fixture generation and one Session open precede each measured open",
+              "cache": "Session: warm OS/index cache; frame: cold view for first, warmed view for warm/scroll; see scenario work",
               "scenarios": {}}
     baseline = json.loads(args.baseline.read_text()) if args.baseline else None
     failed = False
