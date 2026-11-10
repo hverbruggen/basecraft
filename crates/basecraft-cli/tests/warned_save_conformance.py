@@ -94,6 +94,27 @@ with Session(root, writes=True) as session:
     path.write_bytes(b">gene\nGGGG\n")
     refuses(lambda: session.save(doc, decision=decision(check)), "save_decision_stale")
     assert path.read_bytes() == b">gene\nGGGG\n"
+    check = session.save_check(doc)
+    refuses(lambda: session.save(doc, decision=decision(check)), "invalid_arguments")
+    assert path.read_bytes() == b">gene\nGGGG\n"
+
+    # Same bytes in a replacement file still have a different target identity.
+    path = source("replacement")
+    doc = open_edit(session, path)
+    check = session.save_check(doc)
+    replacement = root / "replacement.tmp"
+    replacement.write_bytes(original)
+    replacement.replace(path)
+    refuses(lambda: session.save(doc, decision=decision(check)), "save_decision_stale")
+    assert path.read_bytes() == original
+
+    # Changed raw damaged evidence also invalidates the displayed issue scope.
+    path = source("inventory")
+    doc = open_edit(session, path)
+    check = session.save_check(doc)
+    Path(fixture["ledger"]).write_bytes(b"different damaged ledger")
+    refuses(lambda: session.save(doc, decision=decision(check)), "save_decision_stale")
+    assert path.read_bytes() == original
 
     # Save As binding, no overwrite, root confinement, strict choices.
     path = source("saveas")
@@ -124,22 +145,26 @@ with Session(root, writes=True) as session:
     blocked = Path(fixture["known"]["preservation"]) / "preserved-input"
     blocked.mkdir()
     check = session.save_check(doc)
-    refuses(lambda: session.save(doc, decision=decision(check, "preserve_copy")), "io_error")
+    refuses(lambda: session.save(doc, decision=decision(check, "preserve_copy")), "invalid_arguments")
     assert path.read_bytes() == original
     refuses(lambda: session.save(doc, decision=decision(check, "preserve_copy")), "save_decision_stale")
     blocked.rmdir()
 
-    # Actual serializer failure (unsupported extension), following preservation.
+    # Actual pending-intent write failure after preserving the accepted source.
     path = root / "writefail.fasta"
     doc = open_edit(session, path)
-    check = session.save_check(doc, "failed.unsupported")
-    try:
-        session.save(doc, "failed.unsupported", decision=decision(check, "preserve_copy"))
-    except OperationError as error:
-        assert error.code in {"unknown_format", "format_error", "invalid_arguments"}, error.outcome
-    else:
-        raise AssertionError("unsupported serializer saved")
-    assert path.read_bytes() == original and not (root / "failed.unsupported").exists()
+    check = session.save_check(doc)
+    state = Path(os.environ["BASECRAFT_STATE_DIR"])
+    blocker = state / "recovery" / check["session"] / "pending-save.json"
+    blocker.mkdir()
+    refuses(lambda: session.save(doc, decision=decision(check, "preserve_copy")), "io_error")
+    assert path.read_bytes() == original and session.state(doc)["can_undo"]
+    assert (Path(fixture["known"]["writefail"]) / "preserved-input").read_bytes() == original
+    blocker.rmdir()
+    refuses(lambda: session.save(doc, decision=decision(check, "preserve_copy")), "save_decision_stale")
+    check = session.save_check(doc)
+    assert session.save(doc, decision=decision(check, "preserve_copy"))["warnings"]
+    assert path.read_bytes() == edited
 
     # Permission cannot be waived, including an explicit valid receipt.
     path = source("permission")
@@ -184,7 +209,7 @@ blocked = Path(fixture["known"]["cli-preservation"]) / "preserved-input"
 blocked.mkdir()
 out = cli("edit", path, json.dumps(operation), "--acknowledge-incomplete-evidence",
           "--save-known-policy", "preserve_copy", success=False)
-assert json.loads(out.stderr)["errors"][0]["code"] == "io_error" and path.read_bytes() == original
+assert json.loads(out.stderr)["errors"][0]["code"] == "invalid_arguments" and path.read_bytes() == original
 blocked.rmdir()
 
 # Repair only the deliberately damaged ledger; complete checks have no warning.
@@ -196,10 +221,20 @@ with Session(root, writes=True) as session:
     assert not check["evidence"]["issues"]
     assert session.save(doc)["warnings"] == []
     assert path.read_bytes() == edited
+    path = root / "preservation.fasta"
+    doc = open_edit(session, path)
+    check = session.save_check(doc)
+    assert check["evidence"]["conflict"]["analyses"] and not check["evidence"]["issues"]
+    refuses(lambda: session.save(doc), "analysis_input_conflict")
+    check = session.save_check(doc)
+    assert session.save(doc, decision=decision(check, "preserve_copy", False))["warnings"] == []
     path = source("complete-explicit")
     doc = open_edit(session, path)
     check = session.save_check(doc)
     assert session.save(doc, decision=decision(check, ack=False))["warnings"] == []
+path = root / "cli-preservation.fasta"
+out = cli("edit", path, json.dumps(operation), "--save-known-policy", "preserve_copy", success=True)
+assert not out.stderr and path.read_bytes() == edited
 path = source("cli-complete")
 out = cli("edit", path, json.dumps(operation), success=True)
 assert not out.stderr and path.read_bytes() == edited
