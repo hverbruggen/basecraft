@@ -34,7 +34,7 @@ impl ReviewWrite {
 
     /// Stage the immutable snapshot, draft, previous file, visible bytes and
     /// support record before the owner attempts a visible replacement. The
-    /// evidence lock must already be held, matching link_generated_input_locked.
+    /// evidence lock must already be held, matching `link_generated_input_locked`.
     pub(super) fn prepare(
         &self,
         review: &SangerReviewSession,
