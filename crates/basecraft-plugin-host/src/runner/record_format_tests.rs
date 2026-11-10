@@ -11,7 +11,10 @@ fn bytes(value: &Value) -> Vec<u8> {
 
 fn capture(name: &str, path: &Path, expected: Value) {
     let actual = std::fs::read(path).unwrap();
-    let original = bytes(&expected);
+    let temp = tempfile::tempdir().unwrap();
+    let old_path = temp.path().join("original.json");
+    input_evidence::write_json(&old_path, &expected).unwrap();
+    let original = std::fs::read(old_path).unwrap();
     assert_eq!(actual, original, "original writer oracle: {name}");
     if let Some(root) = std::env::var_os("BASECRAFT_RECORD_CAPTURE") {
         let root = PathBuf::from(root);
@@ -201,6 +204,90 @@ fn original_execution_and_index_writers() {
         &prepared.run.artifact("execution.json").unwrap(),
         json!({
             "schema":1,"workflow":"fixture-unknown","initiator":prepared.initiator,
+            "executor":"basecraft.host","requested_parameters":prepared.request.parameters,
+            "effective_parameters":prepared.effective_parameters(),
+            "package_digest":prepared.operation.package.digest,
+            "descriptor_digest":prepared.operation.descriptor_digest,
+            "process_instance":basecraft_platform::process_instance(),
+        }),
+    );
+}
+
+// Synthetic registered stages exercise workflow success without a scientific
+// engine, remote service or changes to the workflow implementation.
+#[test]
+fn original_successful_workflow_writer() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    std::fs::write(root.join("input.txt"), b">a\nACGT\n>b\nACGA\n").unwrap();
+    let external_registry = registry(root);
+    let mut prepared = prepare(root, &external_registry, "normal");
+    let bundled = root.join("bundled");
+    let package = bundled.join("stages");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(package.join("plugin.toml"),
+        "schema = 2\nid = \"basecraft.delimitation\"\nname = \"Record fixture\"\nversion = \"1.0.0\"\ncontract = \"operations.json\"\n[entry]\noperation = \"python:fixture.py\"\n").unwrap();
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../testdata/fixtures/registry-plugin/operations.json");
+    let mut contract: Value = serde_json::from_slice(&std::fs::read(fixture).unwrap()).unwrap();
+    let mut descriptor = contract["operations"][0].clone();
+    descriptor["inputs"] = json!({"alignment":{"view":"bytes","media_type":"application/octet-stream","min":1,"max":1}});
+    descriptor["outputs"] = json!({"artifacts":{"media_type":"application/json","min":1,"max":1,"visibility":"result","collection":true}});
+    descriptor["parameters"] =
+        json!({"type":"object","properties":{},"additionalProperties":false});
+    descriptor["result"] = json!({"type":"object"});
+    let mut operations = vec![];
+    for name in ["haplotypes", "asap"] {
+        descriptor["name"] = json!(name);
+        descriptor["implementation"] = json!(name);
+        operations.push(descriptor.clone());
+    }
+    contract["operations"] = json!(operations);
+    std::fs::write(package.join("operations.json"), bytes(&contract)).unwrap();
+    std::fs::write(package.join("fixture.py"), r"
+import json
+from pathlib import Path
+from basecraft.plugin import Plugin
+plugin = Plugin('basecraft.delimitation', '1.0.0')
+def stage(snapshot, parameters, context):
+    target = Path(context['outputs']['artifacts']) / 'result.json'
+    target.write_text(json.dumps({'metrics': {'haplotypes': {'original_count': 2}}, 'workspace': None}) + '\n')
+    return {'artifacts': [{'role':'artifacts','path':'result.json'}]}
+plugin.context_operation('haplotypes')(stage)
+plugin.context_operation('asap')(stage)
+plugin.run()
+").unwrap();
+    let stages = Registry::load(&RegistryConfig {
+        bundled,
+        packages: root.join("none"),
+        index: root.join("none.json"),
+    })
+    .unwrap();
+    prepared.operation.package.manifest.id = "basecraft.host".into();
+    prepared.operation.descriptor.host_workflow = Some("asap_alignment".into());
+    prepared.workflow_registry = Some(Arc::new(stages));
+    prepared.parameters["unique_haplotypes"] = json!(false);
+    prepared.context.inputs.insert(
+        "alignment".into(),
+        prepared.context.inputs["sources"].clone(),
+    );
+    prepared.context.input_evidence.insert(
+        "alignment".into(),
+        prepared.context.input_evidence["sources"].clone(),
+    );
+    let output = prepared.run.artifact("workflow").unwrap();
+    std::fs::create_dir(&output).unwrap();
+    prepared
+        .context
+        .outputs
+        .insert("artifacts".into(), output.display().to_string());
+    let result = prepared.execute(Arc::new(AtomicBool::new(false))).unwrap();
+    assert_eq!(result.artifacts[0].path, "fit.json");
+    capture(
+        "execution-workflow-success",
+        &prepared.run.artifact("execution.json").unwrap(),
+        json!({
+            "schema":1,"workflow":"asap_alignment","initiator":prepared.initiator,
             "executor":"basecraft.host","requested_parameters":prepared.request.parameters,
             "effective_parameters":prepared.effective_parameters(),
             "package_digest":prepared.operation.package.digest,
