@@ -244,9 +244,15 @@ fn path_aliases_match_selection_without_merging_input_entries() {
 
     // Equal content in two paths remains two inputs; even explicit repeated
     // references remain in the input list rather than being deduplicated.
-    for sources in [paths.clone(), vec![paths[0].clone(), paths[0].clone()]] {
-        let isolated = tempfile::tempdir().unwrap();
-        let output = isolated.path().join("multiple.spart");
+    // Keep both registered result stores alive until the entire case ends.
+    let results = tempfile::tempdir().unwrap();
+    for (index, sources) in [paths.clone(), vec![paths[0].clone(), paths[0].clone()]]
+        .into_iter()
+        .enumerate()
+    {
+        let isolated = results.path().join(index.to_string());
+        std::fs::create_dir(&isolated).unwrap();
+        let output = isolated.join("multiple.spart");
         let mut session = Session::new(dir.path());
         let doc = workflow::combine_to(&mut session, &sources, &output, None).unwrap();
         let hypotheses = &session.delimitation(doc).unwrap().hypotheses;
