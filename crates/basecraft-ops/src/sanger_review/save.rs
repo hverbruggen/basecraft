@@ -149,7 +149,29 @@ impl SangerReviewSession {
         )))
     }
 
+    // JSON encodes every non-finite float as null. Reject these public working
+    // states before hashing so distinct values cannot share a participant digest.
+    // This is private binding validation, not a change to saved draft formats.
+    fn validate_binding_floats(&self) -> Result<()> {
+        if !self.draft.minimum_identity.is_finite()
+            || self
+                .draft
+                .overlaps
+                .iter()
+                .any(|overlap| !overlap.identity.is_finite())
+        {
+            return Err(invalid(
+                "Sanger save binding requires finite draft and overlap identities",
+            ));
+        }
+        for child in &self.retained {
+            child.validate_binding_floats()?;
+        }
+        Ok(())
+    }
+
     fn state_digest(&self) -> Result<String> {
+        self.validate_binding_floats()?;
         let mut sink = DigestSink(basecraft_io::Hasher::new());
         serde_json::to_writer(&mut sink, &State::from(self))?;
         Ok(sink.0.finish())

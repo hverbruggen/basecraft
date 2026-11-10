@@ -328,3 +328,92 @@ fn source_placement_extensions_and_failed_selection_are_bound() {
     assert!(!consume(&s, &d));
     assert!(s.retained.iter().all(|c| c.save_authority.is_none()));
 }
+
+fn non_finite_binding_control(root: &Path, overlap: bool) {
+    let mut review = pair(&root.join("data"));
+    let target = root.join("new.json");
+    {
+        let set = &mut review;
+        // Two entries prove validation traverses the whole overlap list.
+        set.draft.overlaps = vec![
+            basecraft_docs::sanger::Overlap {
+                reads: [0, 0],
+                comparable_bases: 1,
+                identity: 0.75,
+                accepted: true,
+            };
+            2
+        ];
+        set.retained[0].draft.overlaps = set.draft.overlaps.clone();
+    }
+    let initial_digest = review.state_digest().unwrap();
+    review.check_save(&target).unwrap();
+    let before = inventory(root);
+    for inactive in [false, true] {
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let mut changed = review.clone();
+            let set = if inactive {
+                &mut changed.retained[0]
+            } else {
+                &mut changed
+            };
+            let field = if overlap {
+                &mut set.draft.overlaps[1].identity
+            } else {
+                &mut set.draft.minimum_identity
+            };
+            let finite = *field;
+            *field = value;
+            assert!(matches!(
+                changed.state_digest(),
+                Err(crate::Error::Invalid(_))
+            ));
+            assert!(matches!(
+                changed.check_save(&target),
+                Err(crate::Error::Invalid(_))
+            ));
+            assert_eq!(before, inventory(root));
+            let set = if inactive {
+                &mut changed.retained[0]
+            } else {
+                &mut changed
+            };
+            if overlap {
+                set.draft.overlaps[1].identity = finite;
+            } else {
+                set.draft.minimum_identity = finite;
+            }
+            assert_eq!(initial_digest, changed.state_digest().unwrap());
+            changed.check_save(&target).unwrap();
+            let set = if inactive {
+                &mut changed.retained[0]
+            } else {
+                &mut changed
+            };
+            if overlap {
+                set.draft.overlaps[1].identity = finite + 0.125;
+            } else {
+                set.draft.minimum_identity = finite + 0.125;
+            }
+            assert_ne!(initial_digest, changed.state_digest().unwrap());
+            changed.check_save(&target).unwrap();
+            assert_eq!(before, inventory(root));
+        }
+    }
+}
+
+#[test]
+fn non_finite_root_and_inactive_minimum_identity_refuse_binding() {
+    let Some(root) = enter("non_finite_root_and_inactive_minimum_identity_refuse_binding") else {
+        return;
+    };
+    non_finite_binding_control(&root, false);
+}
+
+#[test]
+fn non_finite_root_and_inactive_nested_overlap_refuse_binding() {
+    let Some(root) = enter("non_finite_root_and_inactive_nested_overlap_refuse_binding") else {
+        return;
+    };
+    non_finite_binding_control(&root, true);
+}
