@@ -56,7 +56,9 @@ fn genome(len: usize) -> SequenceDoc {
 fn glyphs(frame: &Frame) -> usize {
     frame
         .floats()
-        .chunks_exact(FLOATS_PER_INSTANCE)
+        .as_chunks::<FLOATS_PER_INSTANCE>()
+        .0
+        .iter()
         .filter(|quad| quad[14] > 0.0)
         .count()
 }
@@ -65,10 +67,53 @@ fn glyphs(frame: &Frame) -> usize {
 fn alignment_frames_depend_on_visible_cells() {
     let theme = Theme::default();
     // Vary hidden rows and columns separately as well as together.
-    for (rows, cols) in [(128, 4096), (512, 4096), (128, 16384), (512, 16384)] {
+    // Measured before gating. Each row is first, quarter, middle, final page;
+    // ruler digit lengths and partial rows account for the small differences.
+    let cases = [
+        (
+            128,
+            4096,
+            [
+                [2828, 2839, 2839, 2668],
+                [14984, 14985, 14805, 14722],
+                [10034, 9951, 9952, 9956],
+            ],
+        ),
+        (
+            512,
+            4096,
+            [
+                [2828, 2839, 2839, 2668],
+                [14984, 14985, 14990, 14722],
+                [10034, 10031, 10032, 9956],
+            ],
+        ),
+        (
+            128,
+            16384,
+            [
+                [2828, 2839, 2839, 2680],
+                [14984, 14990, 14805, 14730],
+                [10034, 9952, 9952, 9953],
+            ],
+        ),
+        (
+            512,
+            16384,
+            [
+                [2828, 2839, 2839, 2680],
+                [14984, 14990, 14990, 14730],
+                [10034, 10032, 10032, 9953],
+            ],
+        ),
+    ];
+    for (rows, cols, baseline) in cases {
         let doc = alignment(rows, cols);
         // Letters, colour runs, then subpixel overview sampling.
-        for zoom in [11.0, 3.0, 0.5] {
+        for ((zoom, ceiling), counts) in [(11.0, 3200), (3.0, 18500), (0.5, 11000)]
+            .into_iter()
+            .zip(baseline)
+        {
             let mut view = AlignmentView::new(WIDTH, HEIGHT);
             view.px_per_col = zoom;
             view.sync(&doc);
@@ -82,7 +127,16 @@ fn alignment_frames_depend_on_visible_cells() {
                     frame.len(),
                     glyphs(&frame)
                 );
-                assert!(!frame.is_empty());
+                assert_eq!(frame.len(), counts[step], "measured alignment baseline");
+                // Independent geometry ceilings for a 630 px grid: at 11 px,
+                // <=60 columns x22 rows, two quads/cell plus names/header;
+                // at 3 px, <=212 columns x79 rows, one quad/cell plus labels;
+                // at 0.5 px, <=82 occupied runs x122 rows plus the header.
+                // The last bound uses this fixture's two-base gaps every 16 bp.
+                assert!(frame.len() <= ceiling, "visible alignment output budget");
+                if zoom > 7.0 {
+                    assert!(glyphs(&frame) >= 1000, "visible residue grid must be drawn");
+                }
                 // Reusing a frame must replace its contents, not append a frame.
                 let first = frame.floats().to_vec();
                 view.build(&doc, &theme, &mut frame);
@@ -97,10 +151,40 @@ fn genome_frames_depend_on_visible_tracks() {
     let theme = Theme::default();
     // 40..1000 annotated 100-base blocks, all built with the real document
     // interval index and (for Wrapped) the real wrap layout/cache.
-    for len in [4000, 20000, 100000] {
+    // Linear letters/colours, then wrapped letters/colours; measured totals.
+    let cases = [
+        (
+            4000,
+            [
+                [261, 273, 273, 257],
+                [504, 511, 511, 486],
+                [1062, 1092, 1092, 1092],
+                [2030, 2553, 2044, 2044],
+            ],
+        ),
+        (
+            20000,
+            [
+                [261, 273, 285, 267],
+                [504, 511, 516, 490],
+                [1062, 1092, 1140, 1140],
+                [2030, 2555, 2064, 2064],
+            ],
+        ),
+        (
+            100_000,
+            [
+                [261, 285, 285, 268],
+                [504, 516, 516, 491],
+                [1062, 1140, 1140, 1141],
+                [2030, 2580, 2064, 2065],
+            ],
+        ),
+    ];
+    for (len, baseline) in cases {
         let doc = genome(len);
-        for mode in [Mode::Linear, Mode::Wrapped] {
-            for px_per_base in [8.0, 2.0] {
+        for (mode_index, mode) in [Mode::Linear, Mode::Wrapped].into_iter().enumerate() {
+            for (zoom_index, px_per_base) in [8.0, 2.0].into_iter().enumerate() {
                 let mut view = GenomeView::new(WIDTH, HEIGHT);
                 view.mode = mode;
                 view.bp_per_px = 1.0 / px_per_base;
@@ -117,7 +201,34 @@ fn genome_frames_depend_on_visible_tracks() {
                         frame.len(),
                         glyphs(&frame)
                     );
-                    assert!(!frame.is_empty());
+                    assert_eq!(
+                        frame.len(),
+                        baseline[mode_index * 2 + zoom_index][step],
+                        "measured genome baseline"
+                    );
+                    // A track spans 100 (letters) or 400 (colours) bases and
+                    // at most eight of our features. Allow 600 quads per track
+                    // for residues, arrows, six-letter labels and ruler ticks.
+                    // Four hundred vertical pixels admit at most five tracks,
+                    // including partially visible tracks at both edges.
+                    let tracks = if mode == Mode::Linear { 1 } else { 5 };
+                    assert!(frame.len() <= 600 * tracks, "visible genome output budget");
+                    if zoom_index == 0 {
+                        let cells = frame
+                            .floats()
+                            .as_chunks::<FLOATS_PER_INSTANCE>()
+                            .0
+                            .iter()
+                            .filter(|q| {
+                                q[14] == 0.0
+                                    && (q[2] - q[0] - 8.0).abs() < 0.01
+                                    && (q[5] - q[1] - 20.0).abs() < 0.01
+                            })
+                            .count();
+                        // The final linear page allows a 5% blank trailing margin.
+                        assert!(cells >= 95, "actual residue backgrounds must be present");
+                        assert!(glyphs(&frame) >= 100, "actual residues must be labelled");
+                    }
                     assert_eq!(view.hidden, 0, "fixture annotations must fit");
                     let first = frame.floats().to_vec();
                     view.build(&doc, &theme, &mut frame);
