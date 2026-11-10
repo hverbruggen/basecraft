@@ -2,6 +2,7 @@
 // The diagnostic inspector has no production caller in this prerequisite slice.
 #[cfg(test)]
 mod inspection;
+mod write;
 use super::{SangerReviewSession, StoredReview};
 use crate::{analysis_store::ArtifactRun, error::invalid, input_evidence as inputs};
 use basecraft_docs::sanger::{SangerDraft, SangerPlacement};
@@ -630,7 +631,15 @@ impl SangerReviewSession {
     }
 
     fn stored_single_at(&self, path: &Path) -> crate::Result<StoredReview> {
-        let mut evidence = self.evidence.clone();
+        self.stored_single_with_evidence(path, &self.evidence)
+    }
+
+    fn stored_single_with_evidence(
+        &self,
+        path: &Path,
+        evidence: &ReviewEvidence,
+    ) -> crate::Result<StoredReview> {
+        let mut evidence = evidence.clone();
         let parent = base(path)?;
         evidence.map_paths(|p| Ok(PathBuf::from(inputs::relative(&parent, p)?)))?;
         Ok(StoredReview {
@@ -644,11 +653,22 @@ impl SangerReviewSession {
         })
     }
 
+    #[cfg(test)]
     fn stored_at(&self, path: &Path) -> crate::Result<serde_json::Value> {
+        self.stored_with_evidence(path, &self.evidence)
+    }
+
+    fn stored_with_evidence(
+        &self,
+        path: &Path,
+        evidence: &ReviewEvidence,
+    ) -> crate::Result<serde_json::Value> {
         if self.retained.is_empty() {
-            return Ok(serde_json::to_value(self.stored_single_at(path)?)?);
+            return Ok(serde_json::to_value(
+                self.stored_single_with_evidence(path, evidence)?,
+            )?);
         }
-        let mut sets = vec![self.stored_single_at(path)?];
+        let mut sets = vec![self.stored_single_with_evidence(path, evidence)?];
         for set in &self.retained {
             sets.push(set.stored_single_at(path)?);
         }
@@ -660,13 +680,21 @@ impl SangerReviewSession {
     }
 
     fn write_embedded(&self, path: &Path) -> crate::Result<()> {
-        let value = self.stored_at(path)?;
-        if serde_json::to_vec_pretty(&value)?.len() > 64 * 1024 * 1024 {
+        let mut bytes = self.encoded_at(path, &self.evidence)?;
+        // Embedded recovery/support JSON historically includes a final newline.
+        bytes.push(b'\n');
+        basecraft_io::write_atomic(path, |w| w.write_all(&bytes))?;
+        Ok(())
+    }
+
+    fn encoded_at(&self, path: &Path, evidence: &ReviewEvidence) -> crate::Result<Vec<u8>> {
+        let bytes = serde_json::to_vec_pretty(&self.stored_with_evidence(path, evidence)?)?;
+        if bytes.len() > 64 * 1024 * 1024 {
             return Err(invalid(
                 "Sanger review exceeds 64 MiB; previous file preserved",
             ));
         }
-        inputs::write_json(path, &value)
+        Ok(bytes)
     }
 
     /// Recovery lives in application state and is discoverable through the existing
@@ -737,111 +765,29 @@ impl SangerReviewSession {
         let _evidence_lock = inputs::lock()?;
         crate::save_guard::Revision::check(self.accepted.as_ref(), path)?;
         inputs::resolve(&inputs::conflicts(path)?, policy)?;
-        let run = ArtifactRun::create(path, &ulid::Ulid::generate().to_string())?;
-        let previous_evidence = self.evidence.clone();
+        let write = write::ReviewWrite::allocate(self, path)?;
         let outcome = (|| -> crate::Result<()> {
-            let mut dependencies = self.evidence.runs.clone();
-            for set in &self.retained {
-                dependencies.extend(set.evidence.runs.clone());
-                dependencies.extend(
-                    set.evidence
-                        .sources
-                        .iter()
-                        .filter_map(|source| source.ledger.clone()),
-                );
-            }
-            dependencies.extend(
-                self.evidence
-                    .sources
-                    .iter()
-                    .filter_map(|s| s.ledger.clone()),
-            );
-            dependencies.sort();
-            dependencies.dedup();
-            inputs::link_generated_input_locked(
-                &run,
-                &dependencies,
-                self.draft_json.as_bytes(),
-                "identity-v1",
-                "Sanger review/support",
-            )?;
-            carry_authored(&self.evidence.runs, &run)?;
-            self.evidence.runs = vec![run.directory().into()];
-            let snapshot = run.artifact("review.sanger-review.json")?;
-            // The recovery copy is complete before attempting a visible replacement.
-            self.write_embedded(&snapshot)?;
-            let draft = run.artifact("draft.json")?;
-            basecraft_io::write_atomic(&draft, |w| w.write_all(self.draft_json.as_bytes()))?;
-            let mut artifacts = vec![retained(&run, &snapshot, 0)?, retained(&run, &draft, 1)?];
-            if path.is_file() {
-                let previous = run.artifact("previous-review")?;
-                basecraft_io::write_atomic(&previous, |w| {
-                    std::io::copy(&mut std::fs::File::open(path)?, w)?;
-                    Ok(())
-                })?;
-                artifacts.push(retained(&run, &previous, 2)?);
-            }
-            let bytes = serde_json::to_vec_pretty(&self.stored_at(path)?)?;
-            if bytes.len() > 64 * 1024 * 1024 {
-                return Err(invalid(
-                    "Sanger review exceeds 64 MiB; previous file preserved",
-                ));
-            }
-            let staged = run.artifact("visible-review.json")?;
-            basecraft_io::write_atomic(&staged, |w| w.write_all(&bytes))?;
-            artifacts.push(retained(&run, &staged, artifacts.len())?);
-            let mut record = publication(
-                &run,
-                "Explicit saved Sanger review; decisions and support retained",
-                artifacts,
-            );
-            unavailable_sources(&self.evidence, &mut record);
-            record.outputs.push(ArtifactRevision {
-                id: format!("{}:review", run.id()),
-                logical_name: path
-                    .file_name()
-                    .ok_or_else(|| invalid("Review has no filename"))?
-                    .to_string_lossy()
-                    .into_owned(),
-                hash: basecraft_io::hash_bytes(&bytes),
-                size: bytes.len() as u64,
-                retained: None,
-                reference: None,
-            });
-            crate::provenance::publish(run.directory(), &record)?;
+            // Preparing support and exact bytes does not mutate the live review.
+            let prepared = write.prepare(self)?;
+            self.evidence.clone_from(&write.evidence);
             let replacing = crate::save_guard::Revision::check(self.accepted.as_ref(), path)?;
-            let written = if replacing {
-                basecraft_io::write_atomic(path, |w| w.write_all(&bytes))
-                    .map_err(crate::Error::from)
-            } else {
-                run.publish_secondary("visible-review.json", path)
-            };
-            if let Err(error) = written {
-                // No-clobber publication can fail syncing the directory after
-                // visible bytes are present. Do not describe that as unsaved.
-                if basecraft_io::hash_file(path).ok().as_ref()
-                    == Some(&basecraft_io::hash_bytes(&bytes))
-                {
-                    return Err(invalid(format!(
-                        "intended review bytes are visible; publication incomplete: {error}; reopen before retrying; repair evidence: {}",
-                        run.directory().display()
-                    )));
-                }
-                return Err(error);
-            }
-            self.accepted = Some(crate::save_guard::Revision::accepted(path, &bytes).map_err(|error| invalid(format!("review data saved; target verification incomplete: {error}; repair evidence: {}", run.directory().display())))?);
+            prepared.publish(replacing)?;
+            self.accepted = Some(crate::save_guard::Revision::accepted(path, prepared.bytes()).map_err(|error| invalid(format!("review data saved; target verification incomplete: {error}; repair evidence: {}", write.run.directory().display())))?);
             self.anchor.clone_from(&absolute);
-            run.bind(path).map_err(|error| {
+            write.run.bind(path).map_err(|error| {
                 invalid(format!(
                     "review data saved; binding incomplete: {error}; repair evidence: {}",
-                    run.directory().display()
+                    write.run.directory().display()
                 ))
             })?;
             Ok(())
         })();
         if let Err(error) = outcome {
-            if !run.directory().join("manifest.json").is_file() {
-                self.evidence = previous_evidence;
+            // A published support record remains part of recovery even when the
+            // visible write or its acceptance fails. Earlier failures leave the
+            // review's previous evidence untouched.
+            if write.run.directory().join("manifest.json").is_file() {
+                self.evidence.clone_from(&write.evidence);
             }
             let recovery = self.checkpoint();
             return Err(invalid(format!(
@@ -850,7 +796,7 @@ impl SangerReviewSession {
             )));
         }
         self.anchor = absolute;
-        self.checkpoint().map_err(|error| invalid(format!("review data and binding saved; recovery checkpoint incomplete: {error}; repair evidence: {}", run.directory().display())))
+        self.checkpoint().map_err(|error| invalid(format!("review data and binding saved; recovery checkpoint incomplete: {error}; repair evidence: {}", write.run.directory().display())))
     }
 
     pub(super) fn publish_consensus(&mut self, path: &Path) -> crate::Result<()> {
