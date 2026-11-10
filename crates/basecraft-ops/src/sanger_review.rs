@@ -11,7 +11,6 @@ pub(crate) use storage::{is_review, relocate_package};
 use std::path::{Path, PathBuf};
 
 use basecraft_docs::sanger::{ReviewReference, ReviewSettings, SangerDraft};
-use serde::Serialize;
 
 /// Recognised saved Sanger evidence, determined from validated content.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -100,21 +99,7 @@ fn recover_with_saver(
 
 pub use basecraft_protocol::sanger::{MaskSettings, ReviewChoice, ReviewOp};
 
-#[derive(Clone, Debug, Serialize)]
-struct Change {
-    columns: Vec<usize>,
-    before: Vec<ReviewChoice>,
-    after: Vec<ReviewChoice>,
-    manual_before: Vec<bool>,
-    manual_after: Vec<bool>,
-    triage: Option<(
-        ReviewSettings,
-        Option<ReviewReference>,
-        ReviewSettings,
-        Option<ReviewReference>,
-    )>,
-    mask: Option<(MaskSettings, MaskSettings)>,
-}
+use basecraft_docs::sanger::review::ReviewChange as Change;
 
 use basecraft_protocol::sanger_records::{
     SavedCallSets as StoredCallSets, SavedReview as StoredReview,
@@ -564,12 +549,18 @@ impl SangerReviewSession {
         match &op {
             ReviewOp::Undo => {
                 let change = self.undo.pop().ok_or("Nothing to undo")?;
-                self.install_change(&change, false);
+                if let Err(error) = self.install_change(&change, false) {
+                    self.undo.push(change);
+                    return Err(error);
+                }
                 self.redo.push(change);
             }
             ReviewOp::Redo => {
                 let change = self.redo.pop().ok_or("Nothing to redo")?;
-                self.install_change(&change, true);
+                if let Err(error) = self.install_change(&change, true) {
+                    self.redo.push(change);
+                    return Err(error);
+                }
                 self.undo.push(change);
             }
             ReviewOp::Export { path, sha256 } => {
@@ -580,7 +571,7 @@ impl SangerReviewSession {
             }
             _ => {
                 let change = self.prepare_change(&op)?;
-                self.install_change(&change, true);
+                self.install_change(&change, true)?;
                 // Initial triage stays outside legacy undo history.
                 if !matches!(op, ReviewOp::AutoAccept { .. }) {
                     if !matches!(op, ReviewOp::Evaluate { .. }) || !self.events.is_empty() {

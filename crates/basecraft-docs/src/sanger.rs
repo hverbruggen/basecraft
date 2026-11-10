@@ -1,5 +1,7 @@
 //! Typed, read-only Tracy draft evidence. A draft is never an accepted call set.
 
+pub mod review;
+
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
