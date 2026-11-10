@@ -17,9 +17,9 @@ use basecraft_docs::{AlignmentDoc, EditResult, FeatureId, SequenceDoc, TreeDoc};
 use basecraft_protocol::ops::LOG_VERSION;
 use basecraft_protocol::{Actor, DocState, Feature, LogEntry, Op, OpResult};
 
-use crate::documents::Document;
+use crate::documents::{Document, execute_tree};
 use crate::error::invalid;
-use crate::files::{self, HashingWriter, Loaded, Opened, OpenedTree};
+use crate::files::{self, HashingWriter, Loaded, Opened};
 use crate::log::LogWriter;
 
 mod creation;
@@ -431,7 +431,7 @@ impl Session {
         match &self.docs[id.0].content {
             Loaded::Sequence(opened) => opened.doc.version(),
             Loaded::Alignment(opened) => opened.revision(self.docs[id.0].generation),
-            Loaded::Tree(opened) => opened.doc.version(),
+            Loaded::Tree(opened) => opened.revision(self.docs[id.0].generation),
             Loaded::Submission(sub) => sub.revision(self.docs[id.0].generation),
             Loaded::Metadata(opened) => opened.revision(self.docs[id.0].generation),
             Loaded::Delimitation(_) => self.docs[id.0].generation,
@@ -481,11 +481,7 @@ impl Session {
             },
             Loaded::Metadata(opened) => opened.fingerprint(),
             Loaded::Submission(sub) => sub.fingerprint(),
-            Loaded::Tree(o) => DocState {
-                len: o.doc.tip_count() as u64,
-                features: o.doc.annotations().len() as u64,
-                rows: None,
-            },
+            Loaded::Tree(o) => o.fingerprint(),
         }
     }
 
@@ -1211,10 +1207,14 @@ impl Session {
                     != crate::links::document_entry(&target)?;
                 let (hashes, outputs) = if save_as {
                     let links = crate::links::PreparedLinks::prepare(&original, &target)?;
-                    links.publish(|| self.save_tree(t, &target))?
+                    links.publish(|| t.write(&target, format, &self.storage_root))?
                 } else {
-                    (self.save_tree(t, &target)?, Vec::new())
+                    (t.write(&target, format, &self.storage_root)?, Vec::new())
                 };
+                let hashes = hashes
+                    .into_iter()
+                    .map(|(path, hash)| (self.relative(&path), hash))
+                    .collect();
                 self.log_save(id, &target, hashes)?;
                 if !outputs.is_empty() {
                     self.log_tool_run(
@@ -1256,59 +1256,6 @@ impl Session {
             hashes.push((self.relative(&sidecar), h));
         }
         self.log_save(id, &target, hashes)
-    }
-
-    /// Write a tree and its sidecar; returns their hashes.
-    fn save_tree(&self, tree: &OpenedTree, target: &Path) -> Result<Vec<(String, String)>> {
-        let mut hashes = Vec::new();
-        let sidecar = files::tree_sidecar(target);
-        if sidecar.is_file() {
-            let bytes = std::fs::read(&sidecar)?;
-            let metadata: serde_json::Value = serde_json::from_slice(&bytes)?;
-            if metadata.get("schema_version").is_none() || metadata["schema_version"] == 0 {
-                let backup = sidecar.with_file_name(format!(
-                    "{}.unverified-{}",
-                    sidecar.file_name().unwrap_or_default().to_string_lossy(),
-                    basecraft_io::hash_bytes(&bytes).trim_start_matches("b3:")
-                ));
-                if backup.try_exists()? {
-                    if std::fs::read(&backup)? != bytes {
-                        return Err(invalid(
-                            "legacy metadata backup differs; original was not replaced",
-                        ));
-                    }
-                } else {
-                    let mut staged = tempfile::NamedTempFile::new_in(
-                        sidecar.parent().unwrap_or(Path::new(".")),
-                    )?;
-                    std::io::Write::write_all(&mut staged, &bytes)?;
-                    staged.as_file().sync_all()?;
-                    staged.persist_noclobber(&backup).map_err(|e| e.error)?;
-                }
-            }
-        }
-        for (path, sidecar_file) in [(target, false), (sidecar.as_path(), true)] {
-            let mut hash = String::new();
-            basecraft_io::write_atomic(path, |w| {
-                let mut hw = HashingWriter::new(w);
-                if sidecar_file {
-                    files::write_tree_sidecar_at(
-                        &tree.doc,
-                        &basecraft_io::hash_file(target).map_err(std::io::Error::other)?,
-                        &mut hw,
-                    )?;
-                } else {
-                    files::write_tree(tree, &mut hw)?;
-                }
-                hash = hw.hash();
-                Ok(())
-            }).map_err(|error| if sidecar_file {
-                invalid(format!("tree data saved; metadata incomplete: {error}. Keep the open document or temporary recovery and retry saving"))
-            } else { error.into() })?;
-            hashes.push((self.relative(path), hash));
-        }
-        crate::analysis_store::ArtifactRun::refresh_binding(target).map_err(|error| invalid(format!("tree and metadata saved; binding publication incomplete: {error}. Keep the open document and retry saving")))?;
-        Ok(hashes)
     }
 
     fn log_save(&mut self, id: DocId, target: &Path, hashes: Vec<(String, String)>) -> Result<()> {
@@ -2139,14 +2086,10 @@ impl Session {
                 return Ok(vec![hash, side.hash()]);
             }
             Loaded::Sequence(o) => o,
-            Loaded::Tree(t) => {
-                let mut hw = HashingWriter::new(std::io::sink());
-                files::write_tree(t, &mut hw)?;
-                let mut side = HashingWriter::new(std::io::sink());
-                files::write_tree_sidecar_at(&t.doc, &hw.hash(), &mut side)?;
-                return Ok(vec![hw.hash(), side.hash()]);
-            }
-            migrated @ (Loaded::Submission(_) | Loaded::Metadata(_) | Loaded::Alignment(_)) => {
+            migrated @ (Loaded::Submission(_)
+            | Loaded::Metadata(_)
+            | Loaded::Alignment(_)
+            | Loaded::Tree(_)) => {
                 let document = migrated
                     .as_document()
                     .ok_or_else(|| invalid("document interface unavailable"))?;
@@ -2407,9 +2350,7 @@ impl Session {
             Loaded::Metadata(opened) => return opened.apply(op),
             Loaded::Submission(sub) => return sub.apply(op),
             Loaded::Alignment(a) => return a.apply(op),
-            Loaded::Tree(t) => {
-                return execute_tree(&mut t.doc, op).map(|before| (Inverse::Tree(before), None));
-            }
+            Loaded::Tree(t) => return t.apply(op),
         };
         execute_sequence(doc, op)
     }
@@ -2569,14 +2510,14 @@ impl Session {
         let applied = self.docs[id.0].undo.pop().ok_or(Error::NothingTo("undo"))?;
         match (&mut self.docs[id.0].content, &applied.inverse) {
             (Loaded::Alignment(a), inverse) => a.revert(inverse)?,
-            (Loaded::Tree(t), Inverse::Tree(before)) => t.doc = (**before).clone(),
+            (Loaded::Tree(t), inverse) => t.revert(inverse)?,
             (Loaded::Delimitation(work), Inverse::Delimitation(before)) => {
                 *work = (**before).clone();
             }
             (Loaded::Metadata(opened), inverse) => opened.revert(inverse)?,
             (Loaded::Submission(sub), inverse) => sub.revert(inverse)?,
             (Loaded::Sequence(o), inverse) => undo_sequence(&mut o.doc, inverse),
-            (Loaded::Tree(_) | Loaded::Delimitation(_), _) => {
+            (Loaded::Delimitation(_), _) => {
                 return Err(invalid("undo of the wrong kind of edit"));
             }
         }
@@ -2759,58 +2700,6 @@ fn execute_sequence(doc: &mut SequenceDoc, op: &Op) -> Result<(Inverse, Option<F
     }
 }
 
-fn execute_tree(doc: &mut TreeDoc, op: &Op) -> Result<Box<TreeDoc>> {
-    let before = Box::new(doc.clone());
-    let edit = match op {
-        Op::TreeReroot { clade } => doc.reroot(clade),
-        Op::TreeMidpointRoot {} => doc.midpoint_root(),
-        Op::TreeMinimumVarianceRoot {} => doc.minimum_variance_root(),
-        Op::TreeRootPosition { clade, fraction } => doc.set_root_position(clade, *fraction),
-        Op::TreeRotate { clade } => doc.rotate(clade),
-        Op::TreeLadderize { small_first } => {
-            doc.ladderize(*small_first);
-            Ok(())
-        }
-        Op::TreeRenameTip { from, to } => doc.rename_tip(from, to),
-        Op::TreeAnnotate { id, annotation } => doc.annotate(*id, annotation.clone()),
-        Op::TreeAddSupport {
-            name,
-            source,
-            values,
-            kind,
-        } => doc
-            .add_support(name, source, values)
-            .map(|()| doc.set_support_kind(name, *kind)),
-        Op::TreeRemoveSupport { name } => doc.remove_support(name),
-        Op::TreeStyle {
-            style,
-            remove_supports,
-        } => {
-            if style
-                .support_decimals
-                .values()
-                .any(|&decimals| decimals > 10)
-            {
-                return Err(invalid("support decimal places must be between 0 and 10"));
-            }
-            let mut candidate = doc.clone();
-            candidate.set_style(style.clone());
-            remove_supports
-                .iter()
-                .try_for_each(|name| candidate.remove_support(name))
-                .map(|()| *doc = candidate)
-        }
-        _ => {
-            return Err(invalid(format!(
-                "{} needs a sequence or an alignment",
-                op.name()
-            )));
-        }
-    };
-    edit.map_err(|e| invalid(e.0))?;
-    Ok(before)
-}
-
 pub(crate) fn portable_analysis_activity(
     snapshot: &crate::document_record::DocumentRecord,
     activity: &LogEntry,
@@ -2902,7 +2791,6 @@ fn restore_inverse(content: &mut Loaded, inverse: &Inverse) -> Result<()> {
     }
     match (content, inverse) {
         (Loaded::Sequence(opened), inverse) => undo_sequence(&mut opened.doc, inverse),
-        (Loaded::Tree(opened), Inverse::Tree(before)) => opened.doc = (**before).clone(),
         (Loaded::Delimitation(work), Inverse::Delimitation(before)) => *work = (**before).clone(),
         _ => return Err(invalid("edit rollback has incompatible document type")),
     }
