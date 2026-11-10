@@ -192,7 +192,7 @@ fn original_execution_and_index_writers() {
     // A failed workflow writes the same distinct envelope as a successful one:
     // no result/tool/context fields. Invoke the real writer without scientific tools.
     let mut prepared = prepare(root, &registry, "normal");
-    prepared.operation.package.manifest.id = "basecraft.host".into();
+    Arc::make_mut(&mut prepared.operation.package).manifest.id = "basecraft.host".into();
     prepared.operation.descriptor.host_workflow = Some("fixture-unknown".into());
     prepared.workflow_registry = Some(Arc::new(registry));
     let error = prepared
@@ -252,7 +252,7 @@ plugin = Plugin('basecraft.delimitation', '1.0.0')
 def stage(snapshot, parameters, context):
     target = Path(context['outputs']['artifacts']) / 'result.json'
     target.write_text(json.dumps({'metrics': {'haplotypes': {'original_count': 2}}, 'workspace': None}) + '\n')
-    return {'artifacts': [{'role':'artifacts','path':'result.json'}]}
+    return {'data': {}, 'artifacts': [{'role':'artifacts','path':'result.json'}]}
 plugin.context_operation('haplotypes')(stage)
 plugin.context_operation('asap')(stage)
 plugin.run()
@@ -263,7 +263,7 @@ plugin.run()
         index: root.join("none.json"),
     })
     .unwrap();
-    prepared.operation.package.manifest.id = "basecraft.host".into();
+    Arc::make_mut(&mut prepared.operation.package).manifest.id = "basecraft.host".into();
     prepared.operation.descriptor.host_workflow = Some("asap_alignment".into());
     prepared.workflow_registry = Some(Arc::new(stages));
     prepared.parameters["unique_haplotypes"] = json!(false);
