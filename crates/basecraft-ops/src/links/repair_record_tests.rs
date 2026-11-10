@@ -22,16 +22,16 @@ fn original_previous(value: &PreviousMetadata) -> OriginalPreviousMetadata {
 fn original_recovery(
     previous_origin: &PreviousMetadata,
     previous_view: &PreviousMetadata,
-    origin: &Option<StagedLink>,
-    view: &Option<StagedLink>,
+    origin: Option<&StagedLink>,
+    view: Option<&StagedLink>,
 ) -> Vec<u8> {
     serde_json::to_vec_pretty(&serde_json::json!({
         "schema": 1,
         "note": "Save As association recovery: previous entries and intended metadata; snapshots are retained separately",
         "previous_origin": original_previous(previous_origin),
         "previous_view": original_previous(previous_view),
-        "intended_origin": origin.as_ref().map(|link| &link.metadata),
-        "intended_view": view.as_ref().map(|link| &link.metadata),
+        "intended_origin": origin.map(|link| &link.metadata),
+        "intended_view": view.map(|link| &link.metadata),
     })).unwrap()
 }
 
@@ -93,8 +93,8 @@ fn repair_original_producer_bytes() {
         let expected = original_recovery(
             &prepared.previous_origin,
             &prepared.previous_view,
-            &prepared.origin,
-            &prepared.view,
+            prepared.origin.as_ref(),
+            prepared.view.as_ref(),
         );
         let error = prepared
             .publish(|| -> Result<()> {

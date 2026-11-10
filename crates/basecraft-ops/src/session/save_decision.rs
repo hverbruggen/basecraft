@@ -231,8 +231,7 @@ impl Session {
 }
 
 #[cfg(test)]
-#[path = "../../tests/support/isolated_profile.rs"]
-mod isolated_identity_profile;
+use crate::isolated_profile as isolated_identity_profile;
 
 #[cfg(test)]
 mod tests {

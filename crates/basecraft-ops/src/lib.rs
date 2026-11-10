@@ -28,3 +28,7 @@ pub mod document_record;
 pub mod delimitation;
 
 mod contributions;
+
+#[cfg(test)]
+#[path = "../tests/support/isolated_profile.rs"]
+mod isolated_profile;

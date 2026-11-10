@@ -939,8 +939,7 @@ impl RecoveryAttempt {
 mod recovery_windows;
 
 #[cfg(test)]
-#[path = "../tests/support/isolated_profile.rs"]
-mod isolated_recovery_profile;
+use crate::isolated_profile as isolated_recovery_profile;
 
 #[cfg(test)]
 mod tests {
@@ -1006,7 +1005,7 @@ mod tests {
             RecoveryPhase::PendingWrite
         );
         attempt.after_write = Some(Box::new(|target| {
-            std::fs::set_permissions(target, std::fs::Permissions::from_mode(0)).unwrap();
+            std::fs::set_permissions(target, std::fs::Permissions::from_mode(0o000)).unwrap();
         }));
         let error = attempt
             .advance(
@@ -1146,7 +1145,7 @@ mod tests {
             panic!("expected published failure")
         };
         assert!(matches!(failure.cause, crate::Error::Io(_)));
-        assert!(failure.completion.registered_stores.is_empty());
+        assert_eq!(failure.completion.registered_stores, [] as [PathBuf; 0]);
         assert_eq!(failure.completion.outputs.len(), 1);
         let status = attempt.status().unwrap();
         assert_eq!(status.phase, RecoveryPhase::Published);
@@ -1173,8 +1172,11 @@ mod tests {
         let (_session, mut attempt) = prepared(&pre, false);
         let file = attempt.check(0).unwrap().target().to_path_buf();
         attempt.before_sync = Some(Box::new(|stage| {
-            std::fs::set_permissions(stage.join("a.fasta"), std::fs::Permissions::from_mode(0))
-                .unwrap()
+            std::fs::set_permissions(
+                stage.join("a.fasta"),
+                std::fs::Permissions::from_mode(0o000),
+            )
+            .unwrap();
         }));
         assert!(matches!(attempt.publish(), Err(crate::Error::Io(_))));
         assert!(!pre.join("final").exists());
@@ -1189,9 +1191,9 @@ mod tests {
         attempt.after_promote = Some(Box::new(|destination| {
             std::fs::set_permissions(
                 destination.parent().unwrap(),
-                std::fs::Permissions::from_mode(0),
+                std::fs::Permissions::from_mode(0o000),
             )
-            .unwrap()
+            .unwrap();
         }));
         let failure = attempt.publish().unwrap_err();
         std::fs::set_permissions(&post, std::fs::Permissions::from_mode(0o700)).unwrap();

@@ -627,7 +627,10 @@ fn application_state_replay_handles_hidden_baseline_and_missing_original_folder(
     let mut attempt =
         replay::prepare_recovery(&recovery, &recovered, replay::RecoveryMode::Strict).unwrap();
     let check = attempt.check(0).unwrap();
-    assert!(!check.evidence().issues.is_empty());
+    assert_ne!(
+        check.evidence().issues,
+        [] as [basecraft_ops::input_evidence::InspectionIssue; 0]
+    );
     attempt
         .advance(
             0,

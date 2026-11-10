@@ -210,10 +210,9 @@ fn same_bytes_replacement_and_cancel_preserve_originals() {
         std::fs::read(root.join("source/0.fasta")).unwrap(),
         b">gene\nACGT\n"
     );
-    assert!(
-        !basecraft_ops::log::read_all(session.recovery_root())
-            .unwrap()
-            .is_empty()
+    assert_ne!(
+        basecraft_ops::log::read_all(session.recovery_root()).unwrap(),
+        [] as [basecraft_protocol::LogEntry; 0]
     );
 }
 
@@ -582,7 +581,7 @@ fn permission_and_preservation_failures_spend_receipts_without_publication() {
     std::fs::set_permissions(stage, std::fs::Permissions::from_mode(0o500)).unwrap();
     let failed = attempt.advance(0, Some(check.clone().decide(SavePolicy::Cancel, false)));
     std::fs::set_permissions(stage, std::fs::Permissions::from_mode(0o700)).unwrap();
-    assert!(matches!(failed, Err(Error::Format(_)) | Err(Error::Io(_))));
+    assert!(matches!(failed, Err(Error::Format(_) | Error::Io(_))));
     assert!(!destination.exists());
     assert!(matches!(
         attempt.advance(0, Some(check.decide(SavePolicy::Cancel, false))),
@@ -597,7 +596,7 @@ fn permission_and_preservation_failures_spend_receipts_without_publication() {
         Some(check.clone().decide(SavePolicy::PreserveCopy, false)),
     );
     std::fs::set_permissions(run.directory(), std::fs::Permissions::from_mode(0o700)).unwrap();
-    assert!(matches!(failed, Err(Error::Format(_)) | Err(Error::Io(_))));
+    assert!(matches!(failed, Err(Error::Format(_) | Error::Io(_))));
     assert_eq!(std::fs::read(&stage_file).unwrap(), original);
     assert!(!destination.exists());
     assert!(
