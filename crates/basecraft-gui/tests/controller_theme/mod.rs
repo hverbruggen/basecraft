@@ -1,7 +1,14 @@
 //! Exercise shared preparation through actual QML-created editor controllers.
 use cxx_qt::casting::Downcast;
 use cxx_qt_lib::{QByteArray, QQmlApplicationEngine, QString, QUrl};
-use std::{cell::Cell, rc::Rc};
+use std::{
+    cell::Cell,
+    rc::Rc,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
 use crate::{alignment_bridge, bridge, editor_core, tree_bridge};
 
@@ -16,7 +23,7 @@ pub(crate) fn run() {
         .unwrap();
     assert_ne!(bridge::theme_stamp(), bridge::ThemeStamp::default());
 
-    let checked = Rc::new(Cell::new(0));
+    let checked = Arc::new(AtomicUsize::new(0));
     let count = checked.clone();
     let mut engine = QQmlApplicationEngine::new();
     engine
@@ -207,7 +214,7 @@ pub(crate) fn run() {
             } else {
                 panic!("unexpected theme controller");
             }
-            count.set(count.get() + 1);
+            count.fetch_add(1, Ordering::Relaxed);
         })
         .release();
     for name in ["GenomeController", "AlignmentController", "TreeController"] {
@@ -216,6 +223,6 @@ pub(crate) fn run() {
             &QUrl::default(),
         );
     }
-    assert_eq!(checked.get(), 3);
+    assert_eq!(checked.load(Ordering::Relaxed), 3);
     println!("Three real editor theme/font, unchanged stamp and failed-load regressions passed");
 }
