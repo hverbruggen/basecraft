@@ -132,6 +132,23 @@ pub enum Loaded {
     Tree(OpenedTree),
 }
 
+impl Loaded {
+    /// Only migrated kinds participate; legacy kinds retain their existing paths.
+    pub(crate) fn as_document(&self) -> Option<&dyn crate::documents::Document> {
+        match self {
+            Self::Submission(sub) => Some(sub),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn as_document_mut(&mut self) -> Option<&mut dyn crate::documents::Document> {
+        match self {
+            Self::Submission(sub) => Some(sub),
+            _ => None,
+        }
+    }
+}
+
 /// Open a file as whatever it holds: see [`kind`].
 pub fn load(path: &Path) -> Result<Loaded> {
     if Format::from_path(path)? == Format::Metadata {
