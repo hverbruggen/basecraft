@@ -1,9 +1,7 @@
 //! Shared edit, grouping, undo, redo and journal ownership.
-use super::Document;
-use super::execute_tree;
 use super::{
-    Actor, Applied, DocId, Error, FeatureId, Instant, Inverse, LOG_VERSION, Loaded, LogEntry,
-    MERGE_WINDOW, Op, OpResult, Outcome, Pending, ReplayMode, Result, Session, invalid, mergeable,
+    Actor, Applied, DocId, Error, FeatureId, Instant, Inverse, LOG_VERSION, LogEntry, MERGE_WINDOW,
+    Op, OpResult, Outcome, Pending, ReplayMode, Result, Session, invalid, mergeable,
     restore_inverse,
 };
 
@@ -61,35 +59,19 @@ impl Session {
     }
 
     pub fn apply_as(&mut self, doc: DocId, op: Op, actor: Actor) -> Result<Outcome> {
-        if matches!(self.replay_mode, ReplayMode::Live)
-            && let Op::SubmissionEdit { edit } = &op
-            && let basecraft_protocol::submission::SubmissionEdit::ApplyInclusion { plan } =
-                edit.as_ref()
-        {
-            if !self.is_submission(doc) {
-                return Err(invalid("choose a submission document"));
-            }
-            crate::submission::verify_inclusion(self.root(), self.submission(doc)?, plan)?;
-        }
-        // Prepare fallible tree edits before tracking. Rejection must not create
-        // recovery records, mutate supports, or clear the redo stack.
-        let prepared_tree = if matches!(
-            op,
-            Op::TreeMidpointRoot {} | Op::TreeMinimumVarianceRoot {} | Op::TreeStyle { .. }
-        ) {
-            let slot = self
-                .docs
-                .get(doc.0)
-                .ok_or_else(|| invalid("unknown document"))?;
-            let Loaded::Tree(tree) = &slot.content else {
-                return Err(invalid(format!("{} needs a tree", op.name())));
-            };
-            let mut candidate = tree.doc.clone();
-            execute_tree(&mut candidate, &op)?;
-            Some(candidate)
-        } else {
-            None
-        };
+        let content = &self
+            .docs
+            .get(doc.0)
+            .ok_or_else(|| invalid("unknown document"))?
+            .content;
+        content
+            .as_document()
+            .check_preparation_kind(&op, matches!(self.replay_mode, ReplayMode::Live))?;
+        let prepared = content.as_document().prepare_edit(
+            &op,
+            self.root(),
+            matches!(self.replay_mode, ReplayMode::Live),
+        )?;
         self.track(doc)?;
         if self.merge && self.try_merge(doc, &op, &actor)? {
             self.docs[doc.0].generation += 1;
@@ -104,17 +86,10 @@ impl Session {
             });
         }
         self.flush()?;
-        let (inverse, feature) = if let Some(candidate) = prepared_tree {
-            let Loaded::Tree(tree) = &mut self.docs[doc.0].content else {
-                return Err(invalid("tree edit needs a tree"));
-            };
-            (
-                Inverse::Tree(Box::new(std::mem::replace(&mut tree.doc, candidate))),
-                None,
-            )
-        } else {
-            self.execute(doc, &op)?
-        };
+        let (inverse, feature) = self.docs[doc.0]
+            .content
+            .as_document_mut()
+            .apply_prepared(&op, prepared)?;
         self.docs[doc.0].generation += 1;
         let result = OpResult {
             hashes: Vec::new(),
@@ -205,14 +180,7 @@ impl Session {
 
     /// Carry out an edit on the document; returns its inverse.
     pub(super) fn execute(&mut self, id: DocId, op: &Op) -> Result<(Inverse, Option<FeatureId>)> {
-        match &mut self.docs[id.0].content {
-            Loaded::Sequence(o) => o.apply(op),
-            Loaded::Delimitation(work) => work.apply(op),
-            Loaded::Metadata(opened) => opened.apply(op),
-            Loaded::Submission(sub) => sub.apply(op),
-            Loaded::Alignment(a) => a.apply(op),
-            Loaded::Tree(t) => t.apply(op),
-        }
+        self.docs[id.0].content.as_document_mut().apply(op)
     }
 
     /// Undo the last operation on a document; returns the undone entry's id.
@@ -281,14 +249,10 @@ impl Session {
     pub(super) fn undo_one(&mut self, id: DocId) -> Result<String> {
         self.flush()?;
         let applied = self.docs[id.0].undo.pop().ok_or(Error::NothingTo("undo"))?;
-        match (&mut self.docs[id.0].content, &applied.inverse) {
-            (Loaded::Alignment(a), inverse) => a.revert(inverse)?,
-            (Loaded::Tree(t), inverse) => t.revert(inverse)?,
-            (Loaded::Delimitation(work), inverse) => work.revert(inverse)?,
-            (Loaded::Metadata(opened), inverse) => opened.revert(inverse)?,
-            (Loaded::Submission(sub), inverse) => sub.revert(inverse)?,
-            (Loaded::Sequence(o), inverse) => o.revert(inverse)?,
-        }
+        self.docs[id.0]
+            .content
+            .as_document_mut()
+            .revert(&applied.inverse)?;
         self.docs[id.0].generation += 1;
         let of = applied.entry_id.clone();
         let entry = self.entry(
@@ -330,20 +294,9 @@ impl Session {
     }
 
     pub(super) fn reexecute(&mut self, id: DocId, applied: &Applied) -> Result<Inverse> {
-        let inverse = match (&applied.op, &applied.inverse) {
-            // A re-added feature keeps its id.
-            (Op::FeatureAdd { feature }, Inverse::Feature { id: fid, .. }) => {
-                let Loaded::Sequence(o) = &mut self.docs[id.0].content else {
-                    return Err(invalid("feature redo on an alignment"));
-                };
-                o.doc.restore_feature(*fid, Some(feature.clone()));
-                Inverse::Feature {
-                    id: *fid,
-                    before: None,
-                }
-            }
-            (op, _) => self.execute(id, &op.clone())?.0,
-        };
-        Ok(inverse)
+        self.docs[id.0]
+            .content
+            .as_document_mut()
+            .reapply(&applied.op, &applied.inverse)
     }
 }

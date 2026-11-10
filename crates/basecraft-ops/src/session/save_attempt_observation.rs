@@ -63,7 +63,7 @@ pub(crate) trait Hooks {
     fn project(&mut self, error: Error, legacy: impl FnOnce(&Error) -> Error) -> Error {
         legacy(&error)
     }
-    fn write<D: Document>(
+    fn write<D: Document + ?Sized>(
         &mut self,
         doc: &D,
         target: &Path,
@@ -180,7 +180,7 @@ impl Hooks for Observer {
     fn project(&mut self, error: Error, _: impl FnOnce(&Error) -> Error) -> Error {
         error
     }
-    fn write<D: Document>(
+    fn write<D: Document + ?Sized>(
         &mut self,
         doc: &D,
         target: &Path,

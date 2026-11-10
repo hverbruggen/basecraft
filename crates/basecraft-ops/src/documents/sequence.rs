@@ -10,6 +10,10 @@ use crate::files::{self, Format, HashingWriter, Opened};
 use crate::session::{Inverse, normalise};
 
 impl Document for Opened {
+    fn kind(&self) -> crate::files::Kind {
+        crate::files::Kind::Sequence
+    }
+
     fn revision(&self, _generation: u64) -> u64 {
         self.doc.version()
     }
@@ -21,6 +25,17 @@ impl Document for Opened {
     }
     fn revert(&mut self, inverse: &Inverse) -> Result<()> {
         undo_sequence(&mut self.doc, inverse)
+    }
+    fn reapply(&mut self, op: &Op, inverse: &Inverse) -> Result<Inverse> {
+        if let (Op::FeatureAdd { feature }, Inverse::Feature { id, .. }) = (op, inverse) {
+            self.doc.restore_feature(*id, Some(feature.clone()));
+            Ok(Inverse::Feature {
+                id: *id,
+                before: None,
+            })
+        } else {
+            self.apply(op).map(|(inverse, _)| inverse)
+        }
     }
     fn write(
         &self,

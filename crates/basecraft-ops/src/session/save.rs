@@ -357,113 +357,55 @@ impl Session {
         }
         hooks.at(SaveSite::Format);
         let format = files::Format::from_path(&target)?;
-        let opened = match &self.docs[id.0].content {
-            Loaded::Submission(sub) => {
-                let hashes = hooks
-                    .write(
-                        sub,
+        if let Loaded::Tree(t) = &self.docs[id.0].content {
+            hooks.at(SaveSite::OtherKind);
+            if format != files::Format::Tree {
+                return Err(invalid("a tree can only be saved as a tree file"));
+            }
+            let original = self.resolve(&self.docs[id.0].key);
+            let save_as =
+                crate::links::document_entry(&original)? != crate::links::document_entry(&target)?;
+            let (hashes, outputs) = if save_as {
+                let links = crate::links::PreparedLinks::prepare(&original, &target)?;
+                links.publish(|| {
+                    hooks.write(
+                        t,
                         &target,
                         format,
                         &self.storage_root,
                         &self.write_publication,
-                    )?
-                    .into_iter()
-                    .map(|(path, hash)| (self.relative(&path), hash))
-                    .collect();
-                return self.log_save_with(id, &target, hashes, hooks);
-            }
-            Loaded::Metadata(opened) => {
-                let hashes = hooks
-                    .write(
-                        opened,
-                        &target,
-                        format,
-                        &self.storage_root,
-                        &self.write_publication,
-                    )?
-                    .into_iter()
-                    .map(|(path, hash)| (self.relative(&path), hash))
-                    .collect();
-                return self.log_save_with(id, &target, hashes, hooks);
-            }
-            Loaded::Delimitation(work) => {
-                let hashes = hooks
-                    .write(
-                        work,
-                        &target,
-                        format,
-                        &self.storage_root,
-                        &self.write_publication,
-                    )?
-                    .into_iter()
-                    .map(|(path, hash)| (self.relative(&path), hash))
-                    .collect();
-                return self.log_save_with(id, &target, hashes, hooks);
-            }
-            Loaded::Alignment(a) => {
-                let hashes = hooks
-                    .write(
-                        a,
-                        &target,
-                        format,
-                        &self.storage_root,
-                        &self.write_publication,
-                    )?
-                    .into_iter()
-                    .map(|(path, hash)| (self.relative(&path), hash))
-                    .collect();
-                return self.log_save_with(id, &target, hashes, hooks);
-            }
-            Loaded::Tree(t) => {
-                hooks.at(SaveSite::OtherKind);
-                if format != files::Format::Tree {
-                    return Err(invalid("a tree can only be saved as a tree file"));
-                }
-                let original = self.resolve(&self.docs[id.0].key);
-                let save_as = crate::links::document_entry(&original)?
-                    != crate::links::document_entry(&target)?;
-                let (hashes, outputs) = if save_as {
-                    let links = crate::links::PreparedLinks::prepare(&original, &target)?;
-                    links.publish(|| {
-                        hooks.write(
-                            t,
-                            &target,
-                            format,
-                            &self.storage_root,
-                            &self.write_publication,
-                        )
-                    })?
-                } else {
-                    (
-                        hooks.write(
-                            t,
-                            &target,
-                            format,
-                            &self.storage_root,
-                            &self.write_publication,
-                        )?,
-                        Vec::new(),
                     )
-                };
-                let hashes = hashes
-                    .into_iter()
-                    .map(|(path, hash)| (self.relative(&path), hash))
-                    .collect();
-                self.log_save_with(id, &target, hashes, hooks)?;
-                if !outputs.is_empty() {
-                    self.log_tool_run(
-                        id,
-                        self.actor.clone(),
-                        ("basecraft.links", "copy"),
-                        serde_json::json!({"from": original,"to":target}),
-                        &[],
-                        &outputs,
-                    )?;
-                }
-                return Ok(());
+                })?
+            } else {
+                (
+                    hooks.write(
+                        t,
+                        &target,
+                        format,
+                        &self.storage_root,
+                        &self.write_publication,
+                    )?,
+                    Vec::new(),
+                )
+            };
+            let hashes = hashes
+                .into_iter()
+                .map(|(path, hash)| (self.relative(&path), hash))
+                .collect();
+            self.log_save_with(id, &target, hashes, hooks)?;
+            if !outputs.is_empty() {
+                self.log_tool_run(
+                    id,
+                    self.actor.clone(),
+                    ("basecraft.links", "copy"),
+                    serde_json::json!({"from": original,"to":target}),
+                    &[],
+                    &outputs,
+                )?;
             }
-            Loaded::Sequence(o) => o,
-        };
+            return Ok(());
+        }
+        let opened = self.docs[id.0].content.as_document();
         let hashes = hooks
             .write(
                 opened,

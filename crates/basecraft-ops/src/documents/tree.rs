@@ -12,6 +12,10 @@ use crate::files::{self, Format, HashingWriter, OpenedTree};
 use crate::session::Inverse;
 
 impl Document for OpenedTree {
+    fn kind(&self) -> crate::files::Kind {
+        crate::files::Kind::Tree
+    }
+
     fn revision(&self, _generation: u64) -> u64 {
         self.doc.version()
     }
@@ -21,6 +25,39 @@ impl Document for OpenedTree {
             tips: self.doc.tip_count() as u64,
             annotations: self.doc.annotations().len() as u64,
         })
+    }
+
+    fn prepare_edit(
+        &self,
+        op: &Op,
+        _root: &Path,
+        _live: bool,
+    ) -> Result<Option<super::PreparedEdit>> {
+        if matches!(
+            op,
+            Op::TreeMidpointRoot {} | Op::TreeMinimumVarianceRoot {} | Op::TreeStyle { .. }
+        ) {
+            let mut candidate = self.doc.clone();
+            execute_tree(&mut candidate, op)?;
+            Ok(Some(super::PreparedEdit::Tree(Box::new(candidate))))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn apply_prepared(
+        &mut self,
+        op: &Op,
+        prepared: Option<super::PreparedEdit>,
+    ) -> Result<(Inverse, Option<FeatureId>)> {
+        if let Some(super::PreparedEdit::Tree(candidate)) = prepared {
+            Ok((
+                Inverse::Tree(Box::new(std::mem::replace(&mut self.doc, *candidate))),
+                None,
+            ))
+        } else {
+            self.apply(op)
+        }
     }
 
     fn apply(&mut self, op: &Op) -> Result<(Inverse, Option<FeatureId>)> {

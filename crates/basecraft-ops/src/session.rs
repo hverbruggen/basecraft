@@ -473,14 +473,8 @@ impl Session {
     /// The edit revision callers pin a request to: the document version, or the
     /// generation for workspace, metadata and submission documents without a separate version.
     pub fn revision(&self, id: DocId) -> u64 {
-        match &self.docs[id.0].content {
-            Loaded::Sequence(opened) => opened.revision(self.docs[id.0].generation),
-            Loaded::Alignment(opened) => opened.revision(self.docs[id.0].generation),
-            Loaded::Tree(opened) => opened.revision(self.docs[id.0].generation),
-            Loaded::Submission(sub) => sub.revision(self.docs[id.0].generation),
-            Loaded::Metadata(opened) => opened.revision(self.docs[id.0].generation),
-            Loaded::Delimitation(work) => work.revision(self.docs[id.0].generation),
-        }
+        let slot = &self.docs[id.0];
+        slot.content.as_document().revision(slot.generation)
     }
 
     pub fn can_undo(&self, id: DocId) -> bool {
@@ -512,14 +506,7 @@ impl Session {
 
     /// The fingerprint the log records after each operation.
     pub fn state(&self, id: DocId) -> DocState {
-        match &self.docs[id.0].content {
-            Loaded::Sequence(o) => o.fingerprint(),
-            Loaded::Alignment(o) => o.fingerprint(),
-            Loaded::Delimitation(work) => work.fingerprint(),
-            Loaded::Metadata(opened) => opened.fingerprint(),
-            Loaded::Submission(sub) => sub.fingerprint(),
-            Loaded::Tree(o) => o.fingerprint(),
-        }
+        self.docs[id.0].content.as_document().fingerprint()
     }
 
     // Open and save.

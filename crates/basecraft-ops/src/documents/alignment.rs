@@ -11,6 +11,10 @@ use crate::files::{self, Format, HashingWriter, OpenedAlignment};
 use crate::session::{Inverse, normalise};
 
 impl Document for OpenedAlignment {
+    fn kind(&self) -> crate::files::Kind {
+        crate::files::Kind::Alignment
+    }
+
     fn revision(&self, _generation: u64) -> u64 {
         self.doc.version()
     }

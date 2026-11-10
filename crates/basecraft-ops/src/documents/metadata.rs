@@ -11,6 +11,10 @@ use crate::metadata::OpenedMetadata;
 use crate::session::Inverse;
 
 impl Document for OpenedMetadata {
+    fn kind(&self) -> crate::files::Kind {
+        crate::files::Kind::Metadata
+    }
+
     fn revision(&self, generation: u64) -> u64 {
         generation
     }

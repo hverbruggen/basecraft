@@ -28,13 +28,63 @@ mod sequence;
 mod submission;
 mod tree;
 
+/// A payload staged before Session starts durable tracking. The live document
+/// stays unchanged until the journal owner is ready to apply the edit.
+pub(crate) enum PreparedEdit {
+    Tree(Box<basecraft_docs::TreeDoc>),
+}
+
 pub(crate) trait Document {
+    fn kind(&self) -> crate::files::Kind;
+    /// Operations requiring preparation must reject the wrong payload before
+    /// Session retains originals or starts a journal.
+    fn check_preparation_kind(&self, op: &Op, live: bool) -> Result<()> {
+        if matches!(
+            op,
+            Op::TreeMidpointRoot {} | Op::TreeMinimumVarianceRoot {} | Op::TreeStyle { .. }
+        ) && self.kind() != crate::files::Kind::Tree
+        {
+            return Err(crate::error::invalid(format!("{} needs a tree", op.name())));
+        }
+        if live
+            && let Op::SubmissionEdit { edit } = op
+            && matches!(
+                edit.as_ref(),
+                basecraft_protocol::submission::SubmissionEdit::ApplyInclusion { .. }
+            )
+            && self.kind() != crate::files::Kind::Submission
+        {
+            return Err(crate::error::invalid("choose a submission document"));
+        }
+        Ok(())
+    }
     fn revision(&self, generation: u64) -> u64;
     fn fingerprint(&self) -> DocState;
     /// Apply transactionally: an error must leave the payload unchanged.
     /// Session owns actor, history, journal and external input verification.
+    fn prepare_edit(&self, _op: &Op, _root: &Path, _live: bool) -> Result<Option<PreparedEdit>> {
+        Ok(None)
+    }
+    fn apply_prepared(
+        &mut self,
+        op: &Op,
+        prepared: Option<PreparedEdit>,
+    ) -> Result<(Inverse, Option<FeatureId>)> {
+        if prepared.is_some() {
+            return Err(crate::error::invalid(
+                "prepared edit has the wrong document kind",
+            ));
+        }
+        self.apply(op)
+    }
     fn apply(&mut self, op: &Op) -> Result<(Inverse, Option<FeatureId>)>;
     fn revert(&mut self, inverse: &Inverse) -> Result<()>;
+    /// Redo using the original inverse when an edit allocated stable identities.
+    /// Session still owns stacks and the journal; payloads only restore the edit.
+    fn reapply(&mut self, op: &Op, _inverse: &Inverse) -> Result<Inverse> {
+        self.apply(op).map(|(inverse, _)| inverse)
+    }
+
     /// Write using atomic replacement per file. Session owns save guards,
     /// partial-save recovery and document provenance publication. Kind-specific
     /// analysis records use the existing record owner from the writer. Paths remain absolute/as supplied;
