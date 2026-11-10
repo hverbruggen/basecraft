@@ -2396,3 +2396,6 @@ mod completed_result_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod record_format_tests;
