@@ -28,18 +28,18 @@ pub fn reference_input_with_dependencies(
 /// Files remain separate atomic writes: failure may leave conservative partial
 /// evidence, and dropping this guard does not roll those writes back.
 pub struct Mutation {
-    _lock: EvidenceLock,
+    lock: EvidenceLock,
 }
 
 enum EvidenceLock {
     Legacy { _file: std::fs::File },
-    Checked(crate::service_reads::ServiceLockGuard),
+    Checked(Box<crate::service_reads::ServiceLockGuard>),
 }
 
 impl Mutation {
     pub fn begin() -> Result<Self> {
         Ok(Self {
-            _lock: EvidenceLock::Legacy { _file: lock()? },
+            lock: EvidenceLock::Legacy { _file: lock()? },
         })
     }
 
@@ -49,14 +49,14 @@ impl Mutation {
         access: &dyn crate::access::Access,
     ) -> Result<Self> {
         crate::service_reads::acquire_lock(context, access, None).map(|guard| Self {
-            _lock: EvidenceLock::Checked(guard),
+            lock: EvidenceLock::Checked(Box::new(guard)),
         })
     }
     /// Checks the retained guard only; never reacquires or authorizes legacy
     /// write/register methods. Those remain outside confined activation.
     #[allow(dead_code)]
     pub fn reauthorize(&self, access: &dyn crate::access::Access) -> Result<()> {
-        match &self._lock {
+        match &self.lock {
             EvidenceLock::Checked(guard) => guard.reauthorize(access),
             EvidenceLock::Legacy { .. } => Err(crate::access::AccessError::Denied(
                 crate::access::Denial::ServiceUnavailable,

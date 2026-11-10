@@ -284,7 +284,7 @@ fn namespace_mapping_preserves_raw_io() {
 }
 
 #[cfg(target_os = "linux")]
-mod locks {
+pub(super) mod locks {
     use super::*;
     use basecraft_platform::files::inspect_target_namespace;
     use std::{
@@ -292,6 +292,13 @@ mod locks {
         os::unix::fs::PermissionsExt,
     };
 
+    type AdvisoryHook = Box<dyn FnOnce()>;
+    thread_local! { static ADVISORY: RefCell<Option<AdvisoryHook>> = const { RefCell::new(None) }; }
+    pub(crate) fn advisory_boundary() {
+        if let Some(hook) = ADVISORY.with_borrow_mut(Option::take) {
+            hook();
+        }
+    }
     fn fixture(root: &Path) -> Arc<ServiceContext> {
         let mut context = super::context(root);
         context.reservations = root.join("reservations");
@@ -551,5 +558,224 @@ mod locks {
         drop((evidence, stage_target, final_target));
         assert!(context.evidence.exists());
         assert!(!dir.path().join("final").exists());
+    }
+    // Real peers use the existing legacy owner wrappers. All environment changes
+    // belong to a fresh child; the parallel test process environment is untouched.
+    struct Peer {
+        child: std::process::Child,
+        stream: std::os::unix::net::UnixStream,
+    }
+    impl Peer {
+        fn spawn(root: &Path, target: &Path, mode: &str) -> Self {
+            use std::os::unix::net::UnixListener;
+            let socket = root.join(format!("peer-{mode}.sock"));
+            let listener = UnixListener::bind(&socket).unwrap();
+            let child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "service_reads::tests::locks::lock_process_peer",
+                    "--nocapture",
+                ])
+                .env("BASECRAFT_S2C_PEER", mode)
+                .env("BASECRAFT_S2C_SOCKET", socket)
+                .env("BASECRAFT_S2C_TARGET", target)
+                .env("BASECRAFT_PROFILE_DIR", root.join("profile"))
+                .env("BASECRAFT_SCRATCH_DIR", root.join("profile"))
+                .env("TMPDIR", root.join("tmp"))
+                .stdout(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = tx.send(listener.accept());
+            });
+            let mut child = child;
+            let (stream, _) = rx
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .unwrap_or_else(|error| {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    panic!("peer connect: {error}")
+                })
+                .unwrap();
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+                .unwrap();
+            stream
+                .set_write_timeout(Some(std::time::Duration::from_secs(10)))
+                .unwrap();
+            Self { child, stream }
+        }
+        fn receive(&mut self, expected: u8) {
+            use std::io::Read as _;
+            let mut byte = [0];
+            self.stream.read_exact(&mut byte).unwrap();
+            assert_eq!(byte[0], expected);
+        }
+        fn release(&mut self) {
+            use std::io::Write as _;
+            self.stream.write_all(b"R").unwrap();
+            self.receive(b'D');
+            self.finish();
+        }
+        fn finish(&mut self) {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                if let Some(status) = self.child.try_wait().unwrap() {
+                    assert!(status.success());
+                    return;
+                }
+                assert!(std::time::Instant::now() < deadline, "peer exit timeout");
+                // Bounded process-exit supervision only, not race sequencing.
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
+    }
+    impl Drop for Peer {
+        fn drop(&mut self) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+    fn process_context(root: &Path) -> Arc<ServiceContext> {
+        std::fs::create_dir(root.join("tmp")).unwrap();
+        let mut context = super::context(&root.join("profile"));
+        context.reservations = root
+            .join("tmp")
+            .join(crate::save_guard::lock_root().file_name().unwrap());
+        Arc::new(context)
+    }
+    #[test]
+    fn lock_process_peer() {
+        use std::io::{Read as _, Write as _};
+        let Ok(mode) = std::env::var("BASECRAFT_S2C_PEER") else {
+            return;
+        };
+        let mut stream = std::os::unix::net::UnixStream::connect(
+            std::env::var_os("BASECRAFT_S2C_SOCKET").unwrap(),
+        )
+        .unwrap();
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+            .unwrap();
+        let target = PathBuf::from(std::env::var_os("BASECRAFT_S2C_TARGET").unwrap());
+        let lock = match mode.as_str() {
+            "target-hold" => crate::save_guard::lock(&target).unwrap(),
+            "target-busy" => {
+                assert!(
+                    matches!(crate::save_guard::lock(&target), Err(crate::Error::Invalid(message)) if message == "another Basecraft process is saving this target; retry shortly")
+                );
+                stream.write_all(b"B").unwrap();
+                return;
+            }
+            "evidence-hold" => crate::input_evidence::lock().unwrap(),
+            _ => panic!("unknown peer mode"),
+        };
+        stream.write_all(b"H").unwrap();
+        let mut command = [0];
+        stream.read_exact(&mut command).unwrap();
+        assert_eq!(command, *b"R");
+        drop(lock);
+        stream.write_all(b"D").unwrap();
+    }
+    #[test]
+    fn legacy_and_checked_target_contend_both_ways_and_drop_releases() {
+        let dir = tempfile::tempdir().unwrap();
+        let context = process_context(dir.path());
+        let target = dir.path().join("gene-β.fasta");
+        std::fs::write(&target, "unchanged").unwrap();
+        let policy = Policy::new(&context);
+        let mut peer = Peer::spawn(dir.path(), &target, "target-hold");
+        peer.receive(b'H');
+        assert!(
+            matches!(context.reserve_target(&policy, &target, SaveTargetPurpose::ReplaceFile), Err(crate::Error::Invalid(message)) if message == "another Basecraft process is saving this target; retry shortly")
+        );
+        peer.release();
+        drop(peer);
+        let held = context
+            .reserve_target(&policy, &target, SaveTargetPurpose::ReplaceFile)
+            .unwrap();
+        let mut busy = Peer::spawn(dir.path(), &target, "target-busy");
+        busy.receive(b'B');
+        busy.finish();
+        drop(busy);
+        held.reauthorize(&policy).unwrap();
+        drop(held);
+        // The legacy wrapper can acquire the very same persistent leaf after drop.
+        std::fs::remove_file(dir.path().join("peer-target-hold.sock")).unwrap();
+        let mut peer = Peer::spawn(dir.path(), &target, "target-hold");
+        peer.receive(b'H');
+        peer.release();
+        assert_eq!(std::fs::read(&target).unwrap(), b"unchanged");
+        assert!(crate::save_guard::lock_path(&context.reservations, &target).exists());
+    }
+    #[test]
+    fn evidence_wait_and_postwait_substitution_use_the_same_retained_file() {
+        use fs4::fs_std::FileExt;
+        use std::sync::mpsc;
+        use std::time::Duration;
+        for replace in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let context = process_context(dir.path());
+            let mut holder = Peer::spawn(dir.path(), &dir.path().join("unused"), "evidence-hold");
+            holder.receive(b'H');
+            let (ready_tx, ready_rx) = mpsc::channel();
+            let (go_tx, go_rx) = mpsc::channel();
+            let (done_tx, done_rx) = mpsc::channel();
+            let worker_context = Arc::clone(&context);
+            let waiter = std::thread::spawn(move || {
+                ADVISORY.with_borrow_mut(|hook| {
+                    *hook = Some(Box::new(move || {
+                        ready_tx.send(()).unwrap();
+                        go_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+                    }))
+                });
+                let policy = Policy::new(&worker_context);
+                let result = worker_context.lock_evidence(&policy);
+                let correct = if replace {
+                    matches!(
+                        result,
+                        Err(crate::Error::Access(AccessError::Denied(
+                            Denial::ServiceUnavailable
+                        )))
+                    )
+                } else {
+                    let guard = result.unwrap();
+                    guard.reauthorize(&policy).unwrap();
+                    drop(guard);
+                    true
+                };
+                done_tx.send(correct).unwrap();
+            });
+            ready_rx.recv_timeout(Duration::from_secs(10)).unwrap(); // opened + pre-lock recheck complete
+            go_tx.send(()).unwrap();
+            assert!(matches!(
+                done_rx.recv_timeout(Duration::from_millis(100)),
+                Err(mpsc::RecvTimeoutError::Timeout)
+            ));
+            let retained = context.evidence.with_file_name("retained.lock");
+            if replace {
+                std::fs::rename(&context.evidence, &retained).unwrap();
+                std::fs::write(&context.evidence, "replacement").unwrap();
+            }
+            holder.release();
+            assert!(done_rx.recv_timeout(Duration::from_secs(10)).unwrap());
+            waiter.join().unwrap();
+            let old_path = if replace {
+                &retained
+            } else {
+                &context.evidence
+            };
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(old_path)
+                .unwrap();
+            assert!(file.try_lock_exclusive().unwrap()); // postwait failure also dropped the old lock
+            assert!(context.evidence.exists());
+            if replace {
+                assert_eq!(std::fs::read(&context.evidence).unwrap(), b"replacement");
+            }
+        }
     }
 }

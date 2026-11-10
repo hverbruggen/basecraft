@@ -197,7 +197,7 @@ fn namespace_error(error: NamespaceReadError) -> AccessError {
 #[path = "service_reads_tests.rs"]
 pub(crate) mod tests;
 
-/// Routing purpose only, never saved-byte consent or RecoveryAttempt ownership.
+/// Routing purpose only, never saved-byte consent or `RecoveryAttempt` ownership.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SaveTargetPurpose {
     NewFile,
@@ -325,7 +325,6 @@ impl ServiceRequest<'_> {
             _ => return false,
         }
         match (phase, &ticket.lock) {
-            (ServicePhase::LockValidated(_), LockObservation::Pending(_)) => true,
             (ServicePhase::BeforeEffect(_, effect), LockObservation::Pending(lock)) => {
                 matches!(
                     (effect, lock.next_step()),
@@ -336,7 +335,8 @@ impl ServiceRequest<'_> {
                         | (ServiceEffect::OpenFile, Ok(LockStep::OpenFile))
                 )
             }
-            (
+            (ServicePhase::LockValidated(_), LockObservation::Pending(_))
+            | (
                 ServicePhase::BeforeEffect(_, ServiceEffect::AcquireLock) | ServicePhase::Held(_),
                 LockObservation::Opened(_),
             ) => true,
@@ -410,7 +410,7 @@ pub(crate) fn acquire_lock(
     request.authorize_lock(access, ServicePhase::Eligibility)?;
     let target = if target.is_some() {
         let checked = access.service_target(&request)?;
-        if !std::ptr::eq(checked.request, &request) {
+        if !std::ptr::eq(checked.request, std::ptr::from_ref(&request)) {
             return Err(unavailable().into());
         }
         Some(checked.observation)
@@ -471,6 +471,8 @@ pub(crate) fn acquire_lock(
             ServicePhase::BeforeEffect(&ticket, ServiceEffect::AcquireLock),
         )?;
         ticket.recheck()?;
+        #[cfg(all(test, target_os = "linux"))]
+        tests::locks::advisory_boundary();
         if action == ServiceAction::ReserveSaveTarget {
             crate::save_guard::require_reservation(
                 opened.try_lock_exclusive().map_err(namespace_error)?,

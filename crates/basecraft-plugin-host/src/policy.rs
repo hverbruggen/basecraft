@@ -863,4 +863,178 @@ mod service_read_tests {
         ));
         assert_eq!(adapter.boundary(), policy.boundary());
     }
+    #[test]
+    fn lock_adapter_requires_both_flags_and_exact_context_before_bootstrap() {
+        use basecraft_ops::service_reads::{
+            SaveTargetPurpose, ServiceContext, ServicePhase, ServiceRequest,
+        };
+        struct Gate<'a> {
+            adapter: SessionServiceAccess<'a>,
+            expected: bool,
+            called: Cell<usize>,
+            other: &'a ServiceContext,
+        }
+        impl Access for Gate<'_> {
+            fn boundary(&self) -> Option<&Path> {
+                self.adapter.boundary()
+            }
+            fn resource(
+                &self,
+                _: &Path,
+                _: ResourceAction,
+            ) -> basecraft_ops::access::Result<PathBuf> {
+                panic!("no legacy resolution")
+            }
+            fn service_context(
+                &self,
+                request: &ServiceRequest<'_>,
+                phase: ServicePhase<'_>,
+            ) -> basecraft_ops::access::Result<()> {
+                assert!(matches!(phase, ServicePhase::Eligibility));
+                self.called.set(self.called.get() + 1);
+                assert_eq!(
+                    self.adapter.service_context(request, phase).is_ok(),
+                    self.expected && basecraft_platform::files::namespace_lock_supported()
+                );
+                assert!(
+                    self.adapter
+                        .policy
+                        .service_context(request, ServicePhase::Eligibility)
+                        .is_err()
+                );
+                assert!(
+                    TrustedLegacy
+                        .service_context(request, ServicePhase::Eligibility)
+                        .is_err()
+                );
+                assert!(
+                    self.adapter
+                        .service_read(request, ServicePhase::Eligibility)
+                        .is_err()
+                );
+                assert!(
+                    SessionServiceAccess {
+                        policy: self.adapter.policy,
+                        context: self.other
+                    }
+                    .service_context(request, ServicePhase::Eligibility)
+                    .is_err()
+                );
+                Err(AccessError::Denied(Denial::ServiceUnavailable)) // before target or lock namespace inspection
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let context = std::sync::Arc::new(ServiceContext::from_process().unwrap());
+        let other = ServiceContext::from_process().unwrap();
+        for (document, artifact) in [(false, false), (false, true), (true, false), (true, true)] {
+            let mut policy = SessionPolicy::new(dir.path(), true).unwrap();
+            policy.document_write = document;
+            policy.artifact_write = artifact;
+            let gate = Gate {
+                adapter: SessionServiceAccess {
+                    policy: &policy,
+                    context: &context,
+                },
+                expected: document && artifact,
+                called: Cell::new(0),
+                other: &other,
+            };
+            assert!(context.lock_evidence(&gate).is_err());
+            assert!(
+                context
+                    .reserve_target(&gate, &dir.path().join("new"), SaveTargetPurpose::NewFile)
+                    .is_err()
+            );
+            assert_eq!(
+                gate.called.get(),
+                2 * usize::from(basecraft_platform::files::namespace_lock_supported())
+            );
+        }
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn lock_target_handoff_preserves_metadata_and_owned_missing_error() {
+        use basecraft_ops::service_reads::{
+            CheckedServiceTarget, SaveTargetPurpose, ServiceContext, ServicePhase, ServiceRequest,
+        };
+        use std::os::unix::fs::PermissionsExt;
+        struct TargetGate<'a> {
+            adapter: SessionServiceAccess<'a>,
+            calls: Cell<usize>,
+            expected_present: bool,
+        }
+        impl Access for TargetGate<'_> {
+            fn boundary(&self) -> Option<&Path> {
+                self.adapter.boundary()
+            }
+            fn resource(
+                &self,
+                _: &Path,
+                _: ResourceAction,
+            ) -> basecraft_ops::access::Result<PathBuf> {
+                panic!("no legacy resolver")
+            }
+            fn service_context(
+                &self,
+                request: &ServiceRequest<'_>,
+                phase: ServicePhase<'_>,
+            ) -> basecraft_ops::access::Result<()> {
+                assert!(matches!(phase, ServicePhase::Eligibility));
+                self.adapter.service_context(request, phase)
+            }
+            fn service_target<'a>(
+                &self,
+                request: &'a ServiceRequest<'a>,
+            ) -> basecraft_ops::access::Result<CheckedServiceTarget<'a>> {
+                self.calls.set(self.calls.get() + 1);
+                let result = self.adapter.service_target(request);
+                if self.expected_present {
+                    assert!(result.is_ok());
+                    // Stop after the actual strict-result handoff, before lock
+                    // namespace inspection or any service artifact creation.
+                    Err(AccessError::Denied(Denial::ServiceUnavailable))
+                } else {
+                    result
+                }
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("unreadable");
+        std::fs::write(&path, "preserve").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o0)).unwrap();
+        let policy = SessionPolicy::new(dir.path(), true).unwrap();
+        let context = std::sync::Arc::new(ServiceContext::from_process().unwrap());
+        let gate = TargetGate {
+            adapter: SessionServiceAccess {
+                policy: &policy,
+                context: &context,
+            },
+            calls: Cell::new(0),
+            expected_present: true,
+        };
+        assert!(
+            context
+                .reserve_target(&gate, &path, SaveTargetPurpose::ReplaceFile)
+                .is_err()
+        );
+        assert_eq!(gate.calls.get(), 1);
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let gate = TargetGate {
+            expected_present: false,
+            ..gate
+        };
+        let result = context.reserve_target(
+            &gate,
+            &dir.path().join("missing"),
+            SaveTargetPurpose::ReplaceFile,
+        );
+        assert!(
+            matches!(result,Err(basecraft_ops::Error::Access(AccessError::Io(error))) if error.kind()==std::io::ErrorKind::NotFound && error.raw_os_error().is_some())
+        );
+        assert_eq!(gate.calls.get(), 2);
+        assert_eq!(std::fs::read(&path).unwrap(), b"preserve");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
 }
