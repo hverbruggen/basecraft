@@ -5,7 +5,7 @@ use basecraft_io::hash_bytes;
 use basecraft_ops::{DocId, Session, files, metadata, submission};
 use basecraft_protocol::Op;
 
-fn payload_kind(payload: files::Loaded) -> files::Kind {
+fn payload_kind(payload: &files::Loaded) -> files::Kind {
     match payload {
         files::Loaded::Sequence(_) => files::Kind::Sequence,
         files::Loaded::Alignment(_) => files::Kind::Alignment,
@@ -18,7 +18,7 @@ fn payload_kind(payload: files::Loaded) -> files::Kind {
 
 fn agree(path: &Path, expected: files::Kind) {
     assert_eq!(files::kind(path).unwrap(), expected);
-    assert_eq!(payload_kind(files::load(path).unwrap()), expected);
+    assert_eq!(payload_kind(&files::load(path).unwrap()), expected);
     let root = path.parent().unwrap();
     let mut plain = Session::unlogged(root);
     let old = plain.open(path).unwrap();
@@ -87,14 +87,13 @@ fn all_fasta_fixtures_return_the_loaded_kind() {
                 visit(&path, count);
             } else if matches!(files::Format::from_path(&path), Ok(files::Format::Fasta)) {
                 // Fixtures are opened passively; no copy, edit or durable action.
-                match files::load(&path) {
-                    Ok(loaded) => agree(&path, payload_kind(loaded)),
-                    Err(_) => {
-                        let root = path.parent().unwrap();
-                        let old = Session::unlogged(root).open(&path).unwrap_err();
-                        let new = Session::unlogged(root).open_classified(&path).unwrap_err();
-                        assert_eq!(std::mem::discriminant(&old), std::mem::discriminant(&new));
-                    }
+                if let Ok(loaded) = files::load(&path) {
+                    agree(&path, payload_kind(&loaded));
+                } else {
+                    let root = path.parent().unwrap();
+                    let old = Session::unlogged(root).open(&path).unwrap_err();
+                    let new = Session::unlogged(root).open_classified(&path).unwrap_err();
+                    assert_eq!(std::mem::discriminant(&old), std::mem::discriminant(&new));
                 }
                 *count += 1;
             }
@@ -267,7 +266,7 @@ fn classification_validates_through_the_last_record() {
     let mut bytes = b">a\nA\n>b\nT\n>later\n".to_vec();
     bytes.extend(std::iter::repeat_n(
         b'A',
-        files::LONGEST_ALIGNMENT_ROW as usize + 1,
+        usize::try_from(files::LONGEST_ALIGNMENT_ROW).unwrap() + 1,
     ));
     std::fs::write(&path, &bytes).unwrap();
     agree(&path, files::Kind::Sequence);
