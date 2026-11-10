@@ -32,8 +32,8 @@ fn trimal_and_iqtree_preserve_identifiers_and_provenance() {
     });
     common::assert_completed(&outcome);
     let out = session.open(&trimmed).unwrap();
-    assert_eq!(session.alignment(out).width(), 24);
-    assert_eq!(session.alignment(out).row(0).name, "a:one");
+    assert_eq!(session.alignment(out).unwrap().width(), 24);
+    assert_eq!(session.alignment(out).unwrap().row(0).name, "a:one");
     session
         .apply(
             doc,
@@ -52,16 +52,19 @@ fn trimal_and_iqtree_preserve_identifiers_and_provenance() {
     });
     common::assert_completed(&outcome);
     let tree_doc = session.open(&tree).unwrap();
-    assert!(session.tree(tree_doc).find_tip("a:one").is_some());
+    assert!(session.tree(tree_doc).unwrap().find_tip("a:one").is_some());
     // The unsaved edit is what IQ-TREE saw, and the tree links to exactly that.
     let link = basecraft_ops::links::AlignmentLink::read(&tree).unwrap();
     assert!(link.inferred);
-    assert_eq!(link.alignment_version, session.alignment(doc).version());
+    assert_eq!(
+        link.alignment_version,
+        session.alignment(doc).unwrap().version()
+    );
     let snapshot = link
-        .checked_snapshot(&tree, session.tree(tree_doc))
+        .checked_snapshot(&tree, session.tree(tree_doc).unwrap())
         .unwrap();
     let snapshot_doc = session.open(&snapshot).unwrap();
-    assert_eq!(session.alignment(snapshot_doc).read(0, 0, 1), b"T");
+    assert_eq!(session.alignment(snapshot_doc).unwrap().read(0, 0, 1), b"T");
     // IQ-TREE's report stays with the run's retained results.
     assert!(
         outcome

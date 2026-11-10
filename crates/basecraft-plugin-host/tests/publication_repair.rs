@@ -156,7 +156,7 @@ fn owner_save_failure_stays_partial_and_repair_does_not_reapply_hypotheses() {
     std::fs::create_dir(&fault).unwrap();
     let partial = common::wait_in(&jobs, &mut session, &accepted.run_id);
     assert_eq!(partial.state, RuntimeState::Partial, "{partial:#?}");
-    let count = session.delimitation(target).hypotheses.len();
+    let count = session.delimitation(target).unwrap().hypotheses.len();
     assert!(count > 0, "save failed after hypotheses were committed");
     assert_eq!(std::fs::read(&workspace).unwrap(), before);
     std::fs::remove_dir(&fault).unwrap();
@@ -166,7 +166,10 @@ fn owner_save_failure_stays_partial_and_repair_does_not_reapply_hypotheses() {
     );
     let completed = common::wait_in(&jobs, &mut session, &accepted.run_id);
     common::assert_completed(&completed);
-    assert_eq!(session.delimitation(target).hypotheses.len(), count);
+    assert_eq!(
+        session.delimitation(target).unwrap().hypotheses.len(),
+        count
+    );
     assert_eq!(
         basecraft_ops::files::load_delimitation(&workspace)
             .unwrap()
@@ -185,7 +188,10 @@ fn owner_save_failure_stays_partial_and_repair_does_not_reapply_hypotheses() {
 fn assert_reopened_completion(workspace: &std::path::Path, run_id: &str, hypotheses: usize) {
     let mut reopened = Session::recoverable(workspace.parent().unwrap()).unwrap();
     let doc = reopened.open(workspace).unwrap();
-    assert_eq!(reopened.delimitation(doc).hypotheses.len(), hypotheses);
+    assert_eq!(
+        reopened.delimitation(doc).unwrap().hypotheses.len(),
+        hypotheses
+    );
     let record = reopened.document_record(doc).unwrap();
     let finished: Vec<_> = record
         .events
@@ -265,7 +271,7 @@ fn automatically_saved_workspace_retains_completion_after_owner_closes() {
     let completed = common::wait_in(&jobs, &mut session, &accepted.run_id);
     common::assert_completed(&completed);
     let target = jobs.target_document(&accepted.run_id).unwrap();
-    let count = session.delimitation(target).hypotheses.len();
+    let count = session.delimitation(target).unwrap().hypotheses.len();
     assert!(count > 0);
     drop(jobs);
     drop(session);
@@ -293,7 +299,7 @@ fn genuine_workspace_edit_keeps_new_results_as_artifacts_and_records_completion(
         "operation":"basecraft.delimitation/manual_cut@1", "inputs":{"tree":common::file("tree.nwk")},
         "parameters":{"rooted":true,"threshold":0.25},"target":common::document(s, doc)[0]
     })).unwrap();
-    let view = session.delimitation(doc).view.clone();
+    let view = session.delimitation(doc).unwrap().view.clone();
     session
         .apply(
             doc,
@@ -312,7 +318,7 @@ fn genuine_workspace_edit_keeps_new_results_as_artifacts_and_records_completion(
             .iter()
             .any(|warning| warning.contains("Workspace changed"))
     );
-    assert_eq!(session.delimitation(doc).hypotheses, Vec::new());
+    assert_eq!(session.delimitation(doc).unwrap().hypotheses, Vec::new());
     assert!(jobs.finalized_generation(&accepted.run_id).is_none());
     assert!(common::artifact(&outcome, "result.json").is_file());
     assert!(

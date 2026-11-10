@@ -261,7 +261,7 @@ pub fn analysis_result_edits(
     }
     let work: basecraft_protocol::delimitation::DelimitationWorkspace =
         serde_json::from_value(value["workspace"].clone())?;
-    let current = session.delimitation(doc);
+    let current = session.delimitation(doc)?;
     if current
         .specimens
         .iter()
@@ -306,14 +306,12 @@ pub fn combine_selected(
     paths: &[PathBuf],
     keep: Option<&BTreeMap<PathBuf, BTreeSet<String>>>,
 ) -> Result<()> {
-    if !session.is_open(doc) {
-        return Err(invalid("unknown document"));
-    }
+    session.delimitation(doc)?;
     let generation = session.generation(doc);
     let revision = session.revision(doc);
     let hypotheses = combined_hypotheses(session, doc, paths, keep)?;
     if hypotheses.is_empty() {
-        if keep.is_some() && !session.delimitation(doc).hypotheses.is_empty() {
+        if keep.is_some() && !session.delimitation(doc)?.hypotheses.is_empty() {
             return Ok(());
         }
         return Err(invalid("The selected files contain no hypotheses"));
@@ -336,14 +334,8 @@ fn combined_hypotheses(
     paths: &[PathBuf],
     keep: Option<&CombineSelection>,
 ) -> Result<Vec<basecraft_protocol::delimitation::Hypothesis>> {
-    if !session.is_open(doc) {
-        return Err(invalid("unknown document"));
-    }
-    if !session.is_delimitation(doc) {
-        return Err(invalid("Choose a species workspace"));
-    }
     let roster: BTreeSet<_> = session
-        .delimitation(doc)
+        .delimitation(doc)?
         .specimens
         .iter()
         .map(|s| s.id.clone())
@@ -563,7 +555,7 @@ pub fn combine_to(
     let generation = session.generation(doc);
     let revision = session.revision(doc);
     let mut ops = Vec::new();
-    let current = session.delimitation(doc);
+    let current = session.delimitation(doc)?;
     let retained = if let Some(keep) = keep {
         let wanted = keep.get(&paths[0]).cloned().unwrap_or_default();
         let available: BTreeSet<_> = current.hypotheses.iter().map(|h| h.id.clone()).collect();

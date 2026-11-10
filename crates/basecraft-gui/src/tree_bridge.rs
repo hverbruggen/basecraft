@@ -518,22 +518,30 @@ impl qobject::TreeController {
     }
 
     fn with_doc<T>(&self, f: impl FnOnce(&TreeDoc) -> T) -> Option<T> {
+        let access_thread = self.qt_thread();
         let r = self.rust();
         match (&r.session, r.doc) {
-            (Some(s), Some(d)) => Some(f(s.tree(d))),
+            (Some(s), Some(d)) => Some(f(crate::bridge::checked_document!(
+                access_thread,
+                s.tree(d)
+            ))),
             _ => None,
         }
     }
 
     /// Rebuild the frame, status line and scroll bars.
     fn refresh(mut self: Pin<&mut Self>) {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.tree(doc));
+        }
         let (bytes, status, zoom, h, v, sel, tip, placement, sizes) = {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
             let (Some(session), Some(doc)) = (&r.session, r.doc) else {
                 return;
             };
-            let d = session.tree(doc);
+            let d = crate::bridge::checked_document!(access_thread, session.tree(doc));
             r.find
                 .invalidate(&crate::find_bridge::document_key(session, doc));
             r.view.build(d, &r.theme, &mut r.scratch);
@@ -557,7 +565,10 @@ impl qobject::TreeController {
         };
         let geometry = {
             let r = self.rust();
-            let d = r.session.as_ref().unwrap().tree(r.doc.unwrap());
+            let (Some(session), Some(doc)) = (&r.session, r.doc) else {
+                return;
+            };
+            let d = crate::bridge::checked_document!(access_thread, session.tree(doc));
             serde_json::json!({"rows": r.view.tip_rows(d).iter().map(|(name,y,height)| serde_json::json!({"name":name,"y":y,"height":height})).collect::<Vec<_>>(),"root":r.view.node_position(d.root()),"tips_x":d.tips_in_order().iter().filter_map(|&i| r.view.node_position(i).map(|(x,_)|x)).fold(f32::NEG_INFINITY,f32::max),
                 "columns": r.view.column_positions().iter().map(|(id, x, width)| serde_json::json!({"id": id, "x": x, "width": width})).collect::<Vec<_>>()})
         };
@@ -569,7 +580,7 @@ impl qobject::TreeController {
             let (Some(session), Some(doc)) = (&r.session, r.doc) else {
                 return;
             };
-            let d = session.tree(doc);
+            let d = crate::bridge::checked_document!(access_thread, session.tree(doc));
             let key = format!(
                 "{}:{}:{:?}:{:?}",
                 session.id(),
@@ -630,6 +641,9 @@ impl qobject::TreeController {
     /// Apply an edit through the session; on failure, say why and return
     /// the message.
     fn edit(mut self: Pin<&mut Self>, op: Op) -> Result<(), String> {
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            session.tree(doc).map_err(|e| e.to_string())?;
+        }
         if self.rust().display_only {
             let Some(edit) = TreeDrawingEdit::from_op(&op) else {
                 let msg =
@@ -654,7 +668,7 @@ impl qobject::TreeController {
                 return Err("No tree open".into());
             };
             let result = session.apply(doc, op);
-            r.view.sync(session.tree(doc));
+            r.view.sync(session.tree(doc).map_err(|e| e.to_string())?);
             result
         };
         match result {
@@ -721,6 +735,9 @@ impl qobject::TreeController {
     }
 
     pub fn link_alignment(mut self: Pin<&mut Self>, path: &QString) {
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.tree(doc));
+        }
         let result = (|| -> basecraft_ops::Result<()> {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
@@ -731,7 +748,7 @@ impl qobject::TreeController {
             let source = PathBuf::from(path.to_string());
             let outputs = basecraft_ops::links::AlignmentLink::associate(
                 &tree_path,
-                session.tree(doc),
+                session.tree(doc)?,
                 &source,
             )?;
             session.log_tool_run(
@@ -776,6 +793,10 @@ impl qobject::TreeController {
     }
 
     pub fn extract_clade_alignment(mut self: Pin<&mut Self>) {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.tree(doc));
+        }
         use basecraft_plugin_host::{
             jobs::JobManager,
             policy::SessionPolicy,
@@ -792,7 +813,14 @@ impl qobject::TreeController {
             .rust()
             .session
             .as_ref()
-            .map(|session| self.rust().view.selected_names(session.tree(doc)))
+            .map(|session| {
+                self.rust()
+                    .view
+                    .selected_names(crate::bridge::checked_document!(
+                        access_thread,
+                        session.tree(doc)
+                    ))
+            })
             .unwrap_or_default();
         if taxa.is_empty() {
             self.fail("Select one or more clades first");
@@ -808,7 +836,7 @@ impl qobject::TreeController {
         let spawn = crate::document_jobs::background_session(
             session,
             move |session| {
-                let tree = session.tree(doc);
+                let tree = session.tree(doc).map_err(|e| e.to_string())?;
                 let link = basecraft_ops::links::AlignmentLink::read_view(&tree_path)
                     .map_err(|e| format!("Link an alignment first: {e}"))?;
                 let input = link
@@ -896,12 +924,16 @@ impl qobject::TreeController {
     }
 
     fn emit_taxa(mut self: Pin<&mut Self>) {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.tree(doc));
+        }
         let taxa = {
             let r = self.rust();
             let (Some(session), Some(doc)) = (&r.session, r.doc) else {
                 return;
             };
-            let tree = session.tree(doc);
+            let tree = crate::bridge::checked_document!(access_thread, session.tree(doc));
             let names = r.view.selected_names(tree);
             serde_json::to_string(&names).unwrap_or_default()
         };
@@ -956,6 +988,10 @@ impl qobject::TreeController {
         true
     }
     pub fn open_file(mut self: Pin<&mut Self>, path: &QString) -> bool {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.tree(doc));
+        }
         if self.rust().busy {
             self.fail("Wait for the running operation before replacing this document");
             return false;
@@ -970,10 +1006,12 @@ impl qobject::TreeController {
         };
         match session.open(&path) {
             Ok(doc) if session.is_tree(doc) => {
-                let warning = session
-                    .tree_metadata_warning(doc)
-                    .unwrap_or_default()
-                    .to_owned();
+                let warning = crate::bridge::checked_document!(
+                    access_thread,
+                    session.tree_metadata_warning(doc)
+                )
+                .unwrap_or_default()
+                .to_owned();
                 {
                     let mut r = self.as_mut().rust_mut();
                     let r = &mut *r;
@@ -981,7 +1019,10 @@ impl qobject::TreeController {
                     r.view.multi_taxa = None;
                     r.view.forget_layout();
                     r.view.fit();
-                    r.view.sync(session.tree(doc));
+                    r.view.sync(crate::bridge::checked_document!(
+                        access_thread,
+                        session.tree(doc)
+                    ));
                     r.session = Some(session);
                     r.doc = Some(doc);
                 }
@@ -1016,13 +1057,17 @@ impl qobject::TreeController {
     }
 
     pub fn wheel(mut self: Pin<&mut Self>, x: f64, y: f64, dy: f64, dx: f64, modifiers: i32) {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.tree(doc));
+        }
         {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
             let (Some(session), Some(doc)) = (&r.session, r.doc) else {
                 return;
             };
-            let d = session.tree(doc);
+            let d = crate::bridge::checked_document!(access_thread, session.tree(doc));
             if modifiers & (CTRL | ALT) != 0 {
                 // Ctrl zooms both ways about the pointer, Ctrl+Shift only the
                 // width, Alt only the rows. Qt may turn Alt+wheel into a
@@ -1049,6 +1094,10 @@ impl qobject::TreeController {
     }
 
     pub fn press_modified(mut self: Pin<&mut Self>, x: f64, y: f64, modifiers: i32) {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.tree(doc));
+        }
         if modifiers & CTRL == 0 {
             self.press(x, y);
             return;
@@ -1057,7 +1106,7 @@ impl qobject::TreeController {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
             if let (Some(session), Some(doc)) = (&r.session, r.doc) {
-                let tree = session.tree(doc);
+                let tree = crate::bridge::checked_document!(access_thread, session.tree(doc));
                 if let Some(node) = r.view.node_at(tree, f(x), f(y)) {
                     r.view.toggle_clade(tree, node);
                 }
@@ -1067,11 +1116,19 @@ impl qobject::TreeController {
     }
 
     pub fn press(mut self: Pin<&mut Self>, x: f64, y: f64) {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.tree(doc));
+        }
         {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
             if let (Some(session), Some(doc)) = (&r.session, r.doc) {
-                r.view.select_at(session.tree(doc), f(x), f(y));
+                r.view.select_at(
+                    crate::bridge::checked_document!(access_thread, session.tree(doc)),
+                    f(x),
+                    f(y),
+                );
             }
         }
         self.refresh();
@@ -1099,6 +1156,10 @@ impl qobject::TreeController {
     }
 
     pub fn show_tree(mut self: Pin<&mut Self>, path: &QString, edits: &QString) -> bool {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.tree(doc));
+        }
         if self.rust().busy {
             return false;
         }
@@ -1140,7 +1201,10 @@ impl qobject::TreeController {
                 r.view.fit();
             }
             r.view.forget_layout();
-            r.view.sync(session.tree(doc));
+            r.view.sync(crate::bridge::checked_document!(
+                access_thread,
+                session.tree(doc)
+            ));
             r.session = Some(session);
             r.doc = Some(doc);
         }
@@ -1182,6 +1246,10 @@ impl qobject::TreeController {
     }
 
     pub fn key(mut self: Pin<&mut Self>, key: i32, modifiers: i32) -> bool {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.tree(doc));
+        }
         let ctrl = modifiers & CTRL != 0;
         let shift = modifiers & SHIFT != 0;
         // Undo belongs to the document a display tree is drawn for.
@@ -1227,7 +1295,7 @@ impl qobject::TreeController {
                 let mut r = self.as_mut().rust_mut();
                 let r = &mut *r;
                 if let (Some(session), Some(doc)) = (&r.session, r.doc) {
-                    let d = session.tree(doc);
+                    let d = crate::bridge::checked_document!(access_thread, session.tree(doc));
                     match key {
                         KEY_LEFT => r.view.select_parent(d),
                         KEY_RIGHT => r.view.select_child(d),
@@ -1246,20 +1314,36 @@ impl qobject::TreeController {
     }
 
     fn zoom_centre(mut self: Pin<&mut Self>, factor: f32) {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.tree(doc));
+        }
         let mut r = self.as_mut().rust_mut();
         let r = &mut *r;
         if let (Some(session), Some(doc)) = (&r.session, r.doc) {
             let (w, h) = (r.view_size().0, r.view_size().1);
-            r.view
-                .zoom_at(session.tree(doc), w / 2.0, h / 2.0, factor, true);
+            r.view.zoom_at(
+                crate::bridge::checked_document!(access_thread, session.tree(doc)),
+                w / 2.0,
+                h / 2.0,
+                factor,
+                true,
+            );
         }
     }
 
     fn zoom_both(mut self: Pin<&mut Self>, factor: f32) {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.tree(doc));
+        }
         let mut r = self.as_mut().rust_mut();
         let r = &mut *r;
         if let (Some(session), Some(doc)) = (&r.session, r.doc) {
-            r.view.zoom_both(session.tree(doc), factor);
+            r.view.zoom_both(
+                crate::bridge::checked_document!(access_thread, session.tree(doc)),
+                factor,
+            );
         }
     }
 
@@ -1298,6 +1382,10 @@ impl qobject::TreeController {
     }
 
     fn history(mut self: Pin<&mut Self>, redo: bool) {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.tree(doc));
+        }
         // A display tree's history belongs to the document it is drawn for.
         if self.rust().display_only {
             return;
@@ -1313,7 +1401,10 @@ impl qobject::TreeController {
             } else {
                 session.undo(doc)
             };
-            r.view.sync(session.tree(doc));
+            r.view.sync(crate::bridge::checked_document!(
+                access_thread,
+                session.tree(doc)
+            ));
             result
         };
         match result {
@@ -1605,10 +1696,13 @@ impl qobject::TreeController {
         project: &QString,
         fields: &QString,
     ) -> QString {
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.tree(doc));
+        }
         let planned = (|| -> Result<(TreeStyle, usize), String> {
             let r = self.rust();
             let (session, doc) = r.session.as_ref().zip(r.doc).ok_or("No tree open")?;
-            let tree = session.tree(doc);
+            let tree = session.tree(doc).map_err(|e| e.to_string())?;
             let mut style = tree.style().clone();
             let previous_style = style.clone();
             let fields: Vec<basecraft_protocol::metadata::LabelField> =
@@ -1775,6 +1869,10 @@ impl qobject::TreeController {
     }
 
     pub fn add_support_from(mut self: Pin<&mut Self>, path: &QString, name: &QString) {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.tree(doc));
+        }
         let started = Instant::now();
         let path = PathBuf::from(path.to_string());
         if self.rust().display_only {
@@ -1790,7 +1888,10 @@ impl qobject::TreeController {
                 return;
             };
             let result = session.import_support(doc, &path, &name.to_string());
-            r.view.sync(session.tree(doc));
+            r.view.sync(crate::bridge::checked_document!(
+                access_thread,
+                session.tree(doc)
+            ));
             result
         };
         match result {
@@ -1850,6 +1951,9 @@ impl qobject::TreeController {
         publication: bool,
         png_width: Option<f64>,
     ) {
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.tree(doc));
+        }
         if !(0..=2).contains(&scope) {
             self.fail("Unknown figure scope");
             return;
@@ -1870,7 +1974,7 @@ impl qobject::TreeController {
             } else {
                 r.theme.clone()
             };
-            let tree = session.tree(doc);
+            let tree = session.tree(doc)?;
             let svg = if scope == 0 {
                 let mut frame = Frame::new();
                 r.view.build(tree, &theme, &mut frame);
@@ -1925,13 +2029,17 @@ crate::find_bridge::controller_find!(qobject::TreeController);
 
 impl qobject::TreeController {
     fn find_update(mut self: std::pin::Pin<&mut Self>) {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.tree(doc));
+        }
         let mut r = self.as_mut().rust_mut();
         let r = &mut *r;
         let (Some(session), Some(doc)) = (&r.session, r.doc) else {
             return;
         };
         let key = crate::find_bridge::document_key(session, doc);
-        let d = session.tree(doc);
+        let d = crate::bridge::checked_document!(access_thread, session.tree(doc));
         r.find.update(key, || {
             basecraft_viewmodel::find::Input::Names(
                 d.tips_in_order()
@@ -1942,12 +2050,16 @@ impl qobject::TreeController {
         });
     }
     fn find_reveal(mut self: std::pin::Pin<&mut Self>) {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.tree(doc));
+        }
         let mut r = self.as_mut().rust_mut();
         let r = &mut *r;
         let (Some(session), Some(doc), Some(hit)) = (&r.session, r.doc, r.find.hit()) else {
             return;
         };
-        let d = session.tree(doc);
+        let d = crate::bridge::checked_document!(access_thread, session.tree(doc));
         r.view.sync(d);
         r.view.reveal_find(hit.row);
     }

@@ -237,11 +237,27 @@ impl qobject::SubmissionController {
     }
 
     fn refresh(mut self: Pin<&mut Self>) {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.submission(doc));
+        }
         let state = match (&self.rust().session, self.rust().doc) {
             (Some(session), Some(doc)) => Some((
-                serde_json::to_value(session.submission(doc)).unwrap_or(Value::Null),
-                authors_text(&session.submission(doc).submission_citation().authors),
-                authors_text(&session.submission(doc).publication.authors),
+                serde_json::to_value(crate::bridge::checked_document!(
+                    access_thread,
+                    session.submission(doc)
+                ))
+                .unwrap_or(Value::Null),
+                authors_text(
+                    &crate::bridge::checked_document!(access_thread, session.submission(doc))
+                        .submission_citation()
+                        .authors,
+                ),
+                authors_text(
+                    &crate::bridge::checked_document!(access_thread, session.submission(doc))
+                        .publication
+                        .authors,
+                ),
                 session.doc_key(doc).to_string(),
                 session.can_undo(doc),
                 session.can_redo(doc),
@@ -270,6 +286,10 @@ impl qobject::SubmissionController {
     /// Recompute the review: after edits, and when the specimen table or
     /// the submitter changes.
     pub fn refresh_review(mut self: Pin<&mut Self>) {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.submission(doc));
+        }
         self.as_mut().rust_mut().review_epoch += 1;
         if self.rust().review_active {
             return;
@@ -283,7 +303,7 @@ impl qobject::SubmissionController {
         };
         let (project, sub, package_path) = (
             session.root().to_path_buf(),
-            session.submission(doc).clone(),
+            crate::bridge::checked_document!(access_thread, session.submission(doc)).clone(),
             self.rust().package_path(),
         );
         let epoch = self.rust().review_epoch;

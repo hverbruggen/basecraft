@@ -188,7 +188,7 @@ struct RunningAnalysis {
     generation: u64,
     identity: (String, String),
 }
-use cxx_qt::CxxQtType;
+use cxx_qt::{CxxQtType, Threading};
 use cxx_qt_lib::QString;
 use serde_json::{Value, json};
 use std::{
@@ -304,11 +304,17 @@ fn group(members: BTreeSet<String>, label: String) -> Group {
 }
 impl qobject::DelimitationController {
     pub fn accessible_page(&self, page: i32) -> QString {
+        let access_thread = self.qt_thread();
         let state = self.rust();
-        let result =
-            state.session.as_ref().zip(state.doc).map(|(s, d)| {
-                basecraft_viewmodel::accessible::delimitation(s.delimitation(d), page)
-            });
+        let result = match state.session.as_ref().zip(state.doc) {
+            Some((s, d)) => {
+                let workspace = crate::bridge::checked_document!(access_thread, s.delimitation(d));
+                Some(basecraft_viewmodel::accessible::delimitation(
+                    workspace, page,
+                ))
+            }
+            None => None,
+        };
         QString::from(
             result
                 .map_or_else(
@@ -338,10 +344,14 @@ impl qobject::DelimitationController {
         self.set_message(QString::from(&summary));
     }
     fn refresh(mut self: Pin<&mut Self>) {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.delimitation(doc));
+        }
         let Some((data, status)) = ({
             let r = self.rust();
             r.session.as_ref().zip(r.doc).map(|(s, d)| {
-                let w = s.delimitation(d);
+                let w = crate::bridge::checked_document!(access_thread, s.delimitation(d));
                 (
                     serde_json::to_string(w).unwrap(),
                     format!(
@@ -360,18 +370,18 @@ impl qobject::DelimitationController {
         self.as_mut().update_tree_edits();
         self.update_bar_columns();
     }
-    fn update_tree_edits(self: Pin<&mut Self>) {
+    fn update_tree_edits(mut self: Pin<&mut Self>) {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.delimitation(doc));
+        }
         let edits = {
             let r = self.rust();
-            let Some(edits) = r
-                .session
-                .as_ref()
-                .zip(r.doc)
-                .map(|(s, d)| serde_json::to_string(&s.delimitation(d).view.tree_edits))
-            else {
+            let Some((s, d)) = r.session.as_ref().zip(r.doc) else {
                 return;
             };
-            edits.unwrap_or_else(|_| "[]".into())
+            let workspace = crate::bridge::checked_document!(access_thread, s.delimitation(d));
+            serde_json::to_string(&workspace.view.tree_edits).unwrap_or_else(|_| "[]".into())
         };
         if self.rust().tree_edits.to_string() != edits {
             self.set_tree_edits(QString::from(&edits));
@@ -422,6 +432,10 @@ impl qobject::DelimitationController {
     }
     #[allow(clippy::many_single_char_names)]
     pub fn open_file(mut self: Pin<&mut Self>, path: &QString) -> bool {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.delimitation(doc));
+        }
         if self.rust().busy {
             self.fail("Wait for the running operation before replacing this document");
             return false;
@@ -439,7 +453,7 @@ impl qobject::DelimitationController {
         })();
         match result {
             Ok((s, d)) => {
-                let w = s.delimitation(d);
+                let w = crate::bridge::checked_document!(access_thread, s.delimitation(d));
                 let display = w.view.display_tree.clone();
                 let linked = w
                     .specimens
@@ -565,13 +579,18 @@ impl qobject::DelimitationController {
         }
     }
     pub fn root_display_tree(mut self: Pin<&mut Self>, method: &QString) -> bool {
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.delimitation(doc));
+        }
         if !self.as_mut().workspace_available() {
             return false;
         }
         let result = (|| -> Result<PathBuf, String> {
             let state = self.rust();
             let session = state.session.as_ref().ok_or("No workspace")?;
-            let work = session.delimitation(state.doc.ok_or("No workspace")?);
+            let work = session
+                .delimitation(state.doc.ok_or("No workspace")?)
+                .map_err(|e| e.to_string())?;
             let display = basecraft_ops::delimitation::checked_display_tree(work)
                 .map_err(|e| e.to_string())?
                 .ok_or("No display tree")?;
@@ -590,13 +609,17 @@ impl qobject::DelimitationController {
         }
     }
     pub fn attach_tree(mut self: Pin<&mut Self>, path: &QString, rooted: bool) -> bool {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.delimitation(doc));
+        }
         if !self.as_mut().workspace_available() {
             return false;
         }
         let result = (|| -> Result<_, Box<dyn std::error::Error>> {
             let mut p = PathBuf::from(path.to_string());
             if let Some((session, doc)) = self.rust().session.as_ref().zip(self.rust().doc) {
-                let work = session.delimitation(doc);
+                let work = session.delimitation(doc)?;
                 if work.view.display_tree.as_deref() == Some(path.to_string().as_str()) {
                     p = basecraft_ops::delimitation::checked_display_tree(work)?
                         .ok_or("No display tree")?;
@@ -637,7 +660,10 @@ impl qobject::DelimitationController {
                         self.fail("No species workspace is open");
                         return false;
                     };
-                    session.delimitation(doc).view.display_tree.as_deref()
+                    crate::bridge::checked_document!(access_thread, session.delimitation(doc))
+                        .view
+                        .display_tree
+                        .as_deref()
                         != Some(path.to_string().as_str())
                 };
                 if changed {
@@ -693,14 +719,15 @@ impl qobject::DelimitationController {
         self.refresh();
     }
     pub fn analysis_json(&self) -> QString {
+        let access_thread = self.qt_thread();
         let value = (|| -> Option<Value> {
             let state = self.rust();
             let (session, doc) = state.session.as_ref().zip(state.doc)?;
-            let hypothesis = session
-                .delimitation(doc)
-                .hypotheses
-                .iter()
-                .find(|h| h.id == state.active_hypothesis.to_string())?;
+            let hypothesis =
+                crate::bridge::checked_document!(access_thread, session.delimitation(doc))
+                    .hypotheses
+                    .iter()
+                    .find(|h| h.id == state.active_hypothesis.to_string())?;
             if hypothesis.origin != HypothesisOrigin::Inferred {
                 return None;
             }
@@ -725,13 +752,18 @@ impl qobject::DelimitationController {
         QString::from(value.to_string())
     }
     pub fn action(mut self: Pin<&mut Self>, name: &QString, args: &QString) {
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.delimitation(doc));
+        }
         if !self.as_mut().workspace_available() {
             return;
         }
         let result = (|| -> Result<DelimitationEdit, String> {
             let r = self.rust();
             let s = r.session.as_ref().ok_or("No workspace open")?;
-            let w = s.delimitation(r.doc.ok_or("No workspace open")?);
+            let w = s
+                .delimitation(r.doc.ok_or("No workspace open")?)
+                .map_err(|e| e.to_string())?;
             let args: Value = serde_json::from_str(&args.to_string()).map_err(|e| e.to_string())?;
             let text = |key: &str| {
                 args.get(key)
@@ -970,6 +1002,10 @@ impl qobject::DelimitationController {
         }
     }
     fn emit_selection(mut self: Pin<&mut Self>) {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.delimitation(doc));
+        }
         let text = serde_json::to_string(&self.rust().selection.specimens).unwrap();
         self.as_mut().set_selection_json(QString::from(&text));
         self.as_mut().taxa_selected(QString::from(&text));
@@ -978,7 +1014,7 @@ impl qobject::DelimitationController {
             let (session, doc) = state.session.as_ref().zip(state.doc)?;
             let tree = state.display_tree.as_ref()?;
             let mapping = delimitation::tree_mapping(
-                session.delimitation(doc),
+                crate::bridge::checked_document!(access_thread, session.delimitation(doc)),
                 &tree
                     .tips_in_order()
                     .iter()
@@ -1005,11 +1041,15 @@ impl qobject::DelimitationController {
         group: &QString,
         toggle: bool,
     ) {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.delimitation(doc));
+        }
         let result = {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
             let h = r.session.as_ref().zip(r.doc).and_then(|(s, d)| {
-                s.delimitation(d)
+                crate::bridge::checked_document!(access_thread, s.delimitation(d))
                     .hypotheses
                     .iter()
                     .find(|h| h.id == hypothesis.to_string())
@@ -1023,12 +1063,16 @@ impl qobject::DelimitationController {
         }
     }
     pub fn tree_taxa(mut self: Pin<&mut Self>, names: &QString) {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.delimitation(doc));
+        }
         let mapped = (|| -> Option<_> {
             let r = self.rust();
             let (session, doc) = r.session.as_ref().zip(r.doc)?;
             let display = r.display_tree.as_ref()?;
             let mapping = delimitation::tree_mapping(
-                session.delimitation(doc),
+                crate::bridge::checked_document!(access_thread, session.delimitation(doc)),
                 &display
                     .tips_in_order()
                     .iter()
@@ -1050,11 +1094,12 @@ impl qobject::DelimitationController {
         }
     }
     pub fn coverage_json(&self, geometry: &QString) -> QString {
+        let access_thread = self.qt_thread();
         let r = self.rust();
         let Some((session, doc)) = r.session.as_ref().zip(r.doc) else {
             return QString::from("{}");
         };
-        let work = session.delimitation(doc);
+        let work = crate::bridge::checked_document!(access_thread, session.delimitation(doc));
         let names = rows(&geometry.to_string())
             .into_iter()
             .map(|(name, _, _)| name)
@@ -1064,6 +1109,10 @@ impl qobject::DelimitationController {
         QString::from(json!({"unmatched_tips":names.difference(&mapping.keys().cloned().collect()).collect::<Vec<_>>(),"absent_specimens":work.specimens.iter().filter(|s|!represented.contains(&s.id)).map(|s|s.id.clone()).collect::<Vec<_>>()}).to_string())
     }
     pub fn highlight_taxa(mut self: Pin<&mut Self>, names: &QString) {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.delimitation(doc));
+        }
         let ids = serde_json::from_str::<BTreeSet<String>>(&names.to_string());
         if let Ok(names) = ids {
             let mapped = {
@@ -1074,7 +1123,7 @@ impl qobject::DelimitationController {
                 names
                     .into_iter()
                     .filter(|name| {
-                        s.delimitation(d)
+                        crate::bridge::checked_document!(access_thread, s.delimitation(d))
                             .specimens
                             .iter()
                             .any(|specimen| &specimen.id == name)
@@ -1089,11 +1138,19 @@ impl qobject::DelimitationController {
     /// Recompute `bar_columns` after the workspace, display tree, preview
     /// or palette changed.
     fn update_bar_columns(mut self: Pin<&mut Self>) {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.delimitation(doc));
+        }
         let json = {
             let r = self.rust();
             match (r.session.as_ref().zip(r.doc), r.display_tree.as_ref()) {
                 (Some((s, d)), Some(tree)) => {
-                    let work = with_preview(s.delimitation(d), tree, &r.preview);
+                    let work = with_preview(
+                        crate::bridge::checked_document!(access_thread, s.delimitation(d)),
+                        tree,
+                        &r.preview,
+                    );
                     let columns = delimitation::tip_columns(&work, &tip_names(tree), &r.palette);
                     serde_json::to_string(&columns).unwrap_or_else(|_| "[]".into())
                 }
@@ -1106,11 +1163,12 @@ impl qobject::DelimitationController {
     }
     /// Visible columns with their letter codes, plus a legend of the codes used.
     pub fn columns_json(&self, left: f64) -> QString {
+        let access_thread = self.qt_thread();
         let r = self.rust();
         let Some((s, d)) = r.session.as_ref().zip(r.doc) else {
             return QString::from("{\"columns\":[],\"legend\":[]}");
         };
-        let work = s.delimitation(d);
+        let work = crate::bridge::checked_document!(access_thread, s.delimitation(d));
         let mut legend = Vec::new();
         let columns: Vec<Value> = delimitation::columns(work, number(left))
             .into_iter()
@@ -1209,6 +1267,10 @@ impl qobject::DelimitationController {
         self.update_bar_columns();
     }
     pub fn save_cut(mut self: Pin<&mut Self>, name: &QString) {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.delimitation(doc));
+        }
         if !self.as_mut().workspace_available() {
             return;
         }
@@ -1225,7 +1287,7 @@ impl qobject::DelimitationController {
                 self.fail("No species workspace is open");
                 return;
             };
-            let w = session.delimitation(doc);
+            let w = crate::bridge::checked_document!(access_thread, session.delimitation(doc));
             let mapping = delimitation::tree_mapping(
                 w,
                 &tree
@@ -1295,10 +1357,17 @@ impl qobject::DelimitationController {
         self.set_group(false);
     }
     /// Show a hypothesis just created, within the caller's undo group.
-    fn show_created(self: Pin<&mut Self>, id: String) {
+    fn show_created(mut self: Pin<&mut Self>, id: String) {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.delimitation(doc));
+        }
         let state = self.rust();
         if let Some((session, doc)) = state.session.as_ref().zip(state.doc) {
-            let mut view = session.delimitation(doc).view.clone();
+            let mut view =
+                crate::bridge::checked_document!(access_thread, session.delimitation(doc))
+                    .view
+                    .clone();
             view.visible.push(id);
             let _ = self.edit(DelimitationEdit::SetView { view });
         }
@@ -1408,6 +1477,9 @@ impl qobject::DelimitationController {
         theme: &basecraft_viewmodel::Theme,
         png_width: Option<f64>,
     ) {
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.delimitation(doc));
+        }
         let result = (|| -> Result<(), Box<dyn std::error::Error>> {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
@@ -1417,7 +1489,7 @@ impl qobject::DelimitationController {
                 .display_tree
                 .clone()
                 .ok_or("Attach a display tree first")?;
-            let work = s.delimitation(d);
+            let work = s.delimitation(d)?;
             basecraft_ops::session::apply_drawing_edits(&mut tree, &work.view.tree_edits);
             let font = crate::bridge::monospace_font();
             let columns =
@@ -1541,6 +1613,9 @@ impl qobject::DelimitationController {
         rooted: bool,
         settings: &QString,
     ) {
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.delimitation(doc));
+        }
         if self.rust().busy {
             return;
         }
@@ -1549,7 +1624,7 @@ impl qobject::DelimitationController {
         let result = (|| -> Result<_, String> {
             let r = self.rust();
             let (session, doc) = r.session.as_ref().zip(r.doc).ok_or("No workspace open")?;
-            let workspace = session.delimitation(doc);
+            let workspace = session.delimitation(doc).map_err(|e| e.to_string())?;
             let expected_alignment = if workspace
                 .exchange_fields
                 .get("basecraft_alignment_snapshot")
@@ -1699,6 +1774,7 @@ impl qobject::DelimitationController {
             if method == "group_statistics" {
                 let h = session
                     .delimitation(doc)
+                    .map_err(|e| e.to_string())?
                     .hypotheses
                     .iter()
                     .find(|h| h.id == r.active_hypothesis.to_string())
@@ -1950,12 +2026,21 @@ impl qobject::DelimitationController {
     /// evidence stays in the hidden store. Anything with hypotheses, unsaved
     /// edits or a user-chosen name is kept.
     pub fn discard_empty_workspace(mut self: Pin<&mut Self>) -> bool {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.delimitation(doc));
+        }
         let path = {
             let r = self.rust();
             let Some((session, doc)) = r.session.as_ref().zip(r.doc) else {
                 return false;
             };
-            if r.dirty || r.busy || !session.delimitation(doc).hypotheses.is_empty() {
+            if r.dirty
+                || r.busy
+                || !crate::bridge::checked_document!(access_thread, session.delimitation(doc))
+                    .hypotheses
+                    .is_empty()
+            {
                 return false;
             }
             session.root().join(session.doc_key(doc))
@@ -2197,13 +2282,17 @@ crate::find_bridge::controller_find!(qobject::DelimitationController);
 
 impl qobject::DelimitationController {
     fn find_update(mut self: std::pin::Pin<&mut Self>) {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.delimitation(doc));
+        }
         let mut r = self.as_mut().rust_mut();
         let r = &mut *r;
         let (Some(session), Some(doc)) = (&r.session, r.doc) else {
             return;
         };
         let key = crate::find_bridge::document_key(session, doc);
-        let d = session.delimitation(doc);
+        let d = crate::bridge::checked_document!(access_thread, session.delimitation(doc));
         r.find.update(key, || {
             basecraft_viewmodel::find::Input::Names(
                 d.specimens
@@ -2215,12 +2304,16 @@ impl qobject::DelimitationController {
         });
     }
     fn find_reveal(mut self: std::pin::Pin<&mut Self>) {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.delimitation(doc));
+        }
         let mut r = self.as_mut().rust_mut();
         let r = &mut *r;
         let (Some(session), Some(doc), Some(hit)) = (&r.session, r.doc, r.find.hit()) else {
             return;
         };
-        let d = session.delimitation(doc);
+        let d = crate::bridge::checked_document!(access_thread, session.delimitation(doc));
         let _ = (d, hit);
     }
     fn find_y(&self) -> f32 {

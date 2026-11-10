@@ -169,9 +169,10 @@ fn nexus_source_workspace_can_reuse_its_display_tree() {
     let mut session = Session::recoverable(root.path()).unwrap();
     setup_tree(&mut session, &source, &canonical);
     let doc = session.open(&canonical).unwrap();
-    let display = basecraft_ops::delimitation::checked_display_tree(session.delimitation(doc))
-        .unwrap()
-        .unwrap();
+    let display =
+        basecraft_ops::delimitation::checked_display_tree(session.delimitation(doc).unwrap())
+            .unwrap()
+            .unwrap();
     // The controller parses this checked display buffer as Newick on reopen.
     let bytes = std::fs::read_to_string(&display).unwrap();
     let parsed = basecraft_io::newick::parse_trees(&bytes);
@@ -335,7 +336,7 @@ fn preserved_alignment_remains_usable_by_workspace_default_input() {
     std::fs::write(&source, ">a\nTTTT\n>b\nTTTC\n>c\nTTCC\n>d\nCCCC\n").unwrap();
     assert!(provenance::verify(&canonical).unwrap().is_empty());
     let doc = session.open(&canonical).unwrap();
-    let work = session.delimitation(doc).clone();
+    let work = session.delimitation(doc).unwrap().clone();
     // The controller resolves the linked default through the shared lifecycle,
     // including when it submits an all-specimen display-tree job.
     let linked = basecraft_ops::delimitation::checked_alignment(&work, &canonical)

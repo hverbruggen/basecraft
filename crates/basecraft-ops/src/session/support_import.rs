@@ -32,9 +32,7 @@ impl Session {
         source: &Path,
         name: &str,
     ) -> Result<SupportImport> {
-        if !self.is_tree(id) {
-            return Err(invalid("support values can only be imported into a tree"));
-        }
+        self.tree(id)?;
         let source = source.canonicalize()?;
         let hash = basecraft_io::hash_file(&source)?;
         let other = crate::files::load_tree(&source)?;
@@ -42,7 +40,7 @@ impl Session {
             return Err(invalid("support source changed while it was read"));
         }
         let sets = self
-            .tree(id)
+            .tree(id)?
             .support_from(&other.doc)
             .map_err(|e| invalid(e.0))?;
         if sets.is_empty() {
@@ -72,7 +70,7 @@ impl Session {
                 (false, false) => base.to_owned(),
                 (false, true) => format!("{base} {set}"),
             };
-            if self.tree(id).support(&name).is_some() {
+            if self.tree(id)?.support(&name).is_some() {
                 return Err(invalid(format!(
                     "there's already a support set named {name:?}"
                 )));

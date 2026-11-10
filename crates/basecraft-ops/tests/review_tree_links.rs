@@ -21,10 +21,13 @@ fn save_as_replaces_destination_view_association() {
     }
     let mut session = Session::new(root);
     let doc = session.open(&input).unwrap();
-    AlignmentLink::associate(&output, session.tree(doc), &other).unwrap();
+    AlignmentLink::associate(&output, session.tree(doc).unwrap(), &other).unwrap();
     session.save(doc, Some(&output)).unwrap();
     let view = AlignmentLink::read_view(&output).unwrap();
-    assert!(view.checked_snapshot(&output, session.tree(doc)).is_ok());
+    assert!(
+        view.checked_snapshot(&output, session.tree(doc).unwrap())
+            .is_ok()
+    );
     assert_eq!(
         view.source, source,
         "successful Save As must not retain the overwritten tree's unrelated view link"
@@ -45,16 +48,18 @@ fn failed_save_as_does_not_expose_origin_as_explicit_view() {
     AlignmentLink::create(&input, &source, &source, 3, true, None).unwrap();
     let mut session = Session::new(root);
     let doc = session.open(&input).unwrap();
-    AlignmentLink::associate(&input, session.tree(doc), &other).unwrap();
+    AlignmentLink::associate(&input, session.tree(doc).unwrap(), &other).unwrap();
     let view = AlignmentLink::read_view(&input).unwrap();
-    let snapshot = view.checked_snapshot(&input, session.tree(doc)).unwrap();
+    let snapshot = view
+        .checked_snapshot(&input, session.tree(doc).unwrap())
+        .unwrap();
     std::fs::write(snapshot, "damaged").unwrap();
     let error = session.save(doc, Some(&output)).unwrap_err();
     eprintln!("save error: {error}");
     assert!(
         AlignmentLink::read_view(&input)
             .unwrap()
-            .checked_snapshot(&input, session.tree(doc))
+            .checked_snapshot(&input, session.tree(doc).unwrap())
             .is_err()
     );
     if output.exists() {

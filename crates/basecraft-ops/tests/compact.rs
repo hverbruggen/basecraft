@@ -14,9 +14,9 @@ fn compact_alignment_unicode_path_edit_undo_save_reopen_replay() {
         let mut session = Session::new(dir.path());
         let doc = session.open(&path).unwrap();
         assert!(session.is_alignment(doc));
-        assert_eq!(session.alignment(doc).row_count(), 8);
-        assert_eq!(session.alignment(doc).width(), 180);
-        let original = session.alignment(doc).read(0, 0, 180);
+        assert_eq!(session.alignment(doc).unwrap().row_count(), 8);
+        assert_eq!(session.alignment(doc).unwrap().width(), 180);
+        let original = session.alignment(doc).unwrap().read(0, 0, 180);
         session
             .apply(
                 doc,
@@ -28,9 +28,9 @@ fn compact_alignment_unicode_path_edit_undo_save_reopen_replay() {
                 },
             )
             .unwrap();
-        assert_eq!(session.alignment(doc).read(0, 0, 3), b"NNN");
+        assert_eq!(session.alignment(doc).unwrap().read(0, 0, 3), b"NNN");
         session.undo(doc).unwrap();
-        assert_eq!(session.alignment(doc).read(0, 0, 180), original);
+        assert_eq!(session.alignment(doc).unwrap().read(0, 0, 180), original);
         session.redo(doc).unwrap();
         session.save(doc, None).unwrap();
     }
@@ -38,10 +38,10 @@ fn compact_alignment_unicode_path_edit_undo_save_reopen_replay() {
     assert!(report.ok(), "{:?}", report.problems);
     let mut session = Session::new(dir.path());
     let doc = session.open(&path).unwrap();
-    assert_eq!(session.alignment(doc).read(0, 0, 3), b"NNN");
+    assert_eq!(session.alignment(doc).unwrap().read(0, 0, 3), b"NNN");
     for row in 0..8 {
         assert_eq!(
-            session.alignment(doc).row(row).name,
+            session.alignment(doc).unwrap().row(row).name,
             format!("specimen_{:02}", row + 1)
         );
     }

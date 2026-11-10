@@ -85,6 +85,7 @@ fn scenario<T: Debug + PartialEq>(
     assert_eq!(session.redo(doc).unwrap(), second.entry_id);
     assert_eq!(snapshot(&session, doc), expected[2]);
     assert!(!session.can_redo(doc));
+    assert_checked_access(&session, doc, name);
     let fingerprint = session.state(doc);
     session.save(doc, None).unwrap();
     session.flush().unwrap();
@@ -190,7 +191,7 @@ fn sequence() {
 fn alignment() {
     let snapshot = |s: &Session, d| {
         assert!(s.is_alignment(d));
-        let a = s.alignment(d);
+        let a = s.alignment(d).unwrap();
         (0..a.row_count())
             .map(|row| (a.row(row).name.clone(), a.read(row, 0, a.width())))
             .collect::<Vec<_>>()
@@ -231,7 +232,7 @@ fn alignment() {
 fn tree() {
     let snapshot = |s: &Session, d| {
         assert!(s.is_tree(d));
-        let tree = s.tree(d);
+        let tree = s.tree(d).unwrap();
         (
             tree.to_newick(),
             tree.supports().to_vec(),
@@ -252,8 +253,8 @@ fn tree() {
         snapshot,
         |s, d| {
             let original = snapshot(s, d);
-            assert!(s.tree(d).find_tip("specimen_01").is_some());
-            assert!(s.tree(d).find_tip("specimen_02").is_some());
+            assert!(s.tree(d).unwrap().find_tip("specimen_01").is_some());
+            assert!(s.tree(d).unwrap().find_tip("specimen_02").is_some());
             let a = CladeAnnotation::new(vec!["specimen_01".into()], "Reviewed tip");
             let b = CladeAnnotation::new(vec!["specimen_02".into()], "Second tip");
             let mut first = original.clone();
@@ -281,7 +282,7 @@ fn tree() {
 fn delimitation() {
     let snapshot = |s: &Session, d| {
         assert!(s.is_delimitation(d));
-        s.delimitation(d).clone()
+        s.delimitation(d).unwrap().clone()
     };
     scenario(
         "delimitation",
@@ -317,7 +318,7 @@ fn delimitation() {
 fn metadata() {
     let snapshot = |s: &Session, d| {
         assert!(s.is_metadata(d));
-        s.metadata(d).clone()
+        s.metadata(d).unwrap().clone()
     };
     scenario(
         "metadata",
@@ -352,7 +353,7 @@ fn metadata() {
 fn submission() {
     let snapshot = |s: &Session, d| {
         assert!(s.is_submission(d));
-        s.submission(d).clone()
+        s.submission(d).unwrap().clone()
     };
     scenario(
         "submission",
@@ -399,4 +400,146 @@ fn submission() {
             )
         },
     );
+}
+
+// Exercise every public kind getter against each populated kind, plus missing
+// IDs. These reads must preserve unsaved edits, history, identity and all
+// project/recovery bytes, including the existing journal.
+fn assert_checked_access(session: &Session, doc: DocId, name: &str) {
+    use basecraft_ops::{Error, files::Kind};
+    fn files(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+        let mut out = BTreeMap::new();
+        for entry in std::fs::read_dir(root).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                out.extend(files(&path));
+            } else {
+                out.insert(path.clone(), std::fs::read(path).unwrap());
+            }
+        }
+        out
+    }
+    let before_files = files(session.root());
+    let before_state = session.state(doc);
+    let before_revision = session.revision(doc);
+    let before_key = session.doc_key(doc).to_owned();
+    let before_undo = (session.can_undo(doc), session.can_redo(doc));
+    for id in [doc, DocId(usize::MAX), DocId(doc.0 + 1)] {
+        let checks = [
+            (Kind::Sequence, "sequence", session.doc(id).map(|_| ())),
+            (
+                Kind::Sequence,
+                "sequence",
+                session.checked_sequence(id).map(|_| ()),
+            ),
+            (
+                Kind::Alignment,
+                "alignment",
+                session.alignment(id).map(|_| ()),
+            ),
+            (Kind::Tree, "tree", session.tree(id).map(|_| ())),
+            (
+                Kind::Tree,
+                "tree",
+                session.tree_metadata_warning(id).map(|_| ()),
+            ),
+            (
+                Kind::Delimitation,
+                "delimitation",
+                session.delimitation(id).map(|_| ()),
+            ),
+            (Kind::Metadata, "metadata", session.metadata(id).map(|_| ())),
+            (
+                Kind::Metadata,
+                "metadata",
+                session.metadata_notices(id).map(|_| ()),
+            ),
+            (
+                Kind::Submission,
+                "submission",
+                session.submission(id).map(|_| ()),
+            ),
+        ];
+        for (kind, expected, result) in checks {
+            if id != doc {
+                let error = result.unwrap_err();
+                assert_eq!(error.code(), "unknown_document");
+                assert!(matches!(error, Error::UnknownDocument { id: actual } if actual == id));
+            } else if name == expected {
+                result.unwrap();
+            } else {
+                let error = result.unwrap_err();
+                assert_eq!(error.code(), "wrong_document_kind");
+                assert!(
+                    matches!(error, Error::WrongKind { id: actual, expected } if actual == id && expected == kind)
+                );
+            }
+        }
+        assert_eq!(session.is_alignment(id), id == doc && name == "alignment");
+        assert_eq!(session.is_tree(id), id == doc && name == "tree");
+        assert_eq!(
+            session.is_delimitation(id),
+            id == doc && name == "delimitation"
+        );
+        assert_eq!(session.is_metadata(id), id == doc && name == "metadata");
+        assert_eq!(session.is_submission(id), id == doc && name == "submission");
+    }
+    assert_eq!(session.state(doc), before_state);
+    assert_eq!(session.revision(doc), before_revision);
+    assert_eq!(session.doc_key(doc), before_key);
+    assert_eq!((session.can_undo(doc), session.can_redo(doc)), before_undo);
+    assert_eq!(files(session.root()), before_files);
+}
+
+#[test]
+fn getters_reject_an_empty_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let session = Session::unlogged(dir.path());
+    let id = DocId(0);
+    for result in [
+        session.doc(id).map(|_| ()),
+        session.checked_sequence(id).map(|_| ()),
+        session.alignment(id).map(|_| ()),
+        session.tree(id).map(|_| ()),
+        session.tree_metadata_warning(id).map(|_| ()),
+        session.delimitation(id).map(|_| ()),
+        session.metadata(id).map(|_| ()),
+        session.metadata_notices(id).map(|_| ()),
+        session.submission(id).map(|_| ()),
+    ] {
+        assert_eq!(result.unwrap_err().code(), "unknown_document");
+    }
+    assert!(!session.is_alignment(id));
+    assert!(!session.is_tree(id));
+    assert!(!session.is_delimitation(id));
+    assert!(!session.is_metadata(id));
+    assert!(!session.is_submission(id));
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn wrong_kind_extraction_does_not_begin_tracking_or_publish_output() {
+    let dir = tempfile::tempdir().unwrap();
+    let tree = fixture(dir.path(), "tree.nwk", b"(A:1,B:1);");
+    let mut session = Session::new(dir.path());
+    let doc = session.open(&tree).unwrap();
+    let before = serde_json::to_value(log::read_all(dir.path()).unwrap()).unwrap();
+    let output = dir.path().join("refused.gb");
+    for (id, code) in [
+        (doc, "wrong_document_kind"),
+        (DocId(usize::MAX), "unknown_document"),
+    ] {
+        let error = session
+            .extract(id, (0, 1), &[], false, &output)
+            .unwrap_err();
+        assert_eq!(error.code(), code);
+        assert!(!output.exists());
+        assert!(!session.can_undo(doc));
+        assert_eq!(session.revision(doc), 0);
+        assert_eq!(
+            serde_json::to_value(log::read_all(dir.path()).unwrap()).unwrap(),
+            before
+        );
+    }
+    assert_eq!(std::fs::read(tree).unwrap(), b"(A:1,B:1);");
 }

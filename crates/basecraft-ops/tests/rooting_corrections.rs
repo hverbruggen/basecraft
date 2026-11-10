@@ -24,15 +24,18 @@ fn unrepresentable_tip_support_is_refused_before_recovery_tracking() {
             std::fs::write(&path, text).unwrap();
             let mut session = Session::recoverable_with_paths(dir.path(), &paths).unwrap();
             let id = session.open(&path).unwrap();
-            let before = session.tree(id).clone();
+            let before = session.tree(id).unwrap().clone();
             let revision = session.record_revision(id).unwrap();
             let error = session.apply(id, op).unwrap_err().to_string();
             assert!(error.contains("support on a tip"), "{error}");
             session.flush().unwrap();
-            assert_eq!(session.tree(id).nodes(), before.nodes());
-            assert_eq!(session.tree(id).supports(), before.supports());
-            assert_eq!(session.tree(id).annotations(), before.annotations());
-            assert_eq!(session.tree(id).version(), before.version());
+            assert_eq!(session.tree(id).unwrap().nodes(), before.nodes());
+            assert_eq!(session.tree(id).unwrap().supports(), before.supports());
+            assert_eq!(
+                session.tree(id).unwrap().annotations(),
+                before.annotations()
+            );
+            assert_eq!(session.tree(id).unwrap().version(), before.version());
             assert_eq!(session.record_revision(id).unwrap(), revision);
             assert!(!session.can_undo(id));
             assert!(!session.can_redo(id));
@@ -59,7 +62,7 @@ fn tip_support_refusal_preserves_existing_history_and_redo() {
         )
         .unwrap();
     session.undo(id).unwrap();
-    let before = session.tree(id).to_newick();
+    let before = session.tree(id).unwrap().to_newick();
     let revision = session.record_revision(id).unwrap();
     for op in methods() {
         assert!(
@@ -69,14 +72,14 @@ fn tip_support_refusal_preserves_existing_history_and_redo() {
                 .to_string()
                 .contains("support on a tip")
         );
-        assert_eq!(session.tree(id).to_newick(), before);
+        assert_eq!(session.tree(id).unwrap().to_newick(), before);
         assert_eq!(session.record_revision(id).unwrap(), revision);
         assert!(!session.can_undo(id));
         assert!(session.can_redo(id));
     }
     session.redo(id).unwrap();
     session.undo(id).unwrap();
-    assert_eq!(session.tree(id).to_newick(), before);
+    assert_eq!(session.tree(id).unwrap().to_newick(), before);
 }
 
 #[test]

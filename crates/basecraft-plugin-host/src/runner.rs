@@ -271,18 +271,18 @@ fn document_view(
     match view {
         InputView::AlignedFasta if session.is_alignment(doc) => {
             session
-                .alignment(doc)
+                .alignment(doc)?
                 .validate_aligned_input()
                 .map_err(|error| Error::Protocol(error.to_string()))?;
-            basecraft_ops::files::write_alignment(session.alignment(doc), &mut bytes)?;
+            basecraft_ops::files::write_alignment(session.alignment(doc)?, &mut bytes)?;
             Ok((bytes, "canonical-fasta-v1", "afa"))
         }
         InputView::UngappedFasta if session.is_alignment(doc) => {
-            basecraft_ops::files::write_ungapped(session.alignment(doc), &mut bytes)?;
+            basecraft_ops::files::write_ungapped(session.alignment(doc)?, &mut bytes)?;
             Ok((bytes, "ungapped-fasta-v1", "afa"))
         }
         InputView::Newick if session.is_tree(doc) => Ok((
-            session.tree(doc).to_newick_with_rooting().into_bytes(),
+            session.tree(doc)?.to_newick_with_rooting().into_bytes(),
             "canonical-newick-v1",
             "nwk",
         )),
@@ -438,7 +438,7 @@ impl PreparedOperation {
                         }
                         if view == InputView::AlignedFasta && session.is_alignment(id) {
                             session
-                                .alignment(id)
+                                .alignment(id)?
                                 .validate_aligned_input()
                                 .map_err(|error| Error::Protocol(error.to_string()))?;
                         }

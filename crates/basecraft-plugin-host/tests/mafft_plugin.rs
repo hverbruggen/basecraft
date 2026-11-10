@@ -62,7 +62,7 @@ fn realigns_with_mafft_and_logs_the_run() {
 
     // The output is an alignment of the same sequences.
     let out = session.open(&output).unwrap();
-    let aln = session.alignment(out);
+    let aln = session.alignment(out).unwrap();
     assert_eq!(aln.row_count(), 3);
     for (i, (name, seq)) in seqs.iter().enumerate() {
         assert_eq!(aln.row(i).name, *name);

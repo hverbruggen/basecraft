@@ -33,7 +33,7 @@ fn verify(session: &Session, id: basecraft_ops::DocId, edited: bool) -> Result<(
     if !session.is_alignment(id) {
         return Err("fixture did not open as an alignment".into());
     }
-    let doc = session.alignment(id);
+    let doc = session.alignment(id)?;
     if doc.row_count() != ROWS || doc.width() != WIDTH as u64 {
         return Err("alignment dimensions changed".into());
     }
@@ -112,7 +112,7 @@ fn run() -> Result<()> {
         if files::kind(&file)? != Kind::Sequence {
             return Err("large fixture did not open as a sequence".into());
         }
-        let doc = session.doc(id);
+        let doc = session.doc(id)?;
         let payload_bytes = bytes - 7;
         let expected_len = payload_bytes - payload_bytes / 81;
         if doc.len() != expected_len {

@@ -86,7 +86,7 @@ fn selected_combination_preserves_sources_actor_lineage_and_replay() {
         client: "workflow-test".into(),
     });
     let doc = workflow::combine_to(&mut session, &paths, &output, Some(&keep)).unwrap();
-    let work = session.delimitation(doc);
+    let work = session.delimitation(doc).unwrap();
     assert_eq!(work.hypotheses.len(), 2);
     assert_eq!(work.hypotheses[0].id, "partition-2");
     assert_eq!(work.hypotheses[1].unassigned.len(), 2);
@@ -107,10 +107,13 @@ fn selected_combination_preserves_sources_actor_lineage_and_replay() {
                 && matches!(&e.actor, Actor::Script { client } if client == "workflow-test"))
     );
     session.undo(doc).unwrap();
-    assert_eq!(session.delimitation(doc).hypotheses.len(), 3);
-    assert_eq!(session.delimitation(doc).hypotheses[0].id, "partition-1");
+    assert_eq!(session.delimitation(doc).unwrap().hypotheses.len(), 3);
+    assert_eq!(
+        session.delimitation(doc).unwrap().hypotheses[0].id,
+        "partition-1"
+    );
     session.redo(doc).unwrap();
-    assert_eq!(session.delimitation(doc), &reopened);
+    assert_eq!(session.delimitation(doc).unwrap(), &reopened);
     let replay = basecraft_ops::replay::replay(dir.path()).unwrap();
     assert!(replay.problems.is_empty(), "{:?}", replay.problems);
 }
@@ -176,7 +179,7 @@ fn omitted_selection_keeps_every_hypothesis_and_replays() {
     let mut session = Session::new(dir.path());
     let output = dir.path().join("all.spart");
     let doc = workflow::combine_to(&mut session, &paths, &output, None).unwrap();
-    assert_eq!(session.delimitation(doc).hypotheses.len(), 6);
+    assert_eq!(session.delimitation(doc).unwrap().hypotheses.len(), 6);
     let replay = basecraft_ops::replay::replay(dir.path()).unwrap();
     assert!(replay.problems.is_empty(), "{:?}", replay.problems);
 }
@@ -218,7 +221,7 @@ fn path_aliases_match_selection_without_merging_input_entries() {
         Some(&keep),
     )
     .unwrap();
-    let hypotheses = &session.delimitation(doc).hypotheses;
+    let hypotheses = &session.delimitation(doc).unwrap().hypotheses;
     assert_eq!(hypotheses.len(), 2);
     assert_eq!(hypotheses[0].id, "partition-2");
     assert_eq!(
@@ -246,7 +249,7 @@ fn path_aliases_match_selection_without_merging_input_entries() {
         let output = isolated.path().join("multiple.spart");
         let mut session = Session::new(dir.path());
         let doc = workflow::combine_to(&mut session, &sources, &output, None).unwrap();
-        let hypotheses = &session.delimitation(doc).hypotheses;
+        let hypotheses = &session.delimitation(doc).unwrap().hypotheses;
         assert_eq!(hypotheses.len(), 6);
         assert_eq!(
             hypotheses
@@ -269,7 +272,7 @@ fn repeated_combine_and_refused_save_preserve_retained_objects_and_recover() {
     for filename in ["one.spart", "two.spart"] {
         let doc =
             workflow::combine_to(&mut session, &paths, &dir.path().join(filename), None).unwrap();
-        assert_eq!(session.delimitation(doc).hypotheses.len(), 6);
+        assert_eq!(session.delimitation(doc).unwrap().hypotheses.len(), 6);
     }
     assert!(
         workflow::combine_to(&mut session, &paths, &dir.path().join("refused.fa"), None).is_err()

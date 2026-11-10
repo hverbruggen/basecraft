@@ -48,7 +48,7 @@ fn distance_outputs_are_logged_and_replay() {
     common::assert_completed(&outcome);
     let output = root.join("tree.nwk");
     let tree = session.open(&output).unwrap();
-    assert_eq!(session.tree(tree).tip_count(), 4);
+    assert_eq!(session.tree(tree).unwrap().tip_count(), 4);
     // The run report and distance data are retained members, never visible.
     common::member(&outcome, "tree.nwk.run.json");
     assert_eq!(common::visible(root), ["input.aln.fasta", "tree.nwk"]);
@@ -65,7 +65,7 @@ fn distance_outputs_are_logged_and_replay() {
     let metadata = common::read_json(&common::member(&upgma, "tree.nwk.run.json"));
     assert_eq!(metadata["method"], "upgma");
     let tree = session.open(&root.join("upgma.nwk")).unwrap();
-    assert_eq!(session.tree(tree).tip_count(), 4);
+    assert_eq!(session.tree(tree).unwrap().tip_count(), 4);
     drop(session);
     let replay = basecraft_ops::replay::replay(root).unwrap();
     assert!(replay.ok(), "{:?}", replay.problems);
@@ -102,7 +102,10 @@ fn forest_members_share_one_alignment_snapshot() {
         let tree = session.open(&path).unwrap();
         let link = basecraft_ops::links::AlignmentLink::read(&path).unwrap();
         assert_eq!(link.snapshot, main.snapshot);
-        assert!(link.checked_snapshot(&path, session.tree(tree)).is_ok());
+        assert!(
+            link.checked_snapshot(&path, session.tree(tree).unwrap())
+                .is_ok()
+        );
     }
     assert!(!dir.path().join("forest.component-3.nwk").exists());
     assert!(
@@ -150,7 +153,7 @@ fn bootstrap_provenance_success_and_withheld_support_replay() {
             if case == "complete" {
                 assert_eq!(report["bootstrap"]["completed"], 64);
                 let tree = session.open(&output).unwrap();
-                let generated = session.tree(tree);
+                let generated = session.tree(tree).unwrap();
                 assert_eq!(generated.supports()[0].name, "Bootstrap");
                 assert_eq!(
                     generated.supports()[0].kind,
@@ -212,7 +215,10 @@ fn reference_tree_save_as_and_complete_export_retain_alignment_and_support() {
     session.save(tree, Some(&copied)).unwrap();
     let link = basecraft_ops::links::AlignmentLink::read(&copied).unwrap();
     assert_eq!(link.schema, 2);
-    assert!(link.checked_snapshot(&copied, session.tree(tree)).is_ok());
+    assert!(
+        link.checked_snapshot(&copied, session.tree(tree).unwrap())
+            .is_ok()
+    );
     assert!(
         !common::visible(root.path())
             .iter()

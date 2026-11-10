@@ -79,18 +79,18 @@ fn gui_annotation_keeps_its_invocation_in_the_hidden_store_and_skips_known_featu
     assert_eq!(first.state, RuntimeState::Completed, "{first:?}");
     let proposals = first.proposals.clone().unwrap();
     assert_eq!((proposals.applied, proposals.rejected.len()), (1, 0));
-    assert_eq!(session.doc(doc).feature_count(), 1);
+    assert_eq!(session.doc(doc).unwrap().feature_count(), 1);
     // A rerun proposes the same ORF: reported as known, nothing added.
     let second = run(&mut jobs, &registry, &mut session, doc);
     assert_eq!(second.state, RuntimeState::Completed, "{second:?}");
     let proposals = second.proposals.unwrap();
     assert_eq!((proposals.applied, proposals.rejected.len()), (0, 1));
-    assert_eq!(session.doc(doc).feature_count(), 1);
+    assert_eq!(session.doc(doc).unwrap().feature_count(), 1);
     // The applied proposals are one undo step.
     session.undo(doc).unwrap();
-    assert_eq!(session.doc(doc).feature_count(), 0);
+    assert_eq!(session.doc(doc).unwrap().feature_count(), 0);
     session.redo(doc).unwrap();
-    assert_eq!(session.doc(doc).feature_count(), 1);
+    assert_eq!(session.doc(doc).unwrap().feature_count(), 1);
 
     // The submitted snapshot and request live in the hidden run, not beside the file.
     let evidence = Path::new(first.evidence.as_ref().unwrap());

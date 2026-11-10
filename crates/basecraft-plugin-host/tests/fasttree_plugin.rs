@@ -64,7 +64,7 @@ fn builds_a_tree_with_fasttree_and_logs_the_run() {
 
     // The tree opens with every tip and FastTree's local support values.
     let tree = session.open(&output).unwrap();
-    let t = session.tree(tree);
+    let t = session.tree(tree).unwrap();
     assert_eq!(t.tip_count(), 4);
     assert!(t.find_tip("Codium_fragile").is_some());
     assert_eq!(t.supports().len(), 1);

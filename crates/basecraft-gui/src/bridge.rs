@@ -4,6 +4,44 @@
 //! changes, selections and operations; every edit goes through the ops
 //! session, so it's logged and undoable like any other operation.
 
+/// Stop a GUI read on an invalid document and report through the existing
+/// status properties. Queuing also supports immutable QML getters.
+macro_rules! checked_document {
+    (sync $controller:ident, $result:expr) => {
+        match $result {
+            Ok(document) => document,
+            Err(error) => {
+                let message = error.to_string();
+                $controller
+                    .as_mut()
+                    .set_message_kind(cxx_qt_lib::QString::from("error"));
+                $controller
+                    .as_mut()
+                    .set_message(cxx_qt_lib::QString::from(&message));
+                return Default::default();
+            }
+        }
+    };
+    ($thread:expr, $result:expr) => {
+        match $result {
+            Ok(document) => document,
+            Err(error) => {
+                let message = error.to_string();
+                let _ = $thread.queue(move |mut controller| {
+                    controller
+                        .as_mut()
+                        .set_message_kind(cxx_qt_lib::QString::from("error"));
+                    controller
+                        .as_mut()
+                        .set_message(cxx_qt_lib::QString::from(&message));
+                });
+                return Default::default();
+            }
+        }
+    };
+}
+pub(crate) use checked_document;
+
 #[cxx_qt::bridge]
 pub mod qobject {
     impl cxx_qt::Threading for GenomeController {}
@@ -649,8 +687,14 @@ impl qobject::GenomeController {
     }
 
     pub fn accessible_page(&self, page: i32) -> QString {
-        let result =
-            self.with_doc(|s, d| basecraft_viewmodel::accessible::sequence(s.doc(d), page));
+        let access_thread = self.qt_thread();
+        let result = match (&self.rust().session, self.rust().doc) {
+            (Some(s), Some(d)) => {
+                let sequence = crate::bridge::checked_document!(access_thread, s.doc(d));
+                Some(basecraft_viewmodel::accessible::sequence(sequence, page))
+            }
+            _ => None,
+        };
         let value = result.map_or_else(
             || serde_json::json!({"page": 0, "pages": 1, "text": "No document loaded"}),
             |p| serde_json::json!({"page": p.page, "pages": p.pages, "text": p.text}),
@@ -734,22 +778,27 @@ impl qobject::GenomeController {
     }
 
     fn len(&self) -> u64 {
+        let access_thread = self.qt_thread();
         let r = self.rust();
         match (&r.session, r.doc) {
-            (Some(s), Some(d)) => s.doc(d).len(),
+            (Some(s), Some(d)) => crate::bridge::checked_document!(access_thread, s.doc(d)).len(),
             _ => 0,
         }
     }
 
     /// Rebuild the frame and status line.
     fn refresh(mut self: Pin<&mut Self>) {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.doc(doc));
+        }
         let (bytes, status) = {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
             let (Some(session), Some(doc)) = (&r.session, r.doc) else {
                 return;
             };
-            let d = session.doc(doc);
+            let d = crate::bridge::checked_document!(access_thread, session.doc(doc));
             r.find
                 .invalidate(&crate::find_bridge::document_key(session, doc));
             r.view.build(d, &r.theme, &mut r.scratch);
@@ -773,7 +822,7 @@ impl qobject::GenomeController {
             let (Some(session), Some(doc)) = (&r.session, r.doc) else {
                 return;
             };
-            let d = session.doc(doc);
+            let d = crate::bridge::checked_document!(access_thread, session.doc(doc));
             let key = format!("{}:{}:{:?}", session.id(), d.version(), r.theme);
             let content = r.overview_cache.get(key.clone(), || {
                 basecraft_viewmodel::overview::sequence(d, &r.theme)
@@ -846,6 +895,9 @@ impl qobject::GenomeController {
         publication: bool,
         png_width: Option<f64>,
     ) {
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.doc(doc));
+        }
         if !(0..=2).contains(&scope) {
             self.fail("Unknown figure scope");
             return;
@@ -867,7 +919,7 @@ impl qobject::GenomeController {
                 r.theme.clone()
             };
             let mut view = r.view.clone();
-            let sequence = session.doc(doc);
+            let sequence = session.doc(doc)?;
             if scope == 2 {
                 view.fit_doc(sequence);
             }
@@ -923,6 +975,10 @@ impl qobject::GenomeController {
         text: &QString,
         root: &QString,
     ) -> QString {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.doc(doc));
+        }
         if self.rust().session.is_some() || self.rust().busy {
             return QString::from("This controller already owns a document");
         }
@@ -945,7 +1001,10 @@ impl qobject::GenomeController {
         {
             let mut r = self.as_mut().rust_mut();
             r.view.mode = Mode::Wrapped;
-            r.view.fit_doc(session.doc(doc));
+            r.view.fit_doc(crate::bridge::checked_document!(
+                access_thread,
+                session.doc(doc)
+            ));
             r.session = Some(session);
             r.doc = Some(doc);
         }
@@ -956,6 +1015,10 @@ impl qobject::GenomeController {
     }
 
     pub fn open_file(mut self: Pin<&mut Self>, path: &QString) -> bool {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.doc(doc));
+        }
         if self.rust().busy {
             self.fail("Wait for the running operation before replacing this document");
             return false;
@@ -972,7 +1035,7 @@ impl qobject::GenomeController {
         match session.open(&path) {
             Ok(doc) => {
                 let (name, len, circular) = {
-                    let d = session.doc(doc);
+                    let d = crate::bridge::checked_document!(access_thread, session.doc(doc));
                     (d.name.clone(), d.len(), d.circular)
                 };
                 {
@@ -982,7 +1045,10 @@ impl qobject::GenomeController {
                     // the other views are a switch away.
                     let _ = (circular, len);
                     r.view.mode = Mode::Wrapped;
-                    r.view.fit_doc(session.doc(doc));
+                    r.view.fit_doc(crate::bridge::checked_document!(
+                        access_thread,
+                        session.doc(doc)
+                    ));
                     r.session = Some(session);
                     r.doc = Some(doc);
                 }
@@ -1019,6 +1085,10 @@ impl qobject::GenomeController {
 
     #[allow(clippy::cast_possible_truncation)]
     pub fn resize(mut self: Pin<&mut Self>, width: f64, height: f64) {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.doc(doc));
+        }
         let len = self.len();
         {
             let mut r = self.as_mut().rust_mut();
@@ -1029,7 +1099,8 @@ impl qobject::GenomeController {
             if r.view.auto_fit
                 && let (Some(s), Some(d)) = (&r.session, r.doc)
             {
-                r.view.fit_doc(s.doc(d));
+                r.view
+                    .fit_doc(crate::bridge::checked_document!(access_thread, s.doc(d)));
             }
         }
         self.refresh();
@@ -1063,6 +1134,10 @@ impl qobject::GenomeController {
 
     #[allow(clippy::cast_possible_truncation)]
     pub fn press(mut self: Pin<&mut Self>, x: f64, y: f64, modifiers: i32) {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.doc(doc));
+        }
         let len = self.len();
         self.as_mut()
             .rust_mut()
@@ -1072,7 +1147,7 @@ impl qobject::GenomeController {
         if let Some(id) = self.rust().view.selected {
             let reverse = self
                 .with_doc(|s, d| {
-                    s.doc(d)
+                    crate::bridge::checked_document!(access_thread, s.doc(d))
                         .feature(id)
                         .map(|f| f.location.strand() == Strand::Reverse)
                 })
@@ -1086,10 +1161,15 @@ impl qobject::GenomeController {
 
     /// A selected multi-part annotation selects its parts.
     fn adopt_parts(mut self: Pin<&mut Self>) {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.doc(doc));
+        }
         let mut r = self.as_mut().rust_mut();
         let r = &mut *r;
         if let (Some(s), Some(d)) = (&r.session, r.doc) {
-            r.view.adopt_feature_parts(s.doc(d));
+            r.view
+                .adopt_feature_parts(crate::bridge::checked_document!(access_thread, s.doc(d)));
         }
     }
 
@@ -1167,11 +1247,16 @@ impl qobject::GenomeController {
     }
 
     pub fn fit(mut self: Pin<&mut Self>) {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.doc(doc));
+        }
         {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
             if let (Some(s), Some(d)) = (&r.session, r.doc) {
-                r.view.fit_doc(s.doc(d));
+                r.view
+                    .fit_doc(crate::bridge::checked_document!(access_thread, s.doc(d)));
             }
         }
         self.refresh();
@@ -1355,6 +1440,10 @@ impl qobject::GenomeController {
     }
 
     fn clamp_cursor(mut self: Pin<&mut Self>) {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.doc(doc));
+        }
         let len = self.len();
         let mut r = self.as_mut().rust_mut();
         if let Some(c) = r.view.cursor {
@@ -1364,7 +1453,9 @@ impl qobject::GenomeController {
             r.view.selection = (a.min(len) < b.min(len)).then(|| (a.min(len), b.min(len)));
         }
         if let (Some(id), Some(session), Some(doc)) = (r.view.selected, &r.session, r.doc)
-            && session.doc(doc).feature(id).is_none()
+            && crate::bridge::checked_document!(access_thread, session.doc(doc))
+                .feature(id)
+                .is_none()
         {
             r.view.selected = None;
         }
@@ -1556,6 +1647,10 @@ impl qobject::GenomeController {
 
     #[allow(clippy::cast_possible_truncation)]
     pub fn context_press(mut self: Pin<&mut Self>, x: f64, y: f64) -> QString {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.doc(doc));
+        }
         let len = self.len();
         self.as_mut()
             .rust_mut()
@@ -1570,7 +1665,7 @@ impl qobject::GenomeController {
         let label = selected
             .and_then(|id| {
                 self.with_doc(|s, d| {
-                    s.doc(d)
+                    crate::bridge::checked_document!(access_thread, s.doc(d))
                         .feature(id)
                         .map(|f| f.label().unwrap_or(&f.kind).to_string())
                 })
@@ -1578,7 +1673,13 @@ impl qobject::GenomeController {
             .flatten()
             .unwrap_or_default();
         let feature_length = selected
-            .and_then(|id| self.with_doc(|s, d| s.doc(d).feature(id).map(|f| f.location.len())))
+            .and_then(|id| {
+                self.with_doc(|s, d| {
+                    crate::bridge::checked_document!(access_thread, s.doc(d))
+                        .feature(id)
+                        .map(|f| f.location.len())
+                })
+            })
             .flatten()
             .unwrap_or(0);
         let info = json!({
@@ -1654,9 +1755,14 @@ impl qobject::GenomeController {
     }
 
     fn feature_bounds(&self, id: i32) -> Option<(u64, u64)> {
+        let access_thread = self.qt_thread();
         let id = FeatureId(u32::try_from(id).ok()?);
-        self.with_doc(|s, d| s.doc(d).feature(id).and_then(|f| f.location.bounds()))
-            .flatten()
+        self.with_doc(|s, d| {
+            crate::bridge::checked_document!(access_thread, s.doc(d))
+                .feature(id)
+                .and_then(|f| f.location.bounds())
+        })
+        .flatten()
     }
 
     pub fn zoom_to_feature(mut self: Pin<&mut Self>, id: i32) {
@@ -1680,12 +1786,13 @@ impl qobject::GenomeController {
     }
 
     pub fn feature_json(&self, id: i32) -> QString {
+        let access_thread = self.qt_thread();
         let Ok(fid) = u32::try_from(id) else {
             return QString::default();
         };
         let out = self
             .with_doc(|s, d| {
-                s.doc(d)
+                crate::bridge::checked_document!(access_thread, s.doc(d))
                     .feature(FeatureId(fid))
                     .map(|f| feature_to_json(id, f))
             })
@@ -1763,8 +1870,9 @@ impl qobject::GenomeController {
     }
 
     pub fn genetic_code(&self) -> i32 {
+        let access_thread = self.qt_thread();
         self.with_doc(|s, d| {
-            s.doc(d)
+            crate::bridge::checked_document!(access_thread, s.doc(d))
                 .features()
                 .filter(|(_, f)| f.kind == "CDS")
                 .find_map(|(_, f)| f.qualifier("transl_table")?.trim().parse().ok())
@@ -1943,6 +2051,7 @@ impl qobject::GenomeController {
     /// The selected bases. A selected annotation is copied as itself:
     /// spliced if it has parts, reverse-complemented on the reverse strand.
     pub fn selection_text(&self) -> QString {
+        let access_thread = self.qt_thread();
         let v = &self.rust().view;
         let Some((a, b)) = v.selection else {
             return QString::default();
@@ -1954,7 +2063,12 @@ impl qobject::GenomeController {
             return self.feature_sequence(id);
         }
         let text = self
-            .with_doc(|s, d| String::from_utf8_lossy(&s.doc(d).read(a, b)).into_owned())
+            .with_doc(|s, d| {
+                String::from_utf8_lossy(
+                    &crate::bridge::checked_document!(access_thread, s.doc(d)).read(a, b),
+                )
+                .into_owned()
+            })
             .unwrap_or_default();
         QString::from(&text)
     }
@@ -2071,13 +2185,18 @@ impl qobject::GenomeController {
         self.extract_range((a, b), &[], false, None)
     }
 
-    pub fn extract_feature(self: Pin<&mut Self>, id: i32) -> bool {
+    pub fn extract_feature(mut self: Pin<&mut Self>, id: i32) -> bool {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.doc(doc));
+        }
         let Ok(fid) = u32::try_from(id) else {
             return false;
         };
         let info = self
             .with_doc(|s, d| {
-                let f = s.doc(d).feature(FeatureId(fid))?;
+                let f = crate::bridge::checked_document!(access_thread, s.doc(d))
+                    .feature(FeatureId(fid))?;
                 let segs: Vec<(u64, u64)> = f
                     .location
                     .segments
@@ -2136,12 +2255,13 @@ impl qobject::GenomeController {
     }
 
     pub fn feature_sequence(&self, id: i32) -> QString {
+        let access_thread = self.qt_thread();
         let Ok(fid) = u32::try_from(id) else {
             return QString::default();
         };
         let text = self
             .with_doc(|s, d| {
-                let doc = s.doc(d);
+                let doc = crate::bridge::checked_document!(access_thread, s.doc(d));
                 let feature = doc.feature(FeatureId(fid))?;
                 basecraft_ops::files::feature_sequence(doc, feature)
                     .ok()
@@ -2183,8 +2303,15 @@ impl qobject::GenomeController {
 
     #[allow(clippy::cast_possible_truncation)]
     pub fn hover(&self, x: f64, y: f64) -> QString {
+        let access_thread = self.qt_thread();
         let text = self
-            .with_doc(|s, d| self.rust().view.hover_text(x as f32, y as f32, s.doc(d)))
+            .with_doc(|s, d| {
+                self.rust().view.hover_text(
+                    x as f32,
+                    y as f32,
+                    crate::bridge::checked_document!(access_thread, s.doc(d)),
+                )
+            })
             .flatten()
             .unwrap_or_default();
         QString::from(&text)
@@ -2226,11 +2353,18 @@ impl qobject::GenomeController {
     }
 
     pub fn step_feature(mut self: Pin<&mut Self>, forward: bool) -> bool {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.doc(doc));
+        }
         let found = {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
             match (&r.session, r.doc) {
-                (Some(s), Some(d)) => r.view.step_feature(s.doc(d), forward),
+                (Some(s), Some(d)) => r.view.step_feature(
+                    crate::bridge::checked_document!(access_thread, s.doc(d)),
+                    forward,
+                ),
                 _ => false,
             }
         };
@@ -2401,24 +2535,32 @@ crate::find_bridge::controller_find!(qobject::GenomeController);
 
 impl qobject::GenomeController {
     fn find_update(mut self: std::pin::Pin<&mut Self>) {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.doc(doc));
+        }
         let mut r = self.as_mut().rust_mut();
         let r = &mut *r;
         let (Some(session), Some(doc)) = (&r.session, r.doc) else {
             return;
         };
         let key = crate::find_bridge::document_key(session, doc);
-        let d = session.doc(doc);
+        let d = crate::bridge::checked_document!(access_thread, session.doc(doc));
         r.find.update(key, || {
             basecraft_viewmodel::find::Input::Sequence(d.clone())
         });
     }
     fn find_reveal(mut self: std::pin::Pin<&mut Self>) {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.doc(doc));
+        }
         let mut r = self.as_mut().rust_mut();
         let r = &mut *r;
         let (Some(session), Some(doc), Some(hit)) = (&r.session, r.doc, r.find.hit()) else {
             return;
         };
-        let d = session.doc(doc);
+        let d = crate::bridge::checked_document!(access_thread, session.doc(doc));
         r.view.reveal(hit.start, d.len());
     }
     fn find_y(&self) -> f32 {

@@ -47,7 +47,7 @@ fn header_import_links_identifies_saves_and_replays() {
         let doc = metadata::open(&mut s, true).unwrap().unwrap();
         assert!(s.is_metadata(doc));
         let plan = metadata::plan_headers(
-            s.metadata(doc),
+            s.metadata(doc).unwrap(),
             "rbcL.fasta",
             &headers(root),
             &pattern(),
@@ -63,7 +63,7 @@ fn header_import_links_identifies_saves_and_replays() {
                 .any(|i| i.kind == "unmatched" && i.message.contains("orphan"))
         );
         metadata::apply_plan(&mut s, doc, plan.changes).unwrap();
-        let meta = s.metadata(doc);
+        let meta = s.metadata(doc).unwrap();
         assert_eq!(
             meta.specimens.rows[1].cells["eventDate"],
             Cell::Missing(MissingReason::NotCollected)
@@ -89,7 +89,7 @@ fn header_import_links_identifies_saves_and_replays() {
         .unwrap();
         // The same import again changes nothing.
         let again = metadata::plan_headers(
-            s.metadata(doc),
+            s.metadata(doc).unwrap(),
             "rbcL.fasta",
             &headers(root),
             &pattern(),
@@ -99,7 +99,8 @@ fn header_import_links_identifies_saves_and_replays() {
         assert!(again.changes.is_empty(), "{:?}", again.changes);
         // A typed edit, undone and redone.
         let change =
-            metadata::cell_change(s.metadata(doc), "HV1", "eventDate", "2019-05-12").unwrap();
+            metadata::cell_change(s.metadata(doc).unwrap(), "HV1", "eventDate", "2019-05-12")
+                .unwrap();
         s.apply(
             doc,
             Op::MetadataEdit {
@@ -114,12 +115,12 @@ fn header_import_links_identifies_saves_and_replays() {
         .unwrap();
         s.undo(doc).unwrap();
         assert_eq!(
-            metadata::cell_text(s.metadata(doc), "HV1", "eventDate"),
+            metadata::cell_text(s.metadata(doc).unwrap(), "HV1", "eventDate"),
             "2019-05"
         );
         s.redo(doc).unwrap();
         assert_eq!(
-            metadata::cell_text(s.metadata(doc), "HV1", "eventDate"),
+            metadata::cell_text(s.metadata(doc).unwrap(), "HV1", "eventDate"),
             "2019-05-12"
         );
         // A refused edit leaves the document and history alone.
@@ -149,8 +150,8 @@ fn header_import_links_identifies_saves_and_replays() {
     );
     let mut s = Session::unlogged(root);
     let doc = metadata::open(&mut s, false).unwrap().unwrap();
-    assert_eq!(s.metadata_notices(doc), Vec::<String>::new());
-    let meta = s.metadata(doc);
+    assert_eq!(s.metadata_notices(doc).unwrap(), Vec::<String>::new());
+    let meta = s.metadata(doc).unwrap();
     assert_eq!(
         meta.specimens.rows[0].cells["eventDate"],
         Cell::Date(PartialDate::parse("2019-05-12").unwrap())
@@ -175,7 +176,7 @@ fn spreadsheet_import_flags_conflicts_duplicates_and_bad_values() {
     let mut s = Session::unlogged(root);
     let doc = metadata::open(&mut s, true).unwrap().unwrap();
     let first = metadata::plan_headers(
-        s.metadata(doc),
+        s.metadata(doc).unwrap(),
         "rbcL.fasta",
         &headers(root),
         &pattern(),
@@ -189,7 +190,7 @@ fn spreadsheet_import_flags_conflicts_duplicates_and_bad_values() {
     )
     .unwrap();
     let sheet = metadata::read_sheet(&root.join("sheet.csv")).unwrap();
-    let mapping = metadata::guess_mapping(s.metadata(doc), &sheet.headers);
+    let mapping = metadata::guess_mapping(s.metadata(doc).unwrap(), &sheet.headers);
     assert_eq!(mapping["specimen_id"], FieldTarget::Specimen);
     assert_eq!(
         mapping["Country"],
@@ -199,7 +200,7 @@ fn spreadsheet_import_flags_conflicts_duplicates_and_bad_values() {
     );
     assert_eq!(mapping["notes"], FieldTarget::Ignore);
     let plan = metadata::plan_sheet(
-        s.metadata(doc),
+        s.metadata(doc).unwrap(),
         &sheet,
         &mapping,
         None,
@@ -218,7 +219,7 @@ fn spreadsheet_import_flags_conflicts_duplicates_and_bad_values() {
     assert!(plan.changes.columns.iter().any(|c| c.name == "country"));
     assert_eq!(plan.changes.cells.len(), 2);
     let overwrite = metadata::plan_sheet(
-        s.metadata(doc),
+        s.metadata(doc).unwrap(),
         &sheet,
         &mapping,
         None,
@@ -238,10 +239,17 @@ fn spreadsheet_import_flags_conflicts_duplicates_and_bad_values() {
     assert!(overwrite.issues.iter().any(|i| i.kind == "invalid"));
     metadata::apply_plan(&mut s, doc, overwrite.changes).unwrap();
     assert_eq!(
-        metadata::cell_text(s.metadata(doc), "HV1", "eventDate"),
+        metadata::cell_text(s.metadata(doc).unwrap(), "HV1", "eventDate"),
         "2018"
     );
-    assert!(s.metadata(doc).specimens.rows.iter().any(|r| r.id == "HV3"));
+    assert!(
+        s.metadata(doc)
+            .unwrap()
+            .specimens
+            .rows
+            .iter()
+            .any(|r| r.id == "HV3")
+    );
 }
 
 #[test]
@@ -256,7 +264,7 @@ fn template_round_trips_through_import() {
         .map(|(id, _)| ("rbcL.fasta".to_string(), id))
         .collect();
     let path = root.join("template.ods");
-    metadata::write_template(s.metadata(doc), &records, &path).unwrap();
+    metadata::write_template(s.metadata(doc).unwrap(), &records, &path).unwrap();
     let mut sheet = metadata::read_sheet(&path).unwrap();
     assert_eq!(
         &sheet.headers[..4],
@@ -275,9 +283,9 @@ fn template_round_trips_through_import() {
         sheet.rows[row][organism] = "Codium fragile".into();
         sheet.rows[row][date] = "2020-01".into();
     }
-    let mapping = metadata::guess_mapping(s.metadata(doc), &sheet.headers);
+    let mapping = metadata::guess_mapping(s.metadata(doc).unwrap(), &sheet.headers);
     let plan = metadata::plan_sheet(
-        s.metadata(doc),
+        s.metadata(doc).unwrap(),
         &sheet,
         &mapping,
         None,
@@ -289,7 +297,7 @@ fn template_round_trips_through_import() {
     assert_eq!(plan.changes.links.len(), 2);
     assert!(plan.issues.iter().any(|i| i.kind == "duplicate"));
     metadata::apply_plan(&mut s, doc, plan.changes).unwrap();
-    let source = basecraft_docs::metadata::insdc_source(s.metadata(doc), "A1").unwrap();
+    let source = basecraft_docs::metadata::insdc_source(s.metadata(doc).unwrap(), "A1").unwrap();
     let map: BTreeMap<_, _> = source.qualifiers.into_iter().collect();
     assert_eq!(map["organism"], "Codium fragile");
     assert_eq!(map["collection_date"], "2020-01");
@@ -311,8 +319,8 @@ fn outside_edits_future_versions_and_unknown_fields() {
     {
         let mut s = Session::unlogged(root);
         let doc = s.open(&manifest).unwrap();
-        assert_eq!(s.metadata_notices(doc).len(), 1);
-        assert_eq!(s.metadata(doc).specimens.rows[0].id, "HV9");
+        assert_eq!(s.metadata_notices(doc).unwrap().len(), 1);
+        assert_eq!(s.metadata(doc).unwrap().specimens.rows[0].id, "HV9");
         s.apply(
             doc,
             Op::MetadataEdit {
@@ -332,7 +340,7 @@ fn outside_edits_future_versions_and_unknown_fields() {
     assert_eq!(saved["later_feature"]["kept"], true);
     let mut s = Session::unlogged(root);
     let doc = s.open(&manifest).unwrap();
-    assert_eq!(s.metadata_notices(doc), Vec::<String>::new());
+    assert_eq!(s.metadata_notices(doc).unwrap(), Vec::<String>::new());
     drop(s);
     // An undeclared column or a bad value is refused with its location.
     std::fs::write(
@@ -407,7 +415,7 @@ fn document_interface_preserves_metadata_bytes_and_rejections() {
     std::fs::write(&manifest, serde_json::to_vec(&value).unwrap()).unwrap();
     let mut s = Session::new(root);
     let doc = s.open(&manifest).unwrap();
-    let before = s.metadata(doc).clone();
+    let before = s.metadata(doc).unwrap().clone();
     let edit = MetadataEdit::Apply {
         changes: ChangeSet {
             specimens: vec!["roster-A".into(), "roster-B".into()],
@@ -481,11 +489,11 @@ fn document_interface_preserves_metadata_bytes_and_rejections() {
         "{wrong}"
     );
     assert_eq!(s.revision(doc), revision);
-    assert_eq!(s.metadata(doc), &expected);
+    assert_eq!(s.metadata(doc).unwrap(), &expected);
     s.undo(doc).unwrap();
-    assert_eq!(s.metadata(doc), &before);
+    assert_eq!(s.metadata(doc).unwrap(), &before);
     s.redo(doc).unwrap();
-    assert_eq!(s.metadata(doc), &expected);
+    assert_eq!(s.metadata(doc).unwrap(), &expected);
     s.save(doc, None).unwrap();
     for (path, bytes) in metadata::files(&manifest).iter().zip(&expected_bytes) {
         assert_eq!(&std::fs::read(path).unwrap(), bytes);
@@ -493,7 +501,7 @@ fn document_interface_preserves_metadata_bytes_and_rejections() {
     drop(s);
     let mut reopened = Session::unlogged(root);
     let doc = reopened.open(&manifest).unwrap();
-    assert_eq!(reopened.metadata(doc), &expected);
+    assert_eq!(reopened.metadata(doc).unwrap(), &expected);
     let report = replay::replay(root).unwrap();
     assert!(report.ok(), "{:#?}", report.problems);
 }
@@ -504,7 +512,7 @@ fn metadata_partial_writer_failure_retains_payload_and_allows_retry() {
     let root = dir.path();
     let mut s = Session::new(root);
     let doc = metadata::open(&mut s, true).unwrap().unwrap();
-    let before = s.metadata(doc).clone();
+    let before = s.metadata(doc).unwrap().clone();
     metadata::apply_plan(
         &mut s,
         doc,
@@ -514,7 +522,7 @@ fn metadata_partial_writer_failure_retains_payload_and_allows_retry() {
         },
     )
     .unwrap();
-    let expected = s.metadata(doc).clone();
+    let expected = s.metadata(doc).unwrap().clone();
     let bytes = metadata::encode(&expected).unwrap();
     let target = root.join("copy").join(metadata::MANIFEST);
     let paths = metadata::files(&target);
@@ -527,14 +535,14 @@ fn metadata_partial_writer_failure_retains_payload_and_allows_retry() {
         matches!(error, basecraft_ops::Error::Invalid(ref text) if text.starts_with("partial metadata save: replaced ")),
         "{error}"
     );
-    assert_eq!(s.metadata(doc), &expected);
+    assert_eq!(s.metadata(doc).unwrap(), &expected);
     assert_eq!(
         std::fs::read(paths.last().unwrap()).unwrap(),
         *bytes.last().unwrap()
     );
     assert!(!target.exists());
     s.undo(doc).unwrap();
-    assert_eq!(s.metadata(doc), &before);
+    assert_eq!(s.metadata(doc).unwrap(), &before);
     s.redo(doc).unwrap();
     std::fs::remove_dir(blocked).unwrap();
     s.save(doc, Some(&target)).unwrap();

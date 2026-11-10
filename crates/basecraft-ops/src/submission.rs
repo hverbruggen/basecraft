@@ -248,7 +248,7 @@ pub fn save_inclusion_preset(session: &mut Session, rule: InclusionRule) -> Resu
     inclusion_preset_edit(&ProjectMetadata::default(), rule.clone())?;
     let doc =
         crate::metadata::open(session, true)?.ok_or_else(|| invalid("No metadata document"))?;
-    let edit = inclusion_preset_edit(session.metadata(doc), rule)?;
+    let edit = inclusion_preset_edit(session.metadata(doc)?, rule)?;
     session.apply(
         doc,
         Op::MetadataEdit {
@@ -260,10 +260,7 @@ pub fn save_inclusion_preset(session: &mut Session, rule: InclusionRule) -> Resu
 }
 
 fn checked(session: &Session, doc: DocId) -> Result<&Submission> {
-    if !session.is_submission(doc) {
-        return Err(invalid("choose a submission document"));
-    }
-    Ok(session.submission(doc))
+    session.submission(doc)
 }
 
 /// Read every record of an aligned FASTA file as rows.

@@ -12,6 +12,13 @@ pub enum Error {
     UnknownFormat(PathBuf),
     #[error("{0} contains no records")]
     Empty(PathBuf),
+    #[error("unknown document {id:?}")]
+    UnknownDocument { id: crate::DocId },
+    #[error("document {id:?} requires kind {expected:?}")]
+    WrongKind {
+        id: crate::DocId,
+        expected: crate::files::Kind,
+    },
     #[error("invalid operation: {0}")]
     Invalid(String),
     #[error("{0}")]
@@ -30,4 +37,22 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 pub(crate) fn invalid(msg: impl Into<String>) -> Error {
     Error::Invalid(msg.into())
+}
+
+impl Error {
+    /// Stable category for callers; message text is for people, not dispatch.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::UnknownDocument { .. } => "unknown_document",
+            Self::WrongKind { .. } => "wrong_document_kind",
+            Self::Io(_) => "io",
+            Self::Format(_) => "format",
+            Self::Json(_) => "json",
+            Self::UnknownFormat(_) => "unknown_format",
+            Self::Empty(_) => "empty_document",
+            Self::Invalid(_) => "invalid_operation",
+            Self::EvidenceConflict(_) => "evidence_conflict",
+            Self::NothingTo(_) => "nothing_to_do",
+        }
+    }
 }

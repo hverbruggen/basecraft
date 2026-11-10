@@ -13,8 +13,13 @@ fn edits_undo_save_reopen_and_replay_preserve_lineage() {
     std::fs::write(&path, SPART).unwrap();
     let mut session = Session::new(dir.path());
     let doc = session.open(&path).unwrap();
-    assert_eq!(session.delimitation(doc).hypotheses[2].unassigned.len(), 2);
-    let initial = session.delimitation(doc).clone();
+    assert_eq!(
+        session.delimitation(doc).unwrap().hypotheses[2]
+            .unassigned
+            .len(),
+        2
+    );
+    let initial = session.delimitation(doc).unwrap().clone();
     let apply = |session: &mut Session, edit| {
         session
             .apply(
@@ -33,7 +38,12 @@ fn edits_undo_save_reopen_and_replay_preserve_lineage() {
             name: "Edited".into(),
         },
     );
-    let derived = session.delimitation(doc).hypotheses.last().unwrap();
+    let derived = session
+        .delimitation(doc)
+        .unwrap()
+        .hypotheses
+        .last()
+        .unwrap();
     assert_eq!(derived.scores, []);
     assert!(derived.groups.iter().all(|g| g.scores.is_empty()));
     apply(
@@ -51,7 +61,7 @@ fn edits_undo_save_reopen_and_replay_preserve_lineage() {
         },
     );
     assert_eq!(
-        session.delimitation(doc).hypotheses[0].name,
+        session.delimitation(doc).unwrap().hypotheses[0].name,
         "Imported, renamed"
     );
     apply(
@@ -97,7 +107,7 @@ fn edits_undo_save_reopen_and_replay_preserve_lineage() {
             label: "Together".into(),
         },
     );
-    let mut cut = session.delimitation(doc).hypotheses[3].clone();
+    let mut cut = session.delimitation(doc).unwrap().hypotheses[3].clone();
     cut.id = "cut".into();
     cut.origin = HypothesisOrigin::ManualCut;
     apply(
@@ -108,23 +118,23 @@ fn edits_undo_save_reopen_and_replay_preserve_lineage() {
             boundary: "node_age_le_threshold".into(),
         },
     );
-    let mut new = session.delimitation(doc).hypotheses[3].clone();
+    let mut new = session.delimitation(doc).unwrap().hypotheses[3].clone();
     new.id = "manual".into();
     new.origin = HypothesisOrigin::Manual;
     apply(&mut session, Edit::Add { hypothesis: new });
-    let mut view = session.delimitation(doc).view.clone();
+    let mut view = session.delimitation(doc).unwrap().view.clone();
     view.visible = vec!["edited".into(), "partition-2".into()];
     view.selected = ["a".into(), "d".into()].into();
     apply(&mut session, Edit::SetView { view });
-    let expected = session.delimitation(doc).clone();
+    let expected = session.delimitation(doc).unwrap().clone();
     for _ in 0..11 {
         session.undo(doc).unwrap();
     }
-    assert_eq!(session.delimitation(doc), &initial);
+    assert_eq!(session.delimitation(doc).unwrap(), &initial);
     for _ in 0..11 {
         session.redo(doc).unwrap();
     }
-    assert_eq!(session.delimitation(doc), &expected);
+    assert_eq!(session.delimitation(doc).unwrap(), &expected);
     for status in [
         JobStatus::Failed,
         JobStatus::Cancelled,
@@ -149,7 +159,7 @@ fn edits_undo_save_reopen_and_replay_preserve_lineage() {
     session.save(doc, None).unwrap();
     let mut reopened = Session::unlogged(dir.path());
     let copy = reopened.open(&path).unwrap();
-    assert_eq!(reopened.delimitation(copy), &expected);
+    assert_eq!(reopened.delimitation(copy).unwrap(), &expected);
     drop(session);
     let report = replay::replay(dir.path()).unwrap();
     assert!(report.ok(), "{:?}", report.problems);
@@ -159,7 +169,7 @@ fn derived_group(
     session: &Session,
     doc: basecraft_ops::DocId,
 ) -> basecraft_protocol::delimitation::Group {
-    session.delimitation(doc).hypotheses[3].groups[0].clone()
+    session.delimitation(doc).unwrap().hypotheses[3].groups[0].clone()
 }
 
 #[test]
@@ -225,7 +235,10 @@ fn save_as_xml_replays_the_selected_exchange_format() {
     session.save(doc, Some(&xml)).unwrap();
     let mut reopened = Session::unlogged(dir.path());
     let copy = reopened.open(&xml).unwrap();
-    assert_eq!(reopened.delimitation(copy), session.delimitation(doc));
+    assert_eq!(
+        reopened.delimitation(copy).unwrap(),
+        session.delimitation(doc).unwrap()
+    );
     drop(session);
     let report = replay::replay(dir.path()).unwrap();
     assert!(report.ok(), "{:?}", report.problems);
@@ -243,6 +256,7 @@ fn combine_keeps_only_selected_hypotheses_and_remove_guards_lineage() {
     let doc = session.open(&first).unwrap();
     let ids: Vec<String> = session
         .delimitation(doc)
+        .unwrap()
         .hypotheses
         .iter()
         .map(|h| h.id.clone())
@@ -265,7 +279,7 @@ fn combine_keeps_only_selected_hypotheses_and_remove_guards_lineage() {
         Some(&keep),
     )
     .unwrap();
-    let combined = session.delimitation(doc).clone();
+    let combined = session.delimitation(doc).unwrap().clone();
     assert_eq!(combined.hypotheses.len(), ids.len() + 1);
     let added = combined.hypotheses.last().unwrap();
     assert_eq!(
@@ -295,7 +309,7 @@ fn combine_keeps_only_selected_hypotheses_and_remove_guards_lineage() {
             hypotheses: ["copy".to_string(), ids[0].clone()].into(),
         },
     );
-    let work = session.delimitation(doc);
+    let work = session.delimitation(doc).unwrap();
     assert!(
         !work
             .hypotheses
@@ -317,9 +331,9 @@ fn combine_is_atomic_undoable_and_replayable() {
     std::fs::write(&second, SPART).unwrap();
     let mut session = Session::new(dir.path());
     let doc = session.open(&first).unwrap();
-    let original = session.delimitation(doc).clone();
+    let original = session.delimitation(doc).unwrap().clone();
     basecraft_ops::delimitation::combine(&mut session, doc, std::slice::from_ref(&second)).unwrap();
-    let combined = session.delimitation(doc).clone();
+    let combined = session.delimitation(doc).unwrap().clone();
     assert_eq!(combined.hypotheses.len(), original.hypotheses.len() * 2);
     assert_eq!(
         combined.view.visible,
@@ -339,9 +353,9 @@ fn combine_is_atomic_undoable_and_replayable() {
         assert!(!original.hypotheses.iter().any(|h| h.id == hypothesis.id));
     }
     session.undo(doc).unwrap();
-    assert_eq!(session.delimitation(doc), &original);
+    assert_eq!(session.delimitation(doc).unwrap(), &original);
     session.redo(doc).unwrap();
-    assert_eq!(session.delimitation(doc), &combined);
+    assert_eq!(session.delimitation(doc).unwrap(), &combined);
     let output = dir.path().join("combined.spart");
     session.save(doc, Some(&output)).unwrap();
     assert_eq!(
@@ -362,9 +376,9 @@ fn combine_rejects_a_bad_later_source_without_importing_earlier_sources() {
     std::fs::write(&bad, "not a species hypothesis file").unwrap();
     let mut session = Session::new(dir.path());
     let doc = session.open(&first).unwrap();
-    let original = session.delimitation(doc).clone();
+    let original = session.delimitation(doc).unwrap().clone();
     assert!(basecraft_ops::delimitation::combine(&mut session, doc, &[first, bad]).is_err());
-    assert_eq!(session.delimitation(doc), &original);
+    assert_eq!(session.delimitation(doc).unwrap(), &original);
 }
 
 #[test]
@@ -393,14 +407,14 @@ fn combine_preserves_parent_mapping_and_rejects_mismatched_specimens() {
         .unwrap();
     source.save(input, None).unwrap();
     let doc = source.open(&first).unwrap();
-    let original = source.delimitation(doc).clone();
+    let original = source.delimitation(doc).unwrap().clone();
     assert!(
         basecraft_ops::delimitation::combine(&mut source, doc, &[second.clone(), mismatch])
             .is_err()
     );
-    assert_eq!(source.delimitation(doc), &original);
+    assert_eq!(source.delimitation(doc).unwrap(), &original);
     basecraft_ops::delimitation::combine(&mut source, doc, &[second]).unwrap();
-    let imported = &source.delimitation(doc).hypotheses[original.hypotheses.len()..];
+    let imported = &source.delimitation(doc).unwrap().hypotheses[original.hypotheses.len()..];
     assert_eq!(
         imported.last().unwrap().parent.as_ref(),
         Some(&imported[0].id)
@@ -454,7 +468,7 @@ fn hidden_workspace_moves_with_its_folder_and_passive_open_writes_nothing() {
         basecraft_ops::files::tree_sidecar(&path).starts_with(root.join(".basecraft/analyses-v1"))
     );
     session.undo(doc).unwrap();
-    assert_eq!(session.delimitation(doc).view.display_tree, None);
+    assert_eq!(session.delimitation(doc).unwrap().view.display_tree, None);
     session.redo(doc).unwrap();
     drop(session);
     let replay = replay::replay(&root).unwrap();
@@ -648,6 +662,7 @@ fn combined_workspace_move_and_complete_export_keep_declared_source_evidence() {
     session.save(doc, Some(&canonical)).unwrap();
     let expected = session
         .delimitation(doc)
+        .unwrap()
         .hypotheses
         .iter()
         .map(|h| h.groups.clone())

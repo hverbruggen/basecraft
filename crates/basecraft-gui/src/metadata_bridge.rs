@@ -295,9 +295,17 @@ impl qobject::MetadataController {
     }
 
     fn refresh(mut self: Pin<&mut Self>) {
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.metadata(doc));
+        }
         let (table, available, undo, redo) = match (&self.rust().session, self.rust().doc) {
             (Some(session), Some(doc)) => (
-                table_json(Some(session.metadata(doc)), session.metadata_notices(doc)),
+                table_json(
+                    Some(crate::bridge::checked_document!(sync self,
+                        session.metadata(doc)
+                    )),
+                    crate::bridge::checked_document!(sync self, session.metadata_notices(doc)),
+                ),
                 true,
                 session.can_undo(doc),
                 session.can_redo(doc),
@@ -439,15 +447,18 @@ impl qobject::MetadataController {
     }
 
     pub fn set_cell(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         specimen: &QString,
         column: &QString,
         text: &QString,
     ) -> bool {
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.metadata(doc));
+        }
         let (specimen, column, text) = (specimen.to_string(), column.to_string(), text.to_string());
         let change = match self.rust().current() {
             Ok((session, doc)) => {
-                let meta = session.metadata(doc);
+                let meta = crate::bridge::checked_document!(sync self, session.metadata(doc));
                 if metadata::cell_text(meta, &specimen, &column) == text.trim() {
                     return true;
                 }
@@ -528,11 +539,14 @@ impl qobject::MetadataController {
     }
 
     /// Record a new identification. An existing taxon of that name is reused.
-    pub fn identify(self: Pin<&mut Self>, specimen: &QString, name: &QString) -> bool {
+    pub fn identify(mut self: Pin<&mut Self>, specimen: &QString, name: &QString) -> bool {
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.metadata(doc));
+        }
         let (specimen, name) = (specimen.to_string(), name.to_string().trim().to_string());
         let changes = match self.rust().current() {
             Ok((session, doc)) => {
-                let meta = session.metadata(doc);
+                let meta = crate::bridge::checked_document!(sync self, session.metadata(doc));
                 let existing = basecraft_docs::metadata::taxon_by_name(meta, &name);
                 let current = basecraft_docs::metadata::current_identification(meta, &specimen);
                 if existing.is_some_and(|t| current.is_some_and(|i| i.taxon == t.id)) {
@@ -700,9 +714,13 @@ impl qobject::MetadataController {
             Err(error) => return qs(&json!({"error": error.to_string()})),
         };
         let empty = ProjectMetadata::default();
-        let meta = self
-            .current()
-            .map_or(&empty, |(session, doc)| session.metadata(doc));
+        let meta = match self.current() {
+            Ok((session, doc)) => match session.metadata(doc) {
+                Ok(metadata) => metadata,
+                Err(error) => return qs(&json!({"error": error.to_string()})),
+            },
+            Err(_) => &empty,
+        };
         let remembered = meta.import.spreadsheet_mappings.iter().rev().find(|m| {
             sheet
                 .headers
@@ -761,6 +779,9 @@ impl qobject::MetadataController {
     /// Inclusion presets belong to this already-open metadata owner, keeping its
     /// undo stack, dirty state and accepted disk revision coherent with specimen edits.
     pub fn inclusion_presets(mut self: Pin<&mut Self>, save: &QString) -> QString {
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.metadata(doc));
+        }
         if !save.is_empty() {
             let planned = (|| -> Result<_, String> {
                 let rule: basecraft_protocol::submission::InclusionRule =
@@ -780,8 +801,11 @@ impl qobject::MetadataController {
                 return qs(&json!({"error": self.rust().message.to_string()}));
             }
             let edit = self.rust().current().and_then(|(session, doc)| {
-                basecraft_ops::submission::inclusion_preset_edit(session.metadata(doc), rule)
-                    .map_err(|e| e.to_string())
+                basecraft_ops::submission::inclusion_preset_edit(
+                    session.metadata(doc).map_err(|e| e.to_string())?,
+                    rule,
+                )
+                .map_err(|e| e.to_string())
             });
             match edit {
                 Ok(edit) => {
@@ -794,13 +818,19 @@ impl qobject::MetadataController {
                 Err(error) => return qs(&json!({"error": error})),
             }
         }
-        self.rust().current().map_or_else(
-            |_| qs(&json!([])),
-            |(session, doc)| qs(&json!(session.metadata(doc).import.inclusion_rules)),
-        )
+        match self.rust().current() {
+            Ok((session, doc)) => {
+                let metadata = crate::bridge::checked_document!(sync self, session.metadata(doc));
+                qs(&json!(metadata.import.inclusion_rules))
+            }
+            Err(_) => qs(&json!([])),
+        }
     }
 
     pub fn apply_plan(mut self: Pin<&mut Self>, remember: &QString) -> bool {
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.metadata(doc));
+        }
         let Some((plan, source)) = self.as_mut().rust_mut().pending.take() else {
             self.report("error", "There is no import to apply");
             return false;
@@ -816,7 +846,9 @@ impl qobject::MetadataController {
         if !name.is_empty()
             && let Ok((session, doc)) = self.rust().current()
         {
-            let mut settings = session.metadata(doc).import.clone();
+            let mut settings = crate::bridge::checked_document!(sync self, session.metadata(doc))
+                .import
+                .clone();
             match source {
                 PlanSource::Headers(mut pattern) => {
                     pattern.name.clone_from(&name);

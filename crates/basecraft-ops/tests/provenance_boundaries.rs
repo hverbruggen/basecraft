@@ -534,5 +534,5 @@ fn interrupted_tree_metadata_save_is_explicit_and_never_reuses_old_semantics() {
         std::fs::read_to_string(&original).unwrap(),
         "((a,b)90,c);\n"
     );
-    assert!(session.tree(doc).to_newick().contains("new-a"));
+    assert!(session.tree(doc).unwrap().to_newick().contains("new-a"));
 }

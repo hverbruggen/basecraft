@@ -58,7 +58,7 @@ fn finds_orfs_and_maps_them_onto_a_newer_version() {
     let dir = tempfile::tempdir().unwrap();
     let mut session = Session::unlogged(dir.path());
     let doc = session.open(&record(dir.path())).unwrap();
-    let snap = Snapshot::of(session.doc_key(doc), session.doc(doc)).unwrap();
+    let snap = Snapshot::of(session.doc_key(doc), session.doc(doc).unwrap()).unwrap();
 
     let result = p
         .invoke("find_orfs", json!({ "min_codons": 100 }), Some(&snap))
@@ -87,10 +87,13 @@ fn finds_orfs_and_maps_them_onto_a_newer_version() {
     };
     let report = apply_proposals(&mut session, doc, snap.version, result.ops, &actor).unwrap();
     assert_eq!((report.applied, report.dropped), (1, 0));
-    let (_, f) = session.doc(doc).features().last().unwrap();
+    let (_, f) = session.doc(doc).unwrap().features().last().unwrap();
     let seg = &f.location.segments[0];
     assert_eq!((seg.start, seg.end), (15, 15 + 366));
-    assert_eq!(&session.doc(doc).read(seg.start, seg.start + 3), b"ATG");
+    assert_eq!(
+        &session.doc(doc).unwrap().read(seg.start, seg.start + 3),
+        b"ATG"
+    );
 }
 
 #[test]

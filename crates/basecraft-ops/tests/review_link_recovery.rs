@@ -32,13 +32,13 @@ fn guarded_partial_save_supports_retry_and_manual_intended_recovery() {
                 AlignmentLink::create(&input, &source, &source, 7, true, None).unwrap();
             }
             if mode == 2 {
-                AlignmentLink::associate(&input, session.tree(doc), &view).unwrap();
+                AlignmentLink::associate(&input, session.tree(doc).unwrap(), &view).unwrap();
             }
             AlignmentLink::create(&output, &old, &old, 2, true, None).unwrap();
-            AlignmentLink::associate(&output, session.tree(doc), &old).unwrap();
+            AlignmentLink::associate(&output, session.tree(doc).unwrap(), &old).unwrap();
             let old_link = AlignmentLink::read_view(&output).unwrap();
             let old_snapshot = old_link
-                .checked_snapshot(&output, session.tree(doc))
+                .checked_snapshot(&output, session.tree(doc).unwrap())
                 .unwrap();
             let old_bytes = std::fs::read(&old_snapshot).unwrap();
             let mut referents = Vec::new();
@@ -82,7 +82,7 @@ fn guarded_partial_save_supports_retry_and_manual_intended_recovery() {
                 // Restore the intended presentation and association state for the new main file.
                 // Restoring previous links alone would be wrong after main-file replacement.
                 let mut bytes = Vec::new();
-                files::write_tree_sidecar(session.tree(doc), &mut bytes).unwrap();
+                files::write_tree_sidecar(session.tree(doc).unwrap(), &mut bytes).unwrap();
                 std::fs::write(&presentation, bytes).unwrap();
                 for (key, path) in [
                     ("intended_origin", links::sidecar(&output)),
@@ -102,7 +102,7 @@ fn guarded_partial_save_supports_retry_and_manual_intended_recovery() {
                 assert!(replay.ok(), "{:?}", replay.problems);
             }
             let reopened = files::load_tree(&output).unwrap().doc;
-            assert_eq!(reopened.to_newick(), session.tree(doc).to_newick());
+            assert_eq!(reopened.to_newick(), session.tree(doc).unwrap().to_newick());
             assert_eq!(std::fs::read(&old_snapshot).unwrap(), old_bytes);
             if mode == 0 {
                 assert!(!links::metadata_present(&links::sidecar(&output)).unwrap());

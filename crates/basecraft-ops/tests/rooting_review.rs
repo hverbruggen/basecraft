@@ -16,14 +16,14 @@ fn supported_basal_branch_survives_automatic_root_save_reload() {
         std::fs::write(&path, "(A:1,(B:10,C:1)90:1);").unwrap();
         let mut session = Session::new(dir.path());
         let id = session.open(&path).unwrap();
-        let before = session.tree(id).to_newick();
+        let before = session.tree(id).unwrap().to_newick();
         if session.apply(id, op.clone()).is_err() {
             // Explicit nonmutating refusal is preferable to metadata loss.
-            assert_eq!(session.tree(id).to_newick(), before);
+            assert_eq!(session.tree(id).unwrap().to_newick(), before);
             assert!(!session.can_undo(id));
             continue;
         }
-        let rooted = session.tree(id).clone();
+        let rooted = session.tree(id).unwrap().clone();
         assert!(
             rooted
                 .supports()
@@ -97,12 +97,12 @@ fn refusal_in_recoverable_session_creates_no_tracking_or_history() {
             std::fs::write(&path, text).unwrap();
             let mut session = Session::recoverable_with_paths(dir.path(), &paths).unwrap();
             let id = session.open(&path).unwrap();
-            let before = session.tree(id).to_newick();
+            let before = session.tree(id).unwrap().to_newick();
             let revision = session.record_revision(id).unwrap();
             assert!(!session.recovery_root().exists());
             assert!(session.apply(id, op).is_err());
             session.flush().unwrap();
-            assert_eq!(session.tree(id).to_newick(), before);
+            assert_eq!(session.tree(id).unwrap().to_newick(), before);
             assert_eq!(session.record_revision(id).unwrap(), revision);
             assert!(!session.can_undo(id));
             assert!(!session.can_redo(id));

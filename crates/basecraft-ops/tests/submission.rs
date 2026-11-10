@@ -181,11 +181,11 @@ fn coding_review_frames_undo_save_reload_and_replay() {
             },
         )
         .unwrap();
-        assert_eq!(s.submission(doc).frames.len(), 2);
+        assert_eq!(s.submission(doc).unwrap().frames.len(), 2);
         s.undo(doc).unwrap();
-        assert_eq!(s.submission(doc).frames, Vec::new());
+        assert_eq!(s.submission(doc).unwrap().frames, Vec::new());
         s.redo(doc).unwrap();
-        assert_eq!(s.submission(doc).frames.len(), 2);
+        assert_eq!(s.submission(doc).unwrap().frames.len(), 2);
         // A refused edit changes nothing.
         assert!(
             submission::edit(
@@ -214,8 +214,8 @@ fn coding_review_frames_undo_save_reload_and_replay() {
         .open(&root.join("submissions/rbcL.submission.json"))
         .unwrap();
     assert!(s.is_submission(doc));
-    assert_eq!(s.submission(doc).frames.len(), 2);
-    assert_eq!(s.submission(doc).batch.genetic_code, 11);
+    assert_eq!(s.submission(doc).unwrap().frames.len(), 2);
+    assert_eq!(s.submission(doc).unwrap().batch.genetic_code, 11);
     let report = replay::replay(root).unwrap();
     assert!(report.ok(), "{:#?}", report.problems);
 }
@@ -803,11 +803,17 @@ fn inclusion_preview_is_atomic_stale_safe_undoable_and_replayable() {
         },
     )
     .unwrap();
-    assert!(session.submission(doc).marker_drafts.contains_key("rrna"));
+    assert!(
+        session
+            .submission(doc)
+            .unwrap()
+            .marker_drafts
+            .contains_key("rrna")
+    );
     let plan = submission::plan_inclusion(&session, doc, &inclusion_rule()).unwrap();
     assert_eq!((plan.matching, plan.unresolved, plan.included), (1, 1, 2));
     assert_eq!(plan.rows[0].record, "a_b_HV00145_XX");
-    let before = session.submission(doc).clone();
+    let before = session.submission(doc).unwrap().clone();
     let mut forged = plan.clone();
     forged.rows[0].proposed = Decision::Exclude;
     assert!(
@@ -820,7 +826,7 @@ fn inclusion_preview_is_atomic_stale_safe_undoable_and_replayable() {
         )
         .is_err()
     );
-    assert_eq!(session.submission(doc), &before);
+    assert_eq!(session.submission(doc).unwrap(), &before);
     submission::edit(
         &mut session,
         doc,
@@ -829,16 +835,16 @@ fn inclusion_preview_is_atomic_stale_safe_undoable_and_replayable() {
         },
     )
     .unwrap();
-    let after = session.submission(doc).clone();
+    let after = session.submission(doc).unwrap().clone();
     assert_eq!(
         after.rows.len(),
         2,
         "Unresolved unchanged row must not become explicit"
     );
     session.undo(doc).unwrap();
-    assert_eq!(session.submission(doc), &before);
+    assert_eq!(session.submission(doc).unwrap(), &before);
     session.redo(doc).unwrap();
-    assert_eq!(session.submission(doc), &after);
+    assert_eq!(session.submission(doc).unwrap(), &after);
     assert!(
         submission::edit(
             &mut session,
@@ -863,7 +869,7 @@ fn inclusion_preview_is_atomic_stale_safe_undoable_and_replayable() {
         )
         .is_err()
     );
-    assert_eq!(session.submission(doc), &after);
+    assert_eq!(session.submission(doc).unwrap(), &after);
     assert!(
         replay::replay(root.path()).unwrap().ok(),
         "Historical replay must not read changed source"
@@ -935,7 +941,7 @@ fn cached_review_invalidates_source_metadata_and_relevant_settings() {
     )
     .unwrap();
     let mut cache = submission::ReviewCache::default();
-    let mut sub = session.submission(doc).clone();
+    let mut sub = session.submission(doc).unwrap().clone();
     let first =
         submission::review_submission_cached(root.path(), &sub, &submitter(), &mut cache).unwrap();
     sub.publication = basecraft_protocol::submission::Publication {
@@ -1014,7 +1020,7 @@ fn distinct_details_export_undo_replay_and_save_failure_keep_memory_recoverable(
         title: "Paper study".into(),
         authors: basecraft_docs::submission::parse_authors("O'Neill-Smith, Bob").unwrap(),
     };
-    let before = session.submission(doc).clone();
+    let before = session.submission(doc).unwrap().clone();
     submission::edit(
         &mut session,
         doc,
@@ -1045,28 +1051,28 @@ fn distinct_details_export_undo_replay_and_save_failure_keep_memory_recoverable(
         },
     )
     .unwrap();
-    let changed = session.submission(doc).clone();
+    let changed = session.submission(doc).unwrap().clone();
     let target = root.path().join("submissions/rbcL.submission.json");
     let disk = std::fs::read(&target).unwrap();
     std::fs::remove_file(&target).unwrap();
     std::fs::create_dir(&target).unwrap();
     assert!(session.save(doc, None).is_err());
     assert_eq!(
-        session.submission(doc),
+        session.submission(doc).unwrap(),
         &changed,
         "Failed save must retain recoverable edited state"
     );
     assert_eq!(
-        session.submission(doc).publication,
+        session.submission(doc).unwrap().publication,
         publication,
         "Disabled custom details retained"
     );
     std::fs::remove_dir(&target).unwrap();
     std::fs::write(&target, disk).unwrap();
     session.undo(doc).unwrap();
-    assert!(session.submission(doc).publication_differs);
+    assert!(session.submission(doc).unwrap().publication_differs);
     // Export adds its own typed mapping, so undoing details must retain that mapping.
-    assert_eq!(session.submission(doc).rows, before.rows);
+    assert_eq!(session.submission(doc).unwrap().rows, before.rows);
     assert!(replay::replay(root.path()).unwrap().ok());
 }
 
@@ -1092,18 +1098,21 @@ fn inclusion_presets_reuse_the_open_metadata_owner_and_preserve_pending_edits() 
     let rule = inclusion_rule();
     submission::save_inclusion_preset(&mut session, rule.clone()).unwrap();
     assert_eq!(
-        session.metadata(doc).specimens.rows[0].id,
+        session.metadata(doc).unwrap().specimens.rows[0].id,
         "pending-specimen"
     );
-    assert_eq!(session.metadata(doc).import.inclusion_rules, [rule]);
+    assert_eq!(
+        session.metadata(doc).unwrap().import.inclusion_rules,
+        [rule]
+    );
     let saved = metadata::load(&metadata::manifest_path(root.path())).unwrap();
-    assert_eq!(saved.metadata, *session.metadata(doc));
+    assert_eq!(saved.metadata, *session.metadata(doc).unwrap());
     session.undo(doc).unwrap();
     assert_eq!(
-        session.metadata(doc).specimens.rows[0].id,
+        session.metadata(doc).unwrap().specimens.rows[0].id,
         "pending-specimen"
     );
-    assert_eq!(session.metadata(doc).import.inclusion_rules, []);
+    assert_eq!(session.metadata(doc).unwrap().import.inclusion_rules, []);
     assert!(replay::replay(root.path()).unwrap().ok());
 }
 
@@ -1192,7 +1201,7 @@ fn rejected_edit_and_wrong_save_format_preserve_submission_undo_redo() {
     project(root.path());
     let mut session = Session::new(root.path());
     let doc = rbcl(&mut session);
-    let before = session.submission(doc).clone();
+    let before = session.submission(doc).unwrap().clone();
     let mut changed = before.publication.clone();
     changed.title = "Changed publication for undo compatibility".into();
     submission::edit(
@@ -1203,7 +1212,7 @@ fn rejected_edit_and_wrong_save_format_preserve_submission_undo_redo() {
         },
     )
     .unwrap();
-    let edited = session.submission(doc).clone();
+    let edited = session.submission(doc).unwrap().clone();
     assert_ne!(edited, before);
     let revision = session.revision(doc);
     let hashes = session.save_hashes(doc).unwrap();
@@ -1219,7 +1228,7 @@ fn rejected_edit_and_wrong_save_format_preserve_submission_undo_redo() {
             )
             .is_err()
     );
-    assert_eq!(session.submission(doc), &edited);
+    assert_eq!(session.submission(doc).unwrap(), &edited);
     assert_eq!(session.revision(doc), revision);
     assert_eq!(session.save_hashes(doc).unwrap(), hashes);
 
@@ -1234,17 +1243,17 @@ fn rejected_edit_and_wrong_save_format_preserve_submission_undo_redo() {
         )
         .is_err()
     );
-    assert_eq!(session.submission(doc), &edited);
+    assert_eq!(session.submission(doc).unwrap(), &edited);
     assert_eq!(session.revision(doc), revision);
 
     let wrong_target = root.path().join("wrong.fasta");
     assert!(session.save(doc, Some(&wrong_target)).is_err());
     assert!(!wrong_target.exists());
-    assert_eq!(session.submission(doc), &edited);
+    assert_eq!(session.submission(doc).unwrap(), &edited);
     session.undo(doc).unwrap();
-    assert_eq!(session.submission(doc), &before);
+    assert_eq!(session.submission(doc).unwrap(), &before);
     session.redo(doc).unwrap();
-    assert_eq!(session.submission(doc), &edited);
+    assert_eq!(session.submission(doc).unwrap(), &edited);
     session.save(doc, None).unwrap();
     assert!(replay::replay(root.path()).unwrap().ok());
 }

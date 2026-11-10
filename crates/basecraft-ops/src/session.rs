@@ -242,66 +242,83 @@ impl Session {
         self.actor = actor;
     }
 
-    /// A sequence document. Panics if `id` is an alignment.
-    pub fn doc(&self, id: DocId) -> &SequenceDoc {
-        match &self.docs[id.0].content {
-            Loaded::Sequence(o) => &o.doc,
-            _ => panic!("document {} isn't a sequence", id.0),
+    /// A sequence document. Returns an error for a missing ID or a different document kind.
+    pub fn doc(&self, id: DocId) -> Result<&SequenceDoc> {
+        Ok(&self.sequence_of(id)?.doc)
+    }
+
+    /// An alignment document. Returns an error for a missing ID or a different document kind.
+    pub fn alignment(&self, id: DocId) -> Result<&AlignmentDoc> {
+        match self.content(id)? {
+            Loaded::Alignment(o) => Ok(&o.doc),
+            _ => Err(Error::WrongKind {
+                id,
+                expected: files::Kind::Alignment,
+            }),
         }
     }
 
-    /// An alignment document. Panics if `id` is a sequence.
-    pub fn alignment(&self, id: DocId) -> &AlignmentDoc {
-        match &self.docs[id.0].content {
-            Loaded::Alignment(o) => &o.doc,
-            _ => panic!("document {} isn't an alignment", id.0),
-        }
-    }
-
-    /// A tree document. Panics if `id` isn't a tree.
-    pub fn tree(&self, id: DocId) -> &TreeDoc {
-        match &self.docs[id.0].content {
-            Loaded::Tree(o) => &o.doc,
-            _ => panic!("document {} isn't a tree", id.0),
+    /// A tree document. Returns an error for a missing ID or a different document kind.
+    pub fn tree(&self, id: DocId) -> Result<&TreeDoc> {
+        match self.content(id)? {
+            Loaded::Tree(o) => Ok(&o.doc),
+            _ => Err(Error::WrongKind {
+                id,
+                expected: files::Kind::Tree,
+            }),
         }
     }
 
     pub fn delimitation(
         &self,
         id: DocId,
-    ) -> &basecraft_protocol::delimitation::DelimitationWorkspace {
-        match &self.docs[id.0].content {
-            Loaded::Delimitation(work) => work,
-            _ => panic!("not a delimitation workspace"),
+    ) -> Result<&basecraft_protocol::delimitation::DelimitationWorkspace> {
+        match self.content(id)? {
+            Loaded::Delimitation(work) => Ok(work),
+            _ => Err(Error::WrongKind {
+                id,
+                expected: files::Kind::Delimitation,
+            }),
         }
     }
 
     pub fn is_delimitation(&self, id: DocId) -> bool {
-        matches!(self.docs[id.0].content, Loaded::Delimitation(_))
+        self.docs
+            .get(id.0)
+            .is_some_and(|slot| matches!(slot.content, Loaded::Delimitation(_)))
     }
 
-    /// The project's specimen metadata. Panics if `id` is another kind.
-    pub fn metadata(&self, id: DocId) -> &basecraft_protocol::metadata::ProjectMetadata {
-        match &self.docs[id.0].content {
-            Loaded::Metadata(opened) => &opened.metadata,
-            _ => panic!("not the project metadata"),
+    /// The project's specimen metadata. Returns an error for a missing ID or a different document kind.
+    pub fn metadata(&self, id: DocId) -> Result<&basecraft_protocol::metadata::ProjectMetadata> {
+        match self.content(id)? {
+            Loaded::Metadata(opened) => Ok(&opened.metadata),
+            _ => Err(Error::WrongKind {
+                id,
+                expected: files::Kind::Metadata,
+            }),
         }
     }
 
     /// What was noticed when the metadata was opened, such as tables edited
     /// outside Basecraft.
-    pub fn metadata_notices(&self, id: DocId) -> &[String] {
-        match &self.docs[id.0].content {
-            Loaded::Metadata(opened) => &opened.notices,
-            _ => &[],
+    pub fn metadata_notices(&self, id: DocId) -> Result<&[String]> {
+        match self.content(id)? {
+            Loaded::Metadata(opened) => Ok(&opened.notices),
+            _ => Err(Error::WrongKind {
+                id,
+                expected: files::Kind::Metadata,
+            }),
         }
     }
 
-    /// A GenBank submission document. Panics if `id` is another kind.
-    pub fn submission(&self, id: DocId) -> &basecraft_protocol::submission::Submission {
-        match &self.docs[id.0].content {
-            Loaded::Submission(sub) => sub,
-            _ => panic!("not a submission"),
+    /// A GenBank submission document. Returns an error for a missing ID or a different document kind.
+    pub fn submission(&self, id: DocId) -> Result<&basecraft_protocol::submission::Submission> {
+        match self.content(id)? {
+            Loaded::Submission(sub) => Ok(sub),
+            _ => Err(Error::WrongKind {
+                id,
+                expected: files::Kind::Submission,
+            }),
         }
     }
 
@@ -347,41 +364,47 @@ impl Session {
     }
 
     pub fn is_tree(&self, id: DocId) -> bool {
-        matches!(self.docs[id.0].content, Loaded::Tree(_))
+        self.docs
+            .get(id.0)
+            .is_some_and(|slot| matches!(slot.content, Loaded::Tree(_)))
     }
 
-    pub fn tree_metadata_warning(&self, id: DocId) -> Option<&str> {
-        match &self.docs.get(id.0)?.content {
-            Loaded::Tree(tree) => tree.metadata_warning.as_deref(),
-            _ => None,
+    pub fn tree_metadata_warning(&self, id: DocId) -> Result<Option<&str>> {
+        match self.content(id)? {
+            Loaded::Tree(tree) => Ok(tree.metadata_warning.as_deref()),
+            _ => Err(Error::WrongKind {
+                id,
+                expected: files::Kind::Tree,
+            }),
         }
     }
 
     pub fn is_alignment(&self, id: DocId) -> bool {
-        matches!(self.docs[id.0].content, Loaded::Alignment(_))
+        self.docs
+            .get(id.0)
+            .is_some_and(|slot| matches!(slot.content, Loaded::Alignment(_)))
     }
 
     fn sequence_of(&self, id: DocId) -> Result<&Opened> {
-        match &self.docs[id.0].content {
+        match self.content(id)? {
             Loaded::Sequence(o) => Ok(o),
-            Loaded::Delimitation(_) | Loaded::Metadata(_) | Loaded::Submission(_) => {
-                Err(invalid("this needs a sequence"))
-            }
-            Loaded::Alignment(_) => Err(invalid("this needs a sequence, not an alignment")),
-            Loaded::Tree(_) => Err(invalid("this needs a sequence, not a tree")),
+            _ => Err(Error::WrongKind {
+                id,
+                expected: files::Kind::Sequence,
+            }),
         }
     }
 
     /// Checked access for plugin snapshots; never index a wrong-kind/closed slot.
     pub fn checked_sequence(&self, id: DocId) -> Result<&SequenceDoc> {
-        let slot = self
-            .docs
+        self.doc(id)
+    }
+
+    fn content(&self, id: DocId) -> Result<&Loaded> {
+        self.docs
             .get(id.0)
-            .ok_or_else(|| invalid("unknown document"))?;
-        let Loaded::Sequence(sequence) = &slot.content else {
-            return Err(invalid("snapshot requires a sequence document"));
-        };
-        Ok(&sequence.doc)
+            .map(|slot| &slot.content)
+            .ok_or(Error::UnknownDocument { id })
     }
 
     /// Every record, with the current unsaved first record replacing its disk view.
@@ -1903,6 +1926,7 @@ impl Session {
         reverse: bool,
         path: &Path,
     ) -> Result<()> {
+        self.doc(id)?;
         let _reserved = self.derived_target(path)?;
         self.track(id)?;
         self.flush()?;
@@ -2221,7 +2245,7 @@ impl Session {
             if !self.is_submission(doc) {
                 return Err(invalid("choose a submission document"));
             }
-            crate::submission::verify_inclusion(self.root(), self.submission(doc), plan)?;
+            crate::submission::verify_inclusion(self.root(), self.submission(doc)?, plan)?;
         }
         // Prepare fallible tree edits before tracking. Rejection must not create
         // recovery records, mutate supports, or clear the redo stack.

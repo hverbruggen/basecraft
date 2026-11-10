@@ -73,7 +73,7 @@ impl Server {
         self.documents
             .get(&id)
             .copied()
-            .ok_or_else(|| "Unknown document ID".into())
+            .ok_or_else(|| basecraft_ops::Error::UnknownDocument { id: DocId(id) }.into())
     }
 
     fn state(&self, doc: DocId) -> Value {
@@ -171,19 +171,19 @@ impl Server {
                 let doc = self.doc(args)?;
                 if self.session.is_tree(doc) {
                     return Ok(
-                        json!({"tips":self.session.tree(doc).nodes().iter().filter(|n|n.is_tip()).map(|n|&n.name).collect::<Vec<_>>(), "style":self.session.tree(doc).style()}),
+                        json!({"tips":self.session.tree(doc)?.nodes().iter().filter(|n|n.is_tip()).map(|n|&n.name).collect::<Vec<_>>(), "style":self.session.tree(doc)?.style()}),
                     );
                 }
                 if self.session.is_delimitation(doc) {
-                    return Ok(serde_json::to_value(self.session.delimitation(doc))?);
+                    return Ok(serde_json::to_value(self.session.delimitation(doc)?)?);
                 }
                 if self.session.is_metadata(doc) {
                     return Ok(
-                        json!({"metadata":self.session.metadata(doc),"notices":self.session.metadata_notices(doc)}),
+                        json!({"metadata":self.session.metadata(doc)?,"notices":self.session.metadata_notices(doc)?}),
                     );
                 }
                 if self.session.is_submission(doc) {
-                    return Ok(serde_json::to_value(self.session.submission(doc))?);
+                    return Ok(serde_json::to_value(self.session.submission(doc)?)?);
                 }
                 let start = args["start"].as_u64().unwrap_or(0);
                 let end = args["end"]
@@ -197,12 +197,12 @@ impl Server {
                         .as_u64()
                         .and_then(|r| usize::try_from(r).ok())
                         .ok_or("Provide an alignment row")?;
-                    if row >= self.session.alignment(doc).row_count() {
+                    if row >= self.session.alignment(doc)?.row_count() {
                         return Err("Row outside alignment".into());
                     }
-                    self.session.alignment(doc).read(row, start, end)
+                    self.session.alignment(doc)?.read(row, start, end)
                 } else {
-                    self.session.doc(doc).read(start, end)
+                    self.session.doc(doc)?.read(start, end)
                 };
                 Ok(json!({"residues":String::from_utf8_lossy(&residues)}))
             }
@@ -345,7 +345,7 @@ impl Server {
                 )?;
                 self.documents.insert(doc.0, doc);
                 let mut state = self.state(doc);
-                state["notices"] = json!(self.session.metadata_notices(doc));
+                state["notices"] = json!(self.session.metadata_notices(doc)?);
                 Ok(state)
             }
             "metadata_plan_headers" => {
@@ -682,6 +682,22 @@ fn outcome_schema() -> Result<Value> {
     Ok(schema)
 }
 
+// Preserve the existing wire taxonomy while keeping checked document failures
+// typed. Dedicated wire codes belong to the shared error-schema migration.
+fn core_error_code(
+    error: &(dyn std::error::Error + 'static),
+) -> basecraft_protocol::operation::OperationErrorCode {
+    if matches!(
+        error.downcast_ref::<basecraft_ops::Error>(),
+        Some(basecraft_ops::Error::UnknownDocument { .. } | basecraft_ops::Error::WrongKind { .. })
+    ) {
+        return basecraft_protocol::operation::OperationErrorCode::InvalidArguments;
+    }
+    basecraft_plugin_host::jobs::error_code(&basecraft_plugin_host::Error::Protocol(
+        error.to_string(),
+    ))
+}
+
 fn structured(value: Value, failed: bool) -> Value {
     let mut result = json!({"content":[{"type":"text","text":value.to_string()}],"isError":failed});
     result["structuredContent"] = value;
@@ -1011,11 +1027,7 @@ pub fn serve(root: &Path, writable: bool, kind: ClientKind, model: &str) -> Resu
                                 Err(error) => structured(
                                     basecraft_plugin_host::jobs::error_value(
                                         name,
-                                        basecraft_plugin_host::jobs::error_code(
-                                            &basecraft_plugin_host::Error::Protocol(
-                                                error.to_string(),
-                                            ),
-                                        ),
+                                        core_error_code(error.as_ref()),
                                         error.to_string(),
                                     ),
                                     true,

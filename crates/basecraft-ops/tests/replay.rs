@@ -138,7 +138,7 @@ fn extracts_spliced_cds_and_reverse_complements() {
     std::fs::write(root.join("seqs/test.gb"), GB).unwrap();
     let mut s = Session::new(root);
     let d = s.open(&root.join("seqs/test.gb")).unwrap();
-    let original = s.doc(d).read(0, 120);
+    let original = s.doc(d).unwrap().read(0, 120);
 
     // Spliced CDS join(20..40,50..70): 42 bases, one CDS over all of them.
     s.extract(
@@ -206,7 +206,7 @@ fn grouped_operations_undo_together_and_replay() {
     {
         let mut s = Session::new(root);
         let d = s.open(&root.join("seqs/test.gb")).unwrap();
-        let before = s.doc(d).feature_count();
+        let before = s.doc(d).unwrap().feature_count();
         s.begin_group();
         for i in 0..3 {
             s.apply(
@@ -227,14 +227,18 @@ fn grouped_operations_undo_together_and_replay() {
         .unwrap();
         s.undo(d).unwrap();
         assert_eq!(
-            s.doc(d).feature_count(),
+            s.doc(d).unwrap().feature_count(),
             before + 3,
             "the single op undoes alone"
         );
         s.undo(d).unwrap();
-        assert_eq!(s.doc(d).feature_count(), before, "the group undoes as one");
+        assert_eq!(
+            s.doc(d).unwrap().feature_count(),
+            before,
+            "the group undoes as one"
+        );
         s.redo(d).unwrap();
-        assert_eq!(s.doc(d).feature_count(), before + 3);
+        assert_eq!(s.doc(d).unwrap().feature_count(), before + 3);
     }
     let report = replay::replay(root).unwrap();
     assert!(report.ok(), "{:#?}", report.problems);
@@ -324,7 +328,7 @@ fn shift(rows: &[(u32, u32)], start: u64, end: u64, by: i64) -> Op {
 }
 
 fn rows_text(s: &Session, d: basecraft_ops::DocId) -> Vec<String> {
-    let a = s.alignment(d);
+    let a = s.alignment(d).unwrap();
     (0..a.row_count())
         .map(|r| {
             format!(
@@ -347,7 +351,7 @@ fn alignment_session_replays_exactly() {
         let mut s = Session::new(root);
         let d = s.open(&root.join("x.aln.fasta")).unwrap();
         assert!(s.is_alignment(d));
-        assert_eq!(s.alignment(d).width(), 9);
+        assert_eq!(s.alignment(d).unwrap().width(), 9);
         // Typing over residues along row 0: one entry.
         for (i, c) in "TT".chars().enumerate() {
             s.apply(
@@ -533,7 +537,7 @@ fn tree_session_replays_exactly() {
         let mut s = Session::new(root);
         let d = s.open(&root.join("t.nwk")).unwrap();
         assert!(s.is_tree(d));
-        assert_eq!(s.tree(d).tip_count(), 5);
+        assert_eq!(s.tree(d).unwrap().tip_count(), 5);
         s.apply(
             d,
             Op::TreeReroot {
@@ -570,7 +574,7 @@ fn tree_session_replays_exactly() {
         .unwrap();
         // Support from a MrBayes-style tree, matched by branch.
         let other = basecraft_ops::files::load_tree(&root.join("other.tre")).unwrap();
-        let sets = s.tree(d).support_from(&other.doc).unwrap();
+        let sets = s.tree(d).unwrap().support_from(&other.doc).unwrap();
         assert_eq!(sets.len(), 1);
         s.apply(
             d,
@@ -679,8 +683,8 @@ fn sequence_addition_expands_reference_and_replays_with_undo() {
                 },
             )
             .unwrap();
-        assert_eq!(session.alignment(doc).width(), 6);
-        assert_eq!(session.alignment(doc).row_count(), 3);
+        assert_eq!(session.alignment(doc).unwrap().width(), 6);
+        assert_eq!(session.alignment(doc).unwrap().row_count(), 3);
         let added = rows_text(&session, doc);
         session.undo(doc).unwrap();
         assert_eq!(rows_text(&session, doc), before);
@@ -695,7 +699,7 @@ fn sequence_addition_expands_reference_and_replays_with_undo() {
                 },
             )
             .unwrap();
-        assert_eq!(session.alignment(doc).read(3, 0, 6), b"AA----");
+        assert_eq!(session.alignment(doc).unwrap().read(3, 0, 6), b"AA----");
         session.save(doc, None).unwrap();
     }
     let report = replay::replay(root).unwrap();
@@ -726,16 +730,22 @@ fn automatic_root_operations_undo_redo_save_reload_and_replay() {
                     },
                 )
                 .unwrap();
-            let before = session.tree(doc).clone();
+            let before = session.tree(doc).unwrap().clone();
             session.apply(doc, op.clone()).unwrap();
-            saved = session.tree(doc).clone();
+            saved = session.tree(doc).unwrap().clone();
             assert_ne!(before.to_newick(), saved.to_newick());
             session.undo(doc).unwrap();
-            assert_eq!(session.tree(doc).to_newick(), before.to_newick());
-            assert_eq!(session.tree(doc).annotations(), before.annotations());
+            assert_eq!(session.tree(doc).unwrap().to_newick(), before.to_newick());
+            assert_eq!(
+                session.tree(doc).unwrap().annotations(),
+                before.annotations()
+            );
             session.redo(doc).unwrap();
-            assert_eq!(session.tree(doc).to_newick(), saved.to_newick());
-            assert_eq!(session.tree(doc).annotations(), saved.annotations());
+            assert_eq!(session.tree(doc).unwrap().to_newick(), saved.to_newick());
+            assert_eq!(
+                session.tree(doc).unwrap().annotations(),
+                saved.annotations()
+            );
             session.save(doc, None).unwrap();
         }
         let reloaded = basecraft_ops::files::load_tree(&path).unwrap().doc;
@@ -756,12 +766,12 @@ fn automatic_root_error_keeps_document_and_history() {
     std::fs::write(&path, "(A,B:2);").unwrap();
     let mut session = Session::new(dir.path());
     let doc = session.open(&path).unwrap();
-    let before = session.tree(doc).to_newick();
+    let before = session.tree(doc).unwrap().to_newick();
     session.flush().unwrap();
     let entries = basecraft_ops::log::read_all(dir.path()).unwrap().len();
     for op in [Op::TreeMidpointRoot {}, Op::TreeMinimumVarianceRoot {}] {
         assert!(session.apply(doc, op).is_err());
-        assert_eq!(session.tree(doc).to_newick(), before);
+        assert_eq!(session.tree(doc).unwrap().to_newick(), before);
         assert!(!session.can_undo(doc));
         session.flush().unwrap();
         assert_eq!(
@@ -779,12 +789,12 @@ fn strict_sequence_proposals_stage_invalid_batches_and_replay_one_undo_group() {
     let mut session = Session::new(temp.path());
     let doc = session.open(&path).unwrap();
     let generation = session.generation(doc);
-    let revision = session.doc(doc).version();
+    let revision = session.doc(doc).unwrap().version();
     let actor = basecraft_protocol::Actor::Plugin {
         id: "org.example.annotation".into(),
         version: "1.0.0".into(),
     };
-    let before = session.doc(doc).read(0, 8);
+    let before = session.doc(doc).unwrap().read(0, 8);
     assert!(
         session
             .apply_sequence_proposals(
@@ -796,7 +806,7 @@ fn strict_sequence_proposals_stage_invalid_batches_and_replay_one_undo_group() {
             )
             .is_err()
     );
-    assert_eq!(session.doc(doc).read(0, 8), before);
+    assert_eq!(session.doc(doc).unwrap().read(0, 8), before);
     assert_eq!(session.generation(doc), generation);
     assert!(!session.can_undo(doc));
     assert!(
@@ -826,13 +836,13 @@ fn strict_sequence_proposals_stage_invalid_batches_and_replay_one_undo_group() {
     session
         .apply_sequence_proposals(doc, generation, revision, &ops, &actor)
         .unwrap();
-    assert_eq!(session.doc(doc).read(0, 8), b"TCGTACGT");
-    assert_eq!(session.doc(doc).features().count(), 1);
+    assert_eq!(session.doc(doc).unwrap().read(0, 8), b"TCGTACGT");
+    assert_eq!(session.doc(doc).unwrap().features().count(), 1);
     session.undo(doc).unwrap();
-    assert_eq!(session.doc(doc).read(0, 8), before);
-    assert_eq!(session.doc(doc).features().count(), 0);
+    assert_eq!(session.doc(doc).unwrap().read(0, 8), before);
+    assert_eq!(session.doc(doc).unwrap().features().count(), 0);
     session.redo(doc).unwrap();
-    assert_eq!(session.doc(doc).read(0, 8), b"TCGTACGT");
+    assert_eq!(session.doc(doc).unwrap().read(0, 8), b"TCGTACGT");
     session.flush().unwrap();
     assert!(replay::replay(temp.path()).unwrap().ok());
     assert_eq!(std::fs::read(&path).unwrap(), b">sequence\nACGTACGT\n");
@@ -929,7 +939,7 @@ fn submission_edits_undo_save_and_replay() {
             },
             SubmissionEdit::RecordExport {
                 mapping: basecraft_protocol::submission::ExportMapping {
-                    source: s.submission(doc).source.clone(),
+                    source: s.submission(doc).unwrap().source.clone(),
                     records: [("a".into(), "a".into())].into(),
                 },
             },
@@ -951,7 +961,7 @@ fn submission_edits_undo_save_and_replay() {
             .unwrap();
         }
         s.undo(doc).unwrap();
-        assert_eq!(s.submission(doc).frames, Vec::new());
+        assert_eq!(s.submission(doc).unwrap().frames, Vec::new());
         s.save(doc, None).unwrap();
         s.redo(doc).unwrap();
         s.save(doc, None).unwrap();

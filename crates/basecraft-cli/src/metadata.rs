@@ -135,7 +135,7 @@ fn open(project: &Path, create: bool) -> Result<(basecraft_ops::Session, basecra
     let mut session = crate::script_session(&project)?;
     let doc = metadata::open(&mut session, create)?
         .ok_or("this project has no metadata yet; run `basecraft metadata init`")?;
-    for notice in session.metadata_notices(doc) {
+    for notice in session.metadata_notices(doc)? {
         eprintln!("basecraft: {notice}");
     }
     Ok((session, doc))
@@ -211,8 +211,8 @@ pub fn run(command: MetadataCommand) -> Result<()> {
             println!(
                 "{}",
                 serde_json::to_string_pretty(&serde_json::json!({
-                    "metadata": session.metadata(doc),
-                    "notices": session.metadata_notices(doc),
+                    "metadata": session.metadata(doc)?,
+                    "notices": session.metadata_notices(doc)?,
                 }))?
             );
         }
@@ -236,8 +236,9 @@ pub fn run(command: MetadataCommand) -> Result<()> {
                 options: import.options(),
             };
             let plan = metadata::plan_header_import(&session, doc, &request)?;
+            let metadata = session.metadata(doc)?;
             let remember = save_pattern.map(|name| {
-                let mut settings = session.metadata(doc).import.clone();
+                let mut settings = metadata.import.clone();
                 settings.header_patterns.retain(|p| p.name != name);
                 settings.header_patterns.push(pattern);
                 MetadataEdit::SetImportSettings { settings }
@@ -277,8 +278,9 @@ pub fn run(command: MetadataCommand) -> Result<()> {
                 options: import.options(),
             };
             let plan = metadata::plan_sheet_import(&session, doc, &request)?;
+            let metadata = session.metadata(doc)?;
             let remember = save_mapping.map(|name| {
-                let mut settings = session.metadata(doc).import.clone();
+                let mut settings = metadata.import.clone();
                 settings.spreadsheet_mappings.retain(|m| m.name != name);
                 settings.spreadsheet_mappings.push(
                     basecraft_protocol::metadata::SpreadsheetMapping {

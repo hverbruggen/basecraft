@@ -132,9 +132,7 @@ fn open(project: &Path, file: &Path) -> Result<(basecraft_ops::Session, basecraf
     let mut session = crate::script_session(&project)?;
     let file = std::path::absolute(file)?;
     let doc = session.open(&file)?;
-    if !session.is_submission(doc) {
-        return Err(format!("{} is not a submission document", file.display()).into());
-    }
+    session.submission(doc)?;
     Ok((session, doc))
 }
 
@@ -186,11 +184,11 @@ pub fn run(command: SubmissionCommand) -> Result<()> {
                 &std::path::absolute(file)?,
                 &std::path::absolute(alignment)?,
             )?;
-            json_out!(session.submission(doc));
+            json_out!(session.submission(doc)?);
         }
         SubmissionCommand::Show { file, project } => {
             let (session, doc) = open(&project, &file)?;
-            json_out!(session.submission(doc));
+            json_out!(session.submission(doc)?);
         }
         SubmissionCommand::Review { file, project } => {
             let (session, doc) = open(&project, &file)?;
@@ -206,7 +204,7 @@ pub fn run(command: SubmissionCommand) -> Result<()> {
             let (mut session, doc) = open(&project, &file)?;
             submission::edit(&mut session, doc, edit)?;
             session.save(doc, None)?;
-            json_out!(session.submission(doc));
+            json_out!(session.submission(doc)?);
         }
         SubmissionCommand::Frames {
             file,
@@ -250,7 +248,7 @@ pub fn run(command: SubmissionCommand) -> Result<()> {
                 )?;
                 session.save(doc, None)?;
             }
-            json_out!(session.submission(doc).frames);
+            json_out!(session.submission(doc)?.frames);
         }
         SubmissionCommand::Export {
             file,

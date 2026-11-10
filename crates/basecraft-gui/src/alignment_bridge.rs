@@ -493,22 +493,30 @@ impl qobject::AlignmentController {
     }
 
     fn with_doc<T>(&self, f: impl FnOnce(&AlignmentDoc) -> T) -> Option<T> {
+        let access_thread = self.qt_thread();
         let r = self.rust();
         match (&r.session, r.doc) {
-            (Some(s), Some(d)) => Some(f(s.alignment(d))),
+            (Some(s), Some(d)) => Some(f(crate::bridge::checked_document!(
+                access_thread,
+                s.alignment(d)
+            ))),
             _ => None,
         }
     }
 
     /// Rebuild the frame, status line and scroll bars.
     fn refresh(mut self: Pin<&mut Self>) {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.alignment(doc));
+        }
         let (bytes, status, zoom, h, v, names) = {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
             let (Some(session), Some(doc)) = (&r.session, r.doc) else {
                 return;
             };
-            let d = session.alignment(doc);
+            let d = crate::bridge::checked_document!(access_thread, session.alignment(doc));
             r.find
                 .invalidate(&crate::find_bridge::document_key(session, doc));
             r.view.build(d, &r.theme, &mut r.scratch);
@@ -529,7 +537,7 @@ impl qobject::AlignmentController {
             let (Some(session), Some(doc)) = (&r.session, r.doc) else {
                 return;
             };
-            let d = session.alignment(doc);
+            let d = crate::bridge::checked_document!(access_thread, session.alignment(doc));
             let key = format!("{}:{}:{:?}", session.id(), d.version(), r.theme);
             let content = r.overview_cache.get(key.clone(), || {
                 basecraft_viewmodel::overview::alignment(d, &r.theme)
@@ -563,12 +571,16 @@ impl qobject::AlignmentController {
 
     // Only one scan at a time; discard old versions and scan the newest snapshot.
     fn update_gap_count(mut self: Pin<&mut Self>) {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.alignment(doc));
+        }
         let work = {
             let mut r = self.as_mut().rust_mut();
             let (Some(session), Some(doc)) = (&r.session, r.doc) else {
                 return;
             };
-            let d = session.alignment(doc);
+            let d = crate::bridge::checked_document!(access_thread, session.alignment(doc));
             let key = (session.id().to_owned(), d.version());
             if r.gap_scan_key.as_ref() == Some(&key) {
                 return;
@@ -591,7 +603,10 @@ impl qobject::AlignmentController {
                     let mut r = this.as_mut().rust_mut();
                     r.gap_scan_running = false;
                     let current = r.session.as_ref().zip(r.doc).is_some_and(|(s, d)| {
-                        s.id() == work.0.0 && s.alignment(d).version() == work.0.1
+                        s.id() == work.0.0
+                            && crate::bridge::checked_document!(access_thread, s.alignment(d))
+                                .version()
+                                == work.0.1
                     });
                     if current {
                         r.gap_scan_key = Some(work.0);
@@ -634,6 +649,10 @@ impl qobject::AlignmentController {
 
     /// Apply an edit through the session; on failure, say why.
     fn edit(mut self: Pin<&mut Self>, op: Op) -> bool {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.alignment(doc));
+        }
         let result = {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
@@ -641,7 +660,10 @@ impl qobject::AlignmentController {
                 return false;
             };
             let result = session.apply(doc, op);
-            r.view.sync(session.alignment(doc));
+            r.view.sync(crate::bridge::checked_document!(
+                access_thread,
+                session.alignment(doc)
+            ));
             result
         };
         match result {
@@ -704,6 +726,9 @@ impl qobject::AlignmentController {
         png_width: Option<f64>,
         include_selection: bool,
     ) {
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.alignment(doc));
+        }
         if !(0..=2).contains(&scope) {
             self.fail("Unknown figure scope");
             return;
@@ -726,16 +751,16 @@ impl qobject::AlignmentController {
             };
             let mut view = if scope == 0 {
                 r.view
-                    .visible_figure_view(session.alignment(doc), include_selection)
+                    .visible_figure_view(session.alignment(doc)?, include_selection)
             } else {
                 r.view.figure_view_with_selection(
-                    session.alignment(doc),
+                    session.alignment(doc)?,
                     scope == 1,
                     include_selection,
                 )
             };
             let mut frame = Frame::new();
-            view.build(session.alignment(doc), &theme, &mut frame);
+            view.build(session.alignment(doc)?, &theme, &mut frame);
             let svg = basecraft_viewmodel::svg::frame_svg(
                 &frame,
                 view.width,
@@ -767,12 +792,16 @@ impl qobject::AlignmentController {
     }
 
     fn emit_taxa(mut self: Pin<&mut Self>) {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.alignment(doc));
+        }
         let taxa = {
             let r = self.rust();
             let (Some(session), Some(doc)) = (&r.session, r.doc) else {
                 return;
             };
-            let alignment = session.alignment(doc);
+            let alignment = crate::bridge::checked_document!(access_thread, session.alignment(doc));
             let names: Vec<_> = r.view.selection.map_or_else(Vec::new, |block| {
                 (block.rows.0..block.rows.1)
                     .map(|i| alignment.row(i).name.clone())
@@ -831,6 +860,10 @@ impl qobject::AlignmentController {
         true
     }
     pub fn open_file(mut self: Pin<&mut Self>, path: &QString) -> bool {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.alignment(doc));
+        }
         if self.rust().busy {
             self.fail("Wait for the running tool before replacing this document");
             return false;
@@ -848,7 +881,10 @@ impl qobject::AlignmentController {
                 {
                     let mut r = self.as_mut().rust_mut();
                     let r = &mut *r;
-                    r.view.sync(session.alignment(doc));
+                    r.view.sync(crate::bridge::checked_document!(
+                        access_thread,
+                        session.alignment(doc)
+                    ));
                     r.view.reset_zoom();
                     r.session = Some(session);
                     r.doc = Some(doc);
@@ -1051,6 +1087,10 @@ impl qobject::AlignmentController {
     }
 
     fn history(mut self: Pin<&mut Self>, redo: bool) {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.alignment(doc));
+        }
         let result = {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
@@ -1062,7 +1102,10 @@ impl qobject::AlignmentController {
             } else {
                 session.undo(doc)
             };
-            r.view.sync(session.alignment(doc));
+            r.view.sync(crate::bridge::checked_document!(
+                access_thread,
+                session.alignment(doc)
+            ));
             result
         };
         match result {
@@ -1856,6 +1899,10 @@ impl qobject::AlignmentController {
     }
 
     pub fn remove_gap_columns(mut self: Pin<&mut Self>) {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.alignment(doc));
+        }
         let started = Instant::now();
         let before = self.with_doc(AlignmentDoc::width).unwrap_or(0);
         let runs = if self.rust().gap_column_count >= 0.0 {
@@ -1870,7 +1917,10 @@ impl qobject::AlignmentController {
             {
                 let mut r = self.as_mut().rust_mut();
                 if let (Some(session), Some(doc)) = (&r.session, r.doc) {
-                    view.sync(session.alignment(doc));
+                    view.sync(crate::bridge::checked_document!(
+                        access_thread,
+                        session.alignment(doc)
+                    ));
                 }
                 r.view = view;
             }
@@ -1967,24 +2017,32 @@ crate::find_bridge::controller_find!(qobject::AlignmentController);
 
 impl qobject::AlignmentController {
     fn find_update(mut self: std::pin::Pin<&mut Self>) {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.alignment(doc));
+        }
         let mut r = self.as_mut().rust_mut();
         let r = &mut *r;
         let (Some(session), Some(doc)) = (&r.session, r.doc) else {
             return;
         };
         let key = crate::find_bridge::document_key(session, doc);
-        let d = session.alignment(doc);
+        let d = crate::bridge::checked_document!(access_thread, session.alignment(doc));
         r.find.update(key, || {
             basecraft_viewmodel::find::Input::Alignment(d.snapshot())
         });
     }
     fn find_reveal(mut self: std::pin::Pin<&mut Self>) {
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.alignment(doc));
+        }
         let mut r = self.as_mut().rust_mut();
         let r = &mut *r;
         let (Some(session), Some(doc), Some(hit)) = (&r.session, r.doc, r.find.hit()) else {
             return;
         };
-        let d = session.alignment(doc);
+        let d = crate::bridge::checked_document!(access_thread, session.alignment(doc));
         r.view.sync(d);
         let start = r.view.start;
         r.view.reveal((hit.row, hit.start));

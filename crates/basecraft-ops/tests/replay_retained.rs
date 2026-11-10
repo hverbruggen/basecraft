@@ -98,7 +98,7 @@ fn repeated_combine_save_and_refused_save_share_one_session() {
     for name in ["one.spart", "two.spart", "refused.spart"] {
         let doc = session.open(&a).unwrap();
         delimitation::combine(&mut session, doc, std::slice::from_ref(&b)).unwrap();
-        assert_eq!(session.delimitation(doc).hypotheses.len(), 6);
+        assert_eq!(session.delimitation(doc).unwrap().hypotheses.len(), 6);
         let output = root.join(name);
         if name == "refused.spart" {
             // A directory is a deterministic disk-level save refusal.

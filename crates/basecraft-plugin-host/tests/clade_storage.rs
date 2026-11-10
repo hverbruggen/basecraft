@@ -36,7 +36,7 @@ fn unsaved_clade_tree_with_referenced_alignment_retains_both_inputs_and_selectio
     session
         .apply(doc, Op::TreeLadderize { small_first: true })
         .unwrap();
-    let expected = basecraft_io::hash_bytes(session.tree(doc).to_newick().as_bytes());
+    let expected = basecraft_io::hash_bytes(session.tree(doc).unwrap().to_newick().as_bytes());
     assert!(session.saved_source(doc).unwrap().is_none());
     let request: OperationRequest = serde_json::from_value(json!({
         "operation":"basecraft.clade-alignment/extract@1",

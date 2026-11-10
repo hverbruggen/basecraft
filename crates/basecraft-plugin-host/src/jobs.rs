@@ -1098,6 +1098,14 @@ pub fn error_value(
 }
 
 pub fn error_code(error: &Error) -> OperationErrorCode {
+    if matches!(
+        error,
+        Error::Ops(
+            basecraft_ops::Error::UnknownDocument { .. } | basecraft_ops::Error::WrongKind { .. }
+        )
+    ) {
+        return OperationErrorCode::InvalidArguments;
+    }
     let message = error.to_string();
     if message.contains("permission_denied") {
         OperationErrorCode::PermissionDenied

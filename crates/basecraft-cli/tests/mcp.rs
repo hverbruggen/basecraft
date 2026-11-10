@@ -842,3 +842,85 @@ fn submission_selection_confirmation_is_shared_by_mcp_export_and_apply() {
     assert_eq!(replies[3]["result"]["structuredContent"]["records"], 1);
     assert!(d.path().join("package/package.json").is_file());
 }
+
+#[test]
+fn wrong_kind_requests_fail_without_mutation_and_the_server_remains_usable() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("input.afa");
+    let original = b">a\nACGT\n>b\nACGT\n";
+    std::fs::write(&file, original).unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_basecraft"))
+        .args(["mcp", dir.path().to_str().unwrap(), "--allow-writes"])
+        .env("BASECRAFT_PROFILE_DIR", dir.path().join("profile"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+    for message in [
+        json!({"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"checked-access","version":"1"}}}),
+        json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+        request(1, "open", json!({"path":"input.afa"})),
+        request(
+            2,
+            "metadata_status",
+            json!({"document":0,"file":"input.afa"}),
+        ),
+        request(
+            3,
+            "import_support",
+            json!({"document":0,"path":"input.afa"}),
+        ),
+        request(4, "read", json!({"document":999,"row":0,"start":0,"end":4})),
+        request(5, "read", json!({"document":0,"row":0,"start":0,"end":4})),
+        request(6, "state", json!({"document":0})),
+    ] {
+        writeln!(input, "{message}").unwrap();
+    }
+    drop(input);
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let replies: Vec<Value> = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(|s| serde_json::from_str(s).unwrap())
+        .collect();
+    for reply in &replies[2..=4] {
+        assert_eq!(reply["result"]["isError"], true);
+        assert_eq!(
+            reply["result"]["structuredContent"]["errors"][0]["code"],
+            "invalid_arguments"
+        );
+    }
+    assert_eq!(
+        replies[5]["result"]["structuredContent"]["residues"],
+        "ACGT"
+    );
+    assert_eq!(replies[6]["result"]["structuredContent"]["version"], 0);
+    assert_eq!(std::fs::read(file).unwrap(), original);
+}
+
+#[test]
+fn cli_submission_show_rejects_an_alignment_without_success_output() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("input.afa");
+    let original = b">a\nACGT\n>b\nACGT\n";
+    std::fs::write(&file, original).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_basecraft"))
+        .args(["submission", "show"])
+        .arg(&file)
+        .arg("--project")
+        .arg(dir.path())
+        .env("BASECRAFT_PROFILE_DIR", dir.path().join("profile"))
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Submission"));
+    assert_eq!(std::fs::read(file).unwrap(), original);
+}

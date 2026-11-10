@@ -1197,10 +1197,7 @@ pub fn document_key(project: &Path, path: &Path) -> Result<String> {
 }
 
 fn checked_metadata(session: &Session, doc: crate::DocId) -> Result<&ProjectMetadata> {
-    if !session.is_metadata(doc) {
-        return Err(invalid("choose the project metadata document"));
-    }
-    Ok(session.metadata(doc))
+    session.metadata(doc)
 }
 
 pub fn plan_header_import(
@@ -1374,7 +1371,7 @@ pub fn consumer_plan(
             ) {
                 let mut reader = Session::unlogged(session.root());
                 let tree = reader.open(&session.root().join(&key))?;
-                verify_label_owner(reader.tree(tree).style(), &source)?;
+                verify_label_owner(reader.tree(tree)?.style(), &source)?;
             }
             return Ok(
                 serde_json::json!({"labels":metadata_consumers::compose_labels(meta, &key, records, fields), "metadata_hash":metadata_hash, "metadata_source":source, "fields":fields}),
@@ -1394,7 +1391,7 @@ pub fn consumer_plan(
     if !reader.is_delimitation(work_doc) {
         return Err(invalid("choose a delimitation workspace"));
     }
-    let work = reader.delimitation(work_doc);
+    let work = reader.delimitation(work_doc)?;
     let workspace_hash =
         basecraft_io::hash_bytes(&serde_json::to_vec(work).map_err(|e| invalid(e.to_string()))?);
     let (target, operation) = if let Some(links) = links {

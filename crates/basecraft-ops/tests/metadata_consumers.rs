@@ -90,10 +90,10 @@ fn explicit_roster_links_partitions_undo_replay_and_moved_project() {
     std::fs::create_dir(&root).unwrap();
     {
         let (mut s, m, d) = setup(&root);
-        let work = s.delimitation(d).clone();
+        let work = s.delimitation(d).unwrap().clone();
         assert!(
             basecraft_docs::metadata_consumers::project_partition(
-                s.metadata(m),
+                s.metadata(m).unwrap(),
                 &work,
                 &work.hypotheses[0].id,
                 "p1"
@@ -125,6 +125,7 @@ fn explicit_roster_links_partitions_undo_replay_and_moved_project() {
         .unwrap();
         assert_eq!(
             s.delimitation(d)
+                .unwrap()
                 .specimens
                 .iter()
                 .map(|s| s.id.clone())
@@ -132,12 +133,12 @@ fn explicit_roster_links_partitions_undo_replay_and_moved_project() {
             local
         );
         s.undo(d).unwrap();
-        assert_eq!(s.delimitation(d), &work);
+        assert_eq!(s.delimitation(d).unwrap(), &work);
         s.redo(d).unwrap();
         s.save(d, None).unwrap();
         let request = metadata::ConsumerRequest::PromotePartition {
             workspace: "result.spart".into(),
-            hypothesis: s.delimitation(d).hypotheses[0].id.clone(),
+            hypothesis: s.delimitation(d).unwrap().hypotheses[0].id.clone(),
             id: "p1".into(),
         };
         let plan = metadata::consumer_plan(&s, m, &request).unwrap();
@@ -146,7 +147,7 @@ fn explicit_roster_links_partitions_undo_replay_and_moved_project() {
             serde_json::from_value(plan["operation"].clone()).unwrap(),
         )
         .unwrap();
-        let partition = &s.metadata(m).partitions[0];
+        let partition = &s.metadata(m).unwrap().partitions[0];
         assert_eq!(partition.groups[0].members, ["roster-A".into()].into());
         assert!(partition.unassigned.contains("roster-B"));
         assert_eq!(
@@ -154,11 +155,11 @@ fn explicit_roster_links_partitions_undo_replay_and_moved_project() {
             plan["metadata_hash"].as_str().unwrap()
         );
         s.undo(m).unwrap();
-        assert_eq!(s.metadata(m).partitions, [] as [Hypothesis; 0]);
+        assert_eq!(s.metadata(m).unwrap().partitions, [] as [Hypothesis; 0]);
         s.redo(m).unwrap();
         s.save(m, None).unwrap();
         assert_eq!(
-            basecraft_docs::metadata_consumers::partitions(s.metadata(m)).len(),
+            basecraft_docs::metadata_consumers::partitions(s.metadata(m).unwrap()).len(),
             2
         );
         metadata::apply_plan(
@@ -171,7 +172,7 @@ fn explicit_roster_links_partitions_undo_replay_and_moved_project() {
         )
         .unwrap();
         assert!(
-            s.metadata(m).partitions[0]
+            s.metadata(m).unwrap().partitions[0]
                 .unassigned
                 .contains("new-specimen")
         );
@@ -185,7 +186,7 @@ fn explicit_roster_links_partitions_undo_replay_and_moved_project() {
             },
         )
         .unwrap();
-        assert_eq!(s.metadata(m).partitions, [] as [Hypothesis; 0]);
+        assert_eq!(s.metadata(m).unwrap().partitions, [] as [Hypothesis; 0]);
         s.undo(m).unwrap();
         s.save(m, None).unwrap();
     }
@@ -197,11 +198,12 @@ fn explicit_roster_links_partitions_undo_replay_and_moved_project() {
     let m = metadata::open(&mut reopened, false).unwrap().unwrap();
     let d = reopened.open(&moved.join("result.spart")).unwrap();
     assert_eq!(
-        reopened.metadata(m).partitions[0].groups[0].members,
+        reopened.metadata(m).unwrap().partitions[0].groups[0].members,
         ["roster-A".into()].into()
     );
     assert_eq!(
-        reopened.delimitation(d).specimens[0].attributes[basecraft_docs::delimitation::ROSTER_ID],
+        reopened.delimitation(d).unwrap().specimens[0].attributes
+            [basecraft_docs::delimitation::ROSTER_ID],
         "roster-A"
     );
     let moved_plan = metadata::consumer_plan(
@@ -209,7 +211,7 @@ fn explicit_roster_links_partitions_undo_replay_and_moved_project() {
         m,
         &metadata::ConsumerRequest::PromotePartition {
             workspace: "result.spart".into(),
-            hypothesis: reopened.delimitation(d).hypotheses[0].id.clone(),
+            hypothesis: reopened.delimitation(d).unwrap().hypotheses[0].id.clone(),
             id: "after-move".into(),
         },
     )
@@ -221,7 +223,7 @@ fn explicit_roster_links_partitions_undo_replay_and_moved_project() {
 fn partial_unknown_and_conflicting_links_are_truthful() {
     let dir = tempfile::tempdir().unwrap();
     let (s, m, d) = setup(dir.path());
-    let mut work = s.delimitation(d).clone();
+    let mut work = s.delimitation(d).unwrap().clone();
     let source = work.hypotheses[0].id.clone();
     for (i, sp) in work.specimens.iter_mut().enumerate() {
         sp.attributes.insert(
@@ -234,10 +236,15 @@ fn partial_unknown_and_conflicting_links_are_truthful() {
         "roster-A".into(),
     );
     assert!(
-        basecraft_docs::metadata_consumers::project_partition(s.metadata(m), &work, &source, "p")
-            .unwrap_err()
-            .0
-            .contains("assigned and unassigned")
+        basecraft_docs::metadata_consumers::project_partition(
+            s.metadata(m).unwrap(),
+            &work,
+            &source,
+            "p"
+        )
+        .unwrap_err()
+        .0
+        .contains("assigned and unassigned")
     );
     work.specimens[2].attributes.insert(
         basecraft_docs::delimitation::ROSTER_ID.into(),
@@ -250,20 +257,30 @@ fn partial_unknown_and_conflicting_links_are_truthful() {
     work.hypotheses[0].groups[0].members.remove(&moved);
     work.hypotheses[0].groups.push(second);
     assert!(
-        basecraft_docs::metadata_consumers::project_partition(s.metadata(m), &work, &source, "p")
-            .unwrap_err()
-            .0
-            .contains("conflicting source groups")
+        basecraft_docs::metadata_consumers::project_partition(
+            s.metadata(m).unwrap(),
+            &work,
+            &source,
+            "p"
+        )
+        .unwrap_err()
+        .0
+        .contains("conflicting source groups")
     );
     work.specimens[2].attributes.insert(
         basecraft_docs::delimitation::ROSTER_ID.into(),
         "unknown".into(),
     );
     assert!(
-        basecraft_docs::metadata_consumers::project_partition(s.metadata(m), &work, &source, "p")
-            .unwrap_err()
-            .0
-            .contains("unknown roster ID")
+        basecraft_docs::metadata_consumers::project_partition(
+            s.metadata(m).unwrap(),
+            &work,
+            &source,
+            "p"
+        )
+        .unwrap_err()
+        .0
+        .contains("unknown roster ID")
     );
 }
 
@@ -275,7 +292,7 @@ fn composed_labels_skip_empty_fields_and_keep_scientific_ids() {
     let t = s.open(&dir.path().join("tree.nwk")).unwrap();
     let records = vec!["r1".into(), "r2".into(), "unknown".into()];
     let labels = basecraft_docs::metadata_consumers::compose_labels(
-        s.metadata(m),
+        s.metadata(m).unwrap(),
         "tree.nwk",
         &records,
         &[
@@ -290,7 +307,7 @@ fn composed_labels_skip_empty_fields_and_keep_scientific_ids() {
     assert_eq!(labels[2].label, "unknown");
     assert!(labels[2].issue.is_some());
     let duplicates = basecraft_docs::metadata_consumers::compose_labels(
-        s.metadata(m),
+        s.metadata(m).unwrap(),
         "tree.nwk",
         &["r1".into(), "r1".into()],
         &[LabelField::Specimen],
@@ -300,7 +317,7 @@ fn composed_labels_skip_empty_fields_and_keep_scientific_ids() {
             .iter()
             .all(|l| l.issue.is_some() && l.label == "r1")
     );
-    let mut style = s.tree(t).style().clone();
+    let mut style = s.tree(t).unwrap().style().clone();
     style
         .tip_labels
         .insert("r1".into(), labels[0].label.clone());
@@ -318,15 +335,18 @@ fn composed_labels_skip_empty_fields_and_keep_scientific_ids() {
             .unwrap()
             .contains("r1:")
     );
-    assert!(s.tree(t).nodes().iter().any(|n| n.name == "r1"));
+    assert!(s.tree(t).unwrap().nodes().iter().any(|n| n.name == "r1"));
     s.undo(t).unwrap();
-    assert!(s.tree(t).style().tip_labels.is_empty());
+    assert!(s.tree(t).unwrap().style().tip_labels.is_empty());
     s.redo(t).unwrap();
-    assert_eq!(s.tree(t).style().tip_labels["r1"], "Caulerpa roster-A");
+    assert_eq!(
+        s.tree(t).unwrap().style().tip_labels["r1"],
+        "Caulerpa roster-A"
+    );
     let mut check = Session::unlogged(dir.path());
     let tree = check.open(&dir.path().join("tree.nwk")).unwrap();
     assert_eq!(
-        check.tree(tree).style().tip_labels["r1"],
+        check.tree(tree).unwrap().style().tip_labels["r1"],
         "Caulerpa roster-A"
     );
 }
@@ -369,7 +389,7 @@ fn copied_consumers_reject_another_metadata_owner_with_identical_ids() {
     .unwrap();
     let promote = metadata::ConsumerRequest::PromotePartition {
         workspace: "copied.spart".into(),
-        hypothesis: a.delimitation(aw).hypotheses[0].id.clone(),
+        hypothesis: a.delimitation(aw).unwrap().hypotheses[0].id.clone(),
         id: "p".into(),
     };
     assert!(
@@ -388,7 +408,7 @@ fn copied_consumers_reject_another_metadata_owner_with_identical_ids() {
         fields: vec![LabelField::Genus, LabelField::Specimen],
     };
     let snapshot = metadata::consumer_plan(&a, am, &request).unwrap();
-    let mut style = a.tree(tree).style().clone();
+    let mut style = a.tree(tree).unwrap().style().clone();
     style.tip_labels.insert(
         "r1".into(),
         snapshot["labels"][0]["label"].as_str().unwrap().into(),
@@ -414,7 +434,10 @@ fn copied_consumers_reject_another_metadata_owner_with_identical_ids() {
     .unwrap();
     let t = b.open(&copied_tree).unwrap();
     // Passive display preserves the saved snapshot even in a different project.
-    assert_eq!(b.tree(t).style().tip_labels["r1"], "Caulerpa roster-A");
+    assert_eq!(
+        b.tree(t).unwrap().style().tip_labels["r1"],
+        "Caulerpa roster-A"
+    );
     // Explicit refresh refuses equal IDs from a different owner.
     assert!(
         metadata::consumer_plan(&b, bm, &request)
@@ -440,7 +463,10 @@ fn copied_consumers_reject_another_metadata_owner_with_identical_ids() {
     let refresh = metadata::consumer_plan(&a, am, &request).unwrap();
     assert_eq!(refresh["labels"][0]["label"], "Codium roster-A");
     assert_ne!(refresh["metadata_hash"], snapshot["metadata_hash"]);
-    assert_eq!(a.tree(tree).style().tip_labels["r1"], "Caulerpa roster-A");
+    assert_eq!(
+        a.tree(tree).unwrap().style().tip_labels["r1"],
+        "Caulerpa roster-A"
+    );
     // Accepted typed external TSV edits do not silently change the saved snapshot.
     let tsv = first.path().join("metadata/specimens.tsv");
     let external = std::fs::read_to_string(&tsv)
@@ -449,8 +475,11 @@ fn copied_consumers_reject_another_metadata_owner_with_identical_ids() {
     std::fs::write(&tsv, external).unwrap();
     let mut reader = Session::unlogged(first.path());
     let m = metadata::open(&mut reader, false).unwrap().unwrap();
-    assert_ne!(reader.metadata_notices(m), [] as [String; 0]);
+    assert_ne!(reader.metadata_notices(m).unwrap(), [] as [String; 0]);
     let external_plan = metadata::consumer_plan(&reader, m, &request).unwrap();
     assert_eq!(external_plan["labels"][0]["label"], "Ulva roster-A");
-    assert_eq!(a.tree(tree).style().tip_labels["r1"], "Caulerpa roster-A");
+    assert_eq!(
+        a.tree(tree).unwrap().style().tip_labels["r1"],
+        "Caulerpa roster-A"
+    );
 }

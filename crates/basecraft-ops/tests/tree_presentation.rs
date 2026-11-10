@@ -10,8 +10,8 @@ fn support_precision_scale_unknown_settings_save_undo_and_replay() {
     std::fs::write(&path, "((a,b)0.654321/0.987654321,c);").unwrap();
     let mut session = Session::new(dir.path());
     let doc = session.open(&path).unwrap();
-    let original = session.tree(doc).to_newick();
-    let mut style = session.tree(doc).style().clone();
+    let original = session.tree(doc).unwrap().to_newick();
+    let mut style = session.tree(doc).unwrap().style().clone();
     style.support_decimals.insert("Support 1".into(), 0);
     style.support_decimals.insert("Support 2".into(), 4);
     style.support_proportions.insert("Support 1".into(), false);
@@ -32,29 +32,37 @@ fn support_precision_scale_unknown_settings_save_undo_and_replay() {
         .unwrap();
     let node = session
         .tree(doc)
+        .unwrap()
         .resolve(&["a".into(), "b".into()])
         .unwrap();
     assert_eq!(
-        session.tree(doc).supports()[0]
+        session.tree(doc).unwrap().supports()[0]
             .formatted(node, &style)
             .unwrap(),
         "1"
     );
     assert_eq!(
-        session.tree(doc).supports()[1]
+        session.tree(doc).unwrap().supports()[1]
             .formatted(node, &style)
             .unwrap(),
         "0.9877"
     );
     assert_eq!(
-        session.tree(doc).supports()[0].display_percent(node, &style),
+        session.tree(doc).unwrap().supports()[0].display_percent(node, &style),
         Some(0.654_321)
     );
-    assert_eq!(session.tree(doc).to_newick(), original);
+    assert_eq!(session.tree(doc).unwrap().to_newick(), original);
     session.undo(doc).unwrap();
-    assert!(session.tree(doc).style().support_decimals.is_empty());
+    assert!(
+        session
+            .tree(doc)
+            .unwrap()
+            .style()
+            .support_decimals
+            .is_empty()
+    );
     session.redo(doc).unwrap();
-    assert_eq!(session.tree(doc).style(), &style);
+    assert_eq!(session.tree(doc).unwrap().style(), &style);
     session.save(doc, None).unwrap();
     let reopened = files::load_tree(&path).unwrap().doc;
     assert_eq!(reopened.style(), &style);
@@ -110,10 +118,10 @@ fn changing_view_link_preserves_origin_and_save_as_rebases_both_links() {
     let origin_bytes = std::fs::read(basecraft_ops::links::sidecar(&tree_path)).unwrap();
     let origin = AlignmentLink::read(&tree_path).unwrap();
     let snapshot = origin
-        .checked_snapshot(&tree_path, session.tree(doc))
+        .checked_snapshot(&tree_path, session.tree(doc).unwrap())
         .unwrap();
     let snapshot_bytes = std::fs::read(&snapshot).unwrap();
-    AlignmentLink::associate(&tree_path, session.tree(doc), &other).unwrap();
+    AlignmentLink::associate(&tree_path, session.tree(doc).unwrap(), &other).unwrap();
     let view = AlignmentLink::read_view(&tree_path).unwrap();
     assert_eq!(view.source, other);
     assert!(!view.inferred);
@@ -124,7 +132,7 @@ fn changing_view_link_preserves_origin_and_save_as_rebases_both_links() {
     assert_eq!(snapshot_bytes, std::fs::read(&snapshot).unwrap());
     let invalid = root.join("invalid.afa");
     std::fs::write(&invalid, ">a\nAC\n>x\nAT\n").unwrap();
-    assert!(AlignmentLink::associate(&tree_path, session.tree(doc), &invalid).is_err());
+    assert!(AlignmentLink::associate(&tree_path, session.tree(doc).unwrap(), &invalid).is_err());
     assert_eq!(AlignmentLink::read_view(&tree_path).unwrap().source, other);
     std::fs::create_dir(root.join("copies")).unwrap();
     let output = root.join("copies/copy.nwk");
@@ -137,29 +145,29 @@ fn changing_view_link_preserves_origin_and_save_as_rebases_both_links() {
     assert_eq!(copied_view.source, other);
     assert!(
         copied_origin
-            .checked_snapshot(&output, session.tree(doc))
+            .checked_snapshot(&output, session.tree(doc).unwrap())
             .is_ok()
     );
     assert!(
         copied_view
-            .checked_snapshot(&output, session.tree(doc))
+            .checked_snapshot(&output, session.tree(doc).unwrap())
             .is_ok()
     );
     std::fs::remove_file(&other).unwrap();
     assert!(
         copied_view
-            .status(&output, session.tree(doc))
+            .status(&output, session.tree(doc).unwrap())
             .contains("missing or moved")
     );
     assert!(
         copied_view
-            .checked_snapshot(&output, session.tree(doc))
+            .checked_snapshot(&output, session.tree(doc).unwrap())
             .is_ok()
     );
     std::fs::write(&source, ">a\nGG\n>b\nGT\n").unwrap();
     assert!(
         copied_origin
-            .status(&output, session.tree(doc))
+            .status(&output, session.tree(doc).unwrap())
             .contains("source changed")
     );
     assert_eq!(std::fs::read(&snapshot).unwrap(), snapshot_bytes);
@@ -201,8 +209,8 @@ fn staged_support_removal_and_style_are_one_reversible_replayable_edit() {
     std::fs::write(&path, "((a,b)90.123/0.987,c);").unwrap();
     let mut session = Session::new(dir.path());
     let doc = session.open(&path).unwrap();
-    let original = session.tree(doc).to_newick();
-    let mut style = session.tree(doc).style().clone();
+    let original = session.tree(doc).unwrap().to_newick();
+    let mut style = session.tree(doc).unwrap().style().clone();
     style.support_decimals.insert("Support 2".into(), 4);
     session
         .apply(
@@ -213,12 +221,19 @@ fn staged_support_removal_and_style_are_one_reversible_replayable_edit() {
             },
         )
         .unwrap();
-    assert_eq!(session.tree(doc).supports().len(), 1);
-    assert_eq!(session.tree(doc).supports()[0].name, "Support 2");
-    assert_eq!(session.tree(doc).style(), &style);
+    assert_eq!(session.tree(doc).unwrap().supports().len(), 1);
+    assert_eq!(session.tree(doc).unwrap().supports()[0].name, "Support 2");
+    assert_eq!(session.tree(doc).unwrap().style(), &style);
     session.undo(doc).unwrap();
-    assert_eq!(session.tree(doc).to_newick(), original);
-    assert!(session.tree(doc).style().support_decimals.is_empty());
+    assert_eq!(session.tree(doc).unwrap().to_newick(), original);
+    assert!(
+        session
+            .tree(doc)
+            .unwrap()
+            .style()
+            .support_decimals
+            .is_empty()
+    );
     session.redo(doc).unwrap();
     session.save(doc, None).unwrap();
     let reopened = files::load_tree(&path).unwrap().doc;
@@ -236,9 +251,9 @@ fn invalid_style_and_removal_do_not_mutate_or_start_recovery_tracking() {
     std::fs::write(&path, "((a,b)90.123/0.987,c);").unwrap();
     let mut session = Session::new(dir.path());
     let doc = session.open(&path).unwrap();
-    let original = session.tree(doc).to_newick();
-    let version = session.tree(doc).version();
-    let style = session.tree(doc).style().clone();
+    let original = session.tree(doc).unwrap().to_newick();
+    let version = session.tree(doc).unwrap().version();
+    let style = session.tree(doc).unwrap().style().clone();
     assert!(
         session
             .apply(
@@ -250,8 +265,8 @@ fn invalid_style_and_removal_do_not_mutate_or_start_recovery_tracking() {
             )
             .is_err()
     );
-    assert_eq!(session.tree(doc).to_newick(), original);
-    assert_eq!(session.tree(doc).version(), version);
+    assert_eq!(session.tree(doc).unwrap().to_newick(), original);
+    assert_eq!(session.tree(doc).unwrap().version(), version);
     assert!(!dir.path().join(".basecraft").exists());
     let mut invalid = style.clone();
     invalid.support_decimals.insert("Support 1".into(), 255);
@@ -266,7 +281,7 @@ fn invalid_style_and_removal_do_not_mutate_or_start_recovery_tracking() {
             )
             .is_err()
     );
-    assert_eq!(session.tree(doc).style(), &style);
+    assert_eq!(session.tree(doc).unwrap().style(), &style);
     assert!(!dir.path().join(".basecraft").exists());
     // Old operation logs still deserialize with no staged removals.
     let old: Op = serde_json::from_value(json!({"op":"tree.style","params":{"style":{}}})).unwrap();

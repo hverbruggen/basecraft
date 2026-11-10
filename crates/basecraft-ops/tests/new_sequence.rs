@@ -29,7 +29,7 @@ fn new_sequence_validates_before_creating_and_replays_unsaved_edits() {
         .create_sequence("sample", "ac gt\nryswkmbdhvn")
         .unwrap();
     assert_eq!(id.0, 0);
-    assert_eq!(session.doc(id).read(0, 15), b"ACGTRYSWKMBDHVN");
+    assert_eq!(session.doc(id).unwrap().read(0, 15), b"ACGTRYSWKMBDHVN");
     assert!(session.document_record(id).unwrap().unsaved);
     assert!(!root.path().join(session.doc_key(id)).exists());
     assert!(session.save(id, None).is_err());
@@ -43,11 +43,12 @@ fn new_sequence_validates_before_creating_and_replays_unsaved_edits() {
     assert_eq!(session.record_revision(id).unwrap(), before);
     session.apply(id, Op::FeatureAdd { feature }).unwrap();
     session.undo(id).unwrap();
-    assert_eq!(session.doc(id).features().count(), 0);
+    assert_eq!(session.doc(id).unwrap().features().count(), 0);
     session.redo(id).unwrap();
     assert_eq!(
         session
             .doc(id)
+            .unwrap()
             .features()
             .next()
             .unwrap()
@@ -66,12 +67,18 @@ fn new_sequence_validates_before_creating_and_replays_unsaved_edits() {
     let outputs = replay::recover(&recovery, &restored).unwrap();
     let mut recovered = Session::unlogged(&restored);
     let copy = recovered.open(&outputs[0]).unwrap();
-    assert_eq!(recovered.doc(copy).read(0, 15), session.doc(id).read(0, 15));
-    assert_eq!(recovered.doc(copy).features().count(), 1);
+    assert_eq!(
+        recovered.doc(copy).unwrap().read(0, 15),
+        session.doc(id).unwrap().read(0, 15)
+    );
+    assert_eq!(recovered.doc(copy).unwrap().features().count(), 1);
     let output = root.path().join("saved.gb");
     session.save_new(id, Some(&output)).unwrap();
     let reopened = session.open(&output).unwrap();
     assert!(!session.document_record(reopened).unwrap().unsaved);
-    assert_eq!(session.doc(reopened).read(0, 15), b"ACGTRYSWKMBDHVN");
+    assert_eq!(
+        session.doc(reopened).unwrap().read(0, 15),
+        b"ACGTRYSWKMBDHVN"
+    );
     assert!(session.save_new(id, Some(&output)).is_err());
 }

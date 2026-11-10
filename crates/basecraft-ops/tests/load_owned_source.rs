@@ -144,7 +144,7 @@ fn session_records_loaded_hash_and_refuses_edits_after_external_change() {
             )
             .is_err()
     );
-    assert_eq!(session.doc(id).read(0, 4), b"ACGT");
+    assert_eq!(session.doc(id).unwrap().read(0, 4), b"ACGT");
 }
 
 #[test]
@@ -157,7 +157,7 @@ fn companion_hash_remains_guarded_on_the_legacy_path() {
     std::fs::write(&sidecar, gff).unwrap();
     let mut session = Session::new(dir.path());
     let id = session.open(&path).unwrap();
-    assert_eq!(session.doc(id).features().count(), 1);
+    assert_eq!(session.doc(id).unwrap().features().count(), 1);
     let record = session.document_record(id).unwrap();
     let open = record
         .events
@@ -182,8 +182,8 @@ fn companion_hash_remains_guarded_on_the_legacy_path() {
             )
             .is_err()
     );
-    assert_eq!(session.doc(id).read(0, 4), b"ACGT");
-    assert_eq!(session.doc(id).features().count(), 1);
+    assert_eq!(session.doc(id).unwrap().read(0, 4), b"ACGT");
+    assert_eq!(session.doc(id).unwrap().features().count(), 1);
 }
 
 #[cfg(feature = "test-counters")]
@@ -354,7 +354,7 @@ fn bound_tree_session_with_missing_metadata_reads_main_once() {
     counters::reset();
     let mut session = Session::unlogged(dir.path());
     let doc = session.open(&path).unwrap();
-    assert!(session.tree_metadata_warning(doc).is_some());
+    assert!(session.tree_metadata_warning(doc).unwrap().is_some());
     let counts = counters::snapshot();
     assert_eq!(counts.unresolved_reads, 0);
     assert_eq!(

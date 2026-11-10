@@ -26,7 +26,7 @@ fn passive_open_close_and_unchanged_save_create_no_records() {
         let mut session = Session::recoverable_with_paths(dir.path(), &paths).unwrap();
         let doc = session.open(&file).unwrap();
         session.save(doc, None).unwrap();
-        assert_eq!(session.doc(doc).len(), 4);
+        assert_eq!(session.doc(doc).unwrap().len(), 4);
     }
     assert!(!paths.state.exists());
     assert!(!paths.cache.exists());

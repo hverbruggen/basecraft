@@ -109,8 +109,8 @@ pub fn run(scenario: &str, root: &Path) -> Result<()> {
     if !session.is_tree(id) {
         return Err("fixture did not open as a tree".into());
     }
-    let before_total = verify(session.tree(id))?;
-    let before = session.tree(id).to_newick_with_rooting();
+    let before_total = verify(session.tree(id)?)?;
+    let before = session.tree(id)?.to_newick_with_rooting();
     let hashes = session.save_hashes(id)?;
     if scenario == "tree-midpoint-50000" {
         let op = Op::TreeMidpointRoot {};
@@ -118,24 +118,25 @@ pub fn run(scenario: &str, root: &Path) -> Result<()> {
         let applied = session.apply(id, op);
         duration_ns = start.elapsed().as_nanos();
         applied?;
-        let after_total = verify(session.tree(id))?;
+        let after_total = verify(session.tree(id)?)?;
         if (after_total - before_total).abs() > before_total * 1e-12 {
             return Err("reroot changed branch total".into());
         }
-        let after = session.tree(id).to_newick_with_rooting();
+        let after = session.tree(id)?.to_newick_with_rooting();
         if after == before {
             return Err("midpoint operation did not change fixture".into());
         }
         // Undo, redo and durable-log replay are verification, not measured work.
         session.undo(id)?;
-        verify(session.tree(id))?;
-        if session.tree(id).to_newick_with_rooting() != before || session.save_hashes(id)? != hashes
+        verify(session.tree(id)?)?;
+        if session.tree(id)?.to_newick_with_rooting() != before
+            || session.save_hashes(id)? != hashes
         {
             return Err("undo did not restore original tree semantics/hashes".into());
         }
         session.redo(id)?;
-        verify(session.tree(id))?;
-        if session.tree(id).to_newick_with_rooting() != after {
+        verify(session.tree(id)?)?;
+        if session.tree(id)?.to_newick_with_rooting() != after {
             return Err("redo did not reproduce midpoint result".into());
         }
         session.flush()?;
@@ -161,7 +162,7 @@ pub fn run(scenario: &str, root: &Path) -> Result<()> {
             "operations": 1, "verified": true, "fixture_bytes": fixture_bytes,
             "output_bytes": file.metadata()?.len(), "rows": TIPS, "columns": null,
             "edits": usize::from(scenario != "tree-open-50000"),
-            "output_rooted": session.tree(id).rooted,
+            "output_rooted": session.tree(id)?.rooted,
             "work": {"protocol": "session-tree-v1", "tips": TIPS,
                 "shape": "balanced-binary-floor-half-v1", "tip_names": "tipNNNNN-zero-based",
                 "branches": "integer-1+(start*17+count*13)%97-v1", "source_rooting": "unrooted",

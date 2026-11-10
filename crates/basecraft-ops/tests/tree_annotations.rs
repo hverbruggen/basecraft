@@ -19,15 +19,15 @@ fn display_names_preserve_support_tip_identity_links_and_replay() {
         std::fs::write(&source, ">A\nAC\n>B\nAT\n>C\nAG\n").unwrap();
         let mut session = Session::new(root);
         let doc = session.open(&path).unwrap();
-        AlignmentLink::associate(&path, session.tree(doc), &source).unwrap();
+        AlignmentLink::associate(&path, session.tree(doc).unwrap(), &source).unwrap();
         let link = std::fs::read(basecraft_ops::links::sidecar(&path)).unwrap();
         let snapshot = AlignmentLink::read(&path)
             .unwrap()
-            .checked_snapshot(&path, session.tree(doc))
+            .checked_snapshot(&path, session.tree(doc).unwrap())
             .unwrap();
         let snapshot_bytes = std::fs::read(&snapshot).unwrap();
-        let scientific = session.tree(doc).to_newick();
-        let supports = session.tree(doc).supports().to_vec();
+        let scientific = session.tree(doc).unwrap().to_newick();
+        let supports = session.tree(doc).unwrap().supports().to_vec();
         for (id, clade, label) in [
             (1, vec!["A".into(), "B".into()], "95 / named branch"),
             (2, vec!["A".into()], "Tip display name"),
@@ -45,7 +45,7 @@ fn display_names_preserve_support_tip_identity_links_and_replay() {
                 )
                 .unwrap();
         }
-        let annotations = session.tree(doc).annotations().clone();
+        let annotations = session.tree(doc).unwrap().annotations().clone();
         let mut edited = annotations[&1].clone();
         edited.label = "Numeric display: 0.999".into();
         session
@@ -58,17 +58,20 @@ fn display_names_preserve_support_tip_identity_links_and_replay() {
             )
             .unwrap();
         session.undo(doc).unwrap();
-        assert_eq!(session.tree(doc).annotations(), &annotations);
+        assert_eq!(session.tree(doc).unwrap().annotations(), &annotations);
         session.redo(doc).unwrap();
         assert_eq!(
-            session.tree(doc).annotations()[&1].label,
+            session.tree(doc).unwrap().annotations()[&1].label,
             "Numeric display: 0.999"
         );
-        assert_eq!(session.tree(doc).to_newick(), scientific);
-        assert_eq!(session.tree(doc).supports(), supports);
+        assert_eq!(session.tree(doc).unwrap().to_newick(), scientific);
+        assert_eq!(session.tree(doc).unwrap().supports(), supports);
         session.save(doc, None).unwrap();
         let reopened = files::load_tree(&path).unwrap().doc;
-        assert_eq!(reopened.annotations(), session.tree(doc).annotations());
+        assert_eq!(
+            reopened.annotations(),
+            session.tree(doc).unwrap().annotations()
+        );
         assert_eq!(reopened.to_newick(), scientific);
         assert_eq!(reopened.supports(), supports);
         assert!(reopened.find_tip("A").is_some());

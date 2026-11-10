@@ -407,6 +407,7 @@ fn tree_methods_update_one_canonical_spart_and_export_without_sources() {
     basecraft_ops::provenance::package(&copied, &package).unwrap();
     let expected = session
         .delimitation(doc)
+        .unwrap()
         .hypotheses
         .iter()
         .map(|h| h.groups.clone())
@@ -943,7 +944,7 @@ fn workflow_repairs_publication_and_applies_all_hypotheses_in_one_undo_group() {
     common::assert_completed(&setup);
     let mut session = Session::new(root.path());
     let doc = session.open(&root.path().join("species.spart")).unwrap();
-    let before = session.delimitation(doc).hypotheses.clone();
+    let before = session.delimitation(doc).unwrap().hypotheses.clone();
     let mut manager = JobManager::default();
     let accepted = common::submit_in(&mut manager,&registry,&mut session,|s| json!({
         "operation":"basecraft.host/asap_alignment@1","inputs":{"alignment":common::file("input.fa")},
@@ -954,7 +955,7 @@ fn workflow_repairs_publication_and_applies_all_hypotheses_in_one_undo_group() {
     std::fs::write(&export, "foreign").unwrap();
     let partial = common::wait_in(&manager, &mut session, &accepted.run_id);
     assert_eq!(partial.state, RuntimeState::Partial, "{partial:#?}");
-    assert_eq!(session.delimitation(doc).hypotheses, before);
+    assert_eq!(session.delimitation(doc).unwrap().hypotheses, before);
     assert_eq!(std::fs::read_to_string(&export).unwrap(), "foreign");
     let receipt = common::evidence(&partial).join("stages.json");
     let stages = std::fs::read(&receipt).unwrap();
@@ -967,7 +968,7 @@ fn workflow_repairs_publication_and_applies_all_hypotheses_in_one_undo_group() {
         stages,
         "repair must never execute stages again"
     );
-    let applied = session.delimitation(doc).hypotheses.clone();
+    let applied = session.delimitation(doc).unwrap().hypotheses.clone();
     assert!(applied.len() > before.len());
     assert_eq!(
         finished(&session, doc)
@@ -977,9 +978,9 @@ fn workflow_repairs_publication_and_applies_all_hypotheses_in_one_undo_group() {
         1
     );
     session.undo(doc).unwrap();
-    assert_eq!(session.delimitation(doc).hypotheses, before);
+    assert_eq!(session.delimitation(doc).unwrap().hypotheses, before);
     session.redo(doc).unwrap();
-    assert_eq!(session.delimitation(doc).hypotheses, applied);
+    assert_eq!(session.delimitation(doc).unwrap().hypotheses, applied);
     assert_eq!(
         basecraft_ops::provenance::verify(&export).unwrap(),
         Vec::<String>::new()

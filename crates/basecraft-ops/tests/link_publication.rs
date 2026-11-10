@@ -106,9 +106,11 @@ fn publication_error_after_main_write_disables_extraction_and_keeps_previous_ass
     let output = inferred(root, "output", &source);
     let mut session = Session::new(root);
     let doc = session.open(&input).unwrap();
-    AlignmentLink::associate(&output, session.tree(doc), &other).unwrap();
+    AlignmentLink::associate(&output, session.tree(doc).unwrap(), &other).unwrap();
     let old = AlignmentLink::read_view(&output).unwrap();
-    let old_snapshot = old.checked_snapshot(&output, session.tree(doc)).unwrap();
+    let old_snapshot = old
+        .checked_snapshot(&output, session.tree(doc).unwrap())
+        .unwrap();
     let old_bytes = std::fs::read(&old_snapshot).unwrap();
     let old_metadata = std::fs::read(links::view_sidecar(&output)).unwrap();
     // Tree replacement succeeds, then presentation-sidecar replacement fails.
@@ -148,10 +150,11 @@ fn damaged_explicit_view_is_checked_before_overwriting_an_existing_destination()
     let output = inferred(root, "output", &other);
     let mut session = Session::new(root);
     let doc = session.open(&input).unwrap();
-    AlignmentLink::associate(&input, session.tree(doc), &other).unwrap();
+    AlignmentLink::associate(&input, session.tree(doc).unwrap(), &other).unwrap();
     let view = AlignmentLink::read_view(&input).unwrap();
     std::fs::write(
-        view.checked_snapshot(&input, session.tree(doc)).unwrap(),
+        view.checked_snapshot(&input, session.tree(doc).unwrap())
+            .unwrap(),
         "damaged",
     )
     .unwrap();
@@ -205,7 +208,7 @@ fn save_as_with_explicit_view_remains_portable_and_preserves_source_hashes() {
     let input = inferred(&folder, "input", &source);
     let mut session = Session::new(&folder);
     let doc = session.open(&input).unwrap();
-    AlignmentLink::associate(&input, session.tree(doc), &other).unwrap();
+    AlignmentLink::associate(&input, session.tree(doc).unwrap(), &other).unwrap();
     let original = AlignmentLink::read(&input).unwrap();
     let original_metadata = std::fs::read(links::sidecar(&input)).unwrap();
     let output = folder.join("copy.nwk");
@@ -247,7 +250,7 @@ fn save_as_over_symlink_to_original_replaces_alias_associations() {
     AlignmentLink::create(&output, &other, &other, 3, true, None).unwrap();
     let mut session = Session::new(root);
     let doc = session.open(&input).unwrap();
-    AlignmentLink::associate(&output, session.tree(doc), &other).unwrap();
+    AlignmentLink::associate(&output, session.tree(doc).unwrap(), &other).unwrap();
     let previous_origin = std::fs::read(links::sidecar(&input)).unwrap();
     session.save(doc, Some(&output)).unwrap();
     assert!(
@@ -258,7 +261,10 @@ fn save_as_over_symlink_to_original_replaces_alias_associations() {
     );
     let link = AlignmentLink::read_view(&output).unwrap();
     assert_eq!(link.source, source);
-    assert!(link.checked_snapshot(&output, session.tree(doc)).is_ok());
+    assert!(
+        link.checked_snapshot(&output, session.tree(doc).unwrap())
+            .is_ok()
+    );
     assert_eq!(
         std::fs::read(links::sidecar(&input)).unwrap(),
         previous_origin

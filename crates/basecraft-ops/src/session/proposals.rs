@@ -313,7 +313,7 @@ mod tests {
         let (dir, mut session, doc) = fixture();
         session.apply(doc, remove("partition-3")).unwrap();
         session.undo(doc).unwrap();
-        let before = session.delimitation(doc).clone();
+        let before = session.delimitation(doc).unwrap().clone();
         let generation = session.generation(doc);
         let revision = session.revision(doc);
         let journal = crate::log::read_all(dir.path()).unwrap();
@@ -354,7 +354,7 @@ mod tests {
                 .apply_delimitation_proposals(DocId(999), 0, 0, &[])
                 .is_err()
         );
-        assert_eq!(session.delimitation(doc), &before);
+        assert_eq!(session.delimitation(doc).unwrap(), &before);
         assert_eq!(session.generation(doc), generation);
         assert!(session.can_redo(doc));
         assert_eq!(session.events, events);
@@ -362,13 +362,13 @@ mod tests {
         assert_eq!(apply(&mut session, doc, &[]).unwrap(), Vec::<String>::new());
         assert!(session.can_redo(doc));
         session.redo(doc).unwrap();
-        assert_eq!(session.delimitation(doc).hypotheses.len(), 2);
+        assert_eq!(session.delimitation(doc).unwrap().hypotheses.len(), 2);
     }
 
     #[test]
     fn prepared_batch_cannot_commit_after_an_intervening_edit() {
         let (_dir, mut session, doc) = fixture();
-        let candidate = Loaded::Delimitation(session.delimitation(doc).clone());
+        let candidate = Loaded::Delimitation(session.delimitation(doc).unwrap().clone());
         let batch = session
             .stage_proposals(
                 doc,
@@ -380,10 +380,10 @@ mod tests {
             )
             .unwrap();
         session.apply(doc, remove("partition-3")).unwrap();
-        let after_edit = session.delimitation(doc).clone();
+        let after_edit = session.delimitation(doc).unwrap().clone();
         let events = session.events.clone();
         assert!(session.commit_proposals(batch).is_err());
-        assert_eq!(session.delimitation(doc), &after_edit);
+        assert_eq!(session.delimitation(doc).unwrap(), &after_edit);
         assert_eq!(session.events, events);
         assert_eq!(session.generation(doc), 1);
     }
@@ -407,7 +407,7 @@ mod tests {
         for sync_failure in [false, true] {
             let (dir, mut session, doc) = fixture();
             session.track(doc).unwrap();
-            let before = session.delimitation(doc).clone();
+            let before = session.delimitation(doc).unwrap().clone();
             let journal = journal_bytes(dir.path());
             let events = session.events.clone();
             let group = session.next_group;
@@ -419,7 +419,7 @@ mod tests {
             }
             let ops = [remove("partition-1"), remove("partition-3")];
             assert!(apply(&mut session, doc, &ops).is_err());
-            assert_eq!(session.delimitation(doc), &before);
+            assert_eq!(session.delimitation(doc).unwrap(), &before);
             assert_eq!(session.generation(doc), 0);
             assert!(!session.can_undo(doc));
             assert_eq!(session.events, events);
@@ -427,16 +427,16 @@ mod tests {
             assert_eq!(journal_bytes(dir.path()), journal);
             let ids = apply(&mut session, doc, &ops).unwrap();
             assert_eq!(ids.len(), 2);
-            assert_eq!(session.delimitation(doc).hypotheses.len(), 1);
+            assert_eq!(session.delimitation(doc).unwrap().hypotheses.len(), 1);
             assert_eq!(session.generation(doc), 2);
             let entries = crate::log::read_all(dir.path()).unwrap();
             assert_eq!(entries.len(), events.len() + 2);
             assert_eq!(entries[entries.len() - 2].state.features, 2);
             assert_eq!(entries[entries.len() - 1].state.features, 1);
             session.undo(doc).unwrap();
-            assert_eq!(session.delimitation(doc), &before);
+            assert_eq!(session.delimitation(doc).unwrap(), &before);
             session.redo(doc).unwrap();
-            assert_eq!(session.delimitation(doc).hypotheses.len(), 1);
+            assert_eq!(session.delimitation(doc).unwrap().hypotheses.len(), 1);
             assert!(crate::replay::replay(dir.path()).unwrap().ok());
         }
     }
@@ -445,14 +445,14 @@ mod tests {
     fn rollback_durability_failure_poisons_the_same_writer_without_applying_edits() {
         let (dir, mut session, doc) = fixture();
         session.track(doc).unwrap();
-        let before = session.delimitation(doc).clone();
+        let before = session.delimitation(doc).unwrap().clone();
         let faults = &mut session.log.as_mut().unwrap().faults;
         faults.after_bytes = Some(127);
         faults.rollback_sync = true;
         assert!(apply(&mut session, doc, &[remove("partition-1")]).is_err());
         assert!(dir.path().join("recovery-integrity-error.json").exists());
         assert!(apply(&mut session, doc, &[remove("partition-1")]).is_err());
-        assert_eq!(session.delimitation(doc), &before);
+        assert_eq!(session.delimitation(doc).unwrap(), &before);
         assert_eq!(session.generation(doc), 0);
         assert!(!session.can_undo(doc));
     }
@@ -461,7 +461,7 @@ mod tests {
     fn oversized_batch_and_wrong_kind_are_rejected_without_live_edits() {
         let (dir, mut session, doc) = fixture();
         session.track(doc).unwrap();
-        let before = session.delimitation(doc).clone();
+        let before = session.delimitation(doc).unwrap().clone();
         let mut hypothesis = before.hypotheses[0].clone();
         hypothesis.id = "large".into();
         hypothesis.name = "x".repeat(8 << 20);
@@ -472,7 +472,7 @@ mod tests {
         };
         let journal = journal_bytes(dir.path());
         assert!(apply(&mut session, doc, &[op]).is_err());
-        assert_eq!(session.delimitation(doc), &before);
+        assert_eq!(session.delimitation(doc).unwrap(), &before);
         assert_eq!(journal_bytes(dir.path()), journal);
         assert_eq!(session.generation(doc), 0);
         let path = dir.path().join("sequence.fa");
@@ -525,18 +525,18 @@ mod tests {
                 .is_err()
         );
         assert!(session.pending.is_some());
-        assert_eq!(session.doc(doc).read(0, 5), b"ACGTA");
+        assert_eq!(session.doc(doc).unwrap().read(0, 5), b"ACGTA");
         assert_eq!(session.generation(doc), generation);
         assert_eq!(journal_bytes(dir.path()), journal);
         session
             .apply_sequence_proposals(doc, generation, revision, &[op], &Actor::External)
             .unwrap();
         assert!(session.pending.is_none());
-        assert_eq!(session.doc(doc).read(0, 5), b"TCGTA");
+        assert_eq!(session.doc(doc).unwrap().read(0, 5), b"TCGTA");
         session.undo(doc).unwrap();
-        assert_eq!(session.doc(doc).read(0, 5), b"ACGTA");
+        assert_eq!(session.doc(doc).unwrap().read(0, 5), b"ACGTA");
         session.undo(doc).unwrap();
-        assert_eq!(session.doc(doc).read(0, 4), b"ACGT");
+        assert_eq!(session.doc(doc).unwrap().read(0, 4), b"ACGT");
         assert!(crate::replay::replay(dir.path()).unwrap().ok());
     }
 
@@ -564,12 +564,12 @@ mod tests {
                 .is_err()
         );
         assert_eq!(journal_bytes(dir.path()), before);
-        assert_eq!(session.doc(doc).read(0, 4), b"ACGT");
+        assert_eq!(session.doc(doc).unwrap().read(0, 4), b"ACGT");
         assert_eq!(session.generation(doc), 0);
         session
             .apply_sequence_proposals(doc, 0, 0, &[op], &actor)
             .unwrap();
-        assert_eq!(session.doc(doc).read(0, 4), b"TCGT");
+        assert_eq!(session.doc(doc).unwrap().read(0, 4), b"TCGT");
         let feature = Feature {
             kind: "CDS".into(),
             location: basecraft_protocol::Location::simple(
@@ -608,11 +608,11 @@ mod tests {
                 &actor,
             )
             .unwrap();
-        assert!(session.doc(doc).feature(fid).is_none());
+        assert!(session.doc(doc).unwrap().feature(fid).is_none());
         session.undo(doc).unwrap();
-        assert_eq!(session.doc(doc).feature(fid), Some(&feature));
+        assert_eq!(session.doc(doc).unwrap().feature(fid), Some(&feature));
         session.redo(doc).unwrap();
-        assert!(session.doc(doc).feature(fid).is_none());
+        assert!(session.doc(doc).unwrap().feature(fid).is_none());
         assert!(crate::replay::replay(dir.path()).unwrap().ok());
     }
 }

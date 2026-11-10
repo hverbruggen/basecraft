@@ -15,7 +15,13 @@ fn ragged_save_and_save_as_reopen_preserve_explicit_lengths_and_gaps() {
         {
             let mut session = Session::new(dir.path());
             let doc = session.open(&source).unwrap();
-            assert!(session.alignment(doc).validate_aligned_input().is_err());
+            assert!(
+                session
+                    .alignment(doc)
+                    .unwrap()
+                    .validate_aligned_input()
+                    .is_err()
+            );
             session
                 .apply(
                     doc,
@@ -30,7 +36,13 @@ fn ragged_save_and_save_as_reopen_preserve_explicit_lengths_and_gaps() {
             session
                 .save(doc, save_as.then_some(target.as_path()))
                 .unwrap();
-            assert!(session.alignment(doc).validate_aligned_input().is_err());
+            assert!(
+                session
+                    .alignment(doc)
+                    .unwrap()
+                    .validate_aligned_input()
+                    .is_err()
+            );
             // Repeat the same save route: its accepted hash and serializer
             // must agree, without introducing display padding.
             session
@@ -46,7 +58,7 @@ fn ragged_save_and_save_as_reopen_preserve_explicit_lengths_and_gaps() {
         }
         let mut reopened = Session::new(dir.path());
         let doc = reopened.open(target).unwrap();
-        let alignment = reopened.alignment(doc);
+        let alignment = reopened.alignment(doc).unwrap();
         assert!(alignment.validate_aligned_input().is_err());
         assert_eq!(alignment.saved_row_len(1), 3);
         assert_eq!(alignment.read(1, 0, 6), b"T.----");
@@ -73,12 +85,21 @@ fn ragged_extent_tracks_explicit_gap_edits_undo_redo_and_snapshots() {
                 },
             )
             .unwrap();
-        assert_eq!(session.alignment(doc).saved_row_len(1), 5);
-        assert!(session.alignment(doc).validate_aligned_input().is_err());
+        assert_eq!(session.alignment(doc).unwrap().saved_row_len(1), 5);
+        assert!(
+            session
+                .alignment(doc)
+                .unwrap()
+                .validate_aligned_input()
+                .is_err()
+        );
         session.undo(doc).unwrap();
-        assert_eq!(session.alignment(doc).saved_row_len(1), 3);
+        assert_eq!(session.alignment(doc).unwrap().saved_row_len(1), 3);
         session.redo(doc).unwrap();
-        assert_eq!(session.alignment(doc).snapshot().saved_row_len(1), 5);
+        assert_eq!(
+            session.alignment(doc).unwrap().snapshot().saved_row_len(1),
+            5
+        );
         session.undo(doc).unwrap();
         // Explicitly supplied terminal gaps are meaningful input. Equal
         // lengths permit the input; no biological alignment is inferred.
@@ -93,9 +114,21 @@ fn ragged_extent_tracks_explicit_gap_edits_undo_redo_and_snapshots() {
                 },
             )
             .unwrap();
-        assert!(session.alignment(doc).validate_aligned_input().is_ok());
+        assert!(
+            session
+                .alignment(doc)
+                .unwrap()
+                .validate_aligned_input()
+                .is_ok()
+        );
         session.undo(doc).unwrap();
-        assert!(session.alignment(doc).validate_aligned_input().is_err());
+        assert!(
+            session
+                .alignment(doc)
+                .unwrap()
+                .validate_aligned_input()
+                .is_err()
+        );
         session.redo(doc).unwrap();
         session.save(doc, None).unwrap();
     }
@@ -105,8 +138,14 @@ fn ragged_extent_tracks_explicit_gap_edits_undo_redo_and_snapshots() {
     );
     let mut session = Session::new(dir.path());
     let doc = session.open(&source).unwrap();
-    assert!(session.alignment(doc).validate_aligned_input().is_ok());
-    assert_eq!(session.alignment(doc).read(1, 0, 6), b"A.----");
+    assert!(
+        session
+            .alignment(doc)
+            .unwrap()
+            .validate_aligned_input()
+            .is_ok()
+    );
+    assert_eq!(session.alignment(doc).unwrap().read(1, 0, 6), b"A.----");
 }
 
 #[test]
@@ -128,8 +167,8 @@ fn ragged_row_extents_follow_reordering_and_undo_after_width_growth() {
                 },
             )
             .unwrap();
-        assert_eq!(session.alignment(doc).width(), 7);
-        assert_eq!(session.alignment(doc).saved_row_len(1), 3);
+        assert_eq!(session.alignment(doc).unwrap().width(), 7);
+        assert_eq!(session.alignment(doc).unwrap().saved_row_len(1), 3);
         session
             .apply(
                 doc,
@@ -139,9 +178,9 @@ fn ragged_row_extents_follow_reordering_and_undo_after_width_growth() {
                 },
             )
             .unwrap();
-        assert_eq!(session.alignment(doc).saved_row_len(0), 3);
+        assert_eq!(session.alignment(doc).unwrap().saved_row_len(0), 3);
         session.undo(doc).unwrap();
-        assert_eq!(session.alignment(doc).saved_row_len(1), 3);
+        assert_eq!(session.alignment(doc).unwrap().saved_row_len(1), 3);
         session.redo(doc).unwrap();
         session.save(doc, None).unwrap();
     }
@@ -151,7 +190,13 @@ fn ragged_row_extents_follow_reordering_and_undo_after_width_growth() {
     );
     let mut session = Session::new(dir.path());
     let doc = session.open(&source).unwrap();
-    assert!(session.alignment(doc).validate_aligned_input().is_err());
+    assert!(
+        session
+            .alignment(doc)
+            .unwrap()
+            .validate_aligned_input()
+            .is_err()
+    );
 }
 
 #[test]
@@ -172,10 +217,16 @@ fn equal_alignment_preserves_literal_terminal_gaps_and_existing_delete_semantics
                 },
             )
             .unwrap();
-        assert_eq!(session.alignment(doc).read(0, 0, 6), b"C--..-");
-        assert!(session.alignment(doc).validate_aligned_input().is_ok());
+        assert_eq!(session.alignment(doc).unwrap().read(0, 0, 6), b"C--..-");
+        assert!(
+            session
+                .alignment(doc)
+                .unwrap()
+                .validate_aligned_input()
+                .is_ok()
+        );
         session.undo(doc).unwrap();
-        assert_eq!(session.alignment(doc).read(0, 0, 6), b"AC--..");
+        assert_eq!(session.alignment(doc).unwrap().read(0, 0, 6), b"AC--..");
         session.redo(doc).unwrap();
         session.save(doc, None).unwrap();
     }
@@ -185,7 +236,13 @@ fn equal_alignment_preserves_literal_terminal_gaps_and_existing_delete_semantics
     );
     let mut session = Session::new(dir.path());
     let doc = session.open(&source).unwrap();
-    assert!(session.alignment(doc).validate_aligned_input().is_ok());
+    assert!(
+        session
+            .alignment(doc)
+            .unwrap()
+            .validate_aligned_input()
+            .is_ok()
+    );
 }
 
 #[test]
@@ -241,7 +298,7 @@ fn alignment_interface_rejections_normalization_and_hashes() {
             },
         )
         .unwrap();
-    assert_eq!(session.alignment(doc).read(1, 0, 3), b"T.-");
+    assert_eq!(session.alignment(doc).unwrap().read(1, 0, 3), b"T.-");
     let expected = RAGGED.replace("A.-", "T.-");
     let hashes = vec![basecraft_io::hash_bytes(expected.as_bytes())];
     assert_eq!(session.save_hashes(doc).unwrap(), hashes);
@@ -307,13 +364,13 @@ fn alignment_bursts_respect_actor_group_and_nonadjacent_boundaries() {
         b"AAAAAAAA",
     ] {
         session.undo(doc).unwrap();
-        assert_eq!(session.alignment(doc).read(0, 0, 8), expected);
+        assert_eq!(session.alignment(doc).unwrap().read(0, 0, 8), expected);
     }
     assert!(!session.can_undo(doc));
     for _ in 0..5 {
         session.redo(doc).unwrap();
     }
-    assert_eq!(session.alignment(doc).read(0, 0, 8), b"CGTCGTAC");
+    assert_eq!(session.alignment(doc).unwrap().read(0, 0, 8), b"CGTCGTAC");
     session.save(doc, None).unwrap();
     drop(session);
     let entries = basecraft_ops::log::read_all(dir.path()).unwrap();

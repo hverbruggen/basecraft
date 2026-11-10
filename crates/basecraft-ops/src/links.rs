@@ -695,10 +695,13 @@ mod tests {
         std::fs::write(&tree_path, "(a,b);").unwrap();
         let mut session = crate::Session::new(dir.path());
         let doc = session.open(&tree_path).unwrap();
-        AlignmentLink::associate(&tree_path, session.tree(doc), &source).unwrap();
+        AlignmentLink::associate(&tree_path, session.tree(doc).unwrap(), &source).unwrap();
         session.save(doc, Some(&output)).unwrap();
         let link = AlignmentLink::read(&output).unwrap();
-        assert!(link.checked_snapshot(&output, session.tree(doc)).is_ok());
+        assert!(
+            link.checked_snapshot(&output, session.tree(doc).unwrap())
+                .is_ok()
+        );
         session.flush().unwrap();
         assert!(crate::replay::replay(dir.path()).unwrap().ok());
     }

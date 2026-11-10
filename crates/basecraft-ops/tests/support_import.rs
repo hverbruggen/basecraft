@@ -30,7 +30,12 @@ fn imported_source_is_referenced_verified_and_survives_a_folder_move() {
     let imported = session.import_support(doc, &source, "Bootstrap").unwrap();
     assert_eq!(imported.added, vec!["Bootstrap".to_string()]);
     assert_eq!(imported.matched, 2);
-    let set = session.tree(doc).support("Bootstrap").unwrap().clone();
+    let set = session
+        .tree(doc)
+        .unwrap()
+        .support("Bootstrap")
+        .unwrap()
+        .clone();
     assert_eq!(set.source, "support.nwk");
     // The activity wrote no file, so its history row names none.
     let report = session.document_record(doc).unwrap().report().unwrap();
@@ -44,9 +49,9 @@ fn imported_source_is_referenced_verified_and_survives_a_folder_move() {
     );
     // Values and recorded activity form one undo step; redo restores them.
     session.undo(doc).unwrap();
-    assert!(session.tree(doc).support("Bootstrap").is_none());
+    assert!(session.tree(doc).unwrap().support("Bootstrap").is_none());
     session.redo(doc).unwrap();
-    assert_eq!(session.tree(doc).support("Bootstrap"), Some(&set));
+    assert_eq!(session.tree(doc).unwrap().support("Bootstrap"), Some(&set));
     session.save(doc, None).unwrap();
     drop(session);
 
@@ -90,7 +95,7 @@ fn a_source_without_support_or_a_clashing_name_changes_and_records_nothing() {
     let paths = paths(dir.path());
     let mut session = Session::recoverable_with_paths(target.parent().unwrap(), &paths).unwrap();
     let doc = session.open(&target).unwrap();
-    let before = session.tree(doc).supports().to_vec();
+    let before = session.tree(doc).unwrap().supports().to_vec();
     assert_eq!(
         session.import_support(doc, &plain, "").unwrap().added,
         Vec::<String>::new()
@@ -106,7 +111,7 @@ fn a_source_without_support_or_a_clashing_name_changes_and_records_nothing() {
     let other = target.parent().unwrap().join("other.nwk");
     std::fs::write(&other, "((A:1,E:1)75:1,(C:1,D:1)60:1);").unwrap();
     assert!(session.import_support(doc, &other, "x").is_err());
-    assert_eq!(session.tree(doc).supports(), before.as_slice());
+    assert_eq!(session.tree(doc).unwrap().supports(), before.as_slice());
     assert!(!session.can_undo(doc));
     assert!(!target.parent().unwrap().join(".basecraft").exists());
 }

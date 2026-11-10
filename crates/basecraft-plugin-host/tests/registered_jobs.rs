@@ -259,7 +259,7 @@ fn installed_snapshot_proposals_commit_in_owner_and_stale_jobs_preserve_edits() 
     let doc = session.open(&source).unwrap();
     let mut manager = JobManager::default();
     let request: OperationRequest = serde_json::from_value(json!({"operation":"org.example.registry-sequence/annotate@1",
-        "inputs":{"sequence":[{"kind":"document","doc":doc.0.to_string(),"generation":session.generation(doc),"revision":session.doc(doc).version()}]},"parameters":{}})).unwrap();
+        "inputs":{"sequence":[{"kind":"document","doc":doc.0.to_string(),"generation":session.generation(doc),"revision":session.doc(doc).unwrap().version()}]},"parameters":{}})).unwrap();
     let accepted = manager
         .submit_in_session(
             &registry,
@@ -284,13 +284,13 @@ fn installed_snapshot_proposals_commit_in_owner_and_stale_jobs_preserve_edits() 
         completed.proposals.unwrap().document,
         Some(doc.0.to_string())
     );
-    assert_eq!(session.doc(doc).feature_count(), 1);
+    assert_eq!(session.doc(doc).unwrap().feature_count(), 1);
     session.undo(doc).unwrap();
-    assert_eq!(session.doc(doc).feature_count(), 0);
+    assert_eq!(session.doc(doc).unwrap().feature_count(), 0);
     session.redo(doc).unwrap();
-    assert_eq!(session.doc(doc).feature_count(), 1);
+    assert_eq!(session.doc(doc).unwrap().feature_count(), 1);
     let stale: OperationRequest = serde_json::from_value(json!({"operation":"org.example.registry-sequence/annotate@1",
-        "inputs":{"sequence":[{"kind":"document","doc":doc.0.to_string(),"generation":session.generation(doc),"revision":session.doc(doc).version()}]},"parameters":{"slow":true}})).unwrap();
+        "inputs":{"sequence":[{"kind":"document","doc":doc.0.to_string(),"generation":session.generation(doc),"revision":session.doc(doc).unwrap().version()}]},"parameters":{"slow":true}})).unwrap();
     let accepted = manager
         .submit_in_session(
             &registry,
@@ -321,8 +321,8 @@ fn installed_snapshot_proposals_commit_in_owner_and_stale_jobs_preserve_edits() 
     }
     let failed = manager.result(&accepted.run_id).unwrap();
     assert_eq!(failed.state, RuntimeState::Failed);
-    assert_eq!(session.doc(doc).feature_count(), 1);
-    assert_eq!(session.doc(doc).read(0, 8), b"TCGTACGT");
+    assert_eq!(session.doc(doc).unwrap().feature_count(), 1);
+    assert_eq!(session.doc(doc).unwrap().read(0, 8), b"TCGTACGT");
     assert_eq!(std::fs::read(&source).unwrap(), b">sequence\nACGTACGT\n");
 }
 
@@ -470,7 +470,7 @@ fn committed_proposals_stay_partial_and_repair_requires_recorded_session_activit
         let request: OperationRequest = serde_json::from_value(json!({
             "operation":"org.example.registry-sequence/annotate@1",
             "inputs":{"sequence":[{"kind":"document","doc":doc.0.to_string(),
-                "generation":session.generation(doc),"revision":session.doc(doc).version()}]},
+                "generation":session.generation(doc),"revision":session.doc(doc).unwrap().version()}]},
             "parameters":{}
         }))
         .unwrap();
@@ -519,7 +519,7 @@ fn committed_proposals_stay_partial_and_repair_requires_recorded_session_activit
             }
         );
         assert_eq!(partial.proposals.as_ref().unwrap().applied, 1);
-        assert_eq!(session.doc(doc).feature_count(), 1);
+        assert_eq!(session.doc(doc).unwrap().feature_count(), 1);
         let activities = || {
             session
                 .document_record(doc)
@@ -572,12 +572,12 @@ fn committed_proposals_stay_partial_and_repair_requires_recorded_session_activit
             );
         }
         assert_eq!(
-            session.doc(doc).feature_count(),
+            session.doc(doc).unwrap().feature_count(),
             1,
             "repair must not reapply edits"
         );
         session.undo(doc).unwrap();
-        assert_eq!(session.doc(doc).feature_count(), 0);
+        assert_eq!(session.doc(doc).unwrap().feature_count(), 0);
         assert_eq!(std::fs::read(source).unwrap(), original);
     }
 }
@@ -899,10 +899,11 @@ fn unequal_alignment_inputs_are_refused_before_execution_for_files_and_documents
     let mut session = basecraft_ops::Session::new(root.path());
     let doc = session.open(&source).unwrap();
     // Loading still supports the rectangular editor, but cannot erase evidence.
-    assert_eq!(session.alignment(doc).read(1, 0, 5), b"AC---");
+    assert_eq!(session.alignment(doc).unwrap().read(1, 0, 5), b"AC---");
     assert!(
         session
             .alignment(doc)
+            .unwrap()
             .snapshot()
             .validate_aligned_input()
             .is_err()

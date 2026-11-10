@@ -293,7 +293,7 @@ fn full_disk_journal_append_rolls_back_and_keeps_a_recoverable_prefix() {
     eprintln!("full-disk journal error: {error:?}");
     assert!(error.is_err());
     assert_eq!(session.generation(doc), generation, "edit not rolled back");
-    assert_eq!(session.doc(doc).len(), 4);
+    assert_eq!(session.doc(doc).unwrap().len(), 4);
     let root = session.recovery_root().to_path_buf();
     assert!(!root.join("recovery-integrity-error.json").exists());
     let prefix = log::verified_session_prefix(&root).unwrap();
@@ -391,7 +391,7 @@ fn analysis_result_hypotheses_and_columns_undo_as_one_step() {
     }
     let dir = tempfile::tempdir().unwrap();
     let (mut session, doc) = open_species(dir.path());
-    let initial = session.delimitation(doc).clone();
+    let initial = session.delimitation(doc).unwrap().clone();
     let mut result = basecraft_io::spart::parse_text(SPART).unwrap();
     let template = result.hypotheses[0].clone();
     result.hypotheses = ["fitted-1", "fitted-2"]
@@ -410,13 +410,17 @@ fn analysis_result_hypotheses_and_columns_undo_as_one_step() {
     )
     .unwrap();
     delimitation::add_analysis_result(&mut session, doc, &report).unwrap();
-    let added = session.delimitation(doc).clone();
+    let added = session.delimitation(doc).unwrap().clone();
     assert_eq!(added.hypotheses.len(), initial.hypotheses.len() + 2);
     assert!(added.view.visible.contains(&"fitted-2".to_string()));
     session.undo(doc).unwrap();
-    assert_eq!(session.delimitation(doc), &initial, "one undo step");
+    assert_eq!(
+        session.delimitation(doc).unwrap(),
+        &initial,
+        "one undo step"
+    );
     session.redo(doc).unwrap();
-    assert_eq!(session.delimitation(doc), &added);
+    assert_eq!(session.delimitation(doc).unwrap(), &added);
     session.save(doc, None).unwrap();
     drop(session);
     assert!(replay::replay(dir.path()).unwrap().ok());
@@ -434,7 +438,7 @@ fn species_view_columns_and_tree_flips_survive_save_reopen_undo_and_replay() {
     let dir = tempfile::tempdir().unwrap();
     let (mut session, doc) = open_species(dir.path());
     let path = dir.path().join("input.spart");
-    let initial = session.delimitation(doc).view.clone();
+    let initial = session.delimitation(doc).unwrap().view.clone();
     let mut view = initial.clone();
     view.visible = vec!["partition-2".into(), "partition-1".into()];
     view.columns.insert(
@@ -464,16 +468,16 @@ fn species_view_columns_and_tree_flips_survive_save_reopen_undo_and_replay() {
     session.save(doc, None).unwrap();
     let mut reopened = Session::unlogged(dir.path());
     let copy = reopened.open(&path).unwrap();
-    assert_eq!(reopened.delimitation(copy).view, view);
+    assert_eq!(reopened.delimitation(copy).unwrap().view, view);
 
     // Undo after saving returns to the earlier view, and that saves too.
     session.undo(doc).unwrap();
-    assert_eq!(session.delimitation(doc).view, initial);
+    assert_eq!(session.delimitation(doc).unwrap().view, initial);
     assert!(session.document_record(doc).unwrap().unsaved);
     session.save(doc, None).unwrap();
     let mut reopened = Session::unlogged(dir.path());
     let copy = reopened.open(&path).unwrap();
-    assert_eq!(reopened.delimitation(copy).view, initial);
+    assert_eq!(reopened.delimitation(copy).unwrap().view, initial);
     drop(session);
     let report = replay::replay(dir.path()).unwrap();
     assert!(report.ok(), "{:?}", report.problems);
@@ -529,7 +533,7 @@ fn interrupted_result_group_resumes_after_journal_failure_as_one_undo_step() {
     }
     let dir = tempfile::tempdir().unwrap();
     let (mut session, doc) = open_species(dir.path());
-    let initial = session.delimitation(doc).clone();
+    let initial = session.delimitation(doc).unwrap().clone();
     let mut result = basecraft_io::spart::parse_text(SPART).unwrap();
     let template = result.hypotheses[0].clone();
     result.hypotheses = ["repair-1", "repair-2"]
@@ -587,13 +591,13 @@ fn interrupted_result_group_resumes_after_journal_failure_as_one_undo_step() {
         session.apply(doc, op(edit)).unwrap();
     }
     session.end_group();
-    let completed = session.delimitation(doc).clone();
+    let completed = session.delimitation(doc).unwrap().clone();
     assert_eq!(completed.hypotheses.len(), initial.hypotheses.len() + 2);
     session.undo(doc).unwrap();
-    assert_eq!(session.delimitation(doc), &initial);
+    assert_eq!(session.delimitation(doc).unwrap(), &initial);
     assert!(session.resume_group(doc, group).is_err());
     session.redo(doc).unwrap();
-    assert_eq!(session.delimitation(doc), &completed);
+    assert_eq!(session.delimitation(doc).unwrap(), &completed);
     drop(session);
     let replay = replay::replay(dir.path()).unwrap();
     assert!(replay.ok(), "{:?}", replay.problems);

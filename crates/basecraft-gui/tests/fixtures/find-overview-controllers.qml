@@ -54,6 +54,17 @@ Item {
                 for (const mark of marks) {
                     findFlow.require(isFinite(mark.x) && isFinite(mark.y) && mark.x >= 0 && mark.y >= 0 && mark.x + mark.width <= 1.000001 && mark.y + mark.height <= 1.000001, "mark outside normalized data")
                 }
+                if (findFlow.index < 3) {
+                    const controller = findFlow.current
+                    const identity = controller.file_path
+                    const revision = controller.record_revision()
+                    const marksBefore = controller.overview_matches
+                    const wrongFile = findFlow.index === 0 ? "/alignment.afa" : "/sequence.fasta"
+                    findFlow.require(!controller.open_file(findFlow.folder + wrongFile), "wrong-kind open reported success")
+                    findFlow.require(controller.message.length > 0, "wrong-kind refusal has no explanation")
+                    findFlow.require(controller.file_path === identity && controller.record_revision() === revision, "refusal replaced document identity or revision")
+                    findFlow.require(controller.overview_matches === marksBefore, "refusal cleared Find selection")
+                }
                 const count = realFind.result.count
                 realFind.poll(1)
                 findFlow.require(realFind.result.current === (count > 1 ? 2 : 1), "next result did not follow shared Find order")
