@@ -1,6 +1,6 @@
 //! M3 step 1: Session-level guards across store locations and file identities.
 //! These pin existing protections, not the future registry/locking policy.
-use std::{path::Path, process::Command};
+use std::path::Path;
 
 use basecraft_ops::{
     DocId, Error, Session,
@@ -8,7 +8,6 @@ use basecraft_ops::{
     input_evidence::{self, EvidenceConflict, SavePolicy},
     replay,
 };
-use basecraft_platform::paths::AppPaths;
 use basecraft_protocol::Op;
 
 const ORIGINAL: &[u8] = b">gene\nACGT\n";
@@ -16,36 +15,13 @@ const ORIGINAL: &[u8] = b">gene\nACGT\n";
 // Reuse the budget/kind-conformance child-process pattern. Command::env selects
 // the profile before any AppPaths/Session initialization; no process-global env
 // mutation or serial lock is needed in the parallel parent harness.
+#[path = "support/isolated_profile.rs"]
+mod isolated_profile;
+
 fn isolated(name: &str, test: impl FnOnce(&Path)) {
-    if std::env::var("BASECRAFT_REFERENCE_CHILD").as_deref() != Ok(name) {
-        let root = tempfile::tempdir().unwrap();
-        let output = Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", name, "--nocapture"])
-            .env("BASECRAFT_REFERENCE_CHILD", name)
-            .env("BASECRAFT_REFERENCE_ROOT", root.path())
-            .env("BASECRAFT_PROFILE_DIR", root.path().join("profile"))
-            .env("BASECRAFT_STATE_DIR", root.path().join("profile/state"))
-            .env("BASECRAFT_CACHE_DIR", root.path().join("profile/cache"))
-            .env("BASECRAFT_SCRATCH_DIR", root.path().join("scratch"))
-            .env("TMPDIR", root.path())
-            .env("TMP", root.path())
-            .env("TEMP", root.path())
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{name}:\n{}\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        return;
+    if let Some(root) = isolated_profile::enter(name) {
+        test(&root);
     }
-    let root = std::path::PathBuf::from(std::env::var_os("BASECRAFT_REFERENCE_ROOT").unwrap());
-    assert_eq!(
-        AppPaths::discover().unwrap().state,
-        root.join("profile/state")
-    );
-    test(&root);
 }
 
 fn folder(root: &Path, name: &str) -> std::path::PathBuf {
