@@ -131,6 +131,17 @@ fn root_cannot_be_removed_or_renamed_and_ancestor_probe_stops() {
             Denial::RootMutation,
         );
     }
+    for alias in [Path::new("."), Path::new("./")] {
+        denied_as(
+            policy.resolve_resource_with(
+                alias,
+                ResourceAction::Cleanup,
+                &mut |_| panic!("root alias refused before probe"),
+                &mut |_| panic!("root alias refused before open"),
+            ),
+            Denial::RootMutation,
+        );
+    }
     denied_as(
         policy.resolve_resource_with(
             project.path().parent().unwrap(),

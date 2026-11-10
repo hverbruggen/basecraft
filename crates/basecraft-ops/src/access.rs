@@ -101,7 +101,7 @@ pub trait Access {
 }
 
 /// Explicit compatibility mode for trusted legacy entry points only. No Default
-/// implementation: MCP must bind its SessionPolicy, never choose this implicitly.
+/// implementation: MCP must bind its `SessionPolicy`, never choose this implicitly.
 /// This does not bypass domain safety, source checks or no-replace publication.
 pub struct TrustedLegacy;
 
