@@ -1,0 +1,150 @@
+{
+  "draft_json": "{\n  \"aligned_columns\": 4,\n  \"columns\": [\n    {\n      \"column\": 1,\n      \"conflict\": false,\n      \"consensus\": \"A\",\n      \"review\": true,\n      \"support\": [\n        {\n          \"base\": \"A\",\n          \"kind\": \"call\",\n          \"read\": 1\n        }\n      ]\n    },\n    {\n      \"column\": 2,\n      \"conflict\": false,\n      \"consensus\": \"C\",\n      \"review\": true,\n      \"support\": [\n        {\n          \"base\": \"C\",\n          \"kind\": \"call\",\n          \"read\": 1\n        }\n      ]\n    },\n    {\n      \"column\": 3,\n      \"conflict\": false,\n      \"consensus\": \"G\",\n      \"review\": true,\n      \"support\": [\n        {\n          \"base\": \"G\",\n          \"kind\": \"call\",\n          \"read\": 1\n        }\n      ]\n    },\n    {\n      \"column\": 4,\n      \"conflict\": false,\n      \"consensus\": \"T\",\n      \"review\": true,\n      \"support\": [\n        {\n          \"base\": \"T\",\n          \"kind\": \"call\",\n          \"read\": 1\n        }\n      ]\n    }\n  ],\n  \"conflict_columns\": 0,\n  \"consensus\": \"ACGT\",\n  \"consensus_length\": 4,\n  \"engine\": \"Tracy\",\n  \"engine_sha256\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\n  \"inputs\": [\n    {\n      \"orientation\": \"forward\",\n      \"path\": \"trace.ab1\",\n      \"read\": 1,\n      \"sha256\": \"245fb10f874da417017b6d7d0434ed887f7021ce0641d6ef5f533a8ff0c6bf3a\"\n    }\n  ],\n  \"minimum_identity\": 0.8,\n  \"minimum_overlap\": 1,\n  \"mode\": \"basecall\",\n  \"opaque_extension\": {\n    \"keep\": \"original whitespace and this unknown field\"\n  },\n  \"overlaps\": [],\n  \"status\": \"draft_requires_review\",\n  \"version_output\": \"synthetic legacy fixture\"\n}\n",
+  "draft_path": "draft-a.json",
+  "draft_sha256": "9f0d4cdc7497c57dbefa7b70b2cf10c0ab5b0d66615c148f07537a42231d766e",
+  "events": [
+    {
+      "columns": [
+        0,
+        1
+      ],
+      "op": "auto_accept"
+    },
+    {
+      "calls": [
+        "A",
+        "C",
+        null,
+        "T"
+      ],
+      "op": "evaluate",
+      "reference": {
+        "counts": [
+          [
+            1,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            1,
+            0,
+            0
+          ],
+          null,
+          [
+            0,
+            0,
+            0,
+            1
+          ]
+        ],
+        "source_path": "reference.afa",
+        "source_sha256": "fc4994f16af758c46d6ac71d0807d25b3b2ca2390e7de18d598bfb9f5dde6b98"
+      },
+      "settings": {
+        "allow_weak_disagreement": true,
+        "ambiguity_percent": 35,
+        "check_reference": true,
+        "paired_score": 20,
+        "reference_min_rows": 1,
+        "reference_percent": 0,
+        "strong_score": 40,
+        "weak_support_percent": 80
+      },
+      "version": 1
+    },
+    {
+      "op": "undo"
+    },
+    {
+      "op": "redo"
+    },
+    {
+      "choice": {
+        "base": "G",
+        "choice": "edit"
+      },
+      "columns": [
+        0
+      ],
+      "op": "set"
+    },
+    {
+      "choice": {
+        "choice": "reject"
+      },
+      "columns": [
+        1
+      ],
+      "op": "set"
+    },
+    {
+      "choice": {
+        "choice": "pending"
+      },
+      "columns": [
+        2
+      ],
+      "op": "set"
+    },
+    {
+      "choice": {
+        "choice": "accept"
+      },
+      "columns": [
+        3
+      ],
+      "op": "set"
+    },
+    {
+      "op": "mask",
+      "settings": {
+        "end": 1,
+        "error_percent": 10,
+        "evidence": "synthetic primer evidence",
+        "forward": "AC",
+        "minimum_overlap": 8,
+        "reverse": "GT",
+        "start": 0
+      }
+    },
+    {
+      "op": "undo"
+    },
+    {
+      "op": "redo"
+    },
+    {
+      "op": "export",
+      "path": "/fixture/consensus.fa",
+      "sha256": "bfaeacf65b57bd0ebd1a4d3310d94ad1500741fdb6365d58b987f1ed2e603d7a"
+    }
+  ],
+  "evidence": {
+    "placement": null,
+    "runs": [],
+    "schema_version": 1,
+    "sources": [
+      {
+        "ledger": "../01M72T3PC0F1EEQMTF291YZ4CQ",
+        "original": "trace.ab1",
+        "path": "../../../../trace.ab1",
+        "reference": {
+          "hash": "b3:59d26c8160f05b6f1b54628a77332e1661af103b580c41402d82a1e340fcf21d",
+          "path": "../../../../trace.ab1",
+          "stamp": {
+            "device": 66306,
+            "inode": 48927873,
+            "modified_nanos": 959861343,
+            "modified_seconds": 1794317080,
+            "size": 4048
+          }
+        },
+        "sha256": "245fb10f874da417017b6d7d0434ed887f7021ce0641d6ef5f533a8ff0c6bf3a"
+      }
+    ]
+  },
+  "version": 1
+}

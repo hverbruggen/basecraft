@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "source": null,
+  "submitted_hash": "b3:944374f5e5f5975ac75affd65d085c4ad7d23d1e20798cdd81abb04595755156",
+  "submitted_size": 1567,
+  "transformation": "identity-v1",
+  "state": "generated",
+  "sanger_input_events": [],
+  "selected_input_links": {},
+  "upstream": [
+    {
+      "bundle": "../01M72T3PC0F1EEQMTF291YZ4CQ",
+      "hash": "b3:7ef9520b59e7a279a43ee52ae71a8c6660738e2eff7ab5c13102089efcf9f30d",
+      "id": "01M72T3PC0F1EEQMTF291YZ4CQ"
+    },
+    {
+      "bundle": "../01M72T3PK1AFGJ2FJTJ4M49RTR",
+      "hash": "b3:e1b5f385aaf2be1015d8428d4e3f8e3fcf43af1d9e6213bc9c7e5d51d8292687",
+      "id": "01M72T3PK1AFGJ2FJTJ4M49RTR"
+    },
+    {
+      "bundle": "../01M72T3PMXEF1PFCYZE94KCDDN",
+      "hash": "b3:cb0661c0b0b3a1fc45597702c62d4fb9da66ebd8f993bb1c7c61dbf2b4b19eb9",
+      "id": "01M72T3PMXEF1PFCYZE94KCDDN"
+    }
+  ]
+}

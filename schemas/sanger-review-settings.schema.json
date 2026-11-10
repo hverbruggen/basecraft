@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ReviewSettings",
+  "description": "Versioned, explicit rules for automatic review triage, not error probabilities.",
+  "type": "object",
+  "properties": {
+    "allow_weak_disagreement": {
+      "type": "boolean",
+      "default": true
+    },
+    "ambiguity_percent": {
+      "description": "A secondary peak at or above this percentage is ambiguous.",
+      "type": "integer",
+      "format": "uint32",
+      "default": 35,
+      "minimum": 0
+    },
+    "check_reference": {
+      "type": "boolean",
+      "default": true
+    },
+    "paired_score": {
+      "type": "integer",
+      "format": "int32",
+      "default": 20
+    },
+    "reference_min_rows": {
+      "type": "integer",
+      "format": "uint32",
+      "default": 1,
+      "minimum": 0
+    },
+    "reference_percent": {
+      "description": "Zero means any observed canonical occurrence; denominator is A/C/G/T rows.",
+      "type": "integer",
+      "format": "uint32",
+      "default": 0,
+      "minimum": 0
+    },
+    "strong_score": {
+      "type": "integer",
+      "format": "int32",
+      "default": 30
+    },
+    "weak_support_percent": {
+      "description": "Minimum candidate / strongest peak ratio in a non-confident opposing read.",
+      "type": "integer",
+      "format": "uint32",
+      "default": 80,
+      "minimum": 0
+    }
+  }
+}

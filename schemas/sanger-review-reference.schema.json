@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ReviewReference",
+  "description": "Frozen whole-alignment counts used by a recorded triage operation.",
+  "type": "object",
+  "properties": {
+    "counts": {
+      "type": "array",
+      "items": {
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "maxItems": 4,
+        "minItems": 4
+      }
+    },
+    "source_path": {
+      "type": "string"
+    },
+    "source_sha256": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "source_path",
+    "source_sha256",
+    "counts"
+  ]
+}

@@ -453,6 +453,26 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             std::fs::create_dir_all(&dir)?;
             let schemas = [
                 (
+                    "sanger-review-choice",
+                    schemars::schema_for!(basecraft_protocol::sanger::ReviewChoice),
+                ),
+                (
+                    "sanger-mask-settings",
+                    schemars::schema_for!(basecraft_protocol::sanger::MaskSettings),
+                ),
+                (
+                    "sanger-review-op",
+                    schemars::schema_for!(basecraft_protocol::sanger::ReviewOp),
+                ),
+                (
+                    "sanger-review-settings",
+                    schemars::schema_for!(basecraft_protocol::sanger::ReviewSettings),
+                ),
+                (
+                    "sanger-review-reference",
+                    schemars::schema_for!(basecraft_protocol::sanger::ReviewReference),
+                ),
+                (
                     "alignment-link",
                     schemars::schema_for!(basecraft_protocol::records::AlignmentLink),
                 ),

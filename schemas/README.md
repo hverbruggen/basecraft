@@ -466,3 +466,25 @@ User decisions remain open on readability/editability horizon, new formats,
 standard-vs-companion facts, and writer-version/replay treatment. The inventory
 records current behavior and recommends ownership only; it approves none of those
 decisions and does not mark parent M6 complete.
+
+### Existing Sanger review payloads
+
+The five `sanger-*.schema.json` files describe existing nested wire payloads now
+owned by `basecraft_protocol::sanger`: `ReviewChoice`, `MaskSettings`, `ReviewOp`,
+`ReviewSettings`, and `ReviewReference`. Existing docs/ops imports are re-exported.
+`ReviewSettings` retains its serde defaults and existing threshold validation;
+these schemas do not replace runtime validation.
+
+These payloads occur in saved Sanger reviews (v1 single set, v2 retained sets)
+and legacy `jobs/<id>/review.sanger-review.json` checkpoints. The writer remains
+`basecraft-ops/src/sanger_review/storage.rs`; the reader/replay owner remains
+`basecraft-ops/src/sanger_review.rs`. No envelope, field, version, operation,
+identity, or undo behavior changed. The enclosing records are not yet owned by
+protocol, and these payload schemas are not complete saved-review schemas.
+
+Compatibility fixtures in `testdata/fixtures/sanger-legacy` retain actual legacy
+writer bytes, embedded draft hashes, support closure and checkpoint metadata.
+V1 outer/evidence/source/support extras survive; v2 outer extras are rejected.
+Nested known operation/settings/reference/choice extras are currently dropped,
+and unknown operation variants fail. This extraction preserves those limits;
+it does not claim lossless unknown-field rewriting or complete Sanger migration.

@@ -89,57 +89,7 @@ pub fn recover(checkpoint: &Path, destination: &Path) -> crate::Result<PathBuf> 
     Ok(target)
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct MaskSettings {
-    /// Zero-based inclusive start, exclusive end in consensus columns.
-    pub start: usize,
-    pub end: usize,
-    pub forward: String,
-    pub reverse: String,
-    pub minimum_overlap: usize,
-    pub error_percent: usize,
-    pub evidence: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "choice", content = "base", rename_all = "snake_case")]
-pub enum ReviewChoice {
-    Pending,
-    Accept,
-    Auto(char),
-    Reject,
-    Edit(char),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "op", rename_all = "snake_case")]
-pub enum ReviewOp {
-    /// Conservative initial triage; retained in the replay log, outside undo history.
-    AutoAccept {
-        columns: Vec<usize>,
-    },
-    /// Re-evaluate automatic calls while preserving all explicit manual decisions.
-    /// The rule version and frozen reference counts make this portable and auditable.
-    Evaluate {
-        version: u32,
-        settings: ReviewSettings,
-        calls: Vec<Option<char>>,
-        reference: Option<ReviewReference>,
-    },
-    Set {
-        columns: Vec<usize>,
-        choice: ReviewChoice,
-    },
-    Mask {
-        settings: MaskSettings,
-    },
-    Undo,
-    Redo,
-    Export {
-        path: PathBuf,
-        sha256: String,
-    },
-}
+pub use basecraft_protocol::sanger::{MaskSettings, ReviewChoice, ReviewOp};
 
 #[derive(Clone, Debug)]
 struct Change {

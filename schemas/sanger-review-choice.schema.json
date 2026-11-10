@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ReviewChoice",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "choice": {
+          "type": "string",
+          "const": "pending"
+        }
+      },
+      "required": [
+        "choice"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "choice": {
+          "type": "string",
+          "const": "accept"
+        }
+      },
+      "required": [
+        "choice"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "base": {
+          "type": "string",
+          "maxLength": 1,
+          "minLength": 1
+        },
+        "choice": {
+          "type": "string",
+          "const": "auto"
+        }
+      },
+      "required": [
+        "choice",
+        "base"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "choice": {
+          "type": "string",
+          "const": "reject"
+        }
+      },
+      "required": [
+        "choice"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "base": {
+          "type": "string",
+          "maxLength": 1,
+          "minLength": 1
+        },
+        "choice": {
+          "type": "string",
+          "const": "edit"
+        }
+      },
+      "required": [
+        "choice",
+        "base"
+      ]
+    }
+  ]
+}

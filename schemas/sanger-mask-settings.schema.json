@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MaskSettings",
+  "type": "object",
+  "properties": {
+    "end": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "error_percent": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "evidence": {
+      "type": "string"
+    },
+    "forward": {
+      "type": "string"
+    },
+    "minimum_overlap": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "reverse": {
+      "type": "string"
+    },
+    "start": {
+      "description": "Zero-based inclusive start, exclusive end in consensus columns.",
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "start",
+    "end",
+    "forward",
+    "reverse",
+    "minimum_overlap",
+    "error_percent",
+    "evidence"
+  ]
+}

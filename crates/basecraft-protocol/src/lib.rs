@@ -11,6 +11,7 @@ pub mod ops;
 pub mod plugin;
 pub mod provenance;
 pub mod records;
+pub mod sanger;
 pub mod submission;
 pub mod tree;
 

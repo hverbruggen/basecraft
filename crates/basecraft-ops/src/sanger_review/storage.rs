@@ -1590,3 +1590,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "legacy_fixtures.rs"]
+mod legacy_fixtures;

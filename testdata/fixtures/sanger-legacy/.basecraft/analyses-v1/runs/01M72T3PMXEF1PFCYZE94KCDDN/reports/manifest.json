@@ -1,0 +1,12 @@
+{
+  "citations": [],
+  "output_hashes": [],
+  "publication": "01M72T3PMXEF1PFCYZE94KCDDN",
+  "redactions": [
+    "machine-local paths",
+    "host",
+    "user"
+  ],
+  "schema_version": 1,
+  "template_version": 2
+}

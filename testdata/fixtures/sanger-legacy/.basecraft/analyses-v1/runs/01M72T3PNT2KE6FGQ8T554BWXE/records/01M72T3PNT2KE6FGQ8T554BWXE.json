@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "id": "01M72T3PNT2KE6FGQ8T554BWXE",
+  "session": "01M72T3PNT2KE6FGQ8T554BWXE",
+  "parents": [],
+  "parent_hashes": {},
+  "created": "2026-11-10T13:24:41.293Z",
+  "origin": "Explicit saved Sanger review; decisions and support retained",
+  "inputs": [
+    {
+      "id": "01M72T3PNT2KE6FGQ8T554BWXE:support:0",
+      "logical_name": "review.sanger-review.json",
+      "hash": "b3:1c67ff2e81b63708f48976c12b547c60d227d2fdbe58ac4988f140cd305f4605",
+      "size": 10681,
+      "retained": "review.sanger-review.json"
+    },
+    {
+      "id": "01M72T3PNT2KE6FGQ8T554BWXE:support:1",
+      "logical_name": "draft.json",
+      "hash": "b3:944374f5e5f5975ac75affd65d085c4ad7d23d1e20798cdd81abb04595755156",
+      "size": 1567,
+      "retained": "draft.json"
+    },
+    {
+      "id": "01M72T3PNT2KE6FGQ8T554BWXE:support:2",
+      "logical_name": "visible-review.json",
+      "hash": "b3:1b5dec8da85252493032bf2cb556ff5b100c5dfc1c57e6b8093ac472b83fb8c3",
+      "size": 10785,
+      "retained": "visible-review.json"
+    }
+  ],
+  "outputs": [
+    {
+      "id": "01M72T3PNT2KE6FGQ8T554BWXE:review",
+      "logical_name": "multi.json",
+      "hash": "b3:1b5dec8da85252493032bf2cb556ff5b100c5dfc1c57e6b8093ac472b83fb8c3",
+      "size": 10785,
+      "retained": null
+    }
+  ],
+  "events": [],
+  "effective_edits": [],
+  "completeness": {
+    "ancestry_known": false,
+    "input_bytes_available": true,
+    "execution_specification_available": false,
+    "replay_verified": false
+  },
+  "report_template_version": 2
+}
