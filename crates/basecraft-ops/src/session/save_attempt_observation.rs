@@ -20,6 +20,7 @@ pub(crate) enum Site {
     InnerTrack,
     SourceCheck,
     Format,
+    #[cfg(test)]
     Document,
     SaveRecord,
     Provenance,
