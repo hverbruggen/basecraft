@@ -597,3 +597,90 @@ fn native_paths_links_and_denials() {
     fs::set_permissions(&manifest, fs::Permissions::from_mode(0o600)).unwrap();
     fs::set_permissions(&denied, fs::Permissions::from_mode(0o700)).unwrap();
 }
+
+#[test]
+fn species_owner_and_relative_companion() {
+    let name = "provenance::resolver_observation_tests::species_owner_and_relative_companion";
+    let Some(root) = crate::isolated_profile::enter(name) else {
+        return;
+    };
+    if std::env::var_os("RESOLVER_RELATIVE_CASE").is_some() {
+        let source = Path::new("./nested/../relative.txt");
+        fs::create_dir_all(root.join("nested")).unwrap();
+        write(&root.join("relative.txt"), b"source");
+        write(
+            &root.join("relative.txt.provenance/manifest.json"),
+            b"unparsed",
+        );
+        let observed = check(
+            &root,
+            source,
+            Path::new("./nested/../relative.txt.provenance"),
+            BundleSelection::Companion,
+        );
+        assert_eq!(
+            stages(&observed),
+            [ResolverStage::Binding, ResolverStage::CompanionManifest]
+        );
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", name, "--nocapture"])
+        .current_dir(&root)
+        .env("RESOLVER_RELATIVE_CASE", "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let run = crate::analysis_store::ArtifactRun::create(
+        &root.join("species.txt"),
+        "species-observation",
+    )
+    .unwrap();
+    let source = run.directory().join("species.txt");
+    write(&source, b"species");
+    write(&run.directory().join("manifest.json"), b"unparsed");
+    let mut input = crate::input_evidence::SubmittedInput {
+        schema_version: 1,
+        source: None,
+        submitted_hash: basecraft_io::hash_bytes(b"species"),
+        submitted_size: 7,
+        transformation: "identity-v1".into(),
+        state: "generated".into(),
+        extra: std::collections::BTreeMap::new(),
+    };
+    input
+        .extra
+        .insert("species_result".into(), serde_json::json!("species.txt"));
+    crate::input_evidence::write_json(&run.directory().join("input.json"), &input).unwrap();
+    check(&root, &source, run.directory(), BundleSelection::Binding);
+    input
+        .extra
+        .insert("species_result".into(), serde_json::json!("different.txt"));
+    crate::input_evidence::write_json(&run.directory().join("input.json"), &input).unwrap();
+    let observed = check(
+        &root,
+        &source,
+        &companion(&source),
+        BundleSelection::CompanionFallback,
+    );
+    assert!(matches!(
+        &observed.steps[0],
+        ResolverStep::Binding(Ok(None))
+    ));
+    write(&run.directory().join("input.json"), b"malformed");
+    let observed = check(
+        &root,
+        &source,
+        &companion(&source),
+        BundleSelection::CompanionFallback,
+    );
+    assert!(matches!(
+        &observed.steps[0],
+        ResolverStep::Binding(Err(crate::Error::Json(_)))
+    ));
+}
