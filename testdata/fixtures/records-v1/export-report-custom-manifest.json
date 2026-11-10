@@ -1,0 +1,8 @@
+{
+  "coordinates": "raw zero-based half-open; summaries one-based",
+  "document": "C:\\fixture\\λ\"\n.fasta",
+  "revision": "revision\\\"\tλ",
+  "schema_version": 1,
+  "template_version": 73,
+  "unsaved": true
+}

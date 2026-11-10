@@ -136,3 +136,18 @@ The synthetic absolute /fixture namespace avoids private paths without replacing
 bytes. Random directory names, Unicode/native path spelling and actual Unix
 filesystem device/inode values are retained, not portable identity guarantees.
 All four captures use pretty recursively sorted JSON and one terminal LF.
+
+Report-output original writer captures
+-------------------------------------
+provenance-report-{empty,real}-{manifest,source-map}.json come from the
+unchanged provenance::write_reports writer (one terminal LF).
+export-report-{empty,real,custom}-{manifest,source-map,citations}.json come
+from unchanged Report::export (no appended LF). Empty uses synthetic valid
+Publication/DocumentRecord inputs. Real uses FASTA edit/undo/redo plus two
+recorded analysis-snapshot activities, without executing a tool; extra output
+hashes are test-prepared to expose ordering/duplicates. Custom is an explicit
+Report with escaped/native-looking strings, duplicate ids/citations and a
+nondefault template. Random publication/activity ids are retained verbatim.
+The independent original-literal byte oracles remain in report_record_formats.rs.
+Historical provenance-v1 template1/singular-activity files are unchanged and
+are not current-writer goldens. These fresh shapes define no reader migration.
