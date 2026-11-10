@@ -1,0 +1,50 @@
+{
+  "context": {
+    "cancel_file": "/fixture/runtime-1/.basecraft/analyses-v1/runs/fixture-run-5/cancel",
+    "cpu_threads": 4,
+    "input_evidence": {
+      "sources": [
+        {
+          "original_path": "/fixture/runtime-1/input.txt",
+          "run_directory": "/fixture/runtime-1/.basecraft/analyses-v1/runs/fixture-run-6",
+          "source_hash": "b3:aa95faeede7041e63c6056bdcf10e6fbf709a355e539259da51a067e5dd27802",
+          "submitted_hash": "b3:aa95faeede7041e63c6056bdcf10e6fbf709a355e539259da51a067e5dd27802",
+          "transformation": "identity-v1"
+        }
+      ]
+    },
+    "inputs": {
+      "sources": [
+        "/fixture/runtime-2/sources-0.txt"
+      ]
+    },
+    "operation": "org.example.registry-fixture/count@1",
+    "outputs": {
+      "report": "/fixture/runtime-1/.basecraft/analyses-v1/runs/fixture-run-5/pending/report"
+    },
+    "progress_file": "/fixture/runtime-1/.basecraft/analyses-v1/runs/fixture-run-5/progress",
+    "run_id": "fixture-run-5",
+    "schema": 1
+  },
+  "descriptor_digest": "b3:f4b4a5c936ebe1dad9608a2719e9abce7bb52cd6f87e732a46c8b27aa2e77a5a",
+  "effective_parameters": {
+    "include_newlines": true,
+    "mode": "fail"
+  },
+  "execution": null,
+  "executor": "org.example.registry-fixture",
+  "initiator": "record fixture",
+  "interpreter": "/fixture/python/bin/python",
+  "operation": "org.example.registry-fixture/count@1",
+  "package_digest": "b3:c51fd51e9dbde319ce13762cb0d9ac81a5941f1432b3a1e1414a062831e62746",
+  "package_version": "1.0.0",
+  "process_instance": "1234:2026-01-01T00:00:00.000Z",
+  "requested_parameters": {
+    "mode": "fail"
+  },
+  "runtime": null,
+  "schema": 1,
+  "stderr": "",
+  "stdout": "",
+  "tool": null
+}

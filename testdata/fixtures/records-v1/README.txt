@@ -23,3 +23,23 @@ empty registry is a test-written example of the existing missing-file default
 first/update writer outputs, including a nested extension. Only the temporary
 root was replaced with /synthetic/records-v1; no real paths or hosts are fixtures.
 These paths demonstrate LOCAL state shape, not portable project references.
+
+Execution and local-index examples were captured from the ORIGINAL production
+writers before constructor substitutions (DATA-0018 baseline4). Process receipts
+cover success with and without tool/execution evidence and invocation failure.
+Workflow receipts cover failure before stages and success through synthetic
+registered stages; no scientific engines/services are used. These exercise the
+real receipt writers via a test-prepared workflow context, not a real analysis.
+The nine index states are written by persist() using synthetic OperationOutcomes,
+including explicit null ended/diagnostics and a first-error diagnostic. They are
+not nine actual job lifecycle transitions; runtime.json remains authoritative.
+
+Only unpredictable/private runtime paths, run/ledger IDs, interpreter, process
+instance and timestamps were replaced by synthetic values. Keys, values outside
+those substitutions, nulls/omissions, hashes, nested order, spacing and final
+newline are preserved. Raw original captures and the exact substitution map stay
+private. In-process full-byte oracles run the retained original literal builders
+through the existing atomic JSON writer at the SAME runtime values, comparing
+all bytes to the current production file. stdout/stderr and terminal ended time
+are taken from that file; their keys/null rules/time shape are checked, while
+these oracles do not independently verify their contents or wall-clock accuracy.

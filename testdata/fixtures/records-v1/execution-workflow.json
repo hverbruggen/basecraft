@@ -1,0 +1,16 @@
+{
+  "descriptor_digest": "b3:f4b4a5c936ebe1dad9608a2719e9abce7bb52cd6f87e732a46c8b27aa2e77a5a",
+  "effective_parameters": {
+    "include_newlines": true,
+    "mode": "normal"
+  },
+  "executor": "basecraft.host",
+  "initiator": "record fixture",
+  "package_digest": "b3:c51fd51e9dbde319ce13762cb0d9ac81a5941f1432b3a1e1414a062831e62746",
+  "process_instance": "1234:2026-01-01T00:00:00.000Z",
+  "requested_parameters": {
+    "mode": "normal"
+  },
+  "schema": 1,
+  "workflow": "fixture-unknown"
+}
