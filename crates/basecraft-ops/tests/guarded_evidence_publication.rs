@@ -86,6 +86,10 @@ fn registration_first_exposes_proposal_exemption_consistently() {
     scenario("proposal");
 }
 #[test]
+fn interrupted_publication_keeps_original_guard_and_releases_lock() {
+    scenario("interrupted");
+}
+#[test]
 fn save_first_refuses_frozen_obsolete_original() {
     scenario("save-first");
 }
@@ -144,6 +148,19 @@ fn publication_worker() {
         let mut input = mutation.read_input(ledger.directory()).unwrap();
         barrier.send("prepared");
         barrier.expect("commit");
+        if mode == "interrupted" {
+            // A real failed write after the reference publication leaves that
+            // conservative reference protecting the source. There is no rollback.
+            assert!(mutation.write_input(&source, &input).is_err());
+            std::fs::write(
+                root.join("ledger-path"),
+                ledger.directory().as_os_str().as_encoded_bytes(),
+            )
+            .unwrap();
+            drop(mutation);
+            barrier.send("published");
+            return;
+        }
         input.extra.insert(
             "analysis_run".into(),
             json!(input_evidence::relative(ledger.directory(), owner.directory()).unwrap()),
@@ -188,10 +205,6 @@ fn publication_worker() {
             )
             .unwrap();
         session.flush().unwrap();
-        let recovered =
-            basecraft_ops::replay::recover(session.recovery_root(), &root.join("recovered"))
-                .unwrap();
-        assert_eq!(std::fs::read(&recovered[0]).unwrap(), b">gene\nATGT\n");
         if mode != "save-first" {
             let paths = basecraft_platform::paths::AppPaths::discover().unwrap();
             let file = std::fs::OpenOptions::new()
@@ -204,11 +217,30 @@ fn publication_worker() {
             assert!(fs4::fs_std::FileExt::try_lock_exclusive(&file).is_err());
             barrier.send("locked");
         }
+        if mode != "save-first" {
+            let mutation = Mutation::begin().unwrap();
+            let conflicts = input_evidence::conflicts(&source).unwrap();
+            if mode == "proposal" {
+                assert!(conflicts.analyses.is_empty());
+            } else {
+                assert_eq!(conflicts.analyses.len(), 1);
+                if mode != "interrupted" {
+                    assert_eq!(conflicts.analyses[0].run.file_name().unwrap(), "owner");
+                    assert_eq!(conflicts.analyses[0].backing_analyses.len(), 2);
+                    let owner = mutation.read_input(&conflicts.analyses[0].run).unwrap();
+                    assert_eq!(owner.extra["upstream"].as_array().unwrap().len(), 1);
+                }
+            }
+        }
+        let recovered =
+            basecraft_ops::replay::recover(session.recovery_root(), &root.join("recovered"))
+                .unwrap();
+        assert_eq!(std::fs::read(&recovered[0]).unwrap(), b">gene\nATGT\n");
         session
             .save_with_evidence(
                 doc,
                 None,
-                if mode == "preserve" {
+                if mode == "preserve" || mode == "interrupted" {
                     SavePolicy::PreserveCopy
                 } else {
                     SavePolicy::Cancel
@@ -218,7 +250,10 @@ fn publication_worker() {
         if mode != "save-first" {
             let ledger = PathBuf::from(std::fs::read_to_string(root.join("ledger-path")).unwrap());
             let input = input_evidence::read_input(&ledger).unwrap();
-            assert!(input.extra.contains_key("analysis_run"));
+            assert_eq!(
+                input.extra.contains_key("analysis_run"),
+                mode != "interrupted"
+            );
             if mode == "proposal" {
                 assert_eq!(input.extra[input_evidence::PROPOSAL_TARGET], true);
                 assert_eq!(input.state, "referenced");
