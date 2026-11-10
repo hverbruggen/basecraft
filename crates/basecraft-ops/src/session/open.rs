@@ -1,5 +1,6 @@
 //! Document loading, baseline tracking and retained originals.
 use super::{DocId, Op, OpResult, Path, PathBuf, Result, Slot, files, invalid, objects_dir};
+use super::{Loaded, OBJECT_STORE_LIMIT, Session, save_authority};
 
 impl Session {
     pub fn open(&mut self, path: &Path) -> Result<DocId> {

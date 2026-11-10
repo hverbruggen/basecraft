@@ -1,4 +1,5 @@
 //! Shared edit, grouping, undo, redo and journal ownership.
+use super::execute_tree;
 use super::{
     Actor, Applied, DocId, Error, FeatureId, Instant, Inverse, LOG_VERSION, Loaded, LogEntry,
     MERGE_WINDOW, Op, OpResult, Outcome, Pending, ReplayMode, Result, Session, invalid, mergeable,

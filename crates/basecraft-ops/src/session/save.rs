@@ -3,6 +3,7 @@ use super::{
     DerivedTarget, DocId, Error, LegacySave, Loaded, Op, OpResult, Path, Result, SaveDisposition,
     SaveHooks, SaveMilestone, SaveSite, files, invalid,
 };
+use super::{Document, PathBuf, SaveDecision, SaveOutcome, Session, save_decision};
 
 impl Session {
     /// Save a document to its own path, or to `path`.

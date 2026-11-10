@@ -1,4 +1,5 @@
 //! Document and analysis provenance publication.
+use super::Session;
 use super::{
     Actor, DocId, LogEntry, Op, Path, Result, copy_ancestry, files, invalid,
     portable_analysis_activity,

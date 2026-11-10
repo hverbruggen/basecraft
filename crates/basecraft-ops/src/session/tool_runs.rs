@@ -1,4 +1,5 @@
 //! Recording tool runs and job outcomes.
+use super::Session;
 use super::{Actor, DocId, Op, OpResult, Result};
 
 impl Session {
