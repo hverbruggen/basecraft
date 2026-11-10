@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LocalJobIndex",
+  "description": "Lightweight application-state `jobs/<id>/manifest.json`. The pointed-to\nOperationOutcome in runtime.json stays authoritative; this is not JobRecord.\nExisting selected-field readers and owner/receipt checks remain unchanged.",
+  "type": "object",
+  "properties": {
+    "diagnostics": {
+      "description": "First runtime error message or explicit null.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "effective_parameters": true,
+    "ended": {
+      "description": "Explicit null for nonterminal states; never omitted by the writer.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "id": {
+      "type": "string"
+    },
+    "initiator": {
+      "type": "string"
+    },
+    "operation": {
+      "type": "string"
+    },
+    "outputs": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "owner_instance": {
+      "type": "string"
+    },
+    "plugin": {
+      "$ref": "#/$defs/JobIndexPlugin"
+    },
+    "runtime_record": {
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "source": {
+      "$ref": "#/$defs/JobIndexSource"
+    },
+    "started": {
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/RuntimeState"
+    }
+  },
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "id",
+    "status",
+    "owner_instance",
+    "started",
+    "plugin",
+    "operation",
+    "effective_parameters",
+    "initiator",
+    "source",
+    "outputs",
+    "runtime_record"
+  ],
+  "$defs": {
+    "JobIndexPlugin": {
+      "description": "The existing two-field plugin identity in the local index. Neither Actor's\ntagged representation nor OperationPins has this shape.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "id",
+        "version"
+      ]
+    },
+    "JobIndexSource": {
+      "description": "Existing display path wrapper; not a hashed InputReference or a new path rule.",
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "path"
+      ]
+    },
+    "RuntimeState": {
+      "type": "string",
+      "enum": [
+        "queued",
+        "running",
+        "cancelling",
+        "finalizing",
+        "completed",
+        "failed",
+        "cancelled",
+        "interrupted",
+        "partial"
+      ]
+    }
+  }
+}

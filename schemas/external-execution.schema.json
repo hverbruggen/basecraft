@@ -1,0 +1,282 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ExternalExecution",
+  "description": "External-process `execution.json`, distinct from the runtime outcome and the\nhost-workflow envelope. No new reader/version gate is implied by this type.",
+  "type": "object",
+  "properties": {
+    "context": {
+      "description": "The public invocation context rejects unknown fields, including in input\nevidence. Retain its complete snapshot for lossless nested extensions;\nproduction still constructs this from the shared InvocationContext.",
+      "$ref": "#/$defs/InvocationContext"
+    },
+    "descriptor_digest": {
+      "type": "string"
+    },
+    "effective_parameters": true,
+    "execution": {
+      "description": "ExecutionInfo and MethodsInfo currently discard extras. Preserve nested\nprocess evidence rather than introducing a lossy parsing boundary.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ExecutionInfo"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "executor": {
+      "type": "string"
+    },
+    "initiator": {
+      "description": "Existing caller label, not an Actor serialization or a new identity.",
+      "type": "string"
+    },
+    "interpreter": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "operation": {
+      "type": "string"
+    },
+    "package_digest": {
+      "type": "string"
+    },
+    "package_version": {
+      "type": "string"
+    },
+    "process_instance": {
+      "type": "string"
+    },
+    "requested_parameters": true,
+    "runtime": {
+      "description": "Snapshot of the host's managed-runtime receipt, or explicit null. The\nimplementation type is GPL host-owned; protocol must not depend on it."
+    },
+    "schema": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "stderr": {
+      "type": "string"
+    },
+    "stdout": {
+      "type": "string"
+    },
+    "tool": {
+      "description": "ToolInfo currently discards extras. Keep the original snapshot; null is\nalways emitted, including on process failure. No production parse changes.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ToolInfo"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "additionalProperties": true,
+  "required": [
+    "schema",
+    "operation",
+    "package_version",
+    "package_digest",
+    "descriptor_digest",
+    "initiator",
+    "executor",
+    "process_instance",
+    "context",
+    "requested_parameters",
+    "effective_parameters",
+    "stdout",
+    "stderr"
+  ],
+  "$defs": {
+    "ExecutionInfo": {
+      "type": "object",
+      "properties": {
+        "argv": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "environment": {
+          "description": "Only scientific environment settings, never the whole process environment.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "methods": {
+          "description": "Frozen scientific description and citations supplied by the plugin.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MethodsInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "methods_template": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "preprocessing": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "resolved_parameters": {
+          "type": "object",
+          "additionalProperties": true,
+          "default": {}
+        }
+      },
+      "required": [
+        "argv"
+      ]
+    },
+    "InvocationContext": {
+      "description": "Host-owned wire context, sent only after capability negotiation.",
+      "type": "object",
+      "properties": {
+        "cancel_file": {
+          "type": "string"
+        },
+        "cpu_threads": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "input_evidence": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/InvocationInputEvidence"
+            }
+          },
+          "default": {}
+        },
+        "inputs": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "legacy_parameters": {
+          "description": "Host-owned legacy compatibility metadata, never caller parameters.",
+          "type": "object",
+          "additionalProperties": true
+        },
+        "operation": {
+          "type": "string"
+        },
+        "outputs": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "progress_file": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "schema": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "operation",
+        "run_id",
+        "inputs",
+        "outputs",
+        "cpu_threads",
+        "cancel_file",
+        "progress_file"
+      ]
+    },
+    "InvocationInputEvidence": {
+      "type": "object",
+      "properties": {
+        "original_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run_directory": {
+          "type": "string"
+        },
+        "source_hash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "submitted_hash": {
+          "type": "string"
+        },
+        "transformation": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "submitted_hash",
+        "transformation",
+        "run_directory"
+      ]
+    },
+    "MethodsInfo": {
+      "type": "object",
+      "properties": {
+        "citations": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "description": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "description"
+      ]
+    },
+    "ToolInfo": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ]
+    }
+  }
+}

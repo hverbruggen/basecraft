@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "HostWorkflowExecution",
+  "description": "Host-workflow `execution.json`. This explicit shape intentionally has no\nexternal operation, context, stdout/stderr, runtime, interpreter or tool keys.",
+  "type": "object",
+  "properties": {
+    "descriptor_digest": {
+      "type": "string"
+    },
+    "effective_parameters": true,
+    "executor": {
+      "type": "string"
+    },
+    "initiator": {
+      "type": "string"
+    },
+    "package_digest": {
+      "type": "string"
+    },
+    "process_instance": {
+      "type": "string"
+    },
+    "requested_parameters": true,
+    "schema": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "workflow": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": true,
+  "required": [
+    "schema",
+    "workflow",
+    "initiator",
+    "executor",
+    "requested_parameters",
+    "effective_parameters",
+    "package_digest",
+    "descriptor_digest",
+    "process_instance"
+  ]
+}
