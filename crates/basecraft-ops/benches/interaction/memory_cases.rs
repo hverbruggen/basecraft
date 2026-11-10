@@ -41,6 +41,7 @@ pub fn measure(scenario: &str, root: &Path) -> Result<Value> {
         if opened.is_ok() {
             return Err("malformed FASTA unexpectedly opened".into());
         }
+        drop(opened);
     } else {
         let id = opened?;
         // Checked public API; never introduce dependencies on panicking getters.

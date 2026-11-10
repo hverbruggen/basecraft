@@ -246,12 +246,12 @@ mod tests {
             assert!(!p.is_null());
             let large = Layout::from_size_align(256, 8).unwrap();
             // System cannot fulfill an isize::MAX request on supported hosts.
-            assert!(a.realloc(p, large, isize::MAX as usize).is_null());
+            assert!(a.realloc(p, large, (usize::MAX / 2) & !7).is_null());
             let p = a.realloc(p, large, 16);
             assert!(!p.is_null());
             a.dealloc(p, Layout::from_size_align(16, 8).unwrap());
             assert!(
-                a.alloc(Layout::from_size_align(isize::MAX as usize, 1).unwrap())
+                a.alloc(Layout::from_size_align((usize::MAX / 2) & !7, 1).unwrap())
                     .is_null()
             );
             let s = m.finish().unwrap();

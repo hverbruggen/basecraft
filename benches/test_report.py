@@ -114,6 +114,8 @@ class ReportTests(unittest.TestCase):
     def failed_child(self, failed, following):
         sample = {**self.sample(1000), "scenario": following, "operations": 1,
                   "work": {"frames": 1}, "output_counts": [5000]}
+        if following.startswith("heap-"):
+            sample = {**self.heap_sample(), "scenario": following}
         with tempfile.TemporaryDirectory() as directory:
             cache = Path(directory)
             executable = cache / "binary"
@@ -131,6 +133,40 @@ class ReportTests(unittest.TestCase):
             self.assertEqual(report["scenarios"][failed]["completed_samples"], 0)
             self.assertEqual(report["scenarios"][following]["samples"], 3)
             self.assertEqual((report_path.parent / f"{failed}-0/stderr.txt").read_text(), "geometry failed")
+
+    def heap_sample(self):
+        return {**self.sample(1000), "scenario": "heap-open-100mb", "operations": 1,
+                "work": {"instrumentation": "system-requested-live-v1", "unit": "requested bytes"},
+                "heap": {"baseline_bytes": 10, "peak_bytes": 210, "incremental_peak_bytes": 200,
+                         "live_after_open_bytes": 100, "live_after_drop_bytes": 10,
+                         "successful_reallocations": 3, "failed_reallocations": 0, "failed_allocations": 0}}
+
+    def test_heap_units_math_and_identity(self):
+        sample = self.heap_sample()
+        result = summarize([sample] * 3)
+        self.assertEqual(result["median"], 200)
+        self.assertEqual(result["unit"], "requested bytes")
+        self.assertEqual(result["heap_medians"]["peak_bytes"], 210)
+        for key, value in (("peak_bytes", 1), ("incremental_peak_bytes", 199),
+                           ("failed_reallocations", 1), ("failed_allocations", 1),
+                           ("live_after_drop_bytes", -1), ("baseline_bytes", True)):
+            changed = copy.deepcopy(sample)
+            changed["heap"][key] = value
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                summarize([changed])
+        current = self.report()
+        current["scenarios"] = {sample["scenario"]: result}
+        previous = copy.deepcopy(current)
+        previous["scenarios"][sample["scenario"]]["work"]["instrumentation"] = "other"
+        self.assertEqual(compare(current, previous, dict(benchmark_ratio=1.3, gross_ci_ratio=2))[
+            "scenarios"][sample["scenario"]]["status"], "unavailable")
+        changed = copy.deepcopy(sample)
+        changed["work"]["instrumentation"] = "other"
+        with self.assertRaises(ValueError):
+            summarize([sample, changed])
+
+    def test_failed_heap_child_is_retained(self):
+        self.failed_child("heap-open-100mb", "heap-open-compact")
 
     def test_old_size_semantics_require_new_samples(self):
         old_sample = self.sample(1000)
