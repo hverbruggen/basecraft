@@ -106,15 +106,19 @@ mod tests {
         std::fs::write(detached.join("python"), "").unwrap();
         std::os::unix::fs::symlink(detached.parent().unwrap(), root.join(".pixi/envs/default"))
             .unwrap();
-        assert_eq!(source_python_at(&root), Some(detached.join("python")));
+        // Discovery returns resolved paths; macOS temp folders sit behind the
+        // /var -> /private/var link.
+        let resolved = |path: Option<std::path::PathBuf>| path.map(|p| p.canonicalize().unwrap());
+        let python = Some(detached.join("python"));
+        assert_eq!(resolved(source_python_at(&root)), resolved(python.clone()));
         std::fs::write(root.join("build.json"), "{\"schema_version\":2}").unwrap();
         assert!(bundle_python_at(&root).is_none());
         let receipt = serde_json::json!({"python_environment": detached});
         std::fs::write(temp.path().join("release.local.json"), receipt.to_string()).unwrap();
-        assert_eq!(bundle_python_at(&root), Some(detached.join("python")));
+        assert_eq!(resolved(bundle_python_at(&root)), resolved(python.clone()));
         std::fs::remove_file(temp.path().join("release.local.json")).unwrap();
         std::fs::write(root.join("build.json"), receipt.to_string()).unwrap();
-        assert_eq!(bundle_python_at(&root), Some(detached.join("python")));
+        assert_eq!(resolved(bundle_python_at(&root)), resolved(python));
     }
 
     #[cfg(windows)]

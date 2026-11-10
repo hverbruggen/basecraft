@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "name": "basecraft-sanderson-native",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "source_commit": "fd685598e0c65afc790958be6165f2f9f2340ee2",
+  "cargo_lock_sha256": "dd7b4c7f7cde0aa04b01ce1ddffcfb3232cf18ee4eaf0b73047d665d0aef6859",
+  "source_sha256": {
+    "Cargo.toml": "f1b33c599dda97065866e9c5b6fb15b499702f4436cfd3024d4f652e68e16762",
+    "src/lib.rs": "855d89c7055959dc110057ae7abc0fcf9ee9b9f51ee04d1923a09ca9e5734d09",
+    "src/main.rs": "a743dffa12ab8f339d012a5238e031b0665ce224360726c6092a313725e64eeb",
+    "src/model.rs": "74de7fc7be0c63d9f237d19662c277425eaada99a62b460d8713dc0ee7c730e6",
+    "src/objective.rs": "e7c6067fea526b38567697b6ca6fac9262ae2ea0a806bdac52347437b3984709",
+    "src/reference.rs": "11370b41f941d8f20b20e68811238521aa6e7286af94a9a9b7ccd55f604e4805"
+  },
+  "target": "aarch64-apple-darwin",
+  "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)",
+  "binary_sha256": "84adcc089b5bccb840c66581dcdd44c0eeeba0b5cb35ebf509bec7f7ad2d1464",
+  "macos_minimum": "13.0",
+  "license_inventory_target": "x86_64-unknown-linux-gnu",
+  "validation": "macOS engine unit tests: 6 passed, 1 diagnostic benchmark ignored (release, M1, macOS 15.5). Same source and Cargo.lock hashes as the reference-validated Linux engine. Outputs compared with the validated Linux binary on deterministic fixtures (generate_fixture.py: 8-tip clock, 64-tip nonclock, 64-tip nonclock with a 4-point CV grid, 512-tip nonclock; log penalty): identical accepted starts; largest relative difference over 2868 estimates 5.6e-5 (8-tip case identical). 64-tip additive-penalty fixture: both reach the same optimum (objectives agree to 1e-12), but the strict gradient gate accepts start 3 on macOS (4.95e-5 vs tolerance 5.08e-5) and rejects it on Linux (5.16e-5), so Linux returns no converged start. Normal-dependency closure for aarch64-apple-darwin (47 crates) equals Linux's and is covered by the Linux notice inventory.",
+  "pending": "Independent scientific review of this cross-platform evidence, including the borderline convergence gate."
+}

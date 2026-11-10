@@ -3,8 +3,12 @@
 //! On Linux a buffer is a `memfd`: written once, then sealed against
 //! writes, shrinking and growing, so the receiving process can map it
 //! without fearing changes underneath. Windows uses temporary files held
-//! read-only with sharing locks that deny writes and deletion. Other platforms
-//! fail explicitly until an equivalent immutability guarantee is available.
+//! read-only with sharing locks that deny writes and deletion. macOS has
+//! neither seals nor mandatory locks. Its temporary snapshot is reopened
+//! read-only and unlinked before the writer is closed. This requires trusted,
+//! cooperative same-user processes: it does not revoke a writable handle
+//! obtained before unlink, and is not kernel-enforced Linux-style sealing.
+//! Other platforms fail explicitly.
 
 use std::fs::File;
 use std::io::{self, Write};
@@ -23,7 +27,7 @@ pub struct SharedBuffer {
 pub struct SharedWriter {
     file: File,
     len: u64,
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     path: tempfile::TempPath,
 }
 
@@ -38,11 +42,20 @@ impl SharedWriter {
         })
     }
 
-    #[cfg(not(any(target_os = "linux", windows)))]
+    #[cfg(target_os = "macos")]
+    pub fn new(name: &str) -> io::Result<Self> {
+        let (file, path) = tempfile::Builder::new()
+            .prefix(&format!("basecraft-{name}-"))
+            .tempfile()?
+            .into_parts();
+        Ok(Self { file, len: 0, path })
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     pub fn new(_name: &str) -> io::Result<Self> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
-            "immutable shared buffers require Linux memfd or Windows sharing locks",
+            "immutable shared buffers are implemented for Linux, macOS and Windows",
         ))
     }
 
@@ -104,11 +117,36 @@ impl SharedWriter {
         })
     }
 
-    #[cfg(not(any(target_os = "linux", windows)))]
+    #[cfg(target_os = "macos")]
+    pub fn seal(mut self) -> io::Result<SharedBuffer> {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        self.file.flush()?;
+        self.file.sync_all()?;
+        let written = self.file.metadata()?;
+        self.file
+            .set_permissions(std::fs::Permissions::from_mode(0o400))?;
+        let file = File::open(&self.path)?;
+        let opened = file.metadata()?;
+        if (opened.dev(), opened.ino()) != (written.dev(), written.ino())
+            || opened.len() != self.len
+        {
+            return Err(io::Error::other("snapshot file changed during sealing"));
+        }
+        // Remove the name before dropping our writer. Under the trusted-plugin
+        // contract no other process retains a writable handle to this file.
+        self.path.close()?;
+        drop(self.file);
+        Ok(SharedBuffer {
+            fd: file,
+            len: self.len,
+        })
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     pub fn seal(self) -> io::Result<SharedBuffer> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
-            "immutable shared buffers require Linux memfd or Windows sharing locks",
+            "immutable shared buffers are implemented for Linux, macOS and Windows",
         ))
     }
 }
@@ -160,6 +198,8 @@ impl SharedBuffer {
         // shrink underneath us. A buffer received from a plugin may not be
         // sealed; plugins are trusted not to resize what they send, and the
         // protocol requires them to seal.
+        // macOS additionally relies on cooperative same-user processes not
+        // retaining a writable handle before the snapshot is unlinked.
         unsafe { memmap2::Mmap::map(&self.fd) }
     }
 }
@@ -203,5 +243,30 @@ mod windows_tests {
         assert!(std::fs::remove_file(&path).is_err());
         drop(buffer);
         assert!(!path.exists());
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod macos_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn sealed_snapshot_is_read_only_and_unnamed() {
+        let mut writer = SharedWriter::new("immutable").unwrap();
+        writer.write_all(b"ACGT").unwrap();
+        let path = writer.path.to_path_buf();
+        let buffer = writer.seal().unwrap();
+        assert_eq!(buffer.len(), 4);
+        assert_eq!(&buffer.map().unwrap()[..], b"ACGT");
+        // No name to reopen, and the descriptor handed to plugins can't write.
+        assert!(!path.exists());
+        let mut duplicate = buffer.fd.try_clone().unwrap();
+        assert!(duplicate.write_all(b"X").is_err());
+        assert_eq!(
+            buffer.fd.metadata().unwrap().permissions().mode() & 0o777,
+            0o400
+        );
+        assert_eq!(&buffer.map().unwrap()[..], b"ACGT");
     }
 }

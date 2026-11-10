@@ -46,7 +46,7 @@ def executable_path(params=None):
     explicit = (params or {}).get("mptp_executable") or os.environ.get("BASECRAFT_MPTP")
     if explicit:
         return str(explicit)
-    bundled = Path(__file__).resolve().parents[2] / "bin" / "mptp"
+    bundled = Path(__file__).resolve().parents[2] / "bin" / ("mptp.exe" if os.name == "nt" else "mptp")
     if bundled.is_file():
         return str(bundled)
     return shutil.which("mptp")

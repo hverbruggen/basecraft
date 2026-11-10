@@ -11,6 +11,12 @@ use rustix::net::{
     SendAncillaryMessage, SendFlags, recvmsg, sendmsg,
 };
 
+// Linux sets close-on-exec atomically on receipt; other Unixes set it just after.
+#[cfg(target_os = "linux")]
+const RECV_FLAGS: RecvFlags = RecvFlags::CMSG_CLOEXEC;
+#[cfg(not(target_os = "linux"))]
+const RECV_FLAGS: RecvFlags = RecvFlags::empty();
+
 /// Most descriptors accepted per received chunk.
 const MAX_FDS: usize = 16;
 
@@ -112,11 +118,18 @@ impl Receiver {
                 self.stream.as_fd(),
                 &mut [IoSliceMut::new(&mut self.chunk)],
                 &mut control,
-                RecvFlags::CMSG_CLOEXEC,
+                RECV_FLAGS,
             )?;
             for msg in control.drain() {
                 if let RecvAncillaryMessage::ScmRights(fds) = msg {
-                    self.fds.extend(fds);
+                    for fd in fds {
+                        // Without MSG_CMSG_CLOEXEC (macOS), mark each received
+                        // descriptor promptly. This is best effort: receipt and flagging
+                        // are not atomic with concurrent process creation.
+                        #[cfg(not(target_os = "linux"))]
+                        rustix::io::fcntl_setfd(&fd, rustix::io::FdFlags::CLOEXEC)?;
+                        self.fds.push_back(fd);
+                    }
                 }
             }
             if got.flags.contains(rustix::net::ReturnFlags::CTRUNC) || self.fds.len() > self.max_fds

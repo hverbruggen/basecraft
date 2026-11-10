@@ -65,9 +65,17 @@ fn main() {
     compile_shaders(&out_dir);
     // The versioned QtGui directory holds <rhi/qrhi.h>; CMake would add it
     // through Qt6::GuiPrivate.
-    let gui_private = PathBuf::from(qmake_query("QT_INSTALL_HEADERS"))
+    // Framework builds of Qt (macOS) keep it inside QtGui.framework instead.
+    let version = qmake_query("QT_VERSION");
+    let mut gui_private = PathBuf::from(qmake_query("QT_INSTALL_HEADERS"))
         .join("QtGui")
-        .join(qmake_query("QT_VERSION"));
+        .join(&version);
+    let framework = PathBuf::from(qmake_query("QT_INSTALL_LIBS"))
+        .join("QtGui.framework/Headers")
+        .join(&version);
+    if !gui_private.is_dir() && framework.is_dir() {
+        gui_private = framework;
+    }
     let shader_dir = out_dir.join("shaders");
     let builder = CxxQtBuilder::new_qml_module(QmlModule::new("Basecraft").qml_files([
         "qml/Main.qml",

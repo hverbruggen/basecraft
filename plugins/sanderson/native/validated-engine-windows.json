@@ -22,5 +22,7 @@
     "validation_source_sha256": {
       "src/lib.rs": "e75e8abaa82c75fe71695b6ffb48f272537c926a83377830ddc255858c3a7453"
     }
-  }
+  },
+  "license_inventory_target": "x86_64-unknown-linux-gnu",
+  "license_inventory_note": "Normal-dependency closure for x86_64-pc-windows-gnu (46 crates, cargo tree on 2026-11-09) is a subset of the Linux notice inventory."
 }

@@ -5,6 +5,7 @@ import json
 import math
 import os
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -59,7 +60,9 @@ def _binary(package=None):
     if not path.is_file():
         raise RuntimeError("Native Sanderson PL engine is not packaged")
     try:
-        identity = "validated-engine-windows.json" if os.name == "nt" else "validated-engine.json"
+        identity = ("validated-engine-windows.json" if os.name == "nt"
+                    else "validated-engine-macos.json" if sys.platform == "darwin"
+                    else "validated-engine.json")
         expected = json.loads((package / "native" / identity).read_text())
         staged = json.loads((package / "bin" / "engine.json").read_text())
     except (OSError, ValueError) as error:

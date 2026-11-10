@@ -27,7 +27,10 @@ def sha256(path):
 def verify_licenses(package, expected):
     source = package / "native" / "licenses"
     inventory = json.loads((source / "manifest.json").read_text())
-    if inventory.get("schema") != 1 or inventory.get("target") != expected["target"]:
+    # Targets whose dependency closure was checked against the Linux notice
+    # inventory name it in license_inventory_target.
+    covered = expected.get("license_inventory_target", expected["target"])
+    if inventory.get("schema") != 1 or inventory.get("target") != covered:
         raise ValueError("invalid release dependency license inventory")
     if inventory.get("cargo_lock_sha256") != expected["cargo_lock_sha256"]:
         raise ValueError("dependency inventory uses a different Cargo.lock")
@@ -102,20 +105,37 @@ def atomic_text(value, destination):
         temporary.unlink(missing_ok=True)
 
 
-def stage(package, binary):
+# Validated engine per package target: identity file, executable name and the
+# executable format's leading bytes.
+TARGETS = {
+    "linux-64": ("validated-engine.json", "basecraft-sanderson-native", (b"\x7fELF",)),
+    "osx-arm64": ("validated-engine-macos.json", "basecraft-sanderson-native", (b"\xcf\xfa\xed\xfe",)),
+    "win-64": ("validated-engine-windows.json", "basecraft-sanderson-native.exe", (b"MZ",)),
+}
+
+
+def host_target():
+    system, machine = platform.system(), platform.machine()
+    if (system, machine) == ("Linux", "x86_64"):
+        return "linux-64"
+    if (system, machine) == ("Darwin", "arm64"):
+        return "osx-arm64"
+    raise ValueError(f"no validated Sanderson engine for {system} {machine}")
+
+
+def stage(package, binary, target_name=None):
     package = package.resolve(strict=True)
     binary = binary.resolve(strict=True)
     if not (package / "plugin.toml").is_file():
         raise ValueError("expected a staged Sanderson plugin package")
-    if platform.system() != "Linux" or platform.machine() != "x86_64":
-        raise ValueError("validated binary targets Linux x86_64 only")
+    identity, executable, magics = TARGETS[target_name or host_target()]
     if not binary.is_file():
         raise ValueError("native executable is not a regular file")
     with binary.open("rb") as stream:
         magic = stream.read(4)
-    if magic != b"\x7fELF":
-        raise ValueError("native executable is not an ELF regular file")
-    expected = json.loads((package / "native/validated-engine.json").read_text())
+    if not any(magic.startswith(m) for m in magics):
+        raise ValueError(f"native executable is not a {target_name or host_target()} executable")
+    expected = json.loads((package / "native" / identity).read_text())
     if expected.get("name") != "basecraft-sanderson-native" or expected.get("schema") != 1:
         raise ValueError("invalid validated engine identity")
     if sha256(binary) != expected["binary_sha256"]:
@@ -132,7 +152,7 @@ def stage(package, binary):
     if directory.is_symlink():
         raise ValueError("binary directory must not be a symlink")
     directory.mkdir(exist_ok=True)
-    target = directory / "basecraft-sanderson-native"
+    target = directory / executable
     if target.exists() and sha256(target) != expected["binary_sha256"]:
         raise ValueError("a different native executable is already staged")
     notices = directory / "licenses"
@@ -165,8 +185,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--package", type=Path, required=True)
     parser.add_argument("--binary", type=Path, required=True)
+    parser.add_argument("--target", choices=sorted(TARGETS),
+                        help="package target (default: this machine; win-64 packages are staged on Linux)")
     args = parser.parse_args()
-    print(json.dumps(stage(args.package, args.binary), sort_keys=True))
+    print(json.dumps(stage(args.package, args.binary, args.target), sort_keys=True))
 
 
 if __name__ == "__main__":

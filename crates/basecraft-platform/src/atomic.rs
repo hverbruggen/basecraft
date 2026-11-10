@@ -1,6 +1,7 @@
 //! No-clobber namespace promotion for owned staged artifact directories.
 use std::path::Path;
-#[cfg(target_os = "linux")]
+// macOS: rustix maps NOREPLACE to renameatx_np(RENAME_EXCL).
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub fn rename_noreplace(source: &Path, destination: &Path) -> std::io::Result<()> {
     rustix::fs::renameat_with(
         rustix::fs::CWD,
@@ -12,7 +13,7 @@ pub fn rename_noreplace(source: &Path, destination: &Path) -> std::io::Result<()
     Ok(())
 }
 
-#[cfg(all(test, any(target_os = "linux", windows)))]
+#[cfg(all(test, any(target_os = "linux", target_os = "macos", windows)))]
 mod tests {
     #[test]
     fn promotion_preserves_a_competing_destination() {
@@ -35,7 +36,7 @@ mod tests {
         assert!(!source.exists());
     }
 }
-#[cfg(not(any(target_os = "linux", windows)))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 pub fn rename_noreplace(_source: &Path, _destination: &Path) -> std::io::Result<()> {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
