@@ -55,10 +55,9 @@ fn scenario(
     assert_eq!(AppPaths::discover().unwrap().state, paths.state);
     let original_size = file.metadata().unwrap().len();
     counters::reset();
-    // Main.qml openPath asks file_kind three times before opening a document.
-    for _ in 0..3 {
-        basecraft_ops::files::kind(&file).unwrap();
-    }
+    // Main.qml openPath resolves file_kind once and reuses it for routing
+    // and the tab row. FASTA open drops from the original 6 reads to 4.
+    basecraft_ops::files::kind(&file).unwrap();
     let mut session = Session::recoverable_with_paths(&root, &paths).unwrap();
     let doc = session.open(&file).unwrap();
     record(
@@ -128,7 +127,7 @@ fn fasta() {
     scenario(
         "fasta",
         "alignment-editing/ambiguous-gappy.afa",
-        6,
+        4,
         1,
         12,
         |i| Op::AlnReplace {
