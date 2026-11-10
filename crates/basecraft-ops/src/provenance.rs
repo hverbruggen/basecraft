@@ -23,7 +23,7 @@ pub fn bundle_for_result(result: &Path) -> PathBuf {
 pub(crate) struct BundleObservation {
     pub selected: PathBuf,
     pub selected_by: BundleSelection,
-    /// Ordered attempted stages. An absent stage is NotAttempted, not absent on
+    /// Ordered attempted stages. An absent stage is `NotAttempted`, not absent on
     /// disk: an earlier selection or a failed/skipped prerequisite prevented it.
     pub steps: Vec<ResolverStep>,
 }
@@ -55,7 +55,7 @@ pub(crate) enum ResolverStage {
 pub(crate) enum ResolverStep {
     /// None is opaque owner output, not proof that no binding exists.
     Binding(Result<Option<PathBuf>>),
-    /// Following metadata only: NotFound can include a dangling link or missing
+    /// Following metadata only: `NotFound` can include a dangling link or missing
     /// ancestor; a regular file need not be readable or remain the same object.
     Metadata(ResolverStage, PathBuf, std::io::Result<std::fs::Metadata>),
     /// Failure retains original spelling for all subsequent calculations.
