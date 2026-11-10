@@ -28,7 +28,7 @@ pub fn evidence_kind(path: &Path) -> Option<EvidenceKind> {
     if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes)
         && value.get("version").is_some()
     {
-        return SangerReviewSession::decode(&bytes, path)
+        return SangerReviewSession::decode_value(value, path)
             .ok()
             .map(|_| EvidenceKind::Review);
     }
@@ -49,16 +49,31 @@ pub fn saved_review(path: &Path) -> Option<Result<SangerReviewSession, String>> 
         return None;
     }
     let name = path.display();
-    Some(match evidence_kind(path) {
-        Some(EvidenceKind::Review) => SangerReviewSession::load(path),
-        Some(EvidenceKind::Draft) => Err(format!(
-            "{name} is an unreviewed Sanger draft, not a saved Sanger review; start its review in Basecraft"
-        )),
-        None => Err(match SangerReviewSession::load(path) {
-            Err(error) => format!("{name} is not a readable saved Sanger review: {error}"),
-            Ok(_) => format!("{name} is not a readable saved Sanger review"),
-        }),
-    })
+    let unreadable =
+        |error: String| format!("{name} is not a readable saved Sanger review: {error}");
+    let read = || -> Result<SangerReviewSession, String> {
+        // Keep the acquired bytes through classification, decoding and acceptance.
+        // The accepted-revision check still verifies the current file; a second
+        // classification/load pass must not select different bytes after a race.
+        let bytes =
+            crate::provenance::read_record(path).map_err(|error| unreadable(error.to_string()))?;
+        let value: serde_json::Value =
+            serde_json::from_slice(&bytes).map_err(|error| unreadable(error.to_string()))?;
+        if value.get("version").is_none() {
+            if let Ok(draft) = serde_json::from_value::<SangerDraft>(value)
+                && draft.validate().is_ok()
+            {
+                return Err(format!(
+                    "{name} is an unreviewed Sanger draft, not a saved Sanger review; start its review in Basecraft"
+                ));
+            }
+            return Err(unreadable("Unsupported Sanger review version".into()));
+        }
+        SangerReviewSession::decode_value(value, path)
+            .and_then(|review| review.accept_loaded(path, &bytes))
+            .map_err(unreadable)
+    };
+    Some(read())
 }
 
 /// Write a review recovered from application state to `destination`, a new
@@ -305,17 +320,24 @@ impl SangerReviewSession {
         if bytes.len() > 64 * 1024 * 1024 {
             return Err("Sanger review exceeds 64 MiB".into());
         }
-        let mut session = Self::decode(&bytes, path)?;
-        if session.recovery.is_none() {
-            session.accepted = Some(
-                crate::save_guard::Revision::accepted(path, &bytes).map_err(|e| e.to_string())?,
+        Self::decode(&bytes, path)?.accept_loaded(path, &bytes)
+    }
+
+    fn accept_loaded(mut self, path: &Path, bytes: &[u8]) -> Result<Self, String> {
+        if self.recovery.is_none() {
+            self.accepted = Some(
+                crate::save_guard::Revision::accepted(path, bytes).map_err(|e| e.to_string())?,
             );
         }
-        Ok(session)
+        Ok(self)
     }
 
     fn decode(bytes: &[u8], path: &Path) -> Result<Self, String> {
         let value: serde_json::Value = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+        Self::decode_value(value, path)
+    }
+
+    fn decode_value(value: serde_json::Value, path: &Path) -> Result<Self, String> {
         match value["version"].as_u64() {
             Some(1) => Self::from_stored(
                 serde_json::from_value(value).map_err(|e| e.to_string())?,
