@@ -75,9 +75,9 @@ qml-test:
 replay:
     cargo test -q -p basecraft-ops --test replay
 
-# Wall-clock and frame-time budgets on this machine.
-bench:
-    @echo "wall-clock benchmarks: not set up yet"
+# Warm-cache headless timings. Run on the build host under its shared lock.
+bench *args:
+    python3 benches/run.py {{args}}
 
 # Compact defaults need no compilation. Legacy small/full stress tiers remain opt-in.
 # Run compiler-backed tiers on the configured remote build machine.

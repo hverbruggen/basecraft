@@ -1,0 +1,31 @@
+# Observational configuration. Ratios are the M5 plan's future gate semantics,
+# not validated thresholds or active CI gates. Review repeated baselines first.
+[comparison]
+benchmark_ratio = 1.30
+gross_ci_ratio = 2.0
+
+[scenarios.open-alignment]
+fixture = "32 rows x 4096 columns; rowNNN; ACGT rotated by row; .afa"
+measurement = "Session::open only, warm cache, recoverable session"
+
+[scenarios.open-fasta-100mb]
+fixture = "100000000 decimal file bytes; single sequence; 80-base wrapped ACGT"
+measurement = "Session::open only; warm cache; no first-paint claim"
+
+[scenarios.edit-alignment]
+fixture = "compact alignment; 1000 distinct row-0 single-residue replacements with N"
+measurement = "sum of 1000 Session::apply durations / 1000, including first-edit promotion"
+prd_context = "16 ms input-to-screen target requires separate GUI/frame measurement"
+
+[scenarios.undo-alignment]
+fixture = "compact alignment after 1000 single-residue edits"
+measurement = "sum of 1000 Session::undo durations / 1000"
+
+[scenarios.save-alignment]
+fixture = "compact alignment after 1000 edits; overwrite original path"
+measurement = "Session::save only; reopen and all-row verification outside timer"
+
+[scenarios.open-fasta-1gb]
+fixture = "1000000000 decimal file bytes; opt-in single sequence"
+measurement = "warm-cache Session::open; failures/refusals reported explicitly"
+prd_context = "1 s first paint for 1 GB is a separate unmeasured GUI target"
