@@ -327,6 +327,19 @@ fn repeated_combine_and_refused_save_preserve_retained_objects_and_recover() {
     }
 }
 
+fn hint_files(root: &std::path::Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
+    let mut files = std::collections::BTreeMap::new();
+    for entry in std::fs::read_dir(root).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            files.extend(hint_files(&path));
+        } else {
+            files.insert(path.clone(), std::fs::read(&path).unwrap());
+        }
+    }
+    files
+}
+
 // Keep these independent of combine's retained-evidence/alias fixtures.
 fn hint_workspace(
     root: &std::path::Path,
@@ -349,7 +362,7 @@ fn hint_workspace(
 #[test]
 fn linked_alignment_selector_preserves_presence_order_extensions_and_spelling() {
     let dir = tempfile::tempdir().unwrap();
-    let cases: Vec<(Option<&str>, Vec<Vec<&str>>, Option<&str>)> = vec![
+    let cases = [
         (
             Some("Outside/../missing.FA"),
             vec![vec!["a.fa"]],
@@ -371,6 +384,7 @@ fn linked_alignment_selector_preserves_presence_order_extensions_and_spelling() 
     for (index, (snapshot, sources, expected)) in cases.into_iter().enumerate() {
         let path = hint_workspace(dir.path(), &format!("case-{index}.spart"), |work| {
             work.hypotheses.clear();
+            work.view = Default::default();
             let specimen = work.specimens[0].clone();
             work.specimens = sources
                 .into_iter()
@@ -393,6 +407,7 @@ fn linked_alignment_selector_preserves_presence_order_extensions_and_spelling() 
         let mut session = Session::unlogged(dir.path());
         let doc = session.open(&path).unwrap();
         let before = session.delimitation(doc).unwrap().clone();
+        let before_files = hint_files(dir.path());
         #[cfg(feature = "test-counters")]
         basecraft_io::counters::reset();
         assert_eq!(workflow::linked_alignment(&session, doc).unwrap(), expected);
@@ -402,6 +417,7 @@ fn linked_alignment_selector_preserves_presence_order_extensions_and_spelling() 
             basecraft_io::counters::Counters::default()
         );
         assert_eq!(session.delimitation(doc).unwrap(), &before);
+        assert_eq!(hint_files(dir.path()), before_files);
         assert!(!session.can_undo(doc));
         assert!(!session.can_redo(doc));
         assert!(!dir.path().join(".basecraft").exists());
@@ -501,6 +517,7 @@ fn linked_alignment_observation_preserves_unsaved_undo_redo_journal_and_replay()
             serde_json::to_value(session.document_record(doc).unwrap()).unwrap(),
         );
         let replay_before = basecraft_ops::replay::replay(dir.path()).unwrap();
+        let before_files = hint_files(dir.path());
         let _hint = workflow::linked_alignment(&session, doc).unwrap();
         assert_eq!(
             (
@@ -513,6 +530,7 @@ fn linked_alignment_observation_preserves_unsaved_undo_redo_journal_and_replay()
             ),
             before
         );
+        assert_eq!(hint_files(dir.path()), before_files);
         let replay_after = basecraft_ops::replay::replay(dir.path()).unwrap();
         assert!(replay_before.ok(), "{:?}", replay_before.problems);
         assert_eq!(

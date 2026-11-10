@@ -183,6 +183,11 @@ def main():
         assert "delimitation_linked_alignment" in {t["name"] for t in readonly.tools()}
         opened = readonly.tool("open", {"path": paths[0]})["structuredContent"]
         workspace = readonly.tool("read", {"document": opened["document"]})["structuredContent"]
+        # Reuse the host's existing baseline hash rather than adding another
+        # digest implementation/dependency to this adapter conformance test.
+        baseline_record = readonly.tool("document_record", {"document": opened["document"]})["structuredContent"]
+        baseline = json.loads(baseline_record["raw"])
+        exchange_hash = dict(baseline["events"][0]["result"]["hashes"])[opened["path"]]
         assert readonly.tool("delimitation_linked_alignment", {"document": 999999})["isError"]
         (project / "wrong.fa").write_text(">a\nACGT\n")
         wrong = readonly.tool("open", {"path": "wrong.fa"})["structuredContent"]
@@ -201,7 +206,7 @@ def main():
             for specimen in work["specimens"]:
                 specimen["sources"] = {key: "unverified" for key in keys}
             side = Path(str(path) + ".basecraft.json")
-            payload = {"version": 1, "exchange_hash": hashlib.sha256(path.read_bytes()).hexdigest(),
+            payload = {"version": 1, "exchange_hash": exchange_hash,
                        "workspace": work}
             side.write_text(json.dumps(payload))
             before = {p: p.read_bytes() for p in project.rglob("*") if p.is_file()}
