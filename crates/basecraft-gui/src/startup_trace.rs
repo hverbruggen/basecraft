@@ -138,3 +138,8 @@ impl Trace {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod frame;
+#[cfg(test)]
+mod frame_bridge;

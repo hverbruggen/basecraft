@@ -177,6 +177,7 @@ fn main() {
         "src/metadata_bridge.rs",
         "src/submission_bridge.rs",
         "src/application_test_bridge.rs",
+        "src/startup_trace/frame_bridge.rs",
     ])
     .cpp_file("cpp/instanceview.h")
     .cpp_file("cpp/instanceview.cpp")
