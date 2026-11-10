@@ -618,3 +618,6 @@ pub fn require_enabled(id: &str) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod record_format_tests;

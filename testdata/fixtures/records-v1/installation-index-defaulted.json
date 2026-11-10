@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "active": {},
+  "runtimes": {
+    "defaulted": {
+      "schema": 1,
+      "executables": [],
+      "root": "",
+      "interpreter": "",
+      "lock_digest": "",
+      "manifest_digest": "",
+      "package_digest": "",
+      "reported_versions": {},
+      "executable_digests": {}
+    }
+  },
+  "disabled": [],
+  "editable": [],
+  "extra": {
+    "a": 2,
+    "z": 1
+  }
+}

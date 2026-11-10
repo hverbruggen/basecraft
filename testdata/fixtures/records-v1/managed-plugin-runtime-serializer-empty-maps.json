@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "executables": [
+    "z-tool",
+    "a-tool",
+    "z-tool"
+  ],
+  "root": "portable/环境 \"root\"",
+  "interpreter": "C:\\portable\\bin\\python.exe",
+  "lock_digest": "sha256:lock",
+  "manifest_digest": "sha256:manifest",
+  "package_digest": "sha256:package",
+  "reported_versions": {},
+  "executable_digests": {}
+}

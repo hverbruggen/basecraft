@@ -1,0 +1,66 @@
+{
+  "schema": 1,
+  "active": {
+    "a.plugin": "a-package",
+    "z.plugin": "z-package"
+  },
+  "runtimes": {
+    "a-package": {
+      "schema": 1,
+      "executables": [
+        "z-tool",
+        "a-tool",
+        "z-tool"
+      ],
+      "root": "portable/环境 \"root\"",
+      "interpreter": "C:\\portable\\bin\\python.exe",
+      "lock_digest": "sha256:lock",
+      "manifest_digest": "sha256:manifest",
+      "package_digest": "sha256:package",
+      "reported_versions": {
+        "a-tool": "1",
+        "z-tool": "v2\n\t\"é"
+      },
+      "executable_digests": {
+        "a-tool": "sha256:a",
+        "z-tool": "sha256:z"
+      }
+    },
+    "z-package": {
+      "schema": 1,
+      "executables": [
+        "z-tool",
+        "a-tool",
+        "z-tool"
+      ],
+      "root": "portable/环境 \"root\"",
+      "interpreter": "C:\\portable\\bin\\python.exe",
+      "lock_digest": "sha256:lock",
+      "manifest_digest": "sha256:manifest",
+      "package_digest": "sha256:package",
+      "reported_versions": {},
+      "executable_digests": {}
+    }
+  },
+  "disabled": [
+    "a.plugin",
+    "z.plugin"
+  ],
+  "editable": [
+    "a/\"quoted\"\\path",
+    "z/é"
+  ],
+  "a-extra": {
+    "a": [
+      "é",
+      false
+    ],
+    "z": 2
+  },
+  "middle-extra": "\n\t\\\"",
+  "z-extra": [
+    null,
+    true,
+    1.25
+  ]
+}

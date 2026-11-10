@@ -1,0 +1,2157 @@
+[
+  {
+    "case": "missing-file",
+    "outcome": {
+      "kind": "Ok",
+      "value": {
+        "active": {},
+        "disabled": [],
+        "editable": [],
+        "runtimes": {},
+        "schema": 1
+      }
+    }
+  },
+  {
+    "case": "empty-object",
+    "input": "{}",
+    "outcome": {
+      "kind": "Ok",
+      "value": {
+        "active": {},
+        "disabled": [],
+        "editable": [],
+        "runtimes": {},
+        "schema": 1
+      }
+    }
+  },
+  {
+    "case": "null",
+    "input": "null",
+    "outcome": {
+      "category": "Data",
+      "column": 4,
+      "display": "invalid type: null, expected struct InstallationIndex at line 1 column 4",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "bool",
+    "input": "true",
+    "outcome": {
+      "category": "Data",
+      "column": 4,
+      "display": "invalid type: boolean `true`, expected struct InstallationIndex at line 1 column 4",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "string",
+    "input": "\"index\"",
+    "outcome": {
+      "category": "Data",
+      "column": 7,
+      "display": "invalid type: string \"index\", expected struct InstallationIndex at line 1 column 7",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "number",
+    "input": "1",
+    "outcome": {
+      "category": "Data",
+      "column": 1,
+      "display": "invalid type: integer `1`, expected struct InstallationIndex at line 1 column 1",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "empty-input",
+    "input": "",
+    "outcome": {
+      "category": "Eof",
+      "column": 0,
+      "display": "EOF while parsing a value at line 1 column 0",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "malformed",
+    "input": "{\n  \"schema\": }",
+    "outcome": {
+      "category": "Syntax",
+      "column": 13,
+      "display": "expected value at line 2 column 13",
+      "kind": "Json",
+      "line": 2
+    }
+  },
+  {
+    "case": "trailing",
+    "input": "{} {}",
+    "outcome": {
+      "category": "Syntax",
+      "column": 4,
+      "display": "trailing characters at line 1 column 4",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "schema-one",
+    "input": "{\"schema\":1}",
+    "outcome": {
+      "kind": "Ok",
+      "value": {
+        "active": {},
+        "disabled": [],
+        "editable": [],
+        "runtimes": {},
+        "schema": 1
+      }
+    }
+  },
+  {
+    "case": "schema-zero",
+    "input": "{\"schema\":0}",
+    "outcome": {
+      "display": "plugin protocol: unsupported plugin index version",
+      "kind": "Protocol"
+    }
+  },
+  {
+    "case": "schema-future",
+    "input": "{\"schema\":2}",
+    "outcome": {
+      "display": "plugin protocol: unsupported plugin index version",
+      "kind": "Protocol"
+    }
+  },
+  {
+    "case": "schema-max",
+    "input": "{\"schema\":4294967295}",
+    "outcome": {
+      "display": "plugin protocol: unsupported plugin index version",
+      "kind": "Protocol"
+    }
+  },
+  {
+    "case": "schema-negative",
+    "input": "{\"schema\":-1}",
+    "outcome": {
+      "category": "Data",
+      "column": 12,
+      "display": "invalid value: integer `-1`, expected u32 at line 1 column 12",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "schema-overflow",
+    "input": "{\"schema\":4294967296}",
+    "outcome": {
+      "category": "Data",
+      "column": 20,
+      "display": "invalid value: integer `4294967296`, expected u32 at line 1 column 20",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "schema-float",
+    "input": "{\"schema\":1.0}",
+    "outcome": {
+      "category": "Data",
+      "column": 13,
+      "display": "invalid type: floating point `1.0`, expected u32 at line 1 column 13",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "schema-string",
+    "input": "{\"schema\":\"1\"}",
+    "outcome": {
+      "category": "Data",
+      "column": 13,
+      "display": "invalid type: string \"1\", expected u32 at line 1 column 13",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "schema-null",
+    "input": "{\"schema\":null}",
+    "outcome": {
+      "category": "Data",
+      "column": 14,
+      "display": "invalid type: null, expected u32 at line 1 column 14",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "duplicate-known",
+    "input": "{\"schema\":1,\"schema\":1}",
+    "outcome": {
+      "category": "Data",
+      "column": 20,
+      "display": "duplicate field `schema` at line 1 column 20",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "duplicate-unknown",
+    "input": "{\"extra\":1,\"extra\":2}",
+    "outcome": {
+      "kind": "Ok",
+      "value": {
+        "active": {},
+        "disabled": [],
+        "editable": [],
+        "extra": 2,
+        "runtimes": {},
+        "schema": 1
+      }
+    }
+  },
+  {
+    "case": "duplicate-map-key",
+    "input": "{\"active\":{\"p\":\"first\",\"p\":\"last\"}}",
+    "outcome": {
+      "kind": "Ok",
+      "value": {
+        "active": {
+          "p": "last"
+        },
+        "disabled": [],
+        "editable": [],
+        "runtimes": {},
+        "schema": 1
+      }
+    }
+  },
+  {
+    "case": "duplicate-sets",
+    "input": "{\"disabled\":[\"z\",\"a\",\"z\"],\"editable\":[\"z\",\"a\",\"z\"]}",
+    "outcome": {
+      "kind": "Ok",
+      "value": {
+        "active": {},
+        "disabled": [
+          "a",
+          "z"
+        ],
+        "editable": [
+          "a",
+          "z"
+        ],
+        "runtimes": {},
+        "schema": 1
+      }
+    }
+  },
+  {
+    "case": "top-extras",
+    "input": "{\"a-extra\":null,\"middle\":[1,true],\"z-extra\":{\"z\":1,\"a\":2}}",
+    "outcome": {
+      "kind": "Ok",
+      "value": {
+        "a-extra": null,
+        "active": {},
+        "disabled": [],
+        "editable": [],
+        "middle": [
+          1,
+          true
+        ],
+        "runtimes": {},
+        "schema": 1,
+        "z-extra": {
+          "a": 2,
+          "z": 1
+        }
+      }
+    }
+  },
+  {
+    "case": "escaped-native-paths",
+    "input": "{\"editable\":[\"C:\\\\portable\\\\é\\\"file\",\"\\\\\\\\server\\\\share\",\"line\\nbreak\"]}",
+    "outcome": {
+      "kind": "Ok",
+      "value": {
+        "active": {},
+        "disabled": [],
+        "editable": [
+          "C:\\portable\\é\"file",
+          "\\\\server\\share",
+          "line\nbreak"
+        ],
+        "runtimes": {},
+        "schema": 1
+      }
+    }
+  },
+  {
+    "case": "invalid-escape",
+    "input": "{\"editable\":[\"\\q\"]}",
+    "outcome": {
+      "category": "Syntax",
+      "column": 16,
+      "display": "invalid escape at line 1 column 16",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "unpaired-surrogate",
+    "input": "{\"editable\":[\"\\ud800\"]}",
+    "outcome": {
+      "category": "Syntax",
+      "column": 21,
+      "display": "unexpected end of hex escape at line 1 column 21",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "index-sequence-empty",
+    "input": "[]",
+    "outcome": {
+      "category": "Data",
+      "column": 0,
+      "display": "invalid type: sequence, expected struct InstallationIndex at line 1 column 0",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "index-sequence-schema",
+    "input": "[1]",
+    "outcome": {
+      "category": "Data",
+      "column": 0,
+      "display": "invalid type: sequence, expected struct InstallationIndex at line 1 column 0",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "index-sequence-full",
+    "input": "[1,{},{},[],[],{}]",
+    "outcome": {
+      "category": "Data",
+      "column": 0,
+      "display": "invalid type: sequence, expected struct InstallationIndex at line 1 column 0",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "index-sequence-five",
+    "input": "[1,{},{},[],[]]",
+    "outcome": {
+      "category": "Data",
+      "column": 0,
+      "display": "invalid type: sequence, expected struct InstallationIndex at line 1 column 0",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "index-sequence-extra",
+    "input": "[1,{},{},[],[],{},0]",
+    "outcome": {
+      "category": "Data",
+      "column": 0,
+      "display": "invalid type: sequence, expected struct InstallationIndex at line 1 column 0",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "index-active-null",
+    "input": "{\"active\":null}",
+    "outcome": {
+      "category": "Data",
+      "column": 14,
+      "display": "invalid type: null, expected a map at line 1 column 14",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "index-active-bool",
+    "input": "{\"active\":false}",
+    "outcome": {
+      "category": "Data",
+      "column": 15,
+      "display": "invalid type: boolean `false`, expected a map at line 1 column 15",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "index-active-string",
+    "input": "{\"active\":\"x\"}",
+    "outcome": {
+      "category": "Data",
+      "column": 13,
+      "display": "invalid type: string \"x\", expected a map at line 1 column 13",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "index-active-number",
+    "input": "{\"active\":1}",
+    "outcome": {
+      "category": "Data",
+      "column": 11,
+      "display": "invalid type: integer `1`, expected a map at line 1 column 11",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "index-active-array",
+    "input": "{\"active\":[]}",
+    "outcome": {
+      "category": "Data",
+      "column": 10,
+      "display": "invalid type: sequence, expected a map at line 1 column 10",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "index-active-object",
+    "input": "{\"active\":{}}",
+    "outcome": {
+      "kind": "Ok",
+      "value": {
+        "active": {},
+        "disabled": [],
+        "editable": [],
+        "runtimes": {},
+        "schema": 1
+      }
+    }
+  },
+  {
+    "case": "index-runtimes-null",
+    "input": "{\"runtimes\":null}",
+    "outcome": {
+      "category": "Data",
+      "column": 16,
+      "display": "invalid type: null, expected a map at line 1 column 16",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "index-runtimes-bool",
+    "input": "{\"runtimes\":false}",
+    "outcome": {
+      "category": "Data",
+      "column": 17,
+      "display": "invalid type: boolean `false`, expected a map at line 1 column 17",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "index-runtimes-string",
+    "input": "{\"runtimes\":\"x\"}",
+    "outcome": {
+      "category": "Data",
+      "column": 15,
+      "display": "invalid type: string \"x\", expected a map at line 1 column 15",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "index-runtimes-number",
+    "input": "{\"runtimes\":1}",
+    "outcome": {
+      "category": "Data",
+      "column": 13,
+      "display": "invalid type: integer `1`, expected a map at line 1 column 13",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "index-runtimes-array",
+    "input": "{\"runtimes\":[]}",
+    "outcome": {
+      "category": "Data",
+      "column": 12,
+      "display": "invalid type: sequence, expected a map at line 1 column 12",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "index-runtimes-object",
+    "input": "{\"runtimes\":{}}",
+    "outcome": {
+      "kind": "Ok",
+      "value": {
+        "active": {},
+        "disabled": [],
+        "editable": [],
+        "runtimes": {},
+        "schema": 1
+      }
+    }
+  },
+  {
+    "case": "index-disabled-null",
+    "input": "{\"disabled\":null}",
+    "outcome": {
+      "category": "Data",
+      "column": 16,
+      "display": "invalid type: null, expected a sequence at line 1 column 16",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "index-disabled-bool",
+    "input": "{\"disabled\":false}",
+    "outcome": {
+      "category": "Data",
+      "column": 17,
+      "display": "invalid type: boolean `false`, expected a sequence at line 1 column 17",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "index-disabled-string",
+    "input": "{\"disabled\":\"x\"}",
+    "outcome": {
+      "category": "Data",
+      "column": 15,
+      "display": "invalid type: string \"x\", expected a sequence at line 1 column 15",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "index-disabled-number",
+    "input": "{\"disabled\":1}",
+    "outcome": {
+      "category": "Data",
+      "column": 13,
+      "display": "invalid type: integer `1`, expected a sequence at line 1 column 13",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "index-disabled-array",
+    "input": "{\"disabled\":[]}",
+    "outcome": {
+      "kind": "Ok",
+      "value": {
+        "active": {},
+        "disabled": [],
+        "editable": [],
+        "runtimes": {},
+        "schema": 1
+      }
+    }
+  },
+  {
+    "case": "index-disabled-object",
+    "input": "{\"disabled\":{}}",
+    "outcome": {
+      "category": "Data",
+      "column": 12,
+      "display": "invalid type: map, expected a sequence at line 1 column 12",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "index-editable-null",
+    "input": "{\"editable\":null}",
+    "outcome": {
+      "category": "Data",
+      "column": 16,
+      "display": "invalid type: null, expected a sequence at line 1 column 16",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "index-editable-bool",
+    "input": "{\"editable\":false}",
+    "outcome": {
+      "category": "Data",
+      "column": 17,
+      "display": "invalid type: boolean `false`, expected a sequence at line 1 column 17",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "index-editable-string",
+    "input": "{\"editable\":\"x\"}",
+    "outcome": {
+      "category": "Data",
+      "column": 15,
+      "display": "invalid type: string \"x\", expected a sequence at line 1 column 15",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "index-editable-number",
+    "input": "{\"editable\":1}",
+    "outcome": {
+      "category": "Data",
+      "column": 13,
+      "display": "invalid type: integer `1`, expected a sequence at line 1 column 13",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "index-editable-array",
+    "input": "{\"editable\":[]}",
+    "outcome": {
+      "kind": "Ok",
+      "value": {
+        "active": {},
+        "disabled": [],
+        "editable": [],
+        "runtimes": {},
+        "schema": 1
+      }
+    }
+  },
+  {
+    "case": "index-editable-object",
+    "input": "{\"editable\":{}}",
+    "outcome": {
+      "category": "Data",
+      "column": 12,
+      "display": "invalid type: map, expected a sequence at line 1 column 12",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "active-null-value",
+    "input": "{\"active\":{\"p\":null}}",
+    "outcome": {
+      "category": "Data",
+      "column": 19,
+      "display": "invalid type: null, expected a string at line 1 column 19",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "active-array-value",
+    "input": "{\"active\":{\"p\":[]}}",
+    "outcome": {
+      "category": "Data",
+      "column": 15,
+      "display": "invalid type: sequence, expected a string at line 1 column 15",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "disabled-null-element",
+    "input": "{\"disabled\":[null]}",
+    "outcome": {
+      "category": "Data",
+      "column": 17,
+      "display": "invalid type: null, expected a string at line 1 column 17",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "disabled-number-element",
+    "input": "{\"disabled\":[1]}",
+    "outcome": {
+      "category": "Data",
+      "column": 14,
+      "display": "invalid type: integer `1`, expected a string at line 1 column 14",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "editable-null-element",
+    "input": "{\"editable\":[null]}",
+    "outcome": {
+      "category": "Data",
+      "column": 17,
+      "display": "invalid type: null, expected path string at line 1 column 17",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "editable-array-element",
+    "input": "{\"editable\":[[]]}",
+    "outcome": {
+      "category": "Data",
+      "column": 13,
+      "display": "invalid type: sequence, expected path string at line 1 column 13",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-null-value",
+    "input": "{\"runtimes\":{\"unused\":null}}",
+    "outcome": {
+      "category": "Data",
+      "column": 26,
+      "display": "invalid type: null, expected struct Runtime at line 1 column 26",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-string-value",
+    "input": "{\"runtimes\":{\"unused\":\"x\"}}",
+    "outcome": {
+      "category": "Data",
+      "column": 25,
+      "display": "invalid type: string \"x\", expected struct Runtime at line 1 column 25",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "future-plus-malformed-runtime",
+    "input": "{\"runtimes\":{\"unused\":{\"schema\":null}},\"schema\":2}",
+    "outcome": {
+      "category": "Data",
+      "column": 36,
+      "display": "invalid type: null, expected u32 at line 1 column 36",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-schema-missing",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\"}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 184,
+      "display": "missing field `schema` at line 1 column 184",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-schema-null",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":null}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 197,
+      "display": "invalid type: null, expected u32 at line 1 column 197",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-schema-bool",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":false}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 198,
+      "display": "invalid type: boolean `false`, expected u32 at line 1 column 198",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-schema-number",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "kind": "Ok",
+      "value": {
+        "active": {},
+        "disabled": [],
+        "editable": [],
+        "runtimes": {
+          "unused": {
+            "executable_digests": {},
+            "executables": [
+              "z",
+              "a",
+              "z"
+            ],
+            "interpreter": "bin/python",
+            "lock_digest": "lock",
+            "manifest_digest": "manifest",
+            "package_digest": "package",
+            "reported_versions": {},
+            "root": "portable/é\"\\root",
+            "schema": 1
+          }
+        },
+        "schema": 1
+      }
+    }
+  },
+  {
+    "case": "runtime-schema-string",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":\"x\"}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 196,
+      "display": "invalid type: string \"x\", expected u32 at line 1 column 196",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-schema-array",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":[]}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 193,
+      "display": "invalid type: sequence, expected u32 at line 1 column 193",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-schema-object",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":{}}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 193,
+      "display": "invalid type: map, expected u32 at line 1 column 193",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-executables-missing",
+    "input": "{\"runtimes\":{\"unused\":{\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 167,
+      "display": "missing field `executables` at line 1 column 167",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-executables-null",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":null,\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 41,
+      "display": "invalid type: null, expected a sequence at line 1 column 41",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-executables-bool",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":false,\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 42,
+      "display": "invalid type: boolean `false`, expected a sequence at line 1 column 42",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-executables-number",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":1,\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 38,
+      "display": "invalid type: integer `1`, expected a sequence at line 1 column 38",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-executables-string",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":\"x\",\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 40,
+      "display": "invalid type: string \"x\", expected a sequence at line 1 column 40",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-executables-array",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "kind": "Ok",
+      "value": {
+        "active": {},
+        "disabled": [],
+        "editable": [],
+        "runtimes": {
+          "unused": {
+            "executable_digests": {},
+            "executables": [],
+            "interpreter": "bin/python",
+            "lock_digest": "lock",
+            "manifest_digest": "manifest",
+            "package_digest": "package",
+            "reported_versions": {},
+            "root": "portable/é\"\\root",
+            "schema": 1
+          }
+        },
+        "schema": 1
+      }
+    }
+  },
+  {
+    "case": "runtime-executables-object",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":{},\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 37,
+      "display": "invalid type: map, expected a sequence at line 1 column 37",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-root-missing",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 166,
+      "display": "missing field `root` at line 1 column 166",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-root-null",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":null,\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 166,
+      "display": "invalid type: null, expected path string at line 1 column 166",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-root-bool",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":false,\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 167,
+      "display": "invalid type: boolean `false`, expected path string at line 1 column 167",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-root-number",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":1,\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 163,
+      "display": "invalid type: integer `1`, expected path string at line 1 column 163",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-root-string",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"x\",\"schema\":1}}}",
+    "outcome": {
+      "kind": "Ok",
+      "value": {
+        "active": {},
+        "disabled": [],
+        "editable": [],
+        "runtimes": {
+          "unused": {
+            "executable_digests": {},
+            "executables": [
+              "z",
+              "a",
+              "z"
+            ],
+            "interpreter": "bin/python",
+            "lock_digest": "lock",
+            "manifest_digest": "manifest",
+            "package_digest": "package",
+            "reported_versions": {},
+            "root": "x",
+            "schema": 1
+          }
+        },
+        "schema": 1
+      }
+    }
+  },
+  {
+    "case": "runtime-root-array",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":[],\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 162,
+      "display": "invalid type: sequence, expected path string at line 1 column 162",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-root-object",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":{},\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 162,
+      "display": "invalid type: map, expected path string at line 1 column 162",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-interpreter-missing",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 168,
+      "display": "missing field `interpreter` at line 1 column 168",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-interpreter-null",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":null,\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 69,
+      "display": "invalid type: null, expected path string at line 1 column 69",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-interpreter-bool",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":false,\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 70,
+      "display": "invalid type: boolean `false`, expected path string at line 1 column 70",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-interpreter-number",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":1,\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 66,
+      "display": "invalid type: integer `1`, expected path string at line 1 column 66",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-interpreter-string",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"x\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "kind": "Ok",
+      "value": {
+        "active": {},
+        "disabled": [],
+        "editable": [],
+        "runtimes": {
+          "unused": {
+            "executable_digests": {},
+            "executables": [
+              "z",
+              "a",
+              "z"
+            ],
+            "interpreter": "x",
+            "lock_digest": "lock",
+            "manifest_digest": "manifest",
+            "package_digest": "package",
+            "reported_versions": {},
+            "root": "portable/é\"\\root",
+            "schema": 1
+          }
+        },
+        "schema": 1
+      }
+    }
+  },
+  {
+    "case": "runtime-interpreter-array",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":[],\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 65,
+      "display": "invalid type: sequence, expected path string at line 1 column 65",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-interpreter-object",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":{},\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 65,
+      "display": "invalid type: map, expected path string at line 1 column 65",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-lock_digest-missing",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 174,
+      "display": "missing field `lock_digest` at line 1 column 174",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-lock_digest-null",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":null,\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 96,
+      "display": "invalid type: null, expected a string at line 1 column 96",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-lock_digest-bool",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":false,\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 97,
+      "display": "invalid type: boolean `false`, expected a string at line 1 column 97",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-lock_digest-number",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":1,\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 93,
+      "display": "invalid type: integer `1`, expected a string at line 1 column 93",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-lock_digest-string",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"x\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "kind": "Ok",
+      "value": {
+        "active": {},
+        "disabled": [],
+        "editable": [],
+        "runtimes": {
+          "unused": {
+            "executable_digests": {},
+            "executables": [
+              "z",
+              "a",
+              "z"
+            ],
+            "interpreter": "bin/python",
+            "lock_digest": "x",
+            "manifest_digest": "manifest",
+            "package_digest": "package",
+            "reported_versions": {},
+            "root": "portable/é\"\\root",
+            "schema": 1
+          }
+        },
+        "schema": 1
+      }
+    }
+  },
+  {
+    "case": "runtime-lock_digest-array",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":[],\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 92,
+      "display": "invalid type: sequence, expected a string at line 1 column 92",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-lock_digest-object",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":{},\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 92,
+      "display": "invalid type: map, expected a string at line 1 column 92",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-manifest_digest-missing",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 166,
+      "display": "missing field `manifest_digest` at line 1 column 166",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-manifest_digest-null",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":null,\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 121,
+      "display": "invalid type: null, expected a string at line 1 column 121",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-manifest_digest-bool",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":false,\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 122,
+      "display": "invalid type: boolean `false`, expected a string at line 1 column 122",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-manifest_digest-number",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":1,\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 118,
+      "display": "invalid type: integer `1`, expected a string at line 1 column 118",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-manifest_digest-string",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"x\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "kind": "Ok",
+      "value": {
+        "active": {},
+        "disabled": [],
+        "editable": [],
+        "runtimes": {
+          "unused": {
+            "executable_digests": {},
+            "executables": [
+              "z",
+              "a",
+              "z"
+            ],
+            "interpreter": "bin/python",
+            "lock_digest": "lock",
+            "manifest_digest": "x",
+            "package_digest": "package",
+            "reported_versions": {},
+            "root": "portable/é\"\\root",
+            "schema": 1
+          }
+        },
+        "schema": 1
+      }
+    }
+  },
+  {
+    "case": "runtime-manifest_digest-array",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":[],\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 117,
+      "display": "invalid type: sequence, expected a string at line 1 column 117",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-manifest_digest-object",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":{},\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 117,
+      "display": "invalid type: map, expected a string at line 1 column 117",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-package_digest-missing",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 168,
+      "display": "missing field `package_digest` at line 1 column 168",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-package_digest-null",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":null,\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 149,
+      "display": "invalid type: null, expected a string at line 1 column 149",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-package_digest-bool",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":false,\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 150,
+      "display": "invalid type: boolean `false`, expected a string at line 1 column 150",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-package_digest-number",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":1,\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 146,
+      "display": "invalid type: integer `1`, expected a string at line 1 column 146",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-package_digest-string",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"x\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "kind": "Ok",
+      "value": {
+        "active": {},
+        "disabled": [],
+        "editable": [],
+        "runtimes": {
+          "unused": {
+            "executable_digests": {},
+            "executables": [
+              "z",
+              "a",
+              "z"
+            ],
+            "interpreter": "bin/python",
+            "lock_digest": "lock",
+            "manifest_digest": "manifest",
+            "package_digest": "x",
+            "reported_versions": {},
+            "root": "portable/é\"\\root",
+            "schema": 1
+          }
+        },
+        "schema": 1
+      }
+    }
+  },
+  {
+    "case": "runtime-package_digest-array",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":[],\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 145,
+      "display": "invalid type: sequence, expected a string at line 1 column 145",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-package_digest-object",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":{},\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 145,
+      "display": "invalid type: map, expected a string at line 1 column 145",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-reported_versions-missing",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "kind": "Ok",
+      "value": {
+        "active": {},
+        "disabled": [],
+        "editable": [],
+        "runtimes": {
+          "unused": {
+            "executable_digests": {},
+            "executables": [
+              "z",
+              "a",
+              "z"
+            ],
+            "interpreter": "bin/python",
+            "lock_digest": "lock",
+            "manifest_digest": "manifest",
+            "package_digest": "package",
+            "reported_versions": {},
+            "root": "portable/é\"\\root",
+            "schema": 1
+          }
+        },
+        "schema": 1
+      }
+    }
+  },
+  {
+    "case": "runtime-reported_versions-null",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"reported_versions\":null,\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 179,
+      "display": "invalid type: null, expected a map at line 1 column 179",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-reported_versions-bool",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"reported_versions\":false,\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 180,
+      "display": "invalid type: boolean `false`, expected a map at line 1 column 180",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-reported_versions-number",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"reported_versions\":1,\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 176,
+      "display": "invalid type: integer `1`, expected a map at line 1 column 176",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-reported_versions-string",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"reported_versions\":\"x\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 178,
+      "display": "invalid type: string \"x\", expected a map at line 1 column 178",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-reported_versions-array",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"reported_versions\":[],\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 175,
+      "display": "invalid type: sequence, expected a map at line 1 column 175",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-reported_versions-object",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"reported_versions\":{},\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "kind": "Ok",
+      "value": {
+        "active": {},
+        "disabled": [],
+        "editable": [],
+        "runtimes": {
+          "unused": {
+            "executable_digests": {},
+            "executables": [
+              "z",
+              "a",
+              "z"
+            ],
+            "interpreter": "bin/python",
+            "lock_digest": "lock",
+            "manifest_digest": "manifest",
+            "package_digest": "package",
+            "reported_versions": {},
+            "root": "portable/é\"\\root",
+            "schema": 1
+          }
+        },
+        "schema": 1
+      }
+    }
+  },
+  {
+    "case": "runtime-executable_digests-missing",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "kind": "Ok",
+      "value": {
+        "active": {},
+        "disabled": [],
+        "editable": [],
+        "runtimes": {
+          "unused": {
+            "executable_digests": {},
+            "executables": [
+              "z",
+              "a",
+              "z"
+            ],
+            "interpreter": "bin/python",
+            "lock_digest": "lock",
+            "manifest_digest": "manifest",
+            "package_digest": "package",
+            "reported_versions": {},
+            "root": "portable/é\"\\root",
+            "schema": 1
+          }
+        },
+        "schema": 1
+      }
+    }
+  },
+  {
+    "case": "runtime-executable_digests-null",
+    "input": "{\"runtimes\":{\"unused\":{\"executable_digests\":null,\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 48,
+      "display": "invalid type: null, expected a map at line 1 column 48",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-executable_digests-bool",
+    "input": "{\"runtimes\":{\"unused\":{\"executable_digests\":false,\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 49,
+      "display": "invalid type: boolean `false`, expected a map at line 1 column 49",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-executable_digests-number",
+    "input": "{\"runtimes\":{\"unused\":{\"executable_digests\":1,\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 45,
+      "display": "invalid type: integer `1`, expected a map at line 1 column 45",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-executable_digests-string",
+    "input": "{\"runtimes\":{\"unused\":{\"executable_digests\":\"x\",\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 47,
+      "display": "invalid type: string \"x\", expected a map at line 1 column 47",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-executable_digests-array",
+    "input": "{\"runtimes\":{\"unused\":{\"executable_digests\":[],\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 44,
+      "display": "invalid type: sequence, expected a map at line 1 column 44",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-executable_digests-object",
+    "input": "{\"runtimes\":{\"unused\":{\"executable_digests\":{},\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "kind": "Ok",
+      "value": {
+        "active": {},
+        "disabled": [],
+        "editable": [],
+        "runtimes": {
+          "unused": {
+            "executable_digests": {},
+            "executables": [
+              "z",
+              "a",
+              "z"
+            ],
+            "interpreter": "bin/python",
+            "lock_digest": "lock",
+            "manifest_digest": "manifest",
+            "package_digest": "package",
+            "reported_versions": {},
+            "root": "portable/é\"\\root",
+            "schema": 1
+          }
+        },
+        "schema": 1
+      }
+    }
+  },
+  {
+    "case": "runtime-schema-zero",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":0}}}",
+    "outcome": {
+      "kind": "Ok",
+      "value": {
+        "active": {},
+        "disabled": [],
+        "editable": [],
+        "runtimes": {
+          "unused": {
+            "executable_digests": {},
+            "executables": [
+              "z",
+              "a",
+              "z"
+            ],
+            "interpreter": "bin/python",
+            "lock_digest": "lock",
+            "manifest_digest": "manifest",
+            "package_digest": "package",
+            "reported_versions": {},
+            "root": "portable/é\"\\root",
+            "schema": 0
+          }
+        },
+        "schema": 1
+      }
+    }
+  },
+  {
+    "case": "runtime-schema-future",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":2}}}",
+    "outcome": {
+      "kind": "Ok",
+      "value": {
+        "active": {},
+        "disabled": [],
+        "editable": [],
+        "runtimes": {
+          "unused": {
+            "executable_digests": {},
+            "executables": [
+              "z",
+              "a",
+              "z"
+            ],
+            "interpreter": "bin/python",
+            "lock_digest": "lock",
+            "manifest_digest": "manifest",
+            "package_digest": "package",
+            "reported_versions": {},
+            "root": "portable/é\"\\root",
+            "schema": 2
+          }
+        },
+        "schema": 1
+      }
+    }
+  },
+  {
+    "case": "runtime-schema-max",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":4294967295}}}",
+    "outcome": {
+      "kind": "Ok",
+      "value": {
+        "active": {},
+        "disabled": [],
+        "editable": [],
+        "runtimes": {
+          "unused": {
+            "executable_digests": {},
+            "executables": [
+              "z",
+              "a",
+              "z"
+            ],
+            "interpreter": "bin/python",
+            "lock_digest": "lock",
+            "manifest_digest": "manifest",
+            "package_digest": "package",
+            "reported_versions": {},
+            "root": "portable/é\"\\root",
+            "schema": 4294967295
+          }
+        },
+        "schema": 1
+      }
+    }
+  },
+  {
+    "case": "runtime-schema-negative",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":-1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 195,
+      "display": "invalid value: integer `-1`, expected u32 at line 1 column 195",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-schema-overflow",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":4294967296}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 203,
+      "display": "invalid value: integer `4294967296`, expected u32 at line 1 column 203",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-schema-float",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":1.0}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 196,
+      "display": "invalid type: floating point `1.0`, expected u32 at line 1 column 196",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-unknown-unused",
+    "input": "{\"active\":{},\"runtimes\":{\"runtime\":{\"executables\":[\"z\",\"a\",\"z\"],\"extra\":\"forbidden\",\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 71,
+      "display": "unknown field `extra`, expected one of `schema`, `executables`, `root`, `interpreter`, `lock_digest`, `manifest_digest`, `package_digest`, `reported_versions`, `executable_digests` at line 1 column 71",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-malformed-unused",
+    "input": "{\"active\":{},\"runtimes\":{\"runtime\":{\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 47,
+      "display": "missing field `executables` at line 1 column 47",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-unknown-selected",
+    "input": "{\"active\":{\"p\":\"runtime\"},\"runtimes\":{\"runtime\":{\"executables\":[\"z\",\"a\",\"z\"],\"extra\":\"forbidden\",\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 84,
+      "display": "unknown field `extra`, expected one of `schema`, `executables`, `root`, `interpreter`, `lock_digest`, `manifest_digest`, `package_digest`, `reported_versions`, `executable_digests` at line 1 column 84",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-malformed-selected",
+    "input": "{\"active\":{\"p\":\"runtime\"},\"runtimes\":{\"runtime\":{\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 60,
+      "display": "missing field `executables` at line 1 column 60",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-executables-null-element",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[null],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 42,
+      "display": "invalid type: null, expected a string at line 1 column 42",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-executables-duplicate",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"z\",\"a\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "kind": "Ok",
+      "value": {
+        "active": {},
+        "disabled": [],
+        "editable": [],
+        "runtimes": {
+          "unused": {
+            "executable_digests": {},
+            "executables": [
+              "z",
+              "z",
+              "a"
+            ],
+            "interpreter": "bin/python",
+            "lock_digest": "lock",
+            "manifest_digest": "manifest",
+            "package_digest": "package",
+            "reported_versions": {},
+            "root": "portable/é\"\\root",
+            "schema": 1
+          }
+        },
+        "schema": 1
+      }
+    }
+  },
+  {
+    "case": "runtime-versions-bad-value",
+    "input": "{\"runtimes\":{\"unused\":{\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"reported_versions\":{\"x\":1},\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 181,
+      "display": "invalid type: integer `1`, expected a string at line 1 column 181",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-digests-bad-value",
+    "input": "{\"runtimes\":{\"unused\":{\"executable_digests\":{\"x\":null},\"executables\":[\"z\",\"a\",\"z\"],\"interpreter\":\"bin/python\",\"lock_digest\":\"lock\",\"manifest_digest\":\"manifest\",\"package_digest\":\"package\",\"root\":\"portable/é\\\"\\\\root\",\"schema\":1}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 53,
+      "display": "invalid type: null, expected a string at line 1 column 53",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-duplicate-known",
+    "input": "{\"runtimes\":{\"unused\":{\"schema\":1,\"schema\":1,\"executables\":[],\"root\":\"\",\"interpreter\":\"\",\"lock_digest\":\"l\",\"manifest_digest\":\"m\",\"package_digest\":\"p\"}}}",
+    "outcome": {
+      "category": "Data",
+      "column": 42,
+      "display": "duplicate field `schema` at line 1 column 42",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-duplicate-map-key",
+    "input": "{\"runtimes\":{\"unused\":{\"schema\":1,\"executables\":[],\"root\":\"\",\"interpreter\":\"\",\"lock_digest\":\"l\",\"manifest_digest\":\"m\",\"package_digest\":\"p\",\"reported_versions\":{\"x\":\"first\",\"x\":\"last\"}}}}",
+    "outcome": {
+      "kind": "Ok",
+      "value": {
+        "active": {},
+        "disabled": [],
+        "editable": [],
+        "runtimes": {
+          "unused": {
+            "executable_digests": {},
+            "executables": [],
+            "interpreter": "",
+            "lock_digest": "l",
+            "manifest_digest": "m",
+            "package_digest": "p",
+            "reported_versions": {
+              "x": "last"
+            },
+            "root": "",
+            "schema": 1
+          }
+        },
+        "schema": 1
+      }
+    }
+  },
+  {
+    "case": "duplicate-runtime-map-key",
+    "input": "{\"runtimes\":{\"unused\":{\"schema\":1,\"executables\":[],\"root\":\"\",\"interpreter\":\"\",\"lock_digest\":\"l\",\"manifest_digest\":\"m\",\"package_digest\":\"p\"},\"unused\":{\"schema\":1,\"executables\":[],\"root\":\"\",\"interpreter\":\"\",\"lock_digest\":\"l\",\"manifest_digest\":\"m\",\"package_digest\":\"p\"}}}",
+    "outcome": {
+      "kind": "Ok",
+      "value": {
+        "active": {},
+        "disabled": [],
+        "editable": [],
+        "runtimes": {
+          "unused": {
+            "executable_digests": {},
+            "executables": [],
+            "interpreter": "",
+            "lock_digest": "l",
+            "manifest_digest": "m",
+            "package_digest": "p",
+            "reported_versions": {},
+            "root": "",
+            "schema": 1
+          }
+        },
+        "schema": 1
+      }
+    }
+  },
+  {
+    "case": "runtime-sequence-0",
+    "input": "{\"runtimes\":{\"unused\":[]}}",
+    "outcome": {
+      "category": "Data",
+      "column": 24,
+      "display": "invalid length 0, expected struct Runtime with 9 elements at line 1 column 24",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-sequence-1",
+    "input": "{\"runtimes\":{\"unused\":[1]}}",
+    "outcome": {
+      "category": "Data",
+      "column": 25,
+      "display": "invalid length 1, expected struct Runtime with 9 elements at line 1 column 25",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-sequence-2",
+    "input": "{\"runtimes\":{\"unused\":[1,[\"z\",\"a\",\"z\"]]}}",
+    "outcome": {
+      "category": "Data",
+      "column": 39,
+      "display": "invalid length 2, expected struct Runtime with 9 elements at line 1 column 39",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-sequence-3",
+    "input": "{\"runtimes\":{\"unused\":[1,[\"z\",\"a\",\"z\"],\"root\"]}}",
+    "outcome": {
+      "category": "Data",
+      "column": 46,
+      "display": "invalid length 3, expected struct Runtime with 9 elements at line 1 column 46",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-sequence-4",
+    "input": "{\"runtimes\":{\"unused\":[1,[\"z\",\"a\",\"z\"],\"root\",\"python\"]}}",
+    "outcome": {
+      "category": "Data",
+      "column": 55,
+      "display": "invalid length 4, expected struct Runtime with 9 elements at line 1 column 55",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-sequence-5",
+    "input": "{\"runtimes\":{\"unused\":[1,[\"z\",\"a\",\"z\"],\"root\",\"python\",\"lock\"]}}",
+    "outcome": {
+      "category": "Data",
+      "column": 62,
+      "display": "invalid length 5, expected struct Runtime with 9 elements at line 1 column 62",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-sequence-6",
+    "input": "{\"runtimes\":{\"unused\":[1,[\"z\",\"a\",\"z\"],\"root\",\"python\",\"lock\",\"manifest\"]}}",
+    "outcome": {
+      "category": "Data",
+      "column": 73,
+      "display": "invalid length 6, expected struct Runtime with 9 elements at line 1 column 73",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "case": "runtime-sequence-7",
+    "input": "{\"runtimes\":{\"unused\":[1,[\"z\",\"a\",\"z\"],\"root\",\"python\",\"lock\",\"manifest\",\"package\"]}}",
+    "outcome": {
+      "kind": "Ok",
+      "value": {
+        "active": {},
+        "disabled": [],
+        "editable": [],
+        "runtimes": {
+          "unused": {
+            "executable_digests": {},
+            "executables": [
+              "z",
+              "a",
+              "z"
+            ],
+            "interpreter": "python",
+            "lock_digest": "lock",
+            "manifest_digest": "manifest",
+            "package_digest": "package",
+            "reported_versions": {},
+            "root": "root",
+            "schema": 1
+          }
+        },
+        "schema": 1
+      }
+    }
+  },
+  {
+    "case": "runtime-sequence-8",
+    "input": "{\"runtimes\":{\"unused\":[1,[\"z\",\"a\",\"z\"],\"root\",\"python\",\"lock\",\"manifest\",\"package\",{\"a\":\"1\",\"z\":\"2\"}]}}",
+    "outcome": {
+      "kind": "Ok",
+      "value": {
+        "active": {},
+        "disabled": [],
+        "editable": [],
+        "runtimes": {
+          "unused": {
+            "executable_digests": {},
+            "executables": [
+              "z",
+              "a",
+              "z"
+            ],
+            "interpreter": "python",
+            "lock_digest": "lock",
+            "manifest_digest": "manifest",
+            "package_digest": "package",
+            "reported_versions": {
+              "a": "1",
+              "z": "2"
+            },
+            "root": "root",
+            "schema": 1
+          }
+        },
+        "schema": 1
+      }
+    }
+  },
+  {
+    "case": "runtime-sequence-9",
+    "input": "{\"runtimes\":{\"unused\":[1,[\"z\",\"a\",\"z\"],\"root\",\"python\",\"lock\",\"manifest\",\"package\",{\"a\":\"1\",\"z\":\"2\"},{\"z\":\"hash\"}]}}",
+    "outcome": {
+      "kind": "Ok",
+      "value": {
+        "active": {},
+        "disabled": [],
+        "editable": [],
+        "runtimes": {
+          "unused": {
+            "executable_digests": {
+              "z": "hash"
+            },
+            "executables": [
+              "z",
+              "a",
+              "z"
+            ],
+            "interpreter": "python",
+            "lock_digest": "lock",
+            "manifest_digest": "manifest",
+            "package_digest": "package",
+            "reported_versions": {
+              "a": "1",
+              "z": "2"
+            },
+            "root": "root",
+            "schema": 1
+          }
+        },
+        "schema": 1
+      }
+    }
+  },
+  {
+    "case": "runtime-sequence-10",
+    "input": "{\"runtimes\":{\"unused\":[1,[\"z\",\"a\",\"z\"],\"root\",\"python\",\"lock\",\"manifest\",\"package\",{\"a\":\"1\",\"z\":\"2\"},{\"z\":\"hash\"},\"extra\"]}}",
+    "outcome": {
+      "category": "Syntax",
+      "column": 115,
+      "display": "trailing characters at line 1 column 115",
+      "kind": "Json",
+      "line": 1
+    }
+  },
+  {
+    "bytes": 1048576,
+    "case": "input-exact-limit",
+    "input_recipe": "{} followed by ASCII spaces to MAX_DESCRIPTOR_BYTES",
+    "outcome": {
+      "kind": "Ok",
+      "value": {
+        "active": {},
+        "disabled": [],
+        "editable": [],
+        "runtimes": {},
+        "schema": 1
+      }
+    }
+  },
+  {
+    "bytes": 1048577,
+    "case": "input-over-limit-before-parse",
+    "input_recipe": "exact-limit input followed by !",
+    "outcome": {
+      "display": "plugin protocol: plugin index exceeds size limit",
+      "kind": "Protocol"
+    }
+  }
+]

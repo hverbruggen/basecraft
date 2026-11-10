@@ -151,3 +151,82 @@ nondefault template. Random publication/activity ids are retained verbatim.
 The independent original-literal byte oracles remain in report_record_formats.rs.
 Historical provenance-v1 template1/singular-activity files are unchanged and
 are not current-writer goldens. These fresh shapes define no reader migration.
+
+Original installation-index capture and runtime serializer controls
+-----------------------------------------------------------------
+installation-index-{empty,populated,defaulted,mutations-*}.json are raw
+bytes from the original registry::write_index, using predeclared synthetic
+nonpersonal inputs through its private test module record_format_tests.rs.
+The mutation closures simulate state changes; they are not installation,
+removal or runtime-provisioning events. Missing-file reading creates no directory.
+installation-index-rust-default.json is a direct serializer control (schema 0),
+not writer output: missing-file and missing-schema loading instead use schema 1.
+
+managed-plugin-runtime-serializer-{empty-maps,populated}.json use the original
+Runtime and the same to_writer_pretty call shape as the runtime.json writer.
+These are SERIALIZER-ONLY controls, not real runtime.json producer/provisioning
+captures. Paths were supplied before serialization, never redacted/normalized.
+They need not exist or pass runtime verification. Windows-looking strings on
+Unix demonstrate escaping, not Windows native path behavior.
+
+The independent OldIndex/OldRuntime test serializers retain original struct
+field declaration order and construct their inputs independently of production
+values/emitted JSON. Index/runtime struct fields retain declaration order,
+BTree maps/sets sort, executable Vec order/duplicates survive, and no LF is added.
+installation-index-identity-compact.json uses synthetic identity tuples and
+Diagnostic values in the registry generation serializer call shape, including
+managed_runtime; a separately stated old ordered oracle checks its exact bytes
+and hash. This is not discovery or a package/runtime verification capture.
+
+installation-index-reader-observations.json freezes original load_index results
+from 157 named cases: exact Error variant/Display/JSON positions and categories,
+or decoded semantic values. Input strings are recorded verbatim; large bound
+inputs use explicit generation recipes. Observation JSON is test evidence, not
+an application-written record. Unknown top fields and duplicate unknown/map
+keys keep the final semantic value; duplicate known fields fail. Runtime arrays
+of 7/8/9 elements decode (trailing maps default); index arrays fail. Syntactically
+bad nested runtime data fails before an unsupported index schema is checked.
+Unused semantic runtime problems still decode; no semantic verification runs.
+
+installation-index-writer-observations.json freezes exact output-bound success
+and size/closure/load/native-path serialization failures, asserting prior bytes
+survive at each reached stage. These are not atomic-replacement failure tests.
+The invalid UTF-8 native path case was captured on Unix. Other native platforms,
+permission/provisioning semantics and actual generated-path producer evidence
+remain separate qualification gates. Reader captures do not set compatibility
+policy or make nested unknown fields extension-preserving.
+
+Capture baseline bfe3888a58b2da2d914a6ff2d19ccbf9318681eb retained the original
+registry/runtime producer/reader blobs 32e6fad5c1714836890836631bce319dc6933f1a
+and 9e5f2c85ba58a5c3ddb073a8a3bb015fa04af54c. Its explicitly accepted atomic IO
+dependency blob is ac71087672fe771140d68e6e56a31f93b25defdf; this differs from
+the earlier design baseline. Only the private test-module declaration is added
+to registry.rs. No production declaration/body or runtime.rs is changed here.
+Capture ran as an ordinary user on Linux, offline, with isolated application
+profile. No plugin/tool process, discovery, install or provisioning was invoked.
+
+The following original capture lengths/SHA256 freeze bytes before substitution:
+installation-index-defaulted.json
+  387 bytes; SHA256 8d9f6e7f3fc3536c8342eecd39b2b54b98d3e1632688e74e9b84585d3f9918f3
+installation-index-empty.json
+  87 bytes; SHA256 2b63e4d598ee05e18549374a2ad0f13deb810e8ff20b87f7dd6980dbe3c84e0b
+installation-index-identity-compact.json
+  495 bytes; SHA256 f805d77813453cc338a24ccfa475379b86707218071a71dd04422a5f52280ed6
+installation-index-mutations-enable.json
+  1306 bytes; SHA256 6b8d5b5f91196bd681ceadf430e94841f36081a19ca9add64e895325ea195e43
+installation-index-mutations-remove.json
+  1293 bytes; SHA256 b660ebe6a9eef5c04b21c686629ff23e5568a3037a56f1b18766a619b752c878
+installation-index-mutations-reselect.json
+  1724 bytes; SHA256 265485e491f5ede2114ee12d92772c44e826d1bf3a0247116c27f23121f1a3ac
+installation-index-populated.json
+  1322 bytes; SHA256 19f578f6b4bea55b923cd0be8985816c5cc45e371179e715046dc7e246a643cc
+installation-index-reader-observations.json
+  69322 bytes; SHA256 f045d90fefde223a04f56846dd5ea41b12820239108c66b2904ec003f50819c3
+installation-index-rust-default.json
+  87 bytes; SHA256 3cbffd984a404d791169b6e606317848253f77bd3df4008d0457cb57e4b59953
+installation-index-writer-observations.json
+  931 bytes; SHA256 cf1a3702f45c74785129e81b0f06f7a07ac10eab36ea8249cccb5477f513857d
+managed-plugin-runtime-serializer-empty-maps.json
+  335 bytes; SHA256 a1935157d720f0f2a65f766f8c96d74d0985157dfa9d24b6e96c4a0949a0a6b3
+managed-plugin-runtime-serializer-populated.json
+  438 bytes; SHA256 88163aca4682216b5bde247b111e2eae39a8c9acd1e7a11d5f3cc249e896b4b3
