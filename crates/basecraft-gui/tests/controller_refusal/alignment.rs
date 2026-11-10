@@ -1,4 +1,4 @@
-//! Fault injection at the real QObject boundary, run by application_bootstrap.
+//! Fault injection at the real `QObject` boundary, run by `application_bootstrap`.
 use super::*;
 
 fn state(controller: &qobject::AlignmentController, original: DocId) -> serde_json::Value {
@@ -31,6 +31,20 @@ pub(crate) fn run(mut controller: Pin<&mut qobject::AlignmentController>) {
             .open_file(&QString::from(path.to_str().unwrap()))
     );
     let original = controller.rust().doc.unwrap();
+    assert!(
+        controller
+            .as_mut()
+            .rename_row(&QString::from("renamed"))
+            .is_empty()
+    );
+    assert!(
+        controller
+            .rust()
+            .session
+            .as_ref()
+            .unwrap()
+            .can_undo(original)
+    );
     let plugin = QString::from("iqtree");
     let form = QString::from("tree");
     let valid = controller.tool_form(&plugin, &form).to_string();
@@ -71,6 +85,10 @@ pub(crate) fn run(mut controller: Pin<&mut qobject::AlignmentController>) {
             .as_mut()
             .run_form(&plugin, &form, &QString::from("{}"));
         assert_eq!(controller.rust().message_kind.to_string(), "error");
+        assert_eq!(
+            controller.rust().message.to_string(),
+            result["error"].as_str().unwrap()
+        );
         controller.as_mut().select_all();
         assert!(!controller.as_mut().key(0x41, &QString::from("a"), CTRL));
         controller.as_mut().press(10.0, 10.0, 0);

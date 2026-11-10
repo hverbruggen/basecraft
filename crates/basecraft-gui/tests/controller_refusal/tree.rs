@@ -1,4 +1,4 @@
-//! Fault injection at the real QObject boundary, run by application_bootstrap.
+//! Fault injection at the real `QObject` boundary, run by `application_bootstrap`.
 use super::*;
 
 fn state(controller: &qobject::TreeController, original: DocId) -> Value {
@@ -79,8 +79,11 @@ pub(crate) fn run(mut controller: Pin<&mut qobject::TreeController>) {
             .as_mut()
             .select_clade(&QString::from("[\"A\",\"B\"]"));
         assert_eq!(state(&controller, original), before);
+        controller.as_mut().set_message(QString::default());
+        controller.as_mut().set_message_kind(QString::default());
         controller.as_mut().ladderize(true);
         assert_eq!(controller.rust().message.to_string(), refusal);
+        assert_eq!(controller.rust().message_kind.to_string(), "error");
         controller
             .as_mut()
             .find_query(&QString::from("replacement"), true);
