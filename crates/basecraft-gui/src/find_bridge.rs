@@ -33,13 +33,17 @@ pub fn status(find: &Session, y: f32) -> String {
 }
 
 macro_rules! controller_find {
-    ($controller:ty) => {
+    ($controller:ty $(, $getter:ident)?) => {
         impl $controller {
             pub fn find_query(
                 mut self: std::pin::Pin<&mut Self>,
                 query: &cxx_qt_lib::QString,
                 reverse: bool,
             ) {
+
+                $(if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+                    crate::bridge::checked_document!(sync self, session.$getter(doc));
+                })?
                 self.as_mut()
                     .rust_mut()
                     .find
@@ -50,6 +54,10 @@ macro_rules! controller_find {
                 mut self: std::pin::Pin<&mut Self>,
                 direction: i32,
             ) -> cxx_qt_lib::QString {
+
+                $(if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+                    crate::bridge::checked_document!(sync self, session.$getter(doc));
+                })?
                 self.as_mut().find_update();
                 let reveal = {
                     let mut r = self.as_mut().rust_mut();

@@ -6,6 +6,8 @@
 
 /// Stop a GUI read on an invalid document and report through the existing
 /// status properties. Queuing also supports immutable QML getters.
+/// Expand only at the refusing entry point: helpers must propagate `Result`,
+/// and error-string/JSON contracts must return their explicit error value.
 macro_rules! checked_document {
     (sync $controller:ident, $result:expr) => {
         match $result {
@@ -1752,6 +1754,10 @@ impl qobject::GenomeController {
     }
 
     fn feature_bounds(&self, id: i32) -> Option<(u64, u64)> {
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(self.qt_thread(), session.doc(doc));
+        }
+
         let access_thread = self.qt_thread();
         let id = FeatureId(u32::try_from(id).ok()?);
         self.with_doc(|s, d| {
@@ -1783,6 +1789,10 @@ impl qobject::GenomeController {
     }
 
     pub fn feature_json(&self, id: i32) -> QString {
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(self.qt_thread(), session.doc(doc));
+        }
+
         let access_thread = self.qt_thread();
         let Ok(fid) = u32::try_from(id) else {
             return QString::default();
@@ -2055,6 +2065,10 @@ impl qobject::GenomeController {
     /// The selected bases. A selected annotation is copied as itself:
     /// spliced if it has parts, reverse-complemented on the reverse strand.
     pub fn selection_text(&self) -> QString {
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(self.qt_thread(), session.doc(doc));
+        }
+
         let access_thread = self.qt_thread();
         let v = &self.rust().view;
         let Some((a, b)) = v.selection else {
@@ -2259,6 +2273,10 @@ impl qobject::GenomeController {
     }
 
     pub fn feature_sequence(&self, id: i32) -> QString {
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(self.qt_thread(), session.doc(doc));
+        }
+
         let access_thread = self.qt_thread();
         let Ok(fid) = u32::try_from(id) else {
             return QString::default();
@@ -2307,6 +2325,10 @@ impl qobject::GenomeController {
 
     #[allow(clippy::cast_possible_truncation)]
     pub fn hover(&self, x: f64, y: f64) -> QString {
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(self.qt_thread(), session.doc(doc));
+        }
+
         let access_thread = self.qt_thread();
         let text = self
             .with_doc(|s, d| {
@@ -2535,7 +2557,7 @@ fn feature_from_json(text: &str) -> Result<Feature, String> {
     })
 }
 
-crate::find_bridge::controller_find!(qobject::GenomeController);
+crate::find_bridge::controller_find!(qobject::GenomeController, doc);
 
 impl qobject::GenomeController {
     fn find_update(mut self: std::pin::Pin<&mut Self>) {

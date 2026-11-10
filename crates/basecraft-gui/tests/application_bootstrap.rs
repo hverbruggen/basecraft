@@ -166,6 +166,46 @@ fn main() {
         ""
     );
 
+    // Real QML-created controllers; inject invalid owned IDs without exposing
+    // production invokables or constructing placeholder document payloads.
+    {
+        use cxx_qt::casting::Downcast;
+        let mut engine = QQmlApplicationEngine::new();
+        let checked = std::rc::Rc::new(std::cell::Cell::new(0));
+        let count = checked.clone();
+        engine
+            .pin_mut()
+            .on_object_created(move |_, object, _| {
+                // SAFETY: Qt owns the freshly created object, alive for this
+                // synchronous callback on the application thread. No alias is used
+                // while its pinned controller reference is held.
+                let mut object =
+                    unsafe { std::pin::Pin::new_unchecked(object.as_mut().expect("controller")) };
+                if let Some(controller) = object
+                    .as_mut()
+                    .downcast_pin::<tree_bridge::qobject::TreeController>()
+                {
+                    tree_bridge::refusal_tests::run(controller);
+                } else if let Some(controller) = object
+                    .as_mut()
+                    .downcast_pin::<alignment_bridge::qobject::AlignmentController>(
+                ) {
+                    alignment_bridge::refusal_tests::run(controller);
+                } else {
+                    panic!("unexpected controller type");
+                }
+                count.set(count.get() + 1);
+            })
+            .release();
+        for controller in ["TreeController", "AlignmentController"] {
+            engine.pin_mut().load_data(
+                &QByteArray::from(format!("import Basecraft; {controller} {{}}").as_str()),
+                &QUrl::default(),
+            );
+        }
+        assert_eq!(checked.get(), 2, "both real controller regressions ran");
+    }
+
     let figure = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"200\" height=\"100\"><rect width=\"200\" height=\"100\" fill=\"#c02030\"/><text x=\"8\" y=\"50\" font-size=\"20\">A&amp;β</text></svg>";
     let png = figure_png::render(figure, 1500.0).expect("resvg renders editable SVG text");
     assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");

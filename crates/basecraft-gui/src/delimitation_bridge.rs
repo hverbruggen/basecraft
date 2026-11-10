@@ -2278,7 +2278,7 @@ fn root_tree_copy(
     Ok(target)
 }
 
-crate::find_bridge::controller_find!(qobject::DelimitationController);
+crate::find_bridge::controller_find!(qobject::DelimitationController, delimitation);
 
 impl qobject::DelimitationController {
     fn find_update(mut self: std::pin::Pin<&mut Self>) {

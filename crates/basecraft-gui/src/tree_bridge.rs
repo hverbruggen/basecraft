@@ -509,7 +509,10 @@ impl qobject::TreeController {
     }
 
     pub fn accessible_page(&self, page: i32) -> QString {
-        let result = self.with_doc(|d| basecraft_viewmodel::accessible::tree(d, page));
+        let result = crate::bridge::checked_document!(
+            self.qt_thread(),
+            self.with_doc(|d| basecraft_viewmodel::accessible::tree(d, page))
+        );
         let value = result.map_or_else(
             || serde_json::json!({"page": 0, "pages": 1, "text": "No document loaded"}),
             |p| serde_json::json!({"page": p.page, "pages": p.pages, "text": p.text}),
@@ -517,16 +520,16 @@ impl qobject::TreeController {
         QString::from(&value.to_string())
     }
 
-    fn with_doc<T>(&self, f: impl FnOnce(&TreeDoc) -> T) -> Option<T> {
-        let access_thread = self.qt_thread();
+    fn with_doc<T>(&self, f: impl FnOnce(&TreeDoc) -> T) -> basecraft_ops::Result<Option<T>> {
         let r = self.rust();
         match (&r.session, r.doc) {
-            (Some(s), Some(d)) => Some(f(crate::bridge::checked_document!(
-                access_thread,
-                s.tree(d)
-            ))),
-            _ => None,
+            (Some(s), Some(d)) => Ok(Some(f(s.tree(d)?))),
+            _ => Ok(None),
         }
+    }
+
+    fn check_document(&self) -> basecraft_ops::Result<()> {
+        self.with_doc(|_| ()).map(|_| ())
     }
 
     /// Rebuild the frame, status line and scroll bars.
@@ -609,7 +612,11 @@ impl qobject::TreeController {
         self.as_mut().set_hscroll_pos(f64::from(h.0));
         self.as_mut().set_vscroll_size(f64::from(v.1));
         self.as_mut().set_vscroll_pos(f64::from(v.0));
-        let can_auto_root = self.with_doc(TreeView::can_auto_root).unwrap_or(false);
+        let can_auto_root = crate::bridge::checked_document!(
+            self.qt_thread(),
+            self.with_doc(TreeView::can_auto_root)
+        )
+        .unwrap_or(false);
         self.as_mut().set_can_auto_root(can_auto_root);
         self.as_mut().set_has_selection(sel);
         self.as_mut().set_tip_selected(tip);
@@ -641,8 +648,10 @@ impl qobject::TreeController {
     /// Apply an edit through the session; on failure, say why and return
     /// the message.
     fn edit(mut self: Pin<&mut Self>, op: Op) -> Result<(), String> {
-        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
-            session.tree(doc).map_err(|e| e.to_string())?;
+        if let Err(error) = self.check_document() {
+            let message = error.to_string();
+            self.as_mut().fail(&message);
+            return Err(message);
         }
         if self.rust().display_only {
             let Some(edit) = TreeDrawingEdit::from_op(&op) else {
@@ -703,9 +712,11 @@ impl qobject::TreeController {
         let linked = basecraft_ops::links::AlignmentLink::read_view(&path);
         let (source, status) = match linked {
             Ok(link) => {
-                let status = self
-                    .with_doc(|tree| link.status(&path, tree))
-                    .unwrap_or_default();
+                let status = crate::bridge::checked_document!(
+                    self.qt_thread(),
+                    self.with_doc(|tree| link.status(&path, tree))
+                )
+                .unwrap_or_default();
                 (link.source.to_string_lossy().into_owned(), status)
             }
             Err(e)
@@ -778,9 +789,12 @@ impl qobject::TreeController {
     pub fn select_clade(mut self: Pin<&mut Self>, names: &QString) {
         let result = (|| -> Result<usize, Box<dyn std::error::Error>> {
             let names: Vec<String> = serde_json::from_str(&names.to_string())?;
-            self.with_doc(|tree| tree.resolve(&names))
-                .ok_or("No tree open")?
-                .map_err(Into::into)
+            crate::bridge::checked_document!(
+                self.qt_thread(),
+                self.with_doc(|tree| tree.resolve(&names))
+            )
+            .ok_or("No tree open")?
+            .map_err(Into::into)
         })();
         match result {
             Ok(node) => {
@@ -1136,8 +1150,9 @@ impl qobject::TreeController {
 
     pub fn context_press(mut self: Pin<&mut Self>, x: f64, y: f64) -> QString {
         self.as_mut().press(x, y);
-        let info = self
-            .with_doc(|d| {
+        let info = crate::bridge::checked_document!(
+            self.qt_thread(),
+            self.with_doc(|d| {
                 let v = &self.rust().view;
                 let sel = v.selected;
                 json!({
@@ -1151,7 +1166,8 @@ impl qobject::TreeController {
                     "annotation": v.selected_annotation(d).map_or(0, |(id, _)| id),
                 })
             })
-            .unwrap_or(Value::Null);
+        )
+        .unwrap_or(Value::Null);
         QString::from(&info.to_string())
     }
 
@@ -1238,10 +1254,12 @@ impl qobject::TreeController {
     }
 
     pub fn hover(&self, x: f64, y: f64) -> QString {
-        let text = self
-            .with_doc(|d| self.rust().view.hover_text(d, f(x), f(y)))
-            .flatten()
-            .unwrap_or_default();
+        let text = crate::bridge::checked_document!(
+            self.qt_thread(),
+            self.with_doc(|d| self.rust().view.hover_text(d, f(x), f(y)))
+        )
+        .flatten()
+        .unwrap_or_default();
         QString::from(&text)
     }
 
@@ -1514,7 +1532,11 @@ impl qobject::TreeController {
     // Edits.
 
     pub fn reroot(mut self: Pin<&mut Self>) {
-        let op = self.with_doc(|d| self.rust().view.reroot_op(d)).flatten();
+        let op = crate::bridge::checked_document!(
+            self.qt_thread(),
+            self.with_doc(|d| self.rust().view.reroot_op(d))
+        )
+        .flatten();
         match op {
             Some(op) => {
                 if self.as_mut().edit(op).is_ok() {
@@ -1543,7 +1565,11 @@ impl qobject::TreeController {
     }
 
     pub fn rotate(mut self: Pin<&mut Self>) {
-        let op = self.with_doc(|d| self.rust().view.rotate_op(d)).flatten();
+        let op = crate::bridge::checked_document!(
+            self.qt_thread(),
+            self.with_doc(|d| self.rust().view.rotate_op(d))
+        )
+        .flatten();
         match op {
             Some(op) => {
                 let _ = self.as_mut().edit(op);
@@ -1557,8 +1583,9 @@ impl qobject::TreeController {
     }
 
     pub fn root_json(&self) -> QString {
-        let v = self
-            .with_doc(|d| {
+        let v = crate::bridge::checked_document!(
+            self.qt_thread(),
+            self.with_doc(|d| {
                 let (side, other, length, share) = self.rust().view.root_side(d)?;
                 let name = |n: usize| {
                     if d.node(n).is_tip() {
@@ -1579,21 +1606,24 @@ impl qobject::TreeController {
                     "share": share,
                 }))
             })
-            .flatten()
-            .unwrap_or(Value::Null);
+        )
+        .flatten()
+        .unwrap_or(Value::Null);
         QString::from(&v.to_string())
     }
 
     pub fn move_root(mut self: Pin<&mut Self>, fraction: f64) {
-        let op = self
-            .with_doc(|d| {
+        let op = crate::bridge::checked_document!(
+            self.qt_thread(),
+            self.with_doc(|d| {
                 let (side, ..) = self.rust().view.root_side(d)?;
                 Some(Op::TreeRootPosition {
                     clade: d.clade_ref(side),
                     fraction: fraction.clamp(0.0, 1.0),
                 })
             })
-            .flatten();
+        )
+        .flatten();
         match op {
             Some(op) => {
                 if self.as_mut().edit(op).is_ok() {
@@ -1605,13 +1635,15 @@ impl qobject::TreeController {
     }
 
     pub fn tip_name(&self) -> QString {
-        let name = self
-            .with_doc(|d| {
+        let name = crate::bridge::checked_document!(
+            self.qt_thread(),
+            self.with_doc(|d| {
                 let s = self.rust().view.selected?;
                 d.node(s).is_tip().then(|| d.node(s).name.clone())
             })
-            .flatten()
-            .unwrap_or_default();
+        )
+        .flatten()
+        .unwrap_or_default();
         QString::from(&name)
     }
 
@@ -1631,8 +1663,9 @@ impl qobject::TreeController {
     }
 
     pub fn annotation_json(&self) -> QString {
-        let v = self
-            .with_doc(|d| {
+        let v = crate::bridge::checked_document!(
+            self.qt_thread(),
+            self.with_doc(|d| {
                 annotation_request(
                     d,
                     &self.rust().view,
@@ -1641,7 +1674,8 @@ impl qobject::TreeController {
                 )
                 .unwrap_or_else(|error| json!({"error": error}))
             })
-            .unwrap_or(Value::Null);
+        )
+        .unwrap_or(Value::Null);
         QString::from(&v.to_string())
     }
 
@@ -1653,6 +1687,7 @@ impl qobject::TreeController {
                     self.with_doc(|d| {
                         checked_annotation(d, &self.record_revision().to_string(), &v)
                     })
+                    .map_err(|e| e.to_string())?
                     .ok_or_else(|| "No tree open".to_string())?
                 });
         match parsed {
@@ -1759,7 +1794,7 @@ impl qobject::TreeController {
     }
 
     pub fn style_json(&self) -> QString {
-        let v = self
+        let v = crate::bridge::checked_document!(self.qt_thread(), self
             .with_doc(|d| {
                 json!({
                     "sets": d.supports().iter().map(|s| json!({
@@ -1773,7 +1808,7 @@ impl qobject::TreeController {
                     "style": d.style(),
                     "tips": d.nodes().iter().filter(|n| n.is_tip()).map(|n| &n.name).collect::<Vec<_>>(),
                 })
-            })
+            }))
             .unwrap_or(Value::Null);
         QString::from(&v.to_string())
     }
@@ -1795,7 +1830,17 @@ impl qobject::TreeController {
             Ok(s) => s,
             Err(e) => return QString::from(&format!("Bad style: {e}")),
         };
-        if remove_supports.is_empty() && self.with_doc(|d| *d.style() == style).unwrap_or(true) {
+        if remove_supports.is_empty()
+            && match self.with_doc(|d| *d.style() == style) {
+                Ok(value) => value,
+                Err(error) => {
+                    let message = error.to_string();
+                    self.as_mut().fail(&message);
+                    return QString::from(&message);
+                }
+            }
+            .unwrap_or(true)
+        {
             return QString::default();
         }
         match self.as_mut().edit(Op::TreeStyle {
@@ -1813,7 +1858,10 @@ impl qobject::TreeController {
             "below" => SupportPlacement::Below,
             _ => SupportPlacement::Natural,
         };
-        let Some(mut style) = self.with_doc(|d| d.style().clone()) else {
+        let Some(mut style) = crate::bridge::checked_document!(
+            self.qt_thread(),
+            self.with_doc(|d| d.style().clone())
+        ) else {
             return;
         };
         if style.support_placement == p {
@@ -1832,7 +1880,10 @@ impl qobject::TreeController {
         support_font: i32,
         branch_width: i32,
     ) {
-        let Some(mut style) = self.with_doc(|d| d.style().clone()) else {
+        let Some(mut style) = crate::bridge::checked_document!(
+            self.qt_thread(),
+            self.with_doc(|d| d.style().clone())
+        ) else {
             return;
         };
         let before = style.clone();
@@ -2022,7 +2073,7 @@ impl TreeRust {
     }
 }
 
-crate::find_bridge::controller_find!(qobject::TreeController);
+crate::find_bridge::controller_find!(qobject::TreeController, tree);
 
 impl qobject::TreeController {
     fn find_update(mut self: std::pin::Pin<&mut Self>) {
@@ -2132,3 +2183,8 @@ mod annotation_tests {
         }
     }
 }
+
+#[cfg(test)]
+#[allow(dead_code)] // Invoked by the windowless application_bootstrap harness.
+#[path = "../tests/controller_refusal/tree.rs"]
+pub(crate) mod refusal_tests;

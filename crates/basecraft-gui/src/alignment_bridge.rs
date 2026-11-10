@@ -484,7 +484,10 @@ impl qobject::AlignmentController {
     }
 
     pub fn accessible_page(&self, page: i32) -> QString {
-        let result = self.with_doc(|d| basecraft_viewmodel::accessible::alignment(d, page));
+        let result = crate::bridge::checked_document!(
+            self.qt_thread(),
+            self.with_doc(|d| basecraft_viewmodel::accessible::alignment(d, page))
+        );
         let value = result.map_or_else(
             || serde_json::json!({"page": 0, "pages": 1, "text": "No document loaded"}),
             |p| serde_json::json!({"page": p.page, "pages": p.pages, "text": p.text}),
@@ -492,16 +495,16 @@ impl qobject::AlignmentController {
         QString::from(&value.to_string())
     }
 
-    fn with_doc<T>(&self, f: impl FnOnce(&AlignmentDoc) -> T) -> Option<T> {
-        let access_thread = self.qt_thread();
+    fn with_doc<T>(&self, f: impl FnOnce(&AlignmentDoc) -> T) -> basecraft_ops::Result<Option<T>> {
         let r = self.rust();
         match (&r.session, r.doc) {
-            (Some(s), Some(d)) => Some(f(crate::bridge::checked_document!(
-                access_thread,
-                s.alignment(d)
-            ))),
-            _ => None,
+            (Some(s), Some(d)) => Ok(Some(f(s.alignment(d)?))),
+            _ => Ok(None),
         }
+    }
+
+    fn check_document(&self) -> basecraft_ops::Result<()> {
+        self.with_doc(|_| ()).map(|_| ())
     }
 
     /// Rebuild the frame, status line and scroll bars.
@@ -929,6 +932,7 @@ impl qobject::AlignmentController {
     }
 
     pub fn press(mut self: Pin<&mut Self>, x: f64, y: f64, modifiers: i32) {
+        crate::bridge::checked_document!(sync self, self.check_document());
         self.as_mut()
             .rust_mut()
             .view
@@ -976,6 +980,7 @@ impl qobject::AlignmentController {
     }
 
     pub fn key(mut self: Pin<&mut Self>, key: i32, text: &QString, modifiers: i32) -> bool {
+        crate::bridge::checked_document!(sync self, self.check_document());
         let ctrl = modifiers & CTRL != 0;
         let shift = modifiers & SHIFT != 0;
         let alt = modifiers & ALT != 0;
@@ -1265,12 +1270,15 @@ impl qobject::AlignmentController {
     }
 
     pub fn context_press(mut self: Pin<&mut Self>, x: f64, y: f64) -> QString {
+        crate::bridge::checked_document!(sync self, self.check_document());
         let region = self.as_mut().rust_mut().view.context_press(f(x), f(y));
         self.as_mut().refresh();
         let b = self.rust().view.block();
-        let name = self
-            .with_doc(|d| d.row(self.rust().view.cursor.0).name.clone())
-            .unwrap_or_default();
+        let name = crate::bridge::checked_document!(
+            self.qt_thread(),
+            self.with_doc(|d| d.row(self.rust().view.cursor.0).name.clone())
+        )
+        .unwrap_or_default();
         let info = json!({
             "region": match region {
                 Region::Grid => "grid",
@@ -1286,10 +1294,12 @@ impl qobject::AlignmentController {
     }
 
     pub fn hover(&self, x: f64, y: f64) -> QString {
-        let text = self
-            .with_doc(|d| self.rust().view.hover_text(f(x), f(y), d))
-            .flatten()
-            .unwrap_or_default();
+        let text = crate::bridge::checked_document!(
+            self.qt_thread(),
+            self.with_doc(|d| self.rust().view.hover_text(f(x), f(y), d))
+        )
+        .flatten()
+        .unwrap_or_default();
         QString::from(&text)
     }
 
@@ -1310,7 +1320,11 @@ impl qobject::AlignmentController {
                 };
                 basecraft_ops::blast::from_alignment(doc, rows, columns)
             })
-            .unwrap_or_else(|| Err(basecraft_ops::Error::Invalid("Alignment closed".into())));
+            .and_then(|value| {
+                value.unwrap_or_else(|| {
+                    Err(basecraft_ops::Error::Invalid("Alignment closed".into()))
+                })
+            });
         QString::from(&match result {
             Ok(queries) => serde_json::to_string(&queries).unwrap_or_default(),
             Err(error) => serde_json::json!({"error":error.to_string()}).to_string(),
@@ -1318,13 +1332,16 @@ impl qobject::AlignmentController {
     }
 
     pub fn selection_text(&self) -> QString {
-        let text = self
-            .with_doc(|d| self.rust().view.selection_fasta(d))
-            .unwrap_or_default();
+        let text = crate::bridge::checked_document!(
+            self.qt_thread(),
+            self.with_doc(|d| self.rust().view.selection_fasta(d))
+        )
+        .unwrap_or_default();
         QString::from(&text)
     }
 
     pub fn select_all(mut self: Pin<&mut Self>) {
+        crate::bridge::checked_document!(sync self, self.check_document());
         self.as_mut().rust_mut().view.select_all();
         self.refresh();
     }
@@ -1344,6 +1361,7 @@ impl qobject::AlignmentController {
     }
 
     pub fn review_snapshot(mut self: Pin<&mut Self>) -> QString {
+        crate::bridge::checked_document!(sync self, self.check_document());
         let result = (|| -> Result<(tempfile::TempDir, PathBuf), String> {
             let dir = tempfile::Builder::new()
                 .prefix("basecraft-review-reference-")
@@ -1352,6 +1370,7 @@ impl qobject::AlignmentController {
             let path = dir.path().join("reference.afa");
             let mut file = std::fs::File::create(&path).map_err(|e| e.to_string())?;
             self.with_doc(|doc| basecraft_ops::files::write_alignment(doc, &mut file))
+                .map_err(|e| e.to_string())?
                 .ok_or("No alignment open")?
                 .map_err(|e| e.to_string())?;
             Ok((dir, path))
@@ -1420,7 +1439,10 @@ impl qobject::AlignmentController {
                 return;
             }
         };
-        match self.with_doc(|doc| doc.validate_additions(&rows)) {
+        match crate::bridge::checked_document!(
+            self.qt_thread(),
+            self.with_doc(|doc| doc.validate_additions(&rows))
+        ) {
             Some(Ok(())) => {}
             Some(Err(error)) => {
                 self.fail_addition(&error.to_string());
@@ -1431,9 +1453,11 @@ impl qobject::AlignmentController {
                 return;
             }
         }
-        let duplicates = self
-            .with_doc(|doc| doc.duplicate_sequence_names(&rows))
-            .unwrap_or_default();
+        let duplicates = crate::bridge::checked_document!(
+            self.qt_thread(),
+            self.with_doc(|doc| doc.duplicate_sequence_names(&rows))
+        )
+        .unwrap_or_default();
         if !duplicates.is_empty() {
             self.fail_addition(&format!(
                 "These sequence IDs are already in the alignment:\n\n{}",
@@ -1577,18 +1601,21 @@ impl qobject::AlignmentController {
     }
 
     /// What a settings form may depend on: the alignment's sequence type.
-    fn form_context(&self) -> serde_json::Map<String, serde_json::Value> {
-        let protein = self.with_doc(AlignmentDoc::is_protein).unwrap_or(false);
-        [(
+    fn form_context(&self) -> basecraft_ops::Result<serde_json::Map<String, serde_json::Value>> {
+        let protein = self.with_doc(AlignmentDoc::is_protein)?.unwrap_or(false);
+        Ok([(
             "sequence".to_string(),
             serde_json::json!(if protein { "protein" } else { "dna" }),
         )]
         .into_iter()
-        .collect()
+        .collect())
     }
 
     pub fn tool_form(&self, plugin: &QString, form: &QString) -> QString {
-        let context = self.form_context();
+        let context = match self.form_context() {
+            Ok(context) => context,
+            Err(error) => return QString::from(&json!({"error": error.to_string()}).to_string()),
+        };
         let value =
             basecraft_plugin_host::manifest::Manifest::load(&plugin_dir(&plugin.to_string()))
                 .map_err(|e| e.to_string())
@@ -1614,7 +1641,9 @@ impl qobject::AlignmentController {
                 .ok_or_else(|| format!("{} has no {form} settings", manifest.name))?;
             let given: serde_json::Map<String, serde_json::Value> =
                 serde_json::from_str(&values.to_string()).map_err(|e| e.to_string())?;
-            let mut params = form.for_context(&self.form_context()).parameters(&given)?;
+            let mut params = form
+                .for_context(&self.form_context().map_err(|e| e.to_string())?)
+                .parameters(&given)?;
             if form.threads {
                 params.insert(
                     "threads".into(),
@@ -1662,7 +1691,13 @@ impl qobject::AlignmentController {
             return;
         }
         let name = tool.name.clone();
-        if self.with_doc(AlignmentDoc::row_count).unwrap_or(0) < tool.min_rows {
+        if crate::bridge::checked_document!(
+            self.qt_thread(),
+            self.with_doc(AlignmentDoc::row_count)
+        )
+        .unwrap_or(0)
+            < tool.min_rows
+        {
             self.fail(&format!(
                 "{name} needs at least {} sequences",
                 tool.min_rows
@@ -1852,9 +1887,11 @@ impl qobject::AlignmentController {
     }
 
     pub fn remove_gap(mut self: Pin<&mut Self>) {
-        let op = self
-            .with_doc(|d| self.rust().view.remove_left_op(d, self.rust().insert_mode))
-            .unwrap_or_else(|| Err(String::new()));
+        let op = crate::bridge::checked_document!(
+            self.qt_thread(),
+            self.with_doc(|d| self.rust().view.remove_left_op(d, self.rust().insert_mode))
+        )
+        .unwrap_or_else(|| Err(String::new()));
         match op {
             Ok(op) => {
                 if self.as_mut().edit(op) {
@@ -1904,12 +1941,17 @@ impl qobject::AlignmentController {
             crate::bridge::checked_document!(sync self, session.alignment(doc));
         }
         let started = Instant::now();
-        let before = self.with_doc(AlignmentDoc::width).unwrap_or(0);
+        let before =
+            crate::bridge::checked_document!(self.qt_thread(), self.with_doc(AlignmentDoc::width))
+                .unwrap_or(0);
         let runs = if self.rust().gap_column_count >= 0.0 {
             self.rust().gap_runs.clone()
         } else {
-            self.with_doc(AlignmentDoc::gap_column_runs)
-                .unwrap_or_default()
+            crate::bridge::checked_document!(
+                self.qt_thread(),
+                self.with_doc(AlignmentDoc::gap_column_runs)
+            )
+            .unwrap_or_default()
         };
         let mut view = self.rust().view.clone();
         view.map_deleted_columns(&runs);
@@ -1924,7 +1966,11 @@ impl qobject::AlignmentController {
                 }
                 r.view = view;
             }
-            let after = self.with_doc(AlignmentDoc::width).unwrap_or(0);
+            let after = crate::bridge::checked_document!(
+                self.qt_thread(),
+                self.with_doc(AlignmentDoc::width)
+            )
+            .unwrap_or(0);
             if before == after {
                 self.as_mut().notify("No gap-only columns");
             } else {
@@ -1968,9 +2014,11 @@ impl qobject::AlignmentController {
     }
 
     pub fn row_name(&self) -> QString {
-        let name = self
-            .with_doc(|d| d.row(self.rust().view.cursor.0).name.clone())
-            .unwrap_or_default();
+        let name = crate::bridge::checked_document!(
+            self.qt_thread(),
+            self.with_doc(|d| d.row(self.rust().view.cursor.0).name.clone())
+        )
+        .unwrap_or_default();
         QString::from(&name)
     }
 
@@ -2013,7 +2061,7 @@ fn component_trees(tool: &ActiveTool, outcome: &OperationOutcome) -> Vec<PathBuf
         .collect()
 }
 
-crate::find_bridge::controller_find!(qobject::AlignmentController);
+crate::find_bridge::controller_find!(qobject::AlignmentController, alignment);
 
 impl qobject::AlignmentController {
     fn find_update(mut self: std::pin::Pin<&mut Self>) {
@@ -2054,3 +2102,8 @@ impl qobject::AlignmentController {
         0.0
     }
 }
+
+#[cfg(test)]
+#[allow(dead_code)] // Invoked by the windowless application_bootstrap harness.
+#[path = "../tests/controller_refusal/alignment.rs"]
+pub(crate) mod refusal_tests;
