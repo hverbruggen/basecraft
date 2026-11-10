@@ -793,16 +793,16 @@ impl qobject::TreeController {
     }
 
     pub fn extract_clade_alignment(mut self: Pin<&mut Self>) {
-        let access_thread = self.qt_thread();
-        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
-            crate::bridge::checked_document!(sync self, session.tree(doc));
-        }
         use basecraft_plugin_host::{
             jobs::JobManager,
             policy::SessionPolicy,
             registry::{Registry, RegistryConfig},
         };
         use basecraft_protocol::operation::{InputReference, OperationRequest, RuntimeState};
+        let access_thread = self.qt_thread();
+        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+            crate::bridge::checked_document!(sync self, session.tree(doc));
+        }
         if self.rust().busy {
             return;
         }
