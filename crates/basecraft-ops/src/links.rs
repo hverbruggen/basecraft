@@ -759,3 +759,7 @@ mod tests {
         assert!(validate_taxa(&tree, &source, false).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "links/repair_record_tests.rs"]
+mod repair_record_tests;

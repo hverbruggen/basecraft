@@ -101,3 +101,18 @@ from source bytes, constructor inputs, returned snapshot paths and allocated run
 not parsed output metadata. Round-trip tests use the protocol type directly.
 Rust callers using the ops re-export now also import links::AlignmentLinkExt
 for associated functions and methods; public fields/struct literals remain.
+
+Alignment repair/guard original-writer captures (WF-0101):
+link-repair-{absent,file,symlink}.json and link-guard-{absent,file,symlink}.json
+were captured from unchanged PreparedLinks::publish at d82cead before producer
+substitution. repair_record_tests.rs prepares prior filesystem entries and staged
+opaque metadata from the existing DS03 captures, then exercises the real publish
+writer with an intentionally failing data callback. These are producer captures,
+not complete real analysis/Save As journeys. Cases cover absent prior entries,
+binary/empty prior files, dangling Unicode symlinks, and intended null/origin/
+origin-plus-view. Unix symlink cases are platform-specific. Guard filenames retain
+the actual allocated random name. No captured bytes/paths/IDs were substituted.
+The original literal oracle uses independent constructor inputs and the allocated
+recovery basename, never values decoded from the resulting record. All six files
+are pretty recursively sorted JSON without a final newline. Existing behavioral
+Save As/retry/manual recovery tests remain separate evidence.

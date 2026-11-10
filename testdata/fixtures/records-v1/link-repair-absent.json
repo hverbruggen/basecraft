@@ -1,0 +1,12 @@
+{
+  "intended_origin": null,
+  "intended_view": null,
+  "note": "Save As association recovery: previous entries and intended metadata; snapshots are retained separately",
+  "previous_origin": {
+    "entry": "absent"
+  },
+  "previous_view": {
+    "entry": "absent"
+  },
+  "schema": 1
+}
