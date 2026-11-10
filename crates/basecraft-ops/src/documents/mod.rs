@@ -145,6 +145,16 @@ pub(crate) trait Document {
             metadata: None,
         }
     }
+    /// Whether saved hashes and their errors depend only on the complete payload.
+    /// Opt-in requires stable transitive serializer inputs between Slot mutable
+    /// accesses: no target, publication, filesystem, time or shared payload mutation.
+    /// Current opted-in Session constructors use owned backing or immutable indexed
+    /// FASTA backing. The public `Residues` trait and `Source::Mapped` alone do not
+    /// guarantee this invariant; future constructors must preserve it or opt out.
+    fn saved_hashes_are_content_only(&self) -> bool {
+        false
+    }
+
     /// Preserve the existing replay writer, including historical target handling.
     fn saved_hashes(&self, target: &Path, publication: &WritePublication) -> Result<Vec<String>>;
     /// Kind-specific operation composition. Session owns timing, actor/group

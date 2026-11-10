@@ -471,11 +471,23 @@ impl Session {
 
     /// Hashes the files a save would write, without writing them.
     pub fn save_hashes(&self, id: DocId) -> Result<Vec<String>> {
-        self.save_hashes_at(id, Path::new(&self.docs[id.0].key))
+        let slot = &self.docs[id.0];
+        if !slot.content.as_document().saved_hashes_are_content_only() {
+            return self.save_hashes_at(id, Path::new(&slot.key));
+        }
+        if let Some(hashes) = slot.current_saved_hashes.get() {
+            return Ok(hashes.clone());
+        }
+        let hashes = self.save_hashes_at(id, Path::new(&slot.key))?;
+        // Concurrent readers may compute the same vector; a losing set is ordinary.
+        let _ = slot.current_saved_hashes.set(hashes.clone());
+        Ok(hashes)
     }
 
     /// Replay a save using its actual exchange format, including Save As.
     pub fn save_hashes_at(&self, id: DocId, target: &Path) -> Result<Vec<String>> {
+        #[cfg(test)]
+        super::saved_fingerprint_tests::attempt();
         self.docs[id.0].content.as_document().saved_hashes(
             &self.resolve(&target.to_string_lossy()),
             &self.write_publication,

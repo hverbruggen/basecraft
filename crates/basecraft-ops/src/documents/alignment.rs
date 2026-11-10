@@ -58,6 +58,10 @@ impl Document for OpenedAlignment {
         Ok(vec![(target.to_path_buf(), hash)])
     }
 
+    fn saved_hashes_are_content_only(&self) -> bool {
+        true
+    }
+
     fn saved_hashes(
         &self,
         _target: &Path,

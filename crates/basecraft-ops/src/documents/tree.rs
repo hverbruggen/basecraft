@@ -162,6 +162,10 @@ impl Document for OpenedTree {
         Ok(hashes)
     }
 
+    fn saved_hashes_are_content_only(&self) -> bool {
+        true
+    }
+
     fn saved_hashes(
         &self,
         _target: &Path,

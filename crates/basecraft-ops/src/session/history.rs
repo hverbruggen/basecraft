@@ -87,7 +87,7 @@ impl Session {
         }
         self.flush()?;
         let (inverse, feature) = self.docs[doc.0]
-            .content
+            .content_mut()
             .as_document_mut()
             .apply_prepared(&op, prepared)?;
         self.docs[doc.0].generation += 1;
@@ -101,7 +101,7 @@ impl Session {
         if !(self.merge && mergeable)
             && let Err(error) = self.write(&entry)
         {
-            restore_inverse(&mut self.docs[doc.0].content, &inverse)?;
+            restore_inverse(self.docs[doc.0].content_mut(), &inverse)?;
             self.docs[doc.0].generation -= 1;
             return Err(error);
         }
@@ -180,7 +180,7 @@ impl Session {
 
     /// Carry out an edit on the document; returns its inverse.
     pub(super) fn execute(&mut self, id: DocId, op: &Op) -> Result<(Inverse, Option<FeatureId>)> {
-        self.docs[id.0].content.as_document_mut().apply(op)
+        self.docs[id.0].content_mut().as_document_mut().apply(op)
     }
 
     /// Undo the last operation on a document; returns the undone entry's id.
@@ -250,7 +250,7 @@ impl Session {
         self.flush()?;
         let applied = self.docs[id.0].undo.pop().ok_or(Error::NothingTo("undo"))?;
         self.docs[id.0]
-            .content
+            .content_mut()
             .as_document_mut()
             .revert(&applied.inverse)?;
         self.docs[id.0].generation += 1;
@@ -284,7 +284,7 @@ impl Session {
             OpResult::default(),
         );
         if let Err(error) = self.write(&entry) {
-            restore_inverse(&mut self.docs[id.0].content, &inverse)?;
+            restore_inverse(self.docs[id.0].content_mut(), &inverse)?;
             self.docs[id.0].generation -= 1;
             self.docs[id.0].redo.push(applied);
             return Err(error);
@@ -295,7 +295,7 @@ impl Session {
 
     pub(super) fn reexecute(&mut self, id: DocId, applied: &Applied) -> Result<Inverse> {
         self.docs[id.0]
-            .content
+            .content_mut()
             .as_document_mut()
             .reapply(&applied.op, &applied.inverse)
     }

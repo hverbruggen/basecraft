@@ -158,7 +158,7 @@ impl Session {
             self.events.extend(entries);
         }
         let slot = &mut self.docs[doc.0];
-        slot.content = candidate;
+        *slot.content_mut() = candidate;
         slot.generation = next_generation;
         slot.redo.clear();
         slot.undo.extend(applied);

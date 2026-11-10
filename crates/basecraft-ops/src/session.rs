@@ -15,7 +15,7 @@ use save_attempt_observation::{
 };
 
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use basecraft_docs::alignment::Undo as AlnUndo;
@@ -39,6 +39,8 @@ mod retention_tests;
 mod save;
 pub(crate) mod save_authority;
 mod save_decision;
+#[cfg(test)]
+mod saved_fingerprint_tests;
 mod tool_runs;
 pub use save_decision::{EvidenceAction, SaveCheck, SaveDecision, SaveOutcome, SaveWarning};
 pub mod support_import;
@@ -85,6 +87,7 @@ struct Applied {
 struct Slot {
     key: String,
     content: Loaded,
+    current_saved_hashes: OnceLock<Vec<String>>,
     generation: u64,
     save_authority: save_authority::PendingSaveAuthority,
     undo: Vec<Applied>,
@@ -98,6 +101,14 @@ struct Slot {
     origin_issue: Option<String>,
     origin_bundle: PathBuf,
     disk_stamp: basecraft_protocol::provenance::FileStamp,
+}
+
+impl Slot {
+    /// Invalidate before every live mutable borrow, including error rollback.
+    fn content_mut(&mut self) -> &mut Loaded {
+        self.current_saved_hashes.take();
+        &mut self.content
+    }
 }
 
 /// A merged typing burst whose log entry hasn't been written yet.
@@ -348,7 +359,7 @@ impl Session {
 
     pub(crate) fn restore_replay_paths(&mut self, id: DocId, from: &Path, to: &Path) {
         self.docs[id.0]
-            .content
+            .content_mut()
             .as_document_mut()
             .rebase_replay_paths(from, to);
     }
