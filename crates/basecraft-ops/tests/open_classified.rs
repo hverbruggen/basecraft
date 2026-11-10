@@ -87,7 +87,15 @@ fn all_fasta_fixtures_return_the_loaded_kind() {
                 visit(&path, count);
             } else if matches!(files::Format::from_path(&path), Ok(files::Format::Fasta)) {
                 // Fixtures are opened passively; no copy, edit or durable action.
-                agree(&path, files::kind(&path).unwrap());
+                match files::load(&path) {
+                    Ok(loaded) => agree(&path, payload_kind(loaded)),
+                    Err(_) => {
+                        let root = path.parent().unwrap();
+                        let old = Session::unlogged(root).open(&path).unwrap_err();
+                        let new = Session::unlogged(root).open_classified(&path).unwrap_err();
+                        assert_eq!(std::mem::discriminant(&old), std::mem::discriminant(&new));
+                    }
+                }
                 *count += 1;
             }
         }
@@ -215,7 +223,11 @@ fn classified_route_reads_main_once_without_passive_sync() {
             std::fs::read(fixtures.join("sequences-annotations/locus.gb")).unwrap(),
             false,
         ),
-        ("plain.nwk", b"(a:1,b:2);\n(c:3,d:4);\n".to_vec(), false),
+        (
+            "plain.nwk",
+            std::fs::read(fixtures.join("tree-inference/unrooted.nwk")).unwrap(),
+            false,
+        ),
         ("bound.nwk", b"(a,b);\n".to_vec(), true),
     ] {
         let dir = tempfile::tempdir().unwrap();
@@ -246,4 +258,43 @@ fn classified_route_reads_main_once_without_passive_sync() {
         }
         println!("{name}: classified main reads=1 bytes={}", bytes.len());
     }
+}
+
+#[test]
+fn classification_validates_through_the_last_record() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("late.fasta");
+    let mut bytes = b">a\nA\n>b\nT\n>later\n".to_vec();
+    bytes.extend(std::iter::repeat_n(
+        b'A',
+        files::LONGEST_ALIGNMENT_ROW as usize + 1,
+    ));
+    std::fs::write(&path, &bytes).unwrap();
+    agree(&path, files::Kind::Sequence);
+    bytes.extend_from_slice(b"\n>invalid\nA C\n");
+    std::fs::write(&path, bytes).unwrap();
+    assert!(
+        Session::unlogged(dir.path())
+            .open_classified(&path)
+            .is_err()
+    );
+}
+
+#[test]
+fn bound_tree_errors_never_fall_back_to_an_unbound_payload() {
+    use basecraft_ops::analysis_store::ArtifactRun;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("bound.nwk");
+    std::fs::write(&path, b"(a,b);\n").unwrap();
+    let run = ArtifactRun::create(&path, "bound-tree").unwrap();
+    run.bind(&path).unwrap();
+    // A valid adjacent sidecar cannot rescue a mismatched bound main file.
+    std::fs::write(files::tree_sidecar(&path), b"{\"schema_version\":0}").unwrap();
+    std::fs::write(&path, b"(other,tree);\n").unwrap();
+    let mut session = Session::unlogged(dir.path());
+    assert!(session.open_classified(&path).is_err());
+    std::fs::write(&path, b"(a,b);\n").unwrap();
+    let (id, kind) = session.open_classified(&path).unwrap();
+    assert_eq!((id, kind), (DocId(0), files::Kind::Tree));
+    assert!(session.tree_metadata_warning(id).unwrap().is_some());
 }
