@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AlignmentLinkUnavailable",
+  "description": "Temporary origin/view guard; production keeps its selected-field Value reader.",
+  "type": "object",
+  "properties": {
+    "recovery": {
+      "description": "Existing native OsStr basename representation (Unix bytes / Windows units),\nor null. The selected-field reader only displays a recovery hint for a\nstring supplied in an externally authored guard; it does not decode this.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/NativeFilename"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "schema": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "unavailable": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "unavailable"
+  ],
+  "$defs": {
+    "NativeFilename": {
+      "description": "Schema description of Serde's existing OsStr/OsString representation.\nProduction serialization uses OsString itself, without a conversion policy.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "Unix": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "format": "uint8",
+                "maximum": 255,
+                "minimum": 0
+              }
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "Unix"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "Windows": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0
+              }
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "Windows"
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -1,7 +1,6 @@
 //! Explicit tree–alignment provenance. Snapshots retain unsaved input exactly.
 use crate::{Result, error::invalid};
 use basecraft_docs::TreeDoc;
-use serde::Serialize;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Write as _,
@@ -9,6 +8,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use basecraft_protocol::link_records::{
+    AlignmentLinkRecovery, AlignmentLinkUnavailable, PreviousAlignmentMetadata as PreviousMetadata,
+};
 pub use basecraft_protocol::records::AlignmentLink;
 
 fn hidden_sidecar(run: &Path, tree: &Path) -> PathBuf {
@@ -96,30 +98,19 @@ fn retain_snapshot(tree: &Path, input: &Path, expected: &str) -> Result<PathBuf>
     Ok(snapshot)
 }
 
-#[derive(Serialize)]
-#[serde(tag = "entry", content = "value", rename_all = "snake_case")]
-enum PreviousMetadata {
-    Absent,
-    /// Preserve bytes even when the old metadata cannot be decoded.
-    File(Vec<u8>),
-    /// Preserve the directory entry without following a possibly dangling link.
-    Symlink(PathBuf),
-}
-
-impl PreviousMetadata {
-    fn read(path: &Path) -> Result<Self> {
-        match std::fs::symlink_metadata(path) {
-            Ok(metadata) if metadata.file_type().is_symlink() => {
-                Ok(Self::Symlink(std::fs::read_link(path)?))
-            }
-            Ok(metadata) if metadata.is_file() => Ok(Self::File(std::fs::read(path)?)),
-            Ok(_) => Err(invalid(format!(
-                "association metadata is not a file: {}",
-                path.display()
-            ))),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Self::Absent),
-            Err(error) => Err(error.into()),
+/// Keep filesystem inspection in ops; protocol owns only the wire declaration.
+fn previous_metadata(path: &Path) -> Result<PreviousMetadata> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            Ok(PreviousMetadata::Symlink(std::fs::read_link(path)?))
         }
+        Ok(metadata) if metadata.is_file() => Ok(PreviousMetadata::File(std::fs::read(path)?)),
+        Ok(_) => Err(invalid(format!(
+            "association metadata is not a file: {}",
+            path.display()
+        ))),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(PreviousMetadata::Absent),
+        Err(error) => Err(error.into()),
     }
 }
 
@@ -186,8 +177,8 @@ impl PreparedLinks {
         for link in origin.into_iter().chain(view.iter()) {
             link.verify_snapshot(from)?;
         }
-        let previous_origin = PreviousMetadata::read(&sidecar(to))?;
-        let previous_view = PreviousMetadata::read(&view_sidecar(to))?;
+        let previous_origin = previous_metadata(&sidecar(to))?;
+        let previous_view = previous_metadata(&view_sidecar(to))?;
         Ok(Self {
             target: to.to_path_buf(),
             origin: origin
@@ -206,22 +197,25 @@ impl PreparedLinks {
         &self,
         save_data: impl FnOnce() -> Result<T>,
     ) -> Result<(T, Vec<PathBuf>)> {
-        let recovery = serde_json::to_vec_pretty(&serde_json::json!({
-            "schema": 1,
-            "note": "Save As association recovery: previous entries and intended metadata; snapshots are retained separately",
-            "previous_origin": self.previous_origin,
-            "previous_view": self.previous_view,
-            "intended_origin": self.origin.as_ref().map(|link| &link.metadata),
-            "intended_view": self.view.as_ref().map(|link| &link.metadata),
-        }))?;
+        // Convert fallibly before retaining the recovery file or installing guards.
+        // A prior symlink may contain a non-UTF-8 path that JSON cannot represent.
+        let recovery = serde_json::to_vec_pretty(&serde_json::to_value(AlignmentLinkRecovery {
+            schema: 1,
+            note: "Save As association recovery: previous entries and intended metadata; snapshots are retained separately".into(),
+            previous_origin: self.previous_origin.clone(),
+            previous_view: self.previous_view.clone(),
+            intended_origin: self.origin.as_ref().map(|link| link.metadata.clone()),
+            intended_view: self.view.as_ref().map(|link| link.metadata.clone()),
+        })?)?;
         let recovery_path = retain_file(&self.target, ".alignment-recovery.json", |out| {
             out.write_all(&recovery)
         })?;
-        let unavailable = serde_json::to_vec_pretty(&serde_json::json!({
-            "schema": 1,
-            "unavailable": "Save As alignment publication incomplete",
-            "recovery": recovery_path.file_name(),
-        }))?;
+        let unavailable =
+            serde_json::to_vec_pretty(&serde_json::to_value(AlignmentLinkUnavailable {
+                schema: 1,
+                unavailable: "Save As alignment publication incomplete".into(),
+                recovery: recovery_path.file_name().map(std::ffi::OsStr::to_os_string),
+            })?)?;
         // Install the guard before changing data or origin. If this fails, the old
         // tree and all its associations are untouched. Never remove a failed guard.
         basecraft_io::write_atomic(&view_sidecar(&self.target), |out| {

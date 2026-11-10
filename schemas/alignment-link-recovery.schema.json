@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AlignmentLinkRecovery",
+  "description": "Uniquely retained `*.alignment-recovery.json`; schema 1, no rewrite workflow.\nDeserialization describes known writer shapes only. It is not an extension-\npreserving manual repair interface or a substitute for the selective readers.",
+  "type": "object",
+  "properties": {
+    "intended_origin": {
+      "description": "Always emitted, including null. Never decode/re-encode these bytes.",
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "integer",
+        "format": "uint8",
+        "maximum": 255,
+        "minimum": 0
+      }
+    },
+    "intended_view": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "integer",
+        "format": "uint8",
+        "maximum": 255,
+        "minimum": 0
+      }
+    },
+    "note": {
+      "type": "string"
+    },
+    "previous_origin": {
+      "$ref": "#/$defs/PreviousAlignmentMetadata"
+    },
+    "previous_view": {
+      "$ref": "#/$defs/PreviousAlignmentMetadata"
+    },
+    "schema": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "schema",
+    "note",
+    "previous_origin",
+    "previous_view"
+  ],
+  "$defs": {
+    "PreviousAlignmentMetadata": {
+      "description": "Prior directory entry, preserved without decoding bytes or following symlinks.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "entry": {
+              "type": "string",
+              "const": "absent"
+            }
+          },
+          "required": [
+            "entry"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "entry": {
+              "type": "string",
+              "const": "file"
+            },
+            "value": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "format": "uint8",
+                "maximum": 255,
+                "minimum": 0
+              }
+            }
+          },
+          "required": [
+            "entry",
+            "value"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "entry": {
+              "type": "string",
+              "const": "symlink"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "entry",
+            "value"
+          ]
+        }
+      ]
+    }
+  }
+}

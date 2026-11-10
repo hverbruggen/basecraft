@@ -53,8 +53,8 @@ are described below; their readers and fresh-write behavior remain distinct.
 | **DS01** `<tree>.basecraft.json`: exchange/tree hashes, supports, annotations, style | Beside tree / A hidden metadata | [files.rs](../crates/basecraft-ops/src/files.rs) `write_tree_sidecar`, `write_tree_sidecar_at`; plugin-host `file_tool::write_support_sidecar` | `files::load_tree` | `schema_version: 1`; missing/0 legacy accepted with restricted semantics; historical writer omits version | ops `TreeSidecar`; protocol support/style payloads; no complete schema | Outer unknown fields dropped; nested style `extra` kept; legacy backup retained before replacement |
 | **DS02** `<species>.basecraft.json`: exchange hash, path base, workspace | Beside SPART / A | `files::write_delimitation_sidecar`, `write_delimitation_sidecar_at`; [delimitation.rs](../crates/basecraft-ops/src/delimitation.rs) artifact writer; session save | `files::load_delimitation` | `version: 1` (legacy relative form) / `2` (path base) | ops `DelimitationSidecar`; protocol `DelimitationWorkspace` / [delimitation-workspace.schema.json](delimitation-workspace.schema.json) covers payload only | Outer fields dropped; payload's own serde rules apply |
 | **DS03** `<tree>.alignment.json`, hidden origin/view link records | Beside tree / A | [links.rs](../crates/basecraft-ops/src/links.rs) `AlignmentLink::create`, `create_referenced`, association/clone/save helpers | `AlignmentLink` loading/verification; `PreparedLinks::prepare` | `schema: 1` snapshot / `2` referenced ledger | protocol `records::AlignmentLink` (ops re-export, behavior via `AlignmentLinkExt`); [alignment-link.schema.json](alignment-link.schema.json) | Top-level `extra` kept |
-| **DS04** Retained `*.alignment-recovery.json`: prior/intended origin/view bytes | Beside save target, uniquely retained | `PreparedLinks::publish` | manual repair / diagnostic inspection; no automatic recovery writer | `schema: 1` | `Value`; no schema | Generated snapshot, not rewritten |
-| **DS05** Origin/view unavailable guard: diagnostic and recovery filename | Same alignment sidecar locations during partial save | `PreparedLinks::publish` | link loading refuses unusable association | `schema: 1` | `Value`; no schema | Generated guard, not ordinary AlignmentLink |
+| **DS04** Retained `*.alignment-recovery.json`: prior/intended origin/view bytes | Beside save target, uniquely retained | `PreparedLinks::publish` | manual repair / diagnostic inspection; no automatic recovery writer | `schema: 1` | protocol `link_records::AlignmentLinkRecovery`; [alignment-link-recovery.schema.json](alignment-link-recovery.schema.json) | Generated snapshot, not rewritten; no extension-preserving repair interface |
+| **DS05** Origin/view unavailable guard: diagnostic and recovery filename | Same alignment sidecar locations during partial save | `PreparedLinks::publish` | link loading refuses unusable association | `schema: 1` | protocol `link_records::AlignmentLinkUnavailable`; [alignment-link-unavailable.schema.json](alignment-link-unavailable.schema.json) | Generated guard, not ordinary AlignmentLink; selected-field Value reader unchanged |
 | **DS06** `metadata.basecraft.json`: table names/hashes/columns, import settings, partitions | Project metadata folder | [metadata.rs](../crates/basecraft-ops/src/metadata.rs) `encode`, `write` | `metadata::load` | `format`, `version: 1` | ops `Manifest`, `Tables`, `TableEntry`; protocol `ProjectMetadata` / [project-metadata.schema.json](project-metadata.schema.json) covers model, not disk manifest | Manifest top-level extra kept; nested table wrappers drop extras; unknown TSV columns retained by model |
 | **DS07** `specimens.tsv`, `taxa.tsv`, `identifications.tsv`, `records.tsv` | Same metadata folder | `metadata::encode`, `create`, session save | `metadata::load` | Via metadata manifest | protocol metadata row/column types; standard TSV | Header/column handling preserves extra data; no JSON schema for TSV bytes |
 | **DS08** `*.submission.json` | Project / chosen document path | [submission.rs](../crates/basecraft-ops/src/submission.rs) `encode`, `create`; session save | `submission::load` | `version: 1` | protocol `Submission` / [submission.schema.json](submission.schema.json) | Extra maps on Submission and selected nested types kept; other nested structs have their own rules |
@@ -488,3 +488,34 @@ V1 outer/evidence/source/support extras survive; v2 outer extras are rejected.
 Nested known operation/settings/reference/choice extras are currently dropped,
 and unknown operation variants fail. This extraction preserves those limits;
 it does not claim lossless unknown-field rewriting or complete Sanger migration.
+
+
+## Alignment repair and guard producer types (DS04/DS05)
+
+`link_records` describes the existing schema-1 repair snapshot and temporary
+unavailable guard. The prior-entry enum retains absent/file-byte-array/symlink-path
+representations; intended origin/view remain opaque serialized byte arrays or
+explicit null. Both producers retain recursively sorted pretty JSON without a
+final newline. The guard's recovery basename retains Serde's native OsStr
+representation (`{"Unix": [bytes]}` / `{"Windows": [UTF-16 units]}`), or null,
+rather than converting it to a string. The existing unique-file retention and atomic guard writer remain
+the publication owners; no repair subsystem or strict production decoder is added.
+Unknown-field rewrite/extension policy is not established by these producer types.
+
+Six `records-v1/link-{repair,guard}-{absent,file,symlink}.json` original-writer
+captures were frozen before substitution. The unit harness uses test-prepared
+staged bytes from existing DS03 captures and real prior filesystem entries, then
+calls the unchanged publish producer with a failing data callback. They are not
+complete real analysis/Save As journeys. Runtime literal oracles independently
+compare complete bytes at the same inputs and allocated recovery basename; frozen
+known-shape fixtures round-trip byte for byte through Value sorting. The original
+prior-entry wire declaration is frozen independently in the test oracle.
+
+Production guard acceptance remains selected-field JSON inspection: string
+`unavailable` refuses the association independently of schema, and string
+`recovery` only enriches the diagnostic. Nonstring fields retain existing
+fallthrough behavior. Invalid UTF-8 prior symlink paths now return the existing
+JSON error before recovery retention, guard installation or main-data replacement,
+rather than panicking in the former literal builder. Existing staged snapshots
+can already exist and remain retained. No bytes, versions, defaults, unknown-field
+policy, history/replay or compatibility horizon change.

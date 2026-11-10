@@ -116,3 +116,8 @@ The original literal oracle uses independent constructor inputs and the allocate
 recovery basename, never values decoded from the resulting record. All six files
 are pretty recursively sorted JSON without a final newline. Existing behavioral
 Save As/retry/manual recovery tests remain separate evidence.
+The guard recovery basename is the original Serde OsStr representation: Unix
+byte-array object (or Windows UTF-16-unit object on that writer platform), not a
+string. Unix guard fixtures have typed OsString round-trip assertions on Unix;
+other platforms inspect their exact JSON bytes. This does not add cross-platform
+native-filename decoding or change the production selected-field reader.

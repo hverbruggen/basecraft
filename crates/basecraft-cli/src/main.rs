@@ -477,6 +477,14 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     schemars::schema_for!(basecraft_protocol::records::AlignmentLink),
                 ),
                 (
+                    "alignment-link-recovery",
+                    schemars::schema_for!(basecraft_protocol::link_records::AlignmentLinkRecovery),
+                ),
+                (
+                    "alignment-link-unavailable",
+                    schemars::schema_for!(basecraft_protocol::link_records::AlignmentLinkUnavailable),
+                ),
+                (
                     "analysis-run",
                     schemars::schema_for!(basecraft_protocol::records::AnalysisRun),
                 ),
