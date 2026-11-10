@@ -920,7 +920,7 @@ fn cli_submission_show_rejects_an_alignment_without_success_output() {
         .output()
         .unwrap();
     assert!(!output.status.success());
-    assert!(output.stdout.is_empty());
+    assert_eq!(output.stdout, Vec::<u8>::new());
     assert!(String::from_utf8_lossy(&output.stderr).contains("Submission"));
     assert_eq!(std::fs::read(file).unwrap(), original);
 }
