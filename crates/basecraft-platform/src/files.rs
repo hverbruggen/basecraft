@@ -3,8 +3,10 @@ use std::{fs::File, io, path::Path};
 
 mod namespace;
 pub use namespace::{
-    CheckedAbsence, CheckedRead, CheckedReadFile, NamespaceReadError, ReadNamespace,
-    inspect_read_namespace, namespace_read_supported,
+    CheckedAbsence, CheckedRead, CheckedReadFile, LockDirectoryMode, LockNamespace, LockStep,
+    NamespaceReadError, OpenedLock, ReadNamespace, TargetMetadata, TargetNamespace,
+    inspect_lock_namespace, inspect_read_namespace, inspect_target_namespace,
+    namespace_lock_supported, namespace_read_supported,
 };
 
 /// An observed filesystem object, not a permanent or globally unique ID.
