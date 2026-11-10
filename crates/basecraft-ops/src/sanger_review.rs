@@ -61,10 +61,21 @@ pub fn saved_review(path: &Path) -> Option<Result<SangerReviewSession, String>> 
 }
 
 /// Write a review recovered from application state to `destination`, a new
-/// folder, with every retained call set. The checkpoint stays in place.
+/// folder, with every retained call set. The original checkpoint is unchanged.
+/// Failed saves leave the destination and any partial output in place.
 pub fn recover(checkpoint: &Path, destination: &Path) -> crate::Result<PathBuf> {
+    recover_with_saver(checkpoint, destination, |review, target| {
+        review.save_with_evidence(target, crate::input_evidence::SavePolicy::Cancel)
+    })
+}
+
+fn recover_with_saver(
+    checkpoint: &Path,
+    destination: &Path,
+    saver: impl FnOnce(&mut SangerReviewSession, &Path) -> Result<(), String>,
+) -> crate::Result<PathBuf> {
     use crate::error::invalid;
-    let mut review = SangerReviewSession::load(checkpoint).map_err(invalid)?;
+    let review = SangerReviewSession::load(checkpoint).map_err(invalid)?;
     let name = review
         .recovery_path()
         .and(review.storage_anchor().file_name())
@@ -79,13 +90,9 @@ pub fn recover(checkpoint: &Path, destination: &Path) -> crate::Result<PathBuf> 
         }
     })?;
     let target = destination.join(name);
-    if let Err(error) =
-        review.save_with_evidence(&target, crate::input_evidence::SavePolicy::Cancel)
-    {
-        // Nothing else is in the folder this call created.
-        let _ = std::fs::remove_dir_all(destination);
-        return Err(invalid(error));
-    }
+    // A continuation owns a separate checkpoint, even when saving fails.
+    let mut review = review.fork_for_operation();
+    saver(&mut review, &target).map_err(invalid)?;
     Ok(target)
 }
 
@@ -1316,6 +1323,9 @@ mod readonly_tests {
 #[cfg(test)]
 mod moved_and_failed_recovery_tests {
     use super::*;
+    mod recover_cleanup_tests {
+        include!("sanger_review/recover_cleanup_tests.rs");
+    }
     fn pair(folder: &Path) -> SangerReviewSession {
         std::fs::create_dir(folder).unwrap();
         let source = folder.join("source.ab1");
