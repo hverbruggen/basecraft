@@ -541,8 +541,8 @@ fn main() {
                 check(sanger.mask_settings !== manualMasks, "Failed pair lost mask undo");
                 sanger.review_redo();
                 check(sanger.mask_settings === manualMasks, "Failed pair lost mask redo");
-                check(sanger.save_review({}), "Review save failed");
-                check(reopened.open_file({}), "Normal open of saved review failed");
+                check(sanger.save_review({}), "Review save failed: " + sanger.message);
+                check(reopened.open_file({}), "Normal open of saved review failed: " + reopened.message);
                 check(reopened.review_decision.indexOf("G") >= 0, "Manual decision lost on reopen");
                 sangerDone = true;
             }}
