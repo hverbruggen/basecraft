@@ -777,12 +777,11 @@ impl qobject::GenomeController {
         QUrl::from_local_file(&QString::from(parent.to_string_lossy().as_ref()))
     }
 
-    fn len(&self) -> u64 {
-        let access_thread = self.qt_thread();
+    fn len(&self) -> basecraft_ops::Result<u64> {
         let r = self.rust();
         match (&r.session, r.doc) {
-            (Some(s), Some(d)) => crate::bridge::checked_document!(access_thread, s.doc(d)).len(),
-            _ => 0,
+            (Some(s), Some(d)) => Ok(s.doc(d)?.len()),
+            _ => Ok(0),
         }
     }
 
@@ -806,7 +805,7 @@ impl qobject::GenomeController {
             (r.scratch.to_bytes(), r.view.status(d))
         };
         let (zoom, (pos, size)) = {
-            let len = self.len();
+            let len = crate::bridge::checked_document!(sync self, self.len());
             let v = &self.rust().view;
             let zoom = v.zoom_text(len);
             let scroll = if v.mode == Mode::Linear {
@@ -845,7 +844,10 @@ impl qobject::GenomeController {
         self.as_mut().set_frame(QByteArray::from(bytes.as_slice()));
         self.as_mut().set_status(QString::from(&status));
         self.as_mut().set_zoom_text(QString::from(&zoom));
-        let (overview_pos, overview_size) = self.rust().view.overview_fraction(self.len());
+        let (overview_pos, overview_size) = self
+            .rust()
+            .view
+            .overview_fraction(crate::bridge::checked_document!(sync self, self.len()));
         self.as_mut().set_overview_pos(overview_pos);
         self.as_mut().set_overview_size(overview_size);
         self.as_mut().set_scroll_size(size);
@@ -1089,7 +1091,7 @@ impl qobject::GenomeController {
         if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
             crate::bridge::checked_document!(sync self, session.doc(doc));
         }
-        let len = self.len();
+        let len = crate::bridge::checked_document!(sync self, self.len());
         {
             let mut r = self.as_mut().rust_mut();
             let r = &mut *r;
@@ -1108,7 +1110,7 @@ impl qobject::GenomeController {
 
     #[allow(clippy::cast_possible_truncation)]
     pub fn wheel(mut self: Pin<&mut Self>, x: f64, y: f64, dy: f64, dx: f64, modifiers: i32) {
-        let len = self.len();
+        let len = crate::bridge::checked_document!(sync self, self.len());
         {
             let mut r = self.as_mut().rust_mut();
             if r.view.mode == Mode::Circular {
@@ -1138,7 +1140,7 @@ impl qobject::GenomeController {
         if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
             crate::bridge::checked_document!(sync self, session.doc(doc));
         }
-        let len = self.len();
+        let len = crate::bridge::checked_document!(sync self, self.len());
         self.as_mut()
             .rust_mut()
             .view
@@ -1175,7 +1177,7 @@ impl qobject::GenomeController {
 
     #[allow(clippy::cast_possible_truncation)]
     pub fn drag(mut self: Pin<&mut Self>, x: f64, y: f64) {
-        let len = self.len();
+        let len = crate::bridge::checked_document!(sync self, self.len());
         self.as_mut()
             .rust_mut()
             .view
@@ -1210,7 +1212,7 @@ impl qobject::GenomeController {
     }
 
     pub fn switch_view(mut self: Pin<&mut Self>, mode: &QString) {
-        let len = self.len();
+        let len = crate::bridge::checked_document!(sync self, self.len());
         {
             let mut r = self.as_mut().rust_mut();
             let (cursor, selection) = (r.view.cursor, r.view.selection);
@@ -1264,7 +1266,7 @@ impl qobject::GenomeController {
 
     #[allow(clippy::cast_possible_truncation)]
     pub fn show_range(mut self: Pin<&mut Self>, start: f64, end: f64) {
-        let len = self.len();
+        let len = crate::bridge::checked_document!(sync self, self.len());
         {
             let mut r = self.as_mut().rust_mut();
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -1300,7 +1302,7 @@ impl qobject::GenomeController {
     }
 
     pub fn key(mut self: Pin<&mut Self>, key: i32, text: &QString, modifiers: i32) -> bool {
-        let len = self.len();
+        let len = crate::bridge::checked_document!(sync self, self.len());
         let ctrl = modifiers & CTRL != 0;
         let shift = modifiers & SHIFT != 0;
         let (cursor, selection, selected) = {
@@ -1444,7 +1446,7 @@ impl qobject::GenomeController {
         if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
             crate::bridge::checked_document!(sync self, session.doc(doc));
         }
-        let len = self.len();
+        let len = crate::bridge::checked_document!(sync self, self.len());
         let mut r = self.as_mut().rust_mut();
         if let Some(c) = r.view.cursor {
             r.view.cursor = Some(c.min(len));
@@ -1651,7 +1653,7 @@ impl qobject::GenomeController {
         if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
             crate::bridge::checked_document!(sync self, session.doc(doc));
         }
-        let len = self.len();
+        let len = crate::bridge::checked_document!(sync self, self.len());
         self.as_mut()
             .rust_mut()
             .view
@@ -1694,7 +1696,7 @@ impl qobject::GenomeController {
 
     #[allow(clippy::cast_possible_truncation)]
     pub fn double_click(mut self: Pin<&mut Self>, x: f64, y: f64) {
-        let len = self.len();
+        let len = crate::bridge::checked_document!(sync self, self.len());
         self.as_mut()
             .rust_mut()
             .view
@@ -1704,7 +1706,7 @@ impl qobject::GenomeController {
 
     #[allow(clippy::cast_possible_truncation)]
     pub fn zoom_by(mut self: Pin<&mut Self>, x: f64, y: f64, factor: f64) {
-        let len = self.len();
+        let len = crate::bridge::checked_document!(sync self, self.len());
         if factor > 0.0 {
             self.as_mut()
                 .rust_mut()
@@ -1715,7 +1717,7 @@ impl qobject::GenomeController {
     }
 
     fn zoom_centre(mut self: Pin<&mut Self>, factor: f64) {
-        let len = self.len();
+        let len = crate::bridge::checked_document!(sync self, self.len());
         {
             let mut r = self.as_mut().rust_mut();
             if r.view.mode == Mode::Circular {
@@ -1744,7 +1746,7 @@ impl qobject::GenomeController {
     }
 
     pub fn zoom_to_selection(mut self: Pin<&mut Self>) {
-        let len = self.len();
+        let len = crate::bridge::checked_document!(sync self, self.len());
         let Some((a, b)) = self.rust().view.selection else {
             self.notify("Nothing selected");
             return;
@@ -1766,7 +1768,7 @@ impl qobject::GenomeController {
     }
 
     pub fn zoom_to_feature(mut self: Pin<&mut Self>, id: i32) {
-        let len = self.len();
+        let len = crate::bridge::checked_document!(sync self, self.len());
         if let Some((a, b)) = self.feature_bounds(id) {
             self.as_mut().rust_mut().view.zoom_to(a, b, len);
             self.as_mut().sync_mode();
@@ -1802,7 +1804,11 @@ impl qobject::GenomeController {
     }
 
     pub fn new_feature_json(&self) -> QString {
-        let location = self.rust().view.new_feature_location(self.len());
+        let access_thread = self.qt_thread();
+        let location = self
+            .rust()
+            .view
+            .new_feature_location(crate::bridge::checked_document!(access_thread, self.len()));
         let f = Feature {
             kind: "misc_feature".into(),
             location,
@@ -2273,7 +2279,7 @@ impl qobject::GenomeController {
     }
 
     pub fn overview_scroll_to(mut self: Pin<&mut Self>, fraction: f64) {
-        let len = self.len();
+        let len = crate::bridge::checked_document!(sync self, self.len());
         self.as_mut()
             .rust_mut()
             .view
@@ -2282,14 +2288,14 @@ impl qobject::GenomeController {
     }
 
     pub fn scroll_to(mut self: Pin<&mut Self>, fraction: f64) {
-        let len = self.len();
+        let len = crate::bridge::checked_document!(sync self, self.len());
         self.as_mut().rust_mut().view.scroll_to(fraction, len);
         self.refresh();
     }
 
     #[allow(clippy::cast_possible_truncation)]
     pub fn edge_scroll(mut self: Pin<&mut Self>, x: f64, y: f64) -> bool {
-        let len = self.len();
+        let len = crate::bridge::checked_document!(sync self, self.len());
         let moved = self
             .as_mut()
             .rust_mut()
