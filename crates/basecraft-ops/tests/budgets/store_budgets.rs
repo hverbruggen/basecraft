@@ -44,13 +44,17 @@ fn store(root: &Path, name: &str) -> PathBuf {
         .to_path_buf()
 }
 
-// First record observations without assertions; exact gates are added only
-// after the instrumented, otherwise unchanged scanner baseline is captured.
+// Exact counts captured at 7c36aef before adding assertions. These preserve
+// existing global-scan scaling; they are not the desired indexed-save target.
 fn record(stage: &str, stores: &[PathBuf], visits: u64) {
     let counts = counters::snapshot();
     let expected: BTreeMap<_, _> = stores.iter().cloned().map(|s| (s, visits)).collect();
+    assert_eq!(
+        counts.store_inspections, expected,
+        "{stage}: attempted visits by supplied store path"
+    );
     println!(
-        "{stage}: attempts={} repeats={} observed={:?} proposed={expected:?}",
+        "{stage}: attempts={} repeats={} visits={:?}",
         counts.store_inspections.values().sum::<u64>(),
         counts
             .store_inspections
@@ -70,10 +74,9 @@ fn default_and_unrelated_scaling() {
     counters::reset();
     session.save(doc, None).unwrap();
     record("default save without stores", &[], 0);
-    // Newly published provenance registers a nearby store. It is discovered by
-    // subsequent saves, and must not be excluded from the global-scan baseline.
-    let nearby = root.join(".basecraft/analyses-v1");
-    let mut stores = vec![nearby];
+    // Ordinary provenance publication does not create an analysis store. Each
+    // additional unrelated registered store adds exactly one visit per save.
+    let mut stores = Vec::new();
     for index in 0..3 {
         stores.push(store(&root, &format!("unrelated-{index}")));
         session
@@ -129,8 +132,7 @@ fn incomplete_decision_and_recheck() {
     record("warned save cumulative", &stores, 2);
     counters::reset();
     let check = session.check_save(doc, None).unwrap();
-    let mut all = stores.to_vec();
-    all.push(root.join(".basecraft/analyses-v1"));
+    let all = stores.to_vec();
     record("advisory check", &all, 1);
     counters::reset();
     session

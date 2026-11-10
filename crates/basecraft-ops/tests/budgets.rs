@@ -82,6 +82,10 @@ fn record(name: &str, stage: &str, file: &Path, expected: (u64, u64, u64, u64)) 
         .copied()
         .unwrap_or_default();
     assert_eq!(counts.unresolved_reads, 0);
+    assert!(
+        counts.store_inspections.is_empty(),
+        "{name} {stage}: no stores registered"
+    );
     assert_eq!(
         (
             reads.full_reads,

@@ -253,3 +253,49 @@ it permits small process-library/cache state rather than requiring exact zero.
 Private raw evidence and environment identity belong with the task review, not
 in tracked history. This baseline is one deterministic wrapped single-record
 FASTA workload, not a universal memory scaling or 1 GB promise.
+
+### Store inspections per save
+
+The existing `cargo test -p basecraft-ops --features test-counters --test budgets`
+command in `just check` (and therefore `just ci`) also gates production analysis
+store scans. `basecraft_io::counters::store_inspections` counts **attempted visits**
+at `input_evidence::scan_store` entry, before validation, including missing/corrupt
+stores and each repeat. It is a map from the exact supplied path to visit count;
+it performs no canonicalization or filesystem access. Aliased paths remain
+separate keys. Sum values for total attempts; sum `(visits - 1)` for repeated
+visits of the same supplied path. Registry reads, ancestor discovery probes,
+individual run/dependency reads and non-scanner store validation are not store
+visits. This is a work count, not a timing or total filesystem-I/O metric.
+
+The counters share the existing thread-local `reset`/`snapshot` scope with read,
+byte and sync counts. Reset immediately before the operation to measure that
+operation; without reset, advisory checks and authoritative rechecks accumulate.
+Spawned threads have independent counters. Isolated child profiles keep the real
+save scanner's discovered registry self-contained. No feature means no counter
+module or scanner call, and no new wire API.
+
+Baseline captured at `7c36aef` on the otherwise unchanged scanner, before adding
+exact assertions:
+
+| Scenario | Attempts | Repeats |
+|---|---:|---:|
+| Default complete FASTA/GenBank/Newick save, no stores | 0 | 0 |
+| Complete save with 1 / 2 / 3 unrelated registered stores | 1 / 2 / 3 | 0 |
+| Clean no-op save after those saves | 0 | 0 |
+| Incomplete save: one missing and one corrupt registered store | 2 | 0 |
+| Bind the returned decision without resetting | 2 cumulative | 0 |
+| Warned save with that decision, still without resetting | 4 cumulative | 2 |
+| Advisory recheck / explicit decision save of clean document | 2 each | 0 |
+| Known-input advisory, one nearby and registered store | 1 | 0 |
+| Stale inventory decision after adding unrelated store | 2 | 0 |
+| Fresh known-input preserve-copy save | 2 | 0 |
+| Explicit `check_in` with the same missing path twice | 2 | 1 |
+| No-overwrite refusal before scanner entry | 0 | 0 |
+
+The tests compare the **entire per-store map**, so an additional scan or an
+unexpected store fails the gate. The existing exact read/byte/sync budgets remain
+unchanged. Global-scan cost currently grows with unrelated registered stores;
+this records that known architectural gap openly and does not qualify the save
+path against the desired file-local cost. Scanner/index/lock improvements and
+changes to evidence authority are separate work. These checks make no GUI,
+startup, elapsed-time or release qualification claim.
