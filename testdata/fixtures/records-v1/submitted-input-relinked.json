@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "source": {
+    "path": "../../../../moved.fasta",
+    "stamp": {
+      "size": 13,
+      "modified_seconds": 1794333118,
+      "modified_nanos": 643041645,
+      "device": 66306,
+      "inode": 46962087
+    },
+    "hash": "b3:1bc4fa18c1db849e9be96f41a2f77ad0f6b8eb1a0757526d0bf59e253ac0fc5f"
+  },
+  "submitted_hash": "b3:1bc4fa18c1db849e9be96f41a2f77ad0f6b8eb1a0757526d0bf59e253ac0fc5f",
+  "submitted_size": 13,
+  "transformation": "identity-v1",
+  "state": "referenced",
+  "sanger_input_events": [],
+  "selected_input_links": {},
+  "upstream": [
+    {
+      "bundle": "../01M739D45M5BQKJ1JSBBKVQ1VN",
+      "hash": "b3:979c8f247c50ca1b31299296f8d2b1bba766b671ca1b99e33d8d6cde4eb8fc1b",
+      "id": "01M739D45M5BQKJ1JSBBKVQ1VN"
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "source": null,
+  "submitted_hash": "b3:9ac773600ef246ad02b615ac4724188c460d85bebeaf1199e74e3314cb83979a",
+  "submitted_size": 15,
+  "transformation": "canonical-fasta-v1",
+  "state": "generated",
+  "upstream": []
+}

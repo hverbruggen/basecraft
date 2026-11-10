@@ -254,3 +254,34 @@ The frozen examples retain one original run's random identities; fresh runs are
 not normalized to match those identities and ordinary tests never update them.
 Private capture source/input manifests and fault observations accompany the
 task handoff. No new production decoder or compatibility policy is implied.
+
+SubmittedInput original core-owner captures (WF-0131, Phase A1)
+--------------------------------------------------------------
+submitted-input-{referenced,referenced-upstream,generated,generated-upstream,
+preserved,preserved-delegated,broken,relinked}.json are eight raw original
+public-owner outputs at source baseline 0515fd43353878dd53295017f58980336ea968d4.
+submitted_input_record_formats.rs exercises real reference/generated owners,
+ArtifactRuns and publications, preserve/delegate (count zero), break and relink.
+Reference outputs include the empty-event publication pass's existing selected
+input/event/upstream extras. Generated payloads are caller-retained synthetic
+bytes; no scientific engine runs. These are core captures, not all adapter,
+Session Save As, runner, selected-event or Sanger lifecycle qualification (A2).
+
+All bytes are unchanged: original struct/nested declaration order, flattened
+BTree extras, explicit source:null, native stamps/device/inode, returned ULIDs,
+hashes and one terminal LF. Paths are naturally relative to synthetic files;
+no normalization, replacement, injected extras or sorted-Value oracle is used.
+Runtime old-struct oracles derive expected fields from declared bytes/graphs,
+independent native metadata, returned identities and raw dependency manifests.
+Cancel preserves bytes; RemoveAnalysis moves the original bytes, adding no state.
+
+The test embeds original direct-serde and read_input observations separately,
+including complete errors/positions/categories and accepted semantic values.
+Unknown state/version data can deserialize while the host reader rejects it.
+Injected nested-extension rewrites are separate controls, not these eight fresh
+captures; top/reference extras survive but unknown FileStamp extras already do
+not. Failure controls record the actually reached stage and preserve existing
+bytes/partial artifacts. The atomic-write obstruction starts with a test-prepared
+retained copy, reaches the writer, then verifies an idempotent retry. Unix
+permissions/symlinks and Linux error text/copy-read coverage are platform scoped.
+No version, schema, state policy, compatibility or production behavior changes.

@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "source": null,
+  "submitted_hash": "b3:9ac773600ef246ad02b615ac4724188c460d85bebeaf1199e74e3314cb83979a",
+  "submitted_size": 15,
+  "transformation": "canonical-fasta-v1",
+  "state": "generated",
+  "upstream": [
+    {
+      "bundle": "../01M739D45M5BQKJ1JSBBKVQ1VN",
+      "hash": "b3:979c8f247c50ca1b31299296f8d2b1bba766b671ca1b99e33d8d6cde4eb8fc1b",
+      "id": "01M739D45M5BQKJ1JSBBKVQ1VN"
+    }
+  ]
+}
