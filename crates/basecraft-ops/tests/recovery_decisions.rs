@@ -100,6 +100,14 @@ fn changed_inventory_requires_fresh_final_consent_without_resaving() {
         .advance(1, Some(second.decide(SavePolicy::Cancel, true)))
         .unwrap();
     let fresh = required(attempt.publish().unwrap_err());
+    let status = attempt.status().unwrap();
+    assert_eq!(status.phase, replay::RecoveryPhase::NeedsFinalization);
+    assert!(status.documents.iter().all(|document| document.written));
+    assert_eq!(
+        serde_json::to_value(&status.warnings).unwrap(),
+        serde_json::to_value(attempt.warnings()).unwrap()
+    );
+    assert!(!status.warnings.is_empty());
     assert!(!destination.exists());
     let refused = required(
         attempt
@@ -358,6 +366,10 @@ fn stage_and_final_policies_validate_all_groups_before_any_mutation() {
         }
     };
     assert_eq!(completed.evidence_actions.len(), 2);
+    assert_eq!(
+        serde_json::to_value(attempt.status().unwrap().evidence_actions).unwrap(),
+        serde_json::to_value(&completed.evidence_actions).unwrap()
+    );
     assert!(
         completed
             .evidence_actions
@@ -536,6 +548,7 @@ fn damaged_journal_requires_explicit_prefix_and_preserves_bytes() {
     )
     .unwrap();
     assert!(prefix.damage().is_some());
+    assert_eq!(prefix.status().unwrap().damage.as_deref(), prefix.damage());
     prefix.advance(0, None).unwrap();
     let completed = prefix.publish().unwrap();
     assert!(completed.damage.is_some());
@@ -723,4 +736,98 @@ fn new_unsaved_sequence_has_final_only_issue_group_and_explicit_recovery() {
     let mut reopened = Session::unlogged(&root);
     let doc = reopened.open(&complete.outputs[0]).unwrap();
     assert_eq!(reopened.state(doc).len, 4);
+}
+
+#[test]
+fn status_is_read_only_and_tracks_document_progress_without_slot_ids() {
+    use replay::RecoveryPhase;
+    let Some(root) = isolated_profile::enter(
+        "status_is_read_only_and_tracks_document_progress_without_slot_ids",
+    ) else {
+        return;
+    };
+    let mut session = source(&root, 2);
+    // Reopen a key so the originating Slot id differs from the attempt index.
+    let reopened = session.open(&root.join("source/0.fasta")).unwrap();
+    session
+        .apply(
+            reopened,
+            Op::SeqReplace {
+                start: 1,
+                end: 2,
+                residues: "T".into(),
+            },
+        )
+        .unwrap();
+    session.flush().unwrap();
+    let destination = root.join("out");
+    let mut attempt =
+        replay::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
+            .unwrap();
+    let check = attempt.check(0).unwrap();
+    assert_ne!(check.document(), 0);
+    let initial = attempt.status().unwrap();
+    assert_eq!(initial.destination, destination);
+    assert_eq!(initial.phase, RecoveryPhase::PendingWrite);
+    assert_eq!(initial.documents.len(), 2);
+    for (index, document) in initial.documents.iter().enumerate() {
+        assert_eq!(document.index, index);
+        assert_eq!(document.relative_key, format!("{index}.fasta"));
+        assert_eq!(document.phase, RecoveryPhase::PendingWrite);
+        assert!(!document.written);
+    }
+    let stage = check.target().parent().unwrap();
+    let parked = root.join("unavailable-stage");
+    let registry_before = std::fs::read(registry()).ok();
+    let journal_before =
+        serde_json::to_value(basecraft_ops::log::read_all(session.recovery_root()).unwrap())
+            .unwrap();
+    std::fs::rename(stage, &parked).unwrap();
+    for _ in 0..2 {
+        // A validation/check/hash would fail at the missing stage. Snapshot
+        // reads only stored fields and must leave the pending receipt alone.
+        assert_eq!(
+            serde_json::to_value(attempt.status().unwrap()).unwrap(),
+            serde_json::to_value(&initial).unwrap()
+        );
+    }
+    std::fs::rename(&parked, stage).unwrap();
+    assert_eq!(std::fs::read(registry()).ok(), registry_before);
+    assert_eq!(
+        serde_json::to_value(basecraft_ops::log::read_all(session.recovery_root()).unwrap())
+            .unwrap(),
+        journal_before
+    );
+    let decision = attempt
+        .decide(0, check.token(), SavePolicy::Cancel, false)
+        .unwrap();
+    attempt.advance(0, Some(decision)).unwrap();
+    let partial = attempt.status().unwrap();
+    assert_eq!(partial.phase, RecoveryPhase::PendingWrite);
+    assert_eq!(partial.documents[0].phase, RecoveryPhase::NeedsFinalization);
+    assert!(partial.documents[0].written);
+    assert_eq!(partial.documents[1].phase, RecoveryPhase::PendingWrite);
+    assert!(!partial.documents[1].written);
+    attempt.advance(1, None).unwrap();
+    assert_eq!(
+        attempt.status().unwrap().phase,
+        RecoveryPhase::NeedsFinalization
+    );
+    let completion = attempt.publish().unwrap();
+    let mut terminal = attempt.status().unwrap();
+    assert_eq!(terminal.phase, RecoveryPhase::Published);
+    assert_eq!(terminal.destination, completion.destination);
+    assert!(
+        terminal
+            .documents
+            .iter()
+            .all(|document| document.written && document.phase == RecoveryPhase::Published)
+    );
+    terminal.documents[0].written = false;
+    terminal.documents[0].relative_key = "changed snapshot".into();
+    assert!(attempt.status().unwrap().documents[0].written);
+    assert_eq!(
+        attempt.status().unwrap().documents[0].relative_key,
+        "0.fasta"
+    );
 }

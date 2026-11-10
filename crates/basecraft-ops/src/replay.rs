@@ -448,6 +448,8 @@ fn recover_entries(
         damage,
         published: false,
         #[cfg(test)]
+        after_write: None,
+        #[cfg(test)]
         before_sync: None,
         #[cfg(test)]
         before_promote: None,
@@ -470,6 +472,8 @@ pub struct RecoveryAttempt {
     damage: Option<String>,
     published: bool,
     #[cfg(test)]
+    after_write: Option<PublicationBarrier>,
+    #[cfg(test)]
     before_sync: Option<PublicationBarrier>,
     #[cfg(test)]
     before_promote: Option<PublicationBarrier>,
@@ -488,6 +492,41 @@ struct RecoveryDocument {
     // A successful writer must never run twice even if its post-write
     // observation fails. That case requires a fresh finalization check.
     written: bool,
+}
+
+/// Stored workflow progress, not a fresh inspection or permission to proceed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecoveryPhase {
+    /// A writer has not completed. A failed write may still have partial effects.
+    PendingWrite,
+    /// The writer completed; only finalization remains. Evidence may need fresh
+    /// consent, or an unobservable/changed stage may require reconstruction.
+    NeedsFinalization,
+    /// The directory rename completed. Sync/registration may subsequently have
+    /// failed; use the publish result for completion or PublishedWithFailure.
+    Published,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct RecoveryDocumentStatus {
+    /// Index accepted by this attempt's check/decide/advance methods, not a Slot id.
+    pub index: usize,
+    pub relative_key: String,
+    pub phase: RecoveryPhase,
+    /// True once the writer succeeded, even when its later observation failed.
+    pub written: bool,
+}
+
+/// In-memory snapshot only. No receipt, Session access or validation authority.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct RecoveryStatus {
+    pub destination: PathBuf,
+    pub phase: RecoveryPhase,
+    pub documents: Vec<RecoveryDocumentStatus>,
+    pub damage: Option<String>,
+    pub warnings: Vec<crate::session::SaveWarning>,
+    pub evidence_actions: Vec<crate::session::EvidenceAction>,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -577,6 +616,41 @@ fn artifacts(root: &Path) -> Result<Vec<ArtifactObservation>> {
 }
 
 impl RecoveryAttempt {
+    /// Read stored progress without filesystem IO, hashing, validation or
+    /// minting/consuming a receipt. NeedsFinalization is not a readiness claim:
+    /// only publish can validate current artifacts/evidence and promote them.
+    /// Published does not distinguish successful completion from post-rename
+    /// failure; those details remain in the existing publish result.
+    pub fn status(&self) -> Result<RecoveryStatus> {
+        let phase = |written| {
+            if self.published {
+                RecoveryPhase::Published
+            } else if written {
+                RecoveryPhase::NeedsFinalization
+            } else {
+                RecoveryPhase::PendingWrite
+            }
+        };
+        Ok(RecoveryStatus {
+            destination: self.destination.clone(),
+            phase: phase(self.documents.iter().all(|doc| doc.written)),
+            documents: self
+                .documents
+                .iter()
+                .enumerate()
+                .map(|(index, doc)| RecoveryDocumentStatus {
+                    index,
+                    relative_key: doc.relative.clone(),
+                    phase: phase(doc.written),
+                    written: doc.written,
+                })
+                .collect(),
+            damage: self.damage.clone(),
+            warnings: self.warnings.clone(),
+            evidence_actions: self.evidence_actions()?,
+        })
+    }
+
     pub fn len(&self) -> usize {
         self.documents.len()
     }
@@ -732,6 +806,10 @@ impl RecoveryAttempt {
             };
             self.warnings.extend(outcome.warnings);
             self.documents[document].written = true;
+            #[cfg(test)]
+            if let Some(barrier) = self.after_write.take() {
+                barrier(&self.session_path(document)?);
+            }
             self.artifacts = artifacts(
                 self.staging
                     .as_ref()
@@ -879,7 +957,7 @@ mod isolated_recovery_profile;
 mod tests {
     use super::*;
 
-    fn prepared(root: &Path, spart: bool) -> (Session, RecoveryAttempt) {
+    fn reconstructed(root: &Path, spart: bool) -> (Session, RecoveryAttempt) {
         let source = root.join("source");
         std::fs::create_dir_all(&source).unwrap();
         let path = source.join(if spart { "a.spart" } else { "a.fasta" });
@@ -906,14 +984,70 @@ mod tests {
         };
         session.apply(doc, op).unwrap();
         session.flush().unwrap();
-        let mut attempt = prepare_recovery(
+        let attempt = prepare_recovery(
             session.recovery_root(),
             &root.join("final"),
             RecoveryMode::Strict,
         )
         .unwrap();
+        (session, attempt)
+    }
+
+    fn prepared(root: &Path, spart: bool) -> (Session, RecoveryAttempt) {
+        let (session, mut attempt) = reconstructed(root, spart);
         attempt.advance(0, None).unwrap();
         (session, attempt)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn status_retains_written_after_real_post_write_observation_error() {
+        use std::os::unix::fs::PermissionsExt;
+        let Some(root) = isolated_recovery_profile::enter(
+            "replay::tests::status_retains_written_after_real_post_write_observation_error",
+        ) else {
+            return;
+        };
+        let (_session, mut attempt) = reconstructed(&root, false);
+        let check = attempt.check(0).unwrap();
+        let target = check.target().to_path_buf();
+        let original_identity = basecraft_platform::files::identity(&target).unwrap();
+        assert_eq!(
+            attempt.status().unwrap().documents[0].phase,
+            RecoveryPhase::PendingWrite
+        );
+        attempt.after_write = Some(Box::new(|target| {
+            std::fs::set_permissions(target, std::fs::Permissions::from_mode(0)).unwrap();
+        }));
+        let error = attempt
+            .advance(
+                0,
+                Some(check.decide(crate::input_evidence::SavePolicy::Cancel, false)),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            crate::Error::Io(_) | crate::Error::Format(_)
+        ));
+        // The file is still unreadable: status must not re-inspect it. The real
+        // writer succeeded before the owned-stage observation returned its error.
+        let status = attempt.status().unwrap();
+        assert_eq!(status.phase, RecoveryPhase::NeedsFinalization);
+        assert_eq!(status.documents[0].phase, RecoveryPhase::NeedsFinalization);
+        assert!(status.documents[0].written);
+        assert!(!root.join("final").exists());
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let written_identity = basecraft_platform::files::identity(&target).unwrap();
+        assert_ne!(written_identity, original_identity);
+        assert_eq!(std::fs::read(&target).unwrap(), b">gene\nATGT\n");
+        // An untrusted observation requires reconstruction here, not another
+        // write. Status reports the stored fact, never permission to resave.
+        assert!(attempt.advance(0, None).is_err());
+        assert_eq!(
+            basecraft_platform::files::identity(&target).unwrap(),
+            written_identity
+        );
+        assert!(attempt.status().unwrap().documents[0].written);
     }
 
     #[test]
@@ -967,6 +1101,12 @@ mod tests {
         assert!(matches!(failure.cause, crate::Error::Io(_)));
         assert!(failure.completion.registered_stores.is_empty());
         assert_eq!(failure.completion.outputs.len(), 1);
+        let status = attempt.status().unwrap();
+        assert_eq!(status.phase, RecoveryPhase::Published);
+        assert!(status.documents[0].written);
+        assert_eq!(status.documents[0].phase, RecoveryPhase::Published);
+        assert_eq!(status.destination, failure.completion.destination);
+        assert_eq!(status.damage, failure.completion.damage);
         drop(attempt);
         let work = crate::files::load_delimitation(&failure.completion.outputs[0]).unwrap();
         assert_eq!(work.hypotheses.len(), 2);
@@ -991,6 +1131,9 @@ mod tests {
         }));
         assert!(matches!(attempt.publish(), Err(crate::Error::Io(_))));
         assert!(!pre.join("final").exists());
+        let status = attempt.status().unwrap();
+        assert_eq!(status.phase, RecoveryPhase::NeedsFinalization);
+        assert!(status.documents[0].written);
         std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o600)).unwrap();
         drop(attempt);
         let post = root.join("post");
