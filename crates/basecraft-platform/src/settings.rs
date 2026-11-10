@@ -532,6 +532,13 @@ impl SettingsStore {
     pub fn load(&self) -> Result<Preferences, Error> {
         Ok(self.read()?.0)
     }
+    /// Parse a consumed namespace result without reopening its logical path.
+    pub fn load_checked(input: crate::files::CheckedRead) -> Result<Preferences, Error> {
+        match input {
+            crate::files::CheckedRead::File(file) => Ok(Self::parse(file)?.0),
+            crate::files::CheckedRead::Absent(_) => Ok(Preferences::default()),
+        }
+    }
     fn read(&self) -> Result<(Preferences, toml::Value), Error> {
         let file = match File::open(&self.path) {
             Ok(f) => f,
@@ -543,6 +550,9 @@ impl SettingsStore {
             }
             Err(e) => return Err(e.into()),
         };
+        Self::parse(file)
+    }
+    fn parse(file: impl Read) -> Result<(Preferences, toml::Value), Error> {
         let mut text = String::new();
         file.take(MAX_BYTES + 1).read_to_string(&mut text)?;
         if text.len() as u64 > MAX_BYTES {
@@ -664,6 +674,62 @@ fn merge(destination: &mut toml::Value, source: toml::Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    #[test]
+    fn checked_parser_parity_and_read_only_migration() {
+        use crate::files::{CheckedRead, inspect_read_namespace};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("preferences.toml");
+        let store = SettingsStore::new(path.clone());
+        for data in [
+            b"schema_version = 0\n[ui]\nshow_gc = false\n[future]\nvalue = 42\n".to_vec(),
+            b"broken = [".to_vec(),
+            vec![0xff],
+            vec![b' '; MAX_BYTES as usize + 1],
+            {
+                let mut bytes = vec![b' '; MAX_BYTES as usize + 1];
+                bytes[0] = 0xff;
+                bytes
+            },
+            b"[compute]\nlocal_cpu_threads = 0\n".to_vec(),
+        ] {
+            std::fs::write(&path, &data).unwrap();
+            let legacy = store.read();
+            let checked = inspect_read_namespace(&path).unwrap().open_read().unwrap();
+            let CheckedRead::File(file) = checked else {
+                panic!()
+            };
+            let parsed = SettingsStore::parse(file);
+            match (legacy, parsed) {
+                (Ok(a), Ok(b)) => {
+                    assert_eq!(a, b);
+                    assert_eq!(b.1["future"]["value"].as_integer(), Some(42));
+                }
+                (Err(Error::Io(a)), Err(Error::Io(b))) => assert_eq!(a.kind(), b.kind()),
+                (Err(Error::Invalid(a)), Err(Error::Invalid(b))) => assert_eq!(a, b),
+                other => panic!("parser mismatch: {other:?}"),
+            }
+            assert_eq!(std::fs::read(&path).unwrap(), data);
+            assert!(!path.with_extension("toml.lock").exists());
+        }
+        let absent = dir.path().join("missing/preferences.toml");
+        assert_eq!(
+            SettingsStore::load_checked(
+                inspect_read_namespace(&absent)
+                    .unwrap()
+                    .open_read()
+                    .unwrap()
+            )
+            .unwrap(),
+            Preferences::default()
+        );
+        assert!(!dir.path().join("missing").exists());
+        std::fs::write(&path, "[ui]\nshow_gc = false\n").unwrap();
+        let input = inspect_read_namespace(&path).unwrap().open_read().unwrap();
+        std::fs::rename(&path, dir.path().join("old")).unwrap();
+        std::fs::write(&path, "[ui]\nshow_gc = true\n").unwrap();
+        assert!(!SettingsStore::load_checked(input).unwrap().ui.show_gc);
+    }
     #[test]
     fn new_sequence_annotation_shortcuts_remap_and_detect_conflicts() {
         let mut prefs = Preferences::default();
