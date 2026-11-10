@@ -674,7 +674,7 @@ fn merge(destination: &mut toml::Value, source: toml::Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn checked_parser_parity_and_read_only_migration() {
         use crate::files::{CheckedRead, inspect_read_namespace};

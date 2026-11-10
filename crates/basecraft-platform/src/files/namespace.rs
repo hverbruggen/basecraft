@@ -27,8 +27,8 @@ pub enum NamespaceReadError {
 #[derive(Debug)]
 pub struct ReadNamespace {
     _private: (),
-    #[cfg(unix)]
-    inner: unix::Namespace,
+    #[cfg(target_os = "linux")]
+    inner: linux::Namespace,
 }
 #[derive(Debug)]
 pub struct CheckedReadFile(File);
@@ -68,23 +68,23 @@ pub enum CheckedRead {
     Absent(CheckedAbsence),
 }
 
-/// Ordinary Unix backend; only Linux has been qualified by the initial tests.
+/// Ordinary Linux backend. All other targets refuse before filesystem probes.
 pub const fn namespace_read_supported() -> bool {
-    cfg!(unix)
+    cfg!(target_os = "linux")
 }
 
 pub fn inspect_read_namespace(path: &Path) -> Result<ReadNamespace, NamespaceReadError> {
     if !namespace_read_supported() {
         return Err(NamespaceReadError::Unsupported);
     }
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     {
-        unix::inspect(path).map(|inner| ReadNamespace {
+        linux::inspect(path).map(|inner| ReadNamespace {
             _private: (),
             inner,
         })
     }
-    #[cfg(not(unix))]
+    #[cfg(not(target_os = "linux"))]
     {
         let _ = path;
         Err(NamespaceReadError::Unsupported)
@@ -93,19 +93,19 @@ pub fn inspect_read_namespace(path: &Path) -> Result<ReadNamespace, NamespaceRea
 impl ReadNamespace {
     /// Consume once, rechecking the retained lineage before any content open.
     pub fn open_read(self) -> Result<CheckedRead, NamespaceReadError> {
-        #[cfg(unix)]
+        #[cfg(target_os = "linux")]
         {
-            unix::consume(self)
+            linux::consume(self)
         }
-        #[cfg(not(unix))]
+        #[cfg(not(target_os = "linux"))]
         {
             Err(NamespaceReadError::Unsupported)
         }
     }
 }
 
-#[cfg(unix)]
-mod unix {
+#[cfg(target_os = "linux")]
+mod linux {
     use super::{CheckedAbsence, CheckedRead, CheckedReadFile, NamespaceReadError, ReadNamespace};
     use crate::files::{ObjectIdentity, OrdinaryKind, handle_object_identity};
     use rustix::fs::{AtFlags, CWD, FileType, Mode, OFlags, Stat, openat, statat};
@@ -313,17 +313,44 @@ mod unix {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(all(test, target_os = "linux"))]
 #[path = "namespace_read_tests.rs"]
 mod tests;
 
-#[cfg(all(test, not(unix)))]
+#[cfg(all(test, not(target_os = "linux")))]
 mod unsupported_tests {
     #[test]
-    fn unsupported_backend_refuses_without_inspection() {
+    fn unsupported_backend_refuses_existing_missing_and_invalid_paths() {
         assert!(!super::namespace_read_supported());
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("preferences.toml");
+        std::fs::write(&file, "schema_version = 1\n").unwrap();
+        for path in [
+            root.path(),
+            file.as_path(),
+            &root.path().join("missing/leaf"),
+            std::path::Path::new("relative"),
+            std::path::Path::new(""),
+        ] {
+            assert!(matches!(
+                super::inspect_read_namespace(path),
+                Err(super::NamespaceReadError::Unsupported)
+            ));
+        }
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "schema_version = 1\n"
+        );
+        assert!(!root.path().join("missing").exists());
+    }
+
+    #[test]
+    fn unsupported_consumption_cannot_return_a_file_or_absence() {
+        // Only this descendant test module can construct the private sentinel;
+        // public callers cannot construct or obtain a ticket on this backend.
+        let ticket = super::ReadNamespace { _private: () };
         assert!(matches!(
-            super::inspect_read_namespace(std::path::Path::new("arbitrary")),
+            ticket.open_read(),
             Err(super::NamespaceReadError::Unsupported)
         ));
     }
