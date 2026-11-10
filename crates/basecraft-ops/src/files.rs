@@ -175,7 +175,7 @@ pub fn load(path: &Path) -> Result<Loaded> {
 /// Other formats require their existing loaders and are rejected here.
 pub fn load_from(path: &Path, source: Source) -> Result<Loaded> {
     match Format::from_path(path)? {
-        Format::Tree => load_tree_from(path, source, false).map(Loaded::Tree),
+        Format::Tree => load_tree_from(path, &source, false).map(Loaded::Tree),
         Format::Fasta => {
             let file = Arc::new(cache::index_fasta(source)?);
             if file.index.records.is_empty() {
@@ -298,12 +298,12 @@ pub(crate) fn load_tree_from_verified_snapshot(path: &Path) -> Result<OpenedTree
 }
 
 fn load_tree_metadata(path: &Path, verified_snapshot: bool) -> Result<OpenedTree> {
-    load_tree_from(path, Source::open(path)?, verified_snapshot)
+    load_tree_from(path, &Source::open(path)?, verified_snapshot)
 }
 
 pub(crate) fn load_tree_from(
     path: &Path,
-    source: Source,
+    source: &Source,
     verified_snapshot: bool,
 ) -> Result<OpenedTree> {
     let text = std::str::from_utf8(source.bytes())

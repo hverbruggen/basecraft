@@ -578,7 +578,7 @@ impl Session {
         let companion_hashes = hash_companions()?;
         let content = if let Some(source) = source {
             if verified_snapshot && format == files::Format::Tree {
-                Loaded::Tree(files::load_tree_from(path, source, true)?)
+                Loaded::Tree(files::load_tree_from(path, &source, true)?)
             } else {
                 files::load_from(path, source)?
             }
