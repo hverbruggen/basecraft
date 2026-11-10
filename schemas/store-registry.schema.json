@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "StoreRegistry",
+  "description": "Version-one `analysis-stores.json` in application state. These are LOCAL\nabsolute machine paths, not portable project references. Runtime readers\nenforce version 1, the 1 MiB file bound and at most 4096 absolute paths.",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "stores": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "stores"
+  ]
+}

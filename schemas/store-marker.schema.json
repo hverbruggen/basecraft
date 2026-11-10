@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "StoreMarker",
+  "description": "`store.json` in an existing `analyses-v1` namespace. Runtime readers also\nenforce version 1, ordinary-file safety and the existing 4096-byte limit.",
+  "type": "object",
+  "properties": {
+    "format": {
+      "$ref": "#/$defs/StoreFormat"
+    },
+    "schema_version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": true,
+  "required": [
+    "format",
+    "schema_version"
+  ],
+  "$defs": {
+    "StoreFormat": {
+      "description": "Namespace identity; foreign markers must never be claimed or migrated.",
+      "type": "string",
+      "enum": [
+        "basecraft.analysis-store"
+      ]
+    }
+  }
+}
