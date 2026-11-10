@@ -563,16 +563,12 @@ impl Session {
         let accepted_hash = basecraft_io::hash_file(path)?;
         let format = files::Format::from_path(path)?;
         // Files read with the main one: a sidecar, or a metadata manifest's tables.
-        let companions =
-            crate::documents::companions(format, path).unwrap_or_else(|| match format {
-                files::Format::Metadata => crate::metadata::files(path).split_off(1),
-                files::Format::Tree | files::Format::Delimitation => {
-                    vec![files::tree_sidecar(path)]
-                }
-                files::Format::GenBank | files::Format::Fasta => vec![files::gff_sidecar(path)],
-                // Migrated formats were handled above.
-                _ => Vec::new(),
-            });
+        let companions = match format {
+            files::Format::Metadata => crate::metadata::files(path).split_off(1),
+            files::Format::Tree | files::Format::Delimitation => vec![files::tree_sidecar(path)],
+            files::Format::GenBank | files::Format::Fasta => vec![files::gff_sidecar(path)],
+            files::Format::Submission => crate::documents::submission_companions(path),
+        };
         let hash_companions = || -> Result<Vec<Option<String>>> {
             companions
                 .iter()
@@ -2198,7 +2194,7 @@ impl Session {
                 files::write_tree_sidecar_at(&t.doc, &hw.hash(), &mut side)?;
                 return Ok(vec![hw.hash(), side.hash()]);
             }
-            migrated => {
+            migrated @ Loaded::Submission(_) => {
                 let document = migrated
                     .as_document()
                     .ok_or_else(|| invalid("document interface unavailable"))?;

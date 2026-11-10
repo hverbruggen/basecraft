@@ -32,11 +32,5 @@ pub(crate) trait Document {
     fn saved_hashes(&self, target: &Path) -> Result<Vec<String>>;
 }
 
-/// Discovery must precede loading so Session can verify the entire input set.
-/// `None` means a legacy format, not that it has no companions.
-pub(crate) fn companions(format: Format, target: &Path) -> Option<Vec<PathBuf>> {
-    match format {
-        Format::Submission => Some(submission::companions(target)),
-        _ => None,
-    }
-}
+// Discovery precedes payload loading, so it cannot borrow a Document yet.
+pub(crate) use submission::companions as submission_companions;

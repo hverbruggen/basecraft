@@ -10,7 +10,7 @@ use crate::error::invalid;
 use crate::files::Format;
 use crate::session::Inverse;
 
-pub(super) fn companions(_target: &Path) -> Vec<PathBuf> {
+pub(crate) fn companions(_target: &Path) -> Vec<PathBuf> {
     Vec::new()
 }
 
