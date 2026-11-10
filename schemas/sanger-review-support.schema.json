@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ReviewSupport",
+  "type": "object",
+  "properties": {
+    "hash": {
+      "type": "string"
+    },
+    "path": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": true,
+  "required": [
+    "path",
+    "hash"
+  ]
+}

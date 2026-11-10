@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ReviewSource",
+  "type": "object",
+  "properties": {
+    "ledger": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "original": {
+      "type": "string"
+    },
+    "path": {
+      "type": "string"
+    },
+    "reference": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/InputReference"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "sha256": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": true,
+  "required": [
+    "original",
+    "sha256",
+    "path"
+  ],
+  "$defs": {
+    "FileStamp": {
+      "description": "Cheap change signal captured during an existing verified read. Matching time\nand length alone do not prove content identity.",
+      "type": "object",
+      "properties": {
+        "device": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "inode": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "modified_nanos": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "modified_seconds": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "size": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "size",
+        "modified_seconds",
+        "modified_nanos"
+      ]
+    },
+    "InputReference": {
+      "type": "object",
+      "properties": {
+        "hash": {
+          "description": "Source bytes hash reused from the verified document read.",
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "stamp": {
+          "$ref": "#/$defs/FileStamp"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "path",
+        "stamp",
+        "hash"
+      ]
+    }
+  }
+}
