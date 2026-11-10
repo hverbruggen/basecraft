@@ -1,6 +1,7 @@
 //! Transient save decisions. No consent is written to disk or deserialised.
 use std::path::{Path, PathBuf};
 
+use basecraft_platform::files::ObjectIdentity;
 use serde::Serialize;
 
 use super::{DocId, Session};
@@ -24,7 +25,7 @@ struct SaveScope {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     additional_evidence: Vec<EvidenceCheck>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    publication: Option<(PathBuf, (u64, u64))>,
+    publication: Option<(PathBuf, ObjectIdentity)>,
     finalization: bool,
     session: String,
     document: usize,
@@ -34,6 +35,12 @@ struct SaveScope {
     accepted_hashes: Vec<(String, String)>,
     target: PathBuf,
     target_revision: Option<TargetRevision>,
+}
+
+impl SaveScope {
+    fn revision(&self) -> Result<String> {
+        Ok(basecraft_io::hash_bytes(&serde_json::to_vec(self)?))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -293,7 +300,7 @@ impl Session {
         };
         // The digest includes all typed evidence and document/target context.
         // It is private authority, never reconstructed from a wire snapshot.
-        let scope_revision = basecraft_io::hash_bytes(&serde_json::to_vec(&scope)?);
+        let scope_revision = scope.revision()?;
         Ok(SaveCheck {
             token: String::new(),
             scope,
@@ -356,7 +363,7 @@ impl Session {
         let mut check =
             self.save_check_scope(id, &target, crate::input_evidence::check(&target)?)?;
         check.scope.finalization = true;
-        check.scope_revision = basecraft_io::hash_bytes(&serde_json::to_vec(&check.scope)?);
+        check.scope_revision = check.scope.revision()?;
         Ok(check)
     }
 
@@ -450,5 +457,143 @@ impl Session {
     }
     pub(crate) fn discard_recovery_decision(&self, decision: &SaveDecision) -> Result<()> {
         self.consume_save_check(decision).map(|_| ())
+    }
+}
+
+#[cfg(test)]
+#[path = "../../tests/support/isolated_profile.rs"]
+mod isolated_identity_profile;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use basecraft_platform::files::{OrdinaryKind, object_identity};
+
+    fn recovery_session(root: &Path) -> (Session, DocId, PathBuf, PathBuf) {
+        let stage = root.join("stage");
+        let parent = root.join("parent");
+        std::fs::create_dir(&stage).unwrap();
+        std::fs::create_dir(&parent).unwrap();
+        let target = stage.join("a.fasta");
+        std::fs::write(&target, b">gene\nACGT\n").unwrap();
+        let mut session = Session::unlogged(&stage);
+        let doc = session.open(&target).unwrap();
+        session
+            .apply(
+                doc,
+                basecraft_protocol::Op::SeqReplace {
+                    start: 1,
+                    end: 2,
+                    residues: "T".into(),
+                },
+            )
+            .unwrap();
+        session.recovery_placement(stage, parent.join("out"));
+        (session, doc, target, parent)
+    }
+
+    #[test]
+    fn actual_json_scope_digest_retains_all_identity_bits_and_variant() {
+        let Some(root) = isolated_identity_profile::enter(
+            "session::save_decision::tests::actual_json_scope_digest_retains_all_identity_bits_and_variant",
+        ) else {
+            return;
+        };
+        let (session, doc, _, parent) = recovery_session(&root);
+        let mut baseline = session.recovery_check(doc, false).unwrap();
+        assert_eq!(
+            baseline.scope.publication.as_ref().unwrap().1,
+            object_identity(&parent, OrdinaryKind::Directory).unwrap()
+        );
+        assert_eq!(baseline.scope_revision, baseline.scope.revision().unwrap());
+        // Synthetic Windows values exercise the very same typed SaveScope JSON
+        // digest used by production, even when this test runs on Unix.
+        baseline.scope.publication.as_mut().unwrap().1 = ObjectIdentity::Windows {
+            volume_serial: 0,
+            file_id: [0; 16],
+        };
+        baseline.scope_revision = baseline.scope.revision().unwrap();
+        let mut digests = std::collections::BTreeSet::new();
+        digests.insert(baseline.scope_revision.clone());
+        for bit in 0..64 {
+            let mut changed = baseline.clone();
+            changed.scope.publication.as_mut().unwrap().1 = ObjectIdentity::Windows {
+                volume_serial: 1_u64 << bit,
+                file_id: [0; 16],
+            };
+            changed.scope_revision = changed.scope.revision().unwrap();
+            let wire = serde_json::to_value(&changed).unwrap();
+            assert_eq!(
+                wire["publication"][1]["volume_serial"].as_u64(),
+                Some(1_u64 << bit)
+            );
+            assert_eq!(wire["publication"][1]["platform"], "windows");
+            assert!(!changed.same_scope(&baseline), "volume bit {bit}");
+            assert!(digests.insert(changed.scope_revision), "volume bit {bit}");
+        }
+        for bit in 0..128 {
+            let mut bytes = [0; 16];
+            bytes[bit / 8] = 1 << (bit % 8);
+            let mut changed = baseline.clone();
+            changed.scope.publication.as_mut().unwrap().1 = ObjectIdentity::Windows {
+                volume_serial: 0,
+                file_id: bytes,
+            };
+            changed.scope_revision = changed.scope.revision().unwrap();
+            let wire = serde_json::to_value(&changed).unwrap();
+            assert_eq!(wire["publication"][1]["file_id"], serde_json::json!(bytes));
+            assert!(!changed.same_scope(&baseline), "file ID bit {bit}");
+            assert!(digests.insert(changed.scope_revision), "file ID bit {bit}");
+        }
+        let mut unix = baseline.clone();
+        unix.scope.publication.as_mut().unwrap().1 = ObjectIdentity::Unix {
+            device: 0,
+            inode: 0,
+        };
+        unix.scope_revision = unix.scope.revision().unwrap();
+        assert_eq!(
+            serde_json::to_value(&unix).unwrap()["publication"][1]["platform"],
+            "unix"
+        );
+        assert!(!unix.same_scope(&baseline));
+        assert!(digests.insert(unix.scope_revision));
+        assert_eq!(digests.len(), 194);
+    }
+
+    #[test]
+    fn changed_full_parent_identity_spends_receipt_and_returns_stale_scope() {
+        let Some(root) = isolated_identity_profile::enter(
+            "session::save_decision::tests::changed_full_parent_identity_spends_receipt_and_returns_stale_scope",
+        ) else {
+            return;
+        };
+        let (mut session, doc, target, parent) = recovery_session(&root);
+        let check = session.recovery_check(doc, false).unwrap();
+        let old_identity = check.scope.publication.as_ref().unwrap().1.clone();
+        // Retain the old object so this does not assume IDs cannot be recycled.
+        std::fs::rename(&parent, root.join("old-parent")).unwrap();
+        std::fs::create_dir(&parent).unwrap();
+        let new_identity = object_identity(&parent, OrdinaryKind::Directory).unwrap();
+        assert_ne!(old_identity, new_identity);
+        let error = session
+            .save_with_decision(
+                doc,
+                Some(&target),
+                check.clone().decide(SavePolicy::Cancel, false),
+            )
+            .unwrap_err();
+        let crate::Error::SaveDecisionStale(fresh) = error else {
+            panic!("expected stale receipt")
+        };
+        assert_eq!(fresh.scope.publication.as_ref().unwrap().1, new_identity);
+        assert!(!fresh.same_scope(&check));
+        assert!(
+            !session
+                .consume_save_check(&check.decide(SavePolicy::Cancel, false))
+                .unwrap()
+        );
+        assert_eq!(std::fs::read(target).unwrap(), b">gene\nACGT\n");
+        // This tests the lower Session boundary only: RecoveryAttempt separately
+        // rejects the changed pinned parent, rather than adopting fresh identity.
     }
 }

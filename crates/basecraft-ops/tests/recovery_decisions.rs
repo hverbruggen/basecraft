@@ -4,6 +4,7 @@ use basecraft_ops::{
     input_evidence::SavePolicy,
     replay::{self, RecoveryMode},
 };
+use basecraft_platform::files::{OrdinaryKind, object_identity};
 use basecraft_protocol::Op;
 use std::path::{Path, PathBuf};
 #[path = "support/isolated_profile.rs"]
@@ -64,12 +65,12 @@ fn complete_multiple_documents_publish_once_without_rewriting() {
     let check = attempt.check(0).unwrap();
     let stage = check.target().parent().unwrap().to_path_buf();
     attempt.advance(0, None).unwrap();
-    let first = basecraft_platform::files::identity(check.target()).unwrap();
+    let first = object_identity(check.target(), OrdinaryKind::File).unwrap();
     attempt.advance(1, None).unwrap();
     let complete = attempt.publish().unwrap();
     assert_eq!(complete.outputs.len(), 2);
     assert_eq!(
-        basecraft_platform::files::identity(&complete.outputs[0]).unwrap(),
+        object_identity(&complete.outputs[0], OrdinaryKind::File).unwrap(),
         first
     );
     assert!(!stage.exists());
@@ -93,7 +94,7 @@ fn changed_inventory_requires_fresh_final_consent_without_resaving() {
             .unwrap();
     let path = attempt.check(0).unwrap().target().to_path_buf();
     attempt.advance(0, None).unwrap();
-    let first = basecraft_platform::files::identity(&path).unwrap();
+    let first = object_identity(&path, OrdinaryKind::File).unwrap();
     damage();
     let second = required(attempt.advance(1, None).unwrap_err());
     attempt
@@ -117,7 +118,7 @@ fn changed_inventory_requires_fresh_final_consent_without_resaving() {
     attempt
         .advance(0, Some(refused.decide(SavePolicy::Cancel, true)))
         .unwrap();
-    assert_eq!(basecraft_platform::files::identity(&path).unwrap(), first);
+    assert_eq!(object_identity(&path, OrdinaryKind::File).unwrap(), first);
     attempt.publish().unwrap();
 }
 
@@ -194,7 +195,13 @@ fn same_bytes_replacement_and_cancel_preserve_originals() {
     let stage = target.parent().unwrap().to_path_buf();
     attempt.advance(0, None).unwrap();
     let bytes = std::fs::read(&target).unwrap();
-    basecraft_io::write_atomic(&target, |w| w.write_all(&bytes)).unwrap();
+    let retained = root.join("retained-old-staged-file");
+    std::fs::rename(&target, &retained).unwrap();
+    std::fs::write(&target, &bytes).unwrap();
+    assert_ne!(
+        object_identity(&target, OrdinaryKind::File).unwrap(),
+        object_identity(&retained, OrdinaryKind::File).unwrap()
+    );
     assert!(attempt.publish().is_err());
     attempt.cancel();
     assert!(!stage.exists());
@@ -218,7 +225,7 @@ fn destination_competitors_and_replaced_parent_fail_closed() {
         return;
     };
     let session = source(&root, 1);
-    for kind in 0..4 {
+    for kind in 0..3 {
         let destination = root.join(format!("competitor-{kind}"));
         let mut attempt =
             replay::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
@@ -227,13 +234,9 @@ fn destination_competitors_and_replaced_parent_fail_closed() {
         match kind {
             0 => std::fs::write(&destination, b"competitor").unwrap(),
             1 => std::fs::create_dir(&destination).unwrap(),
-            2 => {
+            _ => {
                 std::fs::create_dir(&destination).unwrap();
                 std::fs::write(destination.join("owned"), b"competitor").unwrap();
-            }
-            _ => {
-                #[cfg(unix)]
-                std::os::unix::fs::symlink(root.join("missing"), &destination).unwrap();
             }
         }
         assert!(attempt.publish().is_err());
@@ -829,5 +832,128 @@ fn status_is_read_only_and_tracks_document_progress_without_slot_ids() {
     assert_eq!(
         attempt.status().unwrap().documents[0].relative_key,
         "0.fasta"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn unix_dangling_destination_is_occupied() {
+    let Some(root) = isolated_profile::enter("unix_dangling_destination_is_occupied") else {
+        return;
+    };
+    let session = source(&root, 1);
+    let destination = root.join("out");
+    let mut attempt =
+        replay::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
+            .unwrap();
+    attempt.advance(0, None).unwrap();
+    std::os::unix::fs::symlink("missing", &destination).unwrap();
+    assert!(attempt.publish().is_err());
+    assert!(
+        replay::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
+            .is_err()
+    );
+    assert_eq!(
+        std::fs::read_link(&destination).unwrap(),
+        Path::new("missing")
+    );
+}
+
+#[cfg(windows)]
+#[path = "support/recovery_windows.rs"]
+mod recovery_windows;
+
+#[cfg(windows)]
+#[test]
+#[ignore = "requires native Windows NTFS, cmd.exe junction creation and symlink privilege/Developer Mode; run with --ignored"]
+fn windows_reparse_destinations_are_occupied() {
+    let Some(root) = recovery_windows::enter("windows_reparse_destinations_are_occupied") else {
+        return;
+    };
+    let session = source(&root, 1);
+    let external = root.join("external");
+    std::fs::create_dir(&external).unwrap();
+    std::fs::write(external.join("owned"), b"external").unwrap();
+    for junction in [false, true] {
+        let destination = root.join(if junction { "junction" } else { "dangling" });
+        let mut attempt =
+            replay::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
+                .unwrap();
+        attempt.advance(0, None).unwrap();
+        recovery_windows::competitor(&destination, &external, junction);
+        assert!(attempt.publish().is_err());
+        assert!(
+            replay::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
+                .is_err()
+        );
+        recovery_windows::assert_reparse(&destination);
+        assert_eq!(std::fs::read(external.join("owned")).unwrap(), b"external");
+    }
+}
+
+#[test]
+fn replaced_stage_directory_is_refused_with_file_identity_unchanged() {
+    let Some(root) =
+        isolated_profile::enter("replaced_stage_directory_is_refused_with_file_identity_unchanged")
+    else {
+        return;
+    };
+    let mut session = source(&root, 1);
+    let nested = root.join("source/nested");
+    std::fs::create_dir(&nested).unwrap();
+    let file = nested.join("other.fasta");
+    std::fs::write(&file, b">other\nACGT\n").unwrap();
+    let doc = session.open(&file).unwrap();
+    session
+        .apply(
+            doc,
+            Op::SeqReplace {
+                start: 1,
+                end: 2,
+                residues: "T".into(),
+            },
+        )
+        .unwrap();
+    session.flush().unwrap();
+    let destination = root.join("out");
+    let mut attempt =
+        replay::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
+            .unwrap();
+    let stage = attempt
+        .check(0)
+        .unwrap()
+        .target()
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    for document in 0..attempt.len() {
+        attempt.advance(document, None).unwrap();
+    }
+    let before = object_identity(&stage.join("nested/other.fasta"), OrdinaryKind::File).unwrap();
+    let retained = root.join("retained-stage-directory");
+    std::fs::rename(stage.join("nested"), &retained).unwrap();
+    std::fs::create_dir(stage.join("nested")).unwrap();
+    std::fs::rename(
+        retained.join("other.fasta"),
+        stage.join("nested/other.fasta"),
+    )
+    .unwrap();
+    assert_eq!(
+        object_identity(&stage.join("nested/other.fasta"), OrdinaryKind::File).unwrap(),
+        before
+    );
+    assert_ne!(
+        object_identity(&retained, OrdinaryKind::Directory).unwrap(),
+        object_identity(&stage.join("nested"), OrdinaryKind::Directory).unwrap()
+    );
+    assert!(attempt.publish().is_err());
+    assert!(!destination.exists());
+    assert!(
+        attempt
+            .status()
+            .unwrap()
+            .documents
+            .iter()
+            .all(|doc| doc.written)
     );
 }

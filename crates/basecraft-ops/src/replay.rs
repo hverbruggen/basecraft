@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use basecraft_platform::files::{ObjectIdentity, OrdinaryKind, object_identity};
 use basecraft_protocol::{LogEntry, Op};
 
 use crate::session::{DocId, Session, objects_dir};
@@ -465,7 +466,7 @@ pub struct RecoveryAttempt {
     session: Session,
     staging: Option<tempfile::TempDir>,
     destination: PathBuf,
-    parent_identity: (u64, u64),
+    parent_identity: ObjectIdentity,
     documents: Vec<RecoveryDocument>,
     artifacts: Vec<ArtifactObservation>,
     warnings: Vec<crate::session::SaveWarning>,
@@ -552,28 +553,12 @@ pub struct PublishedWithFailure {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ArtifactObservation {
     path: PathBuf,
-    identity: (u64, u64),
+    identity: ObjectIdentity,
     revision: Option<(String, basecraft_protocol::provenance::FileStamp)>,
 }
 
-pub(crate) fn directory_identity(path: &Path) -> Result<(u64, u64)> {
-    let metadata = std::fs::symlink_metadata(path)?;
-    if !metadata.is_dir() || metadata.file_type().is_symlink() {
-        return Err(crate::error::invalid(
-            "recovery parent is not an ordinary directory",
-        ));
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        Ok((metadata.dev(), metadata.ino()))
-    }
-    #[cfg(not(unix))]
-    {
-        Err(crate::error::invalid(
-            "recovery directory identity is unsupported on this platform",
-        ))
-    }
+pub(crate) fn directory_identity(path: &Path) -> Result<ObjectIdentity> {
+    Ok(object_identity(path, OrdinaryKind::Directory)?)
 }
 
 /// Enumerate only the owned stage, never external stores or arbitrary trees.
@@ -585,7 +570,7 @@ fn artifacts(root: &Path) -> Result<Vec<ArtifactObservation>> {
             (directory_identity(path)?, None)
         } else if metadata.is_file() && !metadata.file_type().is_symlink() {
             (
-                basecraft_platform::files::identity(path)?,
+                object_identity(path, OrdinaryKind::File)?,
                 Some((
                     basecraft_io::hash_file(path)?,
                     crate::input_evidence::stamp(path)?,
@@ -949,6 +934,10 @@ impl RecoveryAttempt {
     }
 }
 
+#[cfg(all(test, windows))]
+#[path = "../tests/support/recovery_windows.rs"]
+mod recovery_windows;
+
 #[cfg(test)]
 #[path = "../tests/support/isolated_profile.rs"]
 mod isolated_recovery_profile;
@@ -1011,7 +1000,7 @@ mod tests {
         let (_session, mut attempt) = reconstructed(&root, false);
         let check = attempt.check(0).unwrap();
         let target = check.target().to_path_buf();
-        let original_identity = basecraft_platform::files::identity(&target).unwrap();
+        let original_identity = object_identity(&target, OrdinaryKind::File).unwrap();
         assert_eq!(
             attempt.status().unwrap().documents[0].phase,
             RecoveryPhase::PendingWrite
@@ -1037,14 +1026,14 @@ mod tests {
         assert!(status.documents[0].written);
         assert!(!root.join("final").exists());
         std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
-        let written_identity = basecraft_platform::files::identity(&target).unwrap();
+        let written_identity = object_identity(&target, OrdinaryKind::File).unwrap();
         assert_ne!(written_identity, original_identity);
         assert_eq!(std::fs::read(&target).unwrap(), b">gene\nATGT\n");
         // An untrusted observation requires reconstruction here, not another
         // write. Status reports the stored fact, never permission to resave.
         assert!(attempt.advance(0, None).is_err());
         assert_eq!(
-            basecraft_platform::files::identity(&target).unwrap(),
+            object_identity(&target, OrdinaryKind::File).unwrap(),
             written_identity
         );
         assert!(attempt.status().unwrap().documents[0].written);
@@ -1057,25 +1046,83 @@ mod tests {
         ) else {
             return;
         };
-        for kind in 0..4 {
+        for kind in 0..3 {
             let case = root.join(kind.to_string());
             std::fs::create_dir(&case).unwrap();
             let (_session, mut attempt) = prepared(&case, false);
             attempt.before_promote = Some(Box::new(move |destination| match kind {
                 0 => std::fs::write(destination, "competitor").unwrap(),
                 1 => std::fs::create_dir(destination).unwrap(),
-                2 => {
+                _ => {
                     std::fs::create_dir(destination).unwrap();
                     std::fs::write(destination.join("owned"), "competitor").unwrap();
-                }
-                _ => {
-                    #[cfg(unix)]
-                    std::os::unix::fs::symlink("missing", destination).unwrap();
                 }
             }));
             assert!(matches!(attempt.publish(), Err(crate::Error::Io(_))));
             assert!(!attempt.published);
             assert!(std::fs::symlink_metadata(case.join("final")).is_ok());
+            if kind == 0 {
+                assert_eq!(std::fs::read(case.join("final")).unwrap(), b"competitor");
+            }
+            if kind == 2 {
+                assert_eq!(
+                    std::fs::read(case.join("final/owned")).unwrap(),
+                    b"competitor"
+                );
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn final_noreplace_barrier_preserves_unix_dangling_link() {
+        let Some(root) = isolated_recovery_profile::enter(
+            "replay::tests::final_noreplace_barrier_preserves_unix_dangling_link",
+        ) else {
+            return;
+        };
+        let (_session, mut attempt) = prepared(&root, false);
+        attempt.before_promote = Some(Box::new(|destination| {
+            std::os::unix::fs::symlink("missing", destination).unwrap();
+            assert!(
+                std::fs::symlink_metadata(destination)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            );
+        }));
+        assert!(matches!(attempt.publish(), Err(crate::Error::Io(_))));
+        assert_eq!(
+            std::fs::read_link(root.join("final")).unwrap(),
+            Path::new("missing")
+        );
+        assert!(!attempt.published);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires native Windows NTFS, cmd.exe junction creation and symlink privilege/Developer Mode; run with --ignored"]
+    fn final_noreplace_barrier_preserves_windows_reparse_competitors() {
+        let Some(root) = super::recovery_windows::enter(
+            "replay::tests::final_noreplace_barrier_preserves_windows_reparse_competitors",
+        ) else {
+            return;
+        };
+        for junction in [false, true] {
+            let case = root.join(if junction { "junction" } else { "dangling" });
+            std::fs::create_dir(&case).unwrap();
+            let (_session, mut attempt) = prepared(&case, false);
+            let external = case.join("external");
+            std::fs::create_dir(&external).unwrap();
+            std::fs::write(external.join("owned"), b"external").unwrap();
+            let target = external.clone();
+            attempt.before_promote = Some(Box::new(move |destination| {
+                super::recovery_windows::competitor(destination, &target, junction);
+            }));
+            assert!(matches!(attempt.publish(), Err(crate::Error::Io(_))));
+            super::recovery_windows::assert_reparse(&case.join("final"));
+            assert_eq!(std::fs::read(external.join("owned")).unwrap(), b"external");
+            assert!(!attempt.published);
         }
     }
 
