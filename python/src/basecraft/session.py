@@ -317,6 +317,25 @@ class Session:
         """Open a project document. Returns its state, including the document ID."""
         return self.call("open", {"path": str(path)})
 
+    def delimitation_candidates(self, paths):
+        """Inspect saved hypotheses in recommendation order without writing."""
+        return self.call("delimitation_candidates", {"paths": [str(p) for p in paths]})
+
+    def delimitation_name(self, paths):
+        """Suggest a free combined SPART filename; does not reserve it."""
+        return self.call("delimitation_name", {"paths": [str(p) for p in paths]})["path"]
+
+    def combine_delimitation(self, paths, output, *, selection=None):
+        """Combine saved hypotheses into a new file using this session's actor.
+
+        Omit selection to keep all. A supplied map names input paths and explicit
+        hypothesis IDs; missing paths keep none. Existing files are refused.
+        """
+        arguments = {"paths": [str(p) for p in paths], "output": str(output)}
+        if selection is not None:
+            arguments["selection"] = {str(p): list(ids) for p, ids in selection.items()}
+        return self.call("delimitation_combine", arguments)
+
     def documents(self):
         return self.call("documents")
 

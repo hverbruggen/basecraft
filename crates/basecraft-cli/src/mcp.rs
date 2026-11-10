@@ -103,6 +103,7 @@ impl Server {
             name,
             "apply"
                 | "save"
+                | "delimitation_combine"
                 | "import_support"
                 | "extract"
                 | "undo"
@@ -247,6 +248,47 @@ impl Server {
                 )?;
                 self.session.flush()?;
                 Ok(json!({"output":target,"hash":basecraft_io::hash_file(&target)?}))
+            }
+            "delimitation_candidates" | "delimitation_name" | "delimitation_combine" => {
+                let paths: Vec<String> = serde_json::from_value(
+                    args.get("paths").cloned().ok_or("Provide input paths")?,
+                )?;
+                let paths = paths
+                    .iter()
+                    .map(|path| self.path(path))
+                    .collect::<Result<Vec<_>>>()?;
+                if name == "delimitation_candidates" {
+                    return Ok(serde_json::to_value(
+                        basecraft_ops::delimitation::combine_candidates(&paths)?,
+                    )?);
+                }
+                if name == "delimitation_name" {
+                    return Ok(json!({"path": basecraft_ops::delimitation::combined_path(&paths)}));
+                }
+                let output = self.path(text(args, "output")?)?;
+                let keep: Option<basecraft_ops::delimitation::CombineSelection> = args
+                    .get("selection")
+                    .cloned()
+                    .map(serde_json::from_value)
+                    .transpose()?;
+                let keep = keep
+                    .map(|keep| {
+                        keep.into_iter()
+                            .map(|(path, ids)| {
+                                let text = path.to_str().ok_or("Selection path must be UTF-8")?;
+                                Ok((self.path(text)?, ids))
+                            })
+                            .collect::<Result<basecraft_ops::delimitation::CombineSelection>>()
+                    })
+                    .transpose()?;
+                let doc = basecraft_ops::delimitation::combine_to(
+                    &mut self.session,
+                    &paths,
+                    &output,
+                    keep.as_ref(),
+                )?;
+                self.documents.insert(doc.0, doc);
+                Ok(json!({"output":output,"document":doc.0}))
             }
             "import_support" => {
                 let doc = self.doc(args)?;
@@ -501,6 +543,9 @@ fn tools() -> Value {
         tool("save","Save a document, optionally to a new project path. An existing other file is never replaced.",json!({"document":doc,"path":string}), &["document"]),
         tool("file_record","Read history and methods for a saved project file as it is on disk, including saved Sanger reviews. Same output as `basecraft history --json`; writes nothing.",json!({"path":string}), &["path"]),
         tool("extract","Extract the inspected sequence revision to a new GenBank file with source ancestry. Coordinates are zero-based, half-open; optional splice segments are in biological order, followed by optional reverse complement. Existing destinations are refused.",json!({"document":doc,"version":{"type":"integer","minimum":0},"path":string,"start":{"type":"integer","minimum":0},"end":{"type":"integer","minimum":0},"segments":{"type":"array","items":{"type":"array","items":{"type":"integer","minimum":0},"minItems":2,"maxItems":2}},"reverse":{"type":"boolean"}}), &["document","version","path","start","end"]),
+        tool("delimitation_candidates","Inspect saved species hypotheses in recommendation order, without writing records.",json!({"paths":{"type":"array","items":{"type":"string"}}}), &["paths"]),
+        tool("delimitation_name","Suggest a free combined SPART filename beside the last input; writes nothing.",json!({"paths":{"type":"array","items":{"type":"string"}}}), &["paths"]),
+        tool("delimitation_combine","Combine explicit saved hypotheses into a new file. Omitted selection keeps all; supplied selection maps input paths to hypothesis IDs, with missing paths keeping none. Existing output or companion is refused. Requires writes.",json!({"paths":{"type":"array","items":{"type":"string"},"minItems":2},"output":string,"selection":{"type":"object","additionalProperties":{"type":"array","items":{"type":"string"}}}}), &["paths","output"]),
         tool("import_support","Add the support values of another project tree file to an open tree as one undoable edit. The source is recorded as a referenced input. An empty or omitted name keeps the source's set names.",json!({"document":doc,"path":string,"name":string}), &["document","path"]),
         tool("provenance_inspect","Read the provenance publication of a saved project result.",json!({"path":string}), &["path"]),
         tool("provenance_verify","Check a saved result against its recorded hashes and retained inputs; runs no tools.",json!({"path":string}), &["path"]),

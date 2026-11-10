@@ -1,5 +1,6 @@
 //! The `basecraft` command-line tool.
 
+mod delimitation;
 mod mcp;
 mod metadata;
 mod operations;
@@ -20,6 +21,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Inspect and combine saved species hypotheses through the shared workflow.
+    Delimitation {
+        #[command(subcommand)]
+        action: delimitation::DelimitationCommand,
+    },
     /// Create an independent DNA sequence as a new GenBank file.
     NewSequence {
         #[arg(long)]
@@ -212,6 +218,7 @@ fn save_policy(name: &str) -> Result<basecraft_ops::input_evidence::SavePolicy, 
 
 fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
+        Command::Delimitation { action } => delimitation::run(action)?,
         Command::Plugins { action } => operations::plugins(action)?,
         Command::Operations { action } => operations::operations(action)?,
         Command::Metadata { action } => metadata::run(action)?,

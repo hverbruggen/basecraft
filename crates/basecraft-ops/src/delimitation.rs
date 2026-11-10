@@ -3,7 +3,7 @@ use crate::{DocId, Result, Session, error::invalid, files};
 use basecraft_protocol::{Op, delimitation::DelimitationEdit};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 /// Publish a new canonical exchange file without replacing a user file. The
@@ -336,6 +336,15 @@ pub fn combine_selected(
                 "A source changed while combining; retry with unchanged files",
             ));
         }
+        if let Some(wanted) = keep.and_then(|keep| keep.get(path)) {
+            let available = work.hypotheses.iter().map(|h| h.id.clone()).collect();
+            if !wanted.is_subset(&available) {
+                return Err(invalid(format!(
+                    "Selected hypothesis no longer exists in {}",
+                    path.display()
+                )));
+            }
+        }
         let anchor = session.root().join(session.doc_key(doc));
         if work
             .specimens
@@ -400,6 +409,10 @@ pub fn combine_selected(
         }
     }
     if hypotheses.is_empty() {
+        // A deliberate selection may keep hypotheses only from the first file.
+        if keep.is_some() && !session.delimitation(doc).hypotheses.is_empty() {
+            return Ok(());
+        }
         return Err(invalid("The selected files contain no hypotheses"));
     }
     session.apply(
@@ -409,4 +422,176 @@ pub fn combine_selected(
         },
     )?;
     Ok(())
+}
+
+/// Explicit hypothesis IDs by source path. Missing files in a supplied map keep
+/// no hypotheses; an absent map keeps all hypotheses.
+pub type CombineSelection = BTreeMap<PathBuf, BTreeSet<String>>;
+
+/// Candidate data, independent of GUI labels or Qt. This is a transient query,
+/// not a new saved format.
+#[derive(Debug, serde::Serialize)]
+pub struct CombineCandidate {
+    pub hypothesis: basecraft_protocol::delimitation::Hypothesis,
+    pub best: bool,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct CombineFile {
+    pub path: PathBuf,
+    pub file: Option<String>,
+    pub specimens: usize,
+    pub hypotheses: Vec<CombineCandidate>,
+}
+
+/// Inspect saved hypotheses in stable recommendation order without writing.
+pub fn combine_candidates(paths: &[PathBuf]) -> Result<Vec<CombineFile>> {
+    use basecraft_protocol::delimitation::HypothesisOrigin;
+    paths
+        .iter()
+        .map(|path| {
+            let work = files::load_delimitation(path)?;
+            let mut hypotheses: Vec<_> = work
+                .hypotheses
+                .into_iter()
+                .map(|hypothesis| {
+                    let best = ["asap_rank", "gmyc_rank"]
+                        .iter()
+                        .any(|key| hypothesis.attributes.get(*key).is_some_and(|r| r == "1"))
+                        || (hypothesis.origin == HypothesisOrigin::Inferred
+                            && !hypothesis.attributes.contains_key("asap_rank")
+                            && !hypothesis.attributes.contains_key("gmyc_rank"));
+                    CombineCandidate { hypothesis, best }
+                })
+                .collect();
+            hypotheses.sort_by_key(|entry| {
+                (
+                    !entry.best,
+                    !matches!(
+                        entry.hypothesis.origin,
+                        HypothesisOrigin::Inferred | HypothesisOrigin::Imported
+                    ),
+                )
+            });
+            Ok(CombineFile {
+                path: path.clone(),
+                file: path.file_name().map(|n| n.to_string_lossy().into_owned()),
+                specimens: work.specimens.len(),
+                hypotheses,
+            })
+        })
+        .collect()
+}
+
+/// Combine saved workspaces into a new file using the caller's recoverable
+/// session and actor. Source edits and Save As retain their existing journal,
+/// evidence and partial-save recovery semantics. No source is overwritten.
+pub fn combine_to(
+    session: &mut Session,
+    paths: &[PathBuf],
+    output: &std::path::Path,
+    keep: Option<&CombineSelection>,
+) -> Result<DocId> {
+    if paths.len() < 2 {
+        return Err(invalid(
+            "Choose at least two saved species hypothesis files",
+        ));
+    }
+    if output.try_exists()? || files::tree_sidecar(output).try_exists()? {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "Choose a new filename for the combined hypotheses",
+        )
+        .into());
+    }
+    if let Some(keep) = keep {
+        if keep.keys().any(|path| !paths.contains(path)) {
+            return Err(invalid(
+                "Hypothesis selection names a file outside the chosen inputs",
+            ));
+        }
+        if keep.values().all(BTreeSet::is_empty) {
+            return Err(invalid("Choose at least one hypothesis to combine"));
+        }
+    }
+    let doc = session.open(&paths[0])?;
+    if !session.is_delimitation(doc) {
+        return Err(invalid("Choose saved species hypothesis files"));
+    }
+    session.begin_group();
+    let applied = (|| -> Result<()> {
+        if let Some(keep) = keep {
+            let wanted = keep.get(&paths[0]).cloned().unwrap_or_default();
+            let available: BTreeSet<_> = session
+                .delimitation(doc)
+                .hypotheses
+                .iter()
+                .map(|h| h.id.clone())
+                .collect();
+            if !wanted.is_subset(&available) {
+                return Err(invalid(
+                    "Selected hypothesis no longer exists in the first input",
+                ));
+            }
+            let dropped = available
+                .difference(&wanted)
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            if !dropped.is_empty() {
+                session.apply(
+                    doc,
+                    Op::DelimitationEdit {
+                        edit: Box::new(DelimitationEdit::Remove {
+                            hypotheses: dropped,
+                        }),
+                    },
+                )?;
+            }
+        }
+        combine_selected(session, doc, &paths[1..], keep)?;
+        Ok(())
+    })();
+    session.end_group();
+    applied?;
+    session.save(doc, Some(output))?;
+    Ok(doc)
+}
+
+/// A free `<common root>.combinedNN.spart` beside the last input.
+pub fn combined_path(paths: &[PathBuf]) -> PathBuf {
+    let Some(last) = paths.last() else {
+        return PathBuf::new();
+    };
+    let directory = last.parent().unwrap_or(Path::new("."));
+    let names: Vec<String> = paths
+        .iter()
+        .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .collect();
+    let first = names.first().map_or("", String::as_str);
+    let mut shared = first.len();
+    for name in names.iter().skip(1) {
+        shared = first
+            .char_indices()
+            .zip(name.chars())
+            .find(|((_, a), b)| a != b)
+            .map_or(shared.min(name.len()), |((i, _), _)| i.min(shared));
+    }
+    // Keep whole name parts: "specimens.afa.asap0" becomes "specimens.afa".
+    let root = if shared == first.len() && names.iter().all(|n| n == first) {
+        first.rsplit_once('.').map_or(first, |(stem, _)| stem)
+    } else {
+        first[..shared]
+            .rsplit_once('.')
+            .map_or("", |(stem, _)| stem)
+    };
+    (1..=u32::MAX)
+        .map(|n| {
+            directory.join(if root.is_empty() {
+                format!("combined{n:02}.spart")
+            } else {
+                format!("{root}.combined{n:02}.spart")
+            })
+        })
+        .find(|path| !path.exists())
+        .unwrap_or_default()
 }
