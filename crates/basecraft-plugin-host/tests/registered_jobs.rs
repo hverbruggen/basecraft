@@ -1409,20 +1409,21 @@ fn registered_target_preparation_preserves_permissions_and_session_identity() {
     let operation = registry
         .resolve(&request("normal").operation, None)
         .unwrap();
-    let prepare = |target: Option<serde_json::Value>, write, session| {
-        let mut request = request("normal");
-        request.target = target.map(|value| serde_json::from_value(value).unwrap());
-        let mut policy = SessionPolicy::new(root.path(), true).unwrap();
-        policy.document_write = write;
-        PreparedOperation::prepare(
-            operation.clone(),
-            request,
-            policy,
-            "test".into(),
-            session,
-            &registry,
-        )
-    };
+    let prepare =
+        |target: Option<serde_json::Value>, write, session: Option<&mut basecraft_ops::Session>| {
+            let mut request = request("normal");
+            request.target = target.map(|value| serde_json::from_value(value).unwrap());
+            let mut policy = SessionPolicy::new(root.path(), true).unwrap();
+            policy.document_write = write;
+            PreparedOperation::prepare(
+                operation.clone(),
+                request,
+                policy,
+                "test".into(),
+                session,
+                &registry,
+            )
+        };
     // No explicit target needs no session, even without document-write permission.
     assert!(prepare(None, false, None).is_ok());
     let file = json!({"kind":"file","path":"target.afa"});
