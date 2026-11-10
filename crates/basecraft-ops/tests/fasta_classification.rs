@@ -200,28 +200,56 @@ fn bounded_classifier_heap() {
     }
     use std::io::Write;
     let dir = tempfile::tempdir().unwrap();
-    for count in [100, 100_000] {
-        let path = dir.path().join("rows.fasta");
-        let mut file = std::io::BufWriter::new(std::fs::File::create(&path).unwrap());
-        for _ in 0..count {
-            file.write_all(b">a description\nACGT\nA\nACGTAC\n")
+    for shape in ["records", "header", "sequence"] {
+        for count in [100, 100_000] {
+            let path = dir.path().join("rows.fasta");
+            let mut file = std::io::BufWriter::new(std::fs::File::create(&path).unwrap());
+            match shape {
+                "header" => file.write_all(b">").unwrap(),
+                "sequence" => file.write_all(b">a\n").unwrap(),
+                _ => {}
+            }
+            for _ in 0..count {
+                file.write_all(if shape == "records" {
+                    b">a description\nACGT\nA\nACGTAC\n"
+                } else {
+                    b"ACGTACGTACGTACGT"
+                })
                 .unwrap();
+            }
+            if shape != "records" {
+                file.write_all(b"\n>b\nT\n").unwrap();
+            }
+            file.flush().unwrap();
+            drop(file);
+            #[cfg(feature = "test-counters")]
+            basecraft_io::counters::reset();
+            let measurement = basecraft_io::heap::Measurement::start().unwrap();
+            let kind = files::kind(&path).unwrap();
+            let new = measurement.finish().unwrap();
+            #[cfg(feature = "test-counters")]
+            {
+                let counts = basecraft_io::counters::snapshot();
+                assert_eq!(counts.unresolved_reads, 0);
+                assert_eq!(
+                    counts.reads[&path.canonicalize().unwrap()],
+                    basecraft_io::counters::Reads {
+                        full_reads: 1,
+                        bytes: path.metadata().unwrap().len(),
+                    }
+                );
+            }
+            let measurement = basecraft_io::heap::Measurement::start().unwrap();
+            assert_eq!(indexed_kind(&path).unwrap(), kind);
+            let old = measurement.finish().unwrap();
+            println!(
+                "shape={shape} count={count} file_bytes={} old_requested_peak={} stream_requested_peak={}",
+                path.metadata().unwrap().len(),
+                old.incremental_peak_bytes,
+                new.incremental_peak_bytes
+            );
+            assert!(new.incremental_peak_bytes < 32 * 1024);
+            assert!(old.incremental_peak_bytes > new.incremental_peak_bytes);
         }
-        file.flush().unwrap();
-        drop(file);
-        let measurement = basecraft_io::heap::Measurement::start().unwrap();
-        assert_eq!(files::kind(&path).unwrap(), Kind::Alignment);
-        let new = measurement.finish().unwrap();
-        let measurement = basecraft_io::heap::Measurement::start().unwrap();
-        assert_eq!(indexed_kind(&path).unwrap(), Kind::Alignment);
-        let old = measurement.finish().unwrap();
-        println!(
-            "records={count} file_bytes={} old_requested_peak={} stream_requested_peak={}",
-            path.metadata().unwrap().len(),
-            old.incremental_peak_bytes,
-            new.incremental_peak_bytes
-        );
-        assert!(new.incremental_peak_bytes < 32 * 1024);
-        assert!(old.incremental_peak_bytes > new.incremental_peak_bytes);
     }
 }

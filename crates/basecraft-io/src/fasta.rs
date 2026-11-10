@@ -84,7 +84,7 @@ impl LineScan {
 }
 
 fn scan_summary(reader: &mut impl Read) -> Result<(Summary, u64)> {
-    let mut buffer = [0u8; 64 * 1024];
+    let mut buffer = [0u8; 16 * 1024];
     let mut summary = Summary::default();
     let mut current_len = 0;
     let mut line = LineScan::default();
