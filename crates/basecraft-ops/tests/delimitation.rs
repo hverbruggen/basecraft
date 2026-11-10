@@ -618,7 +618,28 @@ fn application_state_replay_handles_hidden_baseline_and_missing_original_folder(
     let report = replay::replay(&recovery).unwrap();
     assert!(report.ok(), "{:?}", report.problems);
     let recovered = parent.path().join("recovered");
-    replay::recover(&recovery, &recovered).unwrap();
+    assert!(matches!(
+        replay::recover(&recovery, &recovered),
+        Err(basecraft_ops::Error::SaveCheckRequired(_))
+    ));
+    assert!(!recovered.exists());
+    let journal_before = basecraft_ops::log::read_all(&recovery).unwrap();
+    let mut attempt =
+        replay::prepare_recovery(&recovery, &recovered, replay::RecoveryMode::Strict).unwrap();
+    let check = attempt.check(0).unwrap();
+    assert!(!check.evidence().issues.is_empty());
+    attempt
+        .advance(
+            0,
+            Some(check.decide(basecraft_ops::input_evidence::SavePolicy::Cancel, true)),
+        )
+        .unwrap();
+    let completed = attempt.publish().unwrap();
+    assert!(!completed.warnings.is_empty());
+    assert_eq!(
+        serde_json::to_vec(&basecraft_ops::log::read_all(&recovery).unwrap()).unwrap(),
+        serde_json::to_vec(&journal_before).unwrap()
+    );
     let work = basecraft_ops::files::load_delimitation(&recovered.join("species.spart")).unwrap();
     assert_eq!(work.hypotheses.last().unwrap().name, "Pending");
 }

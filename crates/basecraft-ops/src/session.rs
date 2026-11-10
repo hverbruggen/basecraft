@@ -117,6 +117,7 @@ pub struct Session {
     provenance_policy: basecraft_platform::settings::ProvenancePolicy,
     local_provenance_root: PathBuf,
     tracked: bool,
+    write_publication: crate::documents::WritePublication,
     replay_mode: ReplayMode,
     memory_objects: Mutex<std::collections::HashMap<String, Vec<u8>>>,
     events: Vec<LogEntry>,
@@ -148,6 +149,7 @@ impl Session {
             provenance_policy: basecraft_platform::settings::ProvenancePolicy::Portable,
             local_provenance_root: root.join(".basecraft/provenance"),
             tracked: true,
+            write_publication: crate::documents::WritePublication::Immediate,
             replay_mode: ReplayMode::Live,
             memory_objects: Mutex::new(std::collections::HashMap::new()),
             events: Vec::new(),
@@ -1011,7 +1013,10 @@ impl Session {
             return Err(invalid("history publication requires a saved document"));
         }
         if decision.is_none() && !history_only && self.log.is_some() && path.is_none() && clean {
-            return Ok(SaveOutcome { warnings });
+            return Ok(SaveOutcome {
+                warnings,
+                recovery_observation: None,
+            });
         }
         // Cooperating Basecraft processes serialize the entire data + sidecar +
         // provenance publication. External programs still require hash checks.
@@ -1026,7 +1031,13 @@ impl Session {
         let _evidence_lock = crate::input_evidence::lock()?;
         if !history_only {
             let evidence = crate::input_evidence::check(&target)?;
-            if decision.is_some() || !evidence.is_complete() {
+            if decision.is_some()
+                || !evidence.is_complete()
+                || matches!(
+                    self.write_publication,
+                    crate::documents::WritePublication::Recovery { .. }
+                )
+            {
                 let fresh = self.save_check_scope(id, &target, evidence)?;
                 if let Some(decision) = decision {
                     if !valid_consent || !fresh.same_scope(&decision.check) {
@@ -1034,12 +1045,16 @@ impl Session {
                             self.publish_save_check(id, fresh)?,
                         )));
                     }
-                    if !fresh.evidence().is_complete() && !decision.acknowledge_incomplete {
+                    if !fresh.complete() && !decision.acknowledge_incomplete {
                         return Err(Error::SaveCheckRequired(Box::new(
                             self.publish_save_check(id, fresh)?,
                         )));
                     }
-                } else {
+                } else if !fresh.complete()
+                    || fresh
+                        .evidence_groups()
+                        .any(|g| !g.conflict.analyses.is_empty())
+                {
                     return Err(Error::SaveCheckRequired(Box::new(
                         self.publish_save_check(id, fresh)?,
                     )));
@@ -1049,10 +1064,10 @@ impl Session {
                 if path.is_none() {
                     self.check_save_source(id)?;
                 }
-                crate::input_evidence::resolve(&fresh.evidence().conflict, policy)?;
-                if !fresh.evidence().is_complete() {
+                fresh.resolve(policy)?;
+                if !fresh.complete() {
                     warnings.push(SaveWarning::EvidenceNotChecked {
-                        issues: fresh.evidence().issues.clone(),
+                        issues: fresh.issues(),
                     });
                 }
                 target_check = Some(fresh);
@@ -1163,7 +1178,19 @@ impl Session {
             } else {
                 error
             }
-        }).map(|()| SaveOutcome { warnings })
+        })?;
+        let recovery_observation = if matches!(
+            self.write_publication,
+            crate::documents::WritePublication::Recovery { .. }
+        ) {
+            Some(self.recovery_snapshot(id)?)
+        } else {
+            None
+        };
+        Ok(SaveOutcome {
+            warnings,
+            recovery_observation,
+        })
     }
 
     fn check_save_source(&self, id: DocId) -> Result<()> {
@@ -1192,7 +1219,7 @@ impl Session {
         let opened = match &self.docs[id.0].content {
             Loaded::Submission(sub) => {
                 let hashes = sub
-                    .write(&target, format, &self.storage_root)?
+                    .write(&target, format, &self.storage_root, &self.write_publication)?
                     .into_iter()
                     .map(|(path, hash)| (self.relative(&path), hash))
                     .collect();
@@ -1200,7 +1227,7 @@ impl Session {
             }
             Loaded::Metadata(opened) => {
                 let hashes = opened
-                    .write(&target, format, &self.storage_root)?
+                    .write(&target, format, &self.storage_root, &self.write_publication)?
                     .into_iter()
                     .map(|(path, hash)| (self.relative(&path), hash))
                     .collect();
@@ -1208,7 +1235,7 @@ impl Session {
             }
             Loaded::Delimitation(work) => {
                 let hashes = work
-                    .write(&target, format, &self.storage_root)?
+                    .write(&target, format, &self.storage_root, &self.write_publication)?
                     .into_iter()
                     .map(|(path, hash)| (self.relative(&path), hash))
                     .collect();
@@ -1216,7 +1243,7 @@ impl Session {
             }
             Loaded::Alignment(a) => {
                 let hashes = a
-                    .write(&target, format, &self.storage_root)?
+                    .write(&target, format, &self.storage_root, &self.write_publication)?
                     .into_iter()
                     .map(|(path, hash)| (self.relative(&path), hash))
                     .collect();
@@ -1231,9 +1258,14 @@ impl Session {
                     != crate::links::document_entry(&target)?;
                 let (hashes, outputs) = if save_as {
                     let links = crate::links::PreparedLinks::prepare(&original, &target)?;
-                    links.publish(|| t.write(&target, format, &self.storage_root))?
+                    links.publish(|| {
+                        t.write(&target, format, &self.storage_root, &self.write_publication)
+                    })?
                 } else {
-                    (t.write(&target, format, &self.storage_root)?, Vec::new())
+                    (
+                        t.write(&target, format, &self.storage_root, &self.write_publication)?,
+                        Vec::new(),
+                    )
                 };
                 let hashes = hashes
                     .into_iter()
@@ -1255,7 +1287,7 @@ impl Session {
             Loaded::Sequence(o) => o,
         };
         let hashes = opened
-            .write(&target, format, &self.storage_root)?
+            .write(&target, format, &self.storage_root, &self.write_publication)?
             .into_iter()
             .map(|(path, hash)| (self.relative(&path), hash))
             .collect();
@@ -2077,16 +2109,17 @@ impl Session {
     pub fn save_hashes_at(&self, id: DocId, target: &Path) -> Result<Vec<String>> {
         let content = &self.docs[id.0].content;
         match content {
-            Loaded::Delimitation(work) => {
-                work.saved_hashes(&self.resolve(&target.to_string_lossy()))
-            }
+            Loaded::Delimitation(work) => work.saved_hashes(
+                &self.resolve(&target.to_string_lossy()),
+                &self.write_publication,
+            ),
             migrated @ (Loaded::Sequence(_)
             | Loaded::Submission(_)
             | Loaded::Metadata(_)
             | Loaded::Alignment(_)
             | Loaded::Tree(_)) => {
                 let document = migrated.as_document();
-                document.saved_hashes(target)
+                document.saved_hashes(target, &self.write_publication)
             }
         }
     }

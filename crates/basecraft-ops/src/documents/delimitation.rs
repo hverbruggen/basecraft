@@ -31,6 +31,7 @@ impl Document for DelimitationWorkspace {
         target: &Path,
         format: files::Format,
         _recovery_root: &Path,
+        publication: &super::WritePublication,
     ) -> Result<Vec<(PathBuf, String)>> {
         if format != files::Format::Delimitation {
             return Err(invalid(
@@ -67,22 +68,42 @@ impl Document for DelimitationWorkspace {
         let mut side_hash = String::new();
         basecraft_io::write_atomic(&sidecar, |w| {
             let mut hw = HashingWriter::new(w);
-            files::write_delimitation_sidecar_at(self, &main_hash, target, &mut hw)?;
+            files::write_delimitation_sidecar_at(
+                self,
+                &main_hash,
+                &publication.logical(target).map_err(std::io::Error::other)?,
+                &mut hw,
+            )?;
             side_hash = hw.hash();
             Ok(())
         })?;
-        crate::analysis_store::publish_delimitation(self, target, &main_hash, new_run.as_ref())?;
+        crate::analysis_store::publish_delimitation(
+            self,
+            target,
+            &main_hash,
+            new_run.as_ref(),
+            publication,
+        )?;
         Ok(vec![
             (target.to_path_buf(), main_hash),
             (sidecar, side_hash),
         ])
     }
-    fn saved_hashes(&self, target: &Path) -> Result<Vec<String>> {
+    fn saved_hashes(
+        &self,
+        target: &Path,
+        publication: &super::WritePublication,
+    ) -> Result<Vec<String>> {
         let mut main = HashingWriter::new(std::io::sink());
         files::write_delimitation(self, files::delimitation_xml(target), &mut main)?;
         let hash = main.hash();
         let mut side = HashingWriter::new(std::io::sink());
-        files::write_delimitation_sidecar_at(self, &hash, target, &mut side)?;
+        files::write_delimitation_sidecar_at(
+            self,
+            &hash,
+            &publication.logical(target)?,
+            &mut side,
+        )?;
         Ok(vec![hash, side.hash()])
     }
 }
@@ -134,8 +155,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let target = dir.path().join("wrong.fasta");
         assert!(
-            doc.write(&target, files::Format::Fasta, dir.path())
-                .is_err()
+            doc.write(
+                &target,
+                files::Format::Fasta,
+                dir.path(),
+                &super::super::WritePublication::Immediate
+            )
+            .is_err()
         );
         assert!(!target.exists());
         assert!(!dir.path().join(".basecraft").exists());
@@ -173,9 +199,18 @@ mod tests {
             let mut side = Vec::new();
             files::write_delimitation_sidecar_at(&initial, &hash, &target, &mut side).unwrap();
             let expected = vec![hash.clone(), basecraft_io::hash_bytes(&side)];
-            assert_eq!(doc.saved_hashes(&target).unwrap(), expected);
+            assert_eq!(
+                doc.saved_hashes(&target, &super::super::WritePublication::Immediate)
+                    .unwrap(),
+                expected
+            );
             let written = doc
-                .write(&target, files::Format::Delimitation, dir.path())
+                .write(
+                    &target,
+                    files::Format::Delimitation,
+                    dir.path(),
+                    &super::super::WritePublication::Immediate,
+                )
                 .unwrap();
             assert_eq!(
                 written.iter().map(|(_, h)| h.clone()).collect::<Vec<_>>(),
@@ -205,8 +240,13 @@ mod tests {
             assert_eq!(files::load_delimitation(&target).unwrap(), initial);
             // Saving an already-bound result reuses its run and companion.
             assert_eq!(
-                doc.write(&target, files::Format::Delimitation, dir.path())
-                    .unwrap(),
+                doc.write(
+                    &target,
+                    files::Format::Delimitation,
+                    dir.path(),
+                    &super::super::WritePublication::Immediate
+                )
+                .unwrap(),
                 written
             );
             assert_eq!(
@@ -226,12 +266,18 @@ mod tests {
         let side = files::tree_sidecar(&target);
         std::fs::create_dir(&side).unwrap();
         assert!(
-            work.write(&target, files::Format::Delimitation, dir.path())
-                .is_err()
+            work.write(
+                &target,
+                files::Format::Delimitation,
+                dir.path(),
+                &super::super::WritePublication::Immediate
+            )
+            .is_err()
         );
         assert_eq!(
             basecraft_io::hash_file(&target).unwrap(),
-            work.saved_hashes(&target).unwrap()[0]
+            work.saved_hashes(&target, &super::super::WritePublication::Immediate)
+                .unwrap()[0]
         );
         assert!(side.is_dir());
         assert!(!run.artifact("input.json").unwrap().exists());

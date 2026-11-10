@@ -40,6 +40,7 @@ impl Document for OpenedAlignment {
         target: &Path,
         format: Format,
         _recovery_root: &Path,
+        _publication: &super::WritePublication,
     ) -> Result<Vec<(PathBuf, String)>> {
         if format != self.format {
             return Err(invalid("saving to a different format isn't supported yet"));
@@ -54,7 +55,11 @@ impl Document for OpenedAlignment {
         Ok(vec![(target.to_path_buf(), hash)])
     }
 
-    fn saved_hashes(&self, _target: &Path) -> Result<Vec<String>> {
+    fn saved_hashes(
+        &self,
+        _target: &Path,
+        _publication: &super::WritePublication,
+    ) -> Result<Vec<String>> {
         let mut hw = HashingWriter::new(std::io::sink());
         files::write_alignment(&self.doc, &mut hw)?;
         Ok(vec![hw.hash()])

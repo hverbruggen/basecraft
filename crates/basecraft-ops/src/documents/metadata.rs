@@ -50,6 +50,7 @@ impl Document for OpenedMetadata {
         target: &Path,
         format: Format,
         recovery_root: &Path,
+        _publication: &super::WritePublication,
     ) -> Result<Vec<(PathBuf, String)>> {
         let mut hashes = Vec::new();
         if format != Format::Metadata {
@@ -85,7 +86,11 @@ impl Document for OpenedMetadata {
         Ok(hashes)
     }
 
-    fn saved_hashes(&self, _target: &Path) -> Result<Vec<String>> {
+    fn saved_hashes(
+        &self,
+        _target: &Path,
+        _publication: &super::WritePublication,
+    ) -> Result<Vec<String>> {
         Ok(crate::metadata::encode(&self.metadata)?
             .iter()
             .map(|bytes| basecraft_io::hash_bytes(bytes))

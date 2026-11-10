@@ -38,9 +38,10 @@ pub(crate) trait Document {
         target: &Path,
         format: Format,
         recovery_root: &Path,
+        publication: &WritePublication,
     ) -> Result<Vec<(PathBuf, String)>>;
     /// Preserve the existing replay writer, including historical target handling.
-    fn saved_hashes(&self, target: &Path) -> Result<Vec<String>>;
+    fn saved_hashes(&self, target: &Path, publication: &WritePublication) -> Result<Vec<String>>;
     /// Kind-specific operation composition. Session owns timing, actor/group
     /// boundaries, pending history and stitching the existing inverse steps.
     fn merge(&self, _previous: &Op, _next: &Op) -> Option<Op> {
@@ -59,3 +60,44 @@ pub(crate) use sequence::execute_sequence;
 
 // Detached proposals share Delimitation mutations and fingerprints with Session.
 pub(crate) use delimitation::execute_delimitation;
+
+/// Placement only: no consent, policy, source or overwrite authority enters a writer.
+#[derive(Default)]
+pub(crate) enum WritePublication {
+    #[default]
+    Immediate,
+    Recovery {
+        stage: PathBuf,
+        destination: PathBuf,
+        stores: std::sync::Mutex<Vec<crate::analysis_store::ArtifactRun>>,
+    },
+}
+
+impl WritePublication {
+    pub(crate) fn logical(&self, path: &Path) -> Result<PathBuf> {
+        match self {
+            Self::Immediate => Ok(path.into()),
+            Self::Recovery {
+                stage, destination, ..
+            } => Ok(destination.join(
+                path.strip_prefix(stage)
+                    .map_err(|_| crate::error::invalid("recovery write lies outside stage"))?,
+            )),
+        }
+    }
+
+    pub(crate) fn register(&self, run: &crate::analysis_store::ArtifactRun) -> Result<()> {
+        match self {
+            Self::Immediate => crate::input_evidence::register(run),
+            Self::Recovery { stores, .. } => {
+                let mut stores = stores
+                    .lock()
+                    .map_err(|_| crate::error::invalid("recovery stores unavailable"))?;
+                if !stores.iter().any(|old| old.directory() == run.directory()) {
+                    stores.push(run.clone());
+                }
+                Ok(())
+            }
+        }
+    }
+}

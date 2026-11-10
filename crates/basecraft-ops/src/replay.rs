@@ -6,7 +6,7 @@
 //! recorded hashes. Nothing in the project is written.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use basecraft_protocol::{LogEntry, Op};
 
@@ -267,8 +267,38 @@ fn safe_key(key: &str) -> bool {
 /// or executing any tools. Strict reading rejects torn/corrupt journals; the
 /// error names how many events [`recover_verified_prefix`] would keep.
 pub fn recover(root: &Path, destination: &Path) -> Result<Vec<std::path::PathBuf>> {
+    let mut attempt = prepare_recovery(root, destination, RecoveryMode::Strict)?;
+    for document in 0..attempt.len() {
+        attempt.advance(document, None)?;
+    }
+    Ok(attempt.publish()?.outputs)
+}
+
+/// Strict never falls back to a damaged journal's prefix implicitly.
+#[derive(Clone, Copy, Debug)]
+pub enum RecoveryMode {
+    Strict,
+    VerifiedPrefix,
+}
+
+pub fn prepare_recovery(
+    root: &Path,
+    destination: &Path,
+    mode: RecoveryMode,
+) -> Result<RecoveryAttempt> {
     recover_checked(root, destination)?;
-    let entries = log::read_all(root).map_err(|error| {
+    let (entries, damage) = match mode {
+        RecoveryMode::Strict => (strict_entries(root)?, None),
+        RecoveryMode::VerifiedPrefix => {
+            let prefix = log::verified_session_prefix(root)?;
+            (prefix.entries, prefix.problem)
+        }
+    };
+    recover_entries(root, destination, entries, damage)
+}
+
+fn strict_entries(root: &Path) -> Result<Vec<LogEntry>> {
+    log::read_all(root).map_err(|error| {
         let kept = log::verified_session_prefix(root)
             .ok()
             .filter(|prefix| prefix.problem.is_some());
@@ -280,8 +310,7 @@ pub fn recover(root: &Path, destination: &Path) -> Result<Vec<std::path::PathBuf
             )),
             None => error,
         }
-    })?;
-    recover_entries(root, destination, entries)
+    })
 }
 
 /// Explicit salvage after a crash: reconstruct only the journal's verified
@@ -291,10 +320,12 @@ pub fn recover_verified_prefix(
     root: &Path,
     destination: &Path,
 ) -> Result<(Vec<std::path::PathBuf>, Option<String>)> {
-    recover_checked(root, destination)?;
-    let prefix = log::verified_session_prefix(root)?;
-    let outputs = recover_entries(root, destination, prefix.entries)?;
-    Ok((outputs, prefix.problem))
+    let mut attempt = prepare_recovery(root, destination, RecoveryMode::VerifiedPrefix)?;
+    for document in 0..attempt.len() {
+        attempt.advance(document, None)?;
+    }
+    let completed = attempt.publish()?;
+    Ok((completed.outputs, completed.damage))
 }
 
 fn recover_checked(root: &Path, destination: &Path) -> Result<()> {
@@ -303,17 +334,23 @@ fn recover_checked(root: &Path, destination: &Path) -> Result<()> {
             "journal durability was uncertain; inspect the preserved verified prefix before recovery",
         ));
     }
-    if destination.exists() {
-        return Err(crate::error::invalid("recovery destination already exists"));
+    require_absent(destination)
+}
+
+fn require_absent(destination: &Path) -> Result<()> {
+    match std::fs::symlink_metadata(destination) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+        Ok(_) => Err(crate::error::invalid("recovery destination already exists")),
     }
-    Ok(())
 }
 
 fn recover_entries(
     root: &Path,
     destination: &Path,
     entries: Vec<LogEntry>,
-) -> Result<Vec<std::path::PathBuf>> {
+    damage: Option<String>,
+) -> Result<RecoveryAttempt> {
     if entries.is_empty() {
         return Err(crate::error::invalid(
             "recovery contains no verified events",
@@ -323,10 +360,16 @@ fn recover_entries(
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
-    std::fs::create_dir_all(parent)?;
+    let parent = parent.canonicalize()?;
+    let parent_identity = directory_identity(&parent)?;
+    let name = destination
+        .file_name()
+        .ok_or_else(|| crate::error::invalid("recovery destination needs a basename"))?;
+    let destination = parent.join(name);
+    require_absent(&destination)?;
     let staging = tempfile::Builder::new()
         .prefix(".basecraft-recover-")
-        .tempdir_in(parent)?;
+        .tempdir_in(&parent)?;
     let mut session = Session::unlogged(staging.path());
     let source_root = recorded_source_root(root)?;
     let mut documents = std::collections::BTreeMap::<String, DocId>::new();
@@ -381,15 +424,332 @@ fn recover_entries(
             )));
         }
     }
-    let mut outputs = Vec::new();
-    for (relative, doc) in documents {
-        let target = staging.path().join(&relative);
-        session.save(doc, Some(&target))?;
-        outputs.push(destination.join(relative));
+    session.recovery_placement(staging.path().to_path_buf(), destination.clone());
+    let documents = documents
+        .into_iter()
+        .map(|(relative, id)| RecoveryDocument {
+            relative,
+            id,
+            saved: None,
+        })
+        .collect();
+    let artifacts = artifacts(staging.path())?;
+    Ok(RecoveryAttempt {
+        session,
+        staging: Some(staging),
+        destination,
+        parent_identity,
+        documents,
+        artifacts,
+        warnings: Vec::new(),
+        damage,
+        published: false,
+    })
+}
+
+/// Lifetime owner only. Session Slots retain all receipt authority. Dropping or
+/// cancelling removes only this attempt's disposable stage; originals survive.
+/// A failed pre-publication call leaves the attempt available for a fresh check.
+pub struct RecoveryAttempt {
+    session: Session,
+    staging: Option<tempfile::TempDir>,
+    destination: PathBuf,
+    parent_identity: (u64, u64),
+    documents: Vec<RecoveryDocument>,
+    artifacts: Vec<ArtifactObservation>,
+    warnings: Vec<crate::session::SaveWarning>,
+    damage: Option<String>,
+    published: bool,
+}
+
+struct RecoveryDocument {
+    relative: String,
+    id: DocId,
+    // Expected outcome, never authority. This observation has no published token.
+    saved: Option<crate::session::SaveCheck>,
+}
+
+#[derive(Clone, Debug)]
+pub struct RecoveryCompletion {
+    pub destination: PathBuf,
+    pub outputs: Vec<PathBuf>,
+    pub warnings: Vec<crate::session::SaveWarning>,
+    pub damage: Option<String>,
+    pub registered_stores: Vec<PathBuf>,
+}
+
+/// Rename completed, but a later independent sync/registration did not. The
+/// final files remain. This is terminal, not permission to retry into them.
+#[derive(Debug, thiserror::Error)]
+#[error("recovery was published at {destination}, but completion failed: {cause}", destination = .completion.destination.display())]
+pub struct PublishedWithFailure {
+    pub completion: RecoveryCompletion,
+    #[source]
+    pub cause: crate::Error,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ArtifactObservation {
+    path: PathBuf,
+    identity: (u64, u64),
+    revision: Option<(String, basecraft_protocol::provenance::FileStamp)>,
+}
+
+fn directory_identity(path: &Path) -> Result<(u64, u64)> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(crate::error::invalid(
+            "recovery parent is not an ordinary directory",
+        ));
     }
-    drop(session);
-    std::fs::rename(staging.path(), destination)?;
-    Ok(outputs)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Ok((metadata.dev(), metadata.ino()))
+    }
+    #[cfg(not(unix))]
+    {
+        Err(crate::error::invalid(
+            "recovery directory identity is unsupported on this platform",
+        ))
+    }
+}
+
+/// Enumerate only the owned stage, never external stores or arbitrary trees.
+/// Every file and directory must remain ordinary; equal bytes do not merge inodes.
+fn artifacts(root: &Path) -> Result<Vec<ArtifactObservation>> {
+    fn visit(root: &Path, path: &Path, result: &mut Vec<ArtifactObservation>) -> Result<()> {
+        let metadata = std::fs::symlink_metadata(path)?;
+        let (identity, revision) = if metadata.is_dir() && !metadata.file_type().is_symlink() {
+            (directory_identity(path)?, None)
+        } else if metadata.is_file() && !metadata.file_type().is_symlink() {
+            (
+                basecraft_platform::files::identity(path)?,
+                Some((
+                    basecraft_io::hash_file(path)?,
+                    crate::input_evidence::stamp(path)?,
+                )),
+            )
+        } else {
+            return Err(crate::error::invalid("unsafe recovery artifact"));
+        };
+        result.push(ArtifactObservation {
+            path: path
+                .strip_prefix(root)
+                .map_err(|_| crate::error::invalid("artifact outside recovery stage"))?
+                .into(),
+            identity,
+            revision,
+        });
+        if metadata.is_dir() {
+            for entry in std::fs::read_dir(path)? {
+                visit(root, &entry?.path(), result)?;
+            }
+        }
+        Ok(())
+    }
+    let mut result = Vec::new();
+    visit(root, root, &mut result)?;
+    result.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(result)
+}
+
+impl RecoveryAttempt {
+    pub fn len(&self) -> usize {
+        self.documents.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.documents.is_empty()
+    }
+    pub fn destination(&self) -> &Path {
+        &self.destination
+    }
+    pub fn damage(&self) -> Option<&str> {
+        self.damage.as_deref()
+    }
+    pub fn warnings(&self) -> &[crate::session::SaveWarning] {
+        &self.warnings
+    }
+    pub fn cancel(self) {
+        drop(self);
+    }
+
+    fn document(&self, document: usize) -> Result<&RecoveryDocument> {
+        self.documents
+            .get(document)
+            .ok_or_else(|| crate::error::invalid("unknown recovery document"))
+    }
+
+    fn validate(&self) -> Result<&Path> {
+        if self.published {
+            return Err(crate::error::invalid("recovery has already been published"));
+        }
+        let stage = self
+            .staging
+            .as_ref()
+            .ok_or_else(|| crate::error::invalid("recovery is cancelled"))?
+            .path();
+        let parent = self
+            .destination
+            .parent()
+            .ok_or_else(|| crate::error::invalid("recovery parent missing"))?;
+        if directory_identity(parent)? != self.parent_identity {
+            return Err(crate::error::invalid(
+                "recovery destination parent was replaced",
+            ));
+        }
+        require_absent(&self.destination)?;
+        if artifacts(stage)? != self.artifacts {
+            return Err(crate::error::invalid(
+                "recovery staged artifacts changed; reconstruct a new attempt",
+            ));
+        }
+        Ok(stage)
+    }
+
+    /// Fresh advisory check for just one document. Calls invalidate older tokens
+    /// for that Slot. The final destination can never be changed on this attempt.
+    pub fn check(&self, document: usize) -> Result<crate::session::SaveCheck> {
+        self.validate()?;
+        let doc = self.document(document)?;
+        self.session.recovery_check(doc.id, doc.saved.is_some())
+    }
+
+    pub fn decide(
+        &self,
+        document: usize,
+        token: &str,
+        known: crate::input_evidence::SavePolicy,
+        acknowledge_incomplete: bool,
+    ) -> Result<crate::session::SaveDecision> {
+        self.validate()?;
+        let doc = self.document(document)?;
+        self.session
+            .decide_save(doc.id, None, token, known, acknowledge_incomplete)
+    }
+
+    /// Stage one document, or reauthorize its finalization if already saved.
+    /// Does not publish the destination and never resaves a completed document.
+    pub fn advance(
+        &mut self,
+        document: usize,
+        decision: Option<crate::session::SaveDecision>,
+    ) -> Result<()> {
+        self.validate()?;
+        let doc = self.document(document)?;
+        let id = doc.id;
+        let _target = crate::save_guard::lock(&self.destination)?;
+        let observed = if let Some(expected) = &doc.saved {
+            let _evidence = crate::input_evidence::Mutation::begin()?;
+            self.session.recovery_finalize(id, expected, decision)?
+        } else {
+            let outcome = match decision {
+                Some(decision) => self.session.save_with_decision(
+                    id,
+                    Some(&self.session_path(document)?),
+                    decision,
+                ),
+                None => self.session.save_recovery(id),
+            };
+            // Failed writes can leave partial owned output; Session retains its
+            // existing acceptance rules. This is an observation, never consent.
+            let outcome = match outcome {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    self.artifacts = artifacts(
+                        self.staging
+                            .as_ref()
+                            .ok_or_else(|| crate::error::invalid("recovery stage missing"))?
+                            .path(),
+                    )?;
+                    return Err(error);
+                }
+            };
+            self.warnings.extend(outcome.warnings);
+            outcome
+                .recovery_observation
+                .ok_or_else(|| crate::error::invalid("recovery write observation missing"))?
+        };
+        self.documents[document].saved = Some(observed);
+        self.artifacts = artifacts(
+            self.staging
+                .as_ref()
+                .ok_or_else(|| crate::error::invalid("recovery stage missing"))?
+                .path(),
+        )?;
+        Ok(())
+    }
+
+    fn session_path(&self, document: usize) -> Result<PathBuf> {
+        Ok(self
+            .staging
+            .as_ref()
+            .ok_or_else(|| crate::error::invalid("recovery stage missing"))?
+            .path()
+            .join(&self.document(document)?.relative))
+    }
+
+    pub fn publish(&mut self) -> Result<RecoveryCompletion> {
+        self.validate()?;
+        let _target = crate::save_guard::lock(&self.destination)?;
+        let evidence = crate::input_evidence::Mutation::begin()?;
+        for doc in &self.documents {
+            let expected = doc
+                .saved
+                .as_ref()
+                .ok_or_else(|| crate::error::invalid("recovery documents still need saving"))?;
+            self.session.recovery_finalize(doc.id, expected, None)?;
+        }
+        let stage = self.validate()?.to_path_buf();
+        let stores = self.session.recovery_stores()?;
+        for artifact in self.artifacts.iter().rev() {
+            let path = stage.join(&artifact.path);
+            if artifact.revision.is_some() {
+                basecraft_platform::files::sync_file(&path)?;
+            } else {
+                basecraft_platform::files::sync_directory(&path)?;
+            }
+        }
+        self.validate()?;
+        basecraft_platform::atomic::rename_noreplace(&stage, &self.destination)?;
+        // Disarm immediately: post-promotion errors must never imply rollback.
+        if let Some(staging) = self.staging.take() {
+            let _ = staging.keep();
+        }
+        self.published = true;
+        let mut completion = RecoveryCompletion {
+            destination: self.destination.clone(),
+            outputs: self
+                .documents
+                .iter()
+                .map(|d| self.destination.join(&d.relative))
+                .collect(),
+            warnings: self.warnings.clone(),
+            damage: self.damage.clone(),
+            registered_stores: Vec::new(),
+        };
+        let finish = (|| -> Result<()> {
+            basecraft_platform::files::sync_directory(
+                self.destination
+                    .parent()
+                    .ok_or_else(|| crate::error::invalid("recovery parent missing"))?,
+            )?;
+            for run in stores {
+                let final_run = run.relocated(&stage, &self.destination)?;
+                evidence.register(&final_run)?;
+                completion
+                    .registered_stores
+                    .push(final_run.directory().to_path_buf());
+            }
+            Ok(())
+        })();
+        match finish {
+            Ok(()) => Ok(completion),
+            Err(cause) => Err(crate::Error::PublishedWithFailure(Box::new(
+                PublishedWithFailure { completion, cause },
+            ))),
+        }
+    }
 }
 
 #[cfg(test)]

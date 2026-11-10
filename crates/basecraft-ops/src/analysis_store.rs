@@ -493,6 +493,7 @@ pub(crate) fn publish_delimitation(
     target: &Path,
     main_hash: &str,
     new_run: Option<&ArtifactRun>,
+    publication: &crate::documents::WritePublication,
 ) -> Result<()> {
     if let Some(run) = new_run {
         let input = crate::input_evidence::SubmittedInput {
@@ -523,7 +524,7 @@ pub(crate) fn publish_delimitation(
                 extra: std::collections::BTreeMap::new(),
             })?,
         )?;
-        crate::input_evidence::register(run)?;
+        publication.register(run)?;
         run.bind(target)?;
     }
     if let Some(run) = crate::analysis_store::ArtifactRun::for_result(target)? {
@@ -542,7 +543,7 @@ pub(crate) fn publish_delimitation(
             let bytes = crate::provenance::read_record(&dependency.join("manifest.json"))?;
             let publication: basecraft_protocol::provenance::Publication =
                 serde_json::from_slice(&bytes)?;
-            let reference = serde_json::json!({"bundle":crate::input_evidence::relative(&run, &dependency)?,"id":publication.id,"hash":basecraft_io::hash_bytes(&bytes)});
+            let reference = serde_json::json!({"bundle":crate::input_evidence::relative(&publication.logical(&run)?, &dependency)?,"id":publication.id,"hash":basecraft_io::hash_bytes(&bytes)});
             if !upstream.contains(&reference) {
                 upstream.push(reference);
             }
@@ -555,4 +556,20 @@ pub(crate) fn publish_delimitation(
         crate::input_evidence::write_json(&run.join("input.json"), &input)?;
     }
     Ok(())
+}
+
+impl ArtifactRun {
+    pub(crate) fn relocated(&self, stage: &Path, destination: &Path) -> Result<Self> {
+        let relocate = |path: &Path| -> Result<PathBuf> {
+            Ok(destination.join(
+                path.strip_prefix(stage)
+                    .map_err(|_| invalid("recovery store outside stage"))?,
+            ))
+        };
+        Ok(Self {
+            directory: relocate(&self.directory)?,
+            working_directory: relocate(&self.working_directory)?,
+            id: self.id.clone(),
+        })
+    }
 }

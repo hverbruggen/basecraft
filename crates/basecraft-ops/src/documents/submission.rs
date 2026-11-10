@@ -55,6 +55,7 @@ impl Document for Submission {
         target: &Path,
         format: Format,
         _recovery_root: &Path,
+        _publication: &super::WritePublication,
     ) -> Result<Vec<(PathBuf, String)>> {
         if format != Format::Submission {
             return Err(invalid(format!(
@@ -70,7 +71,11 @@ impl Document for Submission {
         )])
     }
 
-    fn saved_hashes(&self, _target: &Path) -> Result<Vec<String>> {
+    fn saved_hashes(
+        &self,
+        _target: &Path,
+        _publication: &super::WritePublication,
+    ) -> Result<Vec<String>> {
         Ok(vec![basecraft_io::hash_bytes(&crate::submission::encode(
             self,
         )?)])

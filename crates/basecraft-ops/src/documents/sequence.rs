@@ -27,6 +27,7 @@ impl Document for Opened {
         target: &Path,
         format: Format,
         _recovery_root: &Path,
+        _publication: &super::WritePublication,
     ) -> Result<Vec<(PathBuf, String)>> {
         if format != self.format {
             return Err(invalid("saving to a different format isn't supported yet"));
@@ -56,7 +57,11 @@ impl Document for Opened {
         }
         Ok(hashes)
     }
-    fn saved_hashes(&self, _target: &Path) -> Result<Vec<String>> {
+    fn saved_hashes(
+        &self,
+        _target: &Path,
+        _publication: &super::WritePublication,
+    ) -> Result<Vec<String>> {
         let mut hw = HashingWriter::new(std::io::sink());
         files::write_main(self, &mut hw)?;
         let mut out = vec![hw.hash()];
@@ -245,7 +250,9 @@ mod tests {
         std::fs::write(&source, b">sequence\nACGT\n").unwrap();
         let mut loaded = files::load(&source).unwrap();
         let document = loaded.as_document_mut();
-        let initial = document.saved_hashes(&source).unwrap();
+        let initial = document
+            .saved_hashes(&source, &super::super::WritePublication::Immediate)
+            .unwrap();
         let revision = document.revision(99);
         for op in [
             Op::AlnInsertGaps {
@@ -266,18 +273,33 @@ mod tests {
             Op::FeatureRemove { id: 900 },
         ] {
             assert!(document.apply(&op).is_err());
-            assert_eq!(document.saved_hashes(&source).unwrap(), initial);
+            assert_eq!(
+                document
+                    .saved_hashes(&source, &super::super::WritePublication::Immediate)
+                    .unwrap(),
+                initial
+            );
             assert_eq!(document.revision(99), revision);
         }
         assert!(document.revert(&Inverse::Alignment(Vec::new())).is_err());
         let target = root.path().join("wrong.gb");
         assert!(
             document
-                .write(&target, Format::GenBank, root.path())
+                .write(
+                    &target,
+                    Format::GenBank,
+                    root.path(),
+                    &super::super::WritePublication::Immediate
+                )
                 .is_err()
         );
         assert!(!target.exists());
-        assert_eq!(document.saved_hashes(&source).unwrap(), initial);
+        assert_eq!(
+            document
+                .saved_hashes(&source, &super::super::WritePublication::Immediate)
+                .unwrap(),
+            initial
+        );
         assert_eq!(document.revision(99), revision);
     }
 
@@ -308,7 +330,9 @@ mod tests {
             let side = files::write_sidecar(&opened, &mut expected_side).map(|r| r.unwrap());
             let mut loaded = files::Loaded::Sequence(opened);
             let document = loaded.as_document_mut();
-            let initial = document.saved_hashes(&source).unwrap();
+            let initial = document
+                .saved_hashes(&source, &super::super::WritePublication::Immediate)
+                .unwrap();
             assert_eq!(initial[0], basecraft_io::hash_bytes(&expected_main));
             let (inverse, _) = document
                 .apply(&Op::SeqReplace {
@@ -317,11 +341,28 @@ mod tests {
                     residues: "n".into(),
                 })
                 .unwrap();
-            assert_ne!(document.saved_hashes(&source).unwrap(), initial);
+            assert_ne!(
+                document
+                    .saved_hashes(&source, &super::super::WritePublication::Immediate)
+                    .unwrap(),
+                initial
+            );
             document.revert(&inverse).unwrap();
-            assert_eq!(document.saved_hashes(&source).unwrap(), initial);
+            assert_eq!(
+                document
+                    .saved_hashes(&source, &super::super::WritePublication::Immediate)
+                    .unwrap(),
+                initial
+            );
             let target = root.path().join(format!("copy-{name}"));
-            let written = document.write(&target, format, root.path()).unwrap();
+            let written = document
+                .write(
+                    &target,
+                    format,
+                    root.path(),
+                    &super::super::WritePublication::Immediate,
+                )
+                .unwrap();
             assert_eq!(std::fs::read(&target).unwrap(), expected_main);
             assert_eq!(written.len(), if side.is_some() { 2 } else { 1 });
             if side.is_some() {
@@ -334,7 +375,10 @@ mod tests {
             }
             let reopened = files::load(&target).unwrap();
             assert_eq!(
-                reopened.as_document().saved_hashes(&target).unwrap(),
+                reopened
+                    .as_document()
+                    .saved_hashes(&target, &super::super::WritePublication::Immediate)
+                    .unwrap(),
                 initial
             );
         }

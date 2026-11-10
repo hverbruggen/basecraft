@@ -29,6 +29,8 @@ pub enum Error {
     SaveCheckRequired(Box<crate::session::SaveCheck>),
     #[error("save_decision_stale: review the refreshed save check")]
     SaveDecisionStale(Box<crate::session::SaveCheck>),
+    #[error(transparent)]
+    PublishedWithFailure(Box<crate::replay::PublishedWithFailure>),
     #[error("nothing to {0}")]
     NothingTo(&'static str),
 }
@@ -56,6 +58,7 @@ impl Error {
                 "evidence_check_incomplete"
             }
             Self::SaveDecisionStale(_) => "save_decision_stale",
+            Self::PublishedWithFailure(_) => "published_with_failure",
             Self::NothingTo(_) => "nothing_to_do",
         }
     }

@@ -41,6 +41,7 @@ impl Document for OpenedTree {
         target: &Path,
         format: Format,
         _recovery_root: &Path,
+        _publication: &super::WritePublication,
     ) -> Result<Vec<(PathBuf, String)>> {
         if format != Format::Tree {
             return Err(invalid("a tree can only be saved as a tree file"));
@@ -96,7 +97,11 @@ impl Document for OpenedTree {
         Ok(hashes)
     }
 
-    fn saved_hashes(&self, _target: &Path) -> Result<Vec<String>> {
+    fn saved_hashes(
+        &self,
+        _target: &Path,
+        _publication: &super::WritePublication,
+    ) -> Result<Vec<String>> {
         let mut hw = HashingWriter::new(std::io::sink());
         files::write_tree(self, &mut hw)?;
         let mut side = HashingWriter::new(std::io::sink());
@@ -170,7 +175,9 @@ mod tests {
         std::fs::write(&source, "((a:1,b:1):1,c:2);\n(d:1,e:1);\n").unwrap();
         let mut loaded = files::load(&source).unwrap();
         let document = loaded.as_document_mut();
-        let before = document.saved_hashes(&source).unwrap();
+        let before = document
+            .saved_hashes(&source, &super::super::WritePublication::Immediate)
+            .unwrap();
         let revision = document.revision(0);
         for op in [
             Op::AlnRemoveGapColumns {},
@@ -184,15 +191,34 @@ mod tests {
             },
         ] {
             assert!(document.apply(&op).is_err());
-            assert_eq!(document.saved_hashes(&source).unwrap(), before);
+            assert_eq!(
+                document
+                    .saved_hashes(&source, &super::super::WritePublication::Immediate)
+                    .unwrap(),
+                before
+            );
             assert_eq!(document.revision(0), revision);
         }
         assert!(document.revert(&Inverse::Alignment(Vec::new())).is_err());
         let target = root.path().join("wrong.afa");
-        assert!(document.write(&target, Format::Fasta, root.path()).is_err());
+        assert!(
+            document
+                .write(
+                    &target,
+                    Format::Fasta,
+                    root.path(),
+                    &super::super::WritePublication::Immediate
+                )
+                .is_err()
+        );
         assert!(!target.exists());
         assert!(!files::tree_sidecar(&target).exists());
-        assert_eq!(document.saved_hashes(&source).unwrap(), before);
+        assert_eq!(
+            document
+                .saved_hashes(&source, &super::super::WritePublication::Immediate)
+                .unwrap(),
+            before
+        );
         assert_eq!(document.revision(0), revision);
     }
 
@@ -210,7 +236,9 @@ mod tests {
             std::fs::write(&source, bytes).unwrap();
             let mut loaded = files::load(&source).unwrap();
             let document = loaded.as_document_mut();
-            let initial = document.saved_hashes(&source).unwrap();
+            let initial = document
+                .saved_hashes(&source, &super::super::WritePublication::Immediate)
+                .unwrap();
             let revision = document.revision(0);
             let (inverse, feature) = document
                 .apply(&Op::TreeRenameTip {
@@ -219,11 +247,18 @@ mod tests {
                 })
                 .unwrap();
             assert!(feature.is_none());
-            let edited = document.saved_hashes(&source).unwrap();
+            let edited = document
+                .saved_hashes(&source, &super::super::WritePublication::Immediate)
+                .unwrap();
             assert_ne!(edited, initial);
             document.revert(&inverse).unwrap();
             assert_eq!(document.revision(0), revision);
-            assert_eq!(document.saved_hashes(&source).unwrap(), initial);
+            assert_eq!(
+                document
+                    .saved_hashes(&source, &super::super::WritePublication::Immediate)
+                    .unwrap(),
+                initial
+            );
             document
                 .apply(&Op::TreeRenameTip {
                     from: "a".into(),
@@ -231,8 +266,20 @@ mod tests {
                 })
                 .unwrap();
             let target = root.path().join(format!("copy-{name}"));
-            assert_eq!(document.saved_hashes(&target).unwrap(), edited);
-            let written = document.write(&target, Format::Tree, root.path()).unwrap();
+            assert_eq!(
+                document
+                    .saved_hashes(&target, &super::super::WritePublication::Immediate)
+                    .unwrap(),
+                edited
+            );
+            let written = document
+                .write(
+                    &target,
+                    Format::Tree,
+                    root.path(),
+                    &super::super::WritePublication::Immediate,
+                )
+                .unwrap();
             assert_eq!(
                 written.iter().map(|(p, _)| p.clone()).collect::<Vec<_>>(),
                 vec![target.clone(), files::tree_sidecar(&target)]
@@ -246,7 +293,10 @@ mod tests {
             }
             let reopened = files::load(&target).unwrap();
             assert_eq!(
-                reopened.as_document().saved_hashes(&target).unwrap(),
+                reopened
+                    .as_document()
+                    .saved_hashes(&target, &super::super::WritePublication::Immediate)
+                    .unwrap(),
                 edited
             );
         }

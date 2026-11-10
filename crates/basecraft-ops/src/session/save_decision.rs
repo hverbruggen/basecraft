@@ -21,6 +21,11 @@ pub struct SaveCheck {
 #[derive(Clone, Debug, Serialize)]
 struct SaveScope {
     evidence: EvidenceCheck,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    additional_evidence: Vec<EvidenceCheck>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    publication: Option<PathBuf>,
+    finalization: bool,
     session: String,
     document: usize,
     document_key: String,
@@ -42,6 +47,10 @@ impl SaveCheck {
         &self.scope.evidence
     }
 
+    pub fn document(&self) -> usize {
+        self.scope.document
+    }
+
     pub fn target(&self) -> &Path {
         &self.scope.target
     }
@@ -49,6 +58,45 @@ impl SaveCheck {
     /// Session-local, single-attempt token for a later adapter request.
     pub fn token(&self) -> &str {
         &self.token
+    }
+
+    /// Ordered, target-specific checks. Policy capabilities and backing ledgers
+    /// remain separate even when two groups name the same logical analysis.
+    pub fn evidence_groups(&self) -> impl Iterator<Item = &EvidenceCheck> {
+        std::iter::once(&self.scope.evidence).chain(&self.scope.additional_evidence)
+    }
+
+    pub(super) fn complete(&self) -> bool {
+        self.evidence_groups().all(EvidenceCheck::is_complete)
+    }
+
+    pub(super) fn issues(&self) -> Vec<InspectionIssue> {
+        self.evidence_groups()
+            .flat_map(|group| group.issues.clone())
+            .collect()
+    }
+
+    pub(super) fn resolve(&self, policy: SavePolicy) -> Result<()> {
+        // Validate EVERY group before the first durable evidence mutation.
+        for group in self.evidence_groups() {
+            if group.conflict.analyses.is_empty() {
+                continue;
+            }
+            if policy == SavePolicy::Cancel {
+                return Err(crate::Error::EvidenceConflict(Box::new(
+                    group.conflict.clone(),
+                )));
+            }
+            if !group.conflict.options.contains(&policy) {
+                return Err(invalid(
+                    "old analysed bytes are unavailable; preserve-copy cannot repair this input",
+                ));
+            }
+        }
+        for group in self.evidence_groups() {
+            crate::input_evidence::resolve(&group.conflict, policy)?;
+        }
+        Ok(())
     }
 
     pub(super) fn same_scope(&self, other: &Self) -> bool {
@@ -81,10 +129,12 @@ pub struct SaveDecision {
 
 #[derive(Debug, Serialize)]
 pub struct SaveOutcome {
+    #[serde(skip)]
+    pub(crate) recovery_observation: Option<SaveCheck>,
     pub warnings: Vec<SaveWarning>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(tag = "code", rename_all = "snake_case")]
 pub enum SaveWarning {
     EvidenceNotChecked { issues: Vec<InspectionIssue> },
@@ -177,8 +227,21 @@ impl Session {
     ) -> Result<SaveCheck> {
         let target = crate::save_guard::target_path(target)?;
         let target_revision = target_revision(&target)?;
+        let publication = match &self.write_publication {
+            crate::documents::WritePublication::Immediate => None,
+            context => Some(context.logical(&target)?),
+        };
+        let additional_evidence = publication
+            .as_ref()
+            .map(|target| crate::input_evidence::check(target))
+            .transpose()?
+            .into_iter()
+            .collect();
         let scope = SaveScope {
             evidence,
+            additional_evidence,
+            publication,
+            finalization: false,
             session: self.id.clone(),
             document: id.0,
             document_key: self.docs[id.0].key.clone(),
@@ -235,4 +298,86 @@ fn target_revision(target: &Path) -> Result<Option<TargetRevision>> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => return Err(error.into()),
     })
+}
+
+impl Session {
+    pub(crate) fn recovery_placement(&mut self, stage: PathBuf, destination: PathBuf) {
+        self.write_publication = crate::documents::WritePublication::Recovery {
+            stage,
+            destination,
+            stores: std::sync::Mutex::new(Vec::new()),
+        };
+    }
+
+    /// Observation only, not receipt authority. Called under the evidence guard
+    /// immediately after a successful write or authorized finalization.
+    pub(crate) fn recovery_snapshot(&self, id: DocId) -> Result<SaveCheck> {
+        let target = self.resolve(&self.docs[id.0].key);
+        let mut check =
+            self.save_check_scope(id, &target, crate::input_evidence::check(&target)?)?;
+        check.scope.finalization = true;
+        check.scope_revision = basecraft_io::hash_bytes(&serde_json::to_vec(&check.scope)?);
+        Ok(check)
+    }
+
+    pub(crate) fn recovery_check(&self, id: DocId, saved: bool) -> Result<SaveCheck> {
+        if saved {
+            self.publish_save_check(id, self.recovery_snapshot(id)?)
+        } else {
+            self.check_save(id, None)
+        }
+    }
+
+    /// Caller holds the pinned final target reservation, then evidence guard.
+    /// Reauthorizes only publication: never serializes a successful document again.
+    pub(crate) fn recovery_finalize(
+        &self,
+        id: DocId,
+        expected: &SaveCheck,
+        decision: Option<SaveDecision>,
+    ) -> Result<SaveCheck> {
+        let valid = decision
+            .as_ref()
+            .map(|d| self.consume_save_check(d))
+            .transpose()?
+            .unwrap_or(false);
+        self.check_save_source(id)?;
+        let fresh = self.recovery_snapshot(id)?;
+        if let Some(decision) = decision {
+            if !valid || !fresh.same_scope(&decision.check) {
+                return Err(crate::Error::SaveDecisionStale(Box::new(
+                    self.publish_save_check(id, fresh)?,
+                )));
+            }
+            if !fresh.complete() && !decision.acknowledge_incomplete {
+                return Err(crate::Error::SaveCheckRequired(Box::new(
+                    self.publish_save_check(id, fresh)?,
+                )));
+            }
+            fresh.resolve(decision.known)?;
+            self.recovery_snapshot(id)
+        } else if fresh.same_scope(expected) {
+            Ok(fresh)
+        } else {
+            Err(crate::Error::SaveCheckRequired(Box::new(
+                self.publish_save_check(id, fresh)?,
+            )))
+        }
+    }
+
+    pub(crate) fn recovery_stores(&self) -> Result<Vec<crate::analysis_store::ArtifactRun>> {
+        match &self.write_publication {
+            crate::documents::WritePublication::Immediate => Err(invalid("not a recovery Session")),
+            crate::documents::WritePublication::Recovery { stores, .. } => Ok(stores
+                .lock()
+                .map_err(|_| invalid("recovery stores unavailable"))?
+                .clone()),
+        }
+    }
+}
+
+impl Session {
+    pub(crate) fn save_recovery(&mut self, id: DocId) -> Result<SaveOutcome> {
+        self.save_attempt(id, None, SavePolicy::Cancel, true, false, None)
+    }
 }
