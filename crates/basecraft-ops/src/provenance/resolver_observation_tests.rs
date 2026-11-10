@@ -166,9 +166,9 @@ fn stages(observation: &BundleObservation) -> Vec<ResolverStage> {
 
 #[test]
 fn binding_and_companion() {
-    let Some(root) =
-        crate::isolated_profile::enter(concat!(module_path!(), "::binding_and_companion"))
-    else {
+    let Some(root) = crate::isolated_profile::enter(
+        "provenance::resolver_observation_tests::binding_and_companion",
+    ) else {
         return;
     };
     let source = root.join("result.txt");
@@ -240,9 +240,9 @@ fn binding_and_companion() {
 
 #[test]
 fn project_fallback_and_settings() {
-    let Some(root) =
-        crate::isolated_profile::enter(concat!(module_path!(), "::project_fallback_and_settings"))
-    else {
+    let Some(root) = crate::isolated_profile::enter(
+        "provenance::resolver_observation_tests::project_fallback_and_settings",
+    ) else {
         return;
     };
     let source = root.join("outer/inner/result.txt");
@@ -380,7 +380,7 @@ fn companion_for(path: &Path) -> PathBuf {
 
 #[test]
 fn discovery_failure() {
-    let name = concat!(module_path!(), "::discovery_failure");
+    let name = "provenance::resolver_observation_tests::discovery_failure";
     let Some(root) = crate::isolated_profile::enter(name) else {
         return;
     };
@@ -421,9 +421,9 @@ fn native_paths_links_and_denials() {
         ffi::OsStringExt,
         fs::{PermissionsExt, symlink},
     };
-    let Some(root) =
-        crate::isolated_profile::enter(concat!(module_path!(), "::native_paths_links_and_denials"))
-    else {
+    let Some(root) = crate::isolated_profile::enter(
+        "provenance::resolver_observation_tests::native_paths_links_and_denials",
+    ) else {
         return;
     };
     let source = root.join(std::ffi::OsString::from_vec(b"result-\xff.txt".to_vec()));

@@ -164,11 +164,24 @@ fn resolve_bundle(
             steps,
         ) {
             resolver_call(ResolverStage::ProjectRelative);
-            let relative = absolute.strip_prefix(root);
-            resolver_record(steps, || {
-                ResolverStep::ProjectRelative(root.to_path_buf(), relative.map(Path::to_path_buf))
-            });
-            if let Ok(relative) = relative {
+            let relative = match absolute.strip_prefix(root) {
+                Ok(relative) => {
+                    resolver_record(steps, || {
+                        ResolverStep::ProjectRelative(
+                            root.to_path_buf(),
+                            Ok(relative.to_path_buf()),
+                        )
+                    });
+                    Some(relative)
+                }
+                Err(error) => {
+                    resolver_record(steps, || {
+                        ResolverStep::ProjectRelative(root.to_path_buf(), Err(error))
+                    });
+                    None
+                }
+            };
+            if let Some(relative) = relative {
                 let key = relative.to_string_lossy();
                 return (
                     root.join(".basecraft/provenance")
