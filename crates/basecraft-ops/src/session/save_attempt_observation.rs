@@ -1,6 +1,10 @@
 //! Passive, invocation-scoped save boundary hooks. Legacy hooks perform no IO.
 //! Successful calls are not durability witnesses; reconciliation is not authority.
-use super::*;
+use super::Session;
+#[cfg(test)]
+use super::{DocId, SaveDecision, SaveOutcome};
+use crate::{Error, Result, documents::Document, files};
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Site {
@@ -262,6 +266,7 @@ impl Session {
 pub(crate) mod tests {
     use super::*;
     use crate::analysis_store::publication_observation::PersistFact;
+    use basecraft_protocol::Op;
     use std::{collections::BTreeMap, fs};
 
     pub(crate) fn inventory(root: &Path) -> BTreeMap<PathBuf, Option<Vec<u8>>> {
