@@ -33,10 +33,25 @@ fn recoverable_open_requested_heap() {
     for scenario in ["heap-open-compact", "heap-open-100mb", "heap-open-error"] {
         let result = memory_cases::measure(scenario, &root).unwrap();
         println!("{result}");
-        // Threshold follows measured release/debug baselines; selected after capture.
+        // Measured at 39dae81 (debug + five independent release processes).
+        // 100MB incremental peak ~100.986MB; compact ~10.8KB. This gross bound
+        // permits almost 100% large-input headroom plus a fixed small-work floor.
+        // It measures requested Rust heap, never RSS or allocator overhead.
         let heap = &result["heap"];
+        let baseline = heap["baseline_bytes"].as_u64().unwrap();
+        let peak = heap["peak_bytes"].as_u64().unwrap();
+        let incremental = heap["incremental_peak_bytes"].as_u64().unwrap();
+        let after_drop = heap["live_after_drop_bytes"].as_u64().unwrap();
+        let limit = result["fixture_bytes"].as_u64().unwrap() * 2 + 65_536;
+        assert_eq!(peak - baseline, incremental);
+        assert!(peak >= heap["live_after_open_bytes"].as_u64().unwrap());
         assert!(
-            heap["peak_bytes"].as_u64().unwrap() >= heap["live_after_open_bytes"].as_u64().unwrap()
+            incremental <= limit,
+            "{scenario}: incremental peak {incremental} requested bytes exceeds {limit}"
+        );
+        assert!(
+            after_drop <= baseline + 65_536,
+            "{scenario}: live requested bytes after drop {after_drop} exceed baseline {baseline} + 65536"
         );
     }
 }

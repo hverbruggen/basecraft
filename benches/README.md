@@ -59,8 +59,8 @@ baselines explicitly report `unavailable`; they are **not a passing budget**.
 `budgets.toml` preserves the plan's 30% benchmark and 2x gross-CI comparison
 semantics as observations. No timing gate is enabled, no single run establishes
 a trusted threshold, and no direct PRD target is asserted by these headless
-scenarios. First-paint/input-to-screen, peak memory and startup
-measurements remain subsequent work. CI continues to run existing exact counters;
+scenarios. First-paint/input-to-screen and startup measurements remain subsequent
+work; requested-heap measurements are separate opt-in scenarios described below. CI continues to run existing exact counters;
 its timing placeholder is intentionally deferred to the later gate stage.
 
 `--history PATH` opts into appending summary reports to an **external** JSONL
@@ -230,3 +230,26 @@ This does **not** measure allocator metadata, size-class slack, transient intern
 copies during System realloc, memory mappings, foreign allocations bypassing
 Rust's global allocator, process RSS, GUI/startup memory or the 1 GB boundary.
 Neither total nor incremental requested bytes are total process memory.
+
+The deterministic `heap_budgets` integration test joins `just check`/`just ci`.
+It generates its own compact and 100 MB inputs in the configured temporary
+storage, never skips a missing external fixture, and checks the real error path.
+Incremental peak must be at most **2 × input file bytes + 65,536 requested bytes**;
+after Session drop absolute live requested bytes must be at most the pre-open
+baseline + 65,536. Total peak/retained values are also printed. These are gross
+current-behavior regression bounds, not PRD qualification. Benchmark reports
+remain observational; the deterministic Rust test is the enabled memory gate.
+
+Before choosing the bounds, revision `39dae81` measured five independent release
+samples per scenario and the debug test. Release medians: 10,802 incremental
+requested bytes for compact FASTA, 100,985,701 for the exact 100 MB input, and 355
+for malformed FASTA. Debug large incremental peak was 100,985,458 bytes. The
+large gate allows almost 100% headroom (about 2.0007 × file size against the
+measured 1.0099 ×); the 64 KiB floor absorbs small-fixture/framework/path variation
+without weakening the large bound materially. Requested-byte accounting avoids
+wall-time/OS allocator noise, and the measured debug/release difference was tiny
+relative to the headroom. The after-drop bound catches retained large buffers;
+it permits small process-library/cache state rather than requiring exact zero.
+Private raw evidence and environment identity belong with the task review, not
+in tracked history. This baseline is one deterministic wrapped single-record
+FASTA workload, not a universal memory scaling or 1 GB promise.
