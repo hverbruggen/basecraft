@@ -82,10 +82,10 @@ pub fn kind(path: &Path) -> Result<Kind> {
         Format::Fasta => {}
     }
     let summary = fasta::summary(path)?;
-    Ok(fasta_kind(path, summary))
+    Ok(fasta_kind(path, summary, gff_sidecar(path).exists()))
 }
 
-fn fasta_kind(path: &Path, summary: fasta::Summary) -> Kind {
+fn fasta_kind(path: &Path, summary: fasta::Summary, gff_present: bool) -> Kind {
     let named = path
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("afa"))
@@ -93,9 +93,7 @@ fn fasta_kind(path: &Path, summary: fasta::Summary) -> Kind {
             .file_stem()
             .and_then(|s| Path::new(s).extension())
             .is_some_and(|e| e.eq_ignore_ascii_case("aln"));
-    let rows = summary.records >= 2
-        && summary.longest <= LONGEST_ALIGNMENT_ROW
-        && !gff_sidecar(path).exists();
+    let rows = summary.records >= 2 && summary.longest <= LONGEST_ALIGNMENT_ROW && !gff_present;
     if named || rows {
         Kind::Alignment
     } else {
@@ -191,33 +189,66 @@ pub fn load(path: &Path) -> Result<Loaded> {
 pub fn load_from(path: &Path, source: Source) -> Result<Loaded> {
     match Format::from_path(path)? {
         Format::Tree => load_tree_from(path, &source, false).map(Loaded::Tree),
-        Format::Fasta => {
-            let file = Arc::new(cache::index_fasta(source)?);
-            if file.index.records.is_empty() {
-                return Err(Error::Empty(path.to_path_buf()));
-            }
-            let summary = fasta::Summary {
-                records: file.index.records.len() as u64,
-                longest: file.index.records.iter().map(|r| r.len).max().unwrap_or(0),
-            };
-            if fasta_kind(path, summary) == Kind::Alignment {
-                let name = path
-                    .file_name()
-                    .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-                Ok(Loaded::Alignment(OpenedAlignment {
-                    doc: AlignmentDoc::from_fasta(name, &file),
-                    format: Format::Fasta,
-                }))
-            } else {
-                open_fasta_from(path, file).map(Loaded::Sequence)
-            }
-        }
+        Format::Fasta => load_fasta_from(path, source, None),
         Format::GenBank => open_from(path, source).map(Loaded::Sequence),
         _ => Err(crate::error::invalid(
             "this format does not support loading an owned source",
         )),
     }
 }
+
+/// Admission evidence from exactly the bytes consumed by the FASTA loaders.
+/// Other formats and absent companions keep their existing acquisition route.
+pub(crate) struct CapturedLoad {
+    pub content: Loaded,
+    pub main_hash: String,
+    pub companion_hashes: Vec<Option<String>>,
+}
+
+pub(crate) fn capture_load(path: &Path, format: Format) -> Result<Option<CapturedLoad>> {
+    if format != Format::Fasta || !gff_sidecar(path).exists() {
+        return Ok(None);
+    }
+    let (source, main_hash) = Source::open_hashed(path)?;
+    let (gff, gff_hash) = Source::open_hashed(&gff_sidecar(path))?;
+    #[cfg(test)]
+    admission_tests::boundary("acquired");
+    let content = load_fasta_from(path, source, Some(&gff))?;
+    Ok(Some(CapturedLoad {
+        content,
+        main_hash,
+        companion_hashes: vec![Some(gff_hash)],
+    }))
+}
+
+fn load_fasta_from(path: &Path, source: Source, captured_gff: Option<&Source>) -> Result<Loaded> {
+    let file = Arc::new(cache::index_fasta(source)?);
+    if file.index.records.is_empty() {
+        return Err(Error::Empty(path.to_path_buf()));
+    }
+    let summary = fasta::Summary {
+        records: file.index.records.len() as u64,
+        longest: file.index.records.iter().map(|r| r.len).max().unwrap_or(0),
+    };
+    let gff_present = captured_gff.is_some() || gff_sidecar(path).exists();
+    if fasta_kind(path, summary, gff_present) == Kind::Alignment {
+        let name = path
+            .file_name()
+            .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        Ok(Loaded::Alignment(OpenedAlignment {
+            doc: AlignmentDoc::from_fasta(name, &file),
+            format: Format::Fasta,
+        }))
+    } else if let Some(gff) = captured_gff {
+        open_fasta_with_gff(path, file, Some(gff.bytes())).map(Loaded::Sequence)
+    } else {
+        open_fasta_from(path, file).map(Loaded::Sequence)
+    }
+}
+
+#[cfg(test)]
+#[path = "fasta_admission_tests.rs"]
+pub(crate) mod admission_tests;
 
 /// Write explicit alignment contents as FASTA, 60 columns a line.
 /// Synthetic suffix padding used to display ragged input is never materialised.
@@ -592,10 +623,25 @@ fn open_fasta_from(path: &Path, file: Arc<cache::IndexedFasta>) -> Result<Opened
     }
     let sidecar = gff_sidecar(path);
     let gff = if sidecar.exists() {
-        Some(gff3::parse(&std::fs::read(&sidecar)?)?)
+        let bytes = std::fs::read(&sidecar)?;
+        #[cfg(feature = "test-counters")]
+        basecraft_io::counters::record_read(&sidecar, bytes.len() as u64);
+        Some(bytes)
     } else {
         None
     };
+    open_fasta_with_gff(path, file, gff.as_deref())
+}
+
+fn open_fasta_with_gff(
+    path: &Path,
+    file: Arc<cache::IndexedFasta>,
+    gff_bytes: Option<&[u8]>,
+) -> Result<Opened> {
+    if file.index.records.is_empty() {
+        return Err(Error::Empty(path.to_path_buf()));
+    }
+    let gff = gff_bytes.map(gff3::parse).transpose()?;
     let name = file.index.records[0].name.clone();
     let features = gff.and_then(|g| g.sequences.into_iter().find(|s| s.seqid == name));
     let doc = SequenceDoc::from_fasta(Arc::clone(&file), 0, features);

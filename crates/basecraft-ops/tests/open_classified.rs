@@ -297,3 +297,102 @@ fn bound_tree_errors_never_fall_back_to_an_unbound_payload() {
     assert_eq!((id, kind), (DocId(0), files::Kind::Tree));
     assert!(session.tree_metadata_warning(id).unwrap().is_some());
 }
+
+#[cfg(feature = "test-counters")]
+#[test]
+fn companion_capture_counts_every_read_on_both_session_routes() {
+    use basecraft_io::counters;
+    let main = b">a description\nACGT\n>b retained\nTTAA\n";
+    let gff = b"##gff-version 3\na\t.\tgene\t1\t3\t.\t+\t.\tID=gene1\n";
+    for name in ["records.fasta", "records.afa", "records.aln.fasta"] {
+        for classified in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join(name);
+            let sidecar = files::gff_sidecar(&path);
+            std::fs::write(&path, main).unwrap();
+            std::fs::write(&sidecar, gff).unwrap();
+            let mut session = Session::new(dir.path());
+            counters::reset();
+            let id = if classified {
+                session.open_classified(&path).unwrap().0
+            } else {
+                session.open(&path).unwrap()
+            };
+            let counts = counters::snapshot();
+            for (file, bytes) in [(&path, main.as_slice()), (&sidecar, gff.as_slice())] {
+                assert_eq!(
+                    counts.reads[&file.canonicalize().unwrap()],
+                    counters::Reads {
+                        full_reads: 2,
+                        bytes: 2 * bytes.len() as u64,
+                    }
+                );
+            }
+            assert_eq!(counts.unresolved_reads, 0);
+            assert_eq!((counts.sync_data, counts.sync_all), (0, 0));
+            assert!(!dir.path().join(".basecraft").exists());
+            let record = session.document_record(id).unwrap();
+            let open = record
+                .events
+                .iter()
+                .find(|e| matches!(e.op, Op::Open { .. }))
+                .unwrap();
+            let mut expected = vec![(name.into(), hash_bytes(main))];
+            if name == "records.fasta" {
+                expected.push(("records.gff3".into(), hash_bytes(gff)));
+            }
+            assert_eq!(open.result.hashes, expected);
+            println!(
+                "{name} classified={classified}: main=2/{} GFF=2/{} unresolved=0 sync=0",
+                2 * main.len(),
+                2 * gff.len()
+            );
+        }
+    }
+}
+
+#[test]
+fn gff_capture_preserves_error_and_alignment_contracts() {
+    use basecraft_ops::Error;
+    for name in ["records.fasta", "records.afa", "records.aln.fasta"] {
+        for gff in [
+            b"".as_slice(),
+            b"##gff-version 3\nother\t.\tgene\t1\t2\t.\t+\t.\tID=x\n",
+            b"bad GFF\n",
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join(name);
+            let sidecar = files::gff_sidecar(&path);
+            std::fs::write(&path, b">a\nACGT\n>b\nTTAA\n").unwrap();
+            std::fs::write(&sidecar, gff).unwrap();
+            if gff == b"bad GFF\n" && name == "records.fasta" {
+                for error in [
+                    files::load(&path).err().unwrap(),
+                    files::open(&path).err().unwrap(),
+                    Session::new(dir.path()).open(&path).unwrap_err(),
+                ] {
+                    assert!(matches!(
+                        error,
+                        Error::Format(basecraft_io::Error::Parse { .. })
+                    ));
+                }
+            } else {
+                agree(
+                    &path,
+                    if name == "records.fasta" {
+                        files::Kind::Sequence
+                    } else {
+                        files::Kind::Alignment
+                    },
+                );
+            }
+            std::fs::remove_file(&sidecar).unwrap();
+            std::fs::create_dir(&sidecar).unwrap();
+            assert!(matches!(files::open(&path).err().unwrap(), Error::Io(_)));
+            assert!(matches!(
+                Session::new(dir.path()).open(&path).unwrap_err(),
+                Error::Format(basecraft_io::Error::Io(_))
+            ));
+        }
+    }
+}

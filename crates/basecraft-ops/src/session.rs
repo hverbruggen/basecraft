@@ -588,19 +588,15 @@ impl Session {
             files::Format::GenBank | files::Format::Fasta => vec![files::gff_sidecar(path)],
             files::Format::Submission => crate::documents::submission_companions(path),
         };
-        // Only the main-file snapshot is coupled here. Formats with companions
-        // retain their legacy before/after hash checks until their loaders can
-        // return hashes of the exact companion bytes they parsed too.
-        let owned_main = matches!(
-            format,
-            files::Format::Fasta | files::Format::GenBank | files::Format::Tree
-        ) && !companions.iter().any(|c| c.exists());
-        let (source, accepted_hash) = if owned_main {
-            let (source, hash) = basecraft_io::Source::open_hashed(path)?;
-            (Some(source), hash)
-        } else {
-            (None, basecraft_io::hash_file(path)?)
-        };
+        // A captured loader couples parser bytes and hashes, but companions
+        // still require final content checks before admission.
+        let captured = files::capture_load(path, format)?;
+        let owned_main = captured.is_none()
+            && matches!(
+                format,
+                files::Format::Fasta | files::Format::GenBank | files::Format::Tree
+            )
+            && !companions.iter().any(|c| c.exists());
         let hash_companions = || -> Result<Vec<Option<String>>> {
             companions
                 .iter()
@@ -613,18 +609,37 @@ impl Session {
                 })
                 .collect()
         };
-        let companion_hashes = hash_companions()?;
-        let content = if let Some(source) = source {
-            if verified_snapshot && format == files::Format::Tree {
-                Loaded::Tree(files::load_tree_from(path, &source, true)?)
-            } else {
-                files::load_from(path, source)?
-            }
-        } else if verified_snapshot && format == files::Format::Tree {
-            Loaded::Tree(files::load_tree_from_verified_snapshot(path)?)
+        let (content, accepted_hash, companion_hashes) = if let Some(captured) = captured {
+            (
+                captured.content,
+                captured.main_hash,
+                captured.companion_hashes,
+            )
         } else {
-            files::load(path)?
+            let (source, accepted_hash) = if owned_main {
+                let (source, hash) = basecraft_io::Source::open_hashed(path)?;
+                (Some(source), hash)
+            } else {
+                (None, basecraft_io::hash_file(path)?)
+            };
+            let companion_hashes = hash_companions()?;
+            #[cfg(test)]
+            files::admission_tests::boundary("acquired");
+            let content = if let Some(source) = source {
+                if verified_snapshot && format == files::Format::Tree {
+                    Loaded::Tree(files::load_tree_from(path, &source, true)?)
+                } else {
+                    files::load_from(path, source)?
+                }
+            } else if verified_snapshot && format == files::Format::Tree {
+                Loaded::Tree(files::load_tree_from_verified_snapshot(path)?)
+            } else {
+                files::load(path)?
+            };
+            (content, accepted_hash, companion_hashes)
         };
+        #[cfg(test)]
+        files::admission_tests::boundary("parsed");
         if (!owned_main && basecraft_io::hash_file(path)? != accepted_hash)
             || hash_companions()? != companion_hashes
             || crate::input_evidence::stamp(path)? != disk_stamp

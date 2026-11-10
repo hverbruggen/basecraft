@@ -148,7 +148,7 @@ fn session_records_loaded_hash_and_refuses_edits_after_external_change() {
 }
 
 #[test]
-fn companion_hash_remains_guarded_on_the_legacy_path() {
+fn companion_hash_remains_guarded_on_the_captured_path() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("sequence.fasta");
     let sidecar = files::gff_sidecar(&path);
@@ -188,7 +188,7 @@ fn companion_hash_remains_guarded_on_the_legacy_path() {
 
 #[cfg(feature = "test-counters")]
 #[test]
-fn actual_session_read_counts_separate_kind_probe_and_companion_fallback() {
+fn actual_session_read_counts_separate_kind_probe_and_companion_capture() {
     use basecraft_io::counters;
     let dir = tempfile::tempdir().unwrap();
     for (name, bytes, expected_session, expected_probe, companion) in [
@@ -200,7 +200,7 @@ fn actual_session_read_counts_separate_kind_probe_and_companion_fallback() {
             1,
             false,
         ),
-        ("with-gff.fasta", b">a\nACGT\n".as_slice(), 3, 1, true),
+        ("with-gff.fasta", b">a\nACGT\n".as_slice(), 2, 1, true),
         ("tree.nwk", b"(a,b);\n".as_slice(), 1, 0, false),
         (
             "locus.gb",
@@ -454,5 +454,126 @@ fn bound_tree_snapshot_verification_keeps_binding_run_namespace_and_metadata_gua
                 "guard was bypassed: {fault}"
             );
         }
+    }
+}
+
+#[test]
+fn captured_companion_refusals_preserve_baseline_undo_and_passive_storage() {
+    use basecraft_protocol::Op;
+    for change_main in [false, true] {
+        for save in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("records.fasta");
+            let sidecar = files::gff_sidecar(&path);
+            let main = b">a description\nACGT\n>b retained\nTTAA\n";
+            let gff = b"##gff-version 3\na\t.\tgene\t1\t3\t.\t+\t.\tID=gene1\n";
+            std::fs::write(&path, main).unwrap();
+            std::fs::write(&sidecar, gff).unwrap();
+            let mut session = Session::new(dir.path());
+            let id = session.open(&path).unwrap();
+            let before = session.document_record(id).unwrap();
+            let target = if change_main { &path } else { &sidecar };
+            let modified = target.metadata().unwrap().modified().unwrap();
+            let mut replacement = std::fs::read(target).unwrap();
+            if change_main {
+                replacement[15] = b'T';
+            } else {
+                replacement[16] = b'b';
+            }
+            std::fs::write(target, replacement).unwrap();
+            std::fs::File::options()
+                .write(true)
+                .open(target)
+                .unwrap()
+                .set_modified(modified)
+                .unwrap();
+            let result = if save {
+                session.save(id, None).map(|_| ())
+            } else {
+                session
+                    .apply(
+                        id,
+                        Op::SeqReplace {
+                            start: 0,
+                            end: 1,
+                            residues: "G".into(),
+                        },
+                    )
+                    .map(|_| ())
+            };
+            assert!(result.is_err());
+            assert_eq!(session.doc(id).unwrap().read(0, 4), b"ACGT");
+            assert_eq!(session.doc(id).unwrap().features().count(), 1);
+            assert!(!session.can_undo(id));
+            assert!(!session.can_redo(id));
+            assert_eq!(
+                serde_json::to_value(session.document_record(id).unwrap()).unwrap(),
+                serde_json::to_value(before).unwrap()
+            );
+            assert!(!dir.path().join(".basecraft").exists());
+        }
+    }
+}
+
+#[test]
+fn captured_multirecord_writer_and_retained_replay_inputs_match_legacy() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("records.fasta");
+    let sidecar = files::gff_sidecar(&path);
+    let main = b">a description\nACGT\n>b retained\nTTAA\n";
+    let gff = b"##gff-version 3\na\t.\tgene\t1\t3\t.\t+\t.\tID=gene1;Name=example\n";
+    std::fs::write(&path, main).unwrap();
+    std::fs::write(&sidecar, gff).unwrap();
+    let legacy = files::open(&path).unwrap();
+    let mut session = Session::new(dir.path());
+    let id = session.open(&path).unwrap();
+    assert_eq!(
+        session.doc(id).unwrap().to_genbank(),
+        legacy.doc.to_genbank()
+    );
+    session
+        .apply(
+            id,
+            basecraft_protocol::Op::SeqReplace {
+                start: 0,
+                end: 1,
+                residues: "G".into(),
+            },
+        )
+        .unwrap();
+    session.flush().unwrap();
+    for bytes in [main.as_slice(), gff.as_slice()] {
+        assert_eq!(
+            std::fs::read(
+                dir.path()
+                    .join(".basecraft/objects")
+                    .join(hash_bytes(bytes))
+            )
+            .unwrap(),
+            bytes
+        );
+    }
+    session.undo(id).unwrap();
+    assert_eq!(
+        session.doc(id).unwrap().to_genbank(),
+        legacy.doc.to_genbank()
+    );
+    session.redo(id).unwrap();
+    session.flush().unwrap();
+    // Replay must use the exact retained source and companion after both vanish.
+    std::fs::remove_file(&path).unwrap();
+    std::fs::remove_file(&sidecar).unwrap();
+    let report = basecraft_ops::replay::replay(dir.path()).unwrap();
+    assert!(report.ok(), "{report:#?}");
+    for bytes in [main.as_slice(), gff.as_slice()] {
+        assert_eq!(
+            std::fs::read(
+                dir.path()
+                    .join(".basecraft/objects")
+                    .join(hash_bytes(bytes))
+            )
+            .unwrap(),
+            bytes
+        );
     }
 }
