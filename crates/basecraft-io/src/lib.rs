@@ -44,8 +44,40 @@ pub fn write_atomic(
 
 /// BLAKE3 hash of a file's content, as `b3:<hex>`.
 pub fn hash_file(path: &Path) -> Result<String> {
-    let source = Source::open(path)?;
-    Ok(hash_bytes(source.bytes()))
+    let file = std::fs::File::open(path)?;
+    hash_reader(
+        file,
+        #[cfg(feature = "test-counters")]
+        path,
+    )
+}
+
+const HASH_BUFFER_SIZE: usize = 1 << 20;
+
+fn hash_reader(
+    mut reader: impl Read,
+    #[cfg(feature = "test-counters")] path: &Path,
+) -> Result<String> {
+    let mut hasher = Hasher::new();
+    let mut buffer = vec![0u8; HASH_BUFFER_SIZE];
+    #[cfg(feature = "test-counters")]
+    let mut bytes_read = 0;
+    loop {
+        let count = match reader.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(count) => count,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error.into()),
+        };
+        hasher.update(&buffer[..count]);
+        #[cfg(feature = "test-counters")]
+        {
+            bytes_read += count as u64;
+        }
+    }
+    #[cfg(feature = "test-counters")]
+    counters::record_read(path, bytes_read);
+    Ok(hasher.finish())
 }
 
 pub fn hash_bytes(bytes: &[u8]) -> String {
@@ -97,5 +129,126 @@ impl Hasher {
 
     pub fn finish(&self) -> String {
         format!("b3:{}", self.0.finalize().to_hex())
+    }
+}
+
+#[cfg(test)]
+mod hash_tests {
+    use super::*;
+    use std::io::{self, Cursor};
+
+    #[test]
+    fn file_hash_matches_bytes_at_buffer_boundaries() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        for size in [
+            0,
+            1,
+            127,
+            HASH_BUFFER_SIZE - 1,
+            HASH_BUFFER_SIZE,
+            HASH_BUFFER_SIZE + 1,
+            3 * HASH_BUFFER_SIZE + 17,
+        ] {
+            let bytes: Vec<u8> = (0..size).map(|i| i.to_le_bytes()[0]).collect();
+            std::fs::write(file.path(), &bytes).unwrap();
+            #[cfg(feature = "test-counters")]
+            counters::reset();
+            assert_eq!(hash_file(file.path()).unwrap(), hash_bytes(&bytes));
+            #[cfg(feature = "test-counters")]
+            {
+                let counts = counters::snapshot();
+                assert_eq!(counts.reads.len(), 1);
+                assert_eq!(
+                    counts.reads[&file.path().canonicalize().unwrap()],
+                    counters::Reads {
+                        full_reads: 1,
+                        bytes: size as u64
+                    }
+                );
+                assert_eq!(counts.unresolved_reads, 0);
+            }
+        }
+    }
+
+    struct InterruptedReader {
+        bytes: Cursor<Vec<u8>>,
+        interrupt: bool,
+        fail_at_end: bool,
+    }
+
+    impl Read for InterruptedReader {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            assert_eq!(buffer.len(), HASH_BUFFER_SIZE);
+            self.interrupt = !self.interrupt;
+            if self.interrupt {
+                return Err(io::ErrorKind::Interrupted.into());
+            }
+            if self.fail_at_end && self.bytes.position() == self.bytes.get_ref().len() as u64 {
+                return Err(io::ErrorKind::PermissionDenied.into());
+            }
+            // Exercise short reads as well as interruptions before data and EOF.
+            self.bytes.read(&mut buffer[..13])
+        }
+    }
+
+    #[test]
+    fn interrupted_short_reads_retry_and_partial_errors_do_not_count() {
+        #[cfg(feature = "test-counters")]
+        let file = tempfile::NamedTempFile::new().unwrap();
+        for fail_at_end in [false, true] {
+            let bytes = b"deterministic content spanning several short reads".to_vec();
+            let reader = InterruptedReader {
+                bytes: Cursor::new(bytes.clone()),
+                interrupt: false,
+                fail_at_end,
+            };
+            #[cfg(feature = "test-counters")]
+            counters::reset();
+            let result = hash_reader(
+                reader,
+                #[cfg(feature = "test-counters")]
+                file.path(),
+            );
+            if fail_at_end {
+                assert!(matches!(result, Err(Error::Io(error))
+                    if error.kind() == io::ErrorKind::PermissionDenied));
+                #[cfg(feature = "test-counters")]
+                assert_eq!(counters::snapshot(), counters::Counters::default());
+            } else {
+                assert_eq!(result.unwrap(), hash_bytes(&bytes));
+                #[cfg(feature = "test-counters")]
+                assert_eq!(
+                    counters::snapshot().reads[&file.path().canonicalize().unwrap()],
+                    counters::Reads {
+                        full_reads: 1,
+                        bytes: bytes.len() as u64
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn missing_file_preserves_io_error() {
+        let dir = tempfile::tempdir().unwrap();
+        #[cfg(feature = "test-counters")]
+        counters::reset();
+        assert!(
+            matches!(hash_file(&dir.path().join("missing")), Err(Error::Io(error))
+            if error.kind() == io::ErrorKind::NotFound)
+        );
+        #[cfg(feature = "test-counters")]
+        assert_eq!(counters::snapshot(), counters::Counters::default());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn directory_read_fails_without_counting_success() {
+        let dir = tempfile::tempdir().unwrap();
+        #[cfg(feature = "test-counters")]
+        counters::reset();
+        assert!(matches!(hash_file(dir.path()), Err(Error::Io(_))));
+        #[cfg(feature = "test-counters")]
+        assert_eq!(counters::snapshot(), counters::Counters::default());
     }
 }
