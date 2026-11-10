@@ -422,3 +422,166 @@ fn late_registrar() {
     )
     .unwrap();
 }
+
+#[test]
+fn session_tokens_support_adapter_round_trip_and_cannot_be_replayed() {
+    isolated(
+        "session_tokens_support_adapter_round_trip_and_cannot_be_replayed",
+        |root| {
+            let (mut session, doc, file) = setup(root);
+            let known = reference(&folder(root, "known"), &file);
+            damage(root, &file);
+            let check = session.check_save(doc, None).unwrap();
+            let wire = serde_json::to_value(&check).unwrap();
+            let token = wire["token"].as_str().unwrap();
+            // Two adapter acknowledgements can be formed, but only one attempt
+            // consumes this Session's pending receipt, even when that attempt fails.
+            let first = session
+                .decide_save(doc, None, token, SavePolicy::Cancel, true)
+                .unwrap();
+            let duplicate = session
+                .decide_save(doc, None, token, SavePolicy::BreakEvidence, true)
+                .unwrap();
+            assert!(matches!(
+                session.save_with_decision(doc, None, first),
+                Err(Error::EvidenceConflict(_))
+            ));
+            assert!(matches!(
+                session.save_with_decision(doc, None, duplicate),
+                Err(Error::SaveDecisionStale(_))
+            ));
+            assert_eq!(
+                input_evidence::read_input(known.directory()).unwrap().state,
+                "referenced"
+            );
+            assert_eq!(std::fs::read(&file).unwrap(), ORIGINAL);
+            assert!(matches!(
+                session.decide_save(
+                    doc,
+                    None,
+                    "invented blanket consent",
+                    SavePolicy::BreakEvidence,
+                    true
+                ),
+                Err(Error::SaveDecisionStale(_))
+            ));
+            let mut other = Session::recoverable(root).unwrap();
+            let other_doc = other.open(&file).unwrap();
+            assert!(matches!(
+                other.decide_save(other_doc, None, token, SavePolicy::BreakEvidence, true),
+                Err(Error::SaveDecisionStale(_))
+            ));
+            // A new query supersedes the old token even with unchanged byte scope.
+            let old = session.check_save(doc, None).unwrap();
+            let fresh = session.check_save(doc, None).unwrap();
+            assert_ne!(old.token(), fresh.token());
+            assert!(matches!(
+                session.save_with_decision(doc, None, old.decide(SavePolicy::BreakEvidence, true)),
+                Err(Error::SaveDecisionStale(_))
+            ));
+        },
+    );
+}
+
+#[test]
+fn incomplete_inspection_keeps_descendants_ownership_and_backing() {
+    isolated(
+        "incomplete_inspection_keeps_descendants_ownership_and_backing",
+        |root| {
+            let (mut session, doc, file) = setup(root);
+            let anchor = folder(root, "analysis");
+            let ledger = reference(&anchor, &file);
+            let unrelated = root.join("other.fasta");
+            std::fs::write(&unrelated, ORIGINAL).unwrap();
+            let child = input_evidence::reference_input_with_dependencies(
+                &anchor.join("child.txt"),
+                &unrelated,
+                &basecraft_io::hash_file(&unrelated).unwrap(),
+                &[ledger.directory().into()],
+                "child",
+            )
+            .unwrap();
+            let grandchild = input_evidence::reference_input_with_dependencies(
+                &anchor.join("grandchild.txt"),
+                &unrelated,
+                &basecraft_io::hash_file(&unrelated).unwrap(),
+                &[child.directory().into()],
+                "grandchild",
+            )
+            .unwrap();
+            let mut input = input_evidence::read_input(ledger.directory()).unwrap();
+            input.extra.insert(
+                "analysis_run".into(),
+                serde_json::json!(
+                    input_evidence::relative(ledger.directory(), child.directory()).unwrap()
+                ),
+            );
+            input_evidence::write_json(&ledger.artifact("input.json").unwrap(), &input).unwrap();
+            // Damage in this very store must not discard any successfully read
+            // ledger, known descendant, logical owner or backing decision.
+            let damaged = reference(&anchor, &unrelated);
+            std::fs::write(damaged.artifact("input.json").unwrap(), b"damaged").unwrap();
+            let check = session.check_save(doc, None).unwrap();
+            assert!(!check.evidence().is_complete());
+            let analyses = &check.evidence().conflict.analyses;
+            assert_eq!(analyses.len(), 2);
+            let owner = analyses
+                .iter()
+                .find(|a| a.run == child.directory())
+                .unwrap();
+            assert!(
+                owner
+                    .backing_analyses
+                    .iter()
+                    .any(|a| a.run == ledger.directory() && a.direct)
+            );
+            assert!(
+                owner
+                    .backing_analyses
+                    .iter()
+                    .any(|a| a.run == child.directory())
+            );
+            assert!(
+                analyses
+                    .iter()
+                    .any(|a| a.run == grandchild.directory() && !a.direct)
+            );
+            session
+                .save_with_decision(doc, None, check.decide(SavePolicy::PreserveCopy, true))
+                .unwrap();
+            assert_eq!(
+                std::fs::read(ledger.directory().join("preserved-input")).unwrap(),
+                ORIGINAL
+            );
+        },
+    );
+}
+
+#[test]
+fn damaged_display_and_registry_entries_do_not_hide_known_conflicts() {
+    isolated(
+        "damaged_display_and_registry_entries_do_not_hide_known_conflicts",
+        |root| {
+            let (mut session, doc, file) = setup(root);
+            let known = reference(&folder(root, "known"), &file);
+            std::fs::write(known.artifact("run.json").unwrap(), b"damaged").unwrap();
+            let registry = AppPaths::discover()
+                .unwrap()
+                .state
+                .join("analysis-stores.json");
+            let mut value: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&registry).unwrap()).unwrap();
+            value["stores"]
+                .as_array_mut()
+                .unwrap()
+                .push(serde_json::json!("relative invalid entry"));
+            std::fs::write(&registry, serde_json::to_vec(&value).unwrap()).unwrap();
+            let check = required(session.save(doc, None).unwrap_err());
+            assert_eq!(check.evidence().conflict.analyses.len(), 1);
+            assert!(check.evidence().issues.len() >= 2);
+            assert_eq!(check.evidence().conflict.analyses[0].run, known.directory());
+            assert_eq!(std::fs::read(&file).unwrap(), ORIGINAL);
+            assert!(session.can_undo(doc));
+        },
+    );
+}

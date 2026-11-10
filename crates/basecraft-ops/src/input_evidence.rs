@@ -231,14 +231,23 @@ pub enum InspectionCode {
     RunUnavailable,
     LedgerInvalid,
     DependencyUnavailable,
+    IdentityUnverified,
     DisplayMetadataUnavailable,
     LimitExceeded,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InspectionRelevance {
+    Relevant,
+    Unknown,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InspectionIssue {
     pub code: InspectionCode,
     pub location: PathBuf,
+    pub relevance: InspectionRelevance,
     /// No distance-based unrelatedness inference is made. An unreadable record
     /// can hide a direct reference, an alias, an owner or an ancestor edge.
     pub reason: String,
@@ -267,15 +276,30 @@ struct Inspection {
 
 impl Inspection {
     fn issue(&mut self, code: InspectionCode, location: &Path, error: impl std::fmt::Display) {
+        self.issue_for(code, InspectionRelevance::Unknown, location, error);
+    }
+
+    fn issue_for(
+        &mut self,
+        code: InspectionCode,
+        relevance: InspectionRelevance,
+        location: &Path,
+        error: impl std::fmt::Display,
+    ) {
         self.issues.push(InspectionIssue {
             code,
             location: location.into(),
+            relevance,
             reason: error.to_string(),
         });
     }
 
     fn record(&mut self, path: &Path) -> Result<Vec<u8>> {
-        let result = crate::provenance::read_record(path);
+        self.record_bounded(path, 64 << 20)
+    }
+
+    fn record_bounded(&mut self, path: &Path, mut limit: u64) -> Result<Vec<u8>> {
+        let result = crate::provenance::read_record_with_budget(path, &mut limit);
         self.observations.insert(
             path.into(),
             match &result {
@@ -304,7 +328,12 @@ impl Inspection {
         match result {
             Ok(name) => name,
             Err(error) => {
-                self.issue(InspectionCode::DisplayMetadataUnavailable, &path, error);
+                self.issue_for(
+                    InspectionCode::DisplayMetadataUnavailable,
+                    InspectionRelevance::Relevant,
+                    &path,
+                    error,
+                );
                 "Unpublished analysis".into()
             }
         }
@@ -592,16 +621,44 @@ fn conservative(check: EvidenceCheck) -> Result<EvidenceConflict> {
 /// acting. Failure of the lock or of an actual write is never an inspection issue.
 pub fn check(target: &Path) -> Result<EvidenceCheck> {
     let mut inspection = Inspection::default();
-    let mut all = match stores() {
-        Ok(stores) => stores,
-        Err(error) => {
-            let path = registry()?;
-            // Observe damaged registry bytes as well as the validation failure.
-            let _ = inspection.record(&path);
-            inspection.issue(InspectionCode::RegistryUnavailable, &path, error);
-            Vec::new()
+    let path = registry()?;
+    let mut all = Vec::new();
+    match inspection.record_bounded(&path, 1 << 20) {
+        Ok(bytes) => {
+            let parsed = serde_json::from_slice::<serde_json::Value>(&bytes);
+            match parsed {
+                Ok(value) if value["schema_version"] == 1 && value["stores"].is_array() => {
+                    if let Some(paths) = value["stores"].as_array() {
+                        if paths.len() > 4096 {
+                            inspection.issue(
+                                InspectionCode::LimitExceeded,
+                                &path,
+                                "known-store registry exceeds 4096 stores",
+                            );
+                        }
+                        for (index, entry) in paths.iter().take(4096).enumerate() {
+                            match entry.as_str().map(PathBuf::from) {
+                                Some(store) if store.is_absolute() => all.push(store),
+                                _ => inspection.issue(
+                                    InspectionCode::RegistryUnavailable,
+                                    &path,
+                                    format!("known-store entry {index} must be an absolute path"),
+                                ),
+                            }
+                        }
+                    }
+                }
+                Ok(_) => inspection.issue(
+                    InspectionCode::RegistryUnavailable,
+                    &path,
+                    "unsupported known-store registry",
+                ),
+                Err(error) => inspection.issue(InspectionCode::RegistryUnavailable, &path, error),
+            }
         }
-    };
+        Err(crate::Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => inspection.issue(InspectionCode::RegistryUnavailable, &path, error),
+    }
     let target = std::path::absolute(target)?;
     let canonical = target.canonicalize().unwrap_or_else(|_| target.clone());
     for parent in canonical.ancestors().skip(1) {
@@ -625,7 +682,7 @@ struct StoreScan {
 fn scan_store(store: &Path, target: &Path, scan: &mut StoreScan, inspection: &mut Inspection) {
     // The marker can be damaged in different ways with the same parse error.
     // Its observed bytes participate in consent, even when validation fails.
-    let _ = inspection.record(&store.join("store.json"));
+    let _ = inspection.record_bounded(&store.join("store.json"), 4096);
     let result = ArtifactRun::validate_store(store)
         .and_then(|()| Ok(std::fs::read_dir(store.join("runs"))?));
     let entries = match result {
@@ -729,13 +786,38 @@ fn scan_run(
             "proposal target marker is invalid",
         );
     }
+    if let Some(parents) = input
+        .extra
+        .get("upstream")
+        .and_then(serde_json::Value::as_array)
+    {
+        for parent in parents {
+            if parent["bundle"].as_str().is_none() {
+                inspection.issue(
+                    InspectionCode::DependencyUnavailable,
+                    &run.join("input.json"),
+                    "ancestor location is missing",
+                );
+            }
+        }
+    }
     let mut analysis = None;
     let proposal_target = input.extra.get(PROPOSAL_TARGET) == Some(&serde_json::json!(true));
-    if input.state == "referenced"
-        && !proposal_target
-        && let Some(reference) = &input.source
-        && same_source(&run, reference, target)
-    {
+    let source_matches = if input.state == "referenced" && !proposal_target {
+        input.source.as_ref().is_some_and(|reference| {
+            if same_source(&run, reference, target) {
+                return true;
+            }
+            let source = run.join(&reference.path);
+            if let Err(error) = source.canonicalize() {
+                inspection.issue(InspectionCode::IdentityUnverified, &source, error);
+            }
+            false
+        })
+    } else {
+        false
+    };
+    if source_matches && let Some(reference) = &input.source {
         let can_preserve = stamp(target).is_ok_and(|s| {
             s.size == reference.stamp.size
                 && s.modified_seconds == reference.stamp.modified_seconds
@@ -835,6 +917,12 @@ fn inspect_in(
             let owner = lexical(&run.join(owner));
             if known_runs.iter().any(|(path, _)| lexical(path) == owner) {
                 owners.insert(run.clone(), owner);
+            } else {
+                inspection.issue(
+                    InspectionCode::DependencyUnavailable,
+                    &owner,
+                    "analysis owner is unavailable in inspected inventory",
+                );
             }
         } else if run.join("runtime.json").is_file()
             && let Some(parents) = input
@@ -949,13 +1037,12 @@ fn depends_on_inspected(
             return Err(invalid("ancestor input evidence is unavailable"));
         }
         let input = inspection.input(&location)?;
-        let Some(origin) = input
-            .extra
-            .get("origin_run")
-            .and_then(serde_json::Value::as_str)
-        else {
+        let Some(value) = input.extra.get("origin_run") else {
             return Ok(false);
         };
+        let origin = value
+            .as_str()
+            .ok_or_else(|| invalid("origin run location is invalid"))?;
         location = lexical(&location.join(origin));
     }
     Err(invalid("input evidence ancestry exceeds 32 references"))

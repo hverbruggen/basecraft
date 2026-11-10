@@ -63,6 +63,7 @@ impl Session {
             key: key.into(),
             content,
             generation: 0,
+            pending_save_check: std::sync::Mutex::new(None),
             undo: vec![],
             redo: vec![],
             baseline: None,

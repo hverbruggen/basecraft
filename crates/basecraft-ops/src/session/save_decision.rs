@@ -9,8 +9,15 @@ use crate::{Result, error::invalid};
 
 /// A fresh advisory check, or the fresh scope returned after refusing stale
 /// consent. Fields cannot be changed to manufacture authority.
-#[derive(Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct SaveCheck {
+    token: String,
+    #[serde(flatten)]
+    scope: SaveScope,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+struct SaveScope {
     evidence: EvidenceCheck,
     session: String,
     document: usize,
@@ -22,7 +29,7 @@ pub struct SaveCheck {
     target_revision: Option<TargetRevision>,
 }
 
-#[derive(Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 struct TargetRevision {
     hash: String,
     stamp: basecraft_protocol::provenance::FileStamp,
@@ -30,16 +37,25 @@ struct TargetRevision {
 
 impl SaveCheck {
     pub fn evidence(&self) -> &EvidenceCheck {
-        &self.evidence
+        &self.scope.evidence
     }
 
     pub fn target(&self) -> &Path {
-        &self.target
+        &self.scope.target
     }
 
-    /// Consumes this snapshot. `acknowledge_incomplete` is independent of the
-    /// policy for known analyses. Neither snapshot nor decision is Clone or
-    /// Deserialize; a failed attempt requires a fresh check and decision.
+    /// Session-local, single-attempt token for a later adapter request.
+    pub fn token(&self) -> &str {
+        &self.token
+    }
+
+    pub(super) fn same_scope(&self, other: &Self) -> bool {
+        self.scope == other.scope
+    }
+
+    /// Consumes this advisory snapshot. `acknowledge_incomplete` is independent
+    /// of known policy. SaveDecision is neither Clone nor Deserialize; Session
+    /// also consumes the token, so cloning an advisory snapshot cannot replay it.
     pub fn decide(self, known: SavePolicy, acknowledge_incomplete: bool) -> SaveDecision {
         SaveDecision {
             check: self,
@@ -74,14 +90,68 @@ impl Session {
         if !self.is_open(id) {
             return Err(invalid("save document is not open"));
         }
-        let target = path.unwrap_or_else(|| Path::new(&self.docs[id.0].key));
-        let target = if path.is_none() {
-            self.resolve(&self.docs[id.0].key)
-        } else {
-            target.into()
-        };
+        if self.docs[id.0].accepted_hashes.is_empty() && path.is_none() {
+            return Err(invalid(
+                "Choose a destination with Save as for this new sequence",
+            ));
+        }
+        let target = path.map_or_else(|| self.resolve(&self.docs[id.0].key), Path::to_path_buf);
         let evidence = crate::input_evidence::check(&target)?;
-        self.save_check_scope(id, &target, evidence)
+        let check = self.save_check_scope(id, &target, evidence)?;
+        self.publish_save_check(id, check)
+    }
+
+    /// Bind a wire acknowledgement to the Session's one pending check for this
+    /// document. This does not rescan. save_with_decision/save_new_with_decision
+    /// consume its authority on entry and recheck under the normal guard.
+    pub fn decide_save(
+        &self,
+        id: DocId,
+        path: Option<&Path>,
+        token: &str,
+        known: SavePolicy,
+        acknowledge_incomplete: bool,
+    ) -> Result<SaveDecision> {
+        let slot = self
+            .docs
+            .get(id.0)
+            .ok_or_else(|| invalid("save document is not open"))?;
+        let pending = slot
+            .pending_save_check
+            .lock()
+            .map_err(|_| invalid("save check state is unavailable"))?;
+        if let Some(check) = pending.as_ref().filter(|check| check.token == token) {
+            return Ok(check.clone().decide(known, acknowledge_incomplete));
+        }
+        drop(pending);
+        Err(crate::Error::SaveDecisionStale(Box::new(
+            self.check_save(id, path)?,
+        )))
+    }
+
+    pub(super) fn publish_save_check(&self, id: DocId, mut check: SaveCheck) -> Result<SaveCheck> {
+        check.token = ulid::Ulid::generate().to_string();
+        *self.docs[id.0]
+            .pending_save_check
+            .lock()
+            .map_err(|_| invalid("save check state is unavailable"))? = Some(check.clone());
+        Ok(check)
+    }
+
+    pub(super) fn consume_save_check(&self, id: DocId, decision: &SaveDecision) -> Result<bool> {
+        let mut pending = self.docs[id.0]
+            .pending_save_check
+            .lock()
+            .map_err(|_| invalid("save check state is unavailable"))?;
+        // Never consume a newer check when a stale/replayed token is submitted.
+        if pending
+            .as_ref()
+            .is_some_and(|check| check.token == decision.check.token)
+        {
+            pending.take();
+            return Ok(true);
+        }
+        Ok(false)
     }
 
     pub(super) fn save_check_scope(
@@ -107,15 +177,18 @@ impl Session {
             Err(error) => return Err(error.into()),
         };
         Ok(SaveCheck {
-            evidence,
-            session: self.id.clone(),
-            document: id.0,
-            document_key: self.docs[id.0].key.clone(),
-            generation: self.generation(id),
-            revision: self.revision(id),
-            accepted_hashes: self.docs[id.0].accepted_hashes.clone(),
-            target,
-            target_revision,
+            token: String::new(),
+            scope: SaveScope {
+                evidence,
+                session: self.id.clone(),
+                document: id.0,
+                document_key: self.docs[id.0].key.clone(),
+                generation: self.generation(id),
+                revision: self.revision(id),
+                accepted_hashes: self.docs[id.0].accepted_hashes.clone(),
+                target,
+                target_revision,
+            },
         })
     }
 

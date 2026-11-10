@@ -72,6 +72,7 @@ struct Slot {
     key: String,
     content: Loaded,
     generation: u64,
+    pending_save_check: Mutex<Option<SaveCheck>>,
     undo: Vec<Applied>,
     redo: Vec<Applied>,
     baseline: Option<LogEntry>,
@@ -632,6 +633,7 @@ impl Session {
             key: key.clone(),
             content,
             generation: 0,
+            pending_save_check: Mutex::new(None),
             undo: Vec::new(),
             redo: Vec::new(),
             baseline: None,
@@ -957,6 +959,11 @@ impl Session {
         if !self.is_open(id) {
             return Err(invalid("save document is not open"));
         }
+        let valid_consent = decision
+            .as_ref()
+            .map(|decision| self.consume_save_check(id, decision))
+            .transpose()?
+            .unwrap_or(false);
         let mut warnings = Vec::new();
         let new_sequence = self.docs[id.0].accepted_hashes.is_empty();
         if new_sequence && path.is_none() {
@@ -990,14 +997,20 @@ impl Session {
             if decision.is_some() || !evidence.is_complete() {
                 let fresh = self.save_check_scope(id, &target, evidence)?;
                 if let Some(decision) = decision {
-                    if fresh != decision.check {
-                        return Err(Error::SaveDecisionStale(Box::new(fresh)));
+                    if !valid_consent || !fresh.same_scope(&decision.check) {
+                        return Err(Error::SaveDecisionStale(Box::new(
+                            self.publish_save_check(id, fresh)?,
+                        )));
                     }
                     if !fresh.evidence().is_complete() && !decision.acknowledge_incomplete {
-                        return Err(Error::SaveCheckRequired(Box::new(fresh)));
+                        return Err(Error::SaveCheckRequired(Box::new(
+                            self.publish_save_check(id, fresh)?,
+                        )));
                     }
                 } else {
-                    return Err(Error::SaveCheckRequired(Box::new(fresh)));
+                    return Err(Error::SaveCheckRequired(Box::new(
+                        self.publish_save_check(id, fresh)?,
+                    )));
                 }
                 // Changed original/sidecar acceptance is not waivable and must
                 // fail before mutating known evidence.
