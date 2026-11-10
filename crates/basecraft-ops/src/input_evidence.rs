@@ -43,6 +43,11 @@ impl Mutation {
         write_json(&directory.join("input.json"), input)
     }
 
+    /// Preserve one owned leaf without reacquiring the evidence lock.
+    pub fn preserve_input(&self, bundle: &Path) -> Result<()> {
+        preserve_input_locked(bundle)
+    }
+
     pub fn register(&self, run: &ArtifactRun) -> Result<()> {
         register(run)
     }
@@ -785,7 +790,10 @@ fn result_name(run: &Path) -> Result<String> {
 /// the same checked, idempotent preserve-copy transition as a document save,
 /// without touching other analyses that happen to reference the same file.
 pub fn preserve_input(bundle: &Path) -> Result<()> {
-    let _guard = lock()?;
+    Mutation::begin()?.preserve_input(bundle)
+}
+
+fn preserve_input_locked(bundle: &Path) -> Result<()> {
     let input = read_input(bundle)?;
     let reference = input
         .source

@@ -988,13 +988,16 @@ impl PreparedOperation {
             })
             .cloned()
             .collect();
+        // Preserve leaves and delegate the primary ledger under one boundary:
+        // a cooperating save must not invalidate the primary before its rewrite.
+        let mutation = input_evidence::Mutation::begin()?;
         for (binding, records) in &self.context.input_evidence {
             if !retained_bindings.contains(binding) {
                 continue;
             }
             for record in records {
                 if record.original_path.is_some() {
-                    input_evidence::preserve_input(Path::new(&record.run_directory))?;
+                    mutation.preserve_input(Path::new(&record.run_directory))?;
                 }
             }
         }
@@ -1003,7 +1006,7 @@ impl PreparedOperation {
         // incorrectly prefer the now-removed temporary original.
         let input_path = self.run.artifact("input.json")?;
         if input_path.is_file() {
-            let mut input = input_evidence::read_input(self.run.directory())?;
+            let mut input = mutation.read_input(self.run.directory())?;
             if let Some(source) = &input.source
                 && let Some(owner) = self
                     .context
@@ -1021,9 +1024,10 @@ impl PreparedOperation {
                     )?),
                 );
                 input.state = "preserved".into();
-                input_evidence::write_json(&input_path, &input)?;
+                mutation.write_input(self.run.directory(), &input)?;
             }
         }
+        drop(mutation);
         for (binding, paths) in &mut self.context.inputs {
             if !retained_bindings.contains(binding) {
                 continue;

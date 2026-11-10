@@ -114,6 +114,10 @@ fn publication_worker() {
     let root = PathBuf::from(std::env::var_os("BASECRAFT_PUBLICATION_ROOT").unwrap());
     let source = root.join("input.fasta");
     let mut barrier = Barrier::new(UnixStream::connect(root.join(format!("{role}.sock"))).unwrap());
+    if mode.starts_with("retain-") {
+        retention_worker(&root, &role, &mode, &mut barrier);
+        return;
+    }
     if role == "registrar" {
         let expected = basecraft_io::hash_file(&source).unwrap();
         // Freeze before publication, as runner preparation does.
@@ -278,6 +282,213 @@ fn publication_worker() {
                 );
             }
         }
+        barrier.send("saved");
+    }
+}
+
+// Exercise the same already-held preserve/read/delegate interval as retain_inputs.
+// The real saver probes that interval in another process and then uses Session.
+fn retention_scenario(mode: &str) {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("input.fasta"), ORIGINAL).unwrap();
+    let (mut retainer, mut retaining) = spawn(root.path(), "registrar", mode);
+    retaining.expect("prepared");
+    let (mut saver, mut saving) = spawn(root.path(), "saver", mode);
+    let save_first = mode == "retain-break" || mode == "retain-remove";
+    saving.expect(if save_first { "saved" } else { "locked" });
+    retaining.send("commit");
+    retaining.expect(if save_first { "refused" } else { "published" });
+    if !save_first {
+        saving.expect("saved");
+        retaining.send("verify");
+    }
+    assert!(retainer.0.wait().unwrap().success());
+    assert!(saver.0.wait().unwrap().success());
+    assert_eq!(
+        std::fs::read(root.path().join("input.fasta")).unwrap(),
+        b">gene\nATGT\n"
+    );
+}
+
+#[test]
+fn retained_leaf_and_primary_exclude_preserving_save() {
+    retention_scenario("retain-preserve");
+}
+#[test]
+fn breaking_save_first_is_not_resurrected_by_retention() {
+    retention_scenario("retain-break");
+}
+#[test]
+fn removing_save_first_is_not_resurrected_by_retention() {
+    retention_scenario("retain-remove");
+}
+#[test]
+fn failed_retention_releases_guard_and_keeps_recoverable_leaf() {
+    retention_scenario("retain-failure");
+}
+
+fn retention_worker(root: &Path, role: &str, mode: &str, barrier: &mut Barrier) {
+    let source = root.join("input.fasta");
+    if role == "registrar" {
+        let hash = basecraft_io::hash_file(&source).unwrap();
+        let mutation = Mutation::begin().unwrap();
+        let owner = ArtifactRun::create(&root.join("result.txt"), "owner").unwrap();
+        let leaf = mutation
+            .reference_input_with_dependencies(
+                &root.join("result.txt"),
+                &source,
+                &hash,
+                &[],
+                "retained input",
+            )
+            .unwrap();
+        let mut input = mutation.read_input(leaf.directory()).unwrap();
+        input.extra.insert(
+            "analysis_run".into(),
+            json!(input_evidence::relative(leaf.directory(), owner.directory()).unwrap()),
+        );
+        mutation.write_input(leaf.directory(), &input).unwrap();
+        input.extra.remove("analysis_run");
+        input.source.as_mut().unwrap().path =
+            input_evidence::relative(owner.directory(), &source).unwrap();
+        input.extra.insert(
+            "upstream".into(),
+            json!([{
+                "bundle":input_evidence::relative(owner.directory(), leaf.directory()).unwrap(),
+                "id":leaf.id(),
+                "hash":basecraft_io::hash_file(&leaf.artifact("manifest.json").unwrap()).unwrap()
+            }]),
+        );
+        mutation.write_input(owner.directory(), &input).unwrap();
+        input_evidence::write_json(
+            &owner.artifact("run.json").unwrap(),
+            &json!({"result":"result.txt"}),
+        )
+        .unwrap();
+        mutation.register(&owner).unwrap();
+        drop(mutation);
+
+        if mode == "retain-break" || mode == "retain-remove" {
+            barrier.send("prepared");
+            barrier.expect("commit");
+            let mutation = Mutation::begin().unwrap();
+            assert!(mutation.preserve_input(leaf.directory()).is_err());
+            if mode == "retain-break" {
+                assert_eq!(
+                    mutation.read_input(owner.directory()).unwrap().state,
+                    "broken"
+                );
+                assert_eq!(
+                    mutation.read_input(leaf.directory()).unwrap().state,
+                    "broken"
+                );
+            } else {
+                assert!(!owner.directory().exists());
+                assert!(!leaf.directory().exists());
+            }
+            barrier.send("refused");
+            return;
+        }
+        let mutation = Mutation::begin().unwrap();
+        mutation.preserve_input(leaf.directory()).unwrap();
+        // Idempotent checked preservation must not recopy the now-changed source.
+        std::fs::write(&source, b">gene\nAAAA\n").unwrap();
+        mutation.preserve_input(leaf.directory()).unwrap();
+        std::fs::write(&source, ORIGINAL).unwrap();
+        let mut primary = mutation.read_input(owner.directory()).unwrap();
+        assert_eq!(primary.state, "referenced");
+        barrier.send("prepared");
+        barrier.expect("commit");
+        if mode == "retain-failure" {
+            // An actual failed preserve and failed primary write release the guard
+            // without erasing the successfully retained leaf or its provenance.
+            assert!(mutation.preserve_input(&source).is_err());
+            assert!(mutation.write_input(&source, &primary).is_err());
+        } else {
+            primary.extra.insert(
+                "origin_run".into(),
+                json!(input_evidence::relative(owner.directory(), leaf.directory()).unwrap()),
+            );
+            primary.state = "preserved".into();
+            mutation.write_input(owner.directory(), &primary).unwrap();
+        }
+        drop(mutation);
+        barrier.send("published");
+        barrier.expect("verify");
+        assert_eq!(
+            std::fs::read(leaf.directory().join("preserved-input")).unwrap(),
+            ORIGINAL
+        );
+        let primary = input_evidence::read_input(owner.directory()).unwrap();
+        assert_eq!(primary.state, "preserved");
+        if mode == "retain-preserve" {
+            assert_eq!(
+                primary.extra["origin_run"],
+                input_evidence::relative(owner.directory(), leaf.directory()).unwrap()
+            );
+            assert!(!owner.directory().join("preserved-input").exists());
+        }
+    } else {
+        let mut session = Session::recoverable(root).unwrap();
+        let doc = session.open(&source).unwrap();
+        session
+            .apply(
+                doc,
+                Op::SeqReplace {
+                    start: 1,
+                    end: 2,
+                    residues: "T".into(),
+                },
+            )
+            .unwrap();
+        session.flush().unwrap();
+        let save_first = mode == "retain-break" || mode == "retain-remove";
+        if !save_first {
+            let paths = basecraft_platform::paths::AppPaths::discover().unwrap();
+            let lock = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(paths.state.join("analysis-evidence.lock"))
+                .unwrap();
+            assert!(!fs4::fs_std::FileExt::try_lock_exclusive(&lock).unwrap());
+            barrier.send("locked");
+            let mutation = Mutation::begin().unwrap();
+            if mode == "retain-preserve" {
+                assert!(
+                    input_evidence::conflicts(&source)
+                        .unwrap()
+                        .analyses
+                        .is_empty()
+                );
+            } else {
+                assert_eq!(
+                    mutation
+                        .read_input(
+                            ArtifactRun::create(&root.join("result.txt"), "owner")
+                                .unwrap()
+                                .directory()
+                        )
+                        .unwrap()
+                        .state,
+                    "referenced"
+                );
+            }
+        }
+        let recovered =
+            basecraft_ops::replay::recover(session.recovery_root(), &root.join("recovered"))
+                .unwrap();
+        assert_eq!(std::fs::read(&recovered[0]).unwrap(), b">gene\nATGT\n");
+        session
+            .save_with_evidence(
+                doc,
+                None,
+                match mode {
+                    "retain-break" => SavePolicy::BreakEvidence,
+                    "retain-remove" => SavePolicy::RemoveAnalysis,
+                    _ => SavePolicy::PreserveCopy,
+                },
+            )
+            .unwrap();
         barrier.send("saved");
     }
 }
