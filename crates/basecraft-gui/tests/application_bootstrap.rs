@@ -26,7 +26,7 @@ mod delimitation_bridge;
 #[path = "../src/document_jobs.rs"]
 mod document_jobs;
 #[path = "../src/editor_core.rs"]
-#[allow(dead_code)] // harness=false omits pure #[test] bodies.
+#[allow(unused_imports, dead_code)] // harness=false omits pure #[test] bodies.
 mod editor_core;
 #[path = "../src/figure_png.rs"]
 #[allow(unused_imports, dead_code)] // harness=false omits the included module's test bodies.

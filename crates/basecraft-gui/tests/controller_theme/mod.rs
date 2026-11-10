@@ -170,7 +170,8 @@ pub(crate) fn run() {
                     "sequence.fa",
                     ">A\nACGTACGT\n",
                     |mut c: std::pin::Pin<&mut bridge::qobject::GenomeController>| {
-                        c.as_mut().key(bridge::KEY_A, bridge::CTRL);
+                        c.as_mut()
+                            .key(bridge::KEY_A, &QString::default(), bridge::CTRL);
                         assert!(c.has_selection());
                     },
                     |c: &bridge::qobject::GenomeController| c.selection_text()
