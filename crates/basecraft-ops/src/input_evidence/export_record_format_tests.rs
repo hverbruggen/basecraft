@@ -294,6 +294,13 @@ fn original_export_failures() {
             assert_eq!(error.to_string(), format!("invalid operation: {message}"));
         } else if case == "unknown" {
             assert!(error.to_string().starts_with(message));
+        } else if case == "missing" {
+            assert!(matches!(
+                &error,
+                crate::Error::Io(source) if source.kind() == std::io::ErrorKind::NotFound
+            ));
+            #[cfg(target_os = "linux")]
+            assert_eq!(error.to_string(), message);
         } else {
             assert_eq!(error.to_string(), message);
         }
