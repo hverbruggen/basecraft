@@ -138,6 +138,7 @@ impl Loaded {
         match self {
             Self::Submission(sub) => Some(sub),
             Self::Metadata(opened) => Some(opened),
+            Self::Alignment(opened) => Some(opened),
             _ => None,
         }
     }
@@ -146,6 +147,7 @@ impl Loaded {
         match self {
             Self::Submission(sub) => Some(sub),
             Self::Metadata(opened) => Some(opened),
+            Self::Alignment(opened) => Some(opened),
             _ => None,
         }
     }

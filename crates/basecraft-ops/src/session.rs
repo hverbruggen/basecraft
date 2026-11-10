@@ -19,7 +19,7 @@ use basecraft_protocol::{Actor, DocState, Feature, LogEntry, Op, OpResult};
 
 use crate::documents::Document;
 use crate::error::invalid;
-use crate::files::{self, HashingWriter, Loaded, Opened, OpenedAlignment, OpenedTree};
+use crate::files::{self, HashingWriter, Loaded, Opened, OpenedTree};
 use crate::log::LogWriter;
 
 mod creation;
@@ -430,7 +430,7 @@ impl Session {
     pub fn revision(&self, id: DocId) -> u64 {
         match &self.docs[id.0].content {
             Loaded::Sequence(opened) => opened.doc.version(),
-            Loaded::Alignment(opened) => opened.doc.version(),
+            Loaded::Alignment(opened) => opened.revision(self.docs[id.0].generation),
             Loaded::Tree(opened) => opened.doc.version(),
             Loaded::Submission(sub) => sub.revision(self.docs[id.0].generation),
             Loaded::Metadata(opened) => opened.revision(self.docs[id.0].generation),
@@ -473,11 +473,7 @@ impl Session {
                 features: o.doc.feature_count() as u64,
                 rows: None,
             },
-            Loaded::Alignment(o) => DocState {
-                len: o.doc.width(),
-                features: 0,
-                rows: Some(o.doc.row_count() as u64),
-            },
+            Loaded::Alignment(o) => o.fingerprint(),
             Loaded::Delimitation(work) => DocState {
                 len: work.specimens.len() as u64,
                 features: work.hypotheses.len() as u64,
@@ -1199,16 +1195,11 @@ impl Session {
                 return self.log_save(id, &target, hashes);
             }
             Loaded::Alignment(a) => {
-                if format != a.format {
-                    return Err(invalid("saving to a different format isn't supported yet"));
-                }
-                basecraft_io::write_atomic(&target, |w| {
-                    let mut hw = HashingWriter::new(w);
-                    files::write_alignment(&a.doc, &mut hw)?;
-                    main_hash = hw.hash();
-                    Ok(())
-                })?;
-                hashes.push((self.relative(&target), main_hash));
+                let hashes = a
+                    .write(&target, format, &self.storage_root)?
+                    .into_iter()
+                    .map(|(path, hash)| (self.relative(&path), hash))
+                    .collect();
                 return self.log_save(id, &target, hashes);
             }
             Loaded::Tree(t) => {
@@ -2148,11 +2139,6 @@ impl Session {
                 return Ok(vec![hash, side.hash()]);
             }
             Loaded::Sequence(o) => o,
-            Loaded::Alignment(a) => {
-                let mut hw = HashingWriter::new(std::io::sink());
-                files::write_alignment(&a.doc, &mut hw)?;
-                return Ok(vec![hw.hash()]);
-            }
             Loaded::Tree(t) => {
                 let mut hw = HashingWriter::new(std::io::sink());
                 files::write_tree(t, &mut hw)?;
@@ -2160,7 +2146,7 @@ impl Session {
                 files::write_tree_sidecar_at(&t.doc, &hw.hash(), &mut side)?;
                 return Ok(vec![hw.hash(), side.hash()]);
             }
-            migrated @ (Loaded::Submission(_) | Loaded::Metadata(_)) => {
+            migrated @ (Loaded::Submission(_) | Loaded::Metadata(_) | Loaded::Alignment(_)) => {
                 let document = migrated
                     .as_document()
                     .ok_or_else(|| invalid("document interface unavailable"))?;
@@ -2314,7 +2300,8 @@ impl Session {
             && p.doc == doc
             && p.entry.actor == *actor
             && p.last.elapsed() < MERGE_WINDOW
-            && let Some(merged) = merge_alignment(&p.entry.op, op)
+            && let Some(document) = self.docs[doc.0].content.as_document()
+            && let Some(merged) = document.merge(&p.entry.op, op)
         {
             let (Inverse::Alignment(steps), _) = self.execute(doc, op)? else {
                 return Err(invalid("alignment edit without alignment undo"));
@@ -2419,9 +2406,7 @@ impl Session {
             }
             Loaded::Metadata(opened) => return opened.apply(op),
             Loaded::Submission(sub) => return sub.apply(op),
-            Loaded::Alignment(a) => {
-                return execute_alignment(a, op).map(|u| (Inverse::Alignment(u), None));
-            }
+            Loaded::Alignment(a) => return a.apply(op),
             Loaded::Tree(t) => {
                 return execute_tree(&mut t.doc, op).map(|before| (Inverse::Tree(before), None));
             }
@@ -2583,7 +2568,7 @@ impl Session {
         self.flush()?;
         let applied = self.docs[id.0].undo.pop().ok_or(Error::NothingTo("undo"))?;
         match (&mut self.docs[id.0].content, &applied.inverse) {
-            (Loaded::Alignment(a), Inverse::Alignment(steps)) => a.doc.undo(steps),
+            (Loaded::Alignment(a), inverse) => a.revert(inverse)?,
             (Loaded::Tree(t), Inverse::Tree(before)) => t.doc = (**before).clone(),
             (Loaded::Delimitation(work), Inverse::Delimitation(before)) => {
                 *work = (**before).clone();
@@ -2591,7 +2576,7 @@ impl Session {
             (Loaded::Metadata(opened), inverse) => opened.revert(inverse)?,
             (Loaded::Submission(sub), inverse) => sub.revert(inverse)?,
             (Loaded::Sequence(o), inverse) => undo_sequence(&mut o.doc, inverse),
-            (Loaded::Alignment(_) | Loaded::Tree(_) | Loaded::Delimitation(_), _) => {
+            (Loaded::Tree(_) | Loaded::Delimitation(_), _) => {
                 return Err(invalid("undo of the wrong kind of edit"));
             }
         }
@@ -2917,7 +2902,6 @@ fn restore_inverse(content: &mut Loaded, inverse: &Inverse) -> Result<()> {
     }
     match (content, inverse) {
         (Loaded::Sequence(opened), inverse) => undo_sequence(&mut opened.doc, inverse),
-        (Loaded::Alignment(opened), Inverse::Alignment(steps)) => opened.doc.undo(steps),
         (Loaded::Tree(opened), Inverse::Tree(before)) => opened.doc = (**before).clone(),
         (Loaded::Delimitation(work), Inverse::Delimitation(before)) => *work = (**before).clone(),
         _ => return Err(invalid("edit rollback has incompatible document type")),
@@ -2943,64 +2927,6 @@ fn undo_sequence(doc: &mut SequenceDoc, inverse: &Inverse) {
     }
 }
 
-fn execute_alignment(a: &mut OpenedAlignment, op: &Op) -> Result<Vec<AlnUndo>> {
-    let doc = &mut a.doc;
-    let edit = match op {
-        Op::AlnReplace {
-            row,
-            start,
-            end,
-            residues,
-        } => {
-            let residues = normalise(residues)?;
-            doc.replace(*row as usize, *start, *end, residues.as_bytes())
-        }
-        Op::AlnInsert {
-            rows,
-            col,
-            residues,
-        } => {
-            let residues = normalise(residues)?;
-            doc.insert(rows, *col, residues.as_bytes())
-        }
-        Op::AlnFill {
-            rows,
-            start,
-            end,
-            residue,
-        } => {
-            let residue = normalise(residue)?;
-            let &[b] = residue.as_bytes() else {
-                return Err(invalid(format!(
-                    "aln.fill takes one residue, not {residue:?}"
-                )));
-            };
-            doc.fill(rows, *start, *end, b)
-        }
-        Op::AlnInsertGaps { rows, col, count } => doc.insert_gaps(rows, *col, *count),
-        Op::AlnDelete { rows, start, end } => doc.delete(rows, *start, *end),
-        Op::AlnShift {
-            rows,
-            start,
-            end,
-            by,
-        } => doc.shift(rows, *start, *end, *by),
-        Op::AlnRemoveGapColumns {} => Ok(doc.remove_gap_columns().0),
-        Op::AlnMoveRows { rows, to } => doc.move_rows(rows, *to),
-        Op::AlnRenameRow { row, name } => doc.rename(*row as usize, name),
-        Op::AlnRemoveRows { rows } => doc.remove_rows(rows),
-        Op::AlnAddSequences { rows, reference } => {
-            let rows = rows
-                .iter()
-                .map(|(name, seq)| Ok((name.clone(), normalise(seq)?)))
-                .collect::<Result<Vec<_>>>()?;
-            doc.add_sequences(&rows, reference.as_deref())
-        }
-        _ => return Err(invalid(format!("{} needs a sequence", op.name()))),
-    };
-    edit.map_err(|e| invalid(e.0))
-}
-
 /// Edits whose log entries can grow into a burst.
 fn mergeable(op: &Op) -> bool {
     match op {
@@ -3017,92 +2943,6 @@ fn mergeable(op: &Op) -> bool {
         } => end - start == residues.len() as u64,
         Op::AlnInsert { .. } | Op::AlnInsertGaps { .. } | Op::AlnShift { .. } => true,
         _ => false,
-    }
-}
-
-/// One alignment edit that does what `prev` then `next` do, if there is one:
-/// typing over residues along a row, gaps inserted after the previous ones,
-/// or a block slid on from where it was left.
-fn merge_alignment(prev: &Op, next: &Op) -> Option<Op> {
-    match (prev, next) {
-        (
-            Op::AlnReplace {
-                row,
-                start,
-                end,
-                residues,
-            },
-            Op::AlnReplace {
-                row: row2,
-                start: start2,
-                end: end2,
-                residues: residues2,
-            },
-        ) if row == row2
-            && end - start == residues.len() as u64
-            && end2 - start2 == residues2.len() as u64
-            && start2 == end =>
-        {
-            Some(Op::AlnReplace {
-                row: *row,
-                start: *start,
-                end: *end2,
-                residues: format!("{residues}{residues2}"),
-            })
-        }
-        (
-            Op::AlnInsert {
-                rows,
-                col,
-                residues,
-            },
-            Op::AlnInsert {
-                rows: rows2,
-                col: col2,
-                residues: residues2,
-            },
-        ) if rows == rows2 && *col2 == col + residues.len() as u64 => Some(Op::AlnInsert {
-            rows: rows.clone(),
-            col: *col,
-            residues: format!("{residues}{residues2}"),
-        }),
-        (
-            Op::AlnInsertGaps { rows, col, count },
-            Op::AlnInsertGaps {
-                rows: rows2,
-                col: col2,
-                count: count2,
-            },
-        ) if rows == rows2 && *col2 == col + count => Some(Op::AlnInsertGaps {
-            rows: rows.clone(),
-            col: *col,
-            count: count + count2,
-        }),
-        (
-            Op::AlnShift {
-                rows,
-                start,
-                end,
-                by,
-            },
-            Op::AlnShift {
-                rows: rows2,
-                start: start2,
-                end: end2,
-                by: by2,
-            },
-        ) if rows == rows2
-            && start.checked_add_signed(*by) == Some(*start2)
-            && end.checked_add_signed(*by) == Some(*end2) =>
-        {
-            Some(Op::AlnShift {
-                rows: rows.clone(),
-                start: *start,
-                end: *end,
-                by: by + by2,
-            })
-        }
-        _ => None,
     }
 }
 
@@ -3140,7 +2980,7 @@ pub fn objects_dir(root: &Path) -> PathBuf {
 }
 
 /// Upper-case residues; reject anything that isn't a letter, `-` or `*`.
-fn normalise(residues: &str) -> Result<String> {
+pub(crate) fn normalise(residues: &str) -> Result<String> {
     if let Some(c) = residues
         .chars()
         .find(|c| !(c.is_ascii_alphabetic() || *c == '-' || *c == '*'))

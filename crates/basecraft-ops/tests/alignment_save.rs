@@ -187,3 +187,143 @@ fn equal_alignment_preserves_literal_terminal_gaps_and_existing_delete_semantics
     let doc = session.open(&source).unwrap();
     assert!(session.alignment(doc).validate_aligned_input().is_ok());
 }
+
+#[test]
+fn alignment_interface_rejections_normalization_and_hashes() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source.afa");
+    std::fs::write(&source, RAGGED).unwrap();
+    let mut session = Session::new(dir.path());
+    let doc = session.open(&source).unwrap();
+    let original_hashes = session.save_hashes(doc).unwrap();
+    let original_revision = session.revision(doc);
+    for op in [
+        Op::SeqReplace {
+            start: 0,
+            end: 1,
+            residues: "T".into(),
+        },
+        Op::AlnReplace {
+            row: 99,
+            start: 0,
+            end: 1,
+            residues: "T".into(),
+        },
+        Op::AlnReplace {
+            row: 0,
+            start: 0,
+            end: 1,
+            residues: "?".into(),
+        },
+        Op::AlnFill {
+            rows: vec![(0, 1)],
+            start: 0,
+            end: 1,
+            residue: "AC".into(),
+        },
+    ] {
+        assert!(matches!(
+            session.apply(doc, op),
+            Err(basecraft_ops::Error::Invalid(_))
+        ));
+        assert_eq!(session.revision(doc), original_revision);
+        assert_eq!(session.save_hashes(doc).unwrap(), original_hashes);
+        assert!(!session.can_undo(doc));
+    }
+    session
+        .apply(
+            doc,
+            Op::AlnReplace {
+                row: 1,
+                start: 0,
+                end: 1,
+                residues: "t".into(),
+            },
+        )
+        .unwrap();
+    assert_eq!(session.alignment(doc).read(1, 0, 3), b"T.-");
+    let expected = RAGGED.replace("A.-", "T.-");
+    let hashes = vec![basecraft_io::hash_bytes(expected.as_bytes())];
+    assert_eq!(session.save_hashes(doc).unwrap(), hashes);
+    let revision = session.revision(doc);
+    let wrong = dir.path().join("wrong.gb");
+    assert!(matches!(
+        session.save(doc, Some(&wrong)),
+        Err(basecraft_ops::Error::Invalid(_))
+    ));
+    assert!(!wrong.exists());
+    assert_eq!(session.revision(doc), revision);
+    // Historical saved hashes ignore the target even when writing rejects it.
+    assert_eq!(session.save_hashes_at(doc, &wrong).unwrap(), hashes);
+    session.undo(doc).unwrap();
+    assert_eq!(session.save_hashes(doc).unwrap(), original_hashes);
+    session.redo(doc).unwrap();
+    session.save(doc, None).unwrap();
+    assert_eq!(std::fs::read(&source).unwrap(), expected.as_bytes());
+    drop(session);
+    let report = basecraft_ops::replay::replay(dir.path()).unwrap();
+    assert!(report.ok(), "{:?}", report.problems);
+}
+
+#[test]
+fn alignment_bursts_respect_actor_group_and_nonadjacent_boundaries() {
+    use basecraft_protocol::Actor;
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source.afa");
+    std::fs::write(&source, ">a\nAAAAAAAA\n>b\nAAAAAAAA\n").unwrap();
+    let mut session = Session::new(dir.path());
+    let doc = session.open(&source).unwrap();
+    let replace = |start, residue: &str| Op::AlnReplace {
+        row: 0,
+        start,
+        end: start + 1,
+        residues: residue.into(),
+    };
+    let first = Actor::Script {
+        client: "first".into(),
+    };
+    let second = Actor::Script {
+        client: "second".into(),
+    };
+    session.set_actor(first.clone());
+    session.apply(doc, replace(0, "C")).unwrap();
+    session.apply(doc, replace(1, "G")).unwrap();
+    session.set_actor(second.clone());
+    session.apply(doc, replace(2, "T")).unwrap();
+    // Group boundaries retain the existing caller-owned flush contract.
+    session.flush().unwrap();
+    session.begin_group();
+    session.apply(doc, replace(3, "C")).unwrap();
+    session.apply(doc, replace(4, "G")).unwrap();
+    session.flush().unwrap();
+    session.end_group();
+    session.apply(doc, replace(5, "T")).unwrap();
+    session.apply(doc, replace(7, "C")).unwrap();
+    for expected in [
+        b"CGTCGTAA",
+        b"CGTCGAAA",
+        b"CGTAAAAA",
+        b"CGAAAAAA",
+        b"AAAAAAAA",
+    ] {
+        session.undo(doc).unwrap();
+        assert_eq!(session.alignment(doc).read(0, 0, 8), expected);
+    }
+    assert!(!session.can_undo(doc));
+    for _ in 0..5 {
+        session.redo(doc).unwrap();
+    }
+    assert_eq!(session.alignment(doc).read(0, 0, 8), b"CGTCGTAC");
+    session.save(doc, None).unwrap();
+    drop(session);
+    let entries = basecraft_ops::log::read_all(dir.path()).unwrap();
+    let edits: Vec<_> = entries
+        .iter()
+        .filter(|e| matches!(e.op, Op::AlnReplace { .. }))
+        .collect();
+    assert_eq!(edits.len(), 5);
+    assert_eq!(edits[0].actor, first);
+    assert_eq!(edits[1].actor, second);
+    let report = basecraft_ops::replay::replay(dir.path()).unwrap();
+    assert!(report.ok(), "{:?}", report.problems);
+}
