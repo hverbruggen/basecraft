@@ -433,6 +433,7 @@ fn recover_entries(
             relative,
             id,
             saved: None,
+            written: false,
         })
         .collect();
     let artifacts = artifacts(staging.path())?;
@@ -484,6 +485,9 @@ struct RecoveryDocument {
     id: DocId,
     // Expected outcome, never authority. This observation has no published token.
     saved: Option<crate::session::SaveCheck>,
+    // A successful writer must never run twice even if its post-write
+    // observation fails. That case requires a fresh finalization check.
+    written: bool,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -638,7 +642,7 @@ impl RecoveryAttempt {
     pub fn check(&self, document: usize) -> Result<crate::session::SaveCheck> {
         self.validate()?;
         let doc = self.document(document)?;
-        self.session.recovery_check(doc.id, doc.saved.is_some())
+        self.session.recovery_check(doc.id, doc.written)
     }
 
     pub fn decide(
@@ -650,12 +654,15 @@ impl RecoveryAttempt {
     ) -> Result<crate::session::SaveDecision> {
         self.validate()?;
         let doc = self.document(document)?;
-        match self
-            .session
-            .decide_save(doc.id, None, token, known, acknowledge_incomplete)
-        {
+        match self.session.decide_save(
+            doc.id,
+            Some(&self.session_path(document)?),
+            token,
+            known,
+            acknowledge_incomplete,
+        ) {
             Err(crate::Error::SaveDecisionStale(_)) => Err(crate::Error::SaveDecisionStale(
-                Box::new(self.session.recovery_check(doc.id, doc.saved.is_some())?),
+                Box::new(self.session.recovery_check(doc.id, doc.written)?),
             )),
             other => other,
         }
@@ -688,10 +695,19 @@ impl RecoveryAttempt {
                 return Err(error);
             }
         };
-        let finalizing = doc.saved.is_some();
-        let observed = if let Some(expected) = &doc.saved {
-            let _evidence = crate::input_evidence::Mutation::begin()?;
-            self.session.recovery_finalize(id, expected, decision)?
+        let finalizing = doc.written;
+        let observed = if doc.written {
+            let _evidence = match crate::input_evidence::Mutation::begin() {
+                Ok(guard) => guard,
+                Err(error) => {
+                    if let Some(decision) = &decision {
+                        self.session.discard_recovery_decision(decision)?;
+                    }
+                    return Err(error);
+                }
+            };
+            self.session
+                .recovery_finalize(id, doc.saved.as_ref(), decision)?
         } else {
             let outcome = match decision {
                 Some(decision) => self.session.save_with_decision(
@@ -715,9 +731,16 @@ impl RecoveryAttempt {
                 }
             };
             self.warnings.extend(outcome.warnings);
+            self.documents[document].written = true;
+            self.artifacts = artifacts(
+                self.staging
+                    .as_ref()
+                    .ok_or_else(|| crate::error::invalid("recovery stage missing"))?
+                    .path(),
+            )?;
             outcome
                 .recovery_observation
-                .ok_or_else(|| crate::error::invalid("recovery write observation missing"))?
+                .ok_or_else(|| crate::error::invalid("recovery write observation missing"))??
         };
         if finalizing && !observed.complete() {
             self.warnings
@@ -768,11 +791,13 @@ impl RecoveryAttempt {
         let _target = crate::save_guard::lock(&self.destination)?;
         let evidence = crate::input_evidence::Mutation::begin()?;
         for doc in &self.documents {
-            let expected = doc
-                .saved
-                .as_ref()
-                .ok_or_else(|| crate::error::invalid("recovery documents still need saving"))?;
-            self.session.recovery_finalize(doc.id, expected, None)?;
+            if !doc.written {
+                return Err(crate::error::invalid(
+                    "recovery documents still need saving",
+                ));
+            }
+            self.session
+                .recovery_finalize(doc.id, doc.saved.as_ref(), None)?;
         }
         let stage = self.validate()?.to_path_buf();
         let stores = self.session.recovery_stores()?;

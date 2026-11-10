@@ -1196,17 +1196,19 @@ impl Session {
             self.write_publication,
             crate::documents::WritePublication::Recovery { .. }
         ) {
-            let mut observed = self.recovery_snapshot(id)?;
-            if target_check
-                .as_ref()
-                .is_some_and(|before| before.issues() != observed.issues())
-                || observed
-                    .evidence_groups()
-                    .any(|group| !group.conflict.analyses.is_empty())
-            {
-                observed.require_final_decision();
-            }
-            Some(observed)
+            Some((|| -> Result<SaveCheck> {
+                let mut observed = self.recovery_snapshot(id)?;
+                if target_check
+                    .as_ref()
+                    .is_some_and(|before| before.issues() != observed.issues())
+                    || observed
+                        .evidence_groups()
+                        .any(|group| !group.conflict.analyses.is_empty())
+                {
+                    observed.require_final_decision();
+                }
+                Ok(observed)
+            })())
         } else {
             None
         };

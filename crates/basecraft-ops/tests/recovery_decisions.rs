@@ -669,3 +669,58 @@ fn removal_of_shared_backing_ledgers_across_target_groups_is_once() {
         assert_eq!(std::fs::read_dir(trash).unwrap().count(), 1);
     }
 }
+
+#[test]
+fn new_unsaved_sequence_has_final_only_issue_group_and_explicit_recovery() {
+    let Some(root) = isolated_profile::enter(
+        "new_unsaved_sequence_has_final_only_issue_group_and_explicit_recovery",
+    ) else {
+        return;
+    };
+    let mut source = Session::recoverable(&root).unwrap();
+    source.create_sequence("new", "ACGT").unwrap();
+    source.flush().unwrap();
+    let mut attempt = replay::prepare_recovery(
+        source.recovery_root(),
+        &root.join("out"),
+        RecoveryMode::Strict,
+    )
+    .unwrap();
+    let stage_target = attempt.check(0).unwrap().target().to_path_buf();
+    assert!(!stage_target.exists());
+    let original = root.join("original.fasta");
+    std::fs::write(&original, b">gene\nACGT\n").unwrap();
+    let run = reference(&root.join("external/result"), &original);
+    let mut input = basecraft_ops::input_evidence::read_input(run.directory()).unwrap();
+    input.source.as_mut().unwrap().path =
+        basecraft_ops::input_evidence::relative(run.directory(), &stage_target).unwrap();
+    basecraft_ops::input_evidence::write_json(&run.directory().join("input.json"), &input).unwrap();
+    let check = attempt.check(0).unwrap();
+    let groups: Vec<_> = check.evidence_groups().collect();
+    assert!(groups[0].is_complete());
+    assert!(!groups[1].is_complete());
+    assert!(!groups[0].conflict.analyses.is_empty());
+    assert!(groups[1].conflict.analyses.is_empty());
+    assert!(matches!(
+        attempt.advance(0, Some(check.decide(SavePolicy::Cancel, true))),
+        Err(Error::EvidenceConflict(_))
+    ));
+    let check = attempt.check(0).unwrap();
+    attempt
+        .advance(0, Some(check.decide(SavePolicy::BreakEvidence, true)))
+        .unwrap();
+    let complete = match attempt.publish() {
+        Ok(complete) => complete,
+        Err(error) => {
+            let check = required(error);
+            attempt
+                .advance(0, Some(check.decide(SavePolicy::Cancel, true)))
+                .unwrap();
+            attempt.publish().unwrap()
+        }
+    };
+    assert_eq!(complete.outputs.len(), 1);
+    let mut reopened = Session::unlogged(&root);
+    let doc = reopened.open(&complete.outputs[0]).unwrap();
+    assert_eq!(reopened.state(doc).len, 4);
+}

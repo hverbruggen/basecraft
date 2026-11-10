@@ -163,7 +163,7 @@ pub struct SaveDecision {
 #[derive(Debug, Serialize)]
 pub struct SaveOutcome {
     #[serde(skip)]
-    pub(crate) recovery_observation: Option<SaveCheck>,
+    pub(crate) recovery_observation: Option<Result<SaveCheck>>,
     pub warnings: Vec<SaveWarning>,
 }
 
@@ -364,7 +364,7 @@ impl Session {
         if saved {
             self.publish_save_check(id, self.recovery_snapshot(id)?)
         } else {
-            self.check_save(id, None)
+            self.check_save(id, Some(&self.resolve(&self.docs[id.0].key)))
         }
     }
 
@@ -373,7 +373,7 @@ impl Session {
     pub(crate) fn recovery_finalize(
         &self,
         id: DocId,
-        expected: &SaveCheck,
+        expected: Option<&SaveCheck>,
         decision: Option<SaveDecision>,
     ) -> Result<SaveCheck> {
         let valid = decision
@@ -395,8 +395,16 @@ impl Session {
                 )));
             }
             fresh.resolve(decision.known, Some(&self.evidence_actions))?;
-            self.recovery_snapshot(id)
-        } else if fresh.same_scope(expected) {
+            let mut observed = self.recovery_snapshot(id)?;
+            if observed.issues() != fresh.issues()
+                || observed
+                    .evidence_groups()
+                    .any(|group| !group.conflict.analyses.is_empty())
+            {
+                observed.require_final_decision();
+            }
+            Ok(observed)
+        } else if expected.is_some_and(|expected| fresh.same_scope(expected)) {
             Ok(fresh)
         } else {
             Err(crate::Error::SaveCheckRequired(Box::new(
@@ -418,7 +426,8 @@ impl Session {
 
 impl Session {
     pub(crate) fn save_recovery(&mut self, id: DocId) -> Result<SaveOutcome> {
-        self.save_attempt(id, None, SavePolicy::Cancel, true, false, None)
+        let target = self.resolve(&self.docs[id.0].key);
+        self.save_attempt(id, Some(&target), SavePolicy::Cancel, true, false, None)
     }
 }
 
