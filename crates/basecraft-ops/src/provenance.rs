@@ -10,46 +10,207 @@ pub fn companion(path: &Path) -> PathBuf {
     PathBuf::from(name)
 }
 
-/// Locate explicitly published project or standalone history. A missing portable
-/// bundle is an error, never reconstructed from a filename or local journal.
+/// Select the existing binding, companion, project-derived or local history path.
+/// The final fallback is the original companion spelling, even if it does not
+/// exist. Selection does not validate content or establish complete provenance.
 pub fn bundle_for_result(result: &Path) -> PathBuf {
-    if let Ok(Some(hidden)) = crate::analysis_store::ArtifactRun::for_result(result)
-        && hidden.join("manifest.json").is_file()
+    resolve_bundle(result, &mut None).0
+}
+
+// Intentionally unwired: observation is not an access/consent capability.
+#[allow(dead_code)]
+#[derive(Debug)]
+pub(crate) struct BundleObservation {
+    pub selected: PathBuf,
+    pub selected_by: BundleSelection,
+    /// Ordered attempted stages. An absent stage is NotAttempted, not absent on
+    /// disk: an earlier selection or a failed/skipped prerequisite prevented it.
+    pub steps: Vec<ResolverStep>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BundleSelection {
+    Binding,
+    Companion,
+    Project,
+    Local,
+    CompanionFallback,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ResolverStage {
+    Binding,
+    HiddenManifest,
+    CompanionManifest,
+    Canonicalize,
+    ProjectMarker,
+    ProjectRelative,
+    Discover,
+    Settings,
+    LocalManifest,
+}
+
+#[allow(dead_code)]
+#[derive(Debug)]
+pub(crate) enum ResolverStep {
+    /// None is opaque owner output, not proof that no binding exists.
+    Binding(Result<Option<PathBuf>>),
+    /// Following metadata only: NotFound can include a dangling link or missing
+    /// ancestor; a regular file need not be readable or remain the same object.
+    Metadata(ResolverStage, PathBuf, std::io::Result<std::fs::Metadata>),
+    /// Failure retains original spelling for all subsequent calculations.
+    Canonicalize(std::io::Result<PathBuf>),
+    ProjectRelative(
+        PathBuf,
+        std::result::Result<PathBuf, std::path::StripPrefixError>,
+    ),
+    Discover(std::result::Result<(), basecraft_platform::paths::PathError>),
+    /// Successful policy has unknown origin: load can return defaults on missing
+    /// preferences. Non-LocalOnly policy skips the local manifest stage.
+    Settings(
+        std::result::Result<
+            basecraft_platform::settings::ProvenancePolicy,
+            basecraft_platform::settings::Error,
+        >,
+    ),
+}
+
+#[allow(dead_code)]
+pub(crate) fn observe_bundle_for_result(result: &Path) -> BundleObservation {
+    let mut steps = Some(Vec::new());
+    let (selected, selected_by) = resolve_bundle(result, &mut steps);
+    BundleObservation {
+        selected,
+        selected_by,
+        steps: steps.unwrap_or_default(),
+    }
+}
+
+// The closure is never evaluated on the legacy route: no diagnostic path
+// copies, vector allocation, error clones or additional probes on that route.
+fn resolver_record(steps: &mut Option<Vec<ResolverStep>>, step: impl FnOnce() -> ResolverStep) {
+    if let Some(steps) = steps {
+        steps.push(step());
+    }
+}
+
+fn resolver_call(stage: ResolverStage) {
+    #[cfg(test)]
+    resolver_observation_tests::called(stage);
+    #[cfg(not(test))]
+    let _ = stage;
+}
+
+fn resolver_file(path: &Path, stage: ResolverStage, steps: &mut Option<Vec<ResolverStep>>) -> bool {
+    resolver_call(stage);
+    let metadata = std::fs::metadata(path);
+    let is_file = metadata.as_ref().is_ok_and(std::fs::Metadata::is_file);
+    resolver_record(steps, || {
+        ResolverStep::Metadata(stage, path.to_path_buf(), metadata)
+    });
+    is_file
+}
+
+fn resolve_bundle(
+    result: &Path,
+    steps: &mut Option<Vec<ResolverStep>>,
+) -> (PathBuf, BundleSelection) {
+    resolver_call(ResolverStage::Binding);
+    let binding = crate::analysis_store::ArtifactRun::for_result(result);
+    // The selected candidate must be owned by both return and observation only
+    // when collecting. Errors are moved exactly once, never reconstructed.
+    let hidden = match binding {
+        Ok(hidden) => {
+            resolver_record(steps, || ResolverStep::Binding(Ok(hidden.clone())));
+            hidden
+        }
+        Err(error) => {
+            resolver_record(steps, || ResolverStep::Binding(Err(error)));
+            None
+        }
+    };
+    if let Some(hidden) = hidden
+        && resolver_file(
+            &hidden.join("manifest.json"),
+            ResolverStage::HiddenManifest,
+            steps,
+        )
     {
-        return hidden;
+        return (hidden, BundleSelection::Binding);
     }
     let standalone = companion(result);
-    if standalone.join("manifest.json").is_file() {
-        return standalone;
+    if resolver_file(
+        &standalone.join("manifest.json"),
+        ResolverStage::CompanionManifest,
+        steps,
+    ) {
+        return (standalone, BundleSelection::Companion);
     }
-    let absolute = result
-        .canonicalize()
-        .unwrap_or_else(|_| result.to_path_buf());
+    resolver_call(ResolverStage::Canonicalize);
+    let absolute = match result.canonicalize() {
+        Ok(path) => {
+            resolver_record(steps, || ResolverStep::Canonicalize(Ok(path.clone())));
+            path
+        }
+        Err(error) => {
+            resolver_record(steps, || ResolverStep::Canonicalize(Err(error)));
+            result.to_path_buf()
+        }
+    };
     for root in absolute.ancestors().skip(1) {
-        if root.join(".basecraft/project.toml").is_file()
-            && let Ok(relative) = absolute.strip_prefix(root)
-        {
-            let key = relative.to_string_lossy();
-            return root
-                .join(".basecraft/provenance")
-                .join(basecraft_io::hash_bytes(key.as_bytes()).trim_start_matches("b3:"));
+        if resolver_file(
+            &root.join(".basecraft/project.toml"),
+            ResolverStage::ProjectMarker,
+            steps,
+        ) {
+            resolver_call(ResolverStage::ProjectRelative);
+            let relative = absolute.strip_prefix(root);
+            resolver_record(steps, || {
+                ResolverStep::ProjectRelative(root.to_path_buf(), relative.map(Path::to_path_buf))
+            });
+            if let Ok(relative) = relative {
+                let key = relative.to_string_lossy();
+                return (
+                    root.join(".basecraft/provenance")
+                        .join(basecraft_io::hash_bytes(key.as_bytes()).trim_start_matches("b3:")),
+                    BundleSelection::Project,
+                );
+            }
         }
     }
-    if let Ok(paths) = basecraft_platform::paths::AppPaths::discover()
-        && let Ok(preferences) =
-            basecraft_platform::settings::SettingsStore::new(paths.preferences()).load()
-        && preferences.files.provenance == basecraft_platform::settings::ProvenancePolicy::LocalOnly
-    {
-        let local = paths.state.join("provenance").join(
-            basecraft_io::hash_bytes(absolute.as_os_str().as_encoded_bytes())
-                .trim_start_matches("b3:"),
-        );
-        if local.join("manifest.json").is_file() {
-            return local;
+    resolver_call(ResolverStage::Discover);
+    match basecraft_platform::paths::AppPaths::discover() {
+        Ok(paths) => {
+            resolver_record(steps, || ResolverStep::Discover(Ok(())));
+            resolver_call(ResolverStage::Settings);
+            match basecraft_platform::settings::SettingsStore::new(paths.preferences()).load() {
+                Ok(preferences) => {
+                    let policy = preferences.files.provenance;
+                    resolver_record(steps, || ResolverStep::Settings(Ok(policy)));
+                    if policy == basecraft_platform::settings::ProvenancePolicy::LocalOnly {
+                        let local = paths.state.join("provenance").join(
+                            basecraft_io::hash_bytes(absolute.as_os_str().as_encoded_bytes())
+                                .trim_start_matches("b3:"),
+                        );
+                        if resolver_file(
+                            &local.join("manifest.json"),
+                            ResolverStage::LocalManifest,
+                            steps,
+                        ) {
+                            return (local, BundleSelection::Local);
+                        }
+                    }
+                }
+                Err(error) => resolver_record(steps, || ResolverStep::Settings(Err(error))),
+            }
         }
+        Err(error) => resolver_record(steps, || ResolverStep::Discover(Err(error))),
     }
-    standalone
+    (standalone, BundleSelection::CompanionFallback)
 }
+
+#[cfg(test)]
+mod resolver_observation_tests;
 
 fn safe_relative(root: &Path, name: &str) -> Result<PathBuf> {
     let p = Path::new(name);
