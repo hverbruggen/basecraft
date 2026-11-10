@@ -14,6 +14,30 @@ impl Document for Opened {
         crate::files::Kind::Sequence
     }
 
+    fn retains_companions(&self) -> bool {
+        self.format == Format::Fasta
+    }
+    fn proposal_candidate(&self) -> Result<files::Loaded> {
+        Ok(files::Loaded::Sequence(Opened {
+            doc: self.doc.clone(),
+            format: self.format,
+            fasta: self.fasta.clone(),
+        }))
+    }
+    fn apply_proposal(&mut self, op: &Op) -> Result<(Inverse, Option<FeatureId>)> {
+        if !matches!(
+            op,
+            Op::SeqReplace { .. }
+                | Op::FeatureAdd { .. }
+                | Op::FeatureRemove { .. }
+                | Op::FeatureUpdate { .. }
+        ) {
+            return Err(invalid(
+                "proposal contains a prohibited host/lifecycle operation",
+            ));
+        }
+        self.apply(op)
+    }
     fn revision(&self, _generation: u64) -> u64 {
         self.doc.version()
     }

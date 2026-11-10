@@ -23,9 +23,9 @@ use basecraft_docs::{AlignmentDoc, EditResult, FeatureId, SequenceDoc, TreeDoc};
 use basecraft_protocol::ops::LOG_VERSION;
 use basecraft_protocol::{Actor, DocState, Feature, LogEntry, Op, OpResult};
 
-use crate::documents::{Document, execute_tree};
+use crate::documents::execute_tree;
 use crate::error::invalid;
-use crate::files::{self, HashingWriter, Loaded, Opened};
+use crate::files::{self, Loaded, Opened};
 use crate::log::LogWriter;
 
 mod creation;
@@ -267,95 +267,90 @@ impl Session {
 
     /// An alignment document. Returns an error for a missing ID or a different document kind.
     pub fn alignment(&self, id: DocId) -> Result<&AlignmentDoc> {
-        match self.content(id)? {
-            Loaded::Alignment(o) => Ok(&o.doc),
-            _ => Err(Error::WrongKind {
+        self.content(id)?
+            .alignment()
+            .ok_or(Error::WrongKind {
                 id,
                 expected: files::Kind::Alignment,
-            }),
-        }
+            })
+            .map(|payload| &payload.doc)
     }
 
     /// A tree document. Returns an error for a missing ID or a different document kind.
     pub fn tree(&self, id: DocId) -> Result<&TreeDoc> {
-        match self.content(id)? {
-            Loaded::Tree(o) => Ok(&o.doc),
-            _ => Err(Error::WrongKind {
+        self.content(id)?
+            .tree()
+            .ok_or(Error::WrongKind {
                 id,
                 expected: files::Kind::Tree,
-            }),
-        }
+            })
+            .map(|payload| &payload.doc)
     }
 
     pub fn delimitation(
         &self,
         id: DocId,
     ) -> Result<&basecraft_protocol::delimitation::DelimitationWorkspace> {
-        match self.content(id)? {
-            Loaded::Delimitation(work) => Ok(work),
-            _ => Err(Error::WrongKind {
-                id,
-                expected: files::Kind::Delimitation,
-            }),
-        }
+        self.content(id)?.delimitation().ok_or(Error::WrongKind {
+            id,
+            expected: files::Kind::Delimitation,
+        })
     }
 
     pub fn is_delimitation(&self, id: DocId) -> bool {
         self.docs
             .get(id.0)
-            .is_some_and(|slot| matches!(slot.content, Loaded::Delimitation(_)))
+            .is_some_and(|slot| slot.content.kind() == files::Kind::Delimitation)
     }
 
     /// The project's specimen metadata. Returns an error for a missing ID or a different document kind.
     pub fn metadata(&self, id: DocId) -> Result<&basecraft_protocol::metadata::ProjectMetadata> {
-        match self.content(id)? {
-            Loaded::Metadata(opened) => Ok(&opened.metadata),
-            _ => Err(Error::WrongKind {
+        self.content(id)?
+            .metadata()
+            .ok_or(Error::WrongKind {
                 id,
                 expected: files::Kind::Metadata,
-            }),
-        }
+            })
+            .map(|payload| &payload.metadata)
     }
 
     /// What was noticed when the metadata was opened, such as tables edited
     /// outside Basecraft.
     pub fn metadata_notices(&self, id: DocId) -> Result<&[String]> {
-        match self.content(id)? {
-            Loaded::Metadata(opened) => Ok(&opened.notices),
-            _ => Err(Error::WrongKind {
+        self.content(id)?
+            .metadata()
+            .ok_or(Error::WrongKind {
                 id,
                 expected: files::Kind::Metadata,
-            }),
-        }
+            })
+            .map(|payload| payload.notices.as_slice())
     }
 
     /// A GenBank submission document. Returns an error for a missing ID or a different document kind.
     pub fn submission(&self, id: DocId) -> Result<&basecraft_protocol::submission::Submission> {
-        match self.content(id)? {
-            Loaded::Submission(sub) => Ok(sub),
-            _ => Err(Error::WrongKind {
-                id,
-                expected: files::Kind::Submission,
-            }),
-        }
+        self.content(id)?.submission().ok_or(Error::WrongKind {
+            id,
+            expected: files::Kind::Submission,
+        })
     }
 
     pub fn is_submission(&self, id: DocId) -> bool {
         self.docs
             .get(id.0)
-            .is_some_and(|slot| matches!(slot.content, Loaded::Submission(_)))
+            .is_some_and(|slot| slot.content.kind() == files::Kind::Submission)
     }
 
     pub fn is_metadata(&self, id: DocId) -> bool {
         self.docs
             .get(id.0)
-            .is_some_and(|slot| matches!(slot.content, Loaded::Metadata(_)))
+            .is_some_and(|slot| slot.content.kind() == files::Kind::Metadata)
     }
 
     pub(crate) fn restore_replay_paths(&mut self, id: DocId, from: &Path, to: &Path) {
-        if let Loaded::Delimitation(work) = &mut self.docs[id.0].content {
-            files::rebase_delimitation_paths(work, from, to);
-        }
+        self.docs[id.0]
+            .content
+            .as_document_mut()
+            .rebase_replay_paths(from, to);
     }
 
     pub(crate) fn legacy_delimitation_hashes(
@@ -363,54 +358,36 @@ impl Session {
         id: DocId,
         target: &Path,
     ) -> Result<Option<Vec<String>>> {
-        if let Loaded::Tree(tree) = &self.docs[id.0].content {
-            let mut main = HashingWriter::new(std::io::sink());
-            files::write_legacy_tree(tree, &mut main)?;
-            let mut side = HashingWriter::new(std::io::sink());
-            files::write_legacy_tree_sidecar(&tree.doc, &mut side)?;
-            return Ok(Some(vec![main.hash(), side.hash()]));
-        }
-        let Loaded::Delimitation(work) = &self.docs[id.0].content else {
-            return Ok(None);
-        };
-        let mut main = HashingWriter::new(std::io::sink());
-        files::write_delimitation(work, files::delimitation_xml(target), &mut main)?;
-        let hash = main.hash();
-        let mut side = HashingWriter::new(std::io::sink());
-        files::write_delimitation_sidecar(work, &hash, &mut side)?;
-        Ok(Some(vec![hash, side.hash()]))
+        self.docs[id.0].content.as_document().legacy_hashes(target)
     }
 
     pub fn is_tree(&self, id: DocId) -> bool {
         self.docs
             .get(id.0)
-            .is_some_and(|slot| matches!(slot.content, Loaded::Tree(_)))
+            .is_some_and(|slot| slot.content.kind() == files::Kind::Tree)
     }
 
     pub fn tree_metadata_warning(&self, id: DocId) -> Result<Option<&str>> {
-        match self.content(id)? {
-            Loaded::Tree(tree) => Ok(tree.metadata_warning.as_deref()),
-            _ => Err(Error::WrongKind {
+        self.content(id)?
+            .tree()
+            .ok_or(Error::WrongKind {
                 id,
                 expected: files::Kind::Tree,
-            }),
-        }
+            })
+            .map(|payload| payload.metadata_warning.as_deref())
     }
 
     pub fn is_alignment(&self, id: DocId) -> bool {
         self.docs
             .get(id.0)
-            .is_some_and(|slot| matches!(slot.content, Loaded::Alignment(_)))
+            .is_some_and(|slot| slot.content.kind() == files::Kind::Alignment)
     }
 
     fn sequence_of(&self, id: DocId) -> Result<&Opened> {
-        match self.content(id)? {
-            Loaded::Sequence(o) => Ok(o),
-            _ => Err(Error::WrongKind {
-                id,
-                expected: files::Kind::Sequence,
-            }),
-        }
+        self.content(id)?.sequence().ok_or(Error::WrongKind {
+            id,
+            expected: files::Kind::Sequence,
+        })
     }
 
     /// Checked access for plugin snapshots; never index a wrong-kind/closed slot.
@@ -451,7 +428,7 @@ impl Session {
         self.docs
             .iter()
             .position(|slot| {
-                matches!(slot.content, Loaded::Metadata(_)) && Path::new(&slot.key) == key
+                slot.content.kind() == files::Kind::Metadata && Path::new(&slot.key) == key
             })
             .map(DocId)
     }

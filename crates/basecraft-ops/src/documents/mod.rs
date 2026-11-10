@@ -58,6 +58,30 @@ pub(crate) trait Document {
         }
         Ok(())
     }
+    /// Whether admission must retain the discovered companion hashes.
+    fn retains_companions(&self) -> bool {
+        false
+    }
+    fn opening_warning(&self) -> Option<&str> {
+        None
+    }
+    /// Legacy replay projections live with the format that produced them.
+    fn legacy_hashes(&self, _target: &Path) -> Result<Option<Vec<String>>> {
+        Ok(None)
+    }
+    fn rebase_replay_paths(&mut self, _from: &Path, _to: &Path) {}
+    /// Detached proposal staging retains the same payload and writer metadata.
+    /// Unsupported kinds cannot be mutated through the proposal route.
+    fn proposal_candidate(&self) -> Result<crate::files::Loaded> {
+        Err(crate::error::invalid(
+            "this document kind does not support proposals",
+        ))
+    }
+    fn apply_proposal(&mut self, _op: &Op) -> Result<(Inverse, Option<FeatureId>)> {
+        Err(crate::error::invalid(
+            "this document kind does not support proposals",
+        ))
+    }
     fn revision(&self, generation: u64) -> u64;
     fn fingerprint(&self) -> DocState;
     /// Apply transactionally: an error must leave the payload unchanged.
@@ -90,6 +114,16 @@ pub(crate) trait Document {
     /// analysis records use the existing record owner from the writer. Paths remain absolute/as supplied;
     /// Session converts them to project-relative log keys. The recovery root is
     /// diagnostic context for partial multi-file saves, not owned by the payload.
+    /// Prepare linked evidence when saving a document to another location.
+    /// Session publishes it with the guarded document write and records outputs.
+    fn prepare_links(
+        &self,
+        _original: &Path,
+        _target: &Path,
+        _format: Format,
+    ) -> Result<Option<crate::links::PreparedLinks>> {
+        Ok(None)
+    }
     fn write(
         &self,
         target: &Path,
@@ -125,12 +159,6 @@ pub(crate) use submission::companions as submission_companions;
 
 // Shared by staged support import and drawing-edit replay on detached TreeDocs.
 pub(crate) use tree::execute_tree;
-
-// Detached proposal staging uses the same sequence semantics as live documents.
-pub(crate) use sequence::execute_sequence;
-
-// Detached proposals share Delimitation mutations and fingerprints with Session.
-pub(crate) use delimitation::execute_delimitation;
 
 /// Placement only: no consent, policy, source or overwrite authority enters a writer.
 #[derive(Default)]

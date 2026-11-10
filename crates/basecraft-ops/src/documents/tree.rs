@@ -16,6 +16,19 @@ impl Document for OpenedTree {
         crate::files::Kind::Tree
     }
 
+    fn retains_companions(&self) -> bool {
+        true
+    }
+    fn opening_warning(&self) -> Option<&str> {
+        self.metadata_warning.as_deref()
+    }
+    fn legacy_hashes(&self, _target: &Path) -> Result<Option<Vec<String>>> {
+        let mut main = HashingWriter::new(std::io::sink());
+        files::write_legacy_tree(self, &mut main)?;
+        let mut side = HashingWriter::new(std::io::sink());
+        files::write_legacy_tree_sidecar(&self.doc, &mut side)?;
+        Ok(Some(vec![main.hash(), side.hash()]))
+    }
     fn revision(&self, _generation: u64) -> u64 {
         self.doc.version()
     }
@@ -70,6 +83,22 @@ impl Document for OpenedTree {
         };
         self.doc = (**before).clone();
         Ok(())
+    }
+
+    fn prepare_links(
+        &self,
+        original: &Path,
+        target: &Path,
+        format: Format,
+    ) -> Result<Option<crate::links::PreparedLinks>> {
+        if format != Format::Tree {
+            return Err(invalid("a tree can only be saved as a tree file"));
+        }
+        if crate::links::document_entry(original)? != crate::links::document_entry(target)? {
+            crate::links::PreparedLinks::prepare(original, target).map(Some)
+        } else {
+            Ok(None)
+        }
     }
 
     fn write(

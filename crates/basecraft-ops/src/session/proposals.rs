@@ -1,16 +1,8 @@
 //! One staged proposal/commit owner. Kind adapters supply only candidate edits
 //! and fingerprints; Session retains pins, actors, journal and undo ownership.
 use super::{Applied, Inverse, Session, Slot};
-use crate::documents::{execute_delimitation, execute_sequence};
-use crate::{
-    DocId, Result,
-    error::invalid,
-    files::{Loaded, Opened},
-};
-use basecraft_docs::FeatureId;
+use crate::{DocId, Result, error::invalid, files::Loaded};
 use basecraft_protocol::{Actor, LogEntry, Op, OpResult};
-
-type Execute = fn(&mut Loaded, &Op) -> Result<(Inverse, Option<FeatureId>)>;
 
 struct PreparedEdit {
     op: Op,
@@ -25,38 +17,6 @@ struct PreparedBatch {
     candidate: Loaded,
     edits: Vec<PreparedEdit>,
     entries: Vec<LogEntry>,
-}
-
-fn sequence_edit(content: &mut Loaded, op: &Op) -> Result<(Inverse, Option<FeatureId>)> {
-    if !matches!(
-        op,
-        Op::SeqReplace { .. }
-            | Op::FeatureAdd { .. }
-            | Op::FeatureRemove { .. }
-            | Op::FeatureUpdate { .. }
-    ) {
-        return Err(invalid(
-            "proposal contains a prohibited host/lifecycle operation",
-        ));
-    }
-    let Loaded::Sequence(sequence) = content else {
-        return Err(invalid("proposals require a sequence document"));
-    };
-    execute_sequence(&mut sequence.doc, op)
-}
-
-fn delimitation_edit(content: &mut Loaded, op: &Op) -> Result<(Inverse, Option<FeatureId>)> {
-    use basecraft_protocol::delimitation::DelimitationEdit;
-    if !matches!(op, Op::DelimitationEdit { edit } if matches!(edit.as_ref(), DelimitationEdit::Remove { .. } | DelimitationEdit::Combine { .. }))
-    {
-        return Err(invalid(
-            "proposal contains an unsupported hypothesis edit or host/lifecycle operation",
-        ));
-    }
-    let Loaded::Delimitation(work) = content else {
-        return Err(invalid("proposals require a species workspace"));
-    };
-    execute_delimitation(work, op)
 }
 
 impl Session {
@@ -91,15 +51,11 @@ impl Session {
         actor: &Actor,
     ) -> Result<Vec<String>> {
         let slot = self.proposal_target(id, generation, revision, ops.len())?;
-        let Loaded::Sequence(sequence) = &slot.content else {
+        if slot.content.kind() != crate::files::Kind::Sequence {
             return Err(invalid("proposals require a sequence document"));
-        };
-        let candidate = Loaded::Sequence(Opened {
-            doc: sequence.doc.clone(),
-            format: sequence.format,
-            fasta: sequence.fasta.clone(),
-        });
-        let batch = self.stage_proposals(id, ops, actor, candidate, sequence_edit)?;
+        }
+        let candidate = slot.content.as_document().proposal_candidate()?;
+        let batch = self.stage_proposals(id, ops, actor, candidate)?;
         self.commit_proposals(batch)
     }
 
@@ -113,11 +69,11 @@ impl Session {
         ops: &[Op],
     ) -> Result<Vec<String>> {
         let slot = self.proposal_target(id, generation, revision, ops.len())?;
-        let Loaded::Delimitation(work) = &slot.content else {
+        if slot.content.kind() != crate::files::Kind::Delimitation {
             return Err(invalid("proposals require a species workspace"));
-        };
-        let candidate = Loaded::Delimitation(work.clone());
-        let batch = self.stage_proposals(id, ops, &self.actor, candidate, delimitation_edit)?;
+        }
+        let candidate = slot.content.as_document().proposal_candidate()?;
+        let batch = self.stage_proposals(id, ops, &self.actor, candidate)?;
         self.commit_proposals(batch)
     }
 
@@ -127,12 +83,11 @@ impl Session {
         ops: &[Op],
         actor: &Actor,
         mut candidate: Loaded,
-        execute: Execute,
     ) -> Result<PreparedBatch> {
         let mut edits = Vec::with_capacity(ops.len());
         let mut entries = Vec::with_capacity(ops.len());
         for op in ops {
-            let (inverse, feature) = execute(&mut candidate, op)?;
+            let (inverse, feature) = candidate.as_document_mut().apply_proposal(op)?;
             let mut entry = self.entry(
                 id,
                 actor.clone(),
@@ -310,13 +265,7 @@ mod tests {
         let (_dir, mut session, doc) = fixture();
         let candidate = Loaded::Delimitation(session.delimitation(doc).unwrap().clone());
         let batch = session
-            .stage_proposals(
-                doc,
-                &[remove("partition-1")],
-                &session.actor,
-                candidate,
-                delimitation_edit,
-            )
+            .stage_proposals(doc, &[remove("partition-1")], &session.actor, candidate)
             .unwrap();
         session.apply(doc, remove("partition-3")).unwrap();
         let after_edit = session.delimitation(doc).unwrap().clone();

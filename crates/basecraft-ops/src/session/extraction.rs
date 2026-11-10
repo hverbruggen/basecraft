@@ -163,7 +163,8 @@ impl Session {
     }
 }
 
-use super::{HashingWriter, Op, OpResult, invalid};
+use super::{Op, OpResult, invalid};
+use crate::files::HashingWriter;
 
 impl Session {
     /// Extract residues `start..end` with their annotations to a new

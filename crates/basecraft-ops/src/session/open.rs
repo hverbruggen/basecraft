@@ -2,7 +2,7 @@
 #[cfg(test)]
 use super::retention_tests;
 use super::{DocId, Op, OpResult, Path, PathBuf, Result, Slot, files, invalid, objects_dir};
-use super::{Loaded, OBJECT_STORE_LIMIT, Session, save_authority};
+use super::{OBJECT_STORE_LIMIT, Session, save_authority};
 
 impl Session {
     pub fn open(&mut self, path: &Path) -> Result<DocId> {
@@ -77,17 +77,7 @@ impl Session {
             let companion_hashes = hash_companions()?;
             #[cfg(test)]
             files::admission_tests::boundary("acquired");
-            let content = if let Some(source) = source {
-                if verified_snapshot && format == files::Format::Tree {
-                    Loaded::Tree(files::load_tree_from(path, &source, true)?)
-                } else {
-                    files::load_from(path, source)?
-                }
-            } else if verified_snapshot && format == files::Format::Tree {
-                Loaded::Tree(files::load_tree_from_verified_snapshot(path)?)
-            } else {
-                files::load(path)?
-            };
+            let content = files::load_snapshot(path, source, format, verified_snapshot)?;
             (content, accepted_hash, companion_hashes)
         };
         #[cfg(test)]
@@ -108,15 +98,7 @@ impl Session {
             .filter(|(_, hash)| hash.is_none())
             .map(|(c, _)| self.relative(c))
             .collect();
-        if matches!(&content, Loaded::Sequence(o) if o.format == files::Format::Fasta)
-            || matches!(
-                content,
-                Loaded::Tree(_)
-                    | Loaded::Delimitation(_)
-                    | Loaded::Metadata(_)
-                    | Loaded::Submission(_)
-            )
-        {
+        if content.as_document().retains_companions() {
             for (companion, hash) in companions.iter().zip(companion_hashes) {
                 if let Some(hash) = hash {
                     hashes.push((self.relative(companion), hash));
@@ -124,11 +106,10 @@ impl Session {
             }
         }
         let (origin, mut origin_issue) = crate::document_record::read_origin(path, &hashes);
-        if let Loaded::Tree(tree) = &content
-            && let Some(warning) = &tree.metadata_warning
-        {
+        if let Some(warning) = content.as_document().opening_warning() {
             origin_issue = Some(
-                origin_issue.map_or_else(|| warning.clone(), |issue| format!("{issue}\n{warning}")),
+                origin_issue
+                    .map_or_else(|| warning.to_owned(), |issue| format!("{issue}\n{warning}")),
             );
         }
         let kind = content.kind();

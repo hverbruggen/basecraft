@@ -131,6 +131,51 @@ pub enum Loaded {
 }
 
 impl Loaded {
+    pub(crate) fn sequence(&self) -> Option<&Opened> {
+        if let Self::Sequence(payload) = self {
+            Some(payload)
+        } else {
+            None
+        }
+    }
+    pub(crate) fn alignment(&self) -> Option<&OpenedAlignment> {
+        if let Self::Alignment(payload) = self {
+            Some(payload)
+        } else {
+            None
+        }
+    }
+    pub(crate) fn tree(&self) -> Option<&OpenedTree> {
+        if let Self::Tree(payload) = self {
+            Some(payload)
+        } else {
+            None
+        }
+    }
+    pub(crate) fn metadata(&self) -> Option<&crate::metadata::OpenedMetadata> {
+        if let Self::Metadata(payload) = self {
+            Some(payload)
+        } else {
+            None
+        }
+    }
+    pub(crate) fn submission(&self) -> Option<&basecraft_protocol::submission::Submission> {
+        if let Self::Submission(payload) = self {
+            Some(payload)
+        } else {
+            None
+        }
+    }
+    pub(crate) fn delimitation(
+        &self,
+    ) -> Option<&basecraft_protocol::delimitation::DelimitationWorkspace> {
+        if let Self::Delimitation(payload) = self {
+            Some(payload)
+        } else {
+            None
+        }
+    }
+
     /// Classify the payload that was loaded, without probing its source again.
     pub(crate) fn kind(&self) -> Kind {
         self.as_document().kind()
@@ -157,6 +202,26 @@ impl Loaded {
             Self::Sequence(opened) => opened,
             Self::Delimitation(work) => work,
         }
+    }
+}
+
+/// The same admission route for live sources and verified replay snapshots.
+pub(crate) fn load_snapshot(
+    path: &Path,
+    source: Option<Source>,
+    format: Format,
+    verified: bool,
+) -> Result<Loaded> {
+    if let Some(source) = source {
+        if verified && format == Format::Tree {
+            load_tree_from(path, &source, true).map(Loaded::Tree)
+        } else {
+            load_from(path, source)
+        }
+    } else if verified && format == Format::Tree {
+        load_tree_from_verified_snapshot(path).map(Loaded::Tree)
+    } else {
+        load(path)
     }
 }
 

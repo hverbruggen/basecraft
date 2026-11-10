@@ -19,6 +19,9 @@ impl Document for Submission {
         crate::files::Kind::Submission
     }
 
+    fn retains_companions(&self) -> bool {
+        true
+    }
     fn revision(&self, generation: u64) -> u64 {
         generation
     }

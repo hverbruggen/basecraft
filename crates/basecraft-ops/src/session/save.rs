@@ -1,10 +1,10 @@
 //! Shared save guards, writes, hashes and acceptance.
 use super::SaveCheck;
 use super::{
-    DerivedTarget, DocId, Error, LegacySave, Loaded, Op, OpResult, Path, Result, SaveDisposition,
+    DerivedTarget, DocId, Error, LegacySave, Op, OpResult, Path, Result, SaveDisposition,
     SaveHooks, SaveMilestone, SaveSite, files, invalid,
 };
-use super::{Document, SaveDecision, SaveOutcome, Session};
+use super::{SaveDecision, SaveOutcome, Session};
 
 impl Session {
     /// Save a document to its own path, or to `path`.
@@ -357,67 +357,43 @@ impl Session {
         }
         hooks.at(SaveSite::Format);
         let format = files::Format::from_path(&target)?;
-        if let Loaded::Tree(t) = &self.docs[id.0].content {
+        let original = self.resolve(&self.docs[id.0].key);
+        let document = self.docs[id.0].content.as_document();
+        // Preserve the legacy observation marker; behaviour is delegated below.
+        if document.kind() == files::Kind::Tree {
             hooks.at(SaveSite::OtherKind);
-            if format != files::Format::Tree {
-                return Err(invalid("a tree can only be saved as a tree file"));
-            }
-            let original = self.resolve(&self.docs[id.0].key);
-            let save_as =
-                crate::links::document_entry(&original)? != crate::links::document_entry(&target)?;
-            let (hashes, outputs) = if save_as {
-                let links = crate::links::PreparedLinks::prepare(&original, &target)?;
-                links.publish(|| {
-                    hooks.write(
-                        t,
-                        &target,
-                        format,
-                        &self.storage_root,
-                        &self.write_publication,
-                    )
-                })?
-            } else {
-                (
-                    hooks.write(
-                        t,
-                        &target,
-                        format,
-                        &self.storage_root,
-                        &self.write_publication,
-                    )?,
-                    Vec::new(),
-                )
-            };
-            let hashes = hashes
-                .into_iter()
-                .map(|(path, hash)| (self.relative(&path), hash))
-                .collect();
-            self.log_save_with(id, &target, hashes, hooks)?;
-            if !outputs.is_empty() {
-                self.log_tool_run(
-                    id,
-                    self.actor.clone(),
-                    ("basecraft.links", "copy"),
-                    serde_json::json!({"from": original,"to":target}),
-                    &[],
-                    &outputs,
-                )?;
-            }
-            return Ok(());
         }
-        let opened = self.docs[id.0].content.as_document();
-        let hashes = hooks
-            .write(
-                opened,
+        let links = document.prepare_links(&original, &target, format)?;
+        let mut write = || {
+            hooks.write(
+                document,
                 &target,
                 format,
                 &self.storage_root,
                 &self.write_publication,
-            )?
+            )
+        };
+        let (hashes, outputs) = if let Some(links) = links {
+            links.publish(write)?
+        } else {
+            (write()?, Vec::new())
+        };
+        let hashes = hashes
             .into_iter()
             .map(|(path, hash)| (self.relative(&path), hash))
             .collect();
-        self.log_save_with(id, &target, hashes, hooks)
+        self.log_save_with(id, &target, hashes, hooks)?;
+        if !outputs.is_empty() {
+            self.log_tool_run(
+                id,
+                self.actor.clone(),
+                ("basecraft.links", "copy"),
+                serde_json::json!({"from": original, "to": target}),
+                &[],
+                &outputs,
+            )?;
+        }
+        Ok(())
     }
 
     pub(super) fn log_save_with(
@@ -500,20 +476,9 @@ impl Session {
 
     /// Replay a save using its actual exchange format, including Save As.
     pub fn save_hashes_at(&self, id: DocId, target: &Path) -> Result<Vec<String>> {
-        let content = &self.docs[id.0].content;
-        match content {
-            Loaded::Delimitation(work) => work.saved_hashes(
-                &self.resolve(&target.to_string_lossy()),
-                &self.write_publication,
-            ),
-            migrated @ (Loaded::Sequence(_)
-            | Loaded::Submission(_)
-            | Loaded::Metadata(_)
-            | Loaded::Alignment(_)
-            | Loaded::Tree(_)) => {
-                let document = migrated.as_document();
-                document.saved_hashes(target, &self.write_publication)
-            }
-        }
+        self.docs[id.0].content.as_document().saved_hashes(
+            &self.resolve(&target.to_string_lossy()),
+            &self.write_publication,
+        )
     }
 }

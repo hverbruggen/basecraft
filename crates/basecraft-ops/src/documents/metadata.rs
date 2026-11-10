@@ -15,6 +15,9 @@ impl Document for OpenedMetadata {
         crate::files::Kind::Metadata
     }
 
+    fn retains_companions(&self) -> bool {
+        true
+    }
     fn revision(&self, generation: u64) -> u64 {
         generation
     }
