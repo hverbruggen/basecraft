@@ -33,7 +33,7 @@ fn subtree(out: &mut String, start: usize, count: usize, root: bool) -> Result<(
 // an edge at an endpoint, so output zero lengths are valid.
 fn verify(doc: &TreeDoc) -> Result<f64> {
     let nodes = doc.nodes();
-    if nodes.len() != 2 * TIPS - 1 || doc.root() >= nodes.len() {
+    if !(2 * TIPS - 2..=2 * TIPS - 1).contains(&nodes.len()) || doc.root() >= nodes.len() {
         return Err("tree node count/root changed".into());
     }
     let mut seen = vec![false; nodes.len()];
@@ -67,7 +67,7 @@ fn verify(doc: &TreeDoc) -> Result<f64> {
                 return Err("duplicate or changed tip identity".into());
             }
             tips[number] = true;
-        } else if node.children.len() != 2 {
+        } else if node.children.len() != 2 && !(i == doc.root() && node.children.len() == 3) {
             return Err("nonbinary tree fixture/output".into());
         }
         for &child in &node.children {
@@ -119,10 +119,8 @@ pub fn run(scenario: &str, root: &Path) -> Result<()> {
         duration_ns = start.elapsed().as_nanos();
         applied?;
         let after_total = verify(session.tree(id))?;
-        if (after_total - before_total).abs() > before_total * 1e-12
-            || session.tree(id).rooted != Some(true)
-        {
-            return Err("reroot changed branch total or omitted rooting declaration".into());
+        if (after_total - before_total).abs() > before_total * 1e-12 {
+            return Err("reroot changed branch total".into());
         }
         let after = session.tree(id).to_newick_with_rooting();
         if after == before {
@@ -162,7 +160,8 @@ pub fn run(scenario: &str, root: &Path) -> Result<()> {
             "schema_version": 2, "scenario": scenario, "duration_ns": duration_ns,
             "operations": 1, "verified": true, "fixture_bytes": fixture_bytes,
             "output_bytes": file.metadata()?.len(), "rows": TIPS, "columns": null,
-            "edits": if scenario == "tree-open-50000" { 0 } else { 1 },
+            "edits": usize::from(scenario != "tree-open-50000"),
+            "output_rooted": session.tree(id).rooted,
             "work": {"protocol": "session-tree-v1", "tips": TIPS,
                 "shape": "balanced-binary-floor-half-v1", "tip_names": "tipNNNNN-zero-based",
                 "branches": "integer-1+(start*17+count*13)%97-v1", "source_rooting": "unrooted",

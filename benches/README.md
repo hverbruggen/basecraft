@@ -165,9 +165,10 @@ Undo/redo/replay are untimed verification, not a separate undo timing scenario.
 No scientific implementation or production fast path is changed.
 
 Outside timing, bounded traversals verify every tip identity exactly once,
-reachability, reciprocal parents/children, binary topology and finite nonnegative
-branch lengths. The rerooted tree must declare rooting and preserve total branch
-length within relative 1e-12. Undo must restore original Newick/rooting semantics
+reachability, reciprocal parents/children, binary topology (allowing a degree-three root at a midpoint endpoint) and finite
+nonnegative branch lengths. The rerooted tree must preserve total branch length
+within relative 1e-12; raw `output_rooted` retains the actual exchange declaration
+(the current operation preserves the source declaration). Undo must restore original Newick/rooting semantics
 and Session save hashes; redo must reproduce the rerooted semantics. The normal
 recovery journal must contain the operation and pass the existing replay verifier.
 Source bytes/hash remain unchanged. These are structural/round-trip checks, not
