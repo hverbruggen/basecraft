@@ -1,9 +1,7 @@
 use super::*;
 use crate::input_evidence::{self as inputs, SavePolicy};
+use crate::isolated_profile as isolated;
 use std::{collections::BTreeMap, fs};
-
-#[path = "../../tests/support/isolated_profile.rs"]
-mod isolated;
 
 fn enter(case: &str) -> Option<PathBuf> {
     isolated::enter(&format!(
