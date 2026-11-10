@@ -384,7 +384,7 @@ fn linked_alignment_selector_preserves_presence_order_extensions_and_spelling() 
     for (index, (snapshot, sources, expected)) in cases.into_iter().enumerate() {
         let path = hint_workspace(dir.path(), &format!("case-{index}.spart"), |work| {
             work.hypotheses.clear();
-            work.view = Default::default();
+            work.view = basecraft_protocol::delimitation::DelimitationView::default();
             let specimen = work.specimens[0].clone();
             work.specimens = sources
                 .into_iter()
