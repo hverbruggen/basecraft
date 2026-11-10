@@ -48,7 +48,7 @@ fn checked_window(object: Option<&cxx_qt::QObject>) -> (RootKind, Option<&ffi::Q
 
 /// Signatures and generated connectors are linked but never called in Stage A.
 /// Future callers must ensure serialized emissions per handler; atomic state
-/// does not make simultaneous entry into the generated FnMut closure safe.
+/// does not make simultaneous entry into the generated `FnMut` closure safe.
 fn connect_submission<F: FnMut() + Send + 'static>(
     window: &ffi::QQuickWindow,
     callback: F,
@@ -71,8 +71,8 @@ fn connect_presentation_queue<F: FnMut() + Send + 'static>(
     )
 }
 
-/// CxxQtThread queues with guarded pointer/mutex protection; acceptance is not
-/// delivery. It may allocate/wait. No is_destroyed precheck, lock or retry here.
+/// `CxxQtThread` queues with guarded pointer/mutex protection; acceptance is not
+/// delivery. It may allocate/wait. No `is_destroyed` precheck, lock or retry here.
 fn queue_payload(
     thread: &CxxQtThread<ffi::FrameReceiver>,
     observation: Arc<Observation>,
@@ -94,13 +94,13 @@ fn queue_payload(
 
 #[test]
 fn signatures_link_without_creating_qt_objects() {
+    fn require_send_sync<T: Send + Sync>() {}
     // Keep real generated call paths reachable to the linker, without executing
     // any cast/connection/queue. This proves types/linkage, not Qt runtime safety.
     std::hint::black_box(checked_window as fn(_) -> _);
     std::hint::black_box(connect_submission::<fn()> as fn(_, _) -> _);
     std::hint::black_box(connect_presentation_queue::<fn()> as fn(_, _) -> _);
     std::hint::black_box(queue_payload as fn(_, _, _) -> _);
-    fn require_send_sync<T: Send + Sync>() {}
     require_send_sync::<CxxQtThread<ffi::FrameReceiver>>();
     require_send_sync::<Payload>();
 }

@@ -148,7 +148,7 @@ impl Observation {
     /// At most one timestamp capture and queue attempt per event. Queue acceptance
     /// is not delivery. A concurrent cancel can race with an already claimed
     /// attempt; the receiver must check cancellation again before consuming it.
-    /// Contention tests exercise this helper, never concurrent Qt FnMut handlers.
+    /// Contention tests exercise this helper, never concurrent Qt `FnMut` handlers.
     pub fn capture(
         &self,
         event: FrameEvent,
