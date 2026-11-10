@@ -171,7 +171,7 @@ impl ReviewState<'_> {
 impl ReviewChange {
     /// Install a delta prepared for this payload. The owner controls its stack
     /// and audit event; preparing an edit never changes either.
-    pub fn install(&self, state: ReviewStateMut<'_>, forward: bool) -> Result<(), String> {
+    pub fn install(&self, state: &mut ReviewStateMut<'_>, forward: bool) -> Result<(), String> {
         if state.manual.len() != state.decisions.len()
             || self
                 .columns
@@ -257,7 +257,7 @@ mod tests {
         assert!(
             change
                 .install(
-                    ReviewStateMut {
+                    &mut ReviewStateMut {
                         decisions: &mut decisions,
                         manual: &mut manual,
                         mask: &mut mask,

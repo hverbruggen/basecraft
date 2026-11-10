@@ -17,7 +17,7 @@ impl SangerReviewSession {
 
     pub(super) fn install_change(&mut self, change: &Change, forward: bool) -> Result<(), String> {
         change.install(
-            ReviewStateMut {
+            &mut ReviewStateMut {
                 decisions: &mut self.decisions,
                 manual: &mut self.manual,
                 mask: &mut self.mask,
