@@ -381,6 +381,14 @@ impl SessionPolicy {
         if !supported {
             return Err(AccessError::Denied(Denial::ServiceUnavailable).into());
         }
+        // PathBuf::join("") retains a trailing separator. The legacy resolver
+        // accepts that spelling, but the strict platform rejects raw trailing
+        // separators. Use the already configured root spelling, without IO.
+        let path = if relative.as_os_str().is_empty() {
+            self.root.clone()
+        } else {
+            path
+        };
         let namespace = inspect(&path).map_err(strict_namespace_error)?;
         let metadata = namespace.metadata();
         if relative.as_os_str().is_empty() {
