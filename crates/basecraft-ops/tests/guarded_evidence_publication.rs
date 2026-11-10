@@ -214,7 +214,7 @@ fn publication_worker() {
                 .unwrap();
             // A real second process probes the actual OS lock. No timeout or
             // absence-of-message is used as evidence of exclusion.
-            assert!(fs4::fs_std::FileExt::try_lock_exclusive(&file).is_err());
+            assert!(!fs4::fs_std::FileExt::try_lock_exclusive(&file).unwrap());
             barrier.send("locked");
         }
         if mode != "save-first" {
