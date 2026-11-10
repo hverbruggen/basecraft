@@ -74,6 +74,11 @@ pub(crate) struct Revision {
 }
 
 impl Revision {
+    /// Borrow accepted state for a private participant binding; no replacement grant.
+    pub(crate) fn snapshot(&self) -> (&Path, &str, &basecraft_protocol::provenance::FileStamp) {
+        (&self.path, &self.hash, &self.stamp)
+    }
+
     pub(crate) fn accepted(path: &Path, bytes: &[u8]) -> Result<Self> {
         let revision = Self {
             path: target_path(path)?,

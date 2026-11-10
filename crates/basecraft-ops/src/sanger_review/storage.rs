@@ -407,6 +407,7 @@ fn unavailable_sources(evidence: &ReviewEvidence, record: &mut Publication) {
 impl SangerReviewSession {
     /// Attach an explicit completed analysis. The exact draft itself is unchanged.
     pub fn attach_run(&mut self, run: &SangerRun) -> Result<(), String> {
+        self.invalidate_save_authority();
         let mut evidence = run.evidence.clone();
         for read in &self.draft.inputs {
             let source = evidence
@@ -426,6 +427,7 @@ impl SangerReviewSession {
     }
 
     pub(super) fn resume_recovery(&mut self, path: &Path) -> Result<(), String> {
+        self.invalidate_save_authority();
         let paths = basecraft_platform::paths::AppPaths::discover().map_err(|e| e.to_string())?;
         let absolute = std::path::absolute(path).map_err(|e| e.to_string())?;
         if !absolute.starts_with(paths.state.join("jobs")) {
@@ -481,6 +483,7 @@ impl SangerReviewSession {
 
     /// Link an already published public-operation run into the review ancestry.
     pub fn attach_operation_run(&mut self, directory: &Path) -> Result<(), String> {
+        self.invalidate_save_authority();
         if !directory.join("manifest.json").is_file() || !directory.join("runtime.json").is_file() {
             return Err("Completed caller support is missing".into());
         }
@@ -503,6 +506,7 @@ impl SangerReviewSession {
     /// Carry already validated review ancestry, including pre-registry reviews.
     /// New analyses still attach through `attach_operation_run`.
     pub fn inherit_review_ancestry(&mut self, previous: &Self) {
+        self.invalidate_save_authority();
         self.evidence.runs.clone_from(&previous.evidence.runs);
         self.evidence.sources.clone_from(&previous.evidence.sources);
     }
@@ -514,6 +518,7 @@ impl SangerReviewSession {
         directory: &Path,
         path: &Path,
     ) -> Result<(), String> {
+        self.invalidate_save_authority();
         let placement = SangerPlacement::read(path)?;
         let context = source(
             &placement.source_path,
@@ -535,6 +540,7 @@ impl SangerReviewSession {
     }
 
     pub fn include_run(&mut self, run: &SangerRun) -> Result<(), String> {
+        self.invalidate_save_authority();
         self.evidence.runs.extend(run.evidence.runs.clone());
         self.start_recovery()
     }
@@ -600,6 +606,7 @@ impl SangerReviewSession {
     }
 
     pub fn attach_placement(&mut self, run: &SangerRun, path: &Path) -> Result<(), String> {
+        self.invalidate_save_authority();
         let placement = SangerPlacement::read(path)?;
         let context = run
             .evidence
@@ -684,6 +691,7 @@ impl SangerReviewSession {
     /// Recovery lives in application state and is discoverable through the existing
     /// Tasks previous-runs list. It is labelled as a review, never a consensus.
     pub fn start_recovery(&mut self) -> Result<(), String> {
+        self.invalidate_save_authority();
         let anchor = self.anchor.clone();
         self.ensure_sources(&anchor).map_err(|e| e.to_string())?;
         if self.recovery.is_none() {
@@ -1064,6 +1072,7 @@ impl SangerReviewSession {
     /// Freeze the accepted input for alignment addition without exporting an AB1
     /// or requiring a visible review file. This descriptor is never executable.
     pub fn addition_evidence(&mut self) -> Result<String, String> {
+        self.invalidate_save_authority();
         let sequence = self
             .resolved_sequence()
             .filter(|s| !s.is_empty())

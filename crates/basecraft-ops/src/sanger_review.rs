@@ -2,6 +2,7 @@
 //! The source draft and AB1 files remain immutable; no reference base is
 //! inferred or substituted by these operations.
 
+mod save;
 mod storage;
 pub use storage::{SangerRun, record_addition};
 pub(crate) use storage::{is_review, relocate_package};
@@ -98,7 +99,7 @@ fn recover_with_saver(
 
 pub use basecraft_protocol::sanger::{MaskSettings, ReviewChoice, ReviewOp};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 struct Change {
     columns: Vec<usize>,
     before: Vec<ReviewChoice>,
@@ -135,8 +136,8 @@ struct StoredCallSets {
     sets: Vec<StoredReview>,
 }
 
-#[derive(Clone)]
 pub struct SangerReviewSession {
+    save_authority: Option<save::RootAuthority>,
     // Only the selected session owns the inactive sets. Each set owns its replay history.
     retained: Vec<SangerReviewSession>,
     pub draft: SangerDraft,
@@ -307,6 +308,7 @@ impl SangerReviewSession {
         let hash = basecraft_io::sha256_bytes(draft_json.as_bytes());
         let decisions = vec![ReviewChoice::Pending; draft.columns.len()];
         Ok(Self {
+            save_authority: Some(save::RootAuthority::new()),
             retained: Vec::new(),
             mask: Self::default_mask(draft.columns.len()),
             settings: ReviewSettings::default(),
@@ -379,6 +381,7 @@ impl SangerReviewSession {
                 }
                 for set in &mut sets {
                     set.recovery = None;
+                    set.demote_save_authority();
                 }
                 session.retained = sets;
                 Ok(session)
@@ -416,6 +419,7 @@ impl SangerReviewSession {
             evidence.runs.push(bundle);
         }
         let mut session = Self {
+            save_authority: Some(save::RootAuthority::new()),
             retained: Vec::new(),
             mask: Self::default_mask(draft.columns.len()),
             settings: ReviewSettings::default(),
@@ -461,7 +465,9 @@ impl SangerReviewSession {
     }
 
     /// Keep older computed sets and their decisions when a new producer is used.
-    pub fn retain_call_set(&mut self, session: Self) -> Result<(), String> {
+    pub fn retain_call_set(&mut self, mut session: Self) -> Result<(), String> {
+        self.invalidate_save_authority();
+        session.demote_save_authority();
         if !session.retained.is_empty() || self.retained.len() >= 31 {
             return Err("Too many or nested Sanger call sets".into());
         }
@@ -484,6 +490,7 @@ impl SangerReviewSession {
     }
 
     pub fn select_call_set(&mut self, id: &str) -> Result<(), String> {
+        self.invalidate_save_authority();
         let previous = self.draft_sha256.clone();
         self.swap_call_set(id)?;
         if let Err(error) = self.checkpoint() {
@@ -506,6 +513,7 @@ impl SangerReviewSession {
         let mut selected = retained.remove(index);
         std::mem::swap(self, &mut selected);
         // Recovery and save destination belong to the whole review document.
+        std::mem::swap(&mut self.save_authority, &mut selected.save_authority);
         std::mem::swap(&mut self.recovery, &mut selected.recovery);
         std::mem::swap(&mut self.anchor, &mut selected.anchor);
         std::mem::swap(&mut self.accepted, &mut selected.accepted);
@@ -524,6 +532,7 @@ impl SangerReviewSession {
         path: &Path,
         policy: crate::input_evidence::SavePolicy,
     ) -> Result<(), String> {
+        self.invalidate_save_authority();
         self.save_durable(path, policy).map_err(|e| e.to_string())
     }
 
@@ -566,6 +575,7 @@ impl SangerReviewSession {
     }
 
     pub fn apply(&mut self, op: ReviewOp) -> Result<(), String> {
+        self.invalidate_save_authority();
         match &op {
             ReviewOp::Evaluate {
                 version,
@@ -744,6 +754,7 @@ impl SangerReviewSession {
     /// Export only a fully resolved specimen sequence. The output hash is a
     /// replayable operation; source AB1 and draft paths can never be replaced.
     pub fn export_consensus(&mut self, path: &Path, label: &str) -> Result<(), String> {
+        self.invalidate_save_authority();
         let sequence = self
             .resolved_sequence()
             .ok_or("Resolve every review column before export")?;
@@ -1326,7 +1337,7 @@ mod moved_and_failed_recovery_tests {
     mod recover_cleanup_tests {
         include!("sanger_review/recover_cleanup_tests.rs");
     }
-    fn pair(folder: &Path) -> SangerReviewSession {
+    pub(super) fn pair(folder: &Path) -> SangerReviewSession {
         std::fs::create_dir(folder).unwrap();
         let source = folder.join("source.ab1");
         std::fs::copy(
