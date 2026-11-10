@@ -95,24 +95,24 @@ pub struct ExternalExecution {
     /// implementation type is GPL host-owned; protocol must not depend on it.
     pub runtime: Option<Value>,
     pub interpreter: Option<PathBuf>,
-    /// Existing caller label, not an Actor serialization or a new identity.
+    /// Existing caller label, not an `Actor` serialization or a new identity.
     pub initiator: String,
     pub executor: String,
     pub process_instance: String,
     /// The public invocation context rejects unknown fields, including in input
     /// evidence. Retain its complete snapshot for lossless nested extensions;
-    /// production still constructs this from the shared InvocationContext.
+    /// production still constructs this from the shared `InvocationContext`.
     #[schemars(with = "crate::operation::InvocationContext")]
     pub context: Value,
     pub requested_parameters: Value,
     pub effective_parameters: Value,
     pub stdout: String,
     pub stderr: String,
-    /// ToolInfo currently discards extras. Keep the original snapshot; null is
+    /// `ToolInfo` currently discards extras. Keep the original snapshot; null is
     /// always emitted, including on process failure. No production parse changes.
     #[schemars(with = "Option<crate::plugin::ToolInfo>")]
     pub tool: Option<Value>,
-    /// ExecutionInfo and MethodsInfo currently discard extras. Preserve nested
+    /// `ExecutionInfo` and `MethodsInfo` currently discard extras. Preserve nested
     /// process evidence rather than introducing a lossy parsing boundary.
     #[schemars(with = "Option<crate::plugin::ExecutionInfo>")]
     pub execution: Option<Value>,
@@ -137,8 +137,8 @@ pub struct HostWorkflowExecution {
     pub extra: BTreeMap<String, Value>,
 }
 
-/// The existing two-field plugin identity in the local index. Neither Actor's
-/// tagged representation nor OperationPins has this shape.
+/// The existing two-field plugin identity in the local index. Neither `Actor`'s
+/// tagged representation nor `OperationPins` has this shape.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct JobIndexPlugin {
     pub id: String,
@@ -147,7 +147,7 @@ pub struct JobIndexPlugin {
     pub extra: BTreeMap<String, Value>,
 }
 
-/// Existing display path wrapper; not a hashed InputReference or a new path rule.
+/// Existing display path wrapper; not a hashed `InputReference` or a new path rule.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct JobIndexSource {
     pub path: String,
@@ -156,7 +156,7 @@ pub struct JobIndexSource {
 }
 
 /// Lightweight application-state `jobs/<id>/manifest.json`. The pointed-to
-/// OperationOutcome in runtime.json stays authoritative; this is not JobRecord.
+/// `OperationOutcome` in runtime.json stays authoritative; this is not `JobRecord`.
 /// Existing selected-field readers and owner/receipt checks remain unchanged.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct LocalJobIndex {
