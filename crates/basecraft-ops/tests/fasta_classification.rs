@@ -183,6 +183,8 @@ fn summary_facts_match_index() {
 #[cfg(feature = "test-heap")]
 #[test]
 fn bounded_classifier_heap() {
+    use std::io::Write;
+
     // Instrumentation is process-wide: isolate from the other test threads.
     if std::env::var_os("BASECRAFT_CLASSIFIER_HEAP_CHILD").is_none() {
         let output = std::process::Command::new(std::env::current_exe().unwrap())
@@ -198,7 +200,6 @@ fn bounded_classifier_heap() {
         );
         return;
     }
-    use std::io::Write;
     let dir = tempfile::tempdir().unwrap();
     for shape in ["records", "header", "sequence"] {
         for count in [100, 100_000] {
