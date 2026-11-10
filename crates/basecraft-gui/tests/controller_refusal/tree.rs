@@ -75,6 +75,10 @@ pub(crate) fn run(mut controller: Pin<&mut qobject::TreeController>) {
         assert_eq!(controller.rust().message.to_string(), refusal);
         assert_eq!(controller.rust().message_kind.to_string(), "error");
         assert_eq!(state(&controller, original), before);
+        controller
+            .as_mut()
+            .select_clade(&QString::from("[\"A\",\"B\"]"));
+        assert_eq!(state(&controller, original), before);
         controller.as_mut().ladderize(true);
         assert_eq!(controller.rust().message.to_string(), refusal);
         controller

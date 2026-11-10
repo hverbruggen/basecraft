@@ -171,7 +171,7 @@ fn main() {
     {
         use cxx_qt::casting::Downcast;
         let mut engine = QQmlApplicationEngine::new();
-        let checked = std::rc::Rc::new(std::cell::Cell::new(0));
+        let checked = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let count = checked.clone();
         engine
             .pin_mut()
@@ -194,7 +194,7 @@ fn main() {
                 } else {
                     panic!("unexpected controller type");
                 }
-                count.set(count.get() + 1);
+                count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             })
             .release();
         for controller in ["TreeController", "AlignmentController"] {
@@ -203,7 +203,11 @@ fn main() {
                 &QUrl::default(),
             );
         }
-        assert_eq!(checked.get(), 2, "both real controller regressions ran");
+        assert_eq!(
+            checked.load(std::sync::atomic::Ordering::Relaxed),
+            2,
+            "both real controller regressions ran"
+        );
     }
 
     let figure = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"200\" height=\"100\"><rect width=\"200\" height=\"100\" fill=\"#c02030\"/><text x=\"8\" y=\"50\" font-size=\"20\">A&amp;β</text></svg>";

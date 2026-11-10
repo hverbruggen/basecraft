@@ -789,12 +789,9 @@ impl qobject::TreeController {
     pub fn select_clade(mut self: Pin<&mut Self>, names: &QString) {
         let result = (|| -> Result<usize, Box<dyn std::error::Error>> {
             let names: Vec<String> = serde_json::from_str(&names.to_string())?;
-            crate::bridge::checked_document!(
-                self.qt_thread(),
-                self.with_doc(|tree| tree.resolve(&names))
-            )
-            .ok_or("No tree open")?
-            .map_err(Into::into)
+            self.with_doc(|tree| tree.resolve(&names))?
+                .ok_or("No tree open")?
+                .map_err(Into::into)
         })();
         match result {
             Ok(node) => {
