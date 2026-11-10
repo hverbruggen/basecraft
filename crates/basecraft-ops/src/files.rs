@@ -137,6 +137,7 @@ impl Loaded {
     pub(crate) fn as_document(&self) -> Option<&dyn crate::documents::Document> {
         match self {
             Self::Submission(sub) => Some(sub),
+            Self::Metadata(opened) => Some(opened),
             _ => None,
         }
     }
@@ -144,6 +145,7 @@ impl Loaded {
     pub(crate) fn as_document_mut(&mut self) -> Option<&mut dyn crate::documents::Document> {
         match self {
             Self::Submission(sub) => Some(sub),
+            Self::Metadata(opened) => Some(opened),
             _ => None,
         }
     }

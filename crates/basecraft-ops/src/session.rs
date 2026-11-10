@@ -433,7 +433,8 @@ impl Session {
             Loaded::Alignment(opened) => opened.doc.version(),
             Loaded::Tree(opened) => opened.doc.version(),
             Loaded::Submission(sub) => sub.revision(self.docs[id.0].generation),
-            Loaded::Delimitation(_) | Loaded::Metadata(_) => self.docs[id.0].generation,
+            Loaded::Metadata(opened) => opened.revision(self.docs[id.0].generation),
+            Loaded::Delimitation(_) => self.docs[id.0].generation,
         }
     }
 
@@ -482,11 +483,7 @@ impl Session {
                 features: work.hypotheses.len() as u64,
                 rows: None,
             },
-            Loaded::Metadata(opened) => DocState {
-                len: opened.metadata.specimens.rows.len() as u64,
-                features: opened.metadata.identifications.len() as u64,
-                rows: Some(opened.metadata.links.len() as u64),
-            },
+            Loaded::Metadata(opened) => opened.fingerprint(),
             Loaded::Submission(sub) => sub.fingerprint(),
             Loaded::Tree(o) => DocState {
                 len: o.doc.tip_count() as u64,
@@ -1092,43 +1089,18 @@ impl Session {
         let opened = match &self.docs[id.0].content {
             Loaded::Submission(sub) => {
                 let hashes = sub
-                    .write(&target, format)?
+                    .write(&target, format, &self.storage_root)?
                     .into_iter()
                     .map(|(path, hash)| (self.relative(&path), hash))
                     .collect();
                 return self.log_save(id, &target, hashes);
             }
             Loaded::Metadata(opened) => {
-                if format != files::Format::Metadata {
-                    return Err(invalid(format!(
-                        "project metadata is saved as {}",
-                        crate::metadata::MANIFEST
-                    )));
-                }
-                let encoded = crate::metadata::encode(&opened.metadata)?;
-                let paths = crate::metadata::files(&target);
-                if let Some(parent) = target.parent() {
-                    std::fs::create_dir_all(parent)?;
-                }
-                // Tables first, manifest last: the manifest records their hashes.
-                let mut replaced = Vec::new();
-                for (path, bytes) in paths.iter().zip(&encoded).rev() {
-                    if let Err(error) = basecraft_io::write_atomic(path, |w| w.write_all(bytes)) {
-                        if replaced.is_empty() {
-                            return Err(error.into());
-                        }
-                        return Err(invalid(format!(
-                            "partial metadata save: replaced {}; failed at {}: {error}. Metadata generation is incomplete. Keep the open document and retry saving after fixing the destination, or save to a new folder. Temporary recovery, when enabled, is at {}",
-                            replaced.join(", "),
-                            path.display(),
-                            self.storage_root.display()
-                        )));
-                    }
-                    replaced.push(path.display().to_string());
-                }
-                for (path, bytes) in paths.iter().zip(&encoded) {
-                    hashes.push((self.relative(path), basecraft_io::hash_bytes(bytes)));
-                }
+                let hashes = opened
+                    .write(&target, format, &self.storage_root)?
+                    .into_iter()
+                    .map(|(path, hash)| (self.relative(&path), hash))
+                    .collect();
                 return self.log_save(id, &target, hashes);
             }
             Loaded::Delimitation(work) => {
@@ -2162,12 +2134,6 @@ impl Session {
     pub fn save_hashes_at(&self, id: DocId, target: &Path) -> Result<Vec<String>> {
         let content = &self.docs[id.0].content;
         let opened = match content {
-            Loaded::Metadata(opened) => {
-                return Ok(crate::metadata::encode(&opened.metadata)?
-                    .iter()
-                    .map(|bytes| basecraft_io::hash_bytes(bytes))
-                    .collect());
-            }
             Loaded::Delimitation(work) => {
                 let mut main = HashingWriter::new(std::io::sink());
                 files::write_delimitation(work, files::delimitation_xml(target), &mut main)?;
@@ -2194,7 +2160,7 @@ impl Session {
                 files::write_tree_sidecar_at(&t.doc, &hw.hash(), &mut side)?;
                 return Ok(vec![hw.hash(), side.hash()]);
             }
-            migrated @ Loaded::Submission(_) => {
+            migrated @ (Loaded::Submission(_) | Loaded::Metadata(_)) => {
                 let document = migrated
                     .as_document()
                     .ok_or_else(|| invalid("document interface unavailable"))?;
@@ -2451,18 +2417,7 @@ impl Session {
                 basecraft_docs::delimitation::apply(work, edit).map_err(|e| invalid(e.0))?;
                 return Ok((Inverse::Delimitation(before), None));
             }
-            Loaded::Metadata(opened) => {
-                let Op::MetadataEdit { edit } = op else {
-                    return Err(invalid(format!(
-                        "{} can't be applied to the project metadata",
-                        op.name()
-                    )));
-                };
-                let before = Box::new(opened.metadata.clone());
-                basecraft_docs::metadata::apply(&mut opened.metadata, edit)
-                    .map_err(|e| invalid(e.0))?;
-                return Ok((Inverse::Metadata(before), None));
-            }
+            Loaded::Metadata(opened) => return opened.apply(op),
             Loaded::Submission(sub) => return sub.apply(op),
             Loaded::Alignment(a) => {
                 return execute_alignment(a, op).map(|u| (Inverse::Alignment(u), None));
@@ -2633,18 +2588,10 @@ impl Session {
             (Loaded::Delimitation(work), Inverse::Delimitation(before)) => {
                 *work = (**before).clone();
             }
-            (Loaded::Metadata(opened), Inverse::Metadata(before)) => {
-                opened.metadata = (**before).clone();
-            }
+            (Loaded::Metadata(opened), inverse) => opened.revert(inverse)?,
             (Loaded::Submission(sub), inverse) => sub.revert(inverse)?,
             (Loaded::Sequence(o), inverse) => undo_sequence(&mut o.doc, inverse),
-            (
-                Loaded::Alignment(_)
-                | Loaded::Tree(_)
-                | Loaded::Delimitation(_)
-                | Loaded::Metadata(_),
-                _,
-            ) => {
+            (Loaded::Alignment(_) | Loaded::Tree(_) | Loaded::Delimitation(_), _) => {
                 return Err(invalid("undo of the wrong kind of edit"));
             }
         }
@@ -2973,9 +2920,6 @@ fn restore_inverse(content: &mut Loaded, inverse: &Inverse) -> Result<()> {
         (Loaded::Alignment(opened), Inverse::Alignment(steps)) => opened.doc.undo(steps),
         (Loaded::Tree(opened), Inverse::Tree(before)) => opened.doc = (**before).clone(),
         (Loaded::Delimitation(work), Inverse::Delimitation(before)) => *work = (**before).clone(),
-        (Loaded::Metadata(opened), Inverse::Metadata(before)) => {
-            opened.metadata = (**before).clone();
-        }
         _ => return Err(invalid("edit rollback has incompatible document type")),
     }
     Ok(())

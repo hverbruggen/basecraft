@@ -395,3 +395,150 @@ fn saved_metadata_and_submission_reports_use_their_document_readers() {
         assert_eq!(normalize(&saved.raw), normalize(&ordinary.raw));
     }
 }
+
+#[test]
+fn document_interface_preserves_metadata_bytes_and_rejections() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let manifest = metadata::create(root).unwrap();
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&manifest).unwrap()).unwrap();
+    value["future_field"] = serde_json::json!({"preserve": [1, 2]});
+    std::fs::write(&manifest, serde_json::to_vec(&value).unwrap()).unwrap();
+    let mut s = Session::new(root);
+    let doc = s.open(&manifest).unwrap();
+    let before = s.metadata(doc).clone();
+    let edit = MetadataEdit::Apply {
+        changes: ChangeSet {
+            specimens: vec!["roster-A".into(), "roster-B".into()],
+            ..ChangeSet::default()
+        },
+    };
+    // Independent pre-interface payload/serializer path is the byte oracle.
+    let mut expected = before.clone();
+    basecraft_docs::metadata::apply(&mut expected, &edit).unwrap();
+    let expected_bytes = metadata::encode(&expected).unwrap();
+    let expected_hashes: Vec<_> = expected_bytes
+        .iter()
+        .map(|b| basecraft_io::hash_bytes(b))
+        .collect();
+    s.apply(
+        doc,
+        Op::MetadataEdit {
+            edit: Box::new(edit),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        serde_json::to_string(&s.state(doc)).unwrap(),
+        r#"{"len":2,"features":0,"rows":0}"#
+    );
+    assert_eq!(s.save_hashes(doc).unwrap(), expected_hashes);
+    // Historical hashing ignores the target's format; writing rejects it.
+    assert_eq!(
+        s.save_hashes_at(doc, &root.join("wrong.fasta")).unwrap(),
+        expected_hashes
+    );
+    let revision = s.revision(doc);
+    let wrong = s
+        .apply(
+            doc,
+            Op::AlnRenameRow {
+                row: 0,
+                name: "wrong kind".into(),
+            },
+        )
+        .unwrap_err();
+    assert!(
+        matches!(wrong, basecraft_ops::Error::Invalid(ref text) if text.ends_with("can't be applied to the project metadata")),
+        "{wrong}"
+    );
+
+    let wrong = s
+        .apply(
+            doc,
+            Op::MetadataEdit {
+                edit: Box::new(MetadataEdit::Apply {
+                    changes: ChangeSet {
+                        links: vec![basecraft_protocol::metadata::RecordLink {
+                            document: "input.fasta".into(),
+                            record: "row-A".into(),
+                            specimen: "missing".into(),
+                        }],
+                        ..ChangeSet::default()
+                    },
+                }),
+            },
+        )
+        .unwrap_err();
+    assert!(
+        matches!(wrong, basecraft_ops::Error::Invalid(ref text) if text.contains("unknown specimen")),
+        "{wrong}"
+    );
+    let wrong = s.save(doc, Some(&root.join("wrong.fasta"))).unwrap_err();
+    assert!(
+        matches!(wrong, basecraft_ops::Error::Invalid(ref text) if text == "project metadata is saved as metadata.basecraft.json"),
+        "{wrong}"
+    );
+    assert_eq!(s.revision(doc), revision);
+    assert_eq!(s.metadata(doc), &expected);
+    s.undo(doc).unwrap();
+    assert_eq!(s.metadata(doc), &before);
+    s.redo(doc).unwrap();
+    assert_eq!(s.metadata(doc), &expected);
+    s.save(doc, None).unwrap();
+    for (path, bytes) in metadata::files(&manifest).iter().zip(&expected_bytes) {
+        assert_eq!(&std::fs::read(path).unwrap(), bytes);
+    }
+    drop(s);
+    let mut reopened = Session::unlogged(root);
+    let doc = reopened.open(&manifest).unwrap();
+    assert_eq!(reopened.metadata(doc), &expected);
+    let report = replay::replay(root).unwrap();
+    assert!(report.ok(), "{:#?}", report.problems);
+}
+
+#[test]
+fn metadata_partial_writer_failure_retains_payload_and_allows_retry() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let mut s = Session::new(root);
+    let doc = metadata::open(&mut s, true).unwrap().unwrap();
+    let before = s.metadata(doc).clone();
+    metadata::apply_plan(
+        &mut s,
+        doc,
+        ChangeSet {
+            specimens: vec!["retained".into()],
+            ..ChangeSet::default()
+        },
+    )
+    .unwrap();
+    let expected = s.metadata(doc).clone();
+    let bytes = metadata::encode(&expected).unwrap();
+    let target = root.join("copy").join(metadata::MANIFEST);
+    let paths = metadata::files(&target);
+    // Save As passes the source guard. The last table succeeds, then atomic
+    // replacement of the preceding table fails because it is a directory.
+    let blocked = &paths[paths.len() - 2];
+    std::fs::create_dir_all(blocked).unwrap();
+    let error = s.save(doc, Some(&target)).unwrap_err();
+    assert!(
+        matches!(error, basecraft_ops::Error::Invalid(ref text) if text.starts_with("partial metadata save: replaced ")),
+        "{error}"
+    );
+    assert_eq!(s.metadata(doc), &expected);
+    assert_eq!(
+        std::fs::read(paths.last().unwrap()).unwrap(),
+        *bytes.last().unwrap()
+    );
+    assert!(!target.exists());
+    s.undo(doc).unwrap();
+    assert_eq!(s.metadata(doc), &before);
+    s.redo(doc).unwrap();
+    std::fs::remove_dir(blocked).unwrap();
+    s.save(doc, Some(&target)).unwrap();
+    for (path, expected) in paths.iter().zip(&bytes) {
+        assert_eq!(&std::fs::read(path).unwrap(), expected);
+    }
+}

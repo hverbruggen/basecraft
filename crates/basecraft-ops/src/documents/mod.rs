@@ -1,6 +1,6 @@
 //! Kind-specific behavior borrowed by the shared Session.
 //!
-//! Migration is incremental: only Submission implements this interface today.
+//! Migration is incremental: Submission and Metadata implement this interface today.
 //! `Loaded::as_document` returns `None` for legacy kinds. Their existing paths
 //! remain until each is migrated; no placeholder implementations are required.
 //! Payloads are not constrained to a single sequence/record, so future result,
@@ -15,6 +15,7 @@ use crate::Result;
 use crate::files::Format;
 use crate::session::Inverse;
 
+mod metadata;
 mod submission;
 
 pub(crate) trait Document {
@@ -26,8 +27,14 @@ pub(crate) trait Document {
     fn revert(&mut self, inverse: &Inverse) -> Result<()>;
     /// Write using atomic replacement per file. Session owns save guards,
     /// partial-save recovery and publication. Paths remain absolute/as supplied;
-    /// Session converts them to project-relative log keys.
-    fn write(&self, target: &Path, format: Format) -> Result<Vec<(PathBuf, String)>>;
+    /// Session converts them to project-relative log keys. The recovery root is
+    /// diagnostic context for partial multi-file saves, not owned by the payload.
+    fn write(
+        &self,
+        target: &Path,
+        format: Format,
+        recovery_root: &Path,
+    ) -> Result<Vec<(PathBuf, String)>>;
     /// Preserve the existing replay writer, including historical target handling.
     fn saved_hashes(&self, target: &Path) -> Result<Vec<String>>;
 }

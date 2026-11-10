@@ -50,7 +50,12 @@ impl Document for Submission {
         Ok(())
     }
 
-    fn write(&self, target: &Path, format: Format) -> Result<Vec<(PathBuf, String)>> {
+    fn write(
+        &self,
+        target: &Path,
+        format: Format,
+        _recovery_root: &Path,
+    ) -> Result<Vec<(PathBuf, String)>> {
         if format != Format::Submission {
             return Err(invalid(format!(
                 "a submission is saved as *{}",
