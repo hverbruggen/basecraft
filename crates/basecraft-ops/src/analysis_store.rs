@@ -2,7 +2,10 @@
 //!
 //! An unmarked `.basecraft` may contain unrelated application data. We claim only
 //! `analyses-v1`, and refuse an existing namespace without our exact marker.
-use std::path::{Component, Path, PathBuf};
+use std::{
+    collections::BTreeMap,
+    path::{Component, Path, PathBuf},
+};
 
 use basecraft_protocol::records::{StoreFormat, StoreMarker};
 
@@ -114,7 +117,7 @@ impl ArtifactRun {
                 let marker = StoreMarker {
                     format: StoreFormat::AnalysisStore,
                     schema_version: 1,
-                    extra: Default::default(),
+                    extra: BTreeMap::new(),
                 };
                 // Preserve the original compact, sorted JSON and final newline.
                 let mut bytes = serde_json::to_vec(&serde_json::to_value(marker)?)?;
