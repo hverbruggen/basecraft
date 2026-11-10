@@ -134,7 +134,7 @@ impl LogWriter {
                             verified_length: previous_length,
                             error: "append failed and rollback durability could not be confirmed"
                                 .into(),
-                            extra: Default::default(),
+                            extra: std::collections::BTreeMap::new(),
                         },
                     )?)?;
                     let _ =

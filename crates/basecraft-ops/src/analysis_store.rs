@@ -417,7 +417,7 @@ impl ArtifactRun {
                     .ok_or_else(|| invalid("result filename is not UTF-8"))?
                     .into(),
                 result_hash: basecraft_io::hash_file(result)?,
-                extra: Default::default(),
+                extra: BTreeMap::new(),
             })?,
         )
     }

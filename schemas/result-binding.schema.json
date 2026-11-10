@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ResultBinding",
+  "description": "Existing hidden association written by `ArtifactRun::bind`. Runtime readers\nretain their selective version, namespace, path and content-hash checks.",
+  "type": "object",
+  "properties": {
+    "result": {
+      "description": "UTF-8 relative filename, using the existing writer's path conversion.",
+      "type": "string"
+    },
+    "result_hash": {
+      "type": "string"
+    },
+    "run": {
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "run",
+    "result",
+    "result_hash"
+  ]
+}
