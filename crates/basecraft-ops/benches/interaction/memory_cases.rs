@@ -9,9 +9,8 @@ type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 pub fn measure(scenario: &str, root: &Path) -> Result<Value> {
     let bytes = match scenario {
-        "heap-open-compact" => 4096,
+        "heap-open-compact" | "heap-open-error" => 4096,
         "heap-open-100mb" => 100_000_000,
-        "heap-open-error" => 4096,
         _ => return Err("unknown heap scenario".into()),
     };
     let paths = AppPaths::discover()?;
@@ -73,7 +72,7 @@ pub fn measure(scenario: &str, root: &Path) -> Result<Value> {
         "operations": 1, "rows": 1, "columns": null, "edits": 0,
         "work": {"instrumentation": heap::INSTRUMENTATION, "unit": "requested bytes",
                  "window": "Session::open", "recovery": "default", "warmup": scenario != "heap-open-error",
-                 "fixture": "single-record-wrapped-ACGT-v1", "expected_error": scenario == "heap-open-error"},
+                 "fixture": if scenario == "heap-open-error" { "malformed-fasta-v1" } else { "single-record-wrapped-ACGT-v1" }, "expected_error": scenario == "heap-open-error"},
         "heap": {"baseline_bytes": stats.baseline_bytes, "peak_bytes": stats.peak_bytes,
                  "incremental_peak_bytes": stats.incremental_peak_bytes, "live_after_open_bytes": stats.live_bytes,
                  "live_after_drop_bytes": after_drop,
