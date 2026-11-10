@@ -32,7 +32,13 @@ FocusScope {
 
     required property string path
     required property int index
-    property alias controller: ctl
+    property TreeController suppliedController: null
+    readonly property bool adopted: suppliedController !== null
+    readonly property TreeController controller: ctl
+    readonly property TreeController ctl: suppliedController || localController
+    property bool lifetimeAlive: true
+    signal initializationCompleted
+    Component.onDestruction: lifetimeAlive = false
     property alias view: view
     readonly property bool dirty: ctl.dirty
     readonly property string kind: "tree"
@@ -43,20 +49,26 @@ FocusScope {
     signal annotate
     signal openFile(string path)
 
-    TreeController { id: ctl }
+    TreeController { id: localController }
     Connections {
         target: ctl
         function onFileCreated(path) { doc.openFile(path) }
     }
 
     // Open once the view has its real size.
-    Component.onCompleted: Qt.callLater(() => {
-        ctl.resize(view.width, view.height)
-        ctl.open_file(doc.path)
-    })
+    Component.onCompleted: {
+        const owner = ctl
+        Qt.callLater(() => {
+            if (!doc.lifetimeAlive || ctl !== owner) return
+            ctl.resize(view.width, view.height)
+            if (!doc.adopted) ctl.open_file(doc.path)
+            doc.initializationCompleted()
+        })
+    }
 
     TreeCanvas {
         id: view
+        focus: !doc.adopted
         anchors.fill: parent
         anchors.bottomMargin: findBar.height
         findBar: doc.findBar

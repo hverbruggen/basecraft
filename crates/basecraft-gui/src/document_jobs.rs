@@ -259,6 +259,24 @@ pub(crate) fn failure(outcome: &OperationOutcome) -> String {
     )
 }
 
+/// Callback transport for newly acquired owners. Initialization and task both
+/// execute inside the worker; completion may queue ownership onto Qt.
+pub(crate) fn background_initialized<T: Send + 'static, E: Send + 'static>(
+    name: &str,
+    initialize: impl FnOnce() -> Result<T, E> + Send + 'static,
+    interrupted: impl FnOnce() -> E + Send + 'static,
+    completed: impl FnOnce(Result<T, E>) + Send + 'static,
+) -> std::io::Result<()> {
+    std::thread::Builder::new()
+        .name(name.into())
+        .spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(initialize))
+                .unwrap_or_else(|_| Err(interrupted()));
+            completed(result);
+        })
+        .map(|_| ())
+}
+
 /// Transfer a document owner to a background continuation, including runner
 /// preparation and owner-session finalization. Failed thread creation returns
 /// the untouched session; a caught task panic also returns ownership. GUI
@@ -270,23 +288,32 @@ pub(crate) fn background_session<T: Send + 'static>(
 ) -> Result<(), (Box<Session>, String)> {
     let owner = std::sync::Arc::new(std::sync::Mutex::new(Some(session)));
     let worker_owner = owner.clone();
-    let spawned = std::thread::Builder::new()
-        .name("document-operation".into())
-        .spawn(move || {
+    let spawned = background_initialized(
+        "document-operation",
+        move || {
             let Some(mut session) = worker_owner
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .take()
             else {
-                return;
+                return Ok(None);
             };
+            // Keep the owner outside the unwind boundary so an operation panic
+            // still returns the existing Session to its original controller.
             let result =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| task(&mut session)))
                     .unwrap_or_else(|_| {
                         Err("Document operation interrupted by an internal failure".into())
                     });
-            completed(session, result);
-        });
+            Ok(Some((session, result)))
+        },
+        || (),
+        move |result| {
+            if let Ok(Some((session, result))) = result {
+                completed(session, result);
+            }
+        },
+    );
     if let Err(error) = spawned
         && let Some(session) = owner
             .lock()

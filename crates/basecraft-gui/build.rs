@@ -166,6 +166,7 @@ fn main() {
     .qt_module("Quick")
     .files([
         "src/bridge.rs",
+        "src/app_bridge.rs",
         "src/settings_bridge.rs",
         "src/provenance_bridge.rs",
         "src/operations_bridge.rs",

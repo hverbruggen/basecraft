@@ -1000,7 +1000,6 @@ impl qobject::TreeController {
         true
     }
     pub fn open_file(mut self: Pin<&mut Self>, path: &QString) -> bool {
-        let access_thread = self.qt_thread();
         if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
             crate::bridge::checked_document!(sync self, session.tree(doc));
         }
@@ -1009,53 +1008,88 @@ impl qobject::TreeController {
             return false;
         }
         let path = PathBuf::from(path.to_string());
-        let mut session = match Session::recoverable(project_root(&path)) {
-            Ok(session) => session,
+        let root = project_root(&path);
+        let result: Result<(), crate::document_open::OpenError> = (|| {
+            let mut session = Session::recoverable(&root)?;
+            let doc = session.open(&path)?;
+            let candidate = crate::document_open::Candidate::prepare(
+                session,
+                doc,
+                basecraft_ops::files::Kind::Tree,
+                path,
+                root,
+            )?;
+            self.as_mut().install_opened(candidate)
+        })();
+        match result {
+            Ok(()) => true,
             Err(error) => {
                 self.fail(&error.to_string());
-                return false;
-            }
-        };
-        match session.open(&path) {
-            Ok(doc) if session.is_tree(doc) => {
-                let warning = crate::bridge::checked_document!(
-                    access_thread,
-                    session.tree_metadata_warning(doc)
-                )
-                .unwrap_or_default()
-                .to_owned();
-                {
-                    let mut r = self.as_mut().rust_mut();
-                    let r = &mut *r;
-                    r.view.selected = None;
-                    r.view.multi_taxa = None;
-                    r.view.forget_layout();
-                    r.view.fit();
-                    r.view.sync(crate::bridge::checked_document!(
-                        access_thread,
-                        session.tree(doc)
-                    ));
-                    r.session = Some(session);
-                    r.doc = Some(doc);
-                }
-                let abs = std::fs::canonicalize(&path).unwrap_or(path);
-                self.as_mut()
-                    .set_file_path(QString::from(&abs.to_string_lossy().into_owned()));
-                self.as_mut().refresh_link();
-                self.as_mut().set_dirty(false);
-                self.as_mut().notify(&warning);
-                self.refresh();
-                true
-            }
-            Ok(_) => {
-                self.fail(&format!("{} is not a tree", path.display()));
-                false
-            }
-            Err(e) => {
-                self.fail(&format!("Can't open {}: {e}", path.display()));
                 false
             }
         }
+    }
+
+    pub(crate) fn install_fresh(
+        self: Pin<&mut Self>,
+        candidate: crate::document_open::Candidate,
+    ) -> Result<(), crate::document_open::OpenError> {
+        if self.rust().session.is_some() || self.rust().doc.is_some() || self.rust().busy {
+            return Err(crate::document_open::OpenError::StaleIdentity);
+        }
+        self.install_opened(candidate)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn open_identity(&self) -> Option<(String, DocId, u64, u64)> {
+        let session = self.rust().session.as_ref()?;
+        let doc = self.rust().doc?;
+        if !session.is_open(doc) {
+            return None;
+        }
+        Some((
+            session.id().into(),
+            doc,
+            session.generation(doc),
+            session.revision(doc),
+        ))
+    }
+
+    pub(crate) fn install_opened(
+        mut self: Pin<&mut Self>,
+        candidate: crate::document_open::Candidate,
+    ) -> Result<(), crate::document_open::OpenError> {
+        candidate.check(basecraft_ops::files::Kind::Tree)?;
+        let crate::document_open::Candidate {
+            session,
+            doc,
+            path,
+            root,
+            ..
+        } = candidate;
+        let _ = root;
+        let warning = session
+            .tree_metadata_warning(doc)?
+            .unwrap_or_default()
+            .to_owned();
+        let tree = session.tree(doc)?;
+        {
+            let mut r = self.as_mut().rust_mut();
+            r.view.selected = None;
+            r.view.multi_taxa = None;
+            r.view.forget_layout();
+            r.view.fit();
+            r.view.sync(tree);
+            r.session = Some(session);
+            r.doc = Some(doc);
+        }
+        self.as_mut()
+            .set_file_path(QString::from(path.to_string_lossy().as_ref()));
+        self.as_mut().refresh_link();
+        self.as_mut().set_dirty(false);
+        self.as_mut().notify(&warning);
+        self.refresh();
+        Ok(())
     }
 
     pub fn resize(mut self: Pin<&mut Self>, width: f64, height: f64) {

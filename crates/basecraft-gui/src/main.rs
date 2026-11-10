@@ -10,6 +10,8 @@
 )]
 
 mod alignment_bridge;
+mod app_bridge;
+mod document_open;
 mod application;
 mod bridge;
 mod delimitation_bridge;

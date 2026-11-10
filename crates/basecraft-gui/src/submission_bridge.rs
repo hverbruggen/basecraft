@@ -231,6 +231,22 @@ impl SubmissionRust {
 }
 
 impl qobject::SubmissionController {
+    #[cfg(test)]
+    #[allow(dead_code)] // Read by the real-shell bootstrap test.
+    pub(crate) fn open_identity(&self) -> Option<(String, DocId, u64, u64)> {
+        let session = self.rust().session.as_ref()?;
+        let doc = self.rust().doc?;
+        if !session.is_open(doc) {
+            return None;
+        }
+        Some((
+            session.id().into(),
+            doc,
+            session.generation(doc),
+            session.revision(doc),
+        ))
+    }
+
     fn report(mut self: Pin<&mut Self>, kind: &str, text: &str) {
         self.as_mut().set_message_kind(QString::from(kind));
         self.set_message(QString::from(text));

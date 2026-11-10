@@ -11,6 +11,8 @@
 // though this test loads only a windowless item and unopened operation dialog.
 #[path = "../src/alignment_bridge.rs"]
 mod alignment_bridge;
+#[path = "../src/app_bridge.rs"]
+mod app_bridge;
 #[path = "../src/application.rs"]
 mod application;
 #[path = "../src/application_test_bridge.rs"]
@@ -25,6 +27,8 @@ mod controller_theme;
 mod delimitation_bridge;
 #[path = "../src/document_jobs.rs"]
 mod document_jobs;
+#[path = "../src/document_open.rs"]
+mod document_open;
 #[path = "../src/editor_core.rs"]
 #[allow(unused_imports, dead_code)] // harness=false omits pure #[test] bodies.
 mod editor_core;
@@ -37,6 +41,8 @@ mod find_bridge;
 #[path = "../src/metadata_bridge.rs"]
 #[allow(unused_imports, dead_code)] // harness=false omits the included module's test bodies.
 mod metadata_bridge;
+#[cfg(feature = "test-counters")]
+mod open_argv;
 #[path = "../src/operations_bridge.rs"]
 mod operations_bridge;
 #[path = "../src/provenance_bridge.rs"]
@@ -55,6 +61,8 @@ mod submission_bridge;
 mod tree_bridge;
 
 use cxx_qt_lib::{QByteArray, QGuiApplication, QQmlApplicationEngine, QUrl};
+#[cfg(feature = "test-counters")]
+use std::path::Path;
 
 #[cfg(target_os = "linux")]
 #[link(name = "glib-2.0")]
@@ -118,6 +126,11 @@ fn main() {
         );
         std::process::exit(1);
     }
+    #[cfg(feature = "test-counters")]
+    if std::env::args().nth(1).as_deref() == Some("--open-argv") {
+        open_argv::run(Path::new(&std::env::args().nth(2).unwrap()));
+        return;
+    }
     if std::env::args().nth(1).as_deref() == Some("--identity-case") {
         check_identity_case(&std::env::args().nth(2).expect("identity case"));
         return;
@@ -140,6 +153,8 @@ fn main() {
             "isolated identity case {case} failed"
         );
     }
+    #[cfg(feature = "test-counters")]
+    open_argv::spawn();
     let args = vec![
         "basecraft-gui".into(),
         "--editor-kind".into(),
@@ -170,6 +185,244 @@ fn main() {
         font.family().expect("application font family").to_string(),
         ""
     );
+
+    #[cfg(feature = "test-counters")]
+    {
+        let folder = tempfile::tempdir().unwrap();
+        let fixtures =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/compact");
+        std::fs::copy(
+            fixtures.join("alignment-editing/ambiguous-gappy.afa"),
+            folder.path().join("alignment.afa"),
+        )
+        .unwrap();
+        std::fs::copy(
+            fixtures.join("sequences-annotations/locus.gb"),
+            folder.path().join("sequence.gb"),
+        )
+        .unwrap();
+        std::fs::copy(
+            fixtures.join("tree-inference/unrooted.nwk"),
+            folder.path().join("tree.nwk"),
+        )
+        .unwrap();
+        let source = include_str!("fixtures/open-dispatch.qml").replace(
+            "OPEN_TEST_FOLDER",
+            &serde_json::to_string(folder.path()).unwrap(),
+        );
+        let mut engine = QQmlApplicationEngine::new();
+        engine
+            .pin_mut()
+            .on_object_creation_failed(|_, _| std::process::exit(4))
+            .release();
+        basecraft_io::counters::reset();
+        engine
+            .pin_mut()
+            .load_data(&QByteArray::from(&source), &QUrl::default());
+        assert_eq!(app.as_mut().exec(), 0, "real shell open-dispatch harness");
+        let gui = basecraft_io::counters::snapshot();
+        let admissions = app_bridge::testing::take();
+        assert_eq!(
+            admissions.len(),
+            3,
+            "pending/ready duplicates must not acquire again"
+        );
+        for (path, worker) in admissions {
+            let expected = match path.file_name().unwrap().to_str().unwrap() {
+                "alignment.afa" => 1600,
+                "sequence.gb" => 940,
+                "tree.nwk" => 21,
+                other => panic!("unexpected admission {other}"),
+            };
+            assert_eq!(std::fs::metadata(&path).unwrap().len(), expected);
+            assert_eq!(
+                worker.reads[&path].full_reads,
+                1,
+                "{} worker reads",
+                path.display()
+            );
+            assert_eq!(worker.reads[&path].bytes, expected);
+            assert!(
+                !gui.reads.contains_key(&path),
+                "GUI reopened {}",
+                path.display()
+            );
+            assert_eq!(
+                (worker.sync_data, worker.sync_all, worker.unresolved_reads),
+                (0, 0, 0)
+            );
+            println!(
+                "GUI route {}: worker 1/{expected}, GUI 0, identical installed Session/DocId/generation/revision",
+                path.file_name().unwrap().to_string_lossy()
+            );
+        }
+        assert_eq!(gui.unresolved_reads, 0);
+        assert_eq!(
+            (gui.sync_data, gui.sync_all),
+            (0, 0),
+            "passive shell open wrote durable state"
+        );
+        println!(
+            "GUI callback aggregate sync_data={} sync_all={} (includes shell preference/project prelude)",
+            gui.sync_data, gui.sync_all
+        );
+    }
+
+    #[cfg(feature = "test-counters")]
+    for scenario in [
+        "reorder",
+        "cancel-reopen",
+        "save-as",
+        "review-new",
+        "review-duplicate",
+        "review-supersede",
+        "review-cancel",
+        "review-fail",
+        "fail-spawn",
+        "fail-worker",
+        "fail-queue",
+        "fail-construction",
+        "legacy",
+    ] {
+        let folder = tempfile::tempdir().unwrap();
+        let fixtures =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/compact");
+        std::fs::copy(
+            fixtures.join("sequences-annotations/locus.gb"),
+            folder.path().join("sequence.gb"),
+        )
+        .unwrap();
+        std::fs::copy(
+            fixtures.join("tree-inference/unrooted.nwk"),
+            folder.path().join("tree.nwk"),
+        )
+        .unwrap();
+        if scenario == "legacy" {
+            std::fs::copy(
+                fixtures.join("species-delimitation/hypotheses.spart"),
+                folder.path().join("hypotheses.spart"),
+            )
+            .unwrap();
+            let trace = folder.path().join("trace.ab1");
+            std::fs::copy(fixtures.join("sanger-review/forward.ab1"), &trace).unwrap();
+            basecraft_ops::sanger_review::instrument_review(&trace)
+                .unwrap()
+                .save(&folder.path().join("trace.submission.json"))
+                .unwrap();
+            std::fs::write(folder.path().join("unknown.data"), "unsupported").unwrap();
+        }
+        if let Some(fault) = match scenario {
+            "fail-spawn" => Some(app_bridge::faults::Fault::Spawn),
+            "fail-worker" => Some(app_bridge::faults::Fault::Worker),
+            "fail-queue" => Some(app_bridge::faults::Fault::Queue),
+            _ => None,
+        } {
+            app_bridge::faults::set(
+                folder
+                    .path()
+                    .join("sequence.gb")
+                    .to_string_lossy()
+                    .into_owned(),
+                fault,
+            );
+        }
+        if matches!(
+            scenario,
+            "reorder"
+                | "cancel-reopen"
+                | "review-supersede"
+                | "review-cancel"
+                | "fail-construction"
+        ) {
+            app_bridge::barriers::configure(
+                folder
+                    .path()
+                    .join("sequence.gb")
+                    .to_string_lossy()
+                    .into_owned(),
+                folder
+                    .path()
+                    .join("tree.nwk")
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+        }
+        let source = include_str!("fixtures/open-lifecycle.qml")
+            .replace(
+                "OPEN_TEST_FOLDER",
+                &serde_json::to_string(folder.path()).unwrap(),
+            )
+            .replace(
+                "OPEN_TEST_SCENARIO",
+                &serde_json::to_string(scenario).unwrap(),
+            );
+        let mut engine = QQmlApplicationEngine::new();
+        engine
+            .pin_mut()
+            .on_object_creation_failed(|_, _| std::process::exit(4))
+            .release();
+        engine
+            .pin_mut()
+            .load_data(&QByteArray::from(&source), &QUrl::default());
+        assert_eq!(app.as_mut().exec(), 0, "real shell lifecycle {scenario}");
+        let admissions = app_bridge::testing::take();
+        assert_eq!(
+            admissions.len(),
+            if scenario == "legacy" {
+                0
+            } else if matches!(
+                scenario,
+                "cancel-reopen"
+                    | "review-new"
+                    | "review-duplicate"
+                    | "review-cancel"
+                    | "review-fail"
+                    | "fail-spawn"
+                    | "fail-worker"
+                    | "fail-queue"
+                    | "fail-construction"
+            ) {
+                1
+            } else {
+                2
+            },
+            "{scenario} acquisition count"
+        );
+    }
+
+    #[cfg(feature = "test-counters")]
+    {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("shutdown.gb");
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../testdata/fixtures/compact/sequences-annotations/locus.gb"),
+            &path,
+        )
+        .unwrap();
+        app_bridge::barriers::configure(path.to_string_lossy().into_owned(), String::new());
+        let mut engine = QQmlApplicationEngine::new();
+        engine
+            .pin_mut()
+            .on_object_creation_failed(|_, _| std::process::exit(4))
+            .release();
+        engine.pin_mut().load_data(
+            &QByteArray::from(&format!(
+                "import QtQuick; import Basecraft; Main {{ visible: false; Component.onCompleted: openPath({}) }}",
+                serde_json::to_string(&path).unwrap()
+            )),
+            &QUrl::default(),
+        );
+        drop(engine);
+        app_bridge::barriers::release_and_wait();
+        assert!(
+            app_bridge::testing::take().is_empty(),
+            "destroyed shell installed a late candidate"
+        );
+        println!(
+            "Destroyed real shell rejected late worker delivery without joining on the GUI path"
+        );
+    }
 
     controller_theme::run();
 

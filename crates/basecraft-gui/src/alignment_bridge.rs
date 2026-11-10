@@ -863,7 +863,6 @@ impl qobject::AlignmentController {
         true
     }
     pub fn open_file(mut self: Pin<&mut Self>, path: &QString) -> bool {
-        let access_thread = self.qt_thread();
         if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
             crate::bridge::checked_document!(sync self, session.alignment(doc));
         }
@@ -872,43 +871,80 @@ impl qobject::AlignmentController {
             return false;
         }
         let path = PathBuf::from(path.to_string());
-        let mut session = match Session::recoverable(project_root(&path)) {
-            Ok(session) => session,
+        let root = project_root(&path);
+        let result: Result<(), crate::document_open::OpenError> = (|| {
+            let mut session = Session::recoverable(&root)?;
+            let doc = session.open(&path)?;
+            let candidate = crate::document_open::Candidate::prepare(
+                session,
+                doc,
+                basecraft_ops::files::Kind::Alignment,
+                path,
+                root,
+            )?;
+            self.as_mut().install_opened(candidate)
+        })();
+        match result {
+            Ok(()) => true,
             Err(error) => {
                 self.fail(&error.to_string());
-                return false;
-            }
-        };
-        match session.open(&path) {
-            Ok(doc) if session.is_alignment(doc) => {
-                {
-                    let mut r = self.as_mut().rust_mut();
-                    let r = &mut *r;
-                    r.view.sync(crate::bridge::checked_document!(
-                        access_thread,
-                        session.alignment(doc)
-                    ));
-                    r.view.reset_zoom();
-                    r.session = Some(session);
-                    r.doc = Some(doc);
-                }
-                let abs = std::fs::canonicalize(&path).unwrap_or(path);
-                self.as_mut()
-                    .set_file_path(QString::from(&abs.to_string_lossy().into_owned()));
-                self.as_mut().set_dirty(false);
-                self.as_mut().notify("");
-                self.refresh();
-                true
-            }
-            Ok(_) => {
-                self.fail(&format!("{} is not an alignment", path.display()));
-                false
-            }
-            Err(e) => {
-                self.fail(&format!("Can't open {}: {e}", path.display()));
                 false
             }
         }
+    }
+
+    pub(crate) fn install_fresh(
+        self: Pin<&mut Self>,
+        candidate: crate::document_open::Candidate,
+    ) -> Result<(), crate::document_open::OpenError> {
+        if self.rust().session.is_some() || self.rust().doc.is_some() || self.rust().busy {
+            return Err(crate::document_open::OpenError::StaleIdentity);
+        }
+        self.install_opened(candidate)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn open_identity(&self) -> Option<(String, DocId, u64, u64)> {
+        let session = self.rust().session.as_ref()?;
+        let doc = self.rust().doc?;
+        if !session.is_open(doc) {
+            return None;
+        }
+        Some((
+            session.id().into(),
+            doc,
+            session.generation(doc),
+            session.revision(doc),
+        ))
+    }
+
+    pub(crate) fn install_opened(
+        mut self: Pin<&mut Self>,
+        candidate: crate::document_open::Candidate,
+    ) -> Result<(), crate::document_open::OpenError> {
+        candidate.check(basecraft_ops::files::Kind::Alignment)?;
+        let crate::document_open::Candidate {
+            session,
+            doc,
+            path,
+            root,
+            ..
+        } = candidate;
+        let _ = root;
+        let alignment = session.alignment(doc)?;
+        {
+            let mut r = self.as_mut().rust_mut();
+            r.view.sync(alignment);
+            r.view.reset_zoom();
+            r.session = Some(session);
+            r.doc = Some(doc);
+        }
+        self.as_mut()
+            .set_file_path(QString::from(path.to_string_lossy().as_ref()));
+        self.as_mut().set_dirty(false);
+        self.as_mut().notify("");
+        self.refresh();
+        Ok(())
     }
 
     pub fn resize(mut self: Pin<&mut Self>, width: f64, height: f64) {

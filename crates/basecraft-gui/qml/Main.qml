@@ -33,24 +33,24 @@ ApplicationWindow {
     property bool closeConfirmed: false
     property bool discardAuthoredOnQuit: false
     function discardEmptyDrafts() {
-        for (let i = 0; i < openFiles.count; i++) discardEmptyDraft(docs.itemAt(i))
+        for (let i = 0; i < openFiles.count; i++) discardEmptyDraft(window.documentAt(i))
     }
     onClosing: (close) => {
-        if (closeConfirmed) { discardEmptyDrafts(); return }
+        if (closeConfirmed) { discardEmptyDrafts(); documentOpens.shutdown(); return }
         if (!discardAuthoredOnQuit && documentRecord.unsavedDrafts().length) {
             close.accepted = false
             draftQuitDialog.open()
             return
         }
         const unsaved = window.unsavedTabs()
-        if (unsaved.length === 0) { discardEmptyDrafts(); return }
+        if (unsaved.length === 0) { discardEmptyDrafts(); documentOpens.shutdown(); return }
         close.accepted = false
         quitDialog.ask(unsaved)
     }
     function unsavedTabs() {
         const out = []
         for (let i = 0; i < openFiles.count; i++) {
-            const d = docs.itemAt(i)
+            const d = window.documentAt(i)
             if (d && d.controller.dirty) out.push(i)
         }
         return out
@@ -80,13 +80,69 @@ ApplicationWindow {
     }
     // Open files, one tab each.
     ListModel { id: openFiles }
+    function documentAt(index) {
+        if (index < 0 || index >= openFiles.count) return null
+        const slot = docs.itemAt(index)
+        return slot && slot.adoptedSlot === true ? (slot.ready ? slot.documentView : null) : slot
+    }
+    function appendLegacy(row) {
+        row.openToken = documentOpens.track(row.path)
+        openFiles.append(row)
+    }
+    function removeDocument(index) {
+        if (index < 0 || index >= openFiles.count) return
+        documentOpens.retire(openFiles.get(index).openToken || "")
+        const applying = applyingOpenFocus
+        applyingOpenFocus = true
+        openFiles.remove(index)
+        applyingOpenFocus = applying
+    }
+    function requestIndex(token) {
+        for (let i = 0; i < openFiles.count; ++i)
+            if (openFiles.get(i).openToken === token) return i
+        return -1
+    }
+    property bool applyingOpenFocus: false
+    onActiveFocusItemChanged: if (!applyingOpenFocus) documentOpens.revoke_focus()
+    Component.onDestruction: documentOpens.shutdown()
+    DocumentOpens {
+        id: documentOpens
+        onAcquired: (token, kind) => {
+            const index = window.requestIndex(token)
+            const slot = index >= 0 ? docs.itemAt(index) : null
+            if (slot && slot.adoptedSlot === true) slot.construct(kind)
+            else documentOpens.retire(token)
+        }
+        onFailed: (token, message) => {
+            const index = window.requestIndex(token)
+            if (index < 0) return
+            const path = openFiles.get(index).path
+            window.removeDocument(index)
+            provenance.notification(path, message, "fail")
+        }
+        onActivated: (token, review, installedPath) => {
+            const index = window.requestIndex(token)
+            const document = index >= 0 ? window.documentAt(index) : null
+            if (!document || !document.controller || document.controller.file_path !== installedPath) return
+            window.applyingOpenFocus = true
+            tabs.currentIndex = index
+            window.focusOpenedDocument = true
+            window.refreshCurrent()
+            if (review && window.current === document.controller && window.currentPath === document.path
+                    && documentRecord.controller === document.controller && documentRecord.documentPath === document.path)
+                documentRecord.showPage(2)
+            window.applyingOpenFocus = false
+        }
+    }
 
     // The active tab's controller and view, or null.
+    property var currentDocument: null
+    property bool projectingDocument: false
     property var current: null
     property var currentView: null
-    readonly property var traceDocument: traceOpen ? docs.itemAt(tabs.currentIndex) : null
-    readonly property var alignmentDocument: alignmentOpen ? docs.itemAt(tabs.currentIndex) : null
-    readonly property var speciesView: delimitationOpen ? docs.itemAt(tabs.currentIndex) : null
+    readonly property var traceDocument: traceOpen ? currentDocument : null
+    readonly property var alignmentDocument: alignmentOpen ? currentDocument : null
+    readonly property var speciesView: delimitationOpen ? currentDocument : null
     // The species view's display tree, while it shows one.
     readonly property var speciesTree: speciesView !== null && current.display_path.length > 0 ? speciesView.treeController : null
     property string currentPath: ""
@@ -109,6 +165,7 @@ ApplicationWindow {
         currentKind === "sequence" ? ["Sequence"] : alignmentOpen ? ["Alignment", "Phylogeny", "Delimitation"]
         : treeOpen ? ["Tree", "Delimitation"] : delimitationOpen ? ["Delimitation"] : traceOpen ? ["Trace"] : [], ["Export"])
     onRibbonTabsChanged: {
+        if (projectingDocument) return
         if (!ribbonTabs.includes(ribbonTabName)) ribbonTabName = ribbonTabs.length > 3 ? ribbonTabs[2] : "File"
     }
     readonly property string ribbonTab: ribbonTabs.includes(ribbonTabName) ? ribbonTabName : "File"
@@ -246,13 +303,20 @@ ApplicationWindow {
 
     property bool focusOpenedDocument: false
 
-    function refreshCurrent() {
-        const d = docs.itemAt(tabs.currentIndex)
+    function refreshCurrent(allowFocus = true) {
+        const d = window.documentAt(tabs.currentIndex)
+        // Disable typed bindings while publishing the new projection. A tree
+        // must never reach a sequence-only binding under the preceding kind.
+        projectingDocument = true
+        currentKind = ""
+        currentDocument = d
         current = d ? d.controller : null
         currentView = d ? d.view : null
         currentPath = d ? d.path : ""
         currentKind = d ? d.kind : ""
-        if (currentView && (focusOpenedDocument || !tabs.activeFocus)) {
+        projectingDocument = false
+        if (!ribbonTabs.includes(ribbonTabName)) ribbonTabName = ribbonTabs.length > 3 ? ribbonTabs[2] : "File"
+        if (allowFocus && currentView && (focusOpenedDocument || !tabs.activeFocus)) {
             // Background model updates must not steal focus from controls/dialogs.
             if (focusOpenedDocument || !window.activeFocusItem || !window.activeFocusItem.visible)
                 currentView.forceActiveFocus(Qt.OtherFocusReason)
@@ -270,7 +334,7 @@ ApplicationWindow {
     TextRepresentationDialog { id: textRepresentation }
 
     function focusRegion(backward) {
-        const regions = [ribbonTabBar, tree, tabs, delimitationOpen ? docs.itemAt(tabs.currentIndex) : currentView].filter(item => item && item.visible && item.enabled)
+        const regions = [ribbonTabBar, tree, tabs, delimitationOpen ? window.documentAt(tabs.currentIndex) : currentView].filter(item => item && item.visible && item.enabled)
         if (!regions.length) return
         let active = -1
         for (let i = 0; i < regions.length; ++i) {
@@ -289,7 +353,28 @@ ApplicationWindow {
     Shortcut { sequence: "Shift+F6"; onActivated: window.focusRegion(true) }
 
     // Open a file in a tab, or switch to its tab if it's already open.
-    function openPath(path) {
+    function openPath(path, reviewMethods = false) {
+        if (documentOpens.eligible(path)) {
+            const existing = documentOpens.existing(path)
+            if (!existing.length && !shell.project_dir.length) shell.use_project_of(path)
+            const token = documentOpens.request(path, shell.project_dir, reviewMethods)
+            if (!token.length) { provenance.notification(path, "Could not allocate an open request", "fail"); return }
+            if (existing.length) {
+                applyingOpenFocus = true
+                tabs.currentIndex = requestIndex(token)
+                refreshCurrent(false)
+                applyingOpenFocus = false
+                documentOpens.activate(token)
+                return
+            }
+            applyingOpenFocus = true
+            openFiles.append({path: path, dirty: false, kind: "canvas", openToken: token})
+            tabs.currentIndex = openFiles.count - 1
+            applyingOpenFocus = false
+            documentOpens.start(token)
+            return
+        }
+        documentOpens.revoke_focus()
         const kind = shell.file_kind(path)
         // The specimen table is project data, edited on the Export tab.
         if (kind === "metadata") {
@@ -305,11 +390,29 @@ ApplicationWindow {
         }
         focusOpenedDocument = true
         for (let i = 0; i < openFiles.count; i++) {
-            if (openFiles.get(i).path === path) { tabs.currentIndex = i; Qt.callLater(refreshCurrent); return }
+            if (openFiles.get(i).path === path) {
+                tabs.currentIndex = i
+                Qt.callLater(refreshCurrent)
+                if (reviewMethods) reviewLegacyDocument(i, path)
+                return
+            }
         }
         if (!shell.project_dir.length) shell.use_project_of(path)
-        openFiles.append({ path: path, dirty: false, kind: kind })
+        window.appendLegacy({ path: path, dirty: false, kind: kind })
         tabs.currentIndex = openFiles.count - 1
+        if (reviewMethods) reviewLegacyDocument(tabs.currentIndex, path)
+    }
+    function reviewLegacyDocument(index, path) {
+        const document = window.documentAt(index)
+        const token = documentOpens.request(path, shell.project_dir, true)
+        // Legacy trace acquisition retains its existing deferred completion.
+        // The continuation still checks its original view/token and actual owner.
+        Qt.callLater(() => {
+            const row = requestIndex(token)
+            if (row < 0 || window.documentAt(row) !== document || !document || !document.controller.file_path.length) return
+            documentOpens.path_changed(token, path, document.controller.file_path)
+            documentOpens.activate(token)
+        })
     }
 
     property var delimitationSource: null
@@ -318,7 +421,7 @@ ApplicationWindow {
     function documentIsOpen(document, controller, path) {
         if (!document || !controller || controller.file_path !== path) return false
         for (let i = 0; i < openFiles.count; ++i)
-            if (docs.itemAt(i) === document && document.controller === controller) return true
+            if (window.documentAt(i) === document && document.controller === controller) return true
         return false
     }
     function retireDelimitationDocument(document) {
@@ -333,7 +436,7 @@ ApplicationWindow {
         if (delimitationRequest || !current || current.busy || !(alignmentOpen || treeOpen || delimitationOpen)) return
         if (method === "asap" && !alignmentOpen && !(delimitationOpen && current.linked_alignment.length)) return
         delimitationSource = current
-        delimitationDocument = docs.itemAt(tabs.currentIndex)
+        delimitationDocument = window.documentAt(tabs.currentIndex)
         speciesDialog.engineProblems = method === "ptp" ? JSON.parse(shell.delimitation_engines()) : ({})
         speciesDialog.show(method, alignmentOpen ? current.file_path : current.linked_alignment || "",
             treeOpen ? current.file_path : delimitationOpen ? current.display_path : "")
@@ -361,8 +464,8 @@ ApplicationWindow {
         // Never reuse or overwrite an already opened result (including edits).
         for (let i = 0; i < openFiles.count; ++i)
             if (openFiles.get(i).path === path) return
-        openFiles.append({path: path, dirty: false, kind: "delimitation"})
-        const document = docs.itemAt(openFiles.count - 1)
+        window.appendLegacy({path: path, dirty: false, kind: "delimitation"})
+        const document = window.documentAt(openFiles.count - 1)
         Qt.callLater(() => {
             if (!documentIsOpen(request.document, request.source, request.path) ||
                     !document || !documentIsOpen(document, document.controller, path)) return
@@ -435,16 +538,16 @@ ApplicationWindow {
     function startTraceReview(paths, reference, target, cutoff = 20, forceNew = false) {
         let preserve = forceNew
         for (let i = 0; i < openFiles.count; i++) {
-            const existing = docs.itemAt(i)
+            const existing = window.documentAt(i)
             if (openFiles.get(i).path !== paths[0] || !existing) continue
             if (existing.kind === "trace" && existing.working) { tabs.currentIndex = i; return }
             if (existing.controller.dirty) preserve = true
         }
         if (preserve) {
-            openFiles.append({ path: paths[0], dirty: false, kind: "trace" })
+            window.appendLegacy({ path: paths[0], dirty: false, kind: "trace" })
             tabs.currentIndex = openFiles.count - 1
         } else window.openPath(paths[0])
-        const traceDocument = docs.itemAt(tabs.currentIndex)
+        const traceDocument = window.documentAt(tabs.currentIndex)
         Qt.callLater(() => {
             if (!traceDocument) return
             traceDocument.startReview(paths, reference, target, cutoff)
@@ -459,7 +562,7 @@ ApplicationWindow {
             const source = (window.treeOpen || window.delimitationOpen) ? window.current.linked_alignment : window.current.file_path
             if (!source) return
             for (let i = 0; i < docs.count; i++) {
-                const d = docs.itemAt(i)
+                const d = window.documentAt(i)
                 if (!d || d.controller === window.current) continue
                 if ((window.treeOpen || window.delimitationOpen) && d.kind === "alignment" && d.controller.file_path === source)
                     d.controller.highlight_taxa(names)
@@ -475,10 +578,11 @@ ApplicationWindow {
         if (d && d.kind === "delimitation" && d.draft) d.controller.discard_empty_workspace()
     }
     function closeTab(i) {
-        const d = docs.itemAt(i)
+        documentOpens.revoke_focus()
+        const d = window.documentAt(i)
         if (d && d.controller.dirty) { confirmClose.index = i; confirmClose.open(); return }
         discardEmptyDraft(d)
-        openFiles.remove(i)
+        window.removeDocument(i)
         Qt.callLater(refreshCurrent)
     }
 
@@ -534,7 +638,7 @@ ApplicationWindow {
             window.pendingSequence = null
             if (!pending) return
             for (let i = 0; i < openFiles.count; ++i) {
-                if (openFiles.get(i).path === pending.path) { openFiles.remove(i); break }
+                if (openFiles.get(i).path === pending.path) { window.removeDocument(i); break }
             }
             tabs.currentIndex = pending.previous
         }
@@ -544,7 +648,7 @@ ApplicationWindow {
             if (error.length) { validationMessage = error; return }
             const path = "untitled:" + (++window.nextSequence) + "/" + name.trim() + ".gb"
             window.pendingSequence = {path: path, name: name, sequence: sequence, previous: tabs.currentIndex}
-            openFiles.append({path: path, dirty: false, kind: "sequence"})
+            window.appendLegacy({path: path, dirty: false, kind: "sequence"})
             tabs.currentIndex = openFiles.count - 1
         }
     }
@@ -554,7 +658,7 @@ ApplicationWindow {
         const error = document.controller.create_sequence(pending.name, pending.sequence, shell.project_dir)
         window.pendingSequence = null
         if (error.length) {
-            openFiles.remove(document.index)
+            window.removeDocument(document.index)
             tabs.currentIndex = pending.previous
             newSequenceDialog.validationMessage = error
             return
@@ -648,7 +752,7 @@ ApplicationWindow {
         defaultShortcut: "Ctrl+F"
         enabled: window.current !== null
         onTriggered: {
-            const document = docs.itemAt(tabs.currentIndex)
+            const document = window.documentAt(tabs.currentIndex)
             if (document && document.openFind) document.openFind()
         }
     }
@@ -1385,9 +1489,9 @@ ApplicationWindow {
                         disabledReason: "Open an alignment to use this group"
                         enabled: window.alignmentOpen
                         title: "Add sequence"
-                        RibbonButton { commandId: "ribbon.type-a-new-sequence-or-paste-fasta"; text: "Type/paste"; iconName: "new-file"; tip: "Type a new sequence or paste FASTA"; enabled: window.current !== null && !window.current.busy; onInvoked: docs.itemAt(tabs.currentIndex).addText() }
-                        RibbonButton { commandId: "ribbon.add-all-sequences-from-a-fasta-file"; text: "FASTA"; iconName: "add-file"; tip: "Add all sequences from a FASTA file"; enabled: window.current !== null && !window.current.busy; onInvoked: docs.itemAt(tabs.currentIndex).addFasta() }
-                        RibbonButton { commandId: "ribbon.review-chromatograms-and-add-their-consensus"; text: "Chromatogram"; iconName: "waveform"; tip: "Review chromatograms and add their consensus"; enabled: window.current !== null && !window.current.busy; onInvoked: docs.itemAt(tabs.currentIndex).addTraces() }
+                        RibbonButton { commandId: "ribbon.type-a-new-sequence-or-paste-fasta"; text: "Type/paste"; iconName: "new-file"; tip: "Type a new sequence or paste FASTA"; enabled: window.current !== null && !window.current.busy; onInvoked: window.documentAt(tabs.currentIndex).addText() }
+                        RibbonButton { commandId: "ribbon.add-all-sequences-from-a-fasta-file"; text: "FASTA"; iconName: "add-file"; tip: "Add all sequences from a FASTA file"; enabled: window.current !== null && !window.current.busy; onInvoked: window.documentAt(tabs.currentIndex).addFasta() }
+                        RibbonButton { commandId: "ribbon.review-chromatograms-and-add-their-consensus"; text: "Chromatogram"; iconName: "waveform"; tip: "Review chromatograms and add their consensus"; enabled: window.current !== null && !window.current.busy; onInvoked: window.documentAt(tabs.currentIndex).addTraces() }
                     }
                     Item { Layout.fillWidth: true }
                     HelpGroup {}
@@ -1990,7 +2094,7 @@ ApplicationWindow {
 
     property var pendingEvidenceSave: null
     function saveDocument(index, path, continuation) {
-        const d = docs.itemAt(index)
+        const d = window.documentAt(index)
         if (!d) return
         if (!path && openFiles.get(index).path.startsWith("untitled:")) {
             saveDialog.index = index
@@ -2006,7 +2110,7 @@ ApplicationWindow {
             let success
             if (path) {
                 success = d.controller.save_as(path)
-                if (success) { openFiles.setProperty(index, "path", path); Qt.callLater(window.refreshCurrent) }
+                if (success) { openFiles.setProperty(index, "path", path); documentOpens.path_changed(openFiles.get(index).openToken || "", path, d.controller.file_path); Qt.callLater(window.refreshCurrent) }
             } else { d.controller.save(); success = !d.controller.dirty }
             if (continuation) continuation(success)
         }
@@ -2088,7 +2192,7 @@ ApplicationWindow {
         currentFolder: window.activeFolder()
         onVisibleChanged: if (visible) currentFolder = window.activeFolder()
         onAccepted: {
-            const d = docs.itemAt(index)
+            const d = window.documentAt(index)
             const path = window.localPath(selectedFile)
             const next = continuation
             continuation = null
@@ -2191,14 +2295,14 @@ ApplicationWindow {
                 id: tabs
                 Layout.fillWidth: true
                 visible: openFiles.count > 0
-                onCurrentIndexChanged: Qt.callLater(window.refreshCurrent)
+                onCurrentIndexChanged: { if (!window.applyingOpenFocus) documentOpens.revoke_focus(); Qt.callLater(window.refreshCurrent) }
                 Repeater {
                     model: openFiles
                     AppTabButton {
                         required property int index
                         required property string path
                         required property bool dirty
-                        onClicked: { window.focusOpenedDocument = true; Qt.callLater(window.refreshCurrent) }
+                        onClicked: { documentOpens.revoke_focus(); window.focusOpenedDocument = true; Qt.callLater(window.refreshCurrent) }
                         Accessible.name: window.fileName(path) + (dirty ? ", unsaved changes" : "")
                         width: implicitWidth
                         focusPolicy: Qt.StrongFocus
@@ -2258,12 +2362,101 @@ ApplicationWindow {
                     model: openFiles
                     onItemAdded: Qt.callLater(window.refreshCurrent)
                     onItemRemoved: (index, item) => {
-                        window.retireDelimitationDocument(item)
+                        window.retireDelimitationDocument(item.adoptedSlot === true ? item.documentView : item)
                         Qt.callLater(window.refreshCurrent)
                     }
                     // Each file opens in the editor for what it holds.
                     delegate: DelegateChooser {
                         role: "kind"
+                        DelegateChoice {
+                            roleValue: "canvas"
+                            Item {
+                                id: canvasSlot
+                                required property string path
+                                required property string openToken
+                                required property int index
+                                readonly property bool adoptedSlot: true
+                                property bool ready: false
+                                readonly property var documentView: canvasLoader.item
+                                property var admittedController: null
+                                property bool alive: true
+                                Component.onDestruction: {
+                                    alive = false
+                                    documentOpens.retire(openToken)
+                                    if (admittedController) admittedController.destroy()
+                                }
+                                Component { id: sequenceOwner; GenomeController {} }
+                                Component { id: alignmentOwner; AlignmentController {} }
+                                Component { id: treeOwner; TreeController {} }
+                                function construct(kind) {
+                                    if (!alive || admittedController) return
+                                    const factory = kind === "sequence" ? sequenceOwner : kind === "alignment" ? alignmentOwner : treeOwner
+                                    const owner = factory.createObject(canvasSlot)
+                                    if (!owner) { constructionFailed(); return }
+                                    admittedController = owner
+                                    if (!documentOpens.install(openToken, owner)) { constructionFailed(); return }
+                                    const values = {path: path, index: index, suppliedController: owner,
+                                        overviewEnabled: window.overviewEnabled, notificationSink: provenance}
+                                    if (kind === "sequence") { values.showGc = window.showGc; values.defaultLayout = window.defaultLayout }
+                                    if (kind === "alignment") { values.fileUrls = shell; values.insertMode = window.alignmentInsert }
+                                    canvasLoader.setSource(kind === "sequence" ? "DocumentView.qml" : kind === "alignment" ? "AlignmentView.qml" : "PhyloView.qml", values)
+                                }
+                                function constructionFailed() {
+                                    if (!alive) return
+                                    const token = openToken
+                                    Qt.callLater(() => {
+                                        const row = window.requestIndex(token)
+                                        if (row >= 0) {
+                                            provenance.notification(openFiles.get(row).path, "Could not construct the document view", "fail")
+                                            window.removeDocument(row)
+                                        }
+                                    })
+                                }
+                                Loader {
+                                    id: canvasLoader
+                                    anchors.fill: parent
+                                    onStatusChanged: if (status === Loader.Error) canvasSlot.constructionFailed()
+                                }
+                                Binding { target: canvasLoader.item; property: "overviewEnabled"; value: window.overviewEnabled; when: canvasLoader.item !== null }
+                                Binding { target: canvasLoader.item; property: "showGc"; value: window.showGc; when: canvasLoader.item !== null && canvasLoader.item.kind === "sequence" }
+                                Binding { target: canvasLoader.item; property: "insertMode"; value: window.alignmentInsert; when: canvasLoader.item !== null && canvasLoader.item.kind === "alignment" }
+                                Binding { target: canvasLoader.item; property: "index"; value: canvasSlot.index; when: canvasLoader.item !== null }
+                                Binding { target: canvasLoader.item; property: "path"; value: canvasSlot.path; when: canvasLoader.item !== null }
+                                Connections {
+                                    target: canvasLoader.item
+                                    ignoreUnknownSignals: true
+                                    function onInitializationCompleted() {
+                                        if (!canvasSlot.alive || !documentOpens.acknowledge(canvasSlot.openToken, canvasSlot.admittedController)) return
+                                        canvasSlot.ready = true
+                                        documentOpens.activate(canvasSlot.openToken)
+                                        window.refreshCurrent(false)
+                                    }
+                                    function onDirtyChanged() { openFiles.setProperty(canvasSlot.index, "dirty", canvasLoader.item.dirty) }
+                                    function onActivate() { tabs.currentIndex = canvasSlot.index }
+                                    function onOpenFile(path) { window.openPath(path) }
+                                    function onReviewTraces(paths, reference) { window.startTraceReview(paths, reference, canvasLoader.item) }
+                                    function onToggleInsert() { window.alignmentInsert = !window.alignmentInsert }
+                                    function onContextMenu(info) {
+                                        if (canvasLoader.item.kind === "tree") treeMenu.showFor(canvasSlot.admittedController, info)
+                                        else if (canvasLoader.item.kind === "alignment") { alnMenu.info = info; alnMenu.popup() }
+                                        else { menu.info = info; menu.popup() }
+                                    }
+                                    function onCopyText(text) { clipboard.put(text) }
+                                    function onToggleSidebar() { window.sidebarOpen = !window.sidebarOpen }
+                                    function onRenameRow() { renameDialog.askRow() }
+                                    function onRenameTip() { tipDialog.ask() }
+                                    function onAnnotate() { cladeEditor.openSelected() }
+                                    function onEditFeature(id) { editor.openFeature(id) }
+                                    function onEditSelected() { editor.openSelected() }
+                                }
+                                AppMessageBar {
+                                    anchors { left: parent.left; right: parent.right; top: parent.top }
+                                    visible: !canvasSlot.ready
+                                    busy: true
+                                    workingText: "Opening " + window.fileName(canvasSlot.path)
+                                }
+                            }
+                        }
                         DelegateChoice {
                             roleValue: "trace"
                             SangerView {
@@ -2284,7 +2477,7 @@ ApplicationWindow {
                                 insertMode: window.alignmentInsert
                                 onActivate: tabs.currentIndex = index
                                 onReviewTraces: (paths, reference) => {
-                                    window.startTraceReview(paths, reference, docs.itemAt(tabs.currentIndex))
+                                    window.startTraceReview(paths, reference, window.documentAt(tabs.currentIndex))
                                 }
                                 onToggleInsert: window.alignmentInsert = !window.alignmentInsert
                                 onOpenFile: (path) => window.openPath(path)
@@ -2709,7 +2902,7 @@ ApplicationWindow {
                 AppButton {
                     required property string modelData
                     text: "Review " + window.fileName(modelData)
-                    onClicked: { draftQuitDialog.close(); window.openPath(modelData); Qt.callLater(() => documentRecord.showPage(2)) }
+                    onClicked: { draftQuitDialog.close(); window.openPath(modelData, true) }
                 }
             }
         }
@@ -2774,7 +2967,7 @@ ApplicationWindow {
             text: confirmClose.saveError.length ? confirmClose.saveError : "This file has unsaved changes."
         }
         onAccepted: {
-            const controller = docs.itemAt(index).controller
+            const controller = window.documentAt(index).controller
             window.saveDocument(index, "", function(success) {
                 if (!success) {
                     confirmClose.saveError = controller.message || "Save the review to a file first"
@@ -2782,13 +2975,13 @@ ApplicationWindow {
                     return
                 }
                 confirmClose.saveError = ""
-                openFiles.remove(confirmClose.index)
+                window.removeDocument(confirmClose.index)
                 Qt.callLater(window.refreshCurrent)
             })
         }
         onDiscarded: {
             close()
-            openFiles.remove(index)
+            window.removeDocument(index)
             Qt.callLater(window.refreshCurrent)
         }
     }
@@ -2806,7 +2999,7 @@ ApplicationWindow {
         onTriggered: {
             shell.check_theme()
             for (let i = 0; i < docs.count; i++) {
-                const d = docs.itemAt(i)
+                const d = window.documentAt(i)
                 if (d) {
                     d.controller.check_theme()
                     // The species view draws its tree with its own controller.
@@ -2846,7 +3039,7 @@ ApplicationWindow {
     function runDelimSteps(c) {
         while (window.delimPending.length && !c.busy) {
             const step=window.delimPending.shift()
-            if (step.action === "start") docs.itemAt(tabs.currentIndex).startAnalysis(step.method, step.input, step.rooted || false, JSON.stringify(step.settings || {}), step.display || "existing")
+            if (step.action === "start") window.documentAt(tabs.currentIndex).startAnalysis(step.method, step.input, step.rooted || false, JSON.stringify(step.settings || {}), step.display || "existing")
             else if (step.action === "attach") c.attach_tree(step.path,step.rooted)
             else if (step.action === "select") c.highlight_taxa(JSON.stringify(step.ids))
             else if (step.action === "activate_last") { const work = JSON.parse(c.workspace_json); c.activate(work.hypotheses[work.hypotheses.length-1].id) }
@@ -2910,7 +3103,7 @@ ApplicationWindow {
             const v = window.currentView
             if (!c) { console.log("no document open"); shot.start(); return }
             if (arg("--trace-review")) {
-                window.startTraceReview(JSON.parse(arg("--trace-review")), c.review_snapshot(), docs.itemAt(tabs.currentIndex))
+                window.startTraceReview(JSON.parse(arg("--trace-review")), c.review_snapshot(), window.documentAt(tabs.currentIndex))
                 shot.start()
                 return
             }
@@ -2927,7 +3120,7 @@ ApplicationWindow {
             if (arg("--sanger-mask")) { const bounds = JSON.parse(arg("--sanger-mask")); c.mask_ends(bounds[0], bounds[1]) }
             if (arg("--sanger-action")) {
                 ribbonTabName = "Trace"
-                const trace = docs.itemAt(tabs.currentIndex)
+                const trace = window.documentAt(tabs.currentIndex)
                 if (arg("--sanger-action") === "name") { trace.accept(); trace.copyConsensus() }
                 if (arg("--sanger-action") === "mask") trace.maskEnds()
                 if (arg("--sanger-action") === "signal") trace.signalSettings()
@@ -2944,14 +3137,14 @@ ApplicationWindow {
                 const options = JSON.parse(arg("--add-sequences"))
                 c.add_sequences(options.text, options.name || "", options.mafft !== false, options.orientation !== false, options.keep !== false)
             }
-            if (arg("--add-text-dialog")) docs.itemAt(tabs.currentIndex).addText()
-            if (arg("--add-fasta-dialog")) docs.itemAt(tabs.currentIndex).prepareFasta(arg("--add-fasta-dialog"))
-            if (arg("--add-reviewed-dialog")) { const r = JSON.parse(arg("--add-reviewed-dialog")); docs.itemAt(tabs.currentIndex).addReviewed(r.sequence, r.name, r.mafft !== false) }
+            if (arg("--add-text-dialog")) window.documentAt(tabs.currentIndex).addText()
+            if (arg("--add-fasta-dialog")) window.documentAt(tabs.currentIndex).prepareFasta(arg("--add-fasta-dialog"))
+            if (arg("--add-reviewed-dialog")) { const r = JSON.parse(arg("--add-reviewed-dialog")); window.documentAt(tabs.currentIndex).addReviewed(r.sequence, r.name, r.mafft !== false) }
             if (arg("--fit")) c.fit()
             if (arg("--sanger-position")) c.press(Number(arg("--sanger-position")), 40)
             if (arg("--sanger-context")) {
                 const point = arg("--sanger-context").split(",").map(Number)
-                docs.itemAt(tabs.currentIndex).maskMenuAt(point[0], point[1])
+                window.documentAt(tabs.currentIndex).maskMenuAt(point[0], point[1])
             }
             if (arg("--delim")) {
                 window.delimPending=JSON.parse(arg("--delim"))
@@ -3075,7 +3268,7 @@ ApplicationWindow {
     Timer {
         id: additionOptionsPreview
         interval: 200
-        onTriggered: { docs.itemAt(tabs.currentIndex).showAdditionChoices(); shot.start() }
+        onTriggered: { window.documentAt(tabs.currentIndex).showAdditionChoices(); shot.start() }
     }
     Timer {
         id: labelTyper

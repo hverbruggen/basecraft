@@ -32,14 +32,20 @@ FocusScope {
 
     required property string path
     required property int index
-    property alias controller: ctl
+    property GenomeController suppliedController: null
+    readonly property bool adopted: suppliedController !== null
+    readonly property GenomeController controller: ctl
+    readonly property GenomeController ctl: suppliedController || localController
+    property bool lifetimeAlive: true
+    signal initializationCompleted
+    Component.onDestruction: lifetimeAlive = false
     property alias view: view
     readonly property bool dirty: ctl.dirty
     readonly property string kind: "sequence"
     property bool showGc: true
     // Layout a newly opened file starts in: "wrapped", "linear" or "circular".
     property string defaultLayout: "wrapped"
-    onShowGcChanged: ctl.set_show_gc(showGc)
+    onShowGcChanged: if (ctl) ctl.set_show_gc(showGc)
 
     signal contextMenu(var info)
     signal editFeature(int id)
@@ -48,19 +54,24 @@ FocusScope {
     signal copyText(string text)
     signal toggleSidebar
 
-    GenomeController { id: ctl }
+    GenomeController { id: localController }
 
     // Open once the view has its real size, so the fitted zoom is right.
-    Component.onCompleted: Qt.callLater(() => {
-        ctl.resize(view.width, view.height)
-        ctl.set_show_gc(doc.showGc)
-        if (doc.path.startsWith("untitled:")) doc.initializeNew()
-        else ctl.open_file(doc.path)
-        if (doc.defaultLayout !== "wrapped") {
-            ctl.switch_view(doc.defaultLayout)
-            ctl.fit()
-        }
-    })
+    Component.onCompleted: {
+        const owner = ctl
+        Qt.callLater(() => {
+            if (!doc.lifetimeAlive || ctl !== owner) return
+            ctl.resize(view.width, view.height)
+            ctl.set_show_gc(doc.showGc)
+            if (doc.path.startsWith("untitled:")) doc.initializeNew()
+            else if (!doc.adopted) ctl.open_file(doc.path)
+            if (doc.defaultLayout !== "wrapped") {
+                ctl.switch_view(doc.defaultLayout)
+                ctl.fit()
+            }
+            doc.initializationCompleted()
+        })
+    }
 
     AppCanvas {
         id: view
@@ -71,9 +82,9 @@ FocusScope {
         clearColor: ctl.background
         fontFamily: ctl.mono_font
         instances: ctl.frame
-        focus: true
-        onWidthChanged: ctl.resize(width, height)
-        onHeightChanged: ctl.resize(width, height)
+        focus: !doc.adopted
+        onWidthChanged: if (ctl) ctl.resize(width, height)
+        onHeightChanged: if (ctl) ctl.resize(width, height)
 
         MouseArea {
             id: mouse

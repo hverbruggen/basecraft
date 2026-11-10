@@ -35,7 +35,13 @@ FocusScope {
     required property var fileUrls
     required property string path
     required property int index
-    property alias controller: ctl
+    property AlignmentController suppliedController: null
+    readonly property bool adopted: suppliedController !== null
+    readonly property AlignmentController controller: ctl
+    readonly property AlignmentController ctl: suppliedController || localController
+    property bool lifetimeAlive: true
+    signal initializationCompleted
+    Component.onDestruction: lifetimeAlive = false
     property alias view: view
     readonly property bool dirty: ctl.dirty
     readonly property string kind: "alignment"
@@ -64,7 +70,7 @@ FocusScope {
     function addReviewed(sequence, name, mafft = true, evidence = "") { if (ctl.busy) return; doc.activate(); activeAdditionDialog = reviewedSequenceDialog; reviewedSequenceDialog.prepare(sequence, name, mafft ? 1 : 0, evidence) }
     function prepareFasta(text) { if (ctl.busy) return; activeAdditionDialog = fastaSequenceDialog; fastaSequenceDialog.prepare(text) }
 
-    AlignmentController { id: ctl }
+    AlignmentController { id: localController }
     FileDialog {
         id: fastaDialog
         currentFolder: doc.activeFolder()
@@ -134,10 +140,15 @@ FocusScope {
     }
 
     // Open once the view has its real size.
-    Component.onCompleted: Qt.callLater(() => {
-        ctl.resize(view.width, view.height)
-        ctl.open_file(doc.path)
-    })
+    Component.onCompleted: {
+        const owner = ctl
+        Qt.callLater(() => {
+            if (!doc.lifetimeAlive || ctl !== owner) return
+            ctl.resize(view.width, view.height)
+            if (!doc.adopted) ctl.open_file(doc.path)
+            doc.initializationCompleted()
+        })
+    }
 
     AppCanvas {
         id: view
@@ -148,9 +159,9 @@ FocusScope {
         clearColor: ctl.background
         fontFamily: ctl.mono_font
         instances: ctl.frame
-        focus: true
-        onWidthChanged: ctl.resize(width, height)
-        onHeightChanged: ctl.resize(width, height)
+        focus: !doc.adopted
+        onWidthChanged: if (ctl) ctl.resize(width, height)
+        onHeightChanged: if (ctl) ctl.resize(width, height)
 
         MouseArea {
             id: mouse
