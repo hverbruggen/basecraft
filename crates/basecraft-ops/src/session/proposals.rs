@@ -1,6 +1,13 @@
 //! One staged proposal/commit owner. Kind adapters supply only candidate edits
 //! and fingerprints; Session retains pins, actors, journal and undo ownership.
-use super::*;
+use super::{Applied, Inverse, Session, Slot, execute_sequence};
+use crate::{
+    DocId, Result,
+    error::invalid,
+    files::{Loaded, Opened},
+};
+use basecraft_docs::{FeatureId, SequenceDoc};
+use basecraft_protocol::{Actor, DocState, LogEntry, Op, OpResult};
 
 type Execute = fn(&mut Loaded, &Op) -> Result<(Inverse, Option<FeatureId>)>;
 type Fingerprint = fn(&Loaded) -> Result<DocState>;
@@ -275,7 +282,8 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use basecraft_protocol::delimitation::DelimitationEdit;
+    use basecraft_protocol::{Feature, delimitation::DelimitationEdit};
+    use std::path::Path;
 
     fn fixture() -> (tempfile::TempDir, Session, DocId) {
         let dir = tempfile::tempdir().unwrap();
@@ -412,9 +420,9 @@ mod tests {
             let group = session.next_group;
             let faults = &mut session.log.as_mut().unwrap().faults;
             if sync_failure {
-                faults.fail_sync = true;
+                faults.sync = true;
             } else {
-                faults.fail_after_bytes = Some(127);
+                faults.after_bytes = Some(127);
             }
             let ops = [remove("partition-1"), remove("partition-3")];
             assert!(apply(&mut session, doc, &ops).is_err());
@@ -446,8 +454,8 @@ mod tests {
         session.track(doc).unwrap();
         let before = session.delimitation(doc).clone();
         let faults = &mut session.log.as_mut().unwrap().faults;
-        faults.fail_after_bytes = Some(127);
-        faults.fail_rollback_sync = true;
+        faults.after_bytes = Some(127);
+        faults.rollback_sync = true;
         assert!(apply(&mut session, doc, &[remove("partition-1")]).is_err());
         assert!(dir.path().join("recovery-integrity-error.json").exists());
         assert!(apply(&mut session, doc, &[remove("partition-1")]).is_err());
@@ -486,6 +494,60 @@ mod tests {
     }
 
     #[test]
+    fn pending_typing_survives_a_flush_failure_before_proposal_commit() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sequence.fa");
+        std::fs::write(&path, ">a\nACGT\n").unwrap();
+        let mut session = Session::new(dir.path());
+        let doc = session.open(&path).unwrap();
+        session
+            .apply(
+                doc,
+                Op::SeqReplace {
+                    start: 4,
+                    end: 4,
+                    residues: "A".into(),
+                },
+            )
+            .unwrap();
+        assert!(session.pending.is_some());
+        let generation = session.generation(doc);
+        let revision = session.revision(doc);
+        let journal = journal_bytes(dir.path());
+        let op = Op::SeqReplace {
+            start: 0,
+            end: 1,
+            residues: "T".into(),
+        };
+        session.log.as_mut().unwrap().faults.after_bytes = Some(127);
+        assert!(
+            session
+                .apply_sequence_proposals(
+                    doc,
+                    generation,
+                    revision,
+                    std::slice::from_ref(&op),
+                    &Actor::External
+                )
+                .is_err()
+        );
+        assert!(session.pending.is_some());
+        assert_eq!(session.doc(doc).read(0, 5), b"ACGTA");
+        assert_eq!(session.generation(doc), generation);
+        assert_eq!(journal_bytes(dir.path()), journal);
+        session
+            .apply_sequence_proposals(doc, generation, revision, &[op], &Actor::External)
+            .unwrap();
+        assert!(session.pending.is_none());
+        assert_eq!(session.doc(doc).read(0, 5), b"TCGTA");
+        session.undo(doc).unwrap();
+        assert_eq!(session.doc(doc).read(0, 5), b"ACGTA");
+        session.undo(doc).unwrap();
+        assert_eq!(session.doc(doc).read(0, 4), b"ACGT");
+        assert!(crate::replay::replay(dir.path()).unwrap().ok());
+    }
+
+    #[test]
     fn sequence_uses_the_same_batch_rollback_and_preserves_feature_ids() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("sequence.fa");
@@ -502,10 +564,10 @@ mod tests {
         let actor = Actor::Agent {
             model: "proposal-test".into(),
         };
-        session.log.as_mut().unwrap().faults.fail_after_bytes = Some(127);
+        session.log.as_mut().unwrap().faults.after_bytes = Some(127);
         assert!(
             session
-                .apply_sequence_proposals(doc, 0, 0, &[op.clone()], &actor)
+                .apply_sequence_proposals(doc, 0, 0, std::slice::from_ref(&op), &actor)
                 .is_err()
         );
         assert_eq!(journal_bytes(dir.path()), before);

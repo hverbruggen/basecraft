@@ -17,9 +17,9 @@ pub fn log_dir(root: &Path) -> PathBuf {
 #[cfg(test)]
 #[derive(Default)]
 pub(crate) struct Faults {
-    pub fail_after_bytes: Option<usize>,
-    pub fail_sync: bool,
-    pub fail_rollback_sync: bool,
+    pub after_bytes: Option<usize>,
+    pub sync: bool,
+    pub rollback_sync: bool,
 }
 
 pub struct LogWriter {
@@ -101,13 +101,13 @@ impl LogWriter {
             let previous_length = f.metadata()?.len();
             let written = (|| -> std::io::Result<()> {
                 #[cfg(test)]
-                if let Some(bytes) = self.faults.fail_after_bytes.take() {
+                if let Some(bytes) = self.faults.after_bytes.take() {
                     f.write_all(&line[..bytes.min(line.len())])?;
                     return Err(std::io::Error::other("injected partial journal write"));
                 }
                 f.write_all(&line)?;
                 #[cfg(test)]
-                if std::mem::take(&mut self.faults.fail_sync) {
+                if std::mem::take(&mut self.faults.sync) {
                     return Err(std::io::Error::other("injected journal sync failure"));
                 }
                 #[cfg(feature = "test-counters")]
@@ -118,7 +118,7 @@ impl LogWriter {
                 if f.set_len(previous_length)
                     .and_then(|()| {
                         #[cfg(test)]
-                        if std::mem::take(&mut self.faults.fail_rollback_sync) {
+                        if std::mem::take(&mut self.faults.rollback_sync) {
                             return Err(std::io::Error::other("injected rollback sync failure"));
                         }
                         #[cfg(feature = "test-counters")]
