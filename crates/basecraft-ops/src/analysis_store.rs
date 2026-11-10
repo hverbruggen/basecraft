@@ -238,16 +238,26 @@ impl ArtifactRun {
     /// Bounded, read-only discovery beside a result. Hidden bindings take
     /// precedence; legacy companions remain readable when no binding exists.
     pub fn for_result(result: &Path) -> Result<Option<PathBuf>> {
-        Self::resolve_result(result, false)
+        Self::resolve_result(result, false, None)
     }
 
     /// Read association only when the binding describes these exact result bytes.
     /// Save-time location discovery deliberately uses `for_result` instead.
     pub fn for_result_checked(result: &Path) -> Result<Option<PathBuf>> {
-        Self::resolve_result(result, true)
+        Self::resolve_result(result, true, None)
     }
 
-    fn resolve_result(result: &Path, checked: bool) -> Result<Option<PathBuf>> {
+    /// Verify the same binding against bytes already owned by the caller.
+    /// Namespace, binding and run validation is shared with disk verification.
+    pub(crate) fn for_result_with_hash(result: &Path, hash: &str) -> Result<Option<PathBuf>> {
+        Self::resolve_result(result, true, Some(hash))
+    }
+
+    fn resolve_result(
+        result: &Path,
+        checked: bool,
+        snapshot_hash: Option<&str>,
+    ) -> Result<Option<PathBuf>> {
         let parent = result
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
@@ -309,13 +319,16 @@ impl ArtifactRun {
                 if value["schema_version"] != 1 || value["result"].as_str() != relative.to_str() {
                     return Err(invalid("unsupported or mismatched result binding"));
                 }
-                if checked
-                    && value["result_hash"].as_str()
-                        != Some(basecraft_io::hash_file(result)?.as_str())
-                {
-                    return Err(invalid(
-                        "result contents differ from the hidden binding; metadata was not applied",
-                    ));
+                if checked {
+                    let hash = snapshot_hash.map_or_else(
+                        || basecraft_io::hash_file(result),
+                        |hash| Ok(hash.to_owned()),
+                    )?;
+                    if value["result_hash"].as_str() != Some(hash.as_str()) {
+                        return Err(invalid(
+                            "result contents differ from the hidden binding; metadata was not applied",
+                        ));
+                    }
                 }
                 let id = value["run"]
                     .as_str()

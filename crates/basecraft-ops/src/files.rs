@@ -157,16 +157,17 @@ impl Loaded {
 
 /// Open a file as whatever it holds: see [`kind`].
 pub fn load(path: &Path) -> Result<Loaded> {
-    if Format::from_path(path)? == Format::Metadata {
+    let format = Format::from_path(path)?;
+    if format == Format::Metadata {
         return crate::metadata::load(path).map(Loaded::Metadata);
     }
-    if Format::from_path(path)? == Format::Submission {
+    if format == Format::Submission {
         return crate::submission::load(path).map(Loaded::Submission);
     }
-    if Format::from_path(path)? == Format::Delimitation {
+    if format == Format::Delimitation {
         return load_delimitation(path).map(Loaded::Delimitation);
     }
-    load_from(path, Source::open(path)?)
+    load_from(path, open_source(path, format)?)
 }
 
 /// Load FASTA, GenBank or a tree from the supplied main-file snapshot.
@@ -298,7 +299,7 @@ pub(crate) fn load_tree_from_verified_snapshot(path: &Path) -> Result<OpenedTree
 }
 
 fn load_tree_metadata(path: &Path, verified_snapshot: bool) -> Result<OpenedTree> {
-    load_tree_from(path, &Source::open(path)?, verified_snapshot)
+    load_tree_from(path, &open_source(path, Format::Tree)?, verified_snapshot)
 }
 
 pub(crate) fn load_tree_from(
@@ -320,7 +321,10 @@ pub(crate) fn load_tree_from(
     let mut doc = TreeDoc::from_parsed(name, &parsed);
     let mut metadata_warning = None;
     // Errors in a hidden association must never select an adjacent legacy file.
-    let run = crate::analysis_store::ArtifactRun::for_result_checked(path)?;
+    let run = crate::analysis_store::ArtifactRun::for_result_with_hash(
+        path,
+        &basecraft_io::hash_bytes(source.bytes()),
+    )?;
     let bound = run.is_some();
     let sidecar = run.map_or_else(
         || tree_sidecar(path),
@@ -518,11 +522,20 @@ pub struct Opened {
     pub fasta: Option<Arc<cache::IndexedFasta>>,
 }
 
+// Preserve the public loaders' historical filesystem error variants: FASTA
+// used the IO crate's wrapper; GenBank and trees used std filesystem reads.
+fn open_source(path: &Path, format: Format) -> Result<Source> {
+    Source::open(path).map_err(|error| match (format, error) {
+        (Format::GenBank | Format::Tree, basecraft_io::Error::Io(error)) => Error::Io(error),
+        (_, error) => Error::Format(error),
+    })
+}
+
 /// Open the first record of a sequence file.
 pub fn open(path: &Path) -> Result<Opened> {
     let format = Format::from_path(path)?;
     if matches!(format, Format::Fasta | Format::GenBank) {
-        return open_from(path, Source::open(path)?);
+        return open_from(path, open_source(path, format)?);
     }
     open_from(path, Source::from_vec(Vec::new()))
 }

@@ -240,3 +240,219 @@ fn actual_session_read_counts_separate_kind_probe_and_companion_fallback() {
         assert_eq!(counts.sync_all + counts.sync_data, 0);
     }
 }
+
+#[test]
+fn public_filesystem_errors_keep_historical_format_specific_variants() {
+    use basecraft_ops::Error;
+    let dir = tempfile::tempdir().unwrap();
+    for directory in [false, true] {
+        let prefix = if directory { "directory" } else { "missing" };
+        let gb = dir.path().join(format!("{prefix}.gb"));
+        let tree = dir.path().join(format!("{prefix}.nwk"));
+        let fasta = dir.path().join(format!("{prefix}.fasta"));
+        if directory {
+            for path in [&gb, &tree, &fasta] {
+                std::fs::create_dir(path).unwrap();
+            }
+        }
+        for error in [
+            files::open(&gb).err().unwrap(),
+            files::load(&gb).err().unwrap(),
+            files::load_tree(&tree).err().unwrap(),
+            files::load(&tree).err().unwrap(),
+        ] {
+            let Error::Io(error) = error else {
+                panic!("GenBank/tree filesystem error changed variant: {error:?}");
+            };
+            if !directory {
+                assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+            }
+        }
+        for error in [
+            files::open(&fasta).err().unwrap(),
+            files::load(&fasta).err().unwrap(),
+        ] {
+            let Error::Format(basecraft_io::Error::Io(error)) = error else {
+                panic!("FASTA filesystem error changed variant: {error:?}");
+            };
+            if !directory {
+                assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+            }
+        }
+    }
+}
+
+#[test]
+fn bound_tree_verifies_owned_snapshot_after_main_mutation_or_removal() {
+    use basecraft_ops::analysis_store::ArtifactRun;
+    let original = b"(a:1,b:2);\n(c:3,d:4);\n";
+    for metadata in [false, true] {
+        for mutation in ["unchanged", "write", "replace", "remove"] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("bound.nwk");
+            std::fs::write(&path, original).unwrap();
+            let run = ArtifactRun::create(&path, "bound-tree").unwrap();
+            run.bind(&path).unwrap();
+            let expected = files::load_tree(&path).unwrap();
+            if metadata {
+                let mut bytes = Vec::new();
+                files::write_tree_sidecar_at(&expected.doc, &hash_bytes(original), &mut bytes)
+                    .unwrap();
+                std::fs::write(run.artifact("bound.nwk.basecraft.json").unwrap(), bytes).unwrap();
+            }
+            let (source, hash) = Source::open_hashed(&path).unwrap();
+            assert_eq!(hash, hash_bytes(original));
+            #[cfg(feature = "test-counters")]
+            let key = path.canonicalize().unwrap();
+            match mutation {
+                "write" => std::fs::write(&path, b"(changed,tree);\n").unwrap(),
+                "replace" => {
+                    basecraft_io::write_atomic(&path, |w| w.write_all(b"(new,tree);\n")).unwrap()
+                }
+                "remove" => std::fs::remove_file(&path).unwrap(),
+                _ => {}
+            }
+            #[cfg(feature = "test-counters")]
+            basecraft_io::counters::reset();
+            let files::Loaded::Tree(loaded) = files::load_from(&path, source).unwrap() else {
+                panic!("expected tree");
+            };
+            assert_eq!(loaded.doc.to_newick(), expected.doc.to_newick());
+            assert_eq!(loaded.remaining.len(), 1);
+            assert_eq!(loaded.remaining[0], expected.remaining[0]);
+            assert_eq!(loaded.metadata_warning.is_some(), !metadata);
+            #[cfg(feature = "test-counters")]
+            {
+                let counts = basecraft_io::counters::snapshot();
+                assert_eq!(counts.unresolved_reads, 0);
+                assert_eq!(
+                    counts.reads.get(&key).map_or(0, |r| r.full_reads),
+                    0,
+                    "bound load_from reread main: metadata={metadata} mutation={mutation}"
+                );
+            }
+            // The disk verifier must still reject changed/missing disk contents.
+            if mutation != "unchanged" {
+                assert!(ArtifactRun::for_result_checked(&path).is_err());
+            }
+        }
+    }
+}
+
+#[cfg(feature = "test-counters")]
+#[test]
+fn bound_tree_session_with_missing_metadata_reads_main_once() {
+    use basecraft_io::counters;
+    use basecraft_ops::analysis_store::ArtifactRun;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("bound.nwk");
+    let bytes = b"(a,b);\n";
+    std::fs::write(&path, bytes).unwrap();
+    let run = ArtifactRun::create(&path, "bound-tree").unwrap();
+    run.bind(&path).unwrap();
+    let key = path.canonicalize().unwrap();
+    counters::reset();
+    let mut session = Session::unlogged(dir.path());
+    let doc = session.open(&path).unwrap();
+    assert!(session.tree_metadata_warning(doc).is_some());
+    let counts = counters::snapshot();
+    assert_eq!(counts.unresolved_reads, 0);
+    assert_eq!(
+        counts.reads[&key],
+        counters::Reads {
+            full_reads: 1,
+            bytes: bytes.len() as u64
+        }
+    );
+    println!(
+        "bound tree, missing metadata: Session main reads=1 bytes={}",
+        bytes.len()
+    );
+}
+
+#[test]
+fn bound_tree_snapshot_verification_keeps_binding_run_namespace_and_metadata_guards() {
+    use basecraft_ops::analysis_store::ArtifactRun;
+    let original = b"(a,b);\n";
+    for fault in [
+        "snapshot",
+        "binding-schema",
+        "binding-result",
+        "binding-run",
+        "missing-run",
+        "namespace",
+        "metadata-version",
+        "metadata-exchange",
+        "metadata-tree",
+        "metadata-legacy",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bound.nwk");
+        std::fs::write(&path, original).unwrap();
+        let run = ArtifactRun::create(&path, "bound-tree").unwrap();
+        run.bind(&path).unwrap();
+        let source = Source::open(&path).unwrap();
+        let source = if fault == "snapshot" {
+            Source::from_vec(b"(other,tree);\n".to_vec())
+        } else {
+            source
+        };
+        let store = dir.path().join(".basecraft/analyses-v1");
+        let binding = std::fs::read_dir(store.join("bindings"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        match fault {
+            "binding-schema" | "binding-result" | "binding-run" => {
+                let mut value: serde_json::Value =
+                    serde_json::from_slice(&std::fs::read(&binding).unwrap()).unwrap();
+                match fault {
+                    "binding-schema" => value["schema_version"] = 2.into(),
+                    "binding-result" => value["result"] = "other.nwk".into(),
+                    _ => value["run"] = "../outside".into(),
+                }
+                std::fs::write(binding, serde_json::to_vec(&value).unwrap()).unwrap();
+            }
+            "missing-run" => std::fs::remove_dir_all(run.directory()).unwrap(),
+            "namespace" => std::fs::write(
+                store.join("store.json"),
+                b"{\"format\":\"foreign\",\"schema_version\":1}",
+            )
+            .unwrap(),
+            "metadata-version" | "metadata-exchange" | "metadata-tree" | "metadata-legacy" => {
+                let opened = files::load_tree(&path).unwrap();
+                let mut bytes = Vec::new();
+                files::write_tree_sidecar_at(&opened.doc, &hash_bytes(original), &mut bytes)
+                    .unwrap();
+                let mut value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                match fault {
+                    "metadata-version" => value["schema_version"] = 2.into(),
+                    "metadata-legacy" => value["schema_version"] = 0.into(),
+                    "metadata-exchange" => {
+                        value["exchange_hash"] = hash_bytes(b"other bytes").into()
+                    }
+                    _ => value["tree_hash"] = hash_bytes(b"other tree").into(),
+                }
+                std::fs::write(
+                    run.artifact("bound.nwk.basecraft.json").unwrap(),
+                    serde_json::to_vec(&value).unwrap(),
+                )
+                .unwrap();
+            }
+            _ => {}
+        }
+        if fault == "metadata-legacy" {
+            let files::Loaded::Tree(tree) = files::load_from(&path, source).unwrap() else {
+                panic!("expected tree");
+            };
+            assert!(tree.metadata_warning.is_some());
+        } else {
+            assert!(
+                files::load_from(&path, source).is_err(),
+                "guard was bypassed: {fault}"
+            );
+        }
+    }
+}
