@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AlignmentLink",
+  "description": "Existing tree–alignment association, schema 1 (snapshot) or 2 (reference).\nField order and direct pretty serialization are part of the existing wire shape.",
+  "type": "object",
+  "properties": {
+    "alignment_version": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "inferred": {
+      "description": "False for an explicitly associated imported tree: matching names is not inference provenance.",
+      "type": "boolean"
+    },
+    "schema": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "snapshot": {
+      "type": "string"
+    },
+    "snapshot_hash": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string"
+    },
+    "source_hash": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": true,
+  "required": [
+    "schema",
+    "source",
+    "source_hash",
+    "snapshot",
+    "snapshot_hash",
+    "alignment_version",
+    "inferred"
+  ]
+}
