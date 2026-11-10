@@ -33,7 +33,18 @@ impl Barrier {
         assert_eq!(line.trim(), expected);
     }
 }
-fn spawn(root: &Path, role: &str, mode: &str) -> (Child, Barrier) {
+// Timeouts diagnose deadlocks; only a successful OS lock probe establishes
+// exclusion. Reap our children on failure so a broken guard cannot hang Cargo.
+struct Worker(Child);
+impl Drop for Worker {
+    fn drop(&mut self) {
+        if self.0.try_wait().ok().flatten().is_none() {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+}
+fn spawn(root: &Path, role: &str, mode: &str) -> (Worker, Barrier) {
     let socket = root.join(format!("{role}.sock"));
     let listener = UnixListener::bind(&socket).unwrap();
     let child = Command::new(std::env::current_exe().unwrap())
@@ -48,7 +59,7 @@ fn spawn(root: &Path, role: &str, mode: &str) -> (Child, Barrier) {
         .env("TMPDIR", root)
         .spawn()
         .unwrap();
-    (child, Barrier::new(listener.accept().unwrap().0))
+    (Worker(child), Barrier::new(listener.accept().unwrap().0))
 }
 fn scenario(mode: &str) {
     let root = tempfile::tempdir().unwrap();
@@ -70,8 +81,8 @@ fn scenario(mode: &str) {
     if mode != "save-first" {
         saving.expect("saved");
     }
-    assert!(registrar.wait().unwrap().success());
-    assert!(saver.wait().unwrap().success());
+    assert!(registrar.0.wait().unwrap().success());
+    assert!(saver.0.wait().unwrap().success());
     assert_eq!(
         std::fs::read(root.path().join("input.fasta")).unwrap(),
         b">gene\nATGT\n"

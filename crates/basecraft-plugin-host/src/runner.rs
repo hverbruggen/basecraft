@@ -713,6 +713,10 @@ impl PreparedOperation {
             .as_ref()
             .map(|target| target.snapshot.payload())
             .transpose()?;
+        let submission_payload = submission_plan
+            .as_ref()
+            .map(serde_json::to_vec)
+            .transpose()?;
         let mutation = input_evidence::Mutation::begin()?;
         let run = ArtifactRun::create(&anchor, &run_id)?;
         let mut ledger_inputs = Vec::new();
@@ -870,23 +874,22 @@ impl PreparedOperation {
                 reference: None,
             });
         }
-        if let Some(plan) = &submission_plan {
-            let payload = serde_json::to_vec(plan)?;
+        if let Some(payload) = &submission_payload {
             let path = run.artifact("query-preparation.json")?;
-            basecraft_io::write_atomic(&path, |w| std::io::Write::write_all(w, &payload))
+            basecraft_io::write_atomic(&path, |w| std::io::Write::write_all(w, payload))
                 .map_err(basecraft_ops::Error::from)?;
             let dependencies = sources_from_upstream(run.directory())?;
             mutation.link_generated_input(
                 &run,
                 &dependencies,
-                &payload,
+                payload,
                 "blast-query-preparation-v1",
                 "Frozen BLAST submission",
             )?;
             ledger_inputs.push(ArtifactRevision {
                 id: format!("{}:queries", run.id()),
                 logical_name: "query-preparation.json".into(),
-                hash: basecraft_io::hash_bytes(&payload),
+                hash: basecraft_io::hash_bytes(payload),
                 size: payload.len() as u64,
                 retained: Some("query-preparation.json".into()),
                 reference: None,
