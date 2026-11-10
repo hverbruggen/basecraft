@@ -681,6 +681,8 @@ struct StoreScan {
 }
 
 fn scan_store(store: &Path, target: &Path, scan: &mut StoreScan, inspection: &mut Inspection) {
+    #[cfg(feature = "test-counters")]
+    basecraft_io::counters::record_store_inspection(store);
     // The marker can be damaged in different ways with the same parse error.
     // Its observed bytes participate in consent, even when validation fails.
     let _ = inspection.record_bounded(&store.join("store.json"), 4096);

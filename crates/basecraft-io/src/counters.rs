@@ -18,6 +18,9 @@ pub struct Reads {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Counters {
     pub reads: BTreeMap<PathBuf, Reads>,
+    /// Attempted scanner visits, keyed by the exact supplied store path. Includes
+    /// missing/corrupt stores and every repeated visit; no canonicalization I/O.
+    pub store_inspections: BTreeMap<PathBuf, u64>,
     pub sync_data: u64,
     pub sync_all: u64,
     /// A read whose path disappeared before canonicalization is not silently
@@ -48,6 +51,18 @@ pub fn record_read(path: &Path, bytes: u64) {
         } else {
             counters.unresolved_reads += 1;
         }
+    });
+}
+
+/// Count at scanner entry, before any validation or early return. The map is
+/// cumulative since reset; sum values for attempts, sum (value - 1) for repeats
+/// of the same supplied path. Aliased paths deliberately remain distinct.
+pub fn record_store_inspection(path: &Path) {
+    COUNTERS.with(|c| {
+        *c.borrow_mut()
+            .store_inspections
+            .entry(path.to_path_buf())
+            .or_default() += 1;
     });
 }
 
@@ -92,6 +107,12 @@ mod tests {
         reset();
         crate::write_atomic(&dir.path().join("output"), |w| w.write_all(b"A")).unwrap();
         assert_eq!(snapshot().sync_all, 1);
+        record_store_inspection(&dir.path().join("missing"));
+        record_store_inspection(&dir.path().join("missing"));
+        assert_eq!(snapshot().store_inspections[&dir.path().join("missing")], 2);
+        std::thread::spawn(|| assert!(snapshot().store_inspections.is_empty()))
+            .join()
+            .unwrap();
         reset();
         assert_eq!(snapshot(), Counters::default());
     }

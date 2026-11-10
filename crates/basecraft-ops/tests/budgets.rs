@@ -19,30 +19,9 @@ fn scenario(
     save_sync_all: u64,
     edit: impl Fn(u32) -> Op,
 ) {
-    if std::env::var("BASECRAFT_BUDGET_CHILD").as_deref() != Ok(name) {
-        let dir = tempfile::tempdir().unwrap();
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", name, "--nocapture"])
-            .env("BASECRAFT_BUDGET_CHILD", name)
-            .env("BASECRAFT_BUDGET_ROOT", dir.path())
-            .env("BASECRAFT_PROFILE_DIR", dir.path().join("profile"))
-            .env("BASECRAFT_STATE_DIR", dir.path().join("profile/state"))
-            .env("BASECRAFT_CACHE_DIR", dir.path().join("profile/cache"))
-            .env("BASECRAFT_SCRATCH_DIR", dir.path())
-            .env("TMPDIR", dir.path())
-            .env("TMP", dir.path())
-            .env("TEMP", dir.path())
-            .output()
-            .unwrap();
-        println!("{}", String::from_utf8_lossy(&output.stdout));
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+    let Some(root) = child_profile(name) else {
         return;
-    }
-    let root = std::path::PathBuf::from(std::env::var_os("BASECRAFT_BUDGET_ROOT").unwrap());
+    };
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../testdata/fixtures/compact")
         .join(fixture);
@@ -159,4 +138,36 @@ fn newick() {
             to: format!("a{}", i + 1),
         }
     });
+}
+
+#[path = "budgets/store_budgets.rs"]
+mod store_budgets;
+
+fn child_profile(name: &str) -> Option<std::path::PathBuf> {
+    if std::env::var("BASECRAFT_BUDGET_CHILD").as_deref() != Ok(name) {
+        let dir = tempfile::tempdir().unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", name, "--nocapture"])
+            .env("BASECRAFT_BUDGET_CHILD", name)
+            .env("BASECRAFT_BUDGET_ROOT", dir.path())
+            .env("BASECRAFT_PROFILE_DIR", dir.path().join("profile"))
+            .env("BASECRAFT_STATE_DIR", dir.path().join("profile/state"))
+            .env("BASECRAFT_CACHE_DIR", dir.path().join("profile/cache"))
+            .env("BASECRAFT_SCRATCH_DIR", dir.path())
+            .env("TMPDIR", dir.path())
+            .env("TMP", dir.path())
+            .env("TEMP", dir.path())
+            .output()
+            .unwrap();
+        println!("{}", String::from_utf8_lossy(&output.stdout));
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return None;
+    }
+    Some(std::path::PathBuf::from(
+        std::env::var_os("BASECRAFT_BUDGET_ROOT").unwrap(),
+    ))
 }
