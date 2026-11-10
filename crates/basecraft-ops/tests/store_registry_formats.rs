@@ -157,3 +157,27 @@ fn store_writer_bytes_and_validation() {
     std::fs::write(&registry, pretty(&json!({"schema_version":1,"stores":[7]}))).unwrap();
     assert!(input_evidence::register(&run).is_err());
 }
+
+#[test]
+fn committed_store_examples_round_trip() {
+    use basecraft_protocol::records::{StoreMarker, StoreRegistry};
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/records-v1");
+    for name in ["store.json", "store-extended.json"] {
+        let bytes = std::fs::read(fixtures.join(name)).unwrap();
+        let marker: StoreMarker = serde_json::from_slice(&bytes).unwrap();
+        let value = serde_json::to_value(marker).unwrap();
+        let mut actual = serde_json::to_vec(&value).unwrap();
+        actual.push(b'\n');
+        assert_eq!(actual, bytes, "{name}");
+    }
+    for name in ["empty", "first", "extended", "update"] {
+        let bytes = std::fs::read(fixtures.join(format!("store-registry-{name}.json"))).unwrap();
+        let registry: StoreRegistry = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(registry.schema_version, 1);
+        assert_eq!(
+            pretty(&serde_json::to_value(registry).unwrap()),
+            bytes,
+            "{name}"
+        );
+    }
+}

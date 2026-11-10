@@ -1,8 +1,10 @@
-//! Existing recovery records. These describe the v1 wire shape, not a new format.
+//! Existing recovery and analysis-store records. These describe the v1 wire shape, not a new format.
 //!
-//! The session writer serializes through `serde_json::Value`, as its original
-//! literal builders did: keys at every level are sorted and there is no final
-//! newline. Serializing a struct directly is not that byte-level contract.
+//! Writers serialize through `serde_json::Value`, as the original literal
+//! builders did, sorting keys recursively. Recovery uses pretty JSON without a
+//! newline; the store marker uses compact JSON plus a newline, and the registry
+//! uses pretty JSON plus a newline. Direct struct serialization is not that
+//! byte-level contract.
 use std::{collections::BTreeMap, path::PathBuf};
 
 use schemars::JsonSchema;
@@ -48,6 +50,34 @@ pub struct PendingSave {
     pub expected_hashes: Vec<String>,
     pub status: RecoveryStatus,
     pub note: String,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+/// Namespace identity; foreign markers must never be claimed or migrated.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub enum StoreFormat {
+    #[serde(rename = "basecraft.analysis-store")]
+    AnalysisStore,
+}
+
+/// `store.json` in an existing `analyses-v1` namespace. Runtime readers also
+/// enforce version 1, ordinary-file safety and the existing 4096-byte limit.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct StoreMarker {
+    pub format: StoreFormat,
+    pub schema_version: u32,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+/// Version-one `analysis-stores.json` in application state. These are LOCAL
+/// absolute machine paths, not portable project references. Runtime readers
+/// enforce version 1, the 1 MiB file bound and at most 4096 absolute paths.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct StoreRegistry {
+    pub schema_version: u32,
+    pub stores: Vec<PathBuf>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }

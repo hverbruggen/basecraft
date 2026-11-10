@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
 use basecraft_protocol::provenance::{FileStamp, InputReference};
+use basecraft_protocol::records::StoreRegistry;
 use fs4::fs_std::FileExt;
 use serde::{Deserialize, Serialize};
 
@@ -293,7 +294,7 @@ pub fn lock() -> Result<std::fs::File> {
     Ok(lock)
 }
 
-fn store_registry() -> Result<serde_json::Value> {
+fn store_registry() -> Result<StoreRegistry> {
     use std::io::Read as _;
     match std::fs::File::open(registry()?) {
         Ok(file) => {
@@ -309,17 +310,19 @@ fn store_registry() -> Result<serde_json::Value> {
             if value["schema_version"] != 1 || !value["stores"].is_array() {
                 return Err(invalid("unsupported known-store registry"));
             }
-            Ok(value)
+            Ok(serde_json::from_value(value)?)
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            Ok(serde_json::json!({"schema_version":1,"stores":[]}))
-        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(StoreRegistry {
+            schema_version: 1,
+            stores: Vec::new(),
+            extra: BTreeMap::new(),
+        }),
         Err(e) => Err(e.into()),
     }
 }
 
 fn stores() -> Result<Vec<PathBuf>> {
-    let paths: Vec<PathBuf> = serde_json::from_value(store_registry()?["stores"].clone())?;
+    let paths = store_registry()?.stores;
     if paths.len() > 4096 || paths.iter().any(|p| !p.is_absolute()) {
         return Err(invalid("known-store paths must be absolute and bounded"));
     }
@@ -374,8 +377,9 @@ pub fn register(run: &ArtifactRun) -> Result<()> {
         }
         all.push(store.into());
         let mut value = store_registry()?;
-        value["stores"] = serde_json::json!(all);
-        write_json(&registry()?, &value)?;
+        value.stores = all;
+        // The legacy Value builder sorted nested extension keys as well.
+        write_json(&registry()?, &serde_json::to_value(value)?)?;
     }
     Ok(())
 }

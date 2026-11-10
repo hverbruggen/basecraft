@@ -4,9 +4,9 @@
 //! `analyses-v1`, and refuse an existing namespace without our exact marker.
 use std::path::{Component, Path, PathBuf};
 
-use crate::{Result, error::invalid};
+use basecraft_protocol::records::{StoreFormat, StoreMarker};
 
-const MARKER: &str = "{\"format\":\"basecraft.analysis-store\",\"schema_version\":1}\n";
+use crate::{Result, error::invalid};
 
 #[derive(Clone, Debug)]
 pub struct ArtifactRun {
@@ -111,9 +111,15 @@ impl ArtifactRun {
         let store = hidden.join("analyses-v1");
         match std::fs::create_dir(&store) {
             Ok(()) => {
-                basecraft_io::write_atomic(&store.join("store.json"), |w| {
-                    w.write_all(MARKER.as_bytes())
-                })?;
+                let marker = StoreMarker {
+                    format: StoreFormat::AnalysisStore,
+                    schema_version: 1,
+                    extra: Default::default(),
+                };
+                // Preserve the original compact, sorted JSON and final newline.
+                let mut bytes = serde_json::to_vec(&serde_json::to_value(marker)?)?;
+                bytes.push(b'\n');
+                basecraft_io::write_atomic(&store.join("store.json"), |w| w.write_all(&bytes))?;
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                 Self::validate_store(&store)?;
@@ -147,6 +153,7 @@ impl ArtifactRun {
                 "foreign or unsupported analysis namespace; nothing was migrated",
             ));
         }
+        let _: StoreMarker = serde_json::from_value(value)?;
         Ok(())
     }
 

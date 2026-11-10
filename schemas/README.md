@@ -20,7 +20,7 @@ writer/reader without relying on changing line numbers. `Value` means untyped JS
 level; it does not mean that a workflow which rebuilds a record merges old fields.
 “Dropped” means ordinary serde structs ignore unknown fields when reading and omit
 them when writing; “rejected” means `deny_unknown_fields`. None of those behaviors
-is changed here outside the two selected recovery record types.
+is changed here outside the selected recovery, store marker and version-one registry types.
 
 ## Recovery, journal and provenance
 
@@ -33,9 +33,9 @@ is changed here outside the two selected recovery record types.
 | `manifest.json`, `records/<publication-id>.json`: publication, ancestry, artifacts, events, effective edits, completeness | P / A | [provenance.rs](../crates/basecraft-ops/src/provenance.rs) `publish`, `publish_operation`; session publication routines | `inspect`, `verify`, `package`; `document_record::read_origin`, evidence ancestry readers | `schema_version: 1` | protocol `Publication` / [provenance-publication.schema.json](provenance-publication.schema.json) | Rejected at publication and several nested record types; `InputReference.extra` kept |
 | `input.json`: source evidence, submitted hash/size, transformation, evidence state, optional ancestry/ledger references | A / P | [input_evidence.rs](../crates/basecraft-ops/src/input_evidence.rs) `reference_input_with_dependencies`, `link_generated_input`, `resolve`, `relink`; session/provenance/runner/Sanger adapters | `read_input`, `conflicts_in`, `verified_source`, packaging/ancestry readers | `schema_version: 1` | ops `SubmittedInput`; reuses protocol `InputReference`, `FileStamp`; no own schema | Kept via `extra` on input/reference; source stamp has no extra map; evidence state still string |
 | `run.json`: id, result name, status and sometimes outputs | A | `Session::save_inner`, `publish_referenced_analysis`; `input_evidence` reference/generated helpers; runner `prepare` | `input_evidence::result_name`, `scan_run`; artifact binding | `schema_version: 1` | `Value`; no schema | Selective `Value` reads; constructed afresh; variants differ in optional fields |
-| `store.json`: analysis namespace marker | `.basecraft/analyses-v1` | [analysis_store.rs](../crates/basecraft-ops/src/analysis_store.rs) `ArtifactRun::create`, exact compact `MARKER` string | `ArtifactRun::validate_store` | `format: basecraft.analysis-store`, `schema_version: 1` | literal bytes; no type/schema | Extra keys ignored on read; marker not rewritten |
+| `store.json`: analysis namespace marker | `.basecraft/analyses-v1` | [analysis_store.rs](../crates/basecraft-ops/src/analysis_store.rs) `ArtifactRun::create`, compact JSON plus newline | `ArtifactRun::validate_store` | `format: basecraft.analysis-store`, `schema_version: 1` | protocol `StoreMarker` / [store-marker.schema.json](store-marker.schema.json) | Top-level extras kept by type; validation ignores extras; marker not rewritten |
 | Result binding (hash-derived filename): run, result filename/hash | `.basecraft/analyses-v1` binding namespace | `ArtifactRun::bind` | `ArtifactRun::for_result` | `schema_version: 1` | `Value`; no schema | Selective reads; fresh writes |
-| `analysis-stores.json`: absolute known store paths | C state | `input_evidence::register` | `store_registry`, `stores`, save conflict scan | `schema_version: 1` | `Value`; no schema | Top-level fields kept when register mutates Value; path array validated |
+| `analysis-stores.json`: absolute known store paths | C state | `input_evidence::register` | `store_registry`, `stores`, save conflict scan | `schema_version: 1` | protocol `StoreRegistry` / [store-registry.schema.json](store-registry.schema.json) | Top-level extras kept on registration update; absolute path array/count validated |
 | `artifacts/<hash>` with logical name `export-map.json`: old/new publication mapping | E packaged P | `input_evidence::export_history` | retained artifact inspection; no dedicated in-app deserializer | `schema_version: 1` | `Value`; no schema | Generated artifact; original records also retained, no rewrite reader |
 | `reports/manifest.json`: publication, template, output hashes, redactions, citations | P / A | `provenance::write_reports` | report consumer / inspection (no dedicated typed in-app reader) | `schema_version: 1`, `template_version: 2` | `Value`; no schema | Generated afresh |
 | `reports/source-map.json`: paragraph/activity array | P / A | `provenance::write_reports` | report consumer / inspection | No version field | `Vec<Value>`; no schema | Generated afresh |
@@ -143,3 +143,27 @@ environment specification plus equivalent operations request (F11). None authori
 adding fields to this byte-compatible slice. Module moves, registry changes,
 runner stages, error routing, writer-version replay policy and the user's format
 compatibility decision remain later coordinated tasks.
+
+## Typed analysis-store slice
+
+`StoreMarker` and `StoreRegistry` describe the existing version-one namespace and
+local known-store registry. `StoreFormat` names the existing namespace identifier.
+The marker still uses compact sorted JSON plus one trailing newline; registry
+writes still use recursively sorted pretty JSON plus one trailing newline.
+`store_registry_formats.rs` ran against the original writers before replacement
+and compares complete actual writer bytes without normalizing runtime paths.
+Committed examples retain those bytes except for synthetic fixture roots; they
+include nested unknown fields, an empty registry and successive registrations.
+The empty registry is an in-memory default, not a newly created file: there was
+no original production writer for an empty registry.
+
+Marker safety/version checks (4096 bytes), registry read bounds (1 MiB), absolute
+paths, 4096-store count, lock coverage and atomic write/sync behavior are unchanged.
+Registry paths remain absolute LOCAL machine state. Unknown top-level fields
+survive registration updates, including nested JSON values. Marker extras survive
+typed round-trip, but validation does not rewrite the marker. Existing selected
+field/version checks still precede typed parsing to retain error behavior.
+
+This is a shared type for later registry work, not registry version two: reverse
+indexes, per-store locks, save warning/default policy and migration remain M3.
+No new fields, formats, entry routes or compatibility policy are introduced.
