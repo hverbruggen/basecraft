@@ -2,6 +2,7 @@
 //! The source draft and AB1 files remain immutable; no reference base is
 //! inferred or substituted by these operations.
 
+mod edit;
 mod save;
 mod storage;
 pub use storage::{SangerRun, record_addition};
@@ -577,173 +578,31 @@ impl SangerReviewSession {
     pub fn apply(&mut self, op: ReviewOp) -> Result<(), String> {
         self.invalidate_save_authority();
         match &op {
-            ReviewOp::Evaluate {
-                version,
-                settings,
-                calls,
-                reference,
-            } => {
-                settings.validate()?;
-                if ![1, 2].contains(version)
-                    || calls.len() != self.decisions.len()
-                    || calls.iter().flatten().any(|b| !"ACGT".contains(*b))
-                    || reference.as_ref().is_some_and(|r| {
-                        r.counts.len() != calls.len()
-                            || r.source_sha256.len() != 64
-                            || !r.source_sha256.bytes().all(|b| b.is_ascii_hexdigit())
-                    })
-                {
-                    return Err("Invalid automatic review evidence".into());
-                }
-                let columns: Vec<usize> = (0..calls.len()).filter(|&i| !self.manual[i]).collect();
-                let before = columns.iter().map(|&i| self.decisions[i].clone()).collect();
-                let after: Vec<_> = columns
-                    .iter()
-                    .map(|&i| calls[i].map_or(ReviewChoice::Pending, ReviewChoice::Auto))
-                    .collect();
-                let change = Change {
-                    manual_before: vec![false; columns.len()],
-                    manual_after: vec![false; columns.len()],
-                    columns: columns.clone(),
-                    before,
-                    after: after.clone(),
-                    mask: None,
-                    triage: Some((
-                        self.settings.clone(),
-                        self.reference.clone(),
-                        settings.clone(),
-                        reference.clone(),
-                    )),
-                };
-                for (&i, choice) in columns.iter().zip(after) {
-                    self.decisions[i] = choice;
-                }
-                self.settings = settings.clone();
-                self.reference.clone_from(reference);
-                if !self.events.is_empty() {
-                    self.undo.push(change);
-                }
-                self.redo.clear();
-            }
-            ReviewOp::Mask { settings } => {
-                if settings.start >= settings.end
-                    || settings.end > self.decisions.len()
-                    || !(8..=100).contains(&settings.minimum_overlap)
-                    || settings.error_percent > 40
-                    || settings.forward.len() > 200
-                    || settings.reverse.len() > 200
-                    || !settings
-                        .forward
-                        .bytes()
-                        .chain(settings.reverse.bytes())
-                        .all(|b| b"ACGTNRYKMSWBDHV".contains(&b))
-                {
-                    return Err("Invalid terminal mask or primer settings".into());
-                }
-                self.undo.push(Change {
-                    columns: Vec::new(),
-                    before: Vec::new(),
-                    after: Vec::new(),
-                    manual_before: Vec::new(),
-                    manual_after: Vec::new(),
-                    triage: None,
-                    mask: Some((self.mask.clone(), settings.clone())),
-                });
-                self.mask = settings.clone();
-                self.redo.clear();
-            }
-            ReviewOp::AutoAccept { columns } => {
-                if !self.events.is_empty() || columns.iter().any(|&i| i >= self.decisions.len()) {
-                    return Err("Automatic triage is only allowed before manual review".into());
-                }
-                for &i in columns {
-                    self.decisions[i] = ReviewChoice::Accept;
-                }
-            }
-            ReviewOp::Set { columns, choice } => {
-                if matches!(choice, ReviewChoice::Auto(_)) {
-                    return Err("Automatic calls require a recorded evaluation".into());
-                }
-                if columns.is_empty() || columns.len() > self.decisions.len() {
-                    return Err("Select one or more consensus columns".into());
-                }
-                if let ReviewChoice::Edit(base) = choice
-                    && (!base.is_ascii() || !b"ACGTNRYKMSWBDHV-".contains(&(*base as u8)))
-                {
-                    return Err("Manual base must be an IUPAC DNA symbol or gap".into());
-                }
-                let mut sorted = columns.clone();
-                sorted.sort_unstable();
-                sorted.dedup();
-                if sorted.len() != columns.len()
-                    || sorted.iter().any(|&column| column >= self.decisions.len())
-                {
-                    return Err("Invalid or repeated consensus column".into());
-                }
-                let before = columns
-                    .iter()
-                    .map(|&column| self.decisions[column].clone())
-                    .collect();
-                let manual_before = columns.iter().map(|&i| self.manual[i]).collect();
-                for &column in columns {
-                    self.decisions[column] = choice.clone();
-                    self.manual[column] = true;
-                }
-                self.undo.push(Change {
-                    columns: columns.clone(),
-                    before,
-                    after: vec![choice.clone(); columns.len()],
-                    manual_before,
-                    manual_after: vec![true; columns.len()],
-                    triage: None,
-                    mask: None,
-                });
-                self.redo.clear();
-            }
             ReviewOp::Undo => {
                 let change = self.undo.pop().ok_or("Nothing to undo")?;
-                if let Some((before, _)) = &change.mask {
-                    self.mask = before.clone();
-                }
-                for ((&column, before), &manual) in change
-                    .columns
-                    .iter()
-                    .zip(&change.before)
-                    .zip(&change.manual_before)
-                {
-                    self.decisions[column] = before.clone();
-                    self.manual[column] = manual;
-                }
-                if let Some((settings, reference, _, _)) = &change.triage {
-                    self.settings = settings.clone();
-                    self.reference.clone_from(reference);
-                }
+                self.install_change(&change, false);
                 self.redo.push(change);
             }
             ReviewOp::Redo => {
                 let change = self.redo.pop().ok_or("Nothing to redo")?;
-                if let Some((_, after)) = &change.mask {
-                    self.mask = after.clone();
-                }
-                for ((&column, after), &manual) in change
-                    .columns
-                    .iter()
-                    .zip(&change.after)
-                    .zip(&change.manual_after)
-                {
-                    self.decisions[column] = after.clone();
-                    self.manual[column] = manual;
-                }
-                if let Some((_, _, settings, reference)) = &change.triage {
-                    self.settings = settings.clone();
-                    self.reference.clone_from(reference);
-                }
+                self.install_change(&change, true);
                 self.undo.push(change);
             }
             ReviewOp::Export { path, sha256 } => {
                 let actual = basecraft_io::sha256_file(path).map_err(|e| e.to_string())?;
                 if actual != *sha256 {
                     return Err("Exported consensus changed since review".into());
+                }
+            }
+            _ => {
+                let change = self.prepare_change(&op)?;
+                self.install_change(&change, true);
+                // Initial triage stays outside legacy undo history.
+                if !matches!(op, ReviewOp::AutoAccept { .. }) {
+                    if !matches!(op, ReviewOp::Evaluate { .. }) || !self.events.is_empty() {
+                        self.undo.push(change);
+                    }
+                    self.redo.clear();
                 }
             }
         }

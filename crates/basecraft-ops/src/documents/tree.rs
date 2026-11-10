@@ -94,10 +94,10 @@ impl Document for OpenedTree {
         if format != Format::Tree {
             return Err(invalid("a tree can only be saved as a tree file"));
         }
-        if crate::links::document_entry(original)? != crate::links::document_entry(target)? {
-            crate::links::PreparedLinks::prepare(original, target).map(Some)
-        } else {
+        if crate::links::document_entry(original)? == crate::links::document_entry(target)? {
             Ok(None)
+        } else {
+            crate::links::PreparedLinks::prepare(original, target).map(Some)
         }
     }
 
