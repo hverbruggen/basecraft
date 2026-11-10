@@ -89,6 +89,16 @@ fn original_delimitation_save_run_writer() {
     .unwrap();
     let mut session = Session::new(root.path());
     let doc = session.open(&target).unwrap();
+    let mut view = session.delimitation(doc).view.clone();
+    view.visible.reverse();
+    session
+        .apply(
+            doc,
+            basecraft_protocol::Op::DelimitationEdit {
+                edit: Box::new(basecraft_ops::delimitation::DelimitationEdit::SetView { view }),
+            },
+        )
+        .unwrap();
     session.save(doc, None).unwrap();
     let run = ArtifactRun::for_result(&target).unwrap().unwrap();
     // Identity comes from the public binding/directory, not the run record.
