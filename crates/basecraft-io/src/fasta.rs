@@ -4,12 +4,131 @@
 //! length. Uniform records (all lines the same width except the last) are
 //! stored as two numbers, like `.fai`. Ragged records store every line start.
 
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
+use std::path::Path;
 
 use memchr::memchr;
 
 use crate::error::parse_error;
 use crate::{Error, Result};
+
+/// Classification facts, independent of record names and line layouts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Summary {
+    pub records: u64,
+    pub longest: u64,
+}
+
+/// Scan every byte with fixed storage, including arbitrarily long lines and
+/// headers. A later record or parse error can change classification, so this
+/// deliberately does not stop once two records have been found.
+pub fn summary(path: &Path) -> Result<Summary> {
+    let mut file = std::fs::File::open(path)?;
+    let (summary, bytes) = scan_summary(&mut file)?;
+    #[cfg(feature = "test-counters")]
+    crate::counters::record_read(path, bytes);
+    #[cfg(not(feature = "test-counters"))]
+    let _ = bytes;
+    Ok(summary)
+}
+
+// Shared by the index builder and streaming summary. Retain only enough line
+// state to apply the index's syntax, without buffering a line or a header.
+#[derive(Default)]
+struct LineScan {
+    first: Option<u8>,
+    bytes: u64,
+    residues: u64,
+    whitespace: bool,
+    internal_whitespace: bool,
+}
+
+impl LineScan {
+    fn push(&mut self, fragment: &[u8]) {
+        if self.first.is_none() {
+            self.first = fragment.first().copied();
+        }
+        for &byte in fragment {
+            self.bytes += 1;
+            if byte.is_ascii_whitespace() {
+                self.whitespace = true;
+            } else {
+                self.internal_whitespace |= self.whitespace;
+                self.residues = self.bytes;
+            }
+        }
+    }
+
+    fn is_header(&self) -> bool {
+        self.first == Some(b'>')
+    }
+
+    fn validate(&self, has_record: bool, line_no: usize) -> Result<u64> {
+        if has_record {
+            if self.internal_whitespace {
+                return Err(parse_error(
+                    "FASTA",
+                    line_no,
+                    "whitespace inside a sequence line",
+                ));
+            }
+        } else if self.residues != 0 {
+            return Err(parse_error(
+                "FASTA",
+                line_no,
+                "sequence before the first header",
+            ));
+        }
+        Ok(self.residues)
+    }
+}
+
+fn scan_summary(reader: &mut impl Read) -> Result<(Summary, u64)> {
+    let mut buffer = [0u8; 64 * 1024];
+    let mut summary = Summary::default();
+    let mut current_len = 0;
+    let mut line = LineScan::default();
+    let mut line_no = 1;
+    let mut bytes = 0;
+    loop {
+        let n = match reader.read(&mut buffer) {
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            result => result?,
+        };
+        bytes += n as u64;
+        let mut rest = &buffer[..n];
+        while let Some(end) = memchr(b'\n', rest) {
+            line.push(&rest[..end]);
+            summarize_line(&line, line_no, &mut summary, &mut current_len)?;
+            line = LineScan::default();
+            line_no += 1;
+            rest = &rest[end + 1..];
+        }
+        line.push(rest);
+        if n == 0 {
+            if line.first.is_some() {
+                summarize_line(&line, line_no, &mut summary, &mut current_len)?;
+            }
+            return Ok((summary, bytes));
+        }
+    }
+}
+
+fn summarize_line(
+    line: &LineScan,
+    line_no: usize,
+    summary: &mut Summary,
+    current_len: &mut u64,
+) -> Result<()> {
+    if line.is_header() {
+        summary.records += 1;
+        *current_len = 0;
+    } else {
+        *current_len += line.validate(summary.records != 0, line_no)?;
+        summary.longest = summary.longest.max(*current_len);
+    }
+    Ok(())
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Layout {
@@ -150,23 +269,13 @@ impl FastaIndex {
                     .unwrap_or(line.len());
                 let name = String::from_utf8_lossy(&line[1..name_end]).into_owned();
                 current = Some((name, pos as u64, LayoutBuilder::new()));
-            } else if let Some((_, _, b)) = &mut current {
-                let trimmed = line.iter().rposition(|c| !c.is_ascii_whitespace());
-                let residues = trimmed.map_or(0, |i| i + 1);
-                if line[..residues].iter().any(u8::is_ascii_whitespace) {
-                    return Err(parse_error(
-                        "FASTA",
-                        line_no,
-                        "whitespace inside a sequence line",
-                    ));
+            } else {
+                let mut scan = LineScan::default();
+                scan.push(line);
+                let residues = scan.validate(current.is_some(), line_no)?;
+                if let Some((_, _, b)) = &mut current {
+                    b.line(pos as u64, residues, (next - pos) as u64);
                 }
-                b.line(pos as u64, residues as u64, (next - pos) as u64);
-            } else if !line.iter().all(u8::is_ascii_whitespace) {
-                return Err(parse_error(
-                    "FASTA",
-                    line_no,
-                    "sequence before the first header",
-                ));
             }
             pos = next;
         }
@@ -357,6 +466,78 @@ pub fn write_record(w: &mut dyn Write, header: &[u8], seq: &[u8], width: usize) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct Chunked<'a> {
+        data: &'a [u8],
+        chunk: usize,
+    }
+
+    impl Read for Chunked<'_> {
+        fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+            let n = out.len().min(self.chunk).min(self.data.len());
+            out[..n].copy_from_slice(&self.data[..n]);
+            self.data = &self.data[n..];
+            Ok(n)
+        }
+    }
+
+    #[test]
+    fn summary_preserves_syntax_across_fragments() {
+        let cases: &[&[u8]] = &[
+            b"",
+            b" \t\r\n",
+            b">",
+            b">a desc\r\nACGT \t\r\n\n>b\nTT",
+            b">a\nAA\nA\nAAA\n>b\n",
+            b">a\n;comment\n>b\n#comment",
+            b";comment\n>a",
+            b">a\nAC GT",
+            b">a\nAC \t\n>b\nT T",
+            b">a\nAC\rGT",
+            b">a\n\xff\x00\n>b\nT",
+            b">a\nA\n>b\nT\n>c\n A",
+        ];
+        for &data in cases {
+            for chunk in 1..=17 {
+                let result = scan_summary(&mut Chunked { data, chunk });
+                match (FastaIndex::build(data), result) {
+                    (Ok(index), Ok((summary, bytes))) => {
+                        assert_eq!(summary.records, index.records.len() as u64);
+                        assert_eq!(
+                            summary.longest,
+                            index.records.iter().map(|r| r.len).max().unwrap_or(0)
+                        );
+                        assert_eq!(bytes, data.len() as u64);
+                    }
+                    (Err(old), Err(new)) => assert_eq!(old.to_string(), new.to_string()),
+                    (old, new) => panic!("data={data:?} chunk={chunk}: {old:?} vs {new:?}"),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn summary_propagates_late_read_failure() {
+        struct Failing {
+            first: bool,
+        }
+        impl Read for Failing {
+            fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+                if self.first {
+                    self.first = false;
+                    let data = b">a\nAC\n>b\nTT\n";
+                    out[..data.len()].copy_from_slice(data);
+                    Ok(data.len())
+                } else {
+                    Err(io::Error::other("late read failure"))
+                }
+            }
+        }
+        assert!(matches!(
+            scan_summary(&mut Failing { first: true }),
+            Err(Error::Io(_))
+        ));
+    }
 
     fn read_all(idx: &FastaIndex, data: &[u8], name: &str) -> Vec<u8> {
         let r = idx.get(name).unwrap();

@@ -70,7 +70,8 @@ pub enum Kind {
 /// it holds two or more records and none is longer than
 /// [`LONGEST_ALIGNMENT_ROW`]: aligned or not, a set of genes or organelle
 /// genomes reads best as rows. A GFF3 sidecar makes it a sequence: its
-/// annotations belong to sequences. Only the index is read.
+/// annotations belong to sequences (explicit alignment names take precedence).
+/// The standalone probe streams the entire file without constructing an index.
 pub fn kind(path: &Path) -> Result<Kind> {
     match Format::from_path(path)? {
         Format::Delimitation => return Ok(Kind::Delimitation),
@@ -80,11 +81,11 @@ pub fn kind(path: &Path) -> Result<Kind> {
         Format::GenBank => return Ok(Kind::Sequence),
         Format::Fasta => {}
     }
-    let file = cache::open_fasta(path)?;
-    Ok(fasta_kind(path, &file))
+    let summary = fasta::summary(path)?;
+    Ok(fasta_kind(path, summary))
 }
 
-fn fasta_kind(path: &Path, file: &cache::IndexedFasta) -> Kind {
+fn fasta_kind(path: &Path, summary: fasta::Summary) -> Kind {
     let named = path
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("afa"))
@@ -92,9 +93,8 @@ fn fasta_kind(path: &Path, file: &cache::IndexedFasta) -> Kind {
             .file_stem()
             .and_then(|s| Path::new(s).extension())
             .is_some_and(|e| e.eq_ignore_ascii_case("aln"));
-    let records = &file.index.records;
-    let rows = records.len() >= 2
-        && records.iter().all(|r| r.len <= LONGEST_ALIGNMENT_ROW)
+    let rows = summary.records >= 2
+        && summary.longest <= LONGEST_ALIGNMENT_ROW
         && !gff_sidecar(path).exists();
     if named || rows {
         Kind::Alignment
@@ -184,7 +184,11 @@ pub fn load_from(path: &Path, source: Source) -> Result<Loaded> {
             if file.index.records.is_empty() {
                 return Err(Error::Empty(path.to_path_buf()));
             }
-            if fasta_kind(path, &file) == Kind::Alignment {
+            let summary = fasta::Summary {
+                records: file.index.records.len() as u64,
+                longest: file.index.records.iter().map(|r| r.len).max().unwrap_or(0),
+            };
+            if fasta_kind(path, summary) == Kind::Alignment {
                 let name = path
                     .file_name()
                     .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
