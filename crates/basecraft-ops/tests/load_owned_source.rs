@@ -307,7 +307,7 @@ fn bound_tree_verifies_owned_snapshot_after_main_mutation_or_removal() {
             match mutation {
                 "write" => std::fs::write(&path, b"(changed,tree);\n").unwrap(),
                 "replace" => {
-                    basecraft_io::write_atomic(&path, |w| w.write_all(b"(new,tree);\n")).unwrap()
+                    basecraft_io::write_atomic(&path, |w| w.write_all(b"(new,tree);\n")).unwrap();
                 }
                 "remove" => std::fs::remove_file(&path).unwrap(),
                 _ => {}
@@ -431,7 +431,7 @@ fn bound_tree_snapshot_verification_keeps_binding_run_namespace_and_metadata_gua
                     "metadata-version" => value["schema_version"] = 2.into(),
                     "metadata-legacy" => value["schema_version"] = 0.into(),
                     "metadata-exchange" => {
-                        value["exchange_hash"] = hash_bytes(b"other bytes").into()
+                        value["exchange_hash"] = hash_bytes(b"other bytes").into();
                     }
                     _ => value["tree_hash"] = hash_bytes(b"other tree").into(),
                 }
