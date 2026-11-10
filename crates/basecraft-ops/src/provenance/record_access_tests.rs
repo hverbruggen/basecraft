@@ -124,7 +124,7 @@ fn wrappers_preserve_raw_bytes_errors_and_all_budget_limits() {
     assert!(matches!(error, Err(crate::Error::Invalid(_))));
     assert_eq!(left, 100 << 20);
     std::fs::write(&file, b"").unwrap();
-    assert!(parity(&file, 0).0.unwrap().is_empty());
+    assert_eq!(parity(&file, 0).0.unwrap(), [] as [u8; 0]);
 }
 
 #[test]
@@ -162,7 +162,7 @@ fn trusted_wrappers_keep_regular_symlink_and_os_denial_behavior() {
     symlink(&file, &link).unwrap();
     assert_eq!(parity(&link, 10).0.unwrap(), b"bytes");
     assert_eq!(read_record(&link).unwrap(), b"bytes");
-    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0)).unwrap();
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000)).unwrap();
     let (result, remaining) = parity(&file, 10);
     std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
     assert!(
@@ -177,13 +177,13 @@ struct PartialRead {
 }
 impl io::Read for PartialRead {
     fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
-        if !self.sent {
+        if self.sent {
+            Err(io::Error::from_raw_os_error(5))
+        } else {
             let n = 3.min(bytes.len());
             bytes[..n].copy_from_slice(&b"abc"[..n]);
             self.sent = true;
             Ok(n)
-        } else {
-            Err(io::Error::from_raw_os_error(5))
         }
     }
 }
@@ -212,6 +212,9 @@ fn partial_read_failure_accounts_consumed_bytes_in_shared_body() {
 
 #[test]
 fn access_carrier_keeps_typed_denial_io_source_and_raw_os_code() {
+    #[derive(Debug, thiserror::Error)]
+    #[error("permission_denied is only text in this IO source")]
+    struct Cause;
     let denied: crate::Error = AccessError::Denied(Denial::ServiceUnavailable).into();
     assert_eq!(denied.code(), "permission_denied");
     assert!(matches!(
@@ -225,9 +228,6 @@ fn access_carrier_keeps_typed_denial_io_source_and_raw_os_code() {
     assert!(
         matches!(io, crate::Error::Access(AccessError::Io(error)) if error.raw_os_error() == Some(13))
     );
-    #[derive(Debug, thiserror::Error)]
-    #[error("permission_denied is only text in this IO source")]
-    struct Cause;
     let error: crate::Error = AccessError::Io(io::Error::other(Cause)).into();
     assert_eq!(error.code(), "io");
     let crate::Error::Access(AccessError::Io(error)) = error else {
