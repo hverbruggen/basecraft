@@ -247,6 +247,17 @@ fn stale_document_target_issue_and_inventory_require_new_decisions() {
                 ),
                 Err(Error::SaveDecisionStale(_))
             ));
+            // Equal bytes at the same path do not imply the same file identity.
+            let check = session.check_save(doc, None).unwrap();
+            let before_identity = input_evidence::stamp(&file).unwrap();
+            let replacement = root.join("replacement.fasta");
+            std::fs::write(&replacement, ORIGINAL).unwrap();
+            std::fs::rename(&replacement, &file).unwrap();
+            assert_ne!(input_evidence::stamp(&file).unwrap(), before_identity);
+            assert!(matches!(
+                session.save_with_decision(doc, None, check.decide(SavePolicy::Cancel, true)),
+                Err(Error::SaveDecisionStale(_))
+            ));
             assert_eq!(std::fs::read(&file).unwrap(), ORIGINAL);
         },
     );

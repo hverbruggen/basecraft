@@ -164,12 +164,12 @@ fn failed_export_stream_keeps_previous_destination_and_records_nothing() {
 #[cfg(unix)]
 #[test]
 fn read_only_folder_refuses_save_and_keeps_original_and_edits() {
+    use std::os::unix::fs::PermissionsExt;
     if isolated_profile::enter("read_only_folder_refuses_save_and_keeps_original_and_edits")
         .is_none()
     {
         return;
     }
-    use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();
     let data = dir.path().join("data");
     std::fs::create_dir(&data).unwrap();

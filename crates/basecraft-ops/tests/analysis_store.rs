@@ -104,6 +104,7 @@ fn reference_run(root: &std::path::Path, source: &std::path::Path, id: &str) -> 
 
 #[test]
 fn reference_lifecycle_multiple_analyses_preserve_break_trash_and_cancel() {
+    use basecraft_ops::input_evidence::{self, SavePolicy};
     if isolated_profile::enter(
         "reference_lifecycle_multiple_analyses_preserve_break_trash_and_cancel",
     )
@@ -111,7 +112,6 @@ fn reference_lifecycle_multiple_analyses_preserve_break_trash_and_cancel() {
     {
         return;
     }
-    use basecraft_ops::input_evidence::{self, SavePolicy};
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("source.fasta");
     let old = ">a\nAAAA\n>b\nAAAT\n";
@@ -157,12 +157,12 @@ fn reference_lifecycle_multiple_analyses_preserve_break_trash_and_cancel() {
 
 #[test]
 fn changed_missing_and_failed_copy_cannot_claim_preserved_evidence() {
+    use basecraft_ops::input_evidence::{self, SavePolicy};
     if isolated_profile::enter("changed_missing_and_failed_copy_cannot_claim_preserved_evidence")
         .is_none()
     {
         return;
     }
-    use basecraft_ops::input_evidence::{self, SavePolicy};
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("source.fasta");
     std::fs::write(&source, ">a\nAAAA\n>b\nAAAT\n").unwrap();
@@ -193,12 +193,12 @@ fn changed_missing_and_failed_copy_cannot_claim_preserved_evidence() {
 #[cfg(unix)]
 #[test]
 fn symlink_and_hardlink_aliases_are_detected_without_content_reads() {
+    use basecraft_ops::input_evidence;
     if isolated_profile::enter("symlink_and_hardlink_aliases_are_detected_without_content_reads")
         .is_none()
     {
         return;
     }
-    use basecraft_ops::input_evidence;
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("source.fasta");
     std::fs::write(&source, ">a\nAAAA\n>b\nAAAT\n").unwrap();
@@ -226,14 +226,14 @@ fn symlink_and_hardlink_aliases_are_detected_without_content_reads() {
 
 #[test]
 fn session_save_policies_and_copy_failure_leave_source_safe() {
-    if isolated_profile::enter("session_save_policies_and_copy_failure_leave_source_safe").is_none()
-    {
-        return;
-    }
     use basecraft_ops::{
         Session,
         input_evidence::{self, SavePolicy},
     };
+    if isolated_profile::enter("session_save_policies_and_copy_failure_leave_source_safe").is_none()
+    {
+        return;
+    }
     for policy in [
         SavePolicy::Cancel,
         SavePolicy::PreserveCopy,
@@ -320,6 +320,7 @@ fn export_and_extraction_cannot_bypass_known_input_guard() {
 
 #[test]
 fn preserve_retries_and_failed_candidates_never_replace_retained_bytes() {
+    use basecraft_ops::input_evidence::{self, SavePolicy};
     if isolated_profile::enter(
         "preserve_retries_and_failed_candidates_never_replace_retained_bytes",
     )
@@ -327,7 +328,6 @@ fn preserve_retries_and_failed_candidates_never_replace_retained_bytes() {
     {
         return;
     }
-    use basecraft_ops::input_evidence::{self, SavePolicy};
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("source.afa");
     let original = b">a\nAAAA\n>b\nAAAT\n";
@@ -399,6 +399,7 @@ fn nested_collection_bindings_reopen_without_changing_sibling_bindings() {
 
 #[test]
 fn multi_input_verification_uses_only_declared_owners_and_never_bypasses_breaks() {
+    use basecraft_ops::input_evidence;
     if isolated_profile::enter(
         "multi_input_verification_uses_only_declared_owners_and_never_bypasses_breaks",
     )
@@ -406,7 +407,6 @@ fn multi_input_verification_uses_only_declared_owners_and_never_bypasses_breaks(
     {
         return;
     }
-    use basecraft_ops::input_evidence;
     let temp = tempfile::tempdir().unwrap();
     let source_a = temp.path().join("a.txt");
     let source_b = temp.path().join("b.txt");
@@ -494,6 +494,7 @@ fn multi_input_verification_uses_only_declared_owners_and_never_bypasses_breaks(
 
 #[test]
 fn preserved_primary_is_not_replaced_by_a_matching_ancestor_with_missing_original() {
+    use basecraft_ops::input_evidence;
     if isolated_profile::enter(
         "preserved_primary_is_not_replaced_by_a_matching_ancestor_with_missing_original",
     )
@@ -501,7 +502,6 @@ fn preserved_primary_is_not_replaced_by_a_matching_ancestor_with_missing_origina
     {
         return;
     }
-    use basecraft_ops::input_evidence;
     let temp = tempfile::tempdir().unwrap();
     let source = temp.path().join("original.txt");
     let bytes = b"retained primary bytes";
