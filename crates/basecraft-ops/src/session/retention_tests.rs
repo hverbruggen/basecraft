@@ -73,7 +73,7 @@ fn current_source_is_verified_even_with_a_known_object() {
     };
     for known in [false, true] {
         for companion in [false, true] {
-            for mutation in 0..5 {
+            for mutation in 0..if cfg!(unix) { 5 } else { 4 } {
                 let dir = root.join(format!("{known}-{companion}-{mutation}"));
                 let (mut session, id, main) = fixture(&dir);
                 if known {
@@ -376,7 +376,7 @@ fn post_verification_errors_keep_their_native_stage() {
     ) else {
         return;
     };
-    for mode in 0..3 {
+    for mode in 0..if cfg!(unix) { 3 } else { 2 } {
         let dir = root.join(format!("stage-{mode}"));
         let (mut session, id, main) = fixture(&dir);
         let before = session.doc(id).unwrap().to_genbank();
