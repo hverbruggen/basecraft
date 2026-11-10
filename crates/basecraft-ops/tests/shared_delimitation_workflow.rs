@@ -259,11 +259,9 @@ fn path_aliases_match_selection_without_merging_input_entries() {
     }
 }
 
-// This is intentionally not replaced by separate sessions. The persistence
-// worker owns the materialisation fix; run with --ignored after that fix is
-// combined with this branch. It fails on the known baseline defect.
+// Keep the real repeated-source journey in one persistent session. The accepted
+// replay correction must preserve both source and retained bytes throughout.
 #[test]
-#[ignore = "requires the separately assigned replay materialisation correction"]
 fn repeated_combine_and_refused_save_preserve_retained_objects_and_recover() {
     let dir = tempfile::tempdir().unwrap();
     let paths = inputs(dir.path());
@@ -294,6 +292,12 @@ fn repeated_combine_and_refused_save_preserve_retained_objects_and_recover() {
     let replay = basecraft_ops::replay::replay(dir.path()).unwrap();
     assert_eq!(snapshot(), objects, "replay changed retained input bytes");
     assert!(replay.problems.is_empty(), "{:?}", replay.problems);
+    assert!(basecraft_ops::replay::replay(dir.path()).unwrap().ok());
+    assert_eq!(
+        snapshot(),
+        objects,
+        "second replay changed retained input bytes"
+    );
     let recovered = tempfile::tempdir().unwrap();
     let destination = recovered.path().join("recovered");
     let outputs = basecraft_ops::replay::recover(dir.path(), &destination).unwrap();
