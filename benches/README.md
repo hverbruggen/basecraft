@@ -341,3 +341,78 @@ this records that known architectural gap openly and does not qualify the save
 path against the desired file-local cost. Scanner/index/lock improvements and
 changes to evidence authority are separate work. These checks make no GUI,
 startup, elapsed-time or release qualification claim.
+
+
+### Explicit opt-in CI provisioning
+
+Default `ci` timing remains **off** until independent provisioning review and
+supported-environment calibration acceptance. `bench-ci` is an opt-in invocation
+of the same `--compact --samples 5 --gate gross` runner, not a `ci` dependency.
+The private site wrapper must select immutable external files and hold its shared
+compile lock through this command; it also selects external target/TMP storage.
+No acquisition/download, baseline creation, missing-input skip or current-run
+self-baseline is performed by the recipe.
+
+```sh
+just bench-ci "$BENCH_MACHINE" "$BENCH_CACHE" "$BASELINE" "$BENCH_ENVIRONMENT" \
+  "$RUNTIME_RECEIPT" "$PROVISION_RECEIPT" "$PROVISION_SHA256"
+```
+
+Every argument is required. Paths identify files outside the checkout. The receipt
+checksum must be pinned independently in reviewed private site configuration;
+reading a checksum from the same untrusted receipt is not a trust anchor.
+All examples below describe **synthetic field shapes**, not approved calibration.
+No private baseline, receipt, actual host identity or artifact location belongs
+in Git.
+
+The provisioning receipt is a JSON object with these required fields:
+
+| Field | Meaning |
+|---|---|
+| `schema_version` | Integer `1` (benchmark provisioning contract, not an application record) |
+| `reviewed_by`, `review_reference` | Nonempty neutral reviewer and private review identifiers |
+| `valid_until_utc` | Explicit timezone-bearing ISO timestamp; expired receipts fail |
+| `baseline_sha256` | SHA256 of immutable baseline report file bytes |
+| `baseline_source_commit` | Baseline's exact 40-digit source revision |
+| `baseline_executable_sha256` | Baseline's recorded release executable SHA256 |
+| `runner_sha256` | Exact runner identity from the selected baseline, matching current runner |
+| `environment_sha256` | Canonical descriptor SHA256, matching baseline and current descriptor |
+| `runtime_sha256` | SHA256 of the supplied current runtime receipt file bytes |
+
+SHA256 strings are lowercase 64-digit hex. The runtime receipt is a JSON object
+with nonempty strings `target` (actual compilation target), `flags` (effective
+features/compiler/linker flags, explicitly stating defaults/none where relevant),
+`storage` (effective storage identity/filesystem), `power_policy` (effective power
+mode/governor/limits), and `load_policy` (shared lock, CPU budget and contention
+policy). `image_sha256` and `toolchain_sha256` pin the immutable runtime image
+and toolchain identities. The environment descriptor retains its six existing
+required strings and must additionally contain `reviewed_runtime` equal to this
+entire runtime receipt object. Include additional tool-version or policy evidence
+there when needed; any descriptor change invalidates the baseline identity.
+
+Before Cargo or a benchmark starts, provisioning checks checksums, receipt
+expiry/schema, exact baseline source/executable pins, report schema/release/protocol,
+neutral machine label, runner/environment identities, and all four measured compact
+cases. Each needs at least five samples, positive finite median/minimum/maximum,
+nonnegative finite MAD, consistent range, exact fixture/work counts and release
+assertions disabled. Missing/unreadable/malformed/incompatible inputs fail nonzero
+with a diagnostic. Report and runtime file bytes are read once for checksum and
+validation. Child failures still retain stdout/stderr, exit code and aggregate
+failure while subsequent cases run. Reports record provisioning/runtime checksums.
+The optional direct `--gate benchmark` path keeps the existing 1.3x semantics;
+`bench-ci` deliberately selects the existing 2x gross gate.
+
+This verifies consistency with externally pinned, reviewed assertions. It cannot
+authenticate an arbitrary report or reviewer, prove a binary's compiler flags,
+measure actual governor/load continuously, or establish that an attested runtime
+matches the machine. The site wrapper/reviewer must collect and check actual
+build/runtime receipts. Expiry alone does not establish calibration freshness;
+the site review chooses a validity window and must revoke the pinned receipt
+when its environment/policy changes. No signatures or automatic host attestation
+are claimed.
+
+The changed runner hash invalidates all earlier runner reports. Existing samples,
+including prior calibration rounds, must stay unmodified: do not relabel them or
+add new runtime assertions after measurement. A new supported-environment baseline
+and independent acceptance are needed before enabling default timing CI. This
+Python-only provisioning change supplies no new timing/calibration measurements.

@@ -1,5 +1,5 @@
 # Opt-in comparison limits from the M5 plan, not PRD qualification.
-# CI remains off pending reviewed calibration and baseline provisioning.
+# Default CI remains off pending provisioning review and supported-environment calibration.
 [comparison]
 benchmark_ratio = 1.30
 gross_ci_ratio = 2.0

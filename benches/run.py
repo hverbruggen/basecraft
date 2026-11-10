@@ -143,14 +143,128 @@ def timing_gate(report, baseline, budgets, mode):
 
 
 def environment_identity(path):
+    return descriptor_identity(json_object(path, "environment descriptor"))
+
+
+def descriptor_identity(descriptor):
     # Private, reviewed site descriptor: hardware, toolchain, runtime, storage,
     # build flags and lock/isolation policy. Hash values, never publish its paths.
-    descriptor = json.loads(external(path).read_text())
     required = ("hardware", "toolchain", "runtime", "storage", "build", "isolation")
     if not isinstance(descriptor, dict) or any(
             not isinstance(descriptor.get(k), str) or not descriptor[k].strip() for k in required):
         raise ValueError("environment descriptor requires nonempty " + ", ".join(required))
     return hashlib.sha256(json.dumps(descriptor, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+RUNNER_INPUTS = (
+    "benches/run.py", "crates/basecraft-ops/benches/interaction.rs",
+    "crates/basecraft-ops/benches/interaction/frame_cases.rs",
+    "crates/basecraft-ops/benches/interaction/tree_cases.rs", "benches/budgets.toml",
+    "crates/basecraft-ops/benches/interaction/fixtures.rs",
+    "crates/basecraft-ops/benches/interaction/memory_cases.rs",
+    "crates/basecraft-io/src/heap.rs", "crates/basecraft-io/Cargo.toml",
+    "crates/basecraft-ops/Cargo.toml")
+
+
+def runner_identity():
+    return hashlib.sha256(b"".join((ROOT / name).read_bytes() for name in RUNNER_INPUTS)).hexdigest()
+
+
+def json_object(path, label):
+    return parse_object(external(path).read_bytes(), label)
+
+
+def parse_object(content, label):
+    value = json.loads(content)
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} must be a JSON object")
+    return value
+
+
+def require_hash(value, label, length=64):
+    if not isinstance(value, str) or not re.fullmatch(r"[a-f0-9]{%d}" % length, value):
+        raise ValueError(f"{label} requires a lowercase {length}-digit identity")
+    return value
+
+
+def provision_baseline(args, runner_hash, descriptor, budgets):
+    """Validate externally pinned inputs before any compiler/benchmark process.
+
+    The trusted receipt checksum comes from site configuration, not the receipt.
+    Claims about the actual runtime remain reviewed caller attestations.
+    """
+    require_hash(args.provision_sha256, "provision checksum")
+    receipt_bytes = external(args.provision).read_bytes()
+    if hashlib.sha256(receipt_bytes).hexdigest() != args.provision_sha256:
+        raise ValueError("provision receipt checksum mismatch")
+    receipt = parse_object(receipt_bytes, "provision receipt")
+    if type(receipt.get("schema_version")) is not int or receipt["schema_version"] != 1:
+        raise ValueError("unsupported provision receipt schema_version")
+    for key in ("reviewed_by", "review_reference"):
+        if not isinstance(receipt.get(key), str) or not receipt[key].strip():
+            raise ValueError(f"provision receipt requires {key}")
+    try:
+        expires = datetime.fromisoformat(receipt["valid_until_utc"])
+        if expires.utcoffset() is None or expires <= datetime.now(timezone.utc):
+            raise ValueError("expired or timezone-less provision receipt")
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError(f"invalid provision valid_until_utc: {error}") from error
+    baseline_bytes = external(args.baseline).read_bytes()
+    runtime_bytes = external(args.runtime_receipt).read_bytes()
+    for key, actual in (("baseline_sha256", hashlib.sha256(baseline_bytes).hexdigest()),
+                        ("environment_sha256", descriptor_identity(descriptor)),
+                        ("runtime_sha256", hashlib.sha256(runtime_bytes).hexdigest()),
+                        ("runner_sha256", runner_hash)):
+        require_hash(receipt.get(key), key)
+        if receipt[key] != actual:
+            raise ValueError(f"provision {key} mismatch; review new inputs, do not relabel samples")
+    runtime = parse_object(runtime_bytes, "runtime receipt")
+    for key in ("target", "flags", "storage", "power_policy", "load_policy"):
+        if not isinstance(runtime.get(key), str) or not runtime[key].strip():
+            raise ValueError(f"runtime receipt requires explicit {key}")
+    for key in ("image_sha256", "toolchain_sha256"):
+        require_hash(runtime.get(key), f"runtime {key}")
+    if descriptor.get("reviewed_runtime") != runtime:
+        raise ValueError("runtime receipt differs from descriptor reviewed_runtime")
+    baseline = parse_object(baseline_bytes, "baseline report")
+    for key, length in (("source_commit", 40), ("executable_sha256", 64)):
+        require_hash(baseline.get(key), f"baseline {key}", length)
+        if receipt.get("baseline_" + key) != baseline[key]:
+            raise ValueError(f"provision baseline_{key} mismatch")
+    expected = dict(schema_version=SCHEMA_VERSION, machine=args.machine, profile="release",
+                    protocol=PROTOCOL, runner_sha256=runner_hash,
+                    environment_sha256=descriptor_identity(descriptor))
+    for key, value in expected.items():
+        if type(baseline.get(key)) is not type(value) or baseline[key] != value:
+            raise ValueError(f"baseline {key} incompatible with invocation")
+    scenarios = baseline.get("scenarios")
+    if not isinstance(scenarios, dict):
+        raise ValueError("baseline scenarios must be an object")
+    for name in COMPACT_SCENARIOS:
+        sample = scenarios.get(name)
+        if not isinstance(sample, dict):
+            raise ValueError(f"baseline requires {name} object")
+        work = dict(scenario=name, operations=1000 if name in (
+            "edit-alignment", "undo-alignment") else 1, fixture_bytes=131360,
+            rows=32, columns=4096, edits=0 if name == "open-alignment" else 1000,
+            source_commit=baseline["source_commit"], debug_assertions=False,
+            status="measured", unit="ns/operation")
+        for key, value in work.items():
+            if type(sample.get(key)) is not type(value) or sample[key] != value:
+                raise ValueError(f"baseline {name}: incompatible {key}")
+        if type(sample.get("samples")) is not int or sample["samples"] < budgets["minimum_gate_samples"]:
+            raise ValueError(f"baseline {name}: insufficient samples")
+        for key in ("median", "minimum", "maximum", "mad"):
+            value = sample.get(key)
+            try:
+                finite = type(value) in (int, float) and math.isfinite(value)
+            except OverflowError:
+                finite = False
+            if not finite or value < 0 or (key != "mad" and value == 0):
+                raise ValueError(f"baseline {name}: invalid {key}")
+        if not sample["minimum"] <= sample["median"] <= sample["maximum"]:
+            raise ValueError(f"baseline {name}: inconsistent timing range")
+    return baseline, receipt["runtime_sha256"]
 
 
 def main():
@@ -161,6 +275,9 @@ def main():
     parser.add_argument("--gate", choices=("gross", "benchmark"),
                         help="opt-in strict 2x or 1.3x timing gate; requires all compact scenarios")
     parser.add_argument("--environment", type=Path, help="external reviewed environment JSON descriptor")
+    parser.add_argument("--provision", type=Path, help="external reviewed baseline provisioning receipt")
+    parser.add_argument("--provision-sha256", help="receipt checksum pinned by external site configuration")
+    parser.add_argument("--runtime-receipt", type=Path, help="current reviewed runtime attestation JSON")
     parser.add_argument("--compact", action="store_true", help="only compact Session workloads")
     parser.add_argument("--baseline", type=Path, help="reviewed report.json from a compatible run")
     parser.add_argument("--history", type=Path, help="opt-in external JSONL summary history (review before publishing)")
@@ -179,6 +296,13 @@ def main():
         parser.error("strict gate requires --baseline and --environment")
     if args.gate and not set(COMPACT_SCENARIOS).issubset(selected):
         parser.error("strict gate requires all compact Session scenarios")
+    provisioning = any((args.provision, args.provision_sha256, args.runtime_receipt))
+    if provisioning and not all((args.provision, args.provision_sha256, args.runtime_receipt,
+                                 args.baseline, args.environment, args.gate, args.compact)):
+        parser.error("provisioning requires --provision, --provision-sha256, --runtime-receipt, "
+                     "--baseline, --environment, --gate and --compact")
+    if provisioning and args.samples < 5:
+        parser.error("provisioned timing gate requires at least 5 samples")
     heap_mode = any(n.startswith("heap-") for n in (args.scenario or ()))
     if heap_mode and (args.large or any(not n.startswith("heap-") for n in args.scenario)):
         parser.error("run heap instrumentation separately from wall timings")
@@ -196,14 +320,14 @@ def main():
         parser.error("an exact source revision is required")
     history = external(args.history) if args.history else None
     budgets = tomllib.loads((ROOT / "benches/budgets.toml").read_text())
-    runner_hash = hashlib.sha256(b"".join((ROOT / name).read_bytes() for name in (
-        "benches/run.py", "crates/basecraft-ops/benches/interaction.rs",
-        "crates/basecraft-ops/benches/interaction/frame_cases.rs",
-        "crates/basecraft-ops/benches/interaction/tree_cases.rs", "benches/budgets.toml",
-        "crates/basecraft-ops/benches/interaction/fixtures.rs",
-        "crates/basecraft-ops/benches/interaction/memory_cases.rs",
-        "crates/basecraft-io/src/heap.rs", "crates/basecraft-io/Cargo.toml",
-        "crates/basecraft-ops/Cargo.toml"))).hexdigest()
+    runner_hash = runner_identity()
+    # Validate before creating a run or spawning Cargo/the benchmark.
+    descriptor = json_object(args.environment, "environment descriptor") if args.environment else None
+    environment_hash = descriptor_identity(descriptor) if descriptor is not None else None
+    if provisioning:
+        baseline, runtime_hash = provision_baseline(args, runner_hash, descriptor, budgets["comparison"])
+    else:
+        baseline = json.loads(args.baseline.read_text()) if args.baseline else None
     run_dir = Path(tempfile.mkdtemp(prefix="interaction-", dir=cache))
     env = os.environ.copy()
     env.update(BASECRAFT_BENCH_REVISION=revision)
@@ -230,8 +354,10 @@ def main():
               "cache": "Session: warm OS/index cache; frame: cold view for first, warmed view for warm/scroll; see scenario work",
               "scenarios": {}}
     if args.environment:
-        report["environment_sha256"] = environment_identity(args.environment)
-    baseline = json.loads(args.baseline.read_text()) if args.baseline else None
+        report["environment_sha256"] = environment_hash
+    if provisioning:
+        report["provision_sha256"] = args.provision_sha256
+        report["runtime_sha256"] = runtime_hash
     failed = False
     for name in (*selected, *(("open-fasta-1gb",) if args.large else ())):
         samples = []
