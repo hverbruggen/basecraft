@@ -293,6 +293,200 @@ fn document_view(
     }
 }
 
+/// Resolved session inputs, before target binding, freezing or run allocation.
+struct PreparationInputs {
+    sequence: Option<SequenceTarget>,
+    document: Option<DocumentTarget>,
+    input_record: basecraft_ops::document_record::DocumentRecord,
+    generated: BTreeMap<String, Vec<GeneratedInput>>,
+    accepted_hashes: BTreeMap<PathBuf, String>,
+    bindings: crate::policy::ResolvedBindings,
+}
+
+/// Validate input bindings against the owning session's current revisions and
+/// capture generated views. The caller keeps the session and all later stages.
+fn prepare_inputs(
+    operation: &RegisteredOperation,
+    request: &OperationRequest,
+    policy: &SessionPolicy,
+    session: &mut Option<&mut basecraft_ops::Session>,
+) -> Result<PreparationInputs> {
+    let mut sequence = None;
+    let mut document = None;
+    let mut input_record = basecraft_ops::document_record::DocumentRecord::empty("Inputs");
+    let mut generated: BTreeMap<String, Vec<GeneratedInput>> = BTreeMap::new();
+    let mut accepted_hashes: BTreeMap<PathBuf, String> = BTreeMap::new();
+    let bindings = if operation.descriptor.family == ExecutionFamily::SequenceProposal {
+        let session = session.as_deref_mut().ok_or_else(|| {
+            Error::Protocol(
+                "sequence operation requires an owning headless/document session".into(),
+            )
+        })?;
+        let name = operation
+            .descriptor
+            .inputs
+            .keys()
+            .next()
+            .ok_or_else(|| Error::Protocol("missing snapshot binding".into()))?;
+        if request.inputs.len() != 1
+            || request
+                .inputs
+                .get(name)
+                .is_none_or(|values| values.len() != 1)
+        {
+            return Err(Error::Protocol(
+                "sequence operation requires exactly its named snapshot input".into(),
+            ));
+        }
+        let (doc, bindings) = match &request.inputs[name][0] {
+            InputReference::File { path } => {
+                let bindings = policy.resolve(operation, request)?;
+                (session.open(&policy.path(path, false)?)?, bindings)
+            }
+            InputReference::Document {
+                doc,
+                generation,
+                revision,
+            } => {
+                let id = basecraft_ops::DocId(
+                    doc.parse()
+                        .map_err(|_| Error::Protocol("invalid session document ID".into()))?,
+                );
+                let checked = session.checked_sequence(id)?;
+                if session.generation(id) != *generation || checked.version() != *revision {
+                    return Err(Error::Protocol(
+                        "stale_revision: snapshot target changed".into(),
+                    ));
+                }
+                for (role, path) in &request.destinations {
+                    if !operation.descriptor.outputs.contains_key(role) {
+                        return Err(Error::Protocol("unknown destination role".into()));
+                    }
+                    policy.path(path, true)?;
+                }
+                (
+                    id,
+                    crate::policy::ResolvedBindings {
+                        inputs: BTreeMap::new(),
+                        documents: BTreeMap::new(),
+                        destinations: BTreeMap::new(),
+                    },
+                )
+            }
+        };
+        let checked = session.checked_sequence(doc)?;
+        sequence = Some(SequenceTarget {
+            doc,
+            session: session.id().into(),
+            generation: session.generation(doc),
+            revision: checked.version(),
+            snapshot: crate::Snapshot::of(session.doc_key(doc), checked)?,
+            dependencies: session
+                .document_record(doc)?
+                .origin_bundles()
+                .map(Path::to_path_buf)
+                .collect(),
+        });
+        bindings
+    } else {
+        let mut bindings = policy.resolve(operation, request)?;
+        let documents = std::mem::take(&mut bindings.documents);
+        if !documents.is_empty() {
+            let session = session.as_deref().ok_or_else(|| {
+                Error::Protocol("document inputs require an owning session".into())
+            })?;
+            for (name, bound) in documents {
+                let view = operation.descriptor.inputs[&name].view;
+                for (position, binding) in bound {
+                    let id = basecraft_ops::DocId(
+                        binding
+                            .doc
+                            .parse()
+                            .map_err(|_| Error::Protocol("invalid session document ID".into()))?,
+                    );
+                    if !session.is_open(id)
+                        || session.generation(id) != binding.generation
+                        || session.revision(id) != binding.revision
+                    {
+                        return Err(Error::Protocol(
+                            "stale_revision: input document changed".into(),
+                        ));
+                    }
+                    if view == InputView::AlignedFasta && session.is_alignment(id) {
+                        session
+                            .alignment(id)?
+                            .validate_aligned_input()
+                            .map_err(|error| Error::Protocol(error.to_string()))?;
+                    }
+                    input_record.include_input(&session.document_record(id)?);
+                    let saved = session.saved_source(id)?;
+                    if document.is_none() {
+                        let key = session.doc_key(id);
+                        document = Some(DocumentTarget {
+                            doc: id,
+                            session: session.id().into(),
+                            generation: binding.generation,
+                            revision: binding.revision,
+                            record: session.document_record(id)?,
+                            input: (
+                                if view == InputView::UngappedFasta {
+                                    format!("{key} (ungapped)")
+                                } else {
+                                    key.into()
+                                },
+                                String::new(),
+                            ),
+                            saved: saved.as_ref().map(|(path, _, _)| path.clone()),
+                            path: session.root().join(session.doc_key(id)),
+                            receives_results: false,
+                            save: false,
+                        });
+                    }
+                    // A clean document is its saved file; unsaved edits are
+                    // submitted as a generated snapshot of the current revision.
+                    if let Some((path, _, hash)) = saved {
+                        let files = bindings.inputs.entry(name.clone()).or_default();
+                        files.insert(position.min(files.len()), path.clone());
+                        accepted_hashes.insert(path, hash);
+                    } else {
+                        let (bytes, transformation, extension) = document_view(session, id, view)?;
+                        generated
+                            .entry(name.clone())
+                            .or_default()
+                            .push(GeneratedInput {
+                                position,
+                                bytes,
+                                transformation,
+                                extension,
+                                dependencies: session
+                                    .document_record(id)?
+                                    .origin_bundles()
+                                    .map(Path::to_path_buf)
+                                    .collect(),
+                            });
+                    }
+                }
+            }
+            let generated_count: usize = generated.values().map(Vec::len).sum();
+            if generated_count > 1 {
+                return Err(Error::Protocol(
+                    "unsupported_input: save the document before combining it with other inputs"
+                        .into(),
+                ));
+            }
+        }
+        bindings
+    };
+    Ok(PreparationInputs {
+        sequence,
+        document,
+        input_record,
+        generated,
+        accepted_hashes,
+        bindings,
+    })
+}
+
 pub struct PreparedOperation {
     pub(crate) lifecycle: crate::lifecycle::Lifecycle,
     pub(crate) input_diagnostics: Vec<String>,
@@ -338,171 +532,14 @@ impl PreparedOperation {
         } else {
             None
         };
-        let mut sequence = None;
-        let mut document = None;
-        let mut input_record = basecraft_ops::document_record::DocumentRecord::empty("Inputs");
-        let mut generated: BTreeMap<String, Vec<GeneratedInput>> = BTreeMap::new();
-        let mut accepted_hashes: BTreeMap<PathBuf, String> = BTreeMap::new();
-        let bindings = if operation.descriptor.family == ExecutionFamily::SequenceProposal {
-            let session = session.as_deref_mut().ok_or_else(|| {
-                Error::Protocol(
-                    "sequence operation requires an owning headless/document session".into(),
-                )
-            })?;
-            let name = operation
-                .descriptor
-                .inputs
-                .keys()
-                .next()
-                .ok_or_else(|| Error::Protocol("missing snapshot binding".into()))?;
-            if request.inputs.len() != 1
-                || request
-                    .inputs
-                    .get(name)
-                    .is_none_or(|values| values.len() != 1)
-            {
-                return Err(Error::Protocol(
-                    "sequence operation requires exactly its named snapshot input".into(),
-                ));
-            }
-            let (doc, bindings) = match &request.inputs[name][0] {
-                InputReference::File { path } => {
-                    let bindings = policy.resolve(&operation, &request)?;
-                    (session.open(&policy.path(path, false)?)?, bindings)
-                }
-                InputReference::Document {
-                    doc,
-                    generation,
-                    revision,
-                } => {
-                    let id = basecraft_ops::DocId(
-                        doc.parse()
-                            .map_err(|_| Error::Protocol("invalid session document ID".into()))?,
-                    );
-                    let checked = session.checked_sequence(id)?;
-                    if session.generation(id) != *generation || checked.version() != *revision {
-                        return Err(Error::Protocol(
-                            "stale_revision: snapshot target changed".into(),
-                        ));
-                    }
-                    for (role, path) in &request.destinations {
-                        if !operation.descriptor.outputs.contains_key(role) {
-                            return Err(Error::Protocol("unknown destination role".into()));
-                        }
-                        policy.path(path, true)?;
-                    }
-                    (
-                        id,
-                        crate::policy::ResolvedBindings {
-                            inputs: BTreeMap::new(),
-                            documents: BTreeMap::new(),
-                            destinations: BTreeMap::new(),
-                        },
-                    )
-                }
-            };
-            let checked = session.checked_sequence(doc)?;
-            sequence = Some(SequenceTarget {
-                doc,
-                session: session.id().into(),
-                generation: session.generation(doc),
-                revision: checked.version(),
-                snapshot: crate::Snapshot::of(session.doc_key(doc), checked)?,
-                dependencies: session
-                    .document_record(doc)?
-                    .origin_bundles()
-                    .map(Path::to_path_buf)
-                    .collect(),
-            });
-            bindings
-        } else {
-            let mut bindings = policy.resolve(&operation, &request)?;
-            let documents = std::mem::take(&mut bindings.documents);
-            if !documents.is_empty() {
-                let session = session.as_deref().ok_or_else(|| {
-                    Error::Protocol("document inputs require an owning session".into())
-                })?;
-                for (name, bound) in documents {
-                    let view = operation.descriptor.inputs[&name].view;
-                    for (position, binding) in bound {
-                        let id =
-                            basecraft_ops::DocId(binding.doc.parse().map_err(|_| {
-                                Error::Protocol("invalid session document ID".into())
-                            })?);
-                        if !session.is_open(id)
-                            || session.generation(id) != binding.generation
-                            || session.revision(id) != binding.revision
-                        {
-                            return Err(Error::Protocol(
-                                "stale_revision: input document changed".into(),
-                            ));
-                        }
-                        if view == InputView::AlignedFasta && session.is_alignment(id) {
-                            session
-                                .alignment(id)?
-                                .validate_aligned_input()
-                                .map_err(|error| Error::Protocol(error.to_string()))?;
-                        }
-                        input_record.include_input(&session.document_record(id)?);
-                        let saved = session.saved_source(id)?;
-                        if document.is_none() {
-                            let key = session.doc_key(id);
-                            document = Some(DocumentTarget {
-                                doc: id,
-                                session: session.id().into(),
-                                generation: binding.generation,
-                                revision: binding.revision,
-                                record: session.document_record(id)?,
-                                input: (
-                                    if view == InputView::UngappedFasta {
-                                        format!("{key} (ungapped)")
-                                    } else {
-                                        key.into()
-                                    },
-                                    String::new(),
-                                ),
-                                saved: saved.as_ref().map(|(path, _, _)| path.clone()),
-                                path: session.root().join(session.doc_key(id)),
-                                receives_results: false,
-                                save: false,
-                            });
-                        }
-                        // A clean document is its saved file; unsaved edits are
-                        // submitted as a generated snapshot of the current revision.
-                        if let Some((path, _, hash)) = saved {
-                            let files = bindings.inputs.entry(name.clone()).or_default();
-                            files.insert(position.min(files.len()), path.clone());
-                            accepted_hashes.insert(path, hash);
-                        } else {
-                            let (bytes, transformation, extension) =
-                                document_view(session, id, view)?;
-                            generated
-                                .entry(name.clone())
-                                .or_default()
-                                .push(GeneratedInput {
-                                    position,
-                                    bytes,
-                                    transformation,
-                                    extension,
-                                    dependencies: session
-                                        .document_record(id)?
-                                        .origin_bundles()
-                                        .map(Path::to_path_buf)
-                                        .collect(),
-                                });
-                        }
-                    }
-                }
-                let generated_count: usize = generated.values().map(Vec::len).sum();
-                if generated_count > 1 {
-                    return Err(Error::Protocol(
-                        "unsupported_input: save the document before combining it with other inputs"
-                            .into(),
-                    ));
-                }
-            }
-            bindings
-        };
+        let PreparationInputs {
+            sequence,
+            mut document,
+            mut input_record,
+            generated,
+            accepted_hashes,
+            bindings,
+        } = prepare_inputs(&operation, &request, &policy, &mut session)?;
         let target = match &request.target {
             None => None,
             Some(reference) => {
