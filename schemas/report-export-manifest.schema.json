@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ReportExportManifest",
+  "description": "Standalone report metadata; document and revision retain their exact strings.",
+  "type": "object",
+  "properties": {
+    "coordinates": {
+      "type": "string"
+    },
+    "document": {
+      "type": "string"
+    },
+    "revision": {
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "template_version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "unsaved": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "schema_version",
+    "revision",
+    "document",
+    "unsaved",
+    "template_version",
+    "coordinates"
+  ]
+}

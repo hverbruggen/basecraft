@@ -498,8 +498,13 @@ impl Report {
             .paragraphs
             .iter()
             .enumerate()
-            .map(|(i, p)| serde_json::json!({"paragraph":i+1,"activities":p.activity_ids}))
-            .collect();
+            .map(|(i, p)| {
+                serde_json::to_value(basecraft_protocol::report_records::ReportSourceMapEntry {
+                    paragraph: i + 1,
+                    activities: p.activity_ids.clone(),
+                })
+            })
+            .collect::<serde_json::Result<Vec<_>>>()?;
         let mut parameters = String::from("paragraph\tactivity_ids\tparameters_json\n");
         for (i, p) in self.paragraphs.iter().enumerate() {
             let _ = writeln!(
@@ -510,7 +515,15 @@ impl Report {
                 serde_json::to_string(&p.parameters)?
             );
         }
-        let manifest = serde_json::json!({"schema_version":1,"revision":self.revision,"document":self.document,"unsaved":self.unsaved,"template_version":self.template_version,"coordinates":"raw zero-based half-open; summaries one-based"});
+        let manifest =
+            serde_json::to_value(basecraft_protocol::report_records::ReportExportManifest {
+                schema_version: 1,
+                revision: self.revision.clone(),
+                document: self.document.clone(),
+                unsaved: self.unsaved,
+                template_version: self.template_version,
+                coordinates: "raw zero-based half-open; summaries one-based".into(),
+            })?;
         for (name, bytes) in [
             ("parameters.tsv", parameters.into_bytes()),
             ("source-map.json", serde_json::to_vec_pretty(&source_map)?),

@@ -98,7 +98,7 @@ fn empty_publication() -> Publication {
         id: "publication-λ-\"\\\n".into(),
         session: "fixture".into(),
         parents: vec![],
-        parent_hashes: Default::default(),
+        parent_hashes: std::collections::BTreeMap::new(),
         created: "2026-01-01T00:00:00Z".into(),
         origin: "import".into(),
         inputs: vec![],
@@ -190,14 +190,25 @@ fn original_real_multi_activity_bytes() {
     session.undo(doc).unwrap();
     session.redo(doc).unwrap();
     let inputs = vec![("gene-λ.fasta".into(), session.snapshot_file(&file).unwrap())];
-    let mut snapshot = session.document_record(doc).unwrap();
+    let mut submitted = session.document_record(doc).unwrap();
     for operation in ["first", "second"] {
         session.log_tool_run(doc,Actor::Tool{tool:"RecordedTool".into(),version:"1.2".into()},("example",operation),json!({"_execution":{"methods_template":"example.v1","methods":{"description":"Sequences were processed","citations":["Z λ\"\n\\","A","Z λ\"\n\\"]},"resolved_parameters":{"seed":42}}}),&inputs,std::slice::from_ref(&output)).unwrap();
         session
-            .publish_analysis_snapshot(doc, &output, &inputs, &snapshot)
+            .publish_analysis_snapshot(doc, &output, &inputs, &submitted)
             .unwrap();
-        snapshot = DocumentRecord::from_publication(&provenance::inspect(&output).unwrap());
+        submitted = DocumentRecord::from_publication(&provenance::inspect(&output).unwrap());
     }
+    let inspected = serde_json::to_vec(&provenance::inspect(&output).unwrap()).unwrap();
+    let verified = provenance::verify(&output).unwrap();
+    let generated = provenance::companion(&output).join("reports");
+    for name in ["manifest.json", "source-map.json"] {
+        std::fs::write(generated.join(name), b"corrupt derived output").unwrap();
+    }
+    assert_eq!(
+        serde_json::to_vec(&provenance::inspect(&output).unwrap()).unwrap(),
+        inspected
+    );
+    assert_eq!(provenance::verify(&output).unwrap(), verified);
     let mut publication = provenance::inspect(&output).unwrap();
     // Deliberately preserve duplicate hash order in the original manifest projection.
     let first = publication.outputs[0].clone();
@@ -462,4 +473,37 @@ fn export_follows_existing_manifest_symlink() {
             .file_type()
             .is_symlink()
     );
+}
+
+#[test]
+fn original_captures_round_trip_known_shapes() {
+    use basecraft_protocol::report_records::{
+        ProvenanceReportManifest, ReportExportManifest, ReportSourceMapEntry,
+    };
+    fn value<T: serde::de::DeserializeOwned + serde::Serialize>(bytes: &[u8]) -> Value {
+        serde_json::to_value(serde_json::from_slice::<T>(bytes).unwrap()).unwrap()
+    }
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/records-v1");
+    let mut count = 0;
+    for entry in std::fs::read_dir(fixtures).unwrap() {
+        let entry = entry.unwrap();
+        let name = entry.file_name().into_string().unwrap();
+        if !(name.starts_with("provenance-report-") || name.starts_with("export-report-")) {
+            continue;
+        }
+        let bytes = std::fs::read(entry.path()).unwrap();
+        let provenance = name.starts_with("provenance-report-");
+        let decoded = if name.ends_with("source-map.json") {
+            value::<Vec<ReportSourceMapEntry>>(&bytes)
+        } else if name.ends_with("citations.json") {
+            value::<Vec<String>>(&bytes)
+        } else if provenance {
+            value::<ProvenanceReportManifest>(&bytes)
+        } else {
+            value::<ReportExportManifest>(&bytes)
+        };
+        assert_eq!(pretty(&decoded, provenance), bytes, "{name}");
+        count += 1;
+    }
+    assert_eq!(count, 13);
 }

@@ -503,6 +503,23 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     ),
                 ),
                 (
+                    "provenance-report-manifest",
+                    schemars::schema_for!(
+                        basecraft_protocol::report_records::ProvenanceReportManifest
+                    ),
+                ),
+                (
+                    "report-export-manifest",
+                    schemars::schema_for!(basecraft_protocol::report_records::ReportExportManifest),
+                ),
+                (
+                    "report-source-map",
+                    schemars::schema_for!(
+                        Vec<basecraft_protocol::report_records::ReportSourceMapEntry>
+                    ),
+                ),
+                ("report-citations", schemars::schema_for!(Vec<String>)),
+                (
                     "analysis-run",
                     schemars::schema_for!(basecraft_protocol::records::AnalysisRun),
                 ),

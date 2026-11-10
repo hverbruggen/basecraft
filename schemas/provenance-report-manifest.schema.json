@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ProvenanceReportManifest",
+  "description": "Publication report metadata, distinct from a standalone report export.",
+  "type": "object",
+  "properties": {
+    "citations": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "output_hashes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "publication": {
+      "type": "string"
+    },
+    "redactions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "schema_version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "template_version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "schema_version",
+    "publication",
+    "template_version",
+    "output_hashes",
+    "redactions",
+    "citations"
+  ]
+}

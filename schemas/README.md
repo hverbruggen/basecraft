@@ -37,13 +37,13 @@ are described below; their readers and fresh-write behavior remain distinct.
 | **RP09** Result binding (hash-derived filename): run, result filename/hash | `.basecraft/analyses-v1` binding namespace | `ArtifactRun::bind` | `ArtifactRun::for_result` | `schema_version: 1` | protocol `records::ResultBinding` / [result-binding.schema.json](result-binding.schema.json) | Typed round-trip keeps extras; selective reads; fresh writes |
 | **RP10** `analysis-stores.json`: absolute known store paths | C state | `input_evidence::register` | `store_registry`, `stores`, save conflict scan | `schema_version: 1` | protocol `StoreRegistry` / [store-registry.schema.json](store-registry.schema.json) | Top-level extras kept on registration update; absolute path array/count validated |
 | **RP11** `artifacts/<hash>` with logical name `export-map.json`: old/new publication mapping | E packaged P | `input_evidence::export_history` | retained artifact inspection; no dedicated in-app deserializer | `schema_version: 1` | `Value`; no schema | Generated artifact; original records also retained, no rewrite reader |
-| **RP12** `reports/manifest.json`: publication, template, output hashes, redactions, citations | P / A | `provenance::write_reports` | report consumer / inspection (no dedicated typed in-app reader) | `schema_version: 1`, `template_version: 2` | `Value`; no schema | Generated afresh |
-| **RP13** `reports/source-map.json`: paragraph/activity array | P / A | `provenance::write_reports` | report consumer / inspection | No version field | `Vec<Value>`; no schema | Generated afresh |
+| **RP12** `reports/manifest.json`: publication, template, output hashes, redactions, citations | P / A | `provenance::write_reports` | report consumer / inspection (no dedicated typed in-app reader) | `schema_version: 1`, `template_version: 2` | protocol `report_records::ProvenanceReportManifest` / [provenance-report-manifest.schema.json](provenance-report-manifest.schema.json) | Generated afresh |
+| **RP13** `reports/source-map.json`: paragraph/activity array | P / A | `provenance::write_reports` | report consumer / inspection | No version field | protocol `Vec<report_records::ReportSourceMapEntry>` / [report-source-map.schema.json](report-source-map.schema.json) | Generated afresh |
 | **RP14** `reports/history.md`, `methods.generated.md`, `parameters.tsv`, bundle `README.md` | P / A | `provenance::write_reports`, `publish` | human/report consumers | Report manifest template version | Markdown / TSV, not JSON records | Not applicable; user-authored `reports/methods.md` is preserved, never regenerated |
 | **RP15** `record.json`: document chronology and effective operations | E report folder | [document_record.rs](../crates/basecraft-ops/src/document_record.rs) `Report::write_files` (`raw`) | `DocumentRecord` consumers / exported evidence inspection | `schema_version: 1` | ops `DocumentRecord`; no generated schema | Dropped by struct; events retain existing LogEntry behavior |
 | **RP16** `report.json`: history, paragraphs, methods, raw record, citations | E report folder | `Report::write_files` | report consumer | `schema_version: 1`, `template_version` | ops `Report`; no schema | Dropped by struct |
-| **RP17** `manifest.json`: report revision/document/unsaved/template/coordinates | E report folder | `Report::write_files` | `check_report_folder` before replacement | `schema_version: 1` | `Value`; no schema | Selected ownership fields read; regenerated |
-| **RP18** `source-map.json`, `citations.json`: paragraph map array / citation string array | E report folder | `Report::write_files` | report consumers | No version fields | `Vec<Value>` / `Vec<String>`; no schemas | Generated afresh |
+| **RP17** `manifest.json`: report revision/document/unsaved/template/coordinates | E report folder | `Report::write_files` | `check_report_folder` before replacement | `schema_version: 1` | protocol `report_records::ReportExportManifest` / [report-export-manifest.schema.json](report-export-manifest.schema.json) | Selected ownership fields read; regenerated |
+| **RP18** `source-map.json`, `citations.json`: paragraph map array / citation string array | E report folder | `Report::write_files` | report consumers | No version fields | protocol `Vec<report_records::ReportSourceMapEntry>` / `Vec<String>`; [report-source-map.schema.json](report-source-map.schema.json), [report-citations.schema.json](report-citations.schema.json) | Generated afresh |
 | **RP19** `history.md`, `methods.generated.md`, `parameters.tsv` | E report folder | `Report::write_files` | report consumers | Companion manifest template version | Markdown / TSV | Generated afresh; ownership check protects unrelated folders/files |
 
 ## Document companions and Sanger payloads
@@ -543,3 +543,21 @@ serialization now returns the existing host JSON error for unrepresentable nativ
 paths at the original publication stages; the separate member-reader destination
 comparison is outside this correction. Earlier retained publication and stale
 intent bytes/temporary cleanup retain their existing behavior.
+### Fresh report-output producer evidence (RP12/RP13/RP17/RP18)
+
+The separate original-writer captures in `testdata/fixtures/records-v1/` use
+`provenance-report-*` (one terminal LF) and `export-report-*` (no appended LF).
+`ops/tests/report_record_formats.rs` retains independent old-literal byte oracles,
+known-shape typed fixture round-trips, real activity/citation generation, selected
+ownership/refusal and ordered partial-write controls. These fresh template2 /
+activities-array examples supersede historical `provenance-v1` as current-writer
+evidence; the historical template1 / singular-activity fixture stays unchanged.
+
+The two manifests remain distinct, arrays stay unversioned and citations retain
+the existing `Vec<String>` writer. Structs describe required fresh fields, not
+strict readers or extension-preserving rewrites. `check_report_folder` still
+accepts schema1 plus presence of template/coordinates, even null or wrong types;
+regeneration drops unknown fields. Report/document engines (RP15/RP16), permissive
+symlink behavior and provenance's existing per-write 64 MiB cap are unchanged.
+The source-map schema reflects the original `usize` on its generation target;
+no integer-width or cross-platform qualification is introduced.

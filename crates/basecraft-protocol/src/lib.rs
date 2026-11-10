@@ -13,6 +13,7 @@ pub mod plugin;
 pub mod provenance;
 pub mod publication_records;
 pub mod records;
+pub mod report_records;
 pub mod sanger;
 pub mod submission;
 pub mod tree;

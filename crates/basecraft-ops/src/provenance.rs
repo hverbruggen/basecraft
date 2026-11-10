@@ -557,9 +557,17 @@ pub fn write_reports(output: &Path, publication: &Publication) -> Result<()> {
             serde_json::to_string(&activity.operation)?
         );
     }
-    let mappings: Vec<_> = report.paragraphs.iter().enumerate().map(|(index, paragraph)|
-        serde_json::json!({"paragraph": index + 1, "activities": paragraph.activity_ids})
-    ).collect();
+    let mappings = report
+        .paragraphs
+        .iter()
+        .enumerate()
+        .map(|(index, paragraph)| {
+            serde_json::to_value(basecraft_protocol::report_records::ReportSourceMapEntry {
+                paragraph: index + 1,
+                activities: paragraph.activity_ids.clone(),
+            })
+        })
+        .collect::<serde_json::Result<Vec<_>>>()?;
     for (name, bytes) in [
         ("history.md", history.as_bytes()),
         ("methods.generated.md", methods.as_bytes()),
@@ -570,12 +578,16 @@ pub fn write_reports(output: &Path, publication: &Publication) -> Result<()> {
     atomic_json(&output.join("reports/source-map.json"), &mappings)?;
     atomic_json(
         &output.join("reports/manifest.json"),
-        &serde_json::json!({
-            "schema_version": 1, "publication": publication.id,
-            "template_version": 2,
-            "output_hashes": publication.outputs.iter().map(|a| &a.hash).collect::<Vec<_>>(),
-            "redactions": ["machine-local paths", "host", "user"], "citations": report.citations
-        }),
+        &serde_json::to_value(
+            basecraft_protocol::report_records::ProvenanceReportManifest {
+                schema_version: 1,
+                publication: publication.id.clone(),
+                template_version: 2,
+                output_hashes: publication.outputs.iter().map(|a| a.hash.clone()).collect(),
+                redactions: vec!["machine-local paths".into(), "host".into(), "user".into()],
+                citations: report.citations,
+            },
+        )?,
     )
 }
 
