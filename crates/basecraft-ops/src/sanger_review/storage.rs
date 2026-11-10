@@ -1,4 +1,7 @@
 //! Sanger adapters for the common artifact store and one-source evidence ledgers.
+// The diagnostic inspector has no production caller in this prerequisite slice.
+#[cfg(test)]
+mod inspection;
 use super::{SangerReviewSession, StoredReview};
 use crate::{analysis_store::ArtifactRun, error::invalid, input_evidence as inputs};
 use basecraft_docs::sanger::{SangerDraft, SangerPlacement};
@@ -81,6 +84,23 @@ fn base(path: &Path) -> crate::Result<PathBuf> {
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."))
         .canonicalize()?)
+}
+
+struct CandidateProbe {
+    candidate: PathBuf,
+    sha256: basecraft_io::Result<String>,
+}
+
+/// Exactly the unmatched-input probe used by the legacy executor. The outer
+/// result preserves parent-resolution errors; the inner result preserves SHA IO.
+fn probe_candidate(original: &Path, anchor: &Path) -> crate::Result<CandidateProbe> {
+    let candidate = if original.is_absolute() {
+        original.to_path_buf()
+    } else {
+        base(anchor)?.join(original)
+    };
+    let sha256 = basecraft_io::sha256_file(&candidate);
+    Ok(CandidateProbe { candidate, sha256 })
 }
 
 fn source(path: &Path, sha256: &str, anchor: &Path) -> crate::Result<Source> {
@@ -577,14 +597,8 @@ impl SangerReviewSession {
                 .iter()
                 .any(|s| s.original == read.path && s.sha256.eq_ignore_ascii_case(&read.sha256))
             {
-                let candidate = if read.path.is_absolute() {
-                    read.path.clone()
-                } else {
-                    base(anchor)?.join(&read.path)
-                };
-                let mut input = if basecraft_io::sha256_file(&candidate)
-                    .is_ok_and(|h| h.eq_ignore_ascii_case(&read.sha256))
-                {
+                let CandidateProbe { candidate, sha256 } = probe_candidate(&read.path, anchor)?;
+                let mut input = if sha256.is_ok_and(|h| h.eq_ignore_ascii_case(&read.sha256)) {
                     source(&candidate, &read.sha256, anchor)?
                 } else {
                     // Saving/recovering decisions remains possible without the
