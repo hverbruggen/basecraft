@@ -620,6 +620,7 @@ pub(crate) enum StrictResourceError {
     Access(AccessError),
     Missing(Box<basecraft_platform::files::TargetNamespace>),
 }
+#[allow(dead_code)] // Contextual host adapter remains deliberately unwired.
 impl StrictResourceError {
     fn into_access(self) -> AccessError {
         match self {
@@ -696,8 +697,10 @@ struct SessionServiceAccess<'a> {
     context: &'a basecraft_ops::service_reads::ServiceReadContext,
 }
 
+#[allow(dead_code)]
 type SessionServiceReadAccess<'a> = SessionServiceAccess<'a>;
 
+#[allow(dead_code)] // No production construction until separately reviewed activation.
 impl SessionServiceAccess<'_> {
     fn lock_policy(
         &self,
@@ -708,7 +711,15 @@ impl SessionServiceAccess<'_> {
         if !request.permits_lock(self.context, phase) {
             return Err(AccessError::Denied(Denial::ServiceUnavailable));
         }
-        if let Some((target, action)) = request.target() {
+        use basecraft_ops::service_reads::ServicePhase;
+        let target = match phase {
+            ServicePhase::Eligibility => request.target(),
+            ServicePhase::LockValidated(ticket)
+            | ServicePhase::BeforeEffect(ticket, _)
+            | ServicePhase::Held(ticket) => ticket.target(),
+            ServicePhase::Validated(_) => None, // rejected by permits_lock above
+        };
+        if let Some((target, action)) = target {
             let (path, _) = self.policy.resource_path(target, action)?;
             let parent = path
                 .parent()
@@ -1036,5 +1047,74 @@ mod service_read_tests {
         assert_eq!(gate.calls.get(), 2);
         assert_eq!(std::fs::read(&path).unwrap(), b"preserve");
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn effect_policy_checks_retained_absolute_target_after_root_rebinding() {
+        use basecraft_ops::service_reads::{
+            CheckedServiceTarget, SaveTargetPurpose, ServiceContext, ServicePhase, ServiceRequest,
+        };
+        struct Rebound<'a> {
+            initial: SessionServiceAccess<'a>,
+            later: SessionServiceAccess<'a>,
+            validated: Cell<bool>,
+        }
+        impl Access for Rebound<'_> {
+            fn boundary(&self) -> Option<&Path> {
+                self.initial.boundary()
+            }
+            fn resource(
+                &self,
+                _: &Path,
+                _: ResourceAction,
+            ) -> basecraft_ops::access::Result<PathBuf> {
+                panic!("legacy resolver")
+            }
+            fn service_context(
+                &self,
+                request: &ServiceRequest<'_>,
+                phase: ServicePhase<'_>,
+            ) -> basecraft_ops::access::Result<()> {
+                match phase {
+                    ServicePhase::Eligibility => self.initial.service_context(request, phase),
+                    ServicePhase::LockValidated(_) => {
+                        self.validated.set(true);
+                        self.later.service_context(request, phase)
+                    }
+                    _ => panic!("no effect after root rebind refusal"),
+                }
+            }
+            fn service_target<'a>(
+                &self,
+                request: &'a ServiceRequest<'a>,
+            ) -> basecraft_ops::access::Result<CheckedServiceTarget<'a>> {
+                self.initial.service_target(request)
+            }
+        }
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let initial = SessionPolicy::new(first.path(), true).unwrap();
+        let later = SessionPolicy::new(second.path(), true).unwrap();
+        let context = std::sync::Arc::new(ServiceContext::from_process().unwrap());
+        let access = Rebound {
+            initial: SessionServiceAccess {
+                policy: &initial,
+                context: &context,
+            },
+            later: SessionServiceAccess {
+                policy: &later,
+                context: &context,
+            },
+            validated: Cell::new(false),
+        };
+        assert!(matches!(
+            context.reserve_target(&access, Path::new("new"), SaveTargetPurpose::NewFile),
+            Err(basecraft_ops::Error::Access(AccessError::Denied(
+                Denial::OutsideRoot
+            )))
+        ));
+        assert!(access.validated.get());
+        assert!(!first.path().join("new").exists());
+        assert!(!second.path().join("new").exists());
     }
 }

@@ -308,6 +308,8 @@ pub(super) mod locks {
         context: &'a ServiceContext,
         revoke: Cell<Option<ServiceEffect>>,
         revoke_held: Cell<bool>,
+        revoke_validated: Cell<bool>,
+        substitute_target: Cell<bool>,
         trace: RefCell<Vec<(ServiceAction, &'static str)>>,
         current: Cell<*const ()>,
     }
@@ -317,6 +319,8 @@ pub(super) mod locks {
                 context,
                 revoke: Cell::new(None),
                 revoke_held: Cell::new(false),
+                revoke_validated: Cell::new(false),
+                substitute_target: Cell::new(false),
                 trace: RefCell::new(Vec::new()),
                 current: Cell::new(std::ptr::null()),
             }
@@ -343,7 +347,12 @@ pub(super) mod locks {
                     self.current.set(ptr);
                     "eligibility"
                 }
-                ServicePhase::LockValidated(_) => "validated",
+                ServicePhase::LockValidated(_) => {
+                    if self.revoke_validated.get() {
+                        return Err(AccessError::Denied(Denial::ReadOnly));
+                    }
+                    "validated"
+                }
                 ServicePhase::BeforeEffect(_, effect) => {
                     assert_eq!(self.current.get(), ptr);
                     if self.revoke.get() == Some(effect) {
@@ -375,10 +384,14 @@ pub(super) mod locks {
             let (path, _) = request.target().unwrap();
             // Test policy supplies the real lower observation. Shared production
             // action/root policy is separately exercised in plugin-host tests.
-            request.checked_target(
+            let checked = request.checked_target(
                 path.to_owned(),
                 inspect_target_namespace(path).map_err(namespace_error)?,
-            )
+            )?;
+            if self.substitute_target.get() {
+                std::fs::write(path, "appeared after strict inspection").unwrap();
+            }
+            Ok(checked)
         }
     }
     #[test]
@@ -777,5 +790,91 @@ pub(super) mod locks {
                 assert_eq!(std::fs::read(&context.evidence).unwrap(), b"replacement");
             }
         }
+    }
+    #[test]
+    fn invalid_config_validated_revocation_and_stale_handoff_never_mutate_service() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut invalid = super::context(dir.path());
+        invalid.reservations = PathBuf::from("relative/not-a-service");
+        let invalid = Arc::new(invalid);
+        let policy = Policy::new(&invalid);
+        assert!(invalid.lock_evidence(&policy).is_err());
+        assert_eq!(*policy.trace.borrow(), []);
+        // S1 reads do not acquire new mutation-service requirements.
+        assert_eq!(
+            invalid.preferences(&Bound(&invalid)).unwrap(),
+            Preferences::default()
+        );
+        let context = fixture(dir.path());
+        let policy = Policy::new(&context);
+        policy.revoke_validated.set(true);
+        assert!(
+            context
+                .reserve_target(&policy, &dir.path().join("new"), SaveTargetPurpose::NewFile)
+                .is_err()
+        );
+        assert!(!context.reservations.exists());
+        policy.revoke_validated.set(false);
+        policy.substitute_target.set(true);
+        assert!(matches!(
+            context.reserve_target(&policy, &dir.path().join("new"), SaveTargetPurpose::NewFile),
+            Err(crate::Error::Access(AccessError::Denied(
+                Denial::ServiceUnavailable
+            )))
+        ));
+        assert!(!context.reservations.exists());
+        assert_eq!(
+            std::fs::read(dir.path().join("new")).unwrap(),
+            b"appeared after strict inspection"
+        );
+    }
+    #[test]
+    fn returned_guard_retains_configuration_but_requires_fresh_bound_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let (guard, weak) = {
+            let context = fixture(dir.path());
+            let policy = Policy::new(&context);
+            let guard = context
+                .reserve_target(
+                    &policy,
+                    &dir.path().join("target"),
+                    SaveTargetPurpose::NewFile,
+                )
+                .unwrap();
+            (guard, Arc::downgrade(&context))
+        };
+        let retained = weak.upgrade().unwrap();
+        guard.reauthorize(&Policy::new(&retained)).unwrap();
+        let equal_paths = fixture(dir.path());
+        assert!(guard.reauthorize(&Policy::new(&equal_paths)).is_err());
+        drop(retained);
+        drop(guard);
+        assert!(weak.upgrade().is_none());
+    }
+    #[test]
+    fn checked_owner_preserves_open_io_and_post_acquire_denial_releases() {
+        use fs4::fs_std::FileExt;
+        let dir = tempfile::tempdir().unwrap();
+        let context = fixture(dir.path());
+        std::fs::create_dir_all(context.evidence.parent().unwrap()).unwrap();
+        std::fs::write(&context.evidence, "preserve").unwrap();
+        std::fs::set_permissions(&context.evidence, std::fs::Permissions::from_mode(0o0)).unwrap();
+        let policy = Policy::new(&context);
+        let result = context.lock_evidence(&policy);
+        std::fs::set_permissions(&context.evidence, std::fs::Permissions::from_mode(0o600))
+            .unwrap();
+        assert!(
+            matches!(result,Err(crate::Error::Access(AccessError::Io(error))) if error.kind()==std::io::ErrorKind::PermissionDenied && error.raw_os_error().is_some())
+        );
+        assert_eq!(std::fs::read(&context.evidence).unwrap(), b"preserve");
+        policy.revoke_held.set(true);
+        assert!(context.lock_evidence(&policy).is_err());
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&context.evidence)
+            .unwrap();
+        assert!(file.try_lock_exclusive().unwrap());
+        assert!(context.evidence.exists());
     }
 }

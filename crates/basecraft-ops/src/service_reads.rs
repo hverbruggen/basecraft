@@ -256,6 +256,12 @@ pub struct CheckedLockNamespace<'a> {
     lock: LockObservation<'a>,
 }
 impl CheckedLockNamespace<'_> {
+    /// The retained resolved target, not a relative spelling reinterpreted under
+    /// a different policy root during guard reauthorization.
+    pub fn target(&self) -> Option<(&Path, ResourceAction)> {
+        self.target
+            .map(|target| (target.path.as_path(), target.purpose.action()))
+    }
     fn recheck(&self) -> crate::access::Result<()> {
         if let Some(target) = self.target {
             target.namespace.recheck().map_err(namespace_error)?;
@@ -300,6 +306,7 @@ impl ServiceRequest<'_> {
     pub fn permits_lock(&self, context: &ServiceContext, phase: &ServicePhase<'_>) -> bool {
         if !std::ptr::eq(self.context, context)
             || !namespace_lock_supported()
+            || !self.context.lock_locations_supported()
             || !matches!(
                 (self.action, self.target),
                 (ServiceAction::LockAnalysisEvidence, None)
@@ -495,6 +502,21 @@ pub(crate) fn acquire_lock(
 // policy yet. Arc retains immutable configuration, never an authorization ticket.
 pub use crate::save_guard::Reservation;
 impl ServiceContext {
+    // Pure finite service-configuration shape check. The lower namespace walker
+    // still owns all structural/ownership checks; this does no path resolution.
+    fn lock_locations_supported(&self) -> bool {
+        [&self.evidence, &self.reservations].iter().all(|path| {
+            let bytes = path.as_os_str().as_encoded_bytes();
+            bytes.starts_with(b"/")
+                && !bytes.starts_with(b"//")
+                && !bytes.ends_with(b"/")
+                && !bytes.contains(&0)
+                && !bytes
+                    .split(|byte| *byte == b'/')
+                    .skip(1)
+                    .any(|part| part.is_empty() || part == b"." || part == b"..")
+        })
+    }
     pub fn reserve_target(
         self: &Arc<Self>,
         access: &dyn Access,
