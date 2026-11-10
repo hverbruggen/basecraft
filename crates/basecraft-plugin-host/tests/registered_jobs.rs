@@ -1312,10 +1312,9 @@ fn equal_content_retention_keeps_exact_primary_owner_and_leaf_lifecycles() {
                         .unwrap(),
                     original
                 );
-                assert!(
-                    basecraft_ops::provenance::verify(&temp.path().join("report.json"))
-                        .unwrap()
-                        .is_empty()
+                assert_eq!(
+                    basecraft_ops::provenance::verify(&temp.path().join("report.json")).unwrap(),
+                    Vec::<String>::new()
                 );
                 drop(jobs);
                 // Direct leaf lifecycle decisions must not rewrite a distinct
