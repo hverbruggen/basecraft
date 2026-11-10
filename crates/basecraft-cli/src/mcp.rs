@@ -49,18 +49,23 @@ fn text<'a>(args: &'a Value, name: &str) -> Result<&'a str> {
 }
 
 impl Server {
-    fn path(&self, path: &str) -> Result<PathBuf> {
+    fn path(&self, path: &str) -> basecraft_ops::Result<PathBuf> {
         let path = self.session.root().join(path);
-        let resolved = if path.exists() {
+        let resolved = if path.try_exists()? {
             path.canonicalize()?
         } else {
             path.parent()
-                .ok_or("Missing parent")?
+                .ok_or_else(|| basecraft_ops::Error::Invalid("Missing parent".into()))?
                 .canonicalize()?
-                .join(path.file_name().ok_or("Missing filename")?)
+                .join(
+                    path.file_name()
+                        .ok_or_else(|| basecraft_ops::Error::Invalid("Missing filename".into()))?,
+                )
         };
         if !resolved.starts_with(self.session.root()) {
-            return Err("Path lies outside the configured project".into());
+            return Err(basecraft_ops::Error::Invalid(
+                "Path lies outside the configured project".into(),
+            ));
         }
         Ok(resolved)
     }
@@ -263,7 +268,7 @@ impl Server {
                 let paths = paths
                     .iter()
                     .map(|path| self.path(path))
-                    .collect::<Result<Vec<_>>>()?;
+                    .collect::<basecraft_ops::Result<Vec<_>>>()?;
                 if name == "delimitation_candidates" {
                     return Ok(serde_json::to_value(
                         basecraft_ops::delimitation::combine_candidates(&paths)?,
@@ -336,7 +341,6 @@ impl Server {
                             basecraft_ops::Error::Invalid("path must be a string".into())
                         })?;
                         self.path(p)
-                            .map_err(|e| basecraft_ops::Error::Invalid(e.to_string()))
                     })
                     .transpose()?;
                 if name == "save_check" {
