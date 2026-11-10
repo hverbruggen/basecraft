@@ -1017,7 +1017,6 @@ impl qobject::GenomeController {
     }
 
     pub fn open_file(mut self: Pin<&mut Self>, path: &QString) -> bool {
-        let access_thread = self.qt_thread();
         if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
             crate::bridge::checked_document!(sync self, session.doc(doc));
         }
@@ -1037,7 +1036,7 @@ impl qobject::GenomeController {
         match session.open(&path) {
             Ok(doc) => {
                 let (name, len, circular) = {
-                    let d = crate::bridge::checked_document!(access_thread, session.doc(doc));
+                    let d = crate::bridge::checked_document!(sync self, session.doc(doc));
                     (d.name.clone(), d.len(), d.circular)
                 };
                 {
@@ -1047,8 +1046,7 @@ impl qobject::GenomeController {
                     // the other views are a switch away.
                     let _ = (circular, len);
                     r.view.mode = Mode::Wrapped;
-                    r.view.fit_doc(crate::bridge::checked_document!(
-                        access_thread,
+                    r.view.fit_doc(crate::bridge::checked_document!(sync self,
                         session.doc(doc)
                     ));
                     r.session = Some(session);
