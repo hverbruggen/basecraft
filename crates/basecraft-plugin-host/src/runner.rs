@@ -707,20 +707,27 @@ impl PreparedOperation {
             std::fs::create_dir_all(&directory)?;
             directory.join("operation")
         };
+        // Freeze/serialize before locking. Publication rechecks each exact original
+        // hash and keeps ownership, exemptions and primary links under one guard.
+        let sequence_payload = sequence
+            .as_ref()
+            .map(|target| target.snapshot.payload())
+            .transpose()?;
+        let mutation = input_evidence::Mutation::begin()?;
         let run = ArtifactRun::create(&anchor, &run_id)?;
         let mut ledger_inputs = Vec::new();
         let mut upstream = Vec::new();
         let mut first_input = None;
         let mut evidence: BTreeMap<String, Vec<InvocationInputEvidence>> = BTreeMap::new();
         for (source, original_hash, submitted_hash, transformation, frozen) in sources {
-            let ledger = input_evidence::reference_input_with_dependencies(
+            let ledger = mutation.reference_input_with_dependencies(
                 &anchor,
                 &source,
                 &original_hash,
                 &[],
                 &format!("Input for {}", operation.id),
             )?;
-            let mut record = input_evidence::read_input(ledger.directory())?;
+            let mut record = mutation.read_input(ledger.directory())?;
             record.extra.insert(
                 "analysis_run".into(),
                 json!(input_evidence::relative(
@@ -739,7 +746,7 @@ impl PreparedOperation {
                     .extra
                     .insert(input_evidence::PROPOSAL_TARGET.into(), json!(true));
             }
-            input_evidence::write_json(&ledger.artifact("input.json")?, &record)?;
+            mutation.write_input(ledger.directory(), &record)?;
             if let Some(role) = frozen_inputs
                 .iter()
                 .find(|(_, paths)| paths.contains(&frozen.display().to_string()))
@@ -784,7 +791,7 @@ impl PreparedOperation {
         // contributing original also owns its own normal reference ledger.
         if let Some(mut input) = first_input {
             input.extra.insert("upstream".into(), json!(upstream));
-            input_evidence::write_json(&run.artifact("input.json")?, &input)?;
+            mutation.write_input(run.directory(), &input)?;
             // The save guard names a registered run by its run.json and treats a
             // missing one as damage, as for every other registered run. A run
             // without exports is named by its operation.
@@ -795,14 +802,13 @@ impl PreparedOperation {
                 &run.artifact("run.json")?,
                 &json!({"schema_version":1,"id":run.id(),"result":result,"status":"prepared"}),
             )?;
-            let _guard = input_evidence::lock()?;
-            input_evidence::register(&run)?;
+            mutation.register(&run)?;
         }
         for (name, inputs) in &generated {
             for input in inputs {
                 let mut dependencies = sources_from_upstream(run.directory())?;
                 dependencies.extend(input.dependencies.iter().cloned());
-                input_evidence::link_generated_input(
+                mutation.link_generated_input(
                     &run,
                     &dependencies,
                     &input.bytes,
@@ -838,25 +844,27 @@ impl PreparedOperation {
             }
         }
         if let Some(target) = &sequence {
-            let payload = target.snapshot.payload()?;
+            let payload = sequence_payload
+                .as_deref()
+                .ok_or_else(|| Error::Protocol("missing sequence snapshot".into()))?;
             let mut dependencies = sources_from_upstream(run.directory())?;
             dependencies.extend(target.dependencies.iter().cloned());
-            input_evidence::link_generated_input(
+            mutation.link_generated_input(
                 &run,
                 &dependencies,
-                &payload,
+                payload,
                 "sequence-arrow-buffers-v1",
                 "Sequence operation snapshot",
             )?;
             let name = "snapshot.arrow-pair";
             basecraft_io::write_atomic(&run.artifact(name)?, |w| {
-                std::io::Write::write_all(w, &payload)
+                std::io::Write::write_all(w, payload)
             })
             .map_err(basecraft_ops::Error::from)?;
             ledger_inputs.push(ArtifactRevision {
                 id: format!("{}:snapshot", run.id()),
                 logical_name: name.into(),
-                hash: basecraft_io::hash_bytes(&payload),
+                hash: basecraft_io::hash_bytes(payload),
                 size: payload.len() as u64,
                 retained: Some(name.into()),
                 reference: None,
@@ -868,7 +876,7 @@ impl PreparedOperation {
             basecraft_io::write_atomic(&path, |w| std::io::Write::write_all(w, &payload))
                 .map_err(basecraft_ops::Error::from)?;
             let dependencies = sources_from_upstream(run.directory())?;
-            input_evidence::link_generated_input(
+            mutation.link_generated_input(
                 &run,
                 &dependencies,
                 &payload,
@@ -885,6 +893,7 @@ impl PreparedOperation {
             });
             frozen_inputs.insert("queries".into(), vec![path.display().to_string()]);
         }
+        drop(mutation);
         let mut outputs = BTreeMap::new();
         for (name, binding) in &operation.descriptor.outputs {
             let path = if operation.descriptor.host_workflow.is_some() {
@@ -1039,7 +1048,7 @@ impl PreparedOperation {
 
     /// Inherit a workflow stage's original ledgers, avoiding a parent/child cycle.
     pub(crate) fn inherit_input_ancestry(&self, parent: &Path) -> Result<()> {
-        let _guard = input_evidence::lock()?;
+        let mutation = input_evidence::Mutation::begin()?;
         let dependencies = sources_from_upstream(parent)?;
         let mut ledgers = BTreeSet::from([self.run.directory().to_path_buf()]);
         ledgers.extend(
@@ -1050,7 +1059,7 @@ impl PreparedOperation {
                 .map(|input| PathBuf::from(&input.run_directory)),
         );
         for directory in ledgers {
-            let mut input = input_evidence::read_input(&directory)?;
+            let mut input = mutation.read_input(&directory)?;
             input.extra.insert(
                 "analysis_run".into(),
                 json!(input_evidence::relative(&directory, parent)?),
@@ -1070,7 +1079,7 @@ impl PreparedOperation {
                         "id":publication.id,"hash":basecraft_io::hash_bytes(&bytes)}));
                 }
             }
-            input_evidence::write_json(&directory.join("input.json"), &input)?;
+            mutation.write_input(&directory, &input)?;
         }
         Ok(())
     }

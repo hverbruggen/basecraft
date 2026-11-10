@@ -19,10 +19,68 @@ pub fn reference_input_with_dependencies(
     dependencies: &[PathBuf],
     origin: &str,
 ) -> Result<ArtifactRun> {
+    Mutation::begin()?.reference_input_with_dependencies(anchor, source, hash, dependencies, origin)
+}
+
+/// One cooperating evidence mutation boundary. Keep this value alive through
+/// related ledger/ownership writes; never call a locking wrapper while held.
+/// Files remain separate atomic writes: failure may leave conservative partial
+/// evidence, and dropping this guard does not roll those writes back.
+pub struct Mutation {
+    _lock: std::fs::File,
+}
+
+impl Mutation {
+    pub fn begin() -> Result<Self> {
+        Ok(Self { _lock: lock()? })
+    }
+
+    pub fn read_input(&self, directory: &Path) -> Result<SubmittedInput> {
+        read_input(directory)
+    }
+
+    pub fn write_input(&self, directory: &Path, input: &SubmittedInput) -> Result<()> {
+        write_json(&directory.join("input.json"), input)
+    }
+
+    pub fn register(&self, run: &ArtifactRun) -> Result<()> {
+        register(run)
+    }
+
+    pub fn link_generated_input(
+        &self,
+        run: &ArtifactRun,
+        dependencies: &[PathBuf],
+        payload: &[u8],
+        transformation: &str,
+        result_label: &str,
+    ) -> Result<()> {
+        link_generated_input_locked(run, dependencies, payload, transformation, result_label)
+    }
+
+    /// Recheck the caller's frozen original hash under the held evidence lock.
+    pub fn reference_input_with_dependencies(
+        &self,
+        anchor: &Path,
+        source: &Path,
+        hash: &str,
+        dependencies: &[PathBuf],
+        origin: &str,
+    ) -> Result<ArtifactRun> {
+        reference_input_locked(anchor, source, hash, dependencies, origin)
+    }
+}
+
+fn reference_input_locked(
+    anchor: &Path,
+    source: &Path,
+    hash: &str,
+    dependencies: &[PathBuf],
+    origin: &str,
+) -> Result<ArtifactRun> {
     use basecraft_protocol::provenance::{
         ArtifactRevision, Completeness, InputReference, Publication,
     };
-    let _lock = crate::input_evidence::lock()?;
     let run =
         crate::analysis_store::ArtifactRun::create(anchor, &ulid::Ulid::generate().to_string())?;
     let source = source.canonicalize()?;
@@ -1644,8 +1702,13 @@ pub fn link_generated_input(
     transformation: &str,
     result_label: &str,
 ) -> Result<()> {
-    let _lock = lock()?;
-    link_generated_input_locked(run, dependencies, payload, transformation, result_label)
+    Mutation::begin()?.link_generated_input(
+        run,
+        dependencies,
+        payload,
+        transformation,
+        result_label,
+    )
 }
 
 /// Same publication while the caller already holds the evidence lock through a save.
