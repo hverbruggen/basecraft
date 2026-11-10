@@ -249,3 +249,224 @@ fn destination_competitors_and_replaced_parent_fail_closed() {
     assert!(attempt.publish().is_err());
     assert!(!parent.join("out").exists());
 }
+
+fn reference(anchor: &Path, source: &Path) -> basecraft_ops::analysis_store::ArtifactRun {
+    std::fs::create_dir_all(anchor.parent().unwrap()).unwrap();
+    basecraft_ops::input_evidence::reference_input_with_dependencies(
+        anchor,
+        source,
+        &basecraft_io::hash_file(source).unwrap(),
+        &[],
+        "recovery test",
+    )
+    .unwrap()
+}
+
+#[test]
+fn stage_and_final_policies_validate_all_groups_before_any_mutation() {
+    let Some(root) =
+        isolated_profile::enter("stage_and_final_policies_validate_all_groups_before_any_mutation")
+    else {
+        return;
+    };
+    let session = source(&root, 1);
+    let destination = root.join("recovered");
+    std::fs::create_dir(&destination).unwrap();
+    let final_file = destination.join("0.fasta");
+    std::fs::write(&final_file, b">old\nAAAA\n").unwrap();
+    let final_run = reference(&root.join("final-analysis/result"), &final_file);
+    std::fs::remove_file(&final_file).unwrap();
+    std::fs::remove_dir(&destination).unwrap();
+    let mut attempt =
+        replay::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
+            .unwrap();
+    let stage_file = attempt.check(0).unwrap().target().to_path_buf();
+    let stage_run = reference(&root.join("stage-analysis/result"), &stage_file);
+    let original = std::fs::read(stage_run.directory().join("input.json")).unwrap();
+    let check = attempt.check(0).unwrap();
+    let groups: Vec<_> = check.evidence_groups().collect();
+    assert_eq!(groups.len(), 2);
+    assert!(
+        groups[0]
+            .conflict
+            .options
+            .contains(&SavePolicy::PreserveCopy)
+    );
+    assert!(
+        !groups[1]
+            .conflict
+            .options
+            .contains(&SavePolicy::PreserveCopy)
+    );
+    assert_ne!(
+        groups[0].conflict.analyses[0].run,
+        groups[1].conflict.analyses[0].run
+    );
+    assert!(matches!(
+        attempt.advance(0, Some(check.decide(SavePolicy::Cancel, true))),
+        Err(Error::EvidenceConflict(_))
+    ));
+    let check = attempt.check(0).unwrap();
+    assert!(
+        attempt
+            .advance(0, Some(check.decide(SavePolicy::PreserveCopy, true)))
+            .is_err()
+    );
+    assert_eq!(
+        std::fs::read(stage_run.directory().join("input.json")).unwrap(),
+        original
+    );
+    assert!(!stage_run.directory().join("preserved-input").exists());
+    assert!(attempt.evidence_actions().unwrap().is_empty());
+    let check = attempt.check(0).unwrap();
+    attempt
+        .advance(0, Some(check.decide(SavePolicy::BreakEvidence, false)))
+        .unwrap();
+    let completed = attempt.publish().unwrap();
+    assert_eq!(completed.evidence_actions.len(), 2);
+    assert!(
+        completed
+            .evidence_actions
+            .iter()
+            .all(|action| action.completed)
+    );
+    for run in [stage_run, final_run] {
+        assert_eq!(
+            basecraft_ops::input_evidence::read_input(run.directory())
+                .unwrap()
+                .state,
+            "broken"
+        );
+    }
+}
+
+#[test]
+fn nested_delimitation_registers_only_final_stores_and_reopens() {
+    let Some(root) =
+        isolated_profile::enter("nested_delimitation_registers_only_final_stores_and_reopens")
+    else {
+        return;
+    };
+    let original = root.join("source");
+    std::fs::create_dir_all(original.join("nested")).unwrap();
+    let mut source = Session::recoverable(&original).unwrap();
+    for name in ["a.spart", "nested/b.spart.xml"] {
+        let path = original.join(name);
+        // Use the existing exchange writers for each supported encoding.
+        let mut work = basecraft_io::spart::parse_text(include_str!(
+            "../../../testdata/fixtures/delimitation/manual.spart"
+        ))
+        .unwrap();
+        work.exchange_fields
+            .insert("retained-unknown".into(), "keep".into());
+        basecraft_io::write_atomic(&path, |w| {
+            basecraft_ops::files::write_delimitation(&work, name.ends_with("xml"), w)
+        })
+        .unwrap();
+        let doc = source.open(&path).unwrap();
+        source
+            .apply(
+                doc,
+                Op::DelimitationEdit {
+                    edit: Box::new(basecraft_protocol::delimitation::DelimitationEdit::Remove {
+                        hypotheses: ["partition-3".into()].into(),
+                    }),
+                },
+            )
+            .unwrap();
+    }
+    source.flush().unwrap();
+    let destination = root.join("final");
+    let mut attempt =
+        replay::prepare_recovery(source.recovery_root(), &destination, RecoveryMode::Strict)
+            .unwrap();
+    let stage = attempt
+        .check(0)
+        .unwrap()
+        .target()
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    attempt.advance(0, None).unwrap();
+    attempt.advance(1, None).unwrap();
+    assert!(!registry().exists());
+    // A second owned store can alter the earlier evidence inventory. Refresh
+    // only the requested finalization check; never run the writers a second time.
+    let complete = loop {
+        match attempt.publish() {
+            Ok(done) => break done,
+            Err(error) => {
+                let check = required(error);
+                let document = attempt.document_for_check(&check).unwrap();
+                attempt
+                    .advance(document, Some(check.decide(SavePolicy::Cancel, false)))
+                    .unwrap();
+            }
+        }
+    };
+    assert_eq!(complete.registered_stores.len(), 2);
+    let registered = std::fs::read_to_string(registry()).unwrap();
+    assert!(!registered.contains(stage.to_str().unwrap()));
+    assert!(!stage.exists());
+    for file in complete.outputs {
+        let work = basecraft_ops::files::load_delimitation(&file).unwrap();
+        assert_eq!(work.hypotheses.len(), 2);
+        assert_eq!(work.exchange_fields["retained-unknown"], "keep");
+        let side = basecraft_ops::files::tree_sidecar(&file);
+        let value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(side).unwrap()).unwrap();
+        assert_eq!(value["path_base"], file.parent().unwrap().to_str().unwrap());
+        assert!(
+            basecraft_ops::analysis_store::ArtifactRun::for_result(&file)
+                .unwrap()
+                .is_some()
+        );
+    }
+}
+
+#[test]
+fn damaged_journal_requires_explicit_prefix_and_preserves_bytes() {
+    use std::io::Write;
+    let Some(root) =
+        isolated_profile::enter("damaged_journal_requires_explicit_prefix_and_preserves_bytes")
+    else {
+        return;
+    };
+    let session = source(&root, 1);
+    let host = std::fs::read_dir(basecraft_ops::log::log_dir(session.recovery_root()))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let journal = std::fs::read_dir(host)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&journal)
+        .unwrap()
+        .write_all(b"{torn")
+        .unwrap();
+    let bytes = std::fs::read(&journal).unwrap();
+    assert!(replay::recover(session.recovery_root(), &root.join("strict")).is_err());
+    assert!(!root.join("strict").exists());
+    let mut prefix = replay::prepare_recovery(
+        session.recovery_root(),
+        &root.join("prefix"),
+        RecoveryMode::VerifiedPrefix,
+    )
+    .unwrap();
+    assert!(prefix.damage().is_some());
+    prefix.advance(0, None).unwrap();
+    let completed = prefix.publish().unwrap();
+    assert!(completed.damage.is_some());
+    assert_eq!(
+        std::fs::read(&completed.outputs[0]).unwrap(),
+        b">gene\nATGT\n"
+    );
+    assert_eq!(std::fs::read(journal).unwrap(), bytes);
+}

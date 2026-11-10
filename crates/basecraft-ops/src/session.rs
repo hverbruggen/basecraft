@@ -26,7 +26,7 @@ mod creation;
 mod extraction;
 mod proposals;
 mod save_decision;
-pub use save_decision::{SaveCheck, SaveDecision, SaveOutcome, SaveWarning};
+pub use save_decision::{EvidenceAction, SaveCheck, SaveDecision, SaveOutcome, SaveWarning};
 pub mod support_import;
 use crate::{Error, Result};
 
@@ -118,6 +118,7 @@ pub struct Session {
     local_provenance_root: PathBuf,
     tracked: bool,
     write_publication: crate::documents::WritePublication,
+    evidence_actions: Mutex<Vec<save_decision::EvidenceAction>>,
     replay_mode: ReplayMode,
     memory_objects: Mutex<std::collections::HashMap<String, Vec<u8>>>,
     events: Vec<LogEntry>,
@@ -150,6 +151,7 @@ impl Session {
             local_provenance_root: root.join(".basecraft/provenance"),
             tracked: true,
             write_publication: crate::documents::WritePublication::Immediate,
+            evidence_actions: Mutex::new(Vec::new()),
             replay_mode: ReplayMode::Live,
             memory_objects: Mutex::new(std::collections::HashMap::new()),
             events: Vec::new(),
@@ -1064,7 +1066,14 @@ impl Session {
                 if path.is_none() {
                     self.check_save_source(id)?;
                 }
-                fresh.resolve(policy)?;
+                fresh.resolve(
+                    policy,
+                    matches!(
+                        self.write_publication,
+                        crate::documents::WritePublication::Recovery { .. }
+                    )
+                    .then_some(&self.evidence_actions),
+                )?;
                 if !fresh.complete() {
                     warnings.push(SaveWarning::EvidenceNotChecked {
                         issues: fresh.issues(),
@@ -1183,7 +1192,17 @@ impl Session {
             self.write_publication,
             crate::documents::WritePublication::Recovery { .. }
         ) {
-            Some(self.recovery_snapshot(id)?)
+            let mut observed = self.recovery_snapshot(id)?;
+            if target_check
+                .as_ref()
+                .is_some_and(|before| before.issues() != observed.issues())
+                || observed
+                    .evidence_groups()
+                    .any(|group| !group.conflict.analyses.is_empty())
+            {
+                observed.require_final_decision();
+            }
+            Some(observed)
         } else {
             None
         };

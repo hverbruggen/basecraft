@@ -24,7 +24,7 @@ struct SaveScope {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     additional_evidence: Vec<EvidenceCheck>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    publication: Option<PathBuf>,
+    publication: Option<(PathBuf, (u64, u64))>,
     finalization: bool,
     session: String,
     document: usize,
@@ -66,17 +66,21 @@ impl SaveCheck {
         std::iter::once(&self.scope.evidence).chain(&self.scope.additional_evidence)
     }
 
-    pub(super) fn complete(&self) -> bool {
+    pub(crate) fn complete(&self) -> bool {
         self.evidence_groups().all(EvidenceCheck::is_complete)
     }
 
-    pub(super) fn issues(&self) -> Vec<InspectionIssue> {
+    pub(crate) fn issues(&self) -> Vec<InspectionIssue> {
         self.evidence_groups()
             .flat_map(|group| group.issues.clone())
             .collect()
     }
 
-    pub(super) fn resolve(&self, policy: SavePolicy) -> Result<()> {
+    pub(super) fn resolve(
+        &self,
+        policy: SavePolicy,
+        actions: Option<&std::sync::Mutex<Vec<EvidenceAction>>>,
+    ) -> Result<()> {
         // Validate EVERY group before the first durable evidence mutation.
         for group in self.evidence_groups() {
             if group.conflict.analyses.is_empty() {
@@ -94,9 +98,37 @@ impl SaveCheck {
             }
         }
         for group in self.evidence_groups() {
+            if group.conflict.analyses.is_empty() {
+                continue;
+            }
+            let mut actions = actions
+                .map(|actions| {
+                    actions
+                        .lock()
+                        .map_err(|_| invalid("save action state unavailable"))
+                })
+                .transpose()?;
+            if let Some(actions) = &mut actions {
+                actions.push(EvidenceAction {
+                    conflict: group.conflict.clone(),
+                    policy,
+                    completed: false,
+                });
+            }
             crate::input_evidence::resolve(&group.conflict, policy)?;
+            if let Some(actions) = &mut actions
+                && let Some(action) = actions.last_mut()
+            {
+                action.completed = true;
+            }
         }
         Ok(())
+    }
+
+    /// A post-write observation may describe newly discovered issues. It must
+    /// force finalization consent, never grant authority from that observation.
+    pub(super) fn require_final_decision(&mut self) {
+        self.scope_revision.clear();
     }
 
     pub(super) fn same_scope(&self, other: &Self) -> bool {
@@ -229,11 +261,18 @@ impl Session {
         let target_revision = target_revision(&target)?;
         let publication = match &self.write_publication {
             crate::documents::WritePublication::Immediate => None,
-            context => Some(context.logical(&target)?),
+            crate::documents::WritePublication::Recovery { destination, .. } => Some((
+                self.write_publication.logical(&target)?,
+                crate::replay::directory_identity(
+                    destination
+                        .parent()
+                        .ok_or_else(|| invalid("recovery parent missing"))?,
+                )?,
+            )),
         };
         let additional_evidence = publication
             .as_ref()
-            .map(|target| crate::input_evidence::check(target))
+            .map(|(target, _)| crate::input_evidence::check(target))
             .transpose()?
             .into_iter()
             .collect();
@@ -354,7 +393,7 @@ impl Session {
                     self.publish_save_check(id, fresh)?,
                 )));
             }
-            fresh.resolve(decision.known)?;
+            fresh.resolve(decision.known, Some(&self.evidence_actions))?;
             self.recovery_snapshot(id)
         } else if fresh.same_scope(expected) {
             Ok(fresh)
@@ -379,5 +418,27 @@ impl Session {
 impl Session {
     pub(crate) fn save_recovery(&mut self, id: DocId) -> Result<SaveOutcome> {
         self.save_attempt(id, None, SavePolicy::Cancel, true, false, None)
+    }
+}
+
+/// Known-evidence writes are separate effects. An incomplete action may have
+/// modified some backing ledgers before failure; it is never a rollback claim.
+#[derive(Clone, Debug, Serialize)]
+pub struct EvidenceAction {
+    pub conflict: crate::input_evidence::EvidenceConflict,
+    pub policy: SavePolicy,
+    pub completed: bool,
+}
+
+impl Session {
+    pub(crate) fn recovery_actions(&self) -> Result<Vec<EvidenceAction>> {
+        Ok(self
+            .evidence_actions
+            .lock()
+            .map_err(|_| invalid("save action state unavailable"))?
+            .clone())
+    }
+    pub(crate) fn discard_recovery_decision(&self, decision: &SaveDecision) -> Result<()> {
+        self.consume_save_check(decision).map(|_| ())
     }
 }

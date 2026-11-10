@@ -444,6 +444,12 @@ fn recover_entries(
         warnings: Vec::new(),
         damage,
         published: false,
+        #[cfg(test)]
+        before_sync: None,
+        #[cfg(test)]
+        before_promote: None,
+        #[cfg(test)]
+        after_promote: None,
     })
 }
 
@@ -460,7 +466,16 @@ pub struct RecoveryAttempt {
     warnings: Vec<crate::session::SaveWarning>,
     damage: Option<String>,
     published: bool,
+    #[cfg(test)]
+    before_sync: Option<PublicationBarrier>,
+    #[cfg(test)]
+    before_promote: Option<PublicationBarrier>,
+    #[cfg(test)]
+    after_promote: Option<PublicationBarrier>,
 }
+
+#[cfg(test)]
+type PublicationBarrier = Box<dyn FnOnce(&Path)>;
 
 struct RecoveryDocument {
     relative: String,
@@ -476,6 +491,7 @@ pub struct RecoveryCompletion {
     pub warnings: Vec<crate::session::SaveWarning>,
     pub damage: Option<String>,
     pub registered_stores: Vec<PathBuf>,
+    pub evidence_actions: Vec<crate::session::EvidenceAction>,
 }
 
 /// Rename completed, but a later independent sync/registration did not. The
@@ -495,7 +511,7 @@ struct ArtifactObservation {
     revision: Option<(String, basecraft_protocol::provenance::FileStamp)>,
 }
 
-fn directory_identity(path: &Path) -> Result<(u64, u64)> {
+pub(crate) fn directory_identity(path: &Path) -> Result<(u64, u64)> {
     let metadata = std::fs::symlink_metadata(path)?;
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
         return Err(crate::error::invalid(
@@ -570,6 +586,14 @@ impl RecoveryAttempt {
     pub fn warnings(&self) -> &[crate::session::SaveWarning] {
         &self.warnings
     }
+    pub fn evidence_actions(&self) -> Result<Vec<crate::session::EvidenceAction>> {
+        self.session.recovery_actions()
+    }
+    pub fn document_for_check(&self, check: &crate::session::SaveCheck) -> Option<usize> {
+        self.documents
+            .iter()
+            .position(|doc| doc.id.0 == check.document())
+    }
     pub fn cancel(self) {
         drop(self);
     }
@@ -624,8 +648,15 @@ impl RecoveryAttempt {
     ) -> Result<crate::session::SaveDecision> {
         self.validate()?;
         let doc = self.document(document)?;
-        self.session
+        match self
+            .session
             .decide_save(doc.id, None, token, known, acknowledge_incomplete)
+        {
+            Err(crate::Error::SaveDecisionStale(_)) => Err(crate::Error::SaveDecisionStale(
+                Box::new(self.session.recovery_check(doc.id, doc.saved.is_some())?),
+            )),
+            other => other,
+        }
     }
 
     /// Stage one document, or reauthorize its finalization if already saved.
@@ -635,10 +666,27 @@ impl RecoveryAttempt {
         document: usize,
         decision: Option<crate::session::SaveDecision>,
     ) -> Result<()> {
-        self.validate()?;
+        if let Err(error) = self
+            .validate()
+            .and_then(|_| self.document(document).map(|_| ()))
+        {
+            if let Some(decision) = &decision {
+                self.session.discard_recovery_decision(decision)?;
+            }
+            return Err(error);
+        }
         let doc = self.document(document)?;
         let id = doc.id;
-        let _target = crate::save_guard::lock(&self.destination)?;
+        let _target = match crate::save_guard::lock(&self.destination) {
+            Ok(lock) => lock,
+            Err(error) => {
+                if let Some(decision) = &decision {
+                    self.session.discard_recovery_decision(decision)?;
+                }
+                return Err(error);
+            }
+        };
+        let finalizing = doc.saved.is_some();
         let observed = if let Some(expected) = &doc.saved {
             let _evidence = crate::input_evidence::Mutation::begin()?;
             self.session.recovery_finalize(id, expected, decision)?
@@ -670,6 +718,12 @@ impl RecoveryAttempt {
                 .recovery_observation
                 .ok_or_else(|| crate::error::invalid("recovery write observation missing"))?
         };
+        if finalizing && !observed.complete() {
+            self.warnings
+                .push(crate::session::SaveWarning::EvidenceNotChecked {
+                    issues: observed.issues(),
+                });
+        }
         self.documents[document].saved = Some(observed);
         self.artifacts = artifacts(
             self.staging
@@ -702,6 +756,11 @@ impl RecoveryAttempt {
         }
         let stage = self.validate()?.to_path_buf();
         let stores = self.session.recovery_stores()?;
+        let evidence_actions = self.session.recovery_actions()?;
+        #[cfg(test)]
+        if let Some(barrier) = self.before_sync.take() {
+            barrier(&stage);
+        }
         for artifact in self.artifacts.iter().rev() {
             let path = stage.join(&artifact.path);
             if artifact.revision.is_some() {
@@ -711,12 +770,20 @@ impl RecoveryAttempt {
             }
         }
         self.validate()?;
+        #[cfg(test)]
+        if let Some(barrier) = self.before_promote.take() {
+            barrier(&self.destination);
+        }
         basecraft_platform::atomic::rename_noreplace(&stage, &self.destination)?;
         // Disarm immediately: post-promotion errors must never imply rollback.
         if let Some(staging) = self.staging.take() {
             let _ = staging.keep();
         }
         self.published = true;
+        #[cfg(test)]
+        if let Some(barrier) = self.after_promote.take() {
+            barrier(&self.destination);
+        }
         let mut completion = RecoveryCompletion {
             destination: self.destination.clone(),
             outputs: self
@@ -727,6 +794,7 @@ impl RecoveryAttempt {
             warnings: self.warnings.clone(),
             damage: self.damage.clone(),
             registered_stores: Vec::new(),
+            evidence_actions,
         };
         let finish = (|| -> Result<()> {
             basecraft_platform::files::sync_directory(
@@ -753,8 +821,149 @@ impl RecoveryAttempt {
 }
 
 #[cfg(test)]
+#[path = "../tests/support/isolated_profile.rs"]
+mod isolated_recovery_profile;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    fn prepared(root: &Path, spart: bool) -> (Session, RecoveryAttempt) {
+        let source = root.join("source");
+        std::fs::create_dir_all(&source).unwrap();
+        let path = source.join(if spart { "a.spart" } else { "a.fasta" });
+        let bytes = if spart {
+            include_str!("../../../testdata/fixtures/delimitation/manual.spart")
+        } else {
+            ">gene\nACGT\n"
+        };
+        std::fs::write(&path, bytes).unwrap();
+        let mut session = Session::recoverable(&source).unwrap();
+        let doc = session.open(&path).unwrap();
+        let op = if spart {
+            Op::DelimitationEdit {
+                edit: Box::new(basecraft_protocol::delimitation::DelimitationEdit::Remove {
+                    hypotheses: ["partition-3".into()].into(),
+                }),
+            }
+        } else {
+            Op::SeqReplace {
+                start: 1,
+                end: 2,
+                residues: "T".into(),
+            }
+        };
+        session.apply(doc, op).unwrap();
+        session.flush().unwrap();
+        let mut attempt = prepare_recovery(
+            session.recovery_root(),
+            &root.join("final"),
+            RecoveryMode::Strict,
+        )
+        .unwrap();
+        attempt.advance(0, None).unwrap();
+        (session, attempt)
+    }
+
+    #[test]
+    fn final_noreplace_barrier_preserves_competitors() {
+        let Some(root) = isolated_recovery_profile::enter(
+            "replay::tests::final_noreplace_barrier_preserves_competitors",
+        ) else {
+            return;
+        };
+        for kind in 0..4 {
+            let case = root.join(kind.to_string());
+            std::fs::create_dir(&case).unwrap();
+            let (_session, mut attempt) = prepared(&case, false);
+            attempt.before_promote = Some(Box::new(move |destination| match kind {
+                0 => std::fs::write(destination, "competitor").unwrap(),
+                1 => std::fs::create_dir(destination).unwrap(),
+                2 => {
+                    std::fs::create_dir(destination).unwrap();
+                    std::fs::write(destination.join("owned"), "competitor").unwrap();
+                }
+                _ => {
+                    #[cfg(unix)]
+                    std::os::unix::fs::symlink("missing", destination).unwrap();
+                }
+            }));
+            assert!(matches!(attempt.publish(), Err(crate::Error::Io(_))));
+            assert!(!attempt.published);
+            assert!(std::fs::symlink_metadata(case.join("final")).is_ok());
+        }
+    }
+
+    #[test]
+    fn post_promotion_registration_failure_retains_final_files() {
+        let Some(root) = isolated_recovery_profile::enter(
+            "replay::tests::post_promotion_registration_failure_retains_final_files",
+        ) else {
+            return;
+        };
+        let (_session, mut attempt) = prepared(&root, true);
+        let registry = basecraft_platform::paths::AppPaths::discover()
+            .unwrap()
+            .state
+            .join("analysis-stores.json");
+        assert!(!registry.exists());
+        attempt.after_promote = Some(Box::new(move |_| {
+            std::fs::create_dir(&registry).unwrap();
+        }));
+        let crate::Error::PublishedWithFailure(failure) = attempt.publish().unwrap_err() else {
+            panic!("expected published failure")
+        };
+        assert!(matches!(failure.cause, crate::Error::Io(_)));
+        assert!(failure.completion.registered_stores.is_empty());
+        assert_eq!(failure.completion.outputs.len(), 1);
+        drop(attempt);
+        let work = crate::files::load_delimitation(&failure.completion.outputs[0]).unwrap();
+        assert_eq!(work.hypotheses.len(), 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sync_permission_failures_distinguish_before_and_after_promotion() {
+        use std::os::unix::fs::PermissionsExt;
+        let Some(root) = isolated_recovery_profile::enter(
+            "replay::tests::sync_permission_failures_distinguish_before_and_after_promotion",
+        ) else {
+            return;
+        };
+        let pre = root.join("pre");
+        std::fs::create_dir(&pre).unwrap();
+        let (_session, mut attempt) = prepared(&pre, false);
+        let file = attempt.check(0).unwrap().target().to_path_buf();
+        attempt.before_sync = Some(Box::new(|stage| {
+            std::fs::set_permissions(stage.join("a.fasta"), std::fs::Permissions::from_mode(0))
+                .unwrap()
+        }));
+        assert!(matches!(attempt.publish(), Err(crate::Error::Io(_))));
+        assert!(!pre.join("final").exists());
+        std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        drop(attempt);
+        let post = root.join("post");
+        std::fs::create_dir(&post).unwrap();
+        let (_session, mut attempt) = prepared(&post, false);
+        attempt.after_promote = Some(Box::new(|destination| {
+            std::fs::set_permissions(
+                destination.parent().unwrap(),
+                std::fs::Permissions::from_mode(0),
+            )
+            .unwrap()
+        }));
+        let failure = attempt.publish().unwrap_err();
+        std::fs::set_permissions(&post, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let crate::Error::PublishedWithFailure(failure) = failure else {
+            panic!("expected published failure")
+        };
+        assert!(matches!(failure.cause, crate::Error::Io(_)));
+        drop(attempt);
+        assert_eq!(
+            std::fs::read(&failure.completion.outputs[0]).unwrap(),
+            b">gene\nATGT\n"
+        );
+    }
 
     #[test]
     fn materialise_replaces_aliases_and_different_baselines_without_touching_sources() {
@@ -888,7 +1097,8 @@ mod tests {
                 recover_entries(
                     root.path(),
                     &destination,
-                    vec![baseline.clone(), attempt, edit.clone()]
+                    vec![baseline.clone(), attempt, edit.clone()],
+                    None
                 )
                 .is_err()
             );
