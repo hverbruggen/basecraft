@@ -2,7 +2,9 @@ use super::*;
 use basecraft_ops::access::{ServiceAction, TrustedLegacy};
 
 fn denied_as(result: basecraft_ops::access::Result<PathBuf>, expected: Denial) {
-    assert!(matches!(result, Err(AccessError::Denied(reason)) if reason == expected));
+    assert!(
+        matches!(result.expect_err("expected denial"), AccessError::Denied(reason) if reason == expected)
+    );
 }
 
 #[test]
@@ -347,7 +349,7 @@ fn strict_denied(
     expected: Denial,
 ) {
     assert!(
-        matches!(result, Err(StrictResourceError::Access(AccessError::Denied(reason))) if reason == expected)
+        matches!(result.expect_err("expected denial"), StrictResourceError::Access(AccessError::Denied(reason)) if reason == expected)
     );
 }
 

@@ -583,11 +583,13 @@ fn resource_leaf(
             return Err(AccessError::DestinationExists);
         }
     } else if let Some((file, directory)) = kind {
-        if !file && !directory
-            || matches!(
-                action,
-                ResourceAction::ReadFile | ResourceAction::ReplaceFile | ResourceAction::SyncFile
-            ) && !file
+        if !file && !directory {
+            return Err(AccessError::Denied(Denial::ResourceType));
+        }
+        if matches!(
+            action,
+            ResourceAction::ReadFile | ResourceAction::ReplaceFile | ResourceAction::SyncFile
+        ) && !file
             || matches!(
                 action,
                 ResourceAction::ReadDirectory | ResourceAction::SyncDirectory
