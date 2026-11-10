@@ -53,8 +53,8 @@ fn object(session: &Session, bytes: &[u8]) -> PathBuf {
     objects_dir(&session.storage_root)
         .join(basecraft_io::hash_bytes(bytes).trim_start_matches("b3:"))
 }
-fn unchanged(session: &Session, id: DocId, before: &str) {
-    assert_eq!(session.doc(id).unwrap().to_genbank(), before);
+fn unchanged(session: &Session, id: DocId, before: &basecraft_io::genbank::Record) {
+    assert_eq!(&session.doc(id).unwrap().to_genbank(), before);
     let slot = &session.docs[id.0];
     assert!(slot.baseline.is_some());
     assert!(slot.undo.is_empty());
@@ -135,6 +135,9 @@ fn current_source_is_verified_even_with_a_known_object() {
                     );
                 }
                 unchanged(&session, id, &before);
+                if companion || known {
+                    assert_eq!(std::fs::read(object(&session, MAIN)).unwrap(), MAIN);
+                }
                 assert!(!dir.join("recovery.json").exists());
                 assert!(!crate::log::log_dir(&dir).exists());
                 #[cfg(unix)]
@@ -314,21 +317,26 @@ fn retention_modes_and_known_objects_keep_their_read_counts() {
     for mode in 0..5 {
         let dir = root.join(format!("mode-{mode}"));
         let (mut session, id, main) = fixture(&dir);
-        match mode {
-            1 => {
-                session.snapshot_bytes(MAIN).unwrap();
-                session.snapshot_bytes(GFF).unwrap();
-            }
-            2 | 3 => {
-                session.store_objects = false;
-                session.log = None;
-            }
-            4 => {
-                session.tracked = false;
-                session.store_objects = false;
-                session.log = None;
-            }
-            _ => {}
+        if mode == 1 {
+            session.snapshot_bytes(MAIN).unwrap();
+            session.snapshot_bytes(GFF).unwrap();
+        } else if mode >= 2 {
+            session = match mode {
+                2 => Session::detached(&dir),
+                3 => {
+                    let paths = basecraft_platform::paths::AppPaths::from_environment(|key| {
+                        (key == "BASECRAFT_PROFILE_DIR")
+                            .then(|| dir.join("profile").into_os_string())
+                    })
+                    .unwrap();
+                    basecraft_platform::settings::SettingsStore::new(paths.preferences())
+                        .update(basecraft_platform::settings::Change::Recovery(false))
+                        .unwrap();
+                    Session::recoverable_with_paths(&dir, &paths).unwrap()
+                }
+                _ => Session::unlogged(&dir),
+            };
+            assert_eq!(session.open(&main).unwrap(), id);
         }
         #[cfg(feature = "test-counters")]
         basecraft_io::counters::reset();
