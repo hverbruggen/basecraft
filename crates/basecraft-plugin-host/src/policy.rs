@@ -707,11 +707,11 @@ impl SessionServiceAccess<'_> {
         request: &basecraft_ops::service_reads::ServiceRequest<'_>,
         phase: &basecraft_ops::service_reads::ServicePhase<'_>,
     ) -> basecraft_ops::access::Result<()> {
+        use basecraft_ops::service_reads::ServicePhase;
         self.policy.resource_effects(ResourceAction::ReplaceFile)?;
         if !request.permits_lock(self.context, phase) {
             return Err(AccessError::Denied(Denial::ServiceUnavailable));
         }
-        use basecraft_ops::service_reads::ServicePhase;
         let target = match phase {
             ServicePhase::Eligibility => request.target(),
             ServicePhase::LockValidated(ticket)
