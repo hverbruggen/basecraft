@@ -396,3 +396,59 @@ fn gff_capture_preserves_error_and_alignment_contracts() {
         }
     }
 }
+
+#[test]
+fn invalid_main_with_present_gff_keeps_empty_and_parse_errors() {
+    use basecraft_ops::Error;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("invalid.fasta");
+    std::fs::write(files::gff_sidecar(&path), b"##gff-version 3\n").unwrap();
+    for bytes in [
+        b"".as_slice(),
+        b"not FASTA",
+        b">a\nAC\n>b\nGG\n>late\nA C\n",
+    ] {
+        std::fs::write(&path, bytes).unwrap();
+        for error in [
+            files::load(&path).err().unwrap(),
+            Session::new(dir.path()).open(&path).unwrap_err(),
+        ] {
+            if bytes.is_empty() {
+                assert!(matches!(error, Error::Empty(_)));
+            } else {
+                assert!(matches!(
+                    error,
+                    Error::Format(basecraft_io::Error::Parse { .. })
+                ));
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn unreadable_gff_is_not_absent_and_direct_errors_remain_io() {
+    use basecraft_ops::Error;
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("denied.fasta");
+    let sidecar = files::gff_sidecar(&path);
+    std::fs::write(&path, b">a\nACGT\n").unwrap();
+    std::fs::write(&sidecar, b"##gff-version 3\n").unwrap();
+    std::fs::set_permissions(&sidecar, std::fs::Permissions::from_mode(0)).unwrap();
+    // This test intentionally requires an ordinary user, as does validation.
+    assert_eq!(
+        std::fs::read(&sidecar).unwrap_err().kind(),
+        std::io::ErrorKind::PermissionDenied
+    );
+    for error in [
+        files::load(&path).err().unwrap(),
+        files::open(&path).err().unwrap(),
+    ] {
+        assert!(matches!(error, Error::Io(e) if e.kind() == std::io::ErrorKind::PermissionDenied));
+    }
+    assert!(
+        matches!(Session::new(dir.path()).open(&path).unwrap_err(), Error::Format(basecraft_io::Error::Io(e)) if e.kind() == std::io::ErrorKind::PermissionDenied)
+    );
+    std::fs::set_permissions(&sidecar, std::fs::Permissions::from_mode(0o600)).unwrap();
+}

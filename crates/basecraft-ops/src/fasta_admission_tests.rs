@@ -119,3 +119,50 @@ fn persistent_changes_refuse_admission_at_both_boundaries() {
         }
     }
 }
+
+#[test]
+fn capture_hashes_and_writers_use_the_owned_pair() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("records.fasta");
+    let sidecar = files::gff_sidecar(&path);
+    let main = b">a description\nACGT\n>b retained\nTTAA\n";
+    let gff = b"##gff-version 3\na\t.\tgene\t1\t3\t.\t+\t.\tID=gene1;Name=example\n";
+    std::fs::write(&path, main).unwrap();
+    std::fs::write(&sidecar, gff).unwrap();
+    let legacy = files::open(&path).unwrap();
+    let target = path.clone();
+    HOOK.with_borrow_mut(|hook| {
+        *hook = Some(Box::new(move |stage| {
+            assert_eq!(stage, "acquired");
+            std::fs::remove_file(&target).unwrap();
+            std::fs::remove_file(&sidecar).unwrap();
+        }))
+    });
+    let reset = Reset;
+    let captured = files::capture_load(&path, files::Format::Fasta)
+        .unwrap()
+        .unwrap();
+    drop(reset);
+    assert_eq!(captured.main_hash, basecraft_io::hash_bytes(main));
+    assert_eq!(
+        captured.companion_hashes,
+        vec![Some(basecraft_io::hash_bytes(gff))]
+    );
+    let files::Loaded::Sequence(opened) = captured.content else {
+        panic!("captured presence selects sequence")
+    };
+    assert_eq!(opened.doc.to_genbank(), legacy.doc.to_genbank());
+    let mut expected = Vec::new();
+    let mut actual = Vec::new();
+    files::write_main(&legacy, &mut expected).unwrap();
+    files::write_main(&opened, &mut actual).unwrap();
+    assert_eq!(actual, expected);
+    assert_eq!(actual, main);
+    expected.clear();
+    actual.clear();
+    files::write_sidecar(&legacy, &mut expected)
+        .unwrap()
+        .unwrap();
+    files::write_sidecar(&opened, &mut actual).unwrap().unwrap();
+    assert_eq!(actual, expected);
+}

@@ -458,7 +458,10 @@ fn bound_tree_snapshot_verification_keeps_binding_run_namespace_and_metadata_gua
 }
 
 #[test]
-fn captured_companion_refusals_preserve_baseline_undo_and_passive_storage() {
+fn captured_companion_refusals_preserve_baseline_undo_and_journal() {
+    if !isolated_capture_test("captured_companion_refusals_preserve_baseline_undo_and_journal") {
+        return;
+    }
     use basecraft_protocol::Op;
     for change_main in [false, true] {
         for save in [false, true] {
@@ -488,7 +491,9 @@ fn captured_companion_refusals_preserve_baseline_undo_and_passive_storage() {
                 .set_modified(modified)
                 .unwrap();
             let result = if save {
-                session.save(id, None).map(|_| ())
+                session
+                    .save(id, Some(&dir.path().join("copy.fasta")))
+                    .map(|_| ())
             } else {
                 session
                     .apply(
@@ -501,7 +506,9 @@ fn captured_companion_refusals_preserve_baseline_undo_and_passive_storage() {
                     )
                     .map(|_| ())
             };
-            assert!(result.is_err());
+            assert!(
+                matches!(result, Err(basecraft_ops::Error::Invalid(message)) if message.contains("source changed"))
+            );
             assert_eq!(session.doc(id).unwrap().read(0, 4), b"ACGT");
             assert_eq!(session.doc(id).unwrap().features().count(), 1);
             assert!(!session.can_undo(id));
@@ -510,13 +517,19 @@ fn captured_companion_refusals_preserve_baseline_undo_and_passive_storage() {
                 serde_json::to_value(session.document_record(id).unwrap()).unwrap(),
                 serde_json::to_value(before).unwrap()
             );
-            assert!(!dir.path().join(".basecraft").exists());
+            assert!(basecraft_ops::log::read_all(dir.path()).unwrap().is_empty());
+            assert!(!dir.path().join("recovery.json").exists());
+            assert!(!dir.path().join("copy.fasta").exists());
         }
     }
 }
 
 #[test]
 fn captured_multirecord_writer_and_retained_replay_inputs_match_legacy() {
+    if !isolated_capture_test("captured_multirecord_writer_and_retained_replay_inputs_match_legacy")
+    {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("records.fasta");
     let sidecar = files::gff_sidecar(&path);
@@ -547,7 +560,7 @@ fn captured_multirecord_writer_and_retained_replay_inputs_match_legacy() {
             std::fs::read(
                 dir.path()
                     .join(".basecraft/objects")
-                    .join(hash_bytes(bytes))
+                    .join(hash_bytes(bytes).trim_start_matches("b3:"))
             )
             .unwrap(),
             bytes
@@ -570,10 +583,25 @@ fn captured_multirecord_writer_and_retained_replay_inputs_match_legacy() {
             std::fs::read(
                 dir.path()
                     .join(".basecraft/objects")
-                    .join(hash_bytes(bytes))
+                    .join(hash_bytes(bytes).trim_start_matches("b3:"))
             )
             .unwrap(),
             bytes
         );
     }
+}
+
+fn isolated_capture_test(name: &str) -> bool {
+    if std::env::var("BASECRAFT_CAPTURE_TEST_CHILD").as_deref() == Ok(name) {
+        return true;
+    }
+    let isolated = tempfile::tempdir().unwrap();
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", name, "--nocapture"])
+        .env("BASECRAFT_CAPTURE_TEST_CHILD", name)
+        .env("BASECRAFT_PROFILE_DIR", isolated.path().join("profile"))
+        .status()
+        .unwrap();
+    assert!(status.success(), "isolated capture test failed: {name}");
+    false
 }
