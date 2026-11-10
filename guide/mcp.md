@@ -109,3 +109,6 @@ An operation tool can read an open document directly: give it as
 values `state` reports. A clean document is read from its saved file; unsaved
 edits are submitted as a snapshot of the current revision, and the run appears
 in the document's history. A request pinned to an older revision is refused.
+
+See [headless save decisions](headless-saving.md) for structured save checks,
+one-attempt acknowledgement, independent known-analysis policies and warnings.

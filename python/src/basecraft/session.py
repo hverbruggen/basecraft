@@ -361,10 +361,31 @@ class Session:
     def redo(self, document):
         return self.call("redo", {"document": document})
 
-    def save(self, document, path=None):
+    def save_check(self, document, path=None):
+        """Inspect a save without writing; the token belongs to this live Session.
+
+        A newer check supersedes it. Closing the Session discards its authority.
+        """
         arguments = {"document": document}
         if path is not None:
             arguments["path"] = str(path)
+        return self.call("save_check", arguments)
+
+    def save(self, document, path=None, *, decision=None):
+        """Save conservatively, or submit one explicit decision from save_check.
+
+        decision = {"token": check["token"], "known_policy": "cancel",
+                    "acknowledge_incomplete": True}
+        Known analyses require their separate preserve/break/remove policy.
+        Refusals raise OperationError with the fresh check in .outcome["check"].
+        Successful results include warnings; callers must present these to users.
+        Existing other destinations are always refused. No automatic retry.
+        """
+        arguments = {"document": document}
+        if path is not None:
+            arguments["path"] = str(path)
+        if decision is not None:
+            arguments["decision"] = decision
         return self.call("save", arguments)
 
     def create_sequence(self, name, sequence):

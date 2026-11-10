@@ -150,7 +150,7 @@ macro_rules! json_out {
     };
 }
 
-pub fn run(command: SubmissionCommand) -> Result<()> {
+pub fn run(command: SubmissionCommand, save_options: crate::save::Options) -> Result<()> {
     match command {
         SubmissionCommand::InclusionPreview {
             file,
@@ -203,7 +203,7 @@ pub fn run(command: SubmissionCommand) -> Result<()> {
             let edit: SubmissionEdit = serde_json::from_str(&json_argument(&edit)?)?;
             let (mut session, doc) = open(&project, &file)?;
             submission::edit(&mut session, doc, edit)?;
-            session.save(doc, None)?;
+            save_options.save(&mut session, doc, None, false)?;
             json_out!(session.submission(doc)?);
         }
         SubmissionCommand::Frames {
@@ -246,7 +246,7 @@ pub fn run(command: SubmissionCommand) -> Result<()> {
                         clear: Vec::new(),
                     },
                 )?;
-                session.save(doc, None)?;
+                save_options.save(&mut session, doc, None, false)?;
             }
             json_out!(session.submission(doc)?.frames);
         }
@@ -305,7 +305,7 @@ pub fn run(command: SubmissionCommand) -> Result<()> {
                         accessions: plan.accessions,
                     },
                 )?;
-                session.save(doc, None)?;
+                save_options.save(&mut session, doc, None, false)?;
                 eprintln!("basecraft: recorded and saved");
             }
         }

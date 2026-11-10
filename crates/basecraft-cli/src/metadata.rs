@@ -152,6 +152,7 @@ fn finish(
     plan: metadata::Plan,
     apply: bool,
     remember: Option<MetadataEdit>,
+    save_options: crate::save::Options,
 ) -> Result<()> {
     println!("{}", serde_json::to_string_pretty(&plan)?);
     if !apply {
@@ -174,12 +175,12 @@ fn finish(
     })();
     session.end_group();
     applied?;
-    session.save(doc, None)?;
+    save_options.save(&mut session, doc, None, false)?;
     eprintln!("basecraft: applied and saved");
     Ok(())
 }
 
-pub fn run(command: MetadataCommand) -> Result<()> {
+pub fn run(command: MetadataCommand, save_options: crate::save::Options) -> Result<()> {
     match command {
         MetadataCommand::Consumer {
             request,
@@ -199,7 +200,7 @@ pub fn run(command: MetadataCommand) -> Result<()> {
                     session.open(&session.root().join(target))?
                 };
                 session.apply(target_doc, serde_json::from_value(operation.clone())?)?;
-                session.save(target_doc, None)?;
+                save_options.save(&mut session, target_doc, None, false)?;
             }
         }
         MetadataCommand::Init { project } => {
@@ -243,7 +244,7 @@ pub fn run(command: MetadataCommand) -> Result<()> {
                 settings.header_patterns.push(pattern);
                 MetadataEdit::SetImportSettings { settings }
             });
-            finish(session, doc, plan, import.apply, remember)?;
+            finish(session, doc, plan, import.apply, remember, save_options)?;
         }
         MetadataCommand::ImportSheet {
             file,
@@ -290,7 +291,7 @@ pub fn run(command: MetadataCommand) -> Result<()> {
                 );
                 MetadataEdit::SetImportSettings { settings }
             });
-            finish(session, doc, plan, import.apply, remember)?;
+            finish(session, doc, plan, import.apply, remember, save_options)?;
         }
         MetadataCommand::Template {
             file,

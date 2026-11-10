@@ -4,6 +4,7 @@ mod delimitation;
 mod mcp;
 mod metadata;
 mod operations;
+mod save;
 mod submission;
 
 use std::path::PathBuf;
@@ -15,6 +16,8 @@ use clap::{Parser, Subcommand};
 #[derive(Parser)]
 #[command(name = "basecraft", version, about = "Basecraft command-line tool")]
 struct Cli {
+    #[command(flatten)]
+    save_options: save::Options,
     #[command(subcommand)]
     command: Command,
 }
@@ -91,6 +94,12 @@ enum Command {
         /// Record edits as made by an assistant (`agent`) or a script (`script`).
         #[arg(long, value_enum, default_value_t)]
         client_kind: mcp::ClientKind,
+    },
+    /// Inspect a save without writing. The returned token expires when this command exits.
+    SaveCheck {
+        file: PathBuf,
+        #[arg(long)]
+        output: Option<PathBuf>,
     },
     /// Apply a typed JSON operation to a document and save it.
     Edit { file: PathBuf, operation: String },
@@ -191,7 +200,11 @@ fn main() -> ExitCode {
     match run(Cli::parse()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("basecraft: {e}");
+            if let Some(error) = e.downcast_ref::<basecraft_ops::Error>() {
+                eprintln!("{}", save::error_value(error));
+            } else {
+                eprintln!("basecraft: {e}");
+            }
             ExitCode::FAILURE
         }
     }
@@ -217,12 +230,13 @@ fn save_policy(name: &str) -> Result<basecraft_ops::input_evidence::SavePolicy, 
 }
 
 fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
+    let save_options = cli.save_options;
     match cli.command {
         Command::Delimitation { action } => delimitation::run(action)?,
         Command::Plugins { action } => operations::plugins(action)?,
         Command::Operations { action } => operations::operations(action)?,
-        Command::Metadata { action } => metadata::run(action)?,
-        Command::Submission { action } => submission::run(action)?,
+        Command::Metadata { action } => metadata::run(action, save_options)?,
+        Command::Submission { action } => submission::run(action, save_options)?,
         Command::History { file, json } => {
             let report = basecraft_ops::document_record::DocumentRecord::saved_report(&file)?;
             println!(
@@ -315,7 +329,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let output = std::path::absolute(output)?;
             let mut session = script_session(output.parent().ok_or("Missing output folder")?)?;
             let doc = session.create_sequence(&name, &sequence)?;
-            session.save_new(doc, Some(&output))?;
+            save_options.save(&mut session, doc, Some(&output), true)?;
             println!("Created {}", output.display());
         }
         Command::Mcp {
@@ -324,13 +338,23 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             model_id,
             client_kind,
         } => mcp::serve(&project, allow_writes, client_kind, &model_id)?,
+        Command::SaveCheck { file, output } => {
+            let file = file.canonicalize()?;
+            let mut session = script_session(file.parent().ok_or("File has no parent")?)?;
+            let doc = session.open(&file)?;
+            let output = output.map(std::path::absolute).transpose()?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&session.check_save(doc, output.as_deref())?)?
+            );
+        }
         Command::Edit { file, operation } => {
             let file = file.canonicalize()?;
             let root = file.parent().unwrap_or(std::path::Path::new("."));
             let mut session = script_session(root)?;
             let doc = session.open(&file)?;
             session.apply(doc, serde_json::from_str(&operation)?)?;
-            session.save(doc, None)?;
+            save_options.save(&mut session, doc, None, false)?;
         }
         Command::ImportSupport { tree, source, name } => {
             let tree = tree.canonicalize()?;
@@ -340,7 +364,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             if imported.added.is_empty() {
                 return Err("The source tree has no support values".into());
             }
-            session.save(doc, None)?;
+            save_options.save(&mut session, doc, None, false)?;
             println!(
                 "{}",
                 serde_json::json!({"added": imported.added, "matched": imported.matched})
@@ -423,6 +447,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             &operation,
             &params,
             save.then_some(input_conflict),
+            save_options,
         )?,
         Command::Schemas { dir } => {
             std::fs::create_dir_all(&dir)?;
@@ -562,7 +587,19 @@ fn run_plugin(
     operation: &str,
     params: &[String],
     save: Option<basecraft_ops::input_evidence::SavePolicy>,
+    mut save_options: save::Options,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(policy) = save {
+        use basecraft_ops::input_evidence::SavePolicy;
+        if policy != SavePolicy::Cancel {
+            if save_options.save_known_policy != SavePolicy::Cancel
+                && save_options.save_known_policy != policy
+            {
+                return Err("Conflicting --input-conflict and --save-known-policy".into());
+            }
+            save_options.save_known_policy = policy;
+        }
+    }
     let mut map = serde_json::Map::new();
     for p in params {
         let (k, v) = p
@@ -575,7 +612,13 @@ fn run_plugin(
     if manifest.schema < 2 {
         return Err("Plugin requires a versioned operation contract (schema 2); migrate/install it before running analyses".into());
     }
-    run_registered_plugin(&manifest, file, operation, map, save)
+    run_registered_plugin(
+        &manifest,
+        file,
+        operation,
+        map,
+        save.is_some().then_some(save_options),
+    )
 }
 
 /// `plugin` for a schema-2 package: the registered sequence operation through the
@@ -585,7 +628,7 @@ fn run_registered_plugin(
     file: &std::path::Path,
     operation: &str,
     parameters: serde_json::Map<String, serde_json::Value>,
-    save: Option<basecraft_ops::input_evidence::SavePolicy>,
+    save: Option<save::Options>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use basecraft_plugin_host::registry::{Registry, RegistryConfig};
     use basecraft_protocol::operation::{ExecutionFamily, InputReference, OperationRequest};
@@ -636,10 +679,11 @@ fn run_registered_plugin(
         return Err(format!("{} did not complete", registered.id).into());
     }
     if let Some(policy) = save {
-        session.save_with_evidence(
+        policy.save(
+            &mut session,
             target.ok_or("operation returned no target document")?,
             None,
-            policy,
+            false,
         )?;
     }
     Ok(())

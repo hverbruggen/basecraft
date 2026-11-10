@@ -118,6 +118,13 @@ impl Server {
         ) || creates)
             && !self.writable
         {
+            if name == "save" {
+                return Err(basecraft_ops::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "This server is read-only; start it with --allow-writes to enable edits",
+                ))
+                .into());
+            }
             return Err(
                 "permission_denied: This server is read-only; start it with --allow-writes to enable edits".into(),
             );
@@ -318,16 +325,46 @@ impl Server {
                 }
                 Ok(self.state(doc))
             }
-            "save" => {
-                let doc = self.doc(args)?;
+            "save" | "save_check" => {
+                let doc = self
+                    .doc(args)
+                    .map_err(|e| basecraft_ops::Error::Invalid(e.to_string()))?;
                 let path = args
                     .get("path")
-                    .and_then(Value::as_str)
-                    .map(|p| self.path(p))
+                    .map(|value| {
+                        let p = value.as_str().ok_or_else(|| {
+                            basecraft_ops::Error::Invalid("path must be a string".into())
+                        })?;
+                        self.path(p)
+                            .map_err(|e| basecraft_ops::Error::Invalid(e.to_string()))
+                    })
                     .transpose()?;
-                // No overwrite confirmation exists here: refuse existing files.
-                self.session.save_new(doc, path.as_deref())?;
-                Ok(self.state(doc))
+                if name == "save_check" {
+                    return Ok(serde_json::to_value(
+                        self.session.check_save(doc, path.as_deref())?,
+                    )?);
+                }
+                // No overwrite confirmation exists here: retain save_new's rule.
+                let warnings = if let Some(value) = args.get("decision") {
+                    let choice: crate::save::Decision = serde_json::from_value(value.clone())
+                        .map_err(basecraft_ops::Error::Json)?;
+                    let decision = self.session.decide_save(
+                        doc,
+                        path.as_deref(),
+                        &choice.token,
+                        choice.known_policy,
+                        choice.acknowledge_incomplete,
+                    )?;
+                    self.session
+                        .save_new_with_decision(doc, path.as_deref(), decision)?
+                        .warnings
+                } else {
+                    self.session.save_new(doc, path.as_deref())?;
+                    Vec::new()
+                };
+                let mut state = self.state(doc);
+                state["warnings"] = json!(warnings);
+                Ok(state)
             }
             // Project specimen metadata: the same planners as `basecraft metadata`.
             "metadata_open" => {
@@ -548,7 +585,12 @@ fn tools() -> Value {
         apply,
         tool("undo","Undo one edit group.",json!({"document":doc}), &["document"]),
         tool("redo","Redo one edit group.",json!({"document":doc}), &["document"]),
-        tool("save","Save a document, optionally to a new project path. An existing other file is never replaced.",json!({"document":doc,"path":string}), &["document"]),
+        tool("save","Save a document, optionally to a new project path. An existing other file is never replaced.",json!({"document":doc,"path":string,"decision":{
+            "type":"object","additionalProperties":false,
+            "required":["token","known_policy","acknowledge_incomplete"],
+            "properties":{"token":{"type":"string"},"known_policy":{"type":"string","enum":["cancel","preserve_copy","break_evidence","remove_analysis"]},"acknowledge_incomplete":{"type":"boolean"}}
+        }}), &["document"]),
+        tool("save_check","Inspect a save without writing. Returns a single-attempt token owned by this live Session; newer checks supersede it. Known policy and incomplete acknowledgement are separate.",json!({"document":doc,"path":string}), &["document"]),
         tool("file_record","Read history and methods for a saved project file as it is on disk, including saved Sanger reviews. Same output as `basecraft history --json`; writes nothing.",json!({"path":string}), &["path"]),
         tool("extract","Extract the inspected sequence revision to a new GenBank file with source ancestry. Coordinates are zero-based, half-open; optional splice segments are in biological order, followed by optional reverse complement. Existing destinations are refused.",json!({"document":doc,"version":{"type":"integer","minimum":0},"path":string,"start":{"type":"integer","minimum":0},"end":{"type":"integer","minimum":0},"segments":{"type":"array","items":{"type":"array","items":{"type":"integer","minimum":0},"minItems":2,"maxItems":2}},"reverse":{"type":"boolean"}}), &["document","version","path","start","end"]),
         tool("delimitation_candidates","Inspect saved species hypotheses in recommendation order, without writing records.",json!({"paths":{"type":"array","items":{"type":"string"}}}), &["paths"]),
@@ -1025,11 +1067,17 @@ pub fn serve(root: &Path, writable: bool, kind: ClientKind, model: &str) -> Resu
                                 // permission_denied and stale_revision; others are
                                 // invalid_arguments.
                                 Err(error) => structured(
-                                    basecraft_plugin_host::jobs::error_value(
-                                        name,
-                                        core_error_code(error.as_ref()),
-                                        error.to_string(),
-                                    ),
+                                    error
+                                        .downcast_ref::<basecraft_ops::Error>()
+                                        .filter(|_| matches!(name, "save" | "save_check"))
+                                        .map(crate::save::error_value)
+                                        .unwrap_or_else(|| {
+                                            basecraft_plugin_host::jobs::error_value(
+                                                name,
+                                                core_error_code(error.as_ref()),
+                                                error.to_string(),
+                                            )
+                                        }),
                                     true,
                                 ),
                             })

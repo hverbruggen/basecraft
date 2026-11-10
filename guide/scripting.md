@@ -242,3 +242,6 @@ use its returned document ID for subsequent edits and ordinary saves. MCP expose
 same method as `sequence_create` with `name` and `sequence` arguments and requires
 `--allow-writes`. Creating a document does not create a source file; recovery
 follows the session's configured recovery policy.
+
+See [headless save decisions](headless-saving.md) for structured save checks,
+one-attempt acknowledgement, independent known-analysis policies and warnings.
