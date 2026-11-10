@@ -268,6 +268,10 @@ fn main() {
         );
     }
 
+    // Saved legacy reviews register their evidence in the shared test profile.
+    // Retain those fixture stores until every bootstrap save assertion finishes.
+    #[cfg(feature = "test-counters")]
+    let mut lifecycle_folders = Vec::new();
     #[cfg(feature = "test-counters")]
     for scenario in [
         "reorder",
@@ -388,6 +392,7 @@ fn main() {
             },
             "{scenario} acquisition count"
         );
+        lifecycle_folders.push(folder);
     }
 
     #[cfg(feature = "test-counters")]
