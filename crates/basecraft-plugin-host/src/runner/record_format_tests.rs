@@ -52,7 +52,7 @@ fn prepare(root: &Path, registry: &Registry, mode: &str) -> PreparedOperation {
         "parameters":{"mode":mode},"destinations":{"report":format!("{mode}.json")}
     }))
     .unwrap();
-    let operation = registry.resolve(&request.operation, None).unwrap();
+    let operation = registry.resolve(&request.operation, None).unwrap().clone();
     PreparedOperation::prepare(
         operation,
         request,
