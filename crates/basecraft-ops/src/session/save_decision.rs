@@ -9,14 +9,16 @@ use crate::{Result, error::invalid};
 
 /// A fresh advisory check, or the fresh scope returned after refusing stale
 /// consent. Fields cannot be changed to manufacture authority.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct SaveCheck {
     token: String,
     #[serde(flatten)]
     scope: SaveScope,
+    #[serde(skip)]
+    scope_revision: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 struct SaveScope {
     evidence: EvidenceCheck,
     session: String,
@@ -50,7 +52,7 @@ impl SaveCheck {
     }
 
     pub(super) fn same_scope(&self, other: &Self) -> bool {
-        self.scope == other.scope
+        self.scope_revision == other.scope_revision
     }
 
     pub(super) fn target_is_current(&self, target: &Path) -> Result<bool> {
@@ -59,7 +61,7 @@ impl SaveCheck {
     }
 
     /// Consumes this advisory snapshot. `acknowledge_incomplete` is independent
-    /// of known policy. SaveDecision is neither Clone nor Deserialize; Session
+    /// of known policy. `SaveDecision` is neither `Clone` nor `Deserialize`; Session
     /// also consumes the token, so cloning an advisory snapshot cannot replay it.
     pub fn decide(self, known: SavePolicy, acknowledge_incomplete: bool) -> SaveDecision {
         SaveDecision {
@@ -107,7 +109,7 @@ impl Session {
     }
 
     /// Bind a wire acknowledgement to the Session's one pending check for this
-    /// document. This does not rescan. save_with_decision/save_new_with_decision
+    /// document. This does not rescan. `save_with_decision`/`save_new_with_decision`
     /// consume its authority on entry and recheck under the normal guard.
     pub fn decide_save(
         &self,
@@ -167,24 +169,29 @@ impl Session {
     ) -> Result<SaveCheck> {
         let target = crate::save_guard::target_path(target)?;
         let target_revision = target_revision(&target)?;
+        let scope = SaveScope {
+            evidence,
+            session: self.id.clone(),
+            document: id.0,
+            document_key: self.docs[id.0].key.clone(),
+            generation: self.generation(id),
+            revision: self.revision(id),
+            accepted_hashes: self.docs[id.0].accepted_hashes.clone(),
+            target,
+            target_revision,
+        };
+        // The digest includes all typed evidence and document/target context.
+        // It is private authority, never reconstructed from a wire snapshot.
+        let scope_revision = basecraft_io::hash_bytes(&serde_json::to_vec(&scope)?);
         Ok(SaveCheck {
             token: String::new(),
-            scope: SaveScope {
-                evidence,
-                session: self.id.clone(),
-                document: id.0,
-                document_key: self.docs[id.0].key.clone(),
-                generation: self.generation(id),
-                revision: self.revision(id),
-                accepted_hashes: self.docs[id.0].accepted_hashes.clone(),
-                target,
-                target_revision,
-            },
+            scope,
+            scope_revision,
         })
     }
 
     /// Explicit one-attempt decision, including overwrite confirmation supplied
-    /// by the caller. Adapters without overwrite confirmation use save_new_with_decision.
+    /// by the caller. Adapters without overwrite confirmation use `save_new_with_decision`.
     pub fn save_with_decision(
         &mut self,
         id: DocId,
@@ -194,7 +201,7 @@ impl Session {
         self.save_attempt(id, path, decision.known, true, false, Some(decision))
     }
 
-    /// The same decision boundary while retaining save_new's no-overwrite rule.
+    /// The same decision boundary while retaining `save_new`'s no-overwrite rule.
     pub fn save_new_with_decision(
         &mut self,
         id: DocId,

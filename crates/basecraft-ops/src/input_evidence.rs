@@ -202,7 +202,7 @@ pub enum SavePolicy {
     BreakEvidence,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AffectedAnalysis {
     pub run: PathBuf,
     pub result: String,
@@ -215,7 +215,7 @@ pub struct AffectedAnalysis {
     pub backing_analyses: Vec<AffectedAnalysis>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EvidenceConflict {
     pub target: PathBuf,
     pub analyses: Vec<AffectedAnalysis>,
@@ -254,7 +254,7 @@ pub struct InspectionIssue {
 }
 
 /// Advisory snapshot. It performs no registration, preservation or writes.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct EvidenceCheck {
     pub conflict: EvidenceConflict,
     pub issues: Vec<InspectionIssue>,
@@ -1010,6 +1010,7 @@ fn inspect_in(
     inspection.issues.dedup();
     let inventory_revision = basecraft_io::hash_bytes(&serde_json::to_vec(&(
         stores,
+        &conflict,
         &known_runs,
         &inspection.observations,
         &inspection.issues,
