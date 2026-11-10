@@ -504,7 +504,7 @@ pub enum RecoveryPhase {
     /// consent, or an unobservable/changed stage may require reconstruction.
     NeedsFinalization,
     /// The directory rename completed. Sync/registration may subsequently have
-    /// failed; use the publish result for completion or PublishedWithFailure.
+    /// failed; use the publish result for completion or `PublishedWithFailure`.
     Published,
 }
 
@@ -617,7 +617,7 @@ fn artifacts(root: &Path) -> Result<Vec<ArtifactObservation>> {
 
 impl RecoveryAttempt {
     /// Read stored progress without filesystem IO, hashing, validation or
-    /// minting/consuming a receipt. NeedsFinalization is not a readiness claim:
+    /// minting/consuming a receipt. `NeedsFinalization` is not a readiness claim:
     /// only publish can validate current artifacts/evidence and promote them.
     /// Published does not distinguish successful completion from post-rename
     /// failure; those details remain in the existing publish result.
