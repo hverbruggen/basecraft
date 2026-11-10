@@ -12,7 +12,7 @@ use basecraft_platform::files::{ObjectIdentity, OrdinaryKind, object_identity};
 use basecraft_protocol::{LogEntry, Op};
 
 use crate::session::{DocId, Session, objects_dir};
-use crate::{Result, log};
+use crate::{Error, Result, log};
 
 #[derive(Debug, Default)]
 pub struct Report {
@@ -734,57 +734,80 @@ impl RecoveryAttempt {
         document: usize,
         decision: Option<crate::session::SaveDecision>,
     ) -> Result<()> {
+        self.advance_with(document, decision, &mut LegacyAdvance)
+    }
+
+    fn advance_with(
+        &mut self,
+        document: usize,
+        decision: Option<crate::session::SaveDecision>,
+        hooks: &mut impl AdvanceHooks,
+    ) -> Result<()> {
+        hooks.at(AdvanceSite::Validate);
         if let Err(error) = self
             .validate()
             .and_then(|_| self.document(document).map(|_| ()))
         {
-            if let Some(decision) = &decision {
-                self.session.discard_recovery_decision(decision)?;
-            }
-            return Err(error);
+            return Err(hooks.discard(
+                error,
+                decision
+                    .as_ref()
+                    .map(|d| self.session.discard_recovery_decision(d))
+                    .transpose(),
+            ));
         }
         let doc = self.document(document)?;
         let id = doc.id;
+        hooks.at(AdvanceSite::Target);
         let _target = match crate::save_guard::lock(&self.destination) {
             Ok(lock) => lock,
             Err(error) => {
-                if let Some(decision) = &decision {
-                    self.session.discard_recovery_decision(decision)?;
-                }
-                return Err(error);
+                return Err(hooks.discard(
+                    error,
+                    decision
+                        .as_ref()
+                        .map(|d| self.session.discard_recovery_decision(d))
+                        .transpose(),
+                ));
             }
         };
         let finalizing = doc.written;
         let observed = if doc.written {
+            hooks.at(AdvanceSite::Finalize);
             let _evidence = match crate::input_evidence::Mutation::begin() {
                 Ok(guard) => guard,
                 Err(error) => {
-                    if let Some(decision) = &decision {
-                        self.session.discard_recovery_decision(decision)?;
-                    }
-                    return Err(error);
+                    return Err(hooks.discard(
+                        error,
+                        decision
+                            .as_ref()
+                            .map(|d| self.session.discard_recovery_decision(d))
+                            .transpose(),
+                    ));
                 }
             };
             self.session
                 .recovery_finalize(id, doc.saved.as_ref(), decision)?
         } else {
-            let outcome = match decision {
-                Some(decision) => self.session.save_with_decision(
-                    id,
-                    Some(&self.session_path(document)?),
-                    decision,
-                ),
-                None => self.session.save_recovery(id),
+            hooks.at(AdvanceSite::Session);
+            let path = if decision.is_some() {
+                Some(self.session_path(document)?)
+            } else {
+                None
             };
+            let outcome = hooks.save(&mut self.session, id, path.as_deref(), decision);
             // Failed writes can leave partial owned output; Session retains its
             // existing acceptance rules. This is an observation, never consent.
             let outcome = match outcome {
                 Ok(outcome) => outcome,
                 Err(error) => {
-                    if let Some(stage) = &self.staging
-                        && let Ok(observed) = artifacts(stage.path())
-                    {
-                        self.artifacts = observed;
+                    if let Some(stage) = &self.staging {
+                        match hooks.artifacts(stage.path(), AdvanceSite::FailedArtifacts) {
+                            Ok(observed) => self.artifacts = observed,
+                            Err(secondary) => {
+                                hooks.secondary(AdvanceSite::FailedArtifacts, secondary)
+                            }
+                        }
                     }
                     return Err(error);
                 }
@@ -795,12 +818,24 @@ impl RecoveryAttempt {
             if let Some(barrier) = self.after_write.take() {
                 barrier(&self.session_path(document)?);
             }
-            self.artifacts = artifacts(
+            hooks.at(AdvanceSite::FirstArtifacts);
+            let inspected = hooks.artifacts(
                 self.staging
                     .as_ref()
                     .ok_or_else(|| crate::error::invalid("recovery stage missing"))?
                     .path(),
-            )?;
+                AdvanceSite::FirstArtifacts,
+            );
+            match inspected {
+                Ok(artifacts) => self.artifacts = artifacts,
+                Err(error) => {
+                    if let Some(Err(secondary)) = outcome.recovery_observation {
+                        hooks.secondary(AdvanceSite::Observation, secondary);
+                    }
+                    return Err(error);
+                }
+            }
+            hooks.at(AdvanceSite::Observation);
             outcome
                 .recovery_observation
                 .ok_or_else(|| crate::error::invalid("recovery write observation missing"))??
@@ -812,11 +847,13 @@ impl RecoveryAttempt {
                 });
         }
         self.documents[document].saved = Some(observed);
-        self.artifacts = artifacts(
+        hooks.at(AdvanceSite::FinalArtifacts);
+        self.artifacts = hooks.artifacts(
             self.staging
                 .as_ref()
                 .ok_or_else(|| crate::error::invalid("recovery stage missing"))?
                 .path(),
+            AdvanceSite::FinalArtifacts,
         )?;
         Ok(())
     }
@@ -1355,3 +1392,44 @@ mod tests {
         }
     }
 }
+
+// These hooks change only private error projection and passive observation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AdvanceSite {
+    Validate,
+    Target,
+    Finalize,
+    Session,
+    FailedArtifacts,
+    FirstArtifacts,
+    Observation,
+    FinalArtifacts,
+    #[cfg(test)]
+    Discard,
+}
+trait AdvanceHooks {
+    fn at(&mut self, _: AdvanceSite) {}
+    fn secondary(&mut self, _: AdvanceSite, _: Error) {}
+    fn discard(&mut self, primary: Error, discarded: Result<Option<()>>) -> Error {
+        discarded.err().unwrap_or(primary)
+    }
+    fn artifacts(&mut self, path: &Path, _: AdvanceSite) -> Result<Vec<ArtifactObservation>> {
+        artifacts(path)
+    }
+    fn save(
+        &mut self,
+        session: &mut Session,
+        id: crate::session::DocId,
+        path: Option<&Path>,
+        decision: Option<crate::session::SaveDecision>,
+    ) -> Result<crate::session::SaveOutcome> {
+        match decision {
+            Some(decision) => session.save_with_decision(id, path, decision),
+            None => session.save_recovery(id),
+        }
+    }
+}
+struct LegacyAdvance;
+impl AdvanceHooks for LegacyAdvance {}
+#[cfg(test)]
+mod attempt_boundary_tests;

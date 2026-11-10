@@ -17,6 +17,13 @@ use crate::session::Inverse;
 mod alignment;
 mod delimitation;
 mod metadata;
+#[cfg(test)]
+pub(crate) use metadata::observation::{Hooks as DocumentHooks, MetadataFacts};
+#[cfg(test)]
+pub(crate) struct DocumentAttempt {
+    pub result: Result<Vec<(PathBuf, String)>>,
+    pub metadata: Option<MetadataFacts>,
+}
 mod sequence;
 mod submission;
 mod tree;
@@ -40,6 +47,20 @@ pub(crate) trait Document {
         recovery_root: &Path,
         publication: &WritePublication,
     ) -> Result<Vec<(PathBuf, String)>>;
+    #[cfg(test)]
+    fn write_observed(
+        &self,
+        target: &Path,
+        format: Format,
+        recovery_root: &Path,
+        publication: &WritePublication,
+        _hooks: DocumentHooks,
+    ) -> DocumentAttempt {
+        DocumentAttempt {
+            result: self.write(target, format, recovery_root, publication),
+            metadata: None,
+        }
+    }
     /// Preserve the existing replay writer, including historical target handling.
     fn saved_hashes(&self, target: &Path, publication: &WritePublication) -> Result<Vec<String>>;
     /// Kind-specific operation composition. Session owns timing, actor/group

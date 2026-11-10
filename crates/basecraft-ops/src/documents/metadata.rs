@@ -55,6 +55,18 @@ impl Document for OpenedMetadata {
         produce(self, target, format, &mut Unobserved).legacy(recovery_root)
     }
 
+    #[cfg(test)]
+    fn write_observed(
+        &self,
+        target: &Path,
+        format: Format,
+        _recovery_root: &Path,
+        _publication: &super::WritePublication,
+        hooks: observation::Hooks,
+    ) -> super::DocumentAttempt {
+        observation::write_observed(self, target, format, hooks).into_document()
+    }
+
     fn saved_hashes(
         &self,
         _target: &Path,
@@ -69,12 +81,12 @@ impl Document for OpenedMetadata {
 
 /// Prepared memory, not a file-backed recovery artifact or publication authority.
 #[derive(Debug)]
-struct ExpectedOutput {
+pub(crate) struct ExpectedOutput {
     path: PathBuf,
     bytes: Vec<u8>,
 }
 #[derive(Debug, PartialEq, Eq)]
-enum MetadataStep {
+pub(crate) enum MetadataStep {
     ValidateFormat,
     Encode,
     PrepareParent,
@@ -82,7 +94,7 @@ enum MetadataStep {
     ReturnHashes,
 }
 #[derive(Debug, PartialEq, Eq)]
-enum ParentPreparation {
+pub(crate) enum ParentPreparation {
     NotAttempted,
     CallEnteredWithoutSuccess,
     CallReturnedOk,
@@ -126,6 +138,10 @@ trait WriteHooks {
         Ok(())
     }
     fn persisted(&mut self, _: usize) {}
+    #[cfg(test)]
+    fn returning(&mut self) -> Result<()> {
+        Ok(())
+    }
 }
 struct Unobserved;
 impl WriteHooks for Unobserved {}
@@ -181,6 +197,8 @@ fn produce(
             )?;
         }
         attempt.step = MetadataStep::ReturnHashes;
+        #[cfg(test)]
+        hooks.returning()?;
         Ok(expected
             .iter()
             .map(|output| (output.path.clone(), basecraft_io::hash_bytes(&output.bytes)))
@@ -192,26 +210,27 @@ fn produce(
 // Passive proof only. Session/recovery adoption and retention ownership require
 // separate review; compiling this module cannot activate a production route.
 #[cfg(test)]
-mod observation {
+pub(crate) mod observation {
     use super::*;
     use crate::analysis_store::publication_observation::{
         FilePublicationObservation, ObservationFailure, inspect_target,
     };
 
-    pub(super) type PreparedHook = Box<dyn FnOnce(&[ExpectedOutput])>;
-    pub(super) type StageHook = Box<dyn FnOnce(&std::fs::File) -> std::io::Result<()>>;
-    pub(super) type BeforeHook =
+    pub(crate) type PreparedHook = Box<dyn FnOnce(&[ExpectedOutput])>;
+    pub(crate) type StageHook = Box<dyn FnOnce(&std::fs::File) -> std::io::Result<()>>;
+    pub(crate) type BeforeHook =
         Box<dyn FnOnce(&FilePublicationObservation) -> std::io::Result<()>>;
-    pub(super) type InspectHook = Box<dyn FnOnce(&Path) -> Result<()>>;
+    pub(crate) type InspectHook = Box<dyn FnOnce(&Path) -> Result<()>>;
     #[derive(Default)]
-    pub(super) struct Hooks {
+    pub(crate) struct Hooks {
+        pub returning: Option<Box<dyn FnOnce() -> Result<()>>>,
         pub prepared: Option<PreparedHook>,
         pub stage: Option<(usize, StageHook)>,
         pub before: Option<(usize, BeforeHook)>,
         pub inspect: Option<(usize, InspectHook)>,
     }
     #[derive(Debug)]
-    pub(super) struct OutputDiagnostic {
+    pub(crate) struct OutputDiagnostic {
         index: usize,
         failure: ObservationFailure,
     }
@@ -224,12 +243,38 @@ mod observation {
         }
     }
     #[derive(Debug)]
-    pub(super) struct ObservedMetadataWrite {
+    pub(crate) struct ObservedMetadataWrite {
         attempt: Attempt,
         files: Vec<FilePublicationObservation>,
         diagnostics: Vec<OutputDiagnostic>,
     }
+    #[derive(Debug)]
+    pub(crate) struct MetadataFacts {
+        pub expected: Option<Vec<ExpectedOutput>>,
+        pub parent: ParentPreparation,
+        pub step: MetadataStep,
+        pub files: Vec<FilePublicationObservation>,
+        pub diagnostics: Vec<OutputDiagnostic>,
+    }
     impl ObservedMetadataWrite {
+        pub(crate) fn into_document(self) -> super::super::DocumentAttempt {
+            let Attempt {
+                expected,
+                parent,
+                step,
+                producer,
+            } = self.attempt;
+            super::super::DocumentAttempt {
+                result: producer,
+                metadata: Some(MetadataFacts {
+                    expected,
+                    parent,
+                    step,
+                    files: self.files,
+                    diagnostics: self.diagnostics,
+                }),
+            }
+        }
         pub fn expected(&self) -> Option<&[ExpectedOutput]> {
             self.attempt.expected.as_deref()
         }
@@ -255,6 +300,9 @@ mod observation {
         hooks: Hooks,
     }
     impl WriteHooks for Collector {
+        fn returning(&mut self) -> Result<()> {
+            self.hooks.returning.take().map_or(Ok(()), |hook| hook())
+        }
         fn prepared(&mut self, expected: &[ExpectedOutput]) {
             self.files = expected
                 .iter()
@@ -294,7 +342,7 @@ mod observation {
             self.files[index].persisted();
         }
     }
-    pub(super) fn write_observed(
+    pub(crate) fn write_observed(
         document: &OpenedMetadata,
         target: &Path,
         format: Format,

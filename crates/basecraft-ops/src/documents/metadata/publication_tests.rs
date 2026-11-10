@@ -522,3 +522,34 @@ isolated!(legacy_exact_messages_order_and_counters, root, {
         }
     }
 });
+
+isolated!(document_projection_moves_pre_return_failure, root, {
+    let f = Fixture::new(&root.join("case"));
+    let attempt = f.doc.write_observed(
+        &f.target,
+        Format::Metadata,
+        &root,
+        &super::super::WritePublication::Immediate,
+        Hooks {
+            returning: Some(Box::new(|| {
+                Err(std::io::Error::other("injected before return").into())
+            })),
+            ..Default::default()
+        },
+    );
+    assert!(matches!(attempt.result, Err(Error::Io(ref e)) if e.kind() == io::ErrorKind::Other));
+    let facts = attempt.metadata.as_ref().unwrap();
+    assert_eq!(facts.parent, ParentPreparation::CallReturnedOk);
+    assert_eq!(facts.step, MetadataStep::ReturnHashes);
+    assert!(facts.diagnostics.is_empty());
+    for file in &facts.files {
+        assert!(matches!(file.persist(), PersistFact::Committed { .. }));
+    }
+    let expected = facts.expected.as_ref().unwrap();
+    for (output, bytes) in expected.iter().zip(&f.bytes) {
+        assert_eq!(&output.bytes, bytes);
+    }
+    let before = inventory(&root);
+    drop(attempt);
+    assert_eq!(inventory(&root), before);
+});

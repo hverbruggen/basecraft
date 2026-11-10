@@ -8,6 +8,12 @@
 //! Alignment edits merge the same way: typing over residues along a row,
 //! gaps inserted one after another, a block slid step by step.
 
+pub(crate) mod save_attempt_observation;
+use save_attempt_observation::{
+    Disposition as SaveDisposition, Hooks as SaveHooks, Legacy as LegacySave,
+    Milestone as SaveMilestone, Site as SaveSite,
+};
+
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -1042,11 +1048,35 @@ impl Session {
         history_only: bool,
         decision: Option<SaveDecision>,
     ) -> Result<SaveOutcome> {
+        self.save_attempt_with(
+            id,
+            path,
+            policy,
+            overwrite,
+            history_only,
+            decision,
+            &mut LegacySave,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn save_attempt_with(
+        &mut self,
+        id: DocId,
+        path: Option<&Path>,
+        policy: crate::input_evidence::SavePolicy,
+        overwrite: bool,
+        history_only: bool,
+        decision: Option<SaveDecision>,
+        hooks: &mut impl SaveHooks,
+    ) -> Result<SaveOutcome> {
+        hooks.at(SaveSite::Consent);
         let valid_consent = decision
             .as_ref()
             .map(|decision| self.consume_save_check(decision))
             .transpose()?
             .unwrap_or(false);
+        hooks.at(SaveSite::Admission);
         if !self.is_open(id) {
             return Err(invalid("save document is not open"));
         }
@@ -1060,12 +1090,14 @@ impl Session {
         }
         let path = path.filter(|p| !self.is_own_file(id, p));
         let target = path.map_or_else(|| self.resolve(&self.docs[id.0].key), Path::to_path_buf);
+        hooks.at(SaveSite::CleanHashes);
         let clean = (history_only || (self.log.is_some() && path.is_none()))
             && self.save_hashes(id)? == self.docs[id.0].saved_state_hashes;
         if history_only && !clean {
             return Err(invalid("history publication requires a saved document"));
         }
         if decision.is_none() && !history_only && self.log.is_some() && path.is_none() && clean {
+            hooks.disposition(SaveDisposition::Clean);
             return Ok(SaveOutcome {
                 recovery_observation: None,
                 warnings,
@@ -1073,6 +1105,7 @@ impl Session {
         }
         // Cooperating Basecraft processes serialize the entire data + sidecar +
         // provenance publication. External programs still require hash checks.
+        hooks.at(SaveSite::TargetGuard);
         let _save_lock = if self.tracked
             || matches!(
                 self.write_publication,
@@ -1085,6 +1118,7 @@ impl Session {
         if new_sequence || (!overwrite && path.is_some()) {
             crate::save_guard::Revision::check(None, &target)?;
         }
+        hooks.at(SaveSite::Evidence);
         let _evidence_lock = crate::input_evidence::lock()?;
         if !history_only {
             let evidence = crate::input_evidence::check(&target)?;
@@ -1121,11 +1155,15 @@ impl Session {
         if history_only {
             self.check_save_source(id)?;
         }
+        hooks.at(SaveSite::OuterTrack);
         self.track(id)?;
+        hooks.at(SaveSite::OuterFlush);
         self.flush()?;
         let before = basecraft_io::hash_file(&target).ok();
+        hooks.at(SaveSite::ExpectedHashes);
         let expected = self.save_hashes_at(id, &target)?;
         if self.log.is_some() {
+            hooks.at(SaveSite::PendingEncode);
             let intent = serde_json::to_vec_pretty(&serde_json::to_value(
                 basecraft_protocol::records::PendingSave {
                     schema_version: 1,
@@ -1138,13 +1176,16 @@ impl Session {
                     extra: std::collections::BTreeMap::new(),
                 },
             )?)?;
+            hooks.at(SaveSite::PendingParent);
             std::fs::create_dir_all(&self.storage_root)?;
+            hooks.at(SaveSite::PendingWrite);
             basecraft_io::write_atomic(&self.storage_root.join("pending-save.json"), |w| {
                 w.write_all(&intent)
             })?;
         }
         // Preservation and pending-intent publication can take time. A decision
         // cannot authorize an externally replaced destination during that work.
+        hooks.at(SaveSite::Recheck);
         if let Some(check) = &target_check
             && !check.target_is_current(&target)?
         {
@@ -1156,20 +1197,28 @@ impl Session {
             crate::save_guard::Revision::check(None, &target)?;
         }
         let outcome = if history_only {
-            self.log_save(id, &target, self.docs[id.0].accepted_hashes.clone())
+            hooks.disposition(SaveDisposition::History);
+            self.log_save_with(id, &target, self.docs[id.0].accepted_hashes.clone(), hooks)
         } else {
-            self.save_inner(id, path)
+            self.save_inner(id, path, hooks)
         };
         if outcome.is_ok() {
             if target == self.resolve(&self.docs[id.0].key) {
+                hooks.boundary(SaveSite::SavedHashes, self)?;
                 self.docs[id.0].saved_state_hashes = self.save_hashes_at(id, &target)?;
+                hooks.executed(SaveMilestone::SavedHashes);
+                hooks.boundary(SaveSite::DiskStamp, self)?;
                 self.docs[id.0].disk_stamp = crate::input_evidence::stamp(&target)?;
+                hooks.executed(SaveMilestone::DiskStamp);
             }
             if self.log.is_some() {
+                hooks.boundary(SaveSite::PendingRemove, self)?;
                 std::fs::remove_file(self.storage_root.join("pending-save.json"))?;
+                hooks.executed(SaveMilestone::PendingRemoved);
             }
         }
         outcome.map_err(|error| {
+            hooks.executed(SaveMilestone::Reconciled);
             if self.is_metadata(id) && target == self.resolve(&self.docs[id.0].key) {
                 // Tables are replaced one by one before the manifest. Accept
                 // those already written, so a retry isn't refused as a
@@ -1214,10 +1263,10 @@ impl Session {
                         }
                     }
                 }
-                invalid(format!(
+                hooks.project(error, |error| invalid(format!(
                     "data saved; provenance or sidecar incomplete: {error}. Recovery remains at {}",
                     self.storage_root.display()
-                ))
+                )))
             } else {
                 error
             }
@@ -1227,6 +1276,7 @@ impl Session {
             crate::documents::WritePublication::Recovery { .. }
         ) {
             Some((|| -> Result<SaveCheck> {
+                hooks.boundary(SaveSite::Observation, self)?;
                 let mut observed = self.recovery_snapshot(id)?;
                 if target_check
                     .as_ref()
@@ -1237,6 +1287,7 @@ impl Session {
                 {
                     observed.require_final_decision();
                 }
+                hooks.returned(SaveSite::Observation);
                 Ok(observed)
             })())
         } else {
@@ -1262,49 +1313,83 @@ impl Session {
         Ok(())
     }
 
-    fn save_inner(&mut self, id: DocId, path: Option<&Path>) -> Result<()> {
+    fn save_inner(
+        &mut self,
+        id: DocId,
+        path: Option<&Path>,
+        hooks: &mut impl SaveHooks,
+    ) -> Result<()> {
+        hooks.at(SaveSite::InnerFlush);
         self.flush()?;
         let target = path.map_or_else(|| self.resolve(&self.docs[id.0].key), Path::to_path_buf);
         // An unchanged ordinary save neither rewrites data nor creates history.
+        hooks.at(SaveSite::InnerTrack);
         self.track(id)?;
         if target == self.resolve(&self.docs[id.0].key) {
+            hooks.at(SaveSite::SourceCheck);
             self.check_save_source(id)?;
         }
+        hooks.at(SaveSite::Format);
         let format = files::Format::from_path(&target)?;
         let opened = match &self.docs[id.0].content {
             Loaded::Submission(sub) => {
-                let hashes = sub
-                    .write(&target, format, &self.storage_root, &self.write_publication)?
+                let hashes = hooks
+                    .write(
+                        sub,
+                        &target,
+                        format,
+                        &self.storage_root,
+                        &self.write_publication,
+                    )?
                     .into_iter()
                     .map(|(path, hash)| (self.relative(&path), hash))
                     .collect();
-                return self.log_save(id, &target, hashes);
+                return self.log_save_with(id, &target, hashes, hooks);
             }
             Loaded::Metadata(opened) => {
-                let hashes = opened
-                    .write(&target, format, &self.storage_root, &self.write_publication)?
+                let hashes = hooks
+                    .write(
+                        opened,
+                        &target,
+                        format,
+                        &self.storage_root,
+                        &self.write_publication,
+                    )?
                     .into_iter()
                     .map(|(path, hash)| (self.relative(&path), hash))
                     .collect();
-                return self.log_save(id, &target, hashes);
+                return self.log_save_with(id, &target, hashes, hooks);
             }
             Loaded::Delimitation(work) => {
-                let hashes = work
-                    .write(&target, format, &self.storage_root, &self.write_publication)?
+                let hashes = hooks
+                    .write(
+                        work,
+                        &target,
+                        format,
+                        &self.storage_root,
+                        &self.write_publication,
+                    )?
                     .into_iter()
                     .map(|(path, hash)| (self.relative(&path), hash))
                     .collect();
-                return self.log_save(id, &target, hashes);
+                return self.log_save_with(id, &target, hashes, hooks);
             }
             Loaded::Alignment(a) => {
-                let hashes = a
-                    .write(&target, format, &self.storage_root, &self.write_publication)?
+                let hashes = hooks
+                    .write(
+                        a,
+                        &target,
+                        format,
+                        &self.storage_root,
+                        &self.write_publication,
+                    )?
                     .into_iter()
                     .map(|(path, hash)| (self.relative(&path), hash))
                     .collect();
-                return self.log_save(id, &target, hashes);
+                return self.log_save_with(id, &target, hashes, hooks);
             }
             Loaded::Tree(t) => {
+                hooks.at(SaveSite::OtherKind);
                 if format != files::Format::Tree {
                     return Err(invalid("a tree can only be saved as a tree file"));
                 }
@@ -1314,11 +1399,23 @@ impl Session {
                 let (hashes, outputs) = if save_as {
                     let links = crate::links::PreparedLinks::prepare(&original, &target)?;
                     links.publish(|| {
-                        t.write(&target, format, &self.storage_root, &self.write_publication)
+                        hooks.write(
+                            t,
+                            &target,
+                            format,
+                            &self.storage_root,
+                            &self.write_publication,
+                        )
                     })?
                 } else {
                     (
-                        t.write(&target, format, &self.storage_root, &self.write_publication)?,
+                        hooks.write(
+                            t,
+                            &target,
+                            format,
+                            &self.storage_root,
+                            &self.write_publication,
+                        )?,
                         Vec::new(),
                     )
                 };
@@ -1326,7 +1423,7 @@ impl Session {
                     .into_iter()
                     .map(|(path, hash)| (self.relative(&path), hash))
                     .collect();
-                self.log_save(id, &target, hashes)?;
+                self.log_save_with(id, &target, hashes, hooks)?;
                 if !outputs.is_empty() {
                     self.log_tool_run(
                         id,
@@ -1341,15 +1438,27 @@ impl Session {
             }
             Loaded::Sequence(o) => o,
         };
-        let hashes = opened
-            .write(&target, format, &self.storage_root, &self.write_publication)?
+        let hashes = hooks
+            .write(
+                opened,
+                &target,
+                format,
+                &self.storage_root,
+                &self.write_publication,
+            )?
             .into_iter()
             .map(|(path, hash)| (self.relative(&path), hash))
             .collect();
-        self.log_save(id, &target, hashes)
+        self.log_save_with(id, &target, hashes, hooks)
     }
 
-    fn log_save(&mut self, id: DocId, target: &Path, hashes: Vec<(String, String)>) -> Result<()> {
+    fn log_save_with(
+        &mut self,
+        id: DocId,
+        target: &Path,
+        hashes: Vec<(String, String)>,
+        hooks: &mut impl SaveHooks,
+    ) -> Result<()> {
         let key = self.relative(target);
         let entry = self.entry(
             id,
@@ -1360,23 +1469,29 @@ impl Session {
                 feature: None,
             },
         );
+        hooks.record(self.log.is_some());
+        hooks.boundary(SaveSite::SaveRecord, self)?;
         self.write(&entry)?;
+        hooks.returned(SaveSite::SaveRecord);
         if target == self.resolve(&self.docs[id.0].key) {
             self.docs[id.0]
                 .accepted_hashes
                 .clone_from(&entry.result.hashes);
             self.docs[id.0].absent_sidecars.clear();
+            hooks.executed(SaveMilestone::AcceptedLog);
         }
         if self.tracked
             && self.provenance_policy != basecraft_platform::settings::ProvenancePolicy::None
         {
+            hooks.boundary(SaveSite::Provenance, self)?;
             self.publish_save(id, target, &entry, &[], None)
                 .map_err(|e| {
-                    invalid(format!(
+                    hooks.project(e, |e| invalid(format!(
                         "data saved; provenance incomplete: {e}. Recovery has been retained at {}",
                         self.storage_root.display()
-                    ))
+                    )))
                 })?;
+            hooks.returned(SaveSite::Provenance);
         }
         Ok(())
     }
