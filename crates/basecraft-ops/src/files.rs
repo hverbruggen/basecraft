@@ -133,6 +133,18 @@ pub enum Loaded {
 }
 
 impl Loaded {
+    /// Classify the payload that was loaded, without probing its source again.
+    pub(crate) fn kind(&self) -> Kind {
+        match self {
+            Self::Sequence(_) => Kind::Sequence,
+            Self::Delimitation(_) => Kind::Delimitation,
+            Self::Metadata(_) => Kind::Metadata,
+            Self::Submission(_) => Kind::Submission,
+            Self::Alignment(_) => Kind::Alignment,
+            Self::Tree(_) => Kind::Tree,
+        }
+    }
+
     /// Borrow the shared behavior of the existing document payloads.
     pub(crate) fn as_document(&self) -> &dyn crate::documents::Document {
         match self {

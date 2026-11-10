@@ -553,14 +553,21 @@ impl Session {
     // Open and save.
 
     pub fn open(&mut self, path: &Path) -> Result<DocId> {
+        self.open_classified(path).map(|(id, _)| id)
+    }
+
+    /// Open a live file and return the kind of the admitted document payload.
+    /// Unlike a separate [`files::kind`] probe, this does not reread the main
+    /// file to classify it. Existing companion validation still applies.
+    pub fn open_classified(&mut self, path: &Path) -> Result<(DocId, files::Kind)> {
         self.open_inner(path, false)
     }
 
     pub(crate) fn open_replay_snapshot(&mut self, path: &Path) -> Result<DocId> {
-        self.open_inner(path, true)
+        self.open_inner(path, true).map(|(id, _)| id)
     }
 
-    fn open_inner(&mut self, path: &Path, verified_snapshot: bool) -> Result<DocId> {
+    fn open_inner(&mut self, path: &Path, verified_snapshot: bool) -> Result<(DocId, files::Kind)> {
         if crate::sanger_review::evidence_kind(path).is_some() {
             return Err(invalid(
                 "Saved Sanger reviews and drafts are edited only in the Basecraft application; read a saved Sanger review's history, methods and provenance with the history, methods and provenance commands",
@@ -652,6 +659,7 @@ impl Session {
                 origin_issue.map_or_else(|| warning.clone(), |issue| format!("{issue}\n{warning}")),
             );
         }
+        let kind = content.kind();
         self.docs.push(Slot {
             key: key.clone(),
             content,
@@ -681,7 +689,7 @@ impl Session {
             },
         );
         self.docs[id.0].baseline = Some(entry);
-        Ok(id)
+        Ok((id, kind))
     }
 
     /// Promote a read-only load before its first durable action. Validate and
