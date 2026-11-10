@@ -214,3 +214,23 @@ fn run_examples_roundtrip_and_preserve_extensions() {
         assert_eq!(serde_json::to_value(state).unwrap(), json!(label));
     }
 }
+
+#[test]
+fn original_extraction_run_writer_inventory() {
+    // This sixth writer is inventoried separately from the five authorized
+    // constructor substitutions. Its production literal remains unchanged.
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("source.fasta");
+    std::fs::write(&source, b">sample\nACGT\n").unwrap();
+    let mut session = Session::new(root.path());
+    let doc = session.open(&source).unwrap();
+    let target = root.path().join("extracted.gb");
+    session.extract(doc, (0, 4), &[], false, &target).unwrap();
+    let run = ArtifactRun::for_result(&target).unwrap().unwrap();
+    let id = run.file_name().unwrap().to_str().unwrap();
+    capture(
+        "run-extracted",
+        &run,
+        json!({"schema_version":1,"id":id,"result":"extracted.gb","status":"saved"}),
+    );
+}

@@ -220,7 +220,7 @@ pub enum AnalysisRunStatus {
 
 /// The existing version-one analysis-store `run.json` family.
 /// This describes fresh writer shapes; production readers retain their selective
-/// JSON checks. Serialize through Value for recursive sorting before write_json.
+/// JSON checks. Serialize through `Value` for recursive sorting before `write_json`.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct AnalysisRun {
     pub schema_version: u32,
@@ -229,9 +229,9 @@ pub struct AnalysisRun {
     pub result: Option<String>,
     pub status: AnalysisRunStatus,
     /// Absent until referenced publication; a completed run can have an empty
-    /// array. Reuse ArtifactRevision's schema, retaining its JSON snapshot because
+    /// array. Reuse `ArtifactRevision`'s schema, retaining its JSON snapshot because
     /// the public type rejects unknown extensions on deserialization. Fresh
-    /// writers still construct these snapshots from the public ArtifactRevision.
+    /// writers still construct these snapshots from the public `ArtifactRevision`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Option<Vec<crate::provenance::ArtifactRevision>>")]
     pub outputs: Option<Vec<Value>>,
