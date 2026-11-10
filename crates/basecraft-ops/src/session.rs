@@ -25,6 +25,7 @@ use crate::log::LogWriter;
 mod creation;
 mod extraction;
 mod proposals;
+pub(crate) mod save_authority;
 mod save_decision;
 pub use save_decision::{EvidenceAction, SaveCheck, SaveDecision, SaveOutcome, SaveWarning};
 pub mod support_import;
@@ -72,7 +73,7 @@ struct Slot {
     key: String,
     content: Loaded,
     generation: u64,
-    pending_save_check: Mutex<Option<SaveCheck>>,
+    save_authority: save_authority::PendingSaveAuthority,
     undo: Vec<Applied>,
     redo: Vec<Applied>,
     baseline: Option<LogEntry>,
@@ -668,7 +669,7 @@ impl Session {
             key: key.clone(),
             content,
             generation: 0,
-            pending_save_check: Mutex::new(None),
+            save_authority: save_authority::PendingSaveAuthority::default(),
             undo: Vec::new(),
             redo: Vec::new(),
             baseline: None,
@@ -1045,44 +1046,23 @@ impl Session {
                 )
             {
                 let fresh = self.save_check_scope(id, &target, evidence)?;
-                if let Some(decision) = decision {
-                    if !valid_consent || !fresh.same_scope(&decision.check) {
-                        return Err(Error::SaveDecisionStale(Box::new(
-                            self.publish_save_check(id, fresh)?,
-                        )));
-                    }
-                    if !fresh.complete() && !decision.acknowledge_incomplete {
-                        return Err(Error::SaveCheckRequired(Box::new(
-                            self.publish_save_check(id, fresh)?,
-                        )));
-                    }
-                } else if !fresh.complete()
-                    || fresh
-                        .evidence_groups()
-                        .any(|g| !g.conflict.analyses.is_empty())
-                {
-                    return Err(Error::SaveCheckRequired(Box::new(
-                        self.publish_save_check(id, fresh)?,
-                    )));
-                }
-                // Changed original/sidecar acceptance is not waivable and must
-                // fail before mutating known evidence.
-                if path.is_none() {
-                    self.check_save_source(id)?;
-                }
-                fresh.resolve(
+                warnings = self.docs[id.0].save_authority.authorize_write(
+                    &fresh,
+                    decision.as_ref().map(|decision| (decision, valid_consent)),
                     policy,
+                    || {
+                        // Changed original/sidecar acceptance is not waivable.
+                        if path.is_none() {
+                            self.check_save_source(id)?;
+                        }
+                        Ok(())
+                    },
                     matches!(
                         self.write_publication,
                         crate::documents::WritePublication::Recovery { .. }
                     )
                     .then_some(&self.evidence_actions),
                 )?;
-                if !fresh.complete() {
-                    warnings.push(SaveWarning::EvidenceNotChecked {
-                        issues: fresh.issues(),
-                    });
-                }
                 target_check = Some(fresh);
             } else {
                 crate::input_evidence::resolve(&evidence.conflict, policy)?;

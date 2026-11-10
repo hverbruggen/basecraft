@@ -732,3 +732,52 @@ fn foreign_receipt_cannot_consume_local_or_originating_session_authority() {
         },
     );
 }
+
+#[test]
+fn foreign_rejection_supersedes_requested_receipt_without_spending_origin() {
+    isolated(
+        "foreign_rejection_supersedes_requested_receipt_without_spending_origin",
+        |root| {
+            let (mut origin, doc, file) = setup(root);
+            damage(root, &file);
+            let origin_check = origin.check_save(doc, None).unwrap();
+            let other_root = folder(root, "requested-owner");
+            let (mut other, other_doc, other_file) = setup(&other_root);
+            let superseded = other.check_save(other_doc, None).unwrap();
+            let fresh = required(
+                other
+                    .save_with_decision(
+                        other_doc,
+                        None,
+                        origin_check.clone().decide(SavePolicy::Cancel, true),
+                    )
+                    .unwrap_err(),
+            );
+            assert_ne!(superseded.token(), fresh.token());
+            // Rejecting the foreign receipt published a new requested-owner
+            // check. This is supersession, not consumption of the origin.
+            let refreshed = required(
+                other
+                    .save_with_decision(
+                        other_doc,
+                        None,
+                        superseded.decide(SavePolicy::Cancel, true),
+                    )
+                    .unwrap_err(),
+            );
+            assert_ne!(fresh.token(), refreshed.token());
+            assert_eq!(std::fs::read(&file).unwrap(), ORIGINAL);
+            assert_eq!(std::fs::read(&other_file).unwrap(), ORIGINAL);
+            // Moving the live owner retains its one pending receipt.
+            let mut moved = other;
+            moved
+                .save_with_decision(other_doc, None, refreshed.decide(SavePolicy::Cancel, true))
+                .unwrap();
+            origin
+                .save_with_decision(doc, None, origin_check.decide(SavePolicy::Cancel, true))
+                .unwrap();
+            assert_eq!(std::fs::read(&file).unwrap(), b">gene\nATGT\n");
+            assert_eq!(std::fs::read(&other_file).unwrap(), b">gene\nATGT\n");
+        },
+    );
+}
