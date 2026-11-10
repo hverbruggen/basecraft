@@ -7,7 +7,7 @@ from run import compare, summarize
 
 class ReportTests(unittest.TestCase):
     def sample(self, duration):
-        return dict(scenario="edit-alignment", operations=1000, fixture_bytes=131360,
+        return dict(schema_version=2, output_bytes=131360, scenario="edit-alignment", operations=1000, fixture_bytes=131360,
                     rows=32, columns=4096, edits=1000, source_commit="a" * 40,
                     debug_assertions=False, verified=True, duration_ns=duration)
 
@@ -25,7 +25,7 @@ class ReportTests(unittest.TestCase):
             summarize([])
 
     def report(self):
-        return dict(schema_version=1, machine="neutral", profile="release",
+        return dict(schema_version=2, machine="neutral", profile="release",
                     protocol="session-warm-v1", runner_sha256="runner",
                     scenarios={"edit-alignment": summarize([self.sample(1000)] * 3)})
 
@@ -40,6 +40,33 @@ class ReportTests(unittest.TestCase):
         previous["scenarios"]["edit-alignment"]["fixture_bytes"] += 1
         result = compare(current, previous, budgets)
         self.assertEqual(result["scenarios"]["edit-alignment"]["status"], "unavailable")
+
+    def test_save_output_size_does_not_change_input_compatibility(self):
+        samples = [{**self.sample(1000), "scenario": "save-alignment", "operations": 1,
+                    "output_bytes": size} for size in (133536, 132000, 140000)]
+        current = self.report()
+        current["scenarios"] = {"save-alignment": summarize(samples)}
+        previous = copy.deepcopy(current)
+        previous["scenarios"]["save-alignment"]["output_bytes"] = 150000
+        current["scenarios"]["save-alignment"]["output_bytes"] = 133536
+        budgets = dict(benchmark_ratio=1.3, gross_ci_ratio=2)
+        result = compare(current, previous, budgets)
+        self.assertEqual(result["scenarios"]["save-alignment"]["status"], "compared")
+        self.assertEqual(result["scenarios"]["save-alignment"]["ratio"], 1)
+        previous["scenarios"]["save-alignment"]["fixture_bytes"] += 1
+        result = compare(current, previous, budgets)
+        self.assertEqual(result["scenarios"]["save-alignment"]["status"], "unavailable")
+
+    def test_old_size_semantics_require_new_samples(self):
+        old_sample = self.sample(1000)
+        del old_sample["schema_version"]
+        with self.assertRaisesRegex(ValueError, "unsupported sample schema"):
+            summarize([old_sample])
+        previous = self.report()
+        previous["schema_version"] = 1
+        result = compare(self.report(), previous, dict(benchmark_ratio=1.3, gross_ci_ratio=2))
+        self.assertEqual(result["status"], "unavailable")
+        self.assertEqual(result["reason"], "baseline schema_version differs")
 
     def test_ratios_are_observations_and_refusals_are_explicit(self):
         previous = self.report()

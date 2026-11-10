@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCENARIOS = ("open-alignment", "open-fasta-100mb", "edit-alignment",
              "undo-alignment", "save-alignment")
 PROTOCOL = "session-warm-v1"
+SCHEMA_VERSION = 2
 
 
 def digest(path):
@@ -35,6 +36,8 @@ def external(path):
 def summarize(samples):
     if not samples or any(not s.get("verified") for s in samples):
         raise ValueError("missing or unverified measurements")
+    if any(s.get("schema_version") != SCHEMA_VERSION for s in samples):
+        raise ValueError("unsupported sample schema; regenerate rather than reinterpret old fixture sizes")
     keys = ("scenario", "operations", "fixture_bytes", "rows", "columns", "edits",
             "source_commit", "debug_assertions")
     identity = {key: samples[0][key] for key in keys}
@@ -80,6 +83,8 @@ def main():
     parser.add_argument("--samples", type=int, default=5)
     parser.add_argument("--baseline", type=Path, help="reviewed report.json from a compatible run")
     parser.add_argument("--history", type=Path, help="opt-in external JSONL summary history (review before publishing)")
+    parser.add_argument("--scenario", action="append", choices=SCENARIOS,
+                        help="measure only selected default scenarios (repeatable)")
     parser.add_argument("--large", action="store_true", help="also open 1 GB decimal FASTA (may refuse)")
     parser.add_argument("--executable", type=Path, help="reuse a release bench binary built with this source revision")
     parser.add_argument("--revision", help="exact archive revision when .git is absent")
@@ -121,14 +126,14 @@ def main():
         artifacts = [json.loads(line) for line in build.stdout.splitlines()]
         executable = Path(next(a["executable"] for a in artifacts if a.get("executable")
                                and a.get("target", {}).get("name") == "interaction"))
-    report = {"schema_version": 1, "source_commit": revision, "profile": "release",
+    report = {"schema_version": SCHEMA_VERSION, "source_commit": revision, "profile": "release",
               "machine": args.machine, "protocol": PROTOCOL, "runner_sha256": runner_hash,
               "executable_sha256": digest(executable), "date_utc": datetime.now(timezone.utc).isoformat(),
               "cache": "warm; fixture generation and one Session open precede each measured open",
               "scenarios": {}}
     baseline = json.loads(args.baseline.read_text()) if args.baseline else None
     failed = False
-    for name in (*SCENARIOS, *(("open-fasta-1gb",) if args.large else ())):
+    for name in (*(args.scenario or SCENARIOS), *(("open-fasta-1gb",) if args.large else ())):
         samples = []
         for index in range(args.samples):
             work = run_dir / f"{name}-{index}"

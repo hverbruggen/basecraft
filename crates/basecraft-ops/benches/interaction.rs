@@ -90,6 +90,7 @@ fn run() -> Result<()> {
         "alignment.afa"
     });
     fixture(&file, bytes)?;
+    let fixture_bytes = file.metadata()?.len();
     // Explicit untimed warmup, including index/cache population; no cold-cache claim.
     let mut warm = Session::recoverable_with_paths(root, &paths)?;
     warm.open(&file)?;
@@ -174,7 +175,8 @@ fn run() -> Result<()> {
         "{}",
         json!({
             "scenario": scenario, "duration_ns": duration_ns, "operations": operations,
-            "verified": true, "fixture_bytes": file.metadata()?.len(),
+            "schema_version": 2, "verified": true, "fixture_bytes": fixture_bytes,
+            "output_bytes": file.metadata()?.len(),
             "rows": if bytes.is_some() { 1 } else { ROWS },
             "columns": if bytes.is_some() { None } else { Some(WIDTH) },
             "edits": if scenario == "open-alignment" || bytes.is_some() { 0 } else { EDITS },

@@ -74,3 +74,17 @@ Run reporting checks without compiling:
 ```sh
 python3 -m unittest discover -s benches -p 'test_*.py'
 ```
+
+Report and raw-sample **schema version 2** defines `fixture_bytes` as the generated
+input file size, captured before warmup or any measured operation. Raw samples
+also record `output_bytes` after the scenario for diagnostics; output size is
+not part of input compatibility or the timing summary identity. Writer wrapping
+changes can therefore remain comparable while changed input sizes/work parameters
+still reject comparison. Version 1 save samples used the overwritten output size
+as `fixture_bytes`; they must not be reinterpreted. Old reports are incompatible
+with version 2 and old raw samples are rejected by the summarizer. Preserve them
+as historical evidence and regenerate affected baselines under version 2.
+
+Use `--scenario save-alignment` to refresh just the affected scenario; the option
+is repeatable and defaults to the full compact/100 MB set when omitted. `--large`
+continues to explicitly add the opt-in 1 GB case.
