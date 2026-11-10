@@ -170,26 +170,145 @@ fn rejects_bad_selections_wrong_kind_roster_and_existing_destinations() {
 }
 
 #[test]
-fn omitted_selection_keeps_every_hypothesis_and_failed_save_keeps_recovery() {
+fn omitted_selection_keeps_every_hypothesis_and_replays() {
     let dir = tempfile::tempdir().unwrap();
     let paths = inputs(dir.path());
     let mut session = Session::new(dir.path());
     let output = dir.path().join("all.spart");
     let doc = workflow::combine_to(&mut session, &paths, &output, None).unwrap();
     assert_eq!(session.delimitation(doc).hypotheses.len(), 6);
-    drop(session);
-    let failed = tempfile::tempdir().unwrap();
-    let paths = inputs(failed.path());
-    let mut session = Session::new(failed.path());
-    // The shared writer refuses to save hypotheses as a FASTA after the edits
-    // were journalled. The unsuccessful destination leaves replayable recovery.
-    let bad_output = failed.path().join("failed.fa");
-    assert!(workflow::combine_to(&mut session, &paths, &bad_output, None).is_err());
-    let replay = basecraft_ops::replay::replay(failed.path()).unwrap();
+    let replay = basecraft_ops::replay::replay(dir.path()).unwrap();
+    assert!(replay.problems.is_empty(), "{:?}", replay.problems);
+}
+
+#[test]
+fn refused_save_keeps_the_unsaved_batch_replayable() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = inputs(dir.path());
+    let mut session = Session::new(dir.path());
+    // This tests a single failed save. The separate ignored regression below
+    // retains the realistic success/success/refusal journey in ONE session.
+    let output = dir.path().join("failed.fa");
+    assert!(workflow::combine_to(&mut session, &paths, &output, None).is_err());
+    let replay = basecraft_ops::replay::replay(dir.path()).unwrap();
     assert!(replay.entries >= 2);
     assert!(replay.problems.is_empty(), "{:?}", replay.problems);
     for path in paths {
         assert_eq!(std::fs::read_to_string(path).unwrap(), SPART);
     }
-    assert!(!bad_output.exists());
+    assert!(!output.exists());
+}
+
+#[test]
+fn path_aliases_match_selection_without_merging_input_entries() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = inputs(dir.path());
+    std::fs::create_dir(dir.path().join("sub")).unwrap();
+    let alias = dir.path().join("sub/../specimens.asap01.spart");
+    let keep = [
+        (paths[0].clone(), BTreeSet::from(["partition-2".into()])),
+        (paths[1].clone(), BTreeSet::from(["partition-3".into()])),
+    ]
+    .into();
+    let mut session = Session::new(dir.path());
+    let doc = workflow::combine_to(
+        &mut session,
+        &[alias.clone(), paths[1].clone()],
+        &dir.path().join("alias.spart"),
+        Some(&keep),
+    )
+    .unwrap();
+    let hypotheses = &session.delimitation(doc).hypotheses;
+    assert_eq!(hypotheses.len(), 2);
+    assert_eq!(hypotheses[0].id, "partition-2");
+    assert_eq!(
+        hypotheses[1].provenance.parameters["combined_source"]["hypothesis"],
+        "partition-3"
+    );
+    assert_eq!(std::fs::read_to_string(&paths[0]).unwrap(), SPART);
+    assert_eq!(std::fs::read_to_string(&paths[1]).unwrap(), SPART);
+
+    // Multiple spellings in the selection are ambiguous, not a last-key-wins
+    // merge. Check before a document is opened or recovery state is created.
+    let duplicate = [
+        (paths[0].clone(), BTreeSet::from(["partition-2".into()])),
+        (alias, BTreeSet::from(["partition-3".into()])),
+    ]
+    .into();
+    let output = dir.path().join("ambiguous.spart");
+    assert!(workflow::combine_to(&mut session, &paths, &output, Some(&duplicate)).is_err());
+    assert!(!output.exists());
+
+    // Equal content in two paths remains two inputs; even explicit repeated
+    // references remain in the input list rather than being deduplicated.
+    for sources in [paths.clone(), vec![paths[0].clone(), paths[0].clone()]] {
+        let isolated = tempfile::tempdir().unwrap();
+        let output = isolated.path().join("multiple.spart");
+        let mut session = Session::new(dir.path());
+        let doc = workflow::combine_to(&mut session, &sources, &output, None).unwrap();
+        let hypotheses = &session.delimitation(doc).hypotheses;
+        assert_eq!(hypotheses.len(), 6);
+        assert_eq!(
+            hypotheses
+                .iter()
+                .map(|h| &h.id)
+                .collect::<BTreeSet<_>>()
+                .len(),
+            6
+        );
+    }
+}
+
+// This is intentionally not replaced by separate sessions. The persistence
+// worker owns the materialisation fix; run with --ignored after that fix is
+// combined with this branch. It fails on the known baseline defect.
+#[test]
+#[ignore = "requires the separately assigned replay materialisation correction"]
+fn repeated_combine_and_refused_save_preserve_retained_objects_and_recover() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = inputs(dir.path());
+    let mut session = Session::new(dir.path());
+    for filename in ["one.spart", "two.spart"] {
+        let doc =
+            workflow::combine_to(&mut session, &paths, &dir.path().join(filename), None).unwrap();
+        assert_eq!(session.delimitation(doc).hypotheses.len(), 6);
+    }
+    assert!(
+        workflow::combine_to(&mut session, &paths, &dir.path().join("refused.fa"), None).is_err()
+    );
+    session.flush().unwrap();
+    let object_dir = dir.path().join(".basecraft/objects");
+    let snapshot = || {
+        std::fs::read_dir(&object_dir)
+            .unwrap()
+            .map(|entry| {
+                let path = entry.unwrap().path();
+                (
+                    path.file_name().unwrap().to_owned(),
+                    std::fs::read(path).unwrap(),
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>()
+    };
+    let objects = snapshot();
+    let replay = basecraft_ops::replay::replay(dir.path()).unwrap();
+    assert_eq!(snapshot(), objects, "replay changed retained input bytes");
+    assert!(replay.problems.is_empty(), "{:?}", replay.problems);
+    let recovered = tempfile::tempdir().unwrap();
+    let destination = recovered.path().join("recovered");
+    let outputs = basecraft_ops::replay::recover(dir.path(), &destination).unwrap();
+    assert!(
+        outputs.iter().next().is_some(),
+        "recovery returned no documents"
+    );
+    for output in outputs {
+        assert_eq!(
+            files::load_delimitation(&output).unwrap().hypotheses.len(),
+            6
+        );
+    }
+    assert_eq!(snapshot(), objects, "recovery changed retained input bytes");
+    for path in &paths {
+        assert_eq!(std::fs::read_to_string(path).unwrap(), SPART);
+    }
 }

@@ -504,6 +504,28 @@ pub fn combine_to(
         )
         .into());
     }
+    // Match aliases of existing files without collapsing input entries or
+    // identifying distinct files by their names or contents. Output handling
+    // remains with the existing Save As guards.
+    let paths = paths
+        .iter()
+        .map(std::fs::canonicalize)
+        .collect::<std::io::Result<Vec<_>>>()?;
+    let keep = keep
+        .map(|keep| -> Result<CombineSelection> {
+            let mut normalized = CombineSelection::new();
+            for (path, ids) in keep {
+                let path = std::fs::canonicalize(path)?;
+                if normalized.insert(path, ids.clone()).is_some() {
+                    return Err(invalid(
+                        "Hypothesis selection names the same input through multiple path aliases",
+                    ));
+                }
+            }
+            Ok(normalized)
+        })
+        .transpose()?;
+    let keep = keep.as_ref();
     if let Some(keep) = keep {
         if keep.keys().any(|path| !paths.contains(path)) {
             return Err(invalid(

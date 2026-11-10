@@ -45,20 +45,11 @@ pub fn run(command: DelimitationCommand) -> Result<()> {
             selection,
             project,
         } => {
-            let paths = paths
-                .into_iter()
-                .map(absolute)
-                .collect::<std::io::Result<Vec<_>>>()?;
             let output = absolute(output)?;
             let keep: Option<CombineSelection> =
                 selection.map(|s| serde_json::from_str(&s)).transpose()?;
-            let keep = keep
-                .map(|keep| {
-                    keep.into_iter()
-                        .map(|(path, ids)| Ok((absolute(path)?, ids)))
-                        .collect::<std::io::Result<CombineSelection>>()
-                })
-                .transpose()?;
+            // Existing inputs and selection aliases are resolved together by
+            // the shared workflow. Output/project handling stays unchanged.
             let mut session = crate::script_session(absolute(project)?)?;
             delimitation::combine_to(&mut session, &paths, &output, keep.as_ref())?;
             serde_json::json!({"output": output})

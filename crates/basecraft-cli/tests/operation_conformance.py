@@ -199,6 +199,35 @@ def main():
                 hypotheses = inspect.read(doc)["hypotheses"]
                 assert [h["name"] for h in hypotheses] == ["second", "partial"]
                 assert hypotheses[1]["provenance"]["parameters"]["combined_source"]["hypothesis"] == "partition-3"
+        # REV-0036: CLI used to reject aliases that MCP/Python accepted.
+        (project / "sub").mkdir()
+        alias_paths = [str(project / "sub" / ".." / "first.spart"), paths[1]]
+        cli("delimitation", "combine", *alias_paths, "--project", str(project),
+            "--output", str(project / "alias-cli.spart"), "--selection", json.dumps(selection))
+        alias_reply = mcp.tool("delimitation_combine", {"paths": alias_paths,
+            "output": "alias-mcp.spart", "selection": selection})
+        assert not alias_reply.get("isError"), alias_reply
+        delimitation.combine(alias_paths, "alias-python.spart", project=project, selection=selection)
+        for output in ("alias-cli.spart", "alias-mcp.spart", "alias-python.spart"):
+            assert (project / output).read_bytes() == (project / "cli.spart").read_bytes(), output
+        # Aliases also work in selection keys, in the opposite direction.
+        alias_selection = {alias_paths[0]: ["partition-2"], paths[1]: ["partition-3"]}
+        cli("delimitation", "combine", *paths, "--project", str(project),
+            "--output", str(project / "alias-key-cli.spart"), "--selection", json.dumps(alias_selection))
+        assert not mcp.tool("delimitation_combine", {"paths": paths,
+            "output": "alias-key-mcp.spart", "selection": alias_selection}).get("isError")
+        delimitation.combine(paths, "alias-key-python.spart", project=project, selection=alias_selection)
+        for output in ("alias-key-cli.spart", "alias-key-mcp.spart", "alias-key-python.spart"):
+            assert (project / output).read_bytes() == (project / "cli.spart").read_bytes(), output
+        duplicate_selection = {**selection, alias_paths[0]: ["partition-3"]}
+        assert mcp.tool("delimitation_combine", {"paths": paths,
+            "output": "ambiguous-mcp.spart", "selection": duplicate_selection})["isError"]
+        duplicate_cli = subprocess.run([str(binary), "delimitation", "combine", *paths,
+            "--project", str(project), "--output", str(project / "ambiguous-cli.spart"),
+            "--selection", json.dumps(duplicate_selection)], env=env, cwd=root,
+            capture_output=True, text=True, timeout=45)
+        assert duplicate_cli.returncode != 0 and not (project / "ambiguous-cli.spart").exists()
+        assert not (project / "ambiguous-mcp.spart").exists()
         for rejection in (
             {"paths": paths, "output": "mcp.spart"},
             {"paths": paths, "output": "stale.spart", "selection": {paths[1]: ["missing"]}},
