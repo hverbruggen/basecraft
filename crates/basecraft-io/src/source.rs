@@ -36,6 +36,15 @@ impl Source {
         Ok(Source::Owned(bytes))
     }
 
+    /// Read once and hash the exact owned bytes returned to the caller.
+    pub fn open_hashed(path: &Path) -> Result<(Self, String)> {
+        let source = Self::open(path)?;
+        let mut hasher = crate::Hasher::new();
+        hasher.update(source.bytes());
+        let hash = hasher.finish();
+        Ok((source, hash))
+    }
+
     pub fn from_vec(bytes: Vec<u8>) -> Self {
         Source::Owned(bytes)
     }
@@ -55,6 +64,36 @@ impl Source {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn hashed_source_matches_owned_bytes_after_replacement() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("source");
+        for bytes in [b"".as_slice(), b"ACGT".as_slice()] {
+            std::fs::write(&path, bytes).unwrap();
+            #[cfg(feature = "test-counters")]
+            crate::counters::reset();
+            let (source, hash) = Source::open_hashed(&path).unwrap();
+            assert!(!source.is_mapped());
+            assert_eq!(hash, crate::hash_bytes(bytes));
+            #[cfg(feature = "test-counters")]
+            {
+                let counts = crate::counters::snapshot();
+                assert_eq!(counts.unresolved_reads, 0);
+                assert_eq!(
+                    counts.reads[&path.canonicalize().unwrap()],
+                    crate::counters::Reads {
+                        full_reads: 1,
+                        bytes: bytes.len() as u64,
+                    }
+                );
+            }
+            std::fs::write(&path, b"replacement").unwrap();
+            assert_eq!(source.bytes(), bytes);
+            assert_eq!(hash, crate::hash_bytes(source.bytes()));
+        }
+        assert!(Source::open_hashed(&directory.path().join("missing")).is_err());
+    }
+
     #[test]
     fn externally_truncated_large_input_keeps_safe_owned_contents() {
         let directory = tempfile::tempdir().unwrap();

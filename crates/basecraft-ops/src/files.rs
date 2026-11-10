@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::collections::BTreeMap;
 
 use basecraft_docs::{AlignmentDoc, SequenceDoc, TreeDoc};
-use basecraft_io::{cache, fasta, genbank, gff3, newick};
+use basecraft_io::{Source, cache, fasta, genbank, gff3, newick};
 use basecraft_protocol::{CladeAnnotation, Feature, Location, Qualifier, Segment, TreeStyle};
 use serde::{Deserialize, Serialize};
 
@@ -166,25 +166,38 @@ pub fn load(path: &Path) -> Result<Loaded> {
     if Format::from_path(path)? == Format::Delimitation {
         return load_delimitation(path).map(Loaded::Delimitation);
     }
-    if Format::from_path(path)? == Format::Tree {
-        return load_tree(path).map(Loaded::Tree);
-    }
-    if Format::from_path(path)? == Format::Fasta {
-        let file = Arc::new(cache::open_fasta(path)?);
-        if file.index.records.is_empty() {
-            return Err(Error::Empty(path.to_path_buf()));
+    load_from(path, Source::open(path)?)
+}
+
+/// Load FASTA, GenBank or a tree from the supplied main-file snapshot.
+/// Companion files are still read from disk; callers needing their exact hashes
+/// must retain the companion validation used by `Session`.
+/// Other formats require their existing loaders and are rejected here.
+pub fn load_from(path: &Path, source: Source) -> Result<Loaded> {
+    match Format::from_path(path)? {
+        Format::Tree => load_tree_from(path, source, false).map(Loaded::Tree),
+        Format::Fasta => {
+            let file = Arc::new(cache::index_fasta(source)?);
+            if file.index.records.is_empty() {
+                return Err(Error::Empty(path.to_path_buf()));
+            }
+            if fasta_kind(path, &file) == Kind::Alignment {
+                let name = path
+                    .file_name()
+                    .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+                Ok(Loaded::Alignment(OpenedAlignment {
+                    doc: AlignmentDoc::from_fasta(name, &file),
+                    format: Format::Fasta,
+                }))
+            } else {
+                open_fasta_from(path, file).map(Loaded::Sequence)
+            }
         }
-        if fasta_kind(path, &file) == Kind::Alignment {
-            let name = path
-                .file_name()
-                .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-            return Ok(Loaded::Alignment(OpenedAlignment {
-                doc: AlignmentDoc::from_fasta(name, &file),
-                format: Format::Fasta,
-            }));
-        }
+        Format::GenBank => open_from(path, source).map(Loaded::Sequence),
+        _ => Err(crate::error::invalid(
+            "this format does not support loading an owned source",
+        )),
     }
-    open(path).map(Loaded::Sequence)
 }
 
 /// Write explicit alignment contents as FASTA, 60 columns a line.
@@ -285,11 +298,18 @@ pub(crate) fn load_tree_from_verified_snapshot(path: &Path) -> Result<OpenedTree
 }
 
 fn load_tree_metadata(path: &Path, verified_snapshot: bool) -> Result<OpenedTree> {
-    let text = std::fs::read_to_string(path)?;
-    #[cfg(feature = "test-counters")]
-    basecraft_io::counters::record_read(path, text.len() as u64);
-    let nexus = newick::is_nexus(&text);
-    let mut parsed_trees = newick::parse_trees(&text)?.into_iter();
+    load_tree_from(path, Source::open(path)?, verified_snapshot)
+}
+
+pub(crate) fn load_tree_from(
+    path: &Path,
+    source: Source,
+    verified_snapshot: bool,
+) -> Result<OpenedTree> {
+    let text = std::str::from_utf8(source.bytes())
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let nexus = newick::is_nexus(text);
+    let mut parsed_trees = newick::parse_trees(text)?.into_iter();
     let parsed = parsed_trees
         .next()
         .ok_or_else(|| Error::Empty(path.to_path_buf()))?;
@@ -501,6 +521,15 @@ pub struct Opened {
 /// Open the first record of a sequence file.
 pub fn open(path: &Path) -> Result<Opened> {
     let format = Format::from_path(path)?;
+    if matches!(format, Format::Fasta | Format::GenBank) {
+        return open_from(path, Source::open(path)?);
+    }
+    open_from(path, Source::from_vec(Vec::new()))
+}
+
+/// Open a sequence from already-read main-file bytes using the shared parsers.
+pub fn open_from(path: &Path, source: Source) -> Result<Opened> {
+    let format = Format::from_path(path)?;
     match format {
         Format::Delimitation => Err(crate::error::invalid("this is a delimitation workspace")),
         Format::Metadata => Err(crate::error::invalid(
@@ -512,10 +541,7 @@ pub fn open(path: &Path) -> Result<Opened> {
             path.display()
         ))),
         Format::GenBank => {
-            let bytes = std::fs::read(path)?;
-            #[cfg(feature = "test-counters")]
-            basecraft_io::counters::record_read(path, bytes.len() as u64);
-            let rec = genbank::parse(&bytes)?
+            let rec = genbank::parse(source.bytes())?
                 .into_iter()
                 .next()
                 .ok_or_else(|| Error::Empty(path.to_path_buf()))?;
@@ -525,27 +551,28 @@ pub fn open(path: &Path) -> Result<Opened> {
                 fasta: None,
             })
         }
-        Format::Fasta => {
-            let file = Arc::new(cache::open_fasta(path)?);
-            if file.index.records.is_empty() {
-                return Err(Error::Empty(path.to_path_buf()));
-            }
-            let sidecar = gff_sidecar(path);
-            let gff = if sidecar.exists() {
-                Some(gff3::parse(&std::fs::read(&sidecar)?)?)
-            } else {
-                None
-            };
-            let name = file.index.records[0].name.clone();
-            let features = gff.and_then(|g| g.sequences.into_iter().find(|s| s.seqid == name));
-            let doc = SequenceDoc::from_fasta(Arc::clone(&file), 0, features);
-            Ok(Opened {
-                doc,
-                format,
-                fasta: Some(file),
-            })
-        }
+        Format::Fasta => open_fasta_from(path, Arc::new(cache::index_fasta(source)?)),
     }
+}
+
+fn open_fasta_from(path: &Path, file: Arc<cache::IndexedFasta>) -> Result<Opened> {
+    if file.index.records.is_empty() {
+        return Err(Error::Empty(path.to_path_buf()));
+    }
+    let sidecar = gff_sidecar(path);
+    let gff = if sidecar.exists() {
+        Some(gff3::parse(&std::fs::read(&sidecar)?)?)
+    } else {
+        None
+    };
+    let name = file.index.records[0].name.clone();
+    let features = gff.and_then(|g| g.sequences.into_iter().find(|s| s.seqid == name));
+    let doc = SequenceDoc::from_fasta(Arc::clone(&file), 0, features);
+    Ok(Opened {
+        doc,
+        format: Format::Fasta,
+        fasta: Some(file),
+    })
 }
 
 /// Serialise the main file of a document.

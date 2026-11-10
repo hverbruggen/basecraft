@@ -80,7 +80,11 @@ impl IndexedFasta {
 /// Open a FASTA file, loading its index from the cache or building and
 /// caching it.
 pub fn open_fasta(path: &Path) -> Result<IndexedFasta> {
-    let source = Source::open(path)?;
+    index_fasta(Source::open(path)?)
+}
+
+/// Build an index over an already-read source without reopening its path.
+pub fn index_fasta(source: Source) -> Result<IndexedFasta> {
     let index = FastaIndex::build(source.bytes())?;
     Ok(IndexedFasta {
         source,

@@ -542,7 +542,6 @@ impl Session {
         }
         self.flush()?;
         let disk_stamp = crate::input_evidence::stamp(path)?;
-        let accepted_hash = basecraft_io::hash_file(path)?;
         let format = files::Format::from_path(path)?;
         // Files read with the main one: a sidecar, or a metadata manifest's tables.
         let companions = match format {
@@ -550,6 +549,19 @@ impl Session {
             files::Format::Tree | files::Format::Delimitation => vec![files::tree_sidecar(path)],
             files::Format::GenBank | files::Format::Fasta => vec![files::gff_sidecar(path)],
             files::Format::Submission => crate::documents::submission_companions(path),
+        };
+        // Only the main-file snapshot is coupled here. Formats with companions
+        // retain their legacy before/after hash checks until their loaders can
+        // return hashes of the exact companion bytes they parsed too.
+        let owned_main = matches!(
+            format,
+            files::Format::Fasta | files::Format::GenBank | files::Format::Tree
+        ) && !companions.iter().any(|c| c.exists());
+        let (source, accepted_hash) = if owned_main {
+            let (source, hash) = basecraft_io::Source::open_hashed(path)?;
+            (Some(source), hash)
+        } else {
+            (None, basecraft_io::hash_file(path)?)
         };
         let hash_companions = || -> Result<Vec<Option<String>>> {
             companions
@@ -564,12 +576,18 @@ impl Session {
                 .collect()
         };
         let companion_hashes = hash_companions()?;
-        let content = if verified_snapshot && format == files::Format::Tree {
+        let content = if let Some(source) = source {
+            if verified_snapshot && format == files::Format::Tree {
+                Loaded::Tree(files::load_tree_from(path, source, true)?)
+            } else {
+                files::load_from(path, source)?
+            }
+        } else if verified_snapshot && format == files::Format::Tree {
             Loaded::Tree(files::load_tree_from_verified_snapshot(path)?)
         } else {
             files::load(path)?
         };
-        if basecraft_io::hash_file(path)? != accepted_hash
+        if (!owned_main && basecraft_io::hash_file(path)? != accepted_hash)
             || hash_companions()? != companion_hashes
             || crate::input_evidence::stamp(path)? != disk_stamp
         {
