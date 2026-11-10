@@ -290,3 +290,54 @@ fn io_errors_remain_distinct_from_policy_denial() {
     assert!(matches!(result, Err(AccessError::Io(error))
         if error.kind() == std::io::ErrorKind::PermissionDenied));
 }
+
+#[cfg(unix)]
+#[test]
+fn redirected_ancestor_above_root_refuses_output_bindings() {
+    use std::os::unix::fs::symlink;
+    let fixture = tempfile::tempdir().unwrap();
+    let base = fixture.path().join("base");
+    let retained = fixture.path().join("retained-base");
+    let outside = fixture.path().join("outside");
+    let root = base.join("project");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(outside.join("project")).unwrap();
+    let policy = SessionPolicy::new(&root, true).unwrap();
+    let output = Path::new("new-output");
+    assert!(policy.path("new-output", true).is_ok());
+    for action in [
+        ResourceAction::CreateFile,
+        ResourceAction::CreateDirectory,
+        ResourceAction::RenameDestination,
+    ] {
+        assert!(policy.resource(output, action).is_ok());
+    }
+
+    // Stable redirection before the call, not a race. The root leaf itself is
+    // still an ordinary directory, so descendant-only checks cannot catch it.
+    std::fs::rename(&base, &retained).unwrap();
+    symlink(&outside, &base).unwrap();
+    assert!(root.symlink_metadata().unwrap().is_dir());
+    assert!(!root.symlink_metadata().unwrap().file_type().is_symlink());
+    assert!(matches!(
+        policy.path("new-output", true),
+        Err(Error::Protocol(_))
+    ));
+    for action in [
+        ResourceAction::CreateFile,
+        ResourceAction::CreateDirectory,
+        ResourceAction::RenameDestination,
+    ] {
+        denied_as(policy.resource(output, action), Denial::OutsideRoot);
+    }
+    // All calls only check eligibility; neither original nor redirected project
+    // receives an output, even in the initially permitted control cases.
+    assert_eq!(
+        std::fs::read_dir(retained.join("project")).unwrap().count(),
+        0
+    );
+    assert_eq!(
+        std::fs::read_dir(outside.join("project")).unwrap().count(),
+        0
+    );
+}

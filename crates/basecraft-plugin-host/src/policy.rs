@@ -323,6 +323,16 @@ impl SessionPolicy {
             if leaf.is_some() {
                 return Err(AccessError::DestinationExists);
             }
+            // Preserve output containment if an ancestor ABOVE the configured
+            // root was redirected before this call. Root lstat alone follows
+            // such ancestors. This is not protection against a later swap.
+            let parent = path
+                .parent()
+                .ok_or(AccessError::Denied(Denial::InvalidPath))?
+                .canonicalize()?;
+            if !parent.starts_with(&self.root) {
+                return reject(Denial::OutsideRoot);
+            }
         } else if let Some(info) = leaf {
             if !info.is_file() && !info.is_dir() {
                 return reject(Denial::ResourceType);
