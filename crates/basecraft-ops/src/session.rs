@@ -828,6 +828,13 @@ impl Session {
     }
 
     pub fn snapshot_file(&self, path: &Path) -> Result<String> {
+        #[cfg(feature = "test-counters")]
+        {
+            let bytes = std::fs::read(path)?;
+            basecraft_io::counters::record_read(path, bytes.len() as u64);
+            self.snapshot_bytes(&bytes)
+        }
+        #[cfg(not(feature = "test-counters"))]
         self.snapshot_bytes(&std::fs::read(path)?)
     }
 
@@ -867,6 +874,8 @@ impl Session {
         if !dest.exists() {
             std::fs::create_dir_all(objects_dir(&self.storage_root))?;
             let bytes = std::fs::read(path)?;
+            #[cfg(feature = "test-counters")]
+            basecraft_io::counters::record_read(path, bytes.len() as u64);
             if basecraft_io::hash_bytes(&bytes) != hash {
                 return Err(invalid("source changed while retaining its snapshot"));
             }
@@ -1605,6 +1614,8 @@ impl Session {
         let retain =
             |path: &Path, hash: &str, revision: String, name: String| -> Result<ArtifactRevision> {
                 let bytes = std::fs::read(path)?;
+                #[cfg(feature = "test-counters")]
+                basecraft_io::counters::record_read(path, bytes.len() as u64);
                 if basecraft_io::hash_bytes(&bytes) != hash {
                     return Err(invalid("artifact changed during provenance publication"));
                 }

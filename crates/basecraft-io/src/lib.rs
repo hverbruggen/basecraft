@@ -3,6 +3,8 @@
 pub mod abif;
 pub mod archive;
 pub mod cache;
+#[cfg(feature = "test-counters")]
+pub mod counters;
 pub mod fasta;
 pub mod genbank;
 pub mod gff3;
@@ -33,6 +35,8 @@ pub fn write_atomic(
         f(&mut w)?;
         w.flush()?;
     }
+    #[cfg(feature = "test-counters")]
+    counters::record_sync_all();
     tmp.as_file().sync_all()?;
     tmp.persist(path).map_err(|e| Error::Io(e.error))?;
     Ok(())
@@ -60,13 +64,21 @@ pub fn sha256_file(path: &Path) -> Result<String> {
     let mut file = std::fs::File::open(path)?;
     let mut digest = Sha256::new();
     let mut buffer = vec![0u8; 64 * 1024];
+    #[cfg(feature = "test-counters")]
+    let mut bytes_read = 0;
     loop {
         let count = file.read(&mut buffer)?;
         if count == 0 {
             break;
         }
+        #[cfg(feature = "test-counters")]
+        {
+            bytes_read += count as u64;
+        }
         digest.update(&buffer[..count]);
     }
+    #[cfg(feature = "test-counters")]
+    counters::record_read(path, bytes_read);
     Ok(format!("{:x}", digest.finalize()))
 }
 

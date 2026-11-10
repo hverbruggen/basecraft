@@ -87,9 +87,17 @@ impl LogWriter {
             // One write per line: with O_APPEND, a crash can't interleave
             // half lines.
             let previous_length = f.metadata()?.len();
-            if let Err(error) = f.write_all(&line).and_then(|()| f.sync_data()) {
+            if let Err(error) = f.write_all(&line).and_then(|()| {
+                #[cfg(feature = "test-counters")]
+                basecraft_io::counters::record_sync_data();
+                f.sync_data()
+            }) {
                 if f.set_len(previous_length)
-                    .and_then(|()| f.sync_data())
+                    .and_then(|()| {
+                        #[cfg(feature = "test-counters")]
+                        basecraft_io::counters::record_sync_data();
+                        f.sync_data()
+                    })
                     .is_err()
                 {
                     self.poisoned = true;

@@ -31,6 +31,8 @@ impl Source {
             .try_reserve_exact(len)
             .map_err(|e| std::io::Error::other(format!("cannot allocate input buffer: {e}")))?;
         file.read_to_end(&mut bytes)?;
+        #[cfg(feature = "test-counters")]
+        crate::counters::record_read(path, bytes.len() as u64);
         Ok(Source::Owned(bytes))
     }
 

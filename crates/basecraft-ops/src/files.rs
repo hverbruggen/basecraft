@@ -263,6 +263,8 @@ pub(crate) fn load_tree_from_verified_snapshot(path: &Path) -> Result<OpenedTree
 
 fn load_tree_metadata(path: &Path, verified_snapshot: bool) -> Result<OpenedTree> {
     let text = std::fs::read_to_string(path)?;
+    #[cfg(feature = "test-counters")]
+    basecraft_io::counters::record_read(path, text.len() as u64);
     let nexus = newick::is_nexus(&text);
     let mut parsed_trees = newick::parse_trees(&text)?.into_iter();
     let parsed = parsed_trees
@@ -488,6 +490,8 @@ pub fn open(path: &Path) -> Result<Opened> {
         ))),
         Format::GenBank => {
             let bytes = std::fs::read(path)?;
+            #[cfg(feature = "test-counters")]
+            basecraft_io::counters::record_read(path, bytes.len() as u64);
             let rec = genbank::parse(&bytes)?
                 .into_iter()
                 .next()
