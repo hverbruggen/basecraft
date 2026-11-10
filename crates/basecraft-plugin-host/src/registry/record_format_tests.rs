@@ -43,7 +43,7 @@ fn old_empty(schema: u32) -> OldIndex {
 // All path spellings are predeclared nonpersonal inputs, never normalized or
 // redacted from a real capture. Windows-looking strings on Unix prove escaping only.
 fn original_runtime(populated: bool) -> crate::runtime::Runtime {
-    crate::runtime::Runtime {
+    crate::runtime::Runtime(basecraft_protocol::installation_records::Runtime {
         schema: 1,
         executables: vec!["z-tool".into(), "a-tool".into(), "z-tool".into()],
         root: "portable/环境 \"root\"".into(),
@@ -67,7 +67,7 @@ fn original_runtime(populated: bool) -> crate::runtime::Runtime {
         } else {
             BTreeMap::new()
         },
-    }
+    })
 }
 
 fn old_runtime(populated: bool) -> OldRuntime {
@@ -680,4 +680,48 @@ fn original_writer_limits_and_reached_failure_stages() {
         "installation-index-writer-observations",
         &serde_json::to_vec_pretty(&observations).unwrap(),
     );
+}
+
+#[test]
+fn substituted_host_alias_and_transparent_receipts_round_trip() {
+    // Runtime deliberately implements neither Default nor JsonSchema.
+    assert_eq!(InstallationIndex::default().schema, 0);
+    for bytes in [
+        include_bytes!("../../../../testdata/fixtures/records-v1/installation-index-empty.json")
+            .as_slice(),
+        include_bytes!(
+            "../../../../testdata/fixtures/records-v1/installation-index-populated.json"
+        )
+        .as_slice(),
+        include_bytes!(
+            "../../../../testdata/fixtures/records-v1/installation-index-defaulted.json"
+        )
+        .as_slice(),
+        include_bytes!(
+            "../../../../testdata/fixtures/records-v1/installation-index-mutations-enable.json"
+        )
+        .as_slice(),
+        include_bytes!(
+            "../../../../testdata/fixtures/records-v1/installation-index-mutations-remove.json"
+        )
+        .as_slice(),
+        include_bytes!(
+            "../../../../testdata/fixtures/records-v1/installation-index-mutations-reselect.json"
+        )
+        .as_slice(),
+        include_bytes!(
+            "../../../../testdata/fixtures/records-v1/installation-index-rust-default.json"
+        )
+        .as_slice(),
+    ] {
+        let record: InstallationIndex = serde_json::from_slice(bytes).unwrap();
+        assert_eq!(serde_json::to_vec_pretty(&record).unwrap(), bytes);
+    }
+    for bytes in [
+        include_bytes!("../../../../testdata/fixtures/records-v1/managed-plugin-runtime-serializer-empty-maps.json").as_slice(),
+        include_bytes!("../../../../testdata/fixtures/records-v1/managed-plugin-runtime-serializer-populated.json").as_slice(),
+    ] {
+        let record: crate::runtime::Runtime = serde_json::from_slice(bytes).unwrap();
+        assert_eq!(serde_json::to_vec_pretty(&record).unwrap(), bytes);
+    }
 }

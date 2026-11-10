@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Runtime",
+  "description": "Retained managed-runtime receipt. The host verifies its paths and digests.\nThe schema describes objects; the existing serde reader also accepts positional\nsequences of seven through nine fields, with trailing maps defaulted.",
+  "type": "object",
+  "properties": {
+    "executable_digests": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {}
+    },
+    "executables": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "interpreter": {
+      "type": "string"
+    },
+    "lock_digest": {
+      "type": "string"
+    },
+    "manifest_digest": {
+      "type": "string"
+    },
+    "package_digest": {
+      "type": "string"
+    },
+    "reported_versions": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {}
+    },
+    "root": {
+      "type": "string"
+    },
+    "schema": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "executables",
+    "root",
+    "interpreter",
+    "lock_digest",
+    "manifest_digest",
+    "package_digest"
+  ]
+}

@@ -195,20 +195,17 @@ pub fn current_platform() -> &'static str {
 
 /// Immutable selection retained by a registry generation and accepted jobs.
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Runtime {
-    pub schema: u32,
-    pub executables: Vec<String>,
-    pub root: PathBuf,
-    pub interpreter: PathBuf,
-    pub lock_digest: String,
-    pub manifest_digest: String,
-    pub package_digest: String,
-    #[serde(default)]
-    pub reported_versions: BTreeMap<String, String>,
-    #[serde(default)]
-    pub executable_digests: BTreeMap<String, String>,
+#[serde(transparent)]
+pub struct Runtime(pub basecraft_protocol::installation_records::Runtime);
+
+impl std::ops::Deref for Runtime {
+    type Target = basecraft_protocol::installation_records::Runtime;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
+
 impl Runtime {
     pub fn verify(&self) -> Result<()> {
         let hash = |path: PathBuf| -> Result<String> {
@@ -463,7 +460,7 @@ pub fn provision_with(
             reported_versions.insert(command.clone(), check.expected.clone());
         }
     }
-    let runtime = Runtime {
+    let runtime = Runtime(basecraft_protocol::installation_records::Runtime {
         schema: 1,
         executables: spec.executables.clone(),
         root: pending.path().to_owned(),
@@ -474,7 +471,7 @@ pub fn provision_with(
         package_digest: digest.into(),
         reported_versions,
         executable_digests,
-    };
+    });
     runtime.verify()?;
     basecraft_io::write_atomic(&pending.path().join("runtime.json"), |out| {
         serde_json::to_writer_pretty(out, &runtime).map_err(std::io::Error::other)

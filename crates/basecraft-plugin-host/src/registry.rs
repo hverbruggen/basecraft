@@ -1,6 +1,8 @@
 //! Read-only discovery and atomic managed-package selection. No install hooks.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
+#[cfg(test)]
+use std::collections::BTreeSet;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -8,7 +10,8 @@ use std::sync::Arc;
 use basecraft_platform::paths::AppPaths;
 use basecraft_protocol::operation::{MAX_DESCRIPTOR_BYTES, OperationDescriptor, OperationPins};
 use fs4::fs_std::FileExt;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
+#[cfg(test)]
 use serde_json::Value;
 
 use crate::{Error, Manifest, Result, contract};
@@ -100,24 +103,8 @@ pub struct Registry {
     pub diagnostics: Vec<Diagnostic>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-struct InstallationIndex {
-    #[serde(default = "index_version")]
-    schema: u32,
-    #[serde(default)]
-    active: BTreeMap<String, String>,
-    #[serde(default)]
-    runtimes: BTreeMap<String, crate::runtime::Runtime>,
-    #[serde(default)]
-    disabled: BTreeSet<String>,
-    #[serde(default)]
-    editable: BTreeSet<PathBuf>,
-    #[serde(flatten)]
-    unknown: BTreeMap<String, Value>,
-}
-fn index_version() -> u32 {
-    1
-}
+type InstallationIndex =
+    basecraft_protocol::installation_records::InstallationIndex<crate::runtime::Runtime>;
 
 fn load_index(config: &RegistryConfig) -> Result<InstallationIndex> {
     let file = match std::fs::File::open(&config.index) {

@@ -93,8 +93,8 @@ are described below; their readers and fresh-write behavior remain distinct.
 
 | Record | Location | Writer / reader | Version; type/schema | Unknown fields |
 |---|---|---|---|---|
-| **LC01** `plugins-v1.json` | C config | [registry.rs](../crates/basecraft-plugin-host/src/registry.rs) `write_index` / `load_index` | `schema: 1`; host `InstallationIndex`; no schema | `unknown` map kept; nested runtime rejects unknowns |
-| **LC02** Managed runtime `runtime.json` | C plugin runtime directory | [runtime.rs](../crates/basecraft-plugin-host/src/runtime.rs) runtime builder / `Runtime::verify` and registry loading | `schema: 1`; host `Runtime`; no schema; distinct from run outcome | Rejected |
+| **LC01** `plugins-v1.json` | C config | [registry.rs](../crates/basecraft-plugin-host/src/registry.rs) `write_index` / `load_index` | `schema: 1`; protocol `installation_records::InstallationIndex` (host runtime specialization); [plugin-installation-index.schema.json](plugin-installation-index.schema.json) | `unknown` map kept; nested runtime rejects unknowns |
+| **LC02** Managed runtime `runtime.json` | C plugin runtime directory | [runtime.rs](../crates/basecraft-plugin-host/src/runtime.rs) runtime builder / `Runtime::verify` and registry loading | `schema: 1`; protocol `installation_records::Runtime` (transparent host wrapper); [managed-plugin-runtime.schema.json](managed-plugin-runtime.schema.json); distinct from run outcome | Rejected |
 | **LC03** Managed `pixi.toml`, `pixi.lock`, `.pixi/config.toml` | C runtime staging / installed runtime | runtime builder from manifest/locked source; Pixi and runtime verifier read | Existing Pixi formats; `RuntimeSpec` setup; no host JSON schema | Manifest generated; pinned lock copied and verified, not reinterpreted |
 | **LC04** `ncbi-contact.json` | C state | [lifecycle.rs](../crates/basecraft-plugin-host/src/lifecycle.rs) `reserve`, `ContactPermit::complete` read/write | Bare numeric timestamp; no version or wrapper | Not an object; no unknown fields |
 | **LC05** `preferences.toml` | C config | platform [settings.rs](../crates/basecraft-platform/src/settings.rs) `SettingsStore::{load,update,import_qsettings}` | platform `Preferences`, `schema_version: 1`; [preferences-format.md](preferences-format.md) | Extra TOML fields preserved by store; application preferences, not project record |
@@ -427,7 +427,8 @@ rather than a fabricated common JSON golden.
 | EX11–EX14 | registered-jobs publication/retry/cancellation tests | No committed collection intent/export/member receipt golden; cancel is marker bytes |
 | EX15–EX16 | Workflow, engine, plugin and format-specific tests | No single producer-wide golden; concrete missing families split as AU07–AU23 |
 | EX17–EX19 | submission tests exercise package export/qualification and failure handling | No committed full original-writer package manifest/summary golden; raw external tool output requires its own producer qualification |
-| LC01–LC03 | registry/runtime provisioning, integrity and unknown-field tests | No committed InstallationIndex/Runtime original-writer golden; Pixi lock copy/hash evidence is distinct |
+| LC01–LC02 | Twelve frozen `records-v1/installation-index-*.json` and `managed-plugin-runtime-serializer-*.json` captures; host `registry/record_format_tests.rs`; protocol specialization round-trips | Real original index writer, 157 exact reader observations, independent old serializers and compact identity; LC02 is serializer-only, not provisioning evidence; see limitations below |
+| LC03 | runtime provisioning and integrity tests | Pixi lock copy/hash evidence is distinct from receipt serializer captures |
 | LC04 | lifecycle contact throttling tests | No committed timestamp golden; scalar is not a typed record envelope |
 | LC05 | `schemas/preferences.example.toml`; platform `public_example_is_valid`, update/migration tests; GUI real-QSettings migration checks | Hand-authored example, not an original-writer full-byte golden; TOML store merge preserves unknown values, not comments/formatting |
 | LC06 | IO cache invalidation and binary round-trip tests (AU05/AU06) | No committed original cache-byte golden; do not mistake reusable scientific AU07 for this cache |
@@ -451,7 +452,7 @@ edit concurrent shared registration hunks.
 | 2. EX11–EX13 publication receipts | `plugin-host/src/runner.rs` finalization/export helpers; host format tests and separate protocol record module/schemas | Reuse path/digest maps; keep collection intents and member ownership receipts distinct. Preserve presence-only collection intent gating: finalization reconstructs the expected member map from validated artifacts and checks actual membership/bytes/hashes independently, without decoding either intent. Member repair instead parses selected schema/destination/hash/device/inode/size fields and verifies destination bytes. Do not tighten collection-intent decoding or extend member checks to unknown fields during a type-only migration; capture these distinct acceptance rules first |
 | 3. RP12/RP13 provenance report wrappers | `ops/src/provenance.rs` `write_reports`; provenance fixtures and new protocol record module/schemas | Reuse Publication and existing paragraph/citation payload shapes where wire-compatible; manifest vs unversioned array stay distinct. Existing bundle is golden seed. Source-map envelope/version would change bytes and needs separate approval; regenerating reports must still preserve authored methods |
 | 4. DS12–DS14 Sanger invocation/index/checkpoint | `ops/src/sanger_review/storage.rs`; storage format tests and separate protocol record module/schemas | Reuse existing source/path concepts; do not substitute LocalJobIndex or ExternalExecution shapes. Confirm owner/status/primary-output nulls and absent artifact_run on recovery manifest. Capture failed/interrupted/support_retained and checkpoint writers; preserve both run/index records and separate-write failure semantics |
-| 5. LC01 InstallationIndex | `plugin-host/src/registry.rs`; registry format tests and separate protocol record module/schemas | Existing index preserves top-level unknowns but embeds GPL host Runtime. Reuse opaque runtime snapshots or separately coordinate a portable wire contract; protocol cannot depend on host. Defaults/missing schema and invalid future versions must keep current diagnostics |
+| 5. LC01 InstallationIndex / LC02 Runtime | Data types now in protocol `installation_records`; host envelope alias and transparent runtime wrapper | Representation-only substitution with frozen original captures. Host provisioning, verification, discovery and partial effects remain unchanged; broader producer/native qualification remains separate |
 
 RP06 SubmittedInput is important but larger: mutations touch input_evidence,
 analysis_store, Session, provenance, runner and Sanger adapters and overlap active
@@ -561,3 +562,29 @@ regeneration drops unknown fields. Report/document engines (RP15/RP16), permissi
 symlink behavior and provenance's existing per-write 64 MiB cap are unchanged.
 The source-map schema reflects the original `usize` on its generation target;
 no integer-width or cross-platform qualification is introduced.
+
+## Installation record typing and evidence limits
+
+LC01 uses one generic protocol envelope with the protocol Runtime as its schema
+payload and the transparent host Runtime as its behavioral payload. Protocol is
+data-only. Rust Default keeps schema zero; absent index/schema loads as one.
+Top-level extras retain semantic values; nested runtime unknowns remain rejected.
+Fields, sorted maps/sets, vector order, pretty bytes without a final newline and
+compact identity serialization retain the original representation.
+
+The object schemas describe writer shapes, not every incidental reader behavior:
+the runtime reader still accepts positional sequences of seven, eight or nine
+fields. Exact malformed/null/duplicate/default/future-version error observations
+are frozen in the reader fixture. Unknown unused runtimes still parse syntactically
+before the host selectively verifies selected runtimes. No eager verifier or new
+version policy is introduced. Native path ordering/encoding and the host's 1 MiB
+index bound are not schema guarantees. Windows-looking text on Linux proves
+escaping only, not native Windows path behavior.
+
+LC02 captures use the original direct pretty-serializer call shape, not a real
+provisioning run. Compact identity is a serializer/input oracle, not discovery
+or generation qualification. Reached writer-failure observations cover limits,
+closure/load refusal and Unix path serialization, not replacement faults, lock
+contention, partial installation, power loss or ENOSPC. Provisioning/discovery,
+retained-job semantics, generated native runtime paths and Windows/Mac execution
+remain separate validation. EX03's opaque runtime snapshot is unchanged.

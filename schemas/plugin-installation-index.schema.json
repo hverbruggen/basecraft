@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "InstallationIndex",
+  "description": "Plugin selections and retained runtimes. Missing schema decodes as one;\nRust Default intentionally emits zero, matching the original host declaration.\nThe payload parameter preserves the host's behavior-bearing runtime wrapper.",
+  "type": "object",
+  "properties": {
+    "active": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {}
+    },
+    "disabled": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true
+    },
+    "editable": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true
+    },
+    "runtimes": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/Runtime"
+      }
+    },
+    "schema": {
+      "type": "integer",
+      "format": "uint32",
+      "default": 1,
+      "minimum": 0
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "Runtime": {
+      "description": "Retained managed-runtime receipt. The host verifies its paths and digests.\nThe schema describes objects; the existing serde reader also accepts positional\nsequences of seven through nine fields, with trailing maps defaulted.",
+      "type": "object",
+      "properties": {
+        "executable_digests": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "executables": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "interpreter": {
+          "type": "string"
+        },
+        "lock_digest": {
+          "type": "string"
+        },
+        "manifest_digest": {
+          "type": "string"
+        },
+        "package_digest": {
+          "type": "string"
+        },
+        "reported_versions": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "root": {
+          "type": "string"
+        },
+        "schema": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "executables",
+        "root",
+        "interpreter",
+        "lock_digest",
+        "manifest_digest",
+        "package_digest"
+      ]
+    }
+  }
+}

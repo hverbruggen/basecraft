@@ -532,6 +532,16 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     schemars::schema_for!(basecraft_protocol::records::ResultBinding),
                 ),
                 (
+                    "plugin-installation-index",
+                    schemars::schema_for!(
+                        basecraft_protocol::installation_records::InstallationIndex
+                    ),
+                ),
+                (
+                    "managed-plugin-runtime",
+                    schemars::schema_for!(basecraft_protocol::installation_records::Runtime),
+                ),
+                (
                     "external-execution",
                     schemars::schema_for!(basecraft_protocol::records::ExternalExecution),
                 ),
