@@ -1039,6 +1039,17 @@
       "description": "A cheap fingerprint of a document after an operation. Replay compares\nit at every step; full content hashes are compared at open and save.",
       "type": "object",
       "properties": {
+        "counts": {
+          "description": "Named counts and document kind. Absent in logs written before these\ndescriptors were introduced; the original fields retain their meaning.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DocumentCounts"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "features": {
           "description": "Annotations: features of a sequence, clade annotations of a tree.",
           "type": "integer",
@@ -1064,6 +1075,167 @@
       "required": [
         "len",
         "features"
+      ]
+    },
+    "DocumentCounts": {
+      "description": "A document fingerprint names what it counts instead of interpreting a\nmetadata link as an alignment row or a submission frame as a feature.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "features": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "kind": {
+              "type": "string",
+              "const": "sequence"
+            },
+            "residues": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "kind",
+            "residues",
+            "features"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "columns": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "kind": {
+              "type": "string",
+              "const": "alignment"
+            },
+            "rows": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "kind",
+            "columns",
+            "rows"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "annotations": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "kind": {
+              "type": "string",
+              "const": "tree"
+            },
+            "tips": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "kind",
+            "tips",
+            "annotations"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "hypotheses": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "kind": {
+              "type": "string",
+              "const": "delimitation"
+            },
+            "specimens": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "kind",
+            "specimens",
+            "hypotheses"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "identifications": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "kind": {
+              "type": "string",
+              "const": "metadata"
+            },
+            "links": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "specimens": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "kind",
+            "specimens",
+            "identifications",
+            "links"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "accessions": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "frames": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "kind": {
+              "type": "string",
+              "const": "submission"
+            },
+            "records": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "kind",
+            "records",
+            "frames",
+            "accessions"
+          ]
+        }
       ]
     },
     "EndPolicy": {
