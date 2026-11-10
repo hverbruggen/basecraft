@@ -238,16 +238,20 @@ impl SessionPolicy {
         )
     }
 
-    // Inject the two existing platform probes for deny-before-probe tests. This
-    // is the one resolver used by both public bindings and the access seam.
-    fn resolve_resource_with(
+    fn resource_effects(&self, action: ResourceAction) -> basecraft_ops::access::Result<()> {
+        // Recovery mutation may change both documents and evidence artifacts.
+        // Do not infer permission from the selected root, handle or receipt.
+        if action.writes() && (!self.document_write || !self.artifact_write) {
+            return Err(AccessError::Denied(Denial::ReadOnly));
+        }
+        Ok(())
+    }
+
+    fn resource_path(
         &self,
         supplied: &Path,
         action: ResourceAction,
-        metadata: &mut impl FnMut(&Path) -> std::io::Result<std::fs::Metadata>,
-        links: &mut impl FnMut(&Path) -> std::io::Result<u64>,
-    ) -> basecraft_ops::access::Result<PathBuf> {
-        use basecraft_ops::access::Result;
+    ) -> basecraft_ops::access::Result<(PathBuf, PathBuf)> {
         let reject = |reason| Err(AccessError::Denied(reason));
         if supplied.as_os_str().is_empty()
             || supplied
@@ -278,20 +282,24 @@ impl SessionPolicy {
         {
             return reject(Denial::RootMutation);
         }
-        // Check the root itself, but never probe its ancestors. The configured
-        // canonical root is established by SessionPolicy::new. This is not a
-        // handle-relative guarantee against concurrent namespace replacement.
-        let check_directory = |info: &std::fs::Metadata| -> Result<()> {
-            if info.file_type().is_symlink() {
-                Err(AccessError::Denied(Denial::SymbolicLink))
-            } else if !info.is_dir() {
-                Err(AccessError::Denied(Denial::ResourceType))
-            } else {
-                Ok(())
-            }
-        };
+        Ok((path, relative))
+    }
+
+    // Explicit legacy observation backend. Keep its probe order, original IO,
+    // missing-leaf rules and create-parent canonical check for existing callers.
+    fn resolve_resource_with(
+        &self,
+        supplied: &Path,
+        action: ResourceAction,
+        metadata: &mut impl FnMut(&Path) -> std::io::Result<std::fs::Metadata>,
+        links: &mut impl FnMut(&Path) -> std::io::Result<u64>,
+    ) -> basecraft_ops::access::Result<PathBuf> {
+        let (path, relative) = self.resource_path(supplied, action)?;
         let root_metadata = metadata(&self.root)?;
-        check_directory(&root_metadata)?;
+        resource_directory(
+            root_metadata.file_type().is_symlink(),
+            root_metadata.is_dir(),
+        )?;
         let mut leaf = Some(root_metadata);
         let mut current = self.root.clone();
         for component in relative.components() {
@@ -302,57 +310,107 @@ impl SessionPolicy {
             match metadata(&current) {
                 Ok(info) => {
                     if info.file_type().is_symlink() {
-                        return reject(Denial::SymbolicLink);
+                        return Err(AccessError::Denied(Denial::SymbolicLink));
                     }
                     if current != path {
-                        check_directory(&info)?;
+                        resource_directory(info.file_type().is_symlink(), info.is_dir())?;
                     }
                     leaf = Some(info);
                 }
                 Err(error)
                     if error.kind() == std::io::ErrorKind::NotFound
                         && current == path
-                        && (action.creates() || action == ResourceAction::Probe) =>
+                        && resource_allows_absence(action) =>
                 {
                     leaf = None;
                 }
                 Err(error) => return Err(error.into()),
             }
         }
+        resource_leaf(
+            action,
+            leaf.as_ref().map(|info| (info.is_file(), info.is_dir())),
+            || links(&path),
+        )?;
         if action.creates() {
-            if leaf.is_some() {
-                return Err(AccessError::DestinationExists);
-            }
-            // Preserve output containment if an ancestor ABOVE the configured
-            // root was redirected before this call. Root lstat alone follows
-            // such ancestors. This is not protection against a later swap.
+            // Legacy output containment check. Strict observations never call it.
             let parent = path
                 .parent()
                 .ok_or(AccessError::Denied(Denial::InvalidPath))?
                 .canonicalize()?;
             if !parent.starts_with(&self.root) {
-                return reject(Denial::OutsideRoot);
-            }
-        } else if let Some(info) = leaf {
-            if !info.is_file() && !info.is_dir() {
-                return reject(Denial::ResourceType);
-            }
-            if matches!(
-                action,
-                ResourceAction::ReadFile | ResourceAction::ReplaceFile | ResourceAction::SyncFile
-            ) && !info.is_file()
-                || matches!(
-                    action,
-                    ResourceAction::ReadDirectory | ResourceAction::SyncDirectory
-                ) && !info.is_dir()
-            {
-                return reject(Denial::ResourceType);
-            }
-            if info.is_file() && links(&path)? != 1 {
-                return reject(Denial::Hardlink);
+                return Err(AccessError::Denied(Denial::OutsideRoot));
             }
         }
         Ok(path)
+    }
+
+    /// Unwired strict backend for future contextual owners. This is a resource
+    /// check, not service eligibility, overwrite consent or a publication grant.
+    /// Keep the returned observation alive; its path is not permission to reopen.
+    #[allow(dead_code)]
+    pub(crate) fn resolve_resource_strict(
+        &self,
+        supplied: &Path,
+        action: ResourceAction,
+    ) -> std::result::Result<StrictResource, StrictResourceError> {
+        self.resolve_resource_strict_with(
+            supplied,
+            action,
+            basecraft_platform::files::namespace_lock_supported(),
+            basecraft_platform::files::inspect_target_namespace,
+        )
+    }
+
+    // The only strict IO boundary is the actual platform inspector. No legacy
+    // callbacks are present here, including link_count's content-capable open.
+    fn resolve_resource_strict_with(
+        &self,
+        supplied: &Path,
+        action: ResourceAction,
+        supported: bool,
+        inspect: impl FnOnce(
+            &Path,
+        ) -> std::result::Result<
+            basecraft_platform::files::TargetNamespace,
+            basecraft_platform::files::NamespaceReadError,
+        >,
+    ) -> std::result::Result<StrictResource, StrictResourceError> {
+        self.resource_effects(action)?;
+        let (path, relative) = self.resource_path(supplied, action)?;
+        if !supported {
+            return Err(AccessError::Denied(Denial::ServiceUnavailable).into());
+        }
+        let namespace = inspect(&path).map_err(strict_namespace_error)?;
+        let metadata = namespace.metadata();
+        if relative.as_os_str().is_empty() {
+            // The configured resource root must itself still be a directory.
+            // For a descendant, the shared platform chain establishes this.
+            if let Some(info) = metadata {
+                resource_directory(
+                    false,
+                    info.kind() == basecraft_platform::files::OrdinaryKind::Directory,
+                )?;
+            } else {
+                return Err(StrictResourceError::Missing(Box::new(namespace)));
+            }
+        }
+        if metadata.is_none() && !resource_allows_absence(action) {
+            // S2a exposes this error by borrow. Retain its owner instead of
+            // manufacturing a new NotFound or losing its raw OS/source value.
+            return Err(StrictResourceError::Missing(Box::new(namespace)));
+        }
+        resource_leaf(
+            action,
+            metadata.map(|info| {
+                (
+                    info.kind() == basecraft_platform::files::OrdinaryKind::File,
+                    info.kind() == basecraft_platform::files::OrdinaryKind::Directory,
+                )
+            }),
+            || Ok(metadata.map_or(0, basecraft_platform::files::TargetMetadata::links)),
+        )?;
+        Ok(StrictResource { path, namespace })
     }
 
     pub fn resolve(
@@ -491,6 +549,106 @@ impl CredentialGrant {
     }
 }
 
+fn resource_allows_absence(action: ResourceAction) -> bool {
+    action.creates() || action == ResourceAction::Probe
+}
+
+fn resource_directory(symbolic: bool, directory: bool) -> basecraft_ops::access::Result<()> {
+    if symbolic {
+        Err(AccessError::Denied(Denial::SymbolicLink))
+    } else if !directory {
+        Err(AccessError::Denied(Denial::ResourceType))
+    } else {
+        Ok(())
+    }
+}
+
+// Shared action/type/no-overwrite decisions. The backend supplies only observed
+// kind and deferred link count; the strict backend's count is retained metadata.
+fn resource_leaf(
+    action: ResourceAction,
+    kind: Option<(bool, bool)>,
+    links: impl FnOnce() -> std::io::Result<u64>,
+) -> basecraft_ops::access::Result<()> {
+    if action.creates() {
+        if kind.is_some() {
+            return Err(AccessError::DestinationExists);
+        }
+    } else if let Some((file, directory)) = kind {
+        if !file && !directory
+            || matches!(
+                action,
+                ResourceAction::ReadFile | ResourceAction::ReplaceFile | ResourceAction::SyncFile
+            ) && !file
+            || matches!(
+                action,
+                ResourceAction::ReadDirectory | ResourceAction::SyncDirectory
+            ) && !directory
+        {
+            return Err(AccessError::Denied(Denial::ResourceType));
+        }
+        if file && links()? != 1 {
+            return Err(AccessError::Denied(Denial::Hardlink));
+        }
+    }
+    Ok(())
+}
+
+/// Retained structural observation, never a service/consent token. No production
+/// consumer yet: S2c must bind its own request and reauthorize actual effects.
+#[derive(Debug)]
+#[allow(dead_code)]
+pub(crate) struct StrictResource {
+    path: PathBuf,
+    namespace: basecraft_platform::files::TargetNamespace,
+}
+
+/// Local resolver failure carrier, not a new public Access error category.
+/// Missing retains S2a's actual checked-absence owner and original IO error.
+#[derive(Debug)]
+pub(crate) enum StrictResourceError {
+    Access(AccessError),
+    Missing(Box<basecraft_platform::files::TargetNamespace>),
+}
+impl From<AccessError> for StrictResourceError {
+    fn from(error: AccessError) -> Self {
+        Self::Access(error)
+    }
+}
+impl std::fmt::Display for StrictResourceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Access(error) => error.fmt(f),
+            Self::Missing(namespace) => match namespace.absence_error() {
+                Some(error) => error.fmt(f),
+                None => f.write_str("checked missing resource has no absence observation"),
+            },
+        }
+    }
+}
+impl std::error::Error for StrictResourceError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Access(error) => Some(error),
+            Self::Missing(namespace) => namespace
+                .absence_error()
+                .map(|error| error as &(dyn std::error::Error + 'static)),
+        }
+    }
+}
+fn strict_namespace_error(error: basecraft_platform::files::NamespaceReadError) -> AccessError {
+    use basecraft_platform::files::NamespaceReadError;
+    match error {
+        NamespaceReadError::Unsupported | NamespaceReadError::Changed => {
+            AccessError::Denied(Denial::ServiceUnavailable)
+        }
+        NamespaceReadError::Redirected => AccessError::Denied(Denial::SymbolicLink),
+        NamespaceReadError::Aliased => AccessError::Denied(Denial::Hardlink),
+        NamespaceReadError::WrongKind => AccessError::Denied(Denial::ResourceType),
+        NamespaceReadError::Io(error) => AccessError::Io(error),
+    }
+}
+
 impl Access for SessionPolicy {
     fn boundary(&self) -> Option<&Path> {
         Some(&self.root)
@@ -501,11 +659,7 @@ impl Access for SessionPolicy {
         path: &Path,
         action: ResourceAction,
     ) -> basecraft_ops::access::Result<PathBuf> {
-        // Recovery mutation may change both documents and evidence artifacts.
-        // Do not infer permission from the selected root, handle or receipt.
-        if action.writes() && (!self.document_write || !self.artifact_write) {
-            return Err(AccessError::Denied(Denial::ReadOnly));
-        }
+        self.resource_effects(action)?;
         self.resolve_resource(path, action)
     }
 }
