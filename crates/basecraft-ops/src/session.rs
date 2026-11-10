@@ -956,14 +956,14 @@ impl Session {
         history_only: bool,
         decision: Option<SaveDecision>,
     ) -> Result<SaveOutcome> {
+        let valid_consent = decision
+            .as_ref()
+            .map(|decision| self.consume_save_check(decision))
+            .transpose()?
+            .unwrap_or(false);
         if !self.is_open(id) {
             return Err(invalid("save document is not open"));
         }
-        let valid_consent = decision
-            .as_ref()
-            .map(|decision| self.consume_save_check(id, decision))
-            .transpose()?
-            .unwrap_or(false);
         let mut warnings = Vec::new();
         let mut target_check = None;
         let new_sequence = self.docs[id.0].accepted_hashes.is_empty();

@@ -602,3 +602,133 @@ fn damaged_display_and_registry_entries_do_not_hide_known_conflicts() {
         },
     );
 }
+
+#[test]
+fn review_wrong_document_attempt_consumes_original_receipt() {
+    isolated(
+        "review_wrong_document_attempt_consumes_original_receipt",
+        |root| {
+            let (mut session, doc, file) = setup(root);
+            damage(root, &file);
+            let second_file = root.join("second.fasta");
+            std::fs::write(&second_file, ORIGINAL).unwrap();
+            let second = session.open(&second_file).unwrap();
+            let check = session.check_save(doc, None).unwrap();
+            let duplicate = check.clone().decide(SavePolicy::Cancel, true);
+            let wrong =
+                session.save_with_decision(second, None, check.decide(SavePolicy::Cancel, true));
+            assert!(matches!(wrong, Err(Error::SaveDecisionStale(_))));
+            assert_eq!(std::fs::read(&file).unwrap(), ORIGINAL);
+            let replay = session.save_with_decision(doc, None, duplicate);
+            assert!(
+                matches!(replay, Err(Error::SaveDecisionStale(_))),
+                "receipt remained usable after wrong-document attempt: {replay:?}"
+            );
+        },
+    );
+}
+
+#[test]
+fn invalid_document_attempt_consumes_originating_receipt() {
+    isolated(
+        "invalid_document_attempt_consumes_originating_receipt",
+        |root| {
+            let (mut session, doc, file) = setup(root);
+            damage(root, &file);
+            let check = session.check_save(doc, None).unwrap();
+            let duplicate = check.clone().decide(SavePolicy::Cancel, true);
+            let invalid = session.save_with_decision(
+                DocId(usize::MAX),
+                None,
+                check.decide(SavePolicy::Cancel, true),
+            );
+            assert!(matches!(invalid, Err(Error::Invalid(_))));
+            assert_eq!(std::fs::read(&file).unwrap(), ORIGINAL);
+            assert!(session.can_undo(doc));
+            assert!(matches!(
+                session.save_with_decision(doc, None, duplicate),
+                Err(Error::SaveDecisionStale(_))
+            ));
+            assert_eq!(std::fs::read(&file).unwrap(), ORIGINAL);
+        },
+    );
+}
+
+#[test]
+fn invalid_document_attempt_does_not_consume_newer_receipt() {
+    isolated(
+        "invalid_document_attempt_does_not_consume_newer_receipt",
+        |root| {
+            let (mut session, doc, file) = setup(root);
+            damage(root, &file);
+            let second_file = root.join("second.fasta");
+            std::fs::write(&second_file, ORIGINAL).unwrap();
+            let second = session.open(&second_file).unwrap();
+            let old = session.check_save(doc, None).unwrap();
+            let newer = session.check_save(doc, None).unwrap();
+            assert!(matches!(
+                session.save_with_decision(
+                    second,
+                    None,
+                    old.clone().decide(SavePolicy::Cancel, true)
+                ),
+                Err(Error::SaveDecisionStale(_))
+            ));
+            assert_eq!(std::fs::read(&second_file).unwrap(), ORIGINAL);
+            assert!(matches!(
+                session.save_with_decision(
+                    DocId(usize::MAX),
+                    None,
+                    old.decide(SavePolicy::Cancel, true)
+                ),
+                Err(Error::Invalid(_))
+            ));
+            assert_eq!(std::fs::read(&file).unwrap(), ORIGINAL);
+            let outcome = session
+                .save_with_decision(doc, None, newer.decide(SavePolicy::Cancel, true))
+                .unwrap();
+            assert_eq!(outcome.warnings.len(), 1);
+            assert_eq!(std::fs::read(&file).unwrap(), b">gene\nATGT\n");
+        },
+    );
+}
+
+#[test]
+fn foreign_receipt_cannot_consume_local_or_originating_session_authority() {
+    isolated(
+        "foreign_receipt_cannot_consume_local_or_originating_session_authority",
+        |root| {
+            let (mut origin, doc, file) = setup(root);
+            damage(root, &file);
+            let check = origin.check_save(doc, None).unwrap();
+            let duplicate = check.clone().decide(SavePolicy::Cancel, true);
+            let other_root = folder(root, "other-session");
+            let (mut other, other_doc, other_file) = setup(&other_root);
+            let rejected = other
+                .save_with_decision(
+                    other_doc,
+                    None,
+                    check.clone().decide(SavePolicy::Cancel, true),
+                )
+                .unwrap_err();
+            assert!(matches!(rejected, Error::SaveDecisionStale(_)));
+            let local = required(rejected);
+            assert!(matches!(
+                other.save_with_decision(
+                    DocId(usize::MAX),
+                    None,
+                    check.decide(SavePolicy::Cancel, true)
+                ),
+                Err(Error::Invalid(_))
+            ));
+            assert_eq!(std::fs::read(&file).unwrap(), ORIGINAL);
+            assert_eq!(std::fs::read(&other_file).unwrap(), ORIGINAL);
+            other
+                .save_with_decision(other_doc, None, local.decide(SavePolicy::Cancel, true))
+                .unwrap();
+            origin.save_with_decision(doc, None, duplicate).unwrap();
+            assert_eq!(std::fs::read(&file).unwrap(), b">gene\nATGT\n");
+            assert_eq!(std::fs::read(&other_file).unwrap(), b">gene\nATGT\n");
+        },
+    );
+}

@@ -145,8 +145,16 @@ impl Session {
         Ok(check)
     }
 
-    pub(super) fn consume_save_check(&self, id: DocId, decision: &SaveDecision) -> Result<bool> {
-        let mut pending = self.docs[id.0]
+    pub(super) fn consume_save_check(&self, decision: &SaveDecision) -> Result<bool> {
+        // A failed attempt against another requested document still spends the
+        // originating receipt. A foreign Session cannot spend our authority.
+        if decision.check.scope.session != self.id {
+            return Ok(false);
+        }
+        let Some(slot) = self.docs.get(decision.check.scope.document) else {
+            return Ok(false);
+        };
+        let mut pending = slot
             .pending_save_check
             .lock()
             .map_err(|_| invalid("save check state is unavailable"))?;
