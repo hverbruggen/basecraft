@@ -109,7 +109,7 @@ pub(crate) enum RecordLimit {
     Registry,
 }
 impl RecordLimit {
-    fn message(&self) -> &'static str {
+    fn message(self) -> &'static str {
         match self {
             Self::Provenance => "provenance record exceeds reading limit (at most 64 MiB)",
             Self::Registry => "known-store registry exceeds 1 MiB",
