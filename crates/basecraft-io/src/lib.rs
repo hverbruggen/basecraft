@@ -30,6 +30,19 @@ pub fn write_atomic(
     path: &Path,
     f: impl FnOnce(&mut dyn Write) -> std::io::Result<()>,
 ) -> Result<()> {
+    write_atomic_observed(path, f, |_| Ok(()), || {})
+}
+
+/// The staged callback borrows the actual candidate after flush/file sync and
+/// before replacement. Its error prevents persist. The trusted, infallible
+/// latch runs immediately after successful persist (never after a persist error).
+/// No parent sync, identity query, rollback or whole-save guarantee is added.
+pub fn write_atomic_observed(
+    path: &Path,
+    f: impl FnOnce(&mut dyn Write) -> std::io::Result<()>,
+    staged: impl FnOnce(&std::fs::File) -> std::io::Result<()>,
+    persisted: impl FnOnce(),
+) -> Result<()> {
     let dir = path.parent().unwrap_or(Path::new("."));
     let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
     {
@@ -40,7 +53,9 @@ pub fn write_atomic(
     #[cfg(feature = "test-counters")]
     counters::record_sync_all();
     tmp.as_file().sync_all()?;
+    staged(tmp.as_file())?;
     tmp.persist(path).map_err(|e| Error::Io(e.error))?;
+    persisted();
     Ok(())
 }
 
@@ -252,5 +267,125 @@ mod hash_tests {
         assert!(matches!(hash_file(dir.path()), Err(Error::Io(_))));
         #[cfg(feature = "test-counters")]
         assert_eq!(counters::snapshot(), counters::Counters::default());
+    }
+}
+
+#[cfg(test)]
+mod atomic_observation_tests {
+    use super::*;
+    use std::{cell::RefCell, fs, io};
+
+    #[test]
+    fn callbacks_bracket_real_replacement_and_legacy_counts_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("target");
+        fs::write(&path, b"old").unwrap();
+        let events = RefCell::new(Vec::new());
+        #[cfg(feature = "test-counters")]
+        counters::reset();
+        write_atomic_observed(
+            &path,
+            |w| {
+                events.borrow_mut().push("write");
+                w.write_all(b"new")
+            },
+            |file| {
+                events.borrow_mut().push("staged");
+                assert_eq!(file.metadata()?.len(), 3);
+                // This is the flushed actual candidate, not the old target.
+                let mut reader = file.try_clone()?;
+                std::io::Seek::rewind(&mut reader)?;
+                let mut bytes = Vec::new();
+                reader.read_to_end(&mut bytes)?;
+                assert_eq!(bytes, b"new");
+                assert_eq!(fs::read(&path)?, b"old");
+                #[cfg(feature = "test-counters")]
+                assert_eq!(counters::snapshot().sync_all, 1);
+                Ok(())
+            },
+            || {
+                events.borrow_mut().push("persisted");
+                assert_eq!(fs::read(&path).unwrap(), b"new");
+            },
+        )
+        .unwrap();
+        assert_eq!(*events.borrow(), ["write", "staged", "persisted"]);
+        #[cfg(feature = "test-counters")]
+        let observed_counts = counters::snapshot();
+        #[cfg(feature = "test-counters")]
+        counters::reset();
+        write_atomic(&path, |w| w.write_all(b"legacy")).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"legacy");
+        #[cfg(feature = "test-counters")]
+        {
+            assert_eq!(counters::snapshot(), observed_counts);
+            assert_eq!(
+                observed_counts,
+                counters::Counters {
+                    sync_all: 1,
+                    ..Default::default()
+                }
+            );
+        }
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn stage_write_and_persist_errors_never_latch() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("target");
+        fs::write(&path, b"old").unwrap();
+        let held = fs::File::open(&path).unwrap();
+        #[cfg(unix)]
+        let code = 13;
+        #[cfg(windows)]
+        let code = 5;
+        for fail_write in [false, true] {
+            let error = write_atomic_observed(
+                &path,
+                |w| {
+                    w.write_all(b"new")?;
+                    if fail_write {
+                        Err(io::Error::from_raw_os_error(code))
+                    } else {
+                        Ok(())
+                    }
+                },
+                |_| {
+                    assert!(!fail_write);
+                    Err(io::Error::from_raw_os_error(code))
+                },
+                || panic!("failed write/stage latched"),
+            )
+            .unwrap_err();
+            assert!(matches!(error, Error::Io(e) if e.raw_os_error() == Some(code)));
+            assert_eq!(fs::read(&path).unwrap(), b"old");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                assert_eq!(
+                    held.metadata().unwrap().ino(),
+                    path.metadata().unwrap().ino()
+                );
+            }
+            assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+        }
+        let occupied = dir.path().join("directory");
+        fs::create_dir(&occupied).unwrap();
+        let staged = std::cell::Cell::new(0);
+        let error = write_atomic_observed(
+            &occupied,
+            |w| w.write_all(b"new"),
+            |_| {
+                staged.set(staged.get() + 1);
+                Ok(())
+            },
+            || panic!("failed persist latched"),
+        )
+        .unwrap_err();
+        assert!(matches!(error, Error::Io(_)));
+        assert_eq!(staged.get(), 1);
+        assert!(occupied.is_dir());
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
     }
 }
