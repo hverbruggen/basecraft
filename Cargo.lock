@@ -249,6 +249,7 @@ dependencies = [
  "basecraft-protocol",
  "clap",
  "schemars",
+ "serde",
  "serde_json",
  "tempfile",
 ]
