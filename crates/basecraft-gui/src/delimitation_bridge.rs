@@ -499,48 +499,32 @@ impl qobject::DelimitationController {
     /// A free `<common root>.combinedNN.spart` beside the last file.
     pub fn combine_name(&self, paths: &QString) -> QString {
         let paths: Vec<PathBuf> = serde_json::from_str(&paths.to_string()).unwrap_or_default();
-        QString::from(combined_path(&paths).to_string_lossy().as_ref())
+        QString::from(
+            basecraft_ops::delimitation::combined_path(&paths)
+                .to_string_lossy()
+                .as_ref(),
+        )
     }
     /// Hypotheses in each file, best analysis results first, for the combine dialog.
     pub fn combine_candidates(mut self: Pin<&mut Self>, paths: &QString) -> QString {
         let result = (|| -> Result<Vec<Value>, String> {
             let paths: Vec<PathBuf> =
                 serde_json::from_str(&paths.to_string()).map_err(|e| e.to_string())?;
-            paths
-                .iter()
-                .map(|path| {
-                    let work = basecraft_ops::files::load_delimitation(path)
-                        .map_err(|e| format!("{}: {e}", path.display()))?;
-                    let mut entries: Vec<(usize, &Hypothesis)> =
-                        work.hypotheses.iter().enumerate().collect();
-                    // Each analysis run lists its best partition first and
-                    // marks it rank 1; manual work follows the analyses.
-                    let best = |h: &Hypothesis| {
-                        ["asap_rank", "gmyc_rank"]
-                            .iter()
-                            .any(|key| h.attributes.get(*key).is_some_and(|r| r == "1"))
-                            || (h.origin == HypothesisOrigin::Inferred
-                                && !h.attributes.contains_key("asap_rank")
-                                && !h.attributes.contains_key("gmyc_rank"))
-                    };
-                    let inferred = |h: &Hypothesis| {
-                        matches!(h.origin, HypothesisOrigin::Inferred | HypothesisOrigin::Imported)
-                    };
-                    entries.sort_by_key(|(i, h)| (!best(h), !inferred(h), *i));
-                    let hypotheses: Vec<Value> = entries
-                        .into_iter()
-                        .map(|(_, h)| {
-                            let (code, method) = delimitation::origin(h);
-                            json!({"id": h.id, "name": h.name, "code": code, "method": method,
-                                "species": h.groups.len(), "unassigned": h.unassigned.len(),
-                                "best": best(h), "parent": h.parent,
-                                "scores": h.scores.iter().map(|s| json!({"value": s.value, "scale": s.scale})).collect::<Vec<_>>()})
-                        })
-                        .collect();
-                    Ok(json!({"path": path, "file": path.file_name().map(|n| n.to_string_lossy().into_owned()),
-                        "specimens": work.specimens.len(), "hypotheses": hypotheses}))
-                })
-                .collect()
+            basecraft_ops::delimitation::combine_candidates(&paths)
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .map(|file| {
+                    let hypotheses: Vec<Value> = file.hypotheses.into_iter().map(|entry| {
+                        let h = entry.hypothesis;
+                        let (code, method) = delimitation::origin(&h);
+                        json!({"id": h.id, "name": h.name, "code": code, "method": method,
+                            "species": h.groups.len(), "unassigned": h.unassigned.len(),
+                            "best": entry.best, "parent": h.parent,
+                            "scores": h.scores.iter().map(|s| json!({"value": s.value, "scale": s.scale})).collect::<Vec<_>>()})
+                    }).collect();
+                    Ok(json!({"path": file.path, "file": file.file,
+                        "specimens": file.specimens, "hypotheses": hypotheses}))
+                }).collect()
         })();
         match result {
             Ok(files) => QString::from(&Value::Array(files).to_string()),
@@ -559,59 +543,16 @@ impl qobject::DelimitationController {
         let result = (|| -> Result<_, String> {
             let paths: Vec<PathBuf> =
                 serde_json::from_str(&paths.to_string()).map_err(|e| e.to_string())?;
-            if paths.len() < 2 {
-                return Err("Choose at least two saved species hypothesis files".into());
-            }
             let output = PathBuf::from(output.to_string());
-            if output.exists() || basecraft_ops::files::tree_sidecar(&output).exists() {
-                return Err("Choose a new filename for the combined hypotheses".into());
-            }
+            let keep: Option<basecraft_ops::delimitation::CombineSelection> =
+                Some(selection.to_string())
+                    .filter(|s| !s.trim().is_empty())
+                    .map(|s| serde_json::from_str(&s))
+                    .transpose()
+                    .map_err(|e| e.to_string())?;
             let mut session = Session::recoverable(crate::bridge::project_root(&output))
                 .map_err(|e| e.to_string())?;
-            // Path to the hypothesis IDs to keep; empty keeps everything.
-            let keep: Option<BTreeMap<PathBuf, BTreeSet<String>>> = Some(selection.to_string())
-                .filter(|s| !s.trim().is_empty())
-                .map(|s| serde_json::from_str(&s))
-                .transpose()
-                .map_err(|e| e.to_string())?;
-            if keep
-                .as_ref()
-                .is_some_and(|keep| keep.values().all(BTreeSet::is_empty))
-            {
-                return Err("Choose at least one hypothesis to combine".into());
-            }
-            let doc = session.open(&paths[0]).map_err(|e| e.to_string())?;
-            if let Some(keep) = &keep {
-                let wanted = keep.get(&paths[0]).cloned().unwrap_or_default();
-                let dropped: BTreeSet<String> = session
-                    .delimitation(doc)
-                    .hypotheses
-                    .iter()
-                    .map(|h| h.id.clone())
-                    .filter(|id| !wanted.contains(id))
-                    .collect();
-                if !dropped.is_empty() {
-                    session
-                        .apply(
-                            doc,
-                            Op::DelimitationEdit {
-                                edit: Box::new(DelimitationEdit::Remove {
-                                    hypotheses: dropped,
-                                }),
-                            },
-                        )
-                        .map_err(|e| e.to_string())?;
-                }
-            }
-            basecraft_ops::delimitation::combine_selected(
-                &mut session,
-                doc,
-                &paths[1..],
-                keep.as_ref(),
-            )
-            .map_err(|e| e.to_string())?;
-            session
-                .save(doc, Some(&output))
+            basecraft_ops::delimitation::combine_to(&mut session, &paths, &output, keep.as_ref())
                 .map_err(|e| e.to_string())?;
             Ok(())
         })();
@@ -2119,47 +2060,6 @@ fn workspace_path(source: &Path, method: &str) -> PathBuf {
         .unwrap_or_default()
 }
 
-/// `specimens.afa.asap01.spart` and `specimens.afa.gmyc01.spart` give
-/// `specimens.afa.combined01.spart`; files without a shared root give
-/// `combined01.spart`.
-fn combined_path(paths: &[PathBuf]) -> PathBuf {
-    let Some(last) = paths.last() else {
-        return PathBuf::new();
-    };
-    let directory = last.parent().unwrap_or(Path::new("."));
-    let names: Vec<String> = paths
-        .iter()
-        .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
-        .collect();
-    let first = names.first().map_or("", String::as_str);
-    let mut shared = first.len();
-    for name in names.iter().skip(1) {
-        shared = first
-            .char_indices()
-            .zip(name.chars())
-            .find(|((_, a), b)| a != b)
-            .map_or(shared.min(name.len()), |((i, _), _)| i.min(shared));
-    }
-    // Keep whole name parts: "specimens.afa.asap0" becomes "specimens.afa".
-    let root = if shared == first.len() && names.iter().all(|n| n == first) {
-        first.rsplit_once('.').map_or(first, |(stem, _)| stem)
-    } else {
-        first[..shared]
-            .rsplit_once('.')
-            .map_or("", |(stem, _)| stem)
-    };
-    (1..=u32::MAX)
-        .map(|n| {
-            directory.join(if root.is_empty() {
-                format!("combined{n:02}.spart")
-            } else {
-                format!("{root}.combined{n:02}.spart")
-            })
-        })
-        .find(|path| !path.exists())
-        .unwrap_or_default()
-}
-
 /// Names `create_workspace` gives, including the earlier `species-<id>.spart`.
 fn generated_workspace(name: &str) -> bool {
     let Some(stem) = name
@@ -2480,7 +2380,7 @@ mod naming_tests {
             assert!(generated_workspace(name), "{name}");
         }
         let combined = |names: &[&str]| {
-            combined_path(
+            basecraft_ops::delimitation::combined_path(
                 &names
                     .iter()
                     .map(|n| directory.path().join(n))

@@ -65,3 +65,30 @@ def apply(workspace, action, **parameters):
         json.dumps(operation(action, **parameters)),
     ]
     subprocess.run(command, capture_output=True, text=True, check=True)
+
+
+def candidates(paths, *, project):
+    """Inspect saved hypotheses through the shared read-only workflow."""
+    from .session import Session
+    with Session(project) as session:
+        return session.delimitation_candidates(paths)
+
+
+def combined_name(paths, *, project):
+    """Suggest a combined filename without reserving or creating it."""
+    from .session import Session
+    with Session(project) as session:
+        return session.delimitation_name(paths)
+
+
+def combine(paths, output, *, project, selection=None):
+    """Combine saved hypotheses into a new file through the shared workflow.
+
+    ``selection`` maps source paths to hypothesis IDs. Omit it to keep all;
+    missing paths in a supplied map keep none. The project is explicit, and
+    every path must lie inside it. Sources and existing output are preserved.
+    For a persistent headless session use ``Session.combine_delimitation``.
+    """
+    from .session import Session
+    with Session(project, writes=True) as session:
+        return session.combine_delimitation(paths, output, selection=selection)

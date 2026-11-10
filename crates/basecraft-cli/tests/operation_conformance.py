@@ -123,6 +123,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--root", type=Path, required=True)
+    parser.add_argument("--only-delimitation", action="store_true",
+                        help="Run only the shared native delimitation workflow slice")
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     root = args.root.absolute()
@@ -164,6 +166,167 @@ def main():
         completed = subprocess.run([str(binary), *arguments], cwd=root, env=env,
                                    capture_output=True, text=True, timeout=45, check=True)
         return json.loads(completed.stdout), completed.stderr
+
+    # Native file workflow: the GUI calls the same ops functions as these adapters.
+    from basecraft import delimitation
+    from basecraft.session import Session
+    spart = Path(__file__).resolve().parents[3] / "testdata/fixtures/delimitation/manual.spart"
+    for filename in ("first.spart", "second.spart"):
+        shutil.copyfile(spart, project / filename)
+    paths = [str(project / "first.spart"), str(project / "second.spart")]
+    selection = {paths[0]: ["partition-2"], paths[1]: ["partition-3"]}
+    candidates, _ = cli("delimitation", "candidates", *paths)
+    assert candidates == delimitation.candidates(paths, project=project)
+    suggested, _ = cli("delimitation", "name", *paths)
+    assert suggested["path"] == delimitation.combined_name(paths, project=project)
+    cli("delimitation", "combine", *paths, "--project", str(project),
+        "--output", str(project / "cli.spart"), "--selection", json.dumps(selection))
+    delimitation.combine(paths, "python.spart", project=project, selection=selection)
+    mcp = Mcp(binary, project, env)
+    try:
+        assert {t["name"] for t in mcp.tools()} >= {
+            "delimitation_candidates", "delimitation_name", "delimitation_combine"}
+        assert mcp.tool("delimitation_candidates", {"paths": paths})["structuredContent"] == candidates
+        reply = mcp.tool("delimitation_combine", {"paths": paths, "output": "mcp.spart",
+                                                "selection": selection})
+        assert not reply.get("isError"), reply
+        combined_document = reply["structuredContent"]["document"]
+        assert not mcp.tool("undo", {"document": combined_document}).get("isError")
+        baseline = mcp.tool("read", {"document": combined_document})["structuredContent"]
+        assert [h["name"] for h in baseline["hypotheses"]] == ["first", "second", "partial"]
+        assert not mcp.tool("redo", {"document": combined_document}).get("isError")
+        proposed = mcp.tool("read", {"document": combined_document})["structuredContent"]
+        assert [h["name"] for h in proposed["hypotheses"]] == ["second", "partial"]
+        # Same partitions/exchange bytes despite fresh imported IDs and actor/history.
+        assert (project / "cli.spart").read_bytes() == (project / "mcp.spart").read_bytes()
+        assert (project / "cli.spart").read_bytes() == (project / "python.spart").read_bytes()
+        with Session(project) as inspect:
+            for output in ("cli.spart", "mcp.spart", "python.spart"):
+                doc = inspect.open(output)["document"]
+                hypotheses = inspect.read(doc)["hypotheses"]
+                assert [h["name"] for h in hypotheses] == ["second", "partial"]
+                assert hypotheses[1]["provenance"]["parameters"]["combined_source"]["hypothesis"] == "partition-3"
+        # REV-0036: CLI used to reject aliases that MCP/Python accepted.
+        (project / "sub").mkdir()
+        alias_paths = [str(project / "sub" / ".." / "first.spart"), paths[1]]
+        cli("delimitation", "combine", *alias_paths, "--project", str(project),
+            "--output", str(project / "alias-cli.spart"), "--selection", json.dumps(selection))
+        alias_reply = mcp.tool("delimitation_combine", {"paths": alias_paths,
+            "output": "alias-mcp.spart", "selection": selection})
+        assert not alias_reply.get("isError"), alias_reply
+        delimitation.combine(alias_paths, "alias-python.spart", project=project, selection=selection)
+        for output in ("alias-cli.spart", "alias-mcp.spart", "alias-python.spart"):
+            assert (project / output).read_bytes() == (project / "cli.spart").read_bytes(), output
+        # Aliases also work in selection keys, in the opposite direction.
+        alias_selection = {alias_paths[0]: ["partition-2"], paths[1]: ["partition-3"]}
+        cli("delimitation", "combine", *paths, "--project", str(project),
+            "--output", str(project / "alias-key-cli.spart"), "--selection", json.dumps(alias_selection))
+        assert not mcp.tool("delimitation_combine", {"paths": paths,
+            "output": "alias-key-mcp.spart", "selection": alias_selection}).get("isError")
+        delimitation.combine(paths, "alias-key-python.spart", project=project, selection=alias_selection)
+        for output in ("alias-key-cli.spart", "alias-key-mcp.spart", "alias-key-python.spart"):
+            assert (project / output).read_bytes() == (project / "cli.spart").read_bytes(), output
+        duplicate_selection = {**selection, alias_paths[0]: ["partition-3"]}
+        assert mcp.tool("delimitation_combine", {"paths": paths,
+            "output": "ambiguous-mcp.spart", "selection": duplicate_selection})["isError"]
+        duplicate_cli = subprocess.run([str(binary), "delimitation", "combine", *paths,
+            "--project", str(project), "--output", str(project / "ambiguous-cli.spart"),
+            "--selection", json.dumps(duplicate_selection)], env=env, cwd=root,
+            capture_output=True, text=True, timeout=45)
+        assert duplicate_cli.returncode != 0 and not (project / "ambiguous-cli.spart").exists()
+        assert not (project / "ambiguous-mcp.spart").exists()
+        # REV-0036 final review: root.join must not collapse relative/absolute
+        # keys before canonical-alias validation, even for equal selections.
+        opened_source = mcp.tool("open", {"path": "first.spart"})
+        assert not opened_source.get("isError"), opened_source
+        def mcp_documents():
+            documents = mcp.tool("documents", {})["structuredContent"]
+            contents = [mcp.tool("read", {"document": doc["document"]})["structuredContent"]
+                        for doc in documents]
+            return documents, contents
+        before_documents = mcp_documents()
+        before_sources = {path: Path(path).read_bytes() for path in paths}
+        for case, absolute_id in (("conflicting", "partition-3"), ("identical", "partition-2")):
+            mixed = {"first.spart": ["partition-2"], paths[0]: [absolute_id],
+                     "second.spart": ["partition-2"]}
+            for ordering, entries in (("forward", mixed), ("reverse", dict(reversed(list(mixed.items()))))):
+                suffix = f"{case}-{ordering}"
+                refused = subprocess.run([str(binary), "delimitation", "combine", *paths,
+                    "--project", str(project), "--output", f"mixed-cli-{suffix}.spart",
+                    "--selection", json.dumps(entries)], cwd=project, env=env,
+                    capture_output=True, text=True, timeout=45)
+                assert refused.returncode != 0, refused.stdout
+                refused = mcp.tool("delimitation_combine", {"paths": paths,
+                    "output": f"mixed-mcp-{suffix}.spart", "selection": entries})
+                assert refused["isError"], refused
+                assert mcp_documents() == before_documents
+                with Session(project, writes=True) as py:
+                    source = py.open("first.spart")["document"]
+                    before = py.documents(), py.state(source), py.read(source)
+                    try:
+                        py.combine_delimitation(paths, f"mixed-python-{suffix}.spart", selection=entries)
+                    except operations.OperationError:
+                        pass
+                    else:
+                        raise AssertionError("Python accepted duplicate relative/absolute selection keys")
+                    assert (py.documents(), py.state(source), py.read(source)) == before
+                try:
+                    delimitation.combine(paths, f"mixed-convenience-{suffix}.spart",
+                                         project=project, selection=entries)
+                except operations.OperationError:
+                    pass
+                else:
+                    raise AssertionError("Python convenience API accepted duplicate aliases")
+                for route in ("cli", "mcp", "python", "convenience"):
+                    output = project / f"mixed-{route}-{suffix}.spart"
+                    assert not output.exists(), output
+                    assert not Path(str(output) + ".basecraft.json").exists(), output
+                assert {path: Path(path).read_bytes() for path in paths} == before_sources
+        # Keep security checks on selection keys before joining them as well.
+        outside = root / "outside.spart"
+        shutil.copyfile(spart, outside)
+        refused = mcp.tool("delimitation_combine", {"paths": paths,
+            "output": "outside-selection.spart", "selection": {str(outside): ["partition-2"]}})
+        assert refused["isError"], refused
+        assert mcp_documents() == before_documents
+        assert not (project / "outside-selection.spart").exists()
+        assert outside.read_bytes() == spart.read_bytes()
+        assert {path: Path(path).read_bytes() for path in paths} == before_sources
+        for rejection in (
+            {"paths": paths, "output": "mcp.spart"},
+            {"paths": paths, "output": "stale.spart", "selection": {paths[1]: ["missing"]}},
+            {"paths": paths, "output": "empty.spart", "selection": {}},
+            {"paths": paths, "output": "../escape.spart"},
+        ):
+            assert mcp.tool("delimitation_combine", rejection)["isError"]
+        (project / "mismatch.spart").write_text(spart.read_text().replace("d :", "different :"))
+        assert mcp.tool("delimitation_combine", {"paths": [paths[0], "mismatch.spart"],
+                                               "output": "incompatible.spart"})["isError"]
+        assert not (project / "incompatible.spart").exists()
+        assert not (project / "stale.spart").exists()
+    finally:
+        mcp.close()
+    readonly = Mcp(binary, project, env, writable=False)
+    try:
+        assert not readonly.tool("delimitation_candidates", {"paths": paths}).get("isError")
+        assert readonly.tool("delimitation_combine", {"paths": paths, "output": "denied.spart"})["isError"]
+        assert not (project / "denied.spart").exists()
+    finally:
+        readonly.close()
+    for output, actor in (("cli.spart", {"kind": "script", "client": "CLI"}),
+                          ("python.spart", {"kind": "script", "client": "Python"}),
+                          ("mcp.spart", {"kind": "agent", "model": "mcp-client"})):
+        publication, _ = cli("provenance", "inspect", str(project / output))
+        edits = [e for e in publication["events"] if e["op"] == "delimitation.edit"]
+        assert edits and all(e["actor"] == actor for e in edits), (output, edits)
+    assert all(Path(path).read_bytes() == spart.read_bytes() for path in paths)
+    record("Shared delimitation inspection, naming, selections, output and refusal agree across CLI, MCP and Python")
+    if args.only_delimitation:
+        receipt["status"] = "passed"
+        receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
+        print(receipt_path)
+        return
+
 
     op = "org.example.registry-fixture/count@1"
     name = "org.example.registry-fixture.count.v1"

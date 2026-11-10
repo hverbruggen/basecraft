@@ -24,6 +24,7 @@ use crate::log::LogWriter;
 
 mod creation;
 mod extraction;
+mod proposals;
 pub mod support_import;
 use crate::{Error, Result};
 
@@ -468,17 +469,9 @@ impl Session {
     /// The fingerprint the log records after each operation.
     pub fn state(&self, id: DocId) -> DocState {
         match &self.docs[id.0].content {
-            Loaded::Sequence(o) => DocState {
-                len: o.doc.len(),
-                features: o.doc.feature_count() as u64,
-                rows: None,
-            },
+            Loaded::Sequence(o) => proposals::sequence_state(&o.doc),
             Loaded::Alignment(o) => o.fingerprint(),
-            Loaded::Delimitation(work) => DocState {
-                len: work.specimens.len() as u64,
-                features: work.hypotheses.len() as u64,
-                rows: None,
-            },
+            Loaded::Delimitation(work) => proposals::delimitation_state(work),
             Loaded::Metadata(opened) => opened.fingerprint(),
             Loaded::Submission(sub) => sub.fingerprint(),
             Loaded::Tree(o) => o.fingerprint(),
@@ -2340,12 +2333,7 @@ impl Session {
         let doc = match &mut self.docs[id.0].content {
             Loaded::Sequence(o) => &mut o.doc,
             Loaded::Delimitation(work) => {
-                let Op::DelimitationEdit { edit } = op else {
-                    return Err(invalid("this needs a delimitation edit"));
-                };
-                let before = Box::new(work.clone());
-                basecraft_docs::delimitation::apply(work, edit).map_err(|e| invalid(e.0))?;
-                return Ok((Inverse::Delimitation(before), None));
+                return proposals::execute_delimitation(work, op);
             }
             Loaded::Metadata(opened) => return opened.apply(op),
             Loaded::Submission(sub) => return sub.apply(op),
@@ -2353,93 +2341,6 @@ impl Session {
             Loaded::Tree(t) => return t.apply(op),
         };
         execute_sequence(doc, op)
-    }
-
-    /// Validate/stage the full proposal batch before logging or live mutation.
-    /// Ordinary I/O failure rolls the journal back; power loss uses recovery.
-    pub fn apply_sequence_proposals(
-        &mut self,
-        id: DocId,
-        generation: u64,
-        revision: u64,
-        ops: &[Op],
-        actor: &Actor,
-    ) -> Result<Vec<String>> {
-        let slot = self
-            .docs
-            .get(id.0)
-            .ok_or_else(|| invalid("unknown document"))?;
-        let Loaded::Sequence(sequence) = &slot.content else {
-            return Err(invalid("proposals require a sequence document"));
-        };
-        if slot.generation != generation || sequence.doc.version() != revision {
-            return Err(invalid("stale_revision: proposal target changed"));
-        }
-        if ops.len() > 4096 {
-            return Err(invalid("proposal count exceeds 4096"));
-        }
-        let mut candidate = sequence.doc.clone();
-        let mut prepared = Vec::new();
-        let mut entries = Vec::new();
-        for op in ops {
-            if !matches!(
-                op,
-                Op::SeqReplace { .. }
-                    | Op::FeatureAdd { .. }
-                    | Op::FeatureRemove { .. }
-                    | Op::FeatureUpdate { .. }
-            ) {
-                return Err(invalid(
-                    "proposal contains a prohibited host/lifecycle operation",
-                ));
-            }
-            let (inverse, feature) = execute_sequence(&mut candidate, op)?;
-            let mut entry = self.entry(
-                id,
-                actor.clone(),
-                op.clone(),
-                OpResult {
-                    hashes: vec![],
-                    feature: feature.map(|f| f.0),
-                },
-            );
-            entry.state = DocState {
-                len: candidate.len(),
-                features: candidate.features().count() as u64,
-                rows: None,
-            };
-            prepared.push((op.clone(), inverse, entry.id.clone()));
-            entries.push(entry);
-        }
-        if ops.is_empty() {
-            return Ok(Vec::new());
-        }
-        self.flush()?;
-        self.track(id)?;
-        if let Some(log) = &mut self.log {
-            log.append_batch(&entries)?;
-        }
-        let edit_ids = entries.iter().map(|entry| entry.id.clone()).collect();
-        if self.tracked {
-            self.events.extend(entries);
-        }
-        let group = self.next_group;
-        self.next_group += 1;
-        let slot = &mut self.docs[id.0];
-        let Loaded::Sequence(sequence) = &mut slot.content else {
-            return Err(invalid("proposal document kind changed"));
-        };
-        sequence.doc = candidate;
-        slot.generation += ops.len() as u64;
-        slot.redo.clear();
-        slot.undo
-            .extend(prepared.into_iter().map(|(op, inverse, entry_id)| Applied {
-                entry_id,
-                op,
-                inverse,
-                group: Some(group),
-            }));
-        Ok(edit_ids)
     }
 
     /// Undo the last operation on a document; returns the undone entry's id.
