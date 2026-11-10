@@ -21,6 +21,9 @@ use basecraft_protocol::{
     },
     plugin::InvokeResult,
     provenance::{ArtifactRevision, Completeness, Publication},
+    records::{
+        ExternalExecution, HostWorkflowExecution, JobIndexPlugin, JobIndexSource, LocalJobIndex,
+    },
 };
 use serde_json::{Value, json};
 
@@ -1195,16 +1198,43 @@ impl PreparedOperation {
         let (stdout, stderr) = process.captured_output();
         let evidence = input_evidence::write_json(
             &self.run.artifact("execution.json")?,
-            &json!({
-                "schema":1,"operation":self.operation.id,"package_version":self.operation.package.manifest.version,
-                "package_digest":self.operation.package.digest,"descriptor_digest":self.operation.descriptor_digest,
-                "runtime":self.operation.package.manifest.managed_runtime,"interpreter":self.operation.package.interpreter,
-                "initiator":self.initiator,"executor":self.operation.package.manifest.id,
-                "process_instance":basecraft_platform::process_instance(),"context":context,
-                "requested_parameters":self.request.parameters,"effective_parameters":effective,"stdout":stdout,"stderr":stderr,
-                "tool":result.as_ref().ok().and_then(|r| r.tool.as_ref()),
-                "execution":result.as_ref().ok().and_then(|r| r.execution.as_ref()),
-            }),
+            &serde_json::to_value(ExternalExecution {
+                schema: 1,
+                operation: self.operation.id.clone(),
+                package_version: self.operation.package.manifest.version.clone(),
+                package_digest: self.operation.package.digest.clone(),
+                descriptor_digest: self.operation.descriptor_digest.clone(),
+                runtime: self
+                    .operation
+                    .package
+                    .manifest
+                    .managed_runtime
+                    .as_ref()
+                    .map(serde_json::to_value)
+                    .transpose()?,
+                interpreter: self.operation.package.interpreter.clone(),
+                initiator: self.initiator.clone(),
+                executor: self.operation.package.manifest.id.clone(),
+                process_instance: basecraft_platform::process_instance().into(),
+                context: serde_json::to_value(&context)?,
+                requested_parameters: self.request.parameters.clone(),
+                effective_parameters: effective,
+                stdout,
+                stderr,
+                tool: result
+                    .as_ref()
+                    .ok()
+                    .and_then(|r| r.tool.as_ref())
+                    .map(serde_json::to_value)
+                    .transpose()?,
+                execution: result
+                    .as_ref()
+                    .ok()
+                    .and_then(|r| r.execution.as_ref())
+                    .map(serde_json::to_value)
+                    .transpose()?,
+                extra: BTreeMap::new(),
+            })?,
         );
         match result {
             Ok(mut result) => {
@@ -2113,22 +2143,10 @@ impl PreparedOperation {
     /// state. This one only points at the run's own `runtime.json`, which
     /// stays the authoritative record.
     fn write_task_index(&self, outcome: &OperationOutcome, runtime: &Path) -> Result<()> {
-        use basecraft_protocol::operation::RuntimeState;
         let paths = basecraft_platform::paths::AppPaths::discover()
             .map_err(|error| Error::Protocol(error.to_string()))?;
         let directory = paths.state.join("jobs").join(self.run.id());
         std::fs::create_dir_all(&directory)?;
-        let status = match outcome.state {
-            RuntimeState::Completed => "completed",
-            RuntimeState::Failed => "failed",
-            RuntimeState::Cancelled => "cancelled",
-            RuntimeState::Partial => "partial",
-            RuntimeState::Interrupted => "interrupted",
-            RuntimeState::Queued => "queued",
-            RuntimeState::Running => "running",
-            RuntimeState::Cancelling => "cancelling",
-            RuntimeState::Finalizing => "finalizing",
-        };
         let source = self.document.as_ref().map_or_else(
             || {
                 self.context
@@ -2140,24 +2158,38 @@ impl PreparedOperation {
             },
             |target| target.path.display().to_string(),
         );
-        let outputs: serde_json::Map<String, Value> = outcome
+        let outputs = outcome
             .artifacts
             .iter()
-            .map(|artifact| (artifact.path.clone(), json!(artifact.digest)))
+            .map(|artifact| (artifact.path.clone(), artifact.digest.clone()))
             .collect();
-        let index = json!({
-            "schema_version": 1, "id": self.run.id(), "status": status,
-            "owner_instance": basecraft_platform::process_instance(),
-            "started": self.started,
-            "ended": outcome.state.terminal().then(basecraft_platform::now_rfc3339),
-            "plugin": {"id": self.operation.package.manifest.id, "version": self.operation.package.manifest.version},
-            "operation": self.operation.id, "effective_parameters": outcome.effective_parameters,
-            "initiator": self.initiator,
-            "source": {"path": source},
-            "outputs": outputs,
-            "diagnostics": outcome.errors.first().map(|error| error.message.clone()),
-            "runtime_record": runtime,
-        });
+        let index = serde_json::to_value(LocalJobIndex {
+            schema_version: 1,
+            id: self.run.id().into(),
+            status: outcome.state,
+            owner_instance: basecraft_platform::process_instance().into(),
+            started: self.started.clone(),
+            ended: outcome
+                .state
+                .terminal()
+                .then(basecraft_platform::now_rfc3339),
+            plugin: JobIndexPlugin {
+                id: self.operation.package.manifest.id.clone(),
+                version: self.operation.package.manifest.version.clone(),
+                extra: BTreeMap::new(),
+            },
+            operation: self.operation.id.clone(),
+            effective_parameters: outcome.effective_parameters.clone(),
+            initiator: self.initiator.clone(),
+            source: JobIndexSource {
+                path: source,
+                extra: BTreeMap::new(),
+            },
+            outputs,
+            diagnostics: outcome.errors.first().map(|error| error.message.clone()),
+            runtime_record: runtime.into(),
+            extra: BTreeMap::new(),
+        })?;
         input_evidence::write_json(&directory.join("manifest.json"), &index)?;
         Ok(())
     }
@@ -2349,7 +2381,18 @@ impl PreparedOperation {
         let execution = workflow.run(method, effective);
         input_evidence::write_json(
             &self.run.artifact("execution.json")?,
-            &json!({"schema":1,"workflow":method,"initiator":self.initiator,"executor":"basecraft.host","requested_parameters":self.request.parameters,"effective_parameters":self.effective_parameters(),"package_digest":self.operation.package.digest,"descriptor_digest":self.operation.descriptor_digest,"process_instance":basecraft_platform::process_instance()}),
+            &serde_json::to_value(HostWorkflowExecution {
+                schema: 1,
+                workflow: method.into(),
+                initiator: self.initiator.clone(),
+                executor: "basecraft.host".into(),
+                requested_parameters: self.request.parameters.clone(),
+                effective_parameters: self.effective_parameters(),
+                package_digest: self.operation.package.digest.clone(),
+                descriptor_digest: self.operation.descriptor_digest.clone(),
+                process_instance: basecraft_platform::process_instance().into(),
+                extra: BTreeMap::new(),
+            })?,
         )?;
         execution
     }

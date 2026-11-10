@@ -1,9 +1,9 @@
-//! Existing recovery and analysis-store records. These describe the v1 wire shape, not a new format.
+//! Existing recovery, analysis-store and execution records: v1 wire shapes, not new formats.
 //!
 //! Writers serialize through `serde_json::Value`, as the original literal
 //! builders did, sorting keys recursively. Recovery uses pretty JSON without a
 //! newline; the store marker uses compact JSON plus a newline, and the registry
-//! uses pretty JSON plus a newline. Direct struct serialization is not that
+//! and execution/index records use pretty JSON plus a newline. Direct struct serialization is not that
 //! byte-level contract.
 use std::{collections::BTreeMap, path::PathBuf};
 
@@ -78,6 +78,104 @@ pub struct StoreMarker {
 pub struct StoreRegistry {
     pub schema_version: u32,
     pub stores: Vec<PathBuf>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+/// External-process `execution.json`, distinct from the runtime outcome and the
+/// host-workflow envelope. No new reader/version gate is implied by this type.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct ExternalExecution {
+    pub schema: u32,
+    pub operation: String,
+    pub package_version: String,
+    pub package_digest: String,
+    pub descriptor_digest: String,
+    /// Snapshot of the host's managed-runtime receipt, or explicit null. The
+    /// implementation type is GPL host-owned; protocol must not depend on it.
+    pub runtime: Option<Value>,
+    pub interpreter: Option<PathBuf>,
+    /// Existing caller label, not an Actor serialization or a new identity.
+    pub initiator: String,
+    pub executor: String,
+    pub process_instance: String,
+    /// The public invocation context rejects unknown fields, including in input
+    /// evidence. Retain its complete snapshot for lossless nested extensions;
+    /// production still constructs this from the shared InvocationContext.
+    #[schemars(with = "crate::operation::InvocationContext")]
+    pub context: Value,
+    pub requested_parameters: Value,
+    pub effective_parameters: Value,
+    pub stdout: String,
+    pub stderr: String,
+    /// ToolInfo currently discards extras. Keep the original snapshot; null is
+    /// always emitted, including on process failure. No production parse changes.
+    #[schemars(with = "Option<crate::plugin::ToolInfo>")]
+    pub tool: Option<Value>,
+    /// ExecutionInfo and MethodsInfo currently discard extras. Preserve nested
+    /// process evidence rather than introducing a lossy parsing boundary.
+    #[schemars(with = "Option<crate::plugin::ExecutionInfo>")]
+    pub execution: Option<Value>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+/// Host-workflow `execution.json`. This explicit shape intentionally has no
+/// external operation, context, stdout/stderr, runtime, interpreter or tool keys.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct HostWorkflowExecution {
+    pub schema: u32,
+    pub workflow: String,
+    pub initiator: String,
+    pub executor: String,
+    pub requested_parameters: Value,
+    pub effective_parameters: Value,
+    pub package_digest: String,
+    pub descriptor_digest: String,
+    pub process_instance: String,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+/// The existing two-field plugin identity in the local index. Neither Actor's
+/// tagged representation nor OperationPins has this shape.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct JobIndexPlugin {
+    pub id: String,
+    pub version: String,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+/// Existing display path wrapper; not a hashed InputReference or a new path rule.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct JobIndexSource {
+    pub path: String,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+/// Lightweight application-state `jobs/<id>/manifest.json`. The pointed-to
+/// OperationOutcome in runtime.json stays authoritative; this is not JobRecord.
+/// Existing selected-field readers and owner/receipt checks remain unchanged.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct LocalJobIndex {
+    pub schema_version: u32,
+    pub id: String,
+    pub status: crate::operation::RuntimeState,
+    pub owner_instance: String,
+    pub started: String,
+    /// Explicit null for nonterminal states; never omitted by the writer.
+    pub ended: Option<String>,
+    pub plugin: JobIndexPlugin,
+    pub operation: String,
+    pub effective_parameters: Value,
+    pub initiator: String,
+    pub source: JobIndexSource,
+    pub outputs: BTreeMap<String, String>,
+    /// First runtime error message or explicit null.
+    pub diagnostics: Option<String>,
+    pub runtime_record: PathBuf,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }

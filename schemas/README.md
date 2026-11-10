@@ -20,7 +20,7 @@ writer/reader without relying on changing line numbers. `Value` means untyped JS
 level; it does not mean that a workflow which rebuilds a record merges old fields.
 “Dropped” means ordinary serde structs ignore unknown fields when reading and omit
 them when writing; “rejected” means `deny_unknown_fields`. None of those behaviors
-is changed here outside the selected recovery, store marker and version-one registry types.
+is changed here outside the selected recovery, store marker, version-one registry, execution and local index types.
 
 ## Recovery, journal and provenance
 
@@ -71,10 +71,10 @@ is changed here outside the selected recovery, store marker and version-one regi
 |---|---|---|---|---|---|---|
 | `descriptor.json`: accepted operation descriptor | A | [runner.rs](../crates/basecraft-plugin-host/src/runner.rs) `PreparedOperation::prepare` | repair, `document_record::task_primary_output` | Descriptor semantic `version` string (not a schema-version field) | protocol `OperationDescriptor` within [operation-contract.schema.json](operation-contract.schema.json) | Descriptor rejects unknown fields; parameters schema is open JSON |
 | `request.json`: accepted registered request | A | `PreparedOperation::prepare` | repair/retained run inspection; submission qualification | `schema: 1` | protocol `OperationRequest` / [operation-request.schema.json](operation-request.schema.json) | Request envelope rejects unknowns; parameter object preserved |
-| `execution.json`: plugin identity/pins/runtime/context, initiator/executor, requested/effective parameters, tool/process evidence | A | `PreparedOperation::execute` | `verify_completed_result`, `record_document_run`, submission qualification | `schema: 1` | `Value`; nested public invocation/tool types reused; no complete schema | Value readers preserve raw fields; new execution builds fresh record |
-| Host-workflow `execution.json`: workflow/initiator/executor/pins/parameters | A | `PreparedOperation::execute_workflow` | same execution-evidence readers | `schema: 1` | `Value`; distinct shape from external execution | Selective reads; fresh record |
+| `execution.json`: plugin identity/pins/runtime/context, initiator/executor, requested/effective parameters, tool/process evidence | A | `PreparedOperation::execute` | `verify_completed_result`, `record_document_run`, submission qualification | `schema: 1` | protocol `records::ExternalExecution` / [external-execution.schema.json](external-execution.schema.json) | Unchanged Value readers; typed round-trip retains nested snapshot extras; new execution builds fresh record |
+| Host-workflow `execution.json`: workflow/initiator/executor/pins/parameters | A | `PreparedOperation::execute_workflow` | same execution-evidence readers | `schema: 1` | protocol `records::HostWorkflowExecution` / [host-workflow-execution.schema.json](host-workflow-execution.schema.json); distinct external shape | Selective reads unchanged; typed round-trip retains extras; fresh record |
 | `runtime.json`: operation lifecycle/outcome/validated artifacts/errors/pins | A | `PreparedOperation::persist` (jobs drive transitions) | `lookup_completed_result`, `jobs` repair, `document_record::reconcile_task_receipt` | `schema: 1` | protocol `OperationOutcome` / [operation-outcome.schema.json](operation-outcome.schema.json) | Outcome/error/artifact structs drop unknowns; nested pins reject them; JSON data/parameters retained |
-| `manifest.json`: lightweight job index with runtime receipt pointer | J | `PreparedOperation::write_task_index` | `document_record::job_records`, receipt reconciliation | `schema_version: 1` | `Value`; **not** protocol `JobRecord` | Selected fields read; rebuilt index, validated runtime receipt authoritative |
+| `manifest.json`: lightweight job index with runtime receipt pointer | J | `PreparedOperation::write_task_index` | `document_record::job_records`, receipt reconciliation | `schema_version: 1` | protocol `records::LocalJobIndex` / [local-job-index.schema.json](local-job-index.schema.json); **not** `JobRecord` | Unchanged selected-field reads; typed round-trip retains extras; rebuilt index, validated runtime receipt authoritative |
 | `validated.json`: plugin's accepted invocation result | A | `PreparedOperation::validate_result`; [jobs.rs](../crates/basecraft-plugin-host/src/jobs.rs) output validation | finalization/repair | No schema version in current `InvokeResult` | protocol plugin `InvokeResult` / [plugin-invoke-result.schema.json](plugin-invoke-result.schema.json) | Unknown typed fields dropped; plugin data JSON retained |
 | `validated-artifacts.json`: validated artifact array | A | Same output-validation paths | finalization/repair | No outer version; run contract supplies context | `Vec<(String, PathBuf, String)>` role/path/digest tuples; no schema | Tuple length/types checked; no object extras |
 | `stages.json`: child operation outcome array | A workflow | [delimitation_pipeline.rs](../crates/basecraft-plugin-host/src/delimitation_pipeline.rs) `AlignmentWorkflow::persist` | runner workflow repair/reconciliation | No outer version; each outcome `schema: 1` | `Vec<OperationOutcome>`; outcome schema for each item | Same as outcome |
@@ -167,3 +167,34 @@ field/version checks still precede typed parsing to retain error behavior.
 This is a shared type for later registry work, not registry version two: reverse
 indexes, per-store locks, save warning/default policy and migration remain M3.
 No new fields, formats, entry routes or compatibility policy are introduced.
+
+## Typed execution and local job-index slice
+
+`ExternalExecution` and `HostWorkflowExecution` name the two existing
+`execution.json` shapes explicitly, with no permissive union. `LocalJobIndex`
+names the small application-state index, not the scientific `JobRecord` or the
+authoritative `OperationOutcome` in `runtime.json`. RuntimeState supplies the
+index's existing state strings. Writers serialize through Value to retain
+recursive key sorting and pretty JSON with exactly one final newline. Existing
+`schema: 1` versus `schema_version: 1`, explicit nulls, omitted workflow-only
+nonfields, path conversions, fresh-record behavior and all readers are unchanged.
+Unknown fields survive typed round-trip; no production merge/rewrite is implied.
+
+Reuse assessment: requests/outcomes remain OperationRequest/OperationOutcome;
+initiator is the existing string label, not Actor's tagged shape. Context, tool
+and execution snapshots reference public InvocationContext/ToolInfo/ExecutionInfo
+in generated schemas. Their Rust fields retain opaque JSON because those public
+types reject or discard nested extensions (including input evidence and methods).
+Production constructs those snapshots from the same public values. Managed-runtime
+receipts have no public protocol payload: they stay opaque to avoid an Apache
+protocol dependency on the GPL host implementation. Parameters remain arbitrary
+operation-schema JSON. The small plugin identity and source wrapper have no
+shape-compatible public type: Actor, OperationPins and hashed InputReference
+would add or rename fields. Index outputs reuse the existing path-to-digest map.
+
+Generated schemas describe current known payloads, not future-extension validation
+or the existing readers' selected-field acceptance policy. Version, ownership,
+receipt/hash verification and failure diagnostics are still enforced at the same
+production boundaries. No new format, compatibility promise, lifecycle transition,
+actor, dependency, cancellation, override or immutable-artifact behavior is added.
+Parent M6 remains incomplete.

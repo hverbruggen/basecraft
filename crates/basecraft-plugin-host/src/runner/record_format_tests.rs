@@ -296,3 +296,65 @@ plugin.run()
         }),
     );
 }
+fn roundtrip<T: serde::de::DeserializeOwned + serde::Serialize>(name: &str) {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../testdata/fixtures/records-v1")
+        .join(name);
+    let original = std::fs::read(path).unwrap();
+    let record: T = serde_json::from_slice(&original).unwrap();
+    assert_eq!(bytes(&serde_json::to_value(record).unwrap()), original);
+    let mut extended: Value = serde_json::from_slice(&original).unwrap();
+    extended["future"] = json!({"z":[null,{"z":1,"a":[false,2]}],"a":"extension"});
+    for key in ["context", "tool", "execution", "plugin", "source"] {
+        if extended[key].is_object() {
+            extended[key]["future"] = json!({"z":[{"a":1}],"a":null});
+        }
+    }
+    if extended["context"].is_object() {
+        extended["context"]["input_evidence"]["sources"][0]["future"] = json!({"nested":[1,null]});
+    }
+    if extended["execution"].is_object() {
+        extended["execution"]["methods"] =
+            json!({"description":"fixture","citations":[],"future":{"x":[null,{}]}});
+    }
+    if extended.get("runtime").is_some() {
+        extended["runtime"] = json!({"future":{"z":[1,null],"a":{}}});
+    }
+    let record: T = serde_json::from_value(extended.clone()).unwrap();
+    assert_eq!(serde_json::to_value(record).unwrap(), extended);
+}
+
+#[test]
+fn typed_execution_and_index_examples_roundtrip() {
+    use basecraft_protocol::records::{ExternalExecution, HostWorkflowExecution, LocalJobIndex};
+    for mode in ["normal", "delayed", "fail"] {
+        roundtrip::<ExternalExecution>(&format!("execution-{mode}.json"));
+    }
+    roundtrip::<HostWorkflowExecution>("execution-workflow.json");
+    roundtrip::<HostWorkflowExecution>("execution-workflow-success.json");
+    for state in [
+        "queued",
+        "running",
+        "cancelling",
+        "finalizing",
+        "completed",
+        "failed",
+        "cancelled",
+        "interrupted",
+        "partial",
+    ] {
+        roundtrip::<LocalJobIndex>(&format!("job-index-{state}.json"));
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/records-v1");
+    let external = std::fs::read(root.join("execution-normal.json")).unwrap();
+    let workflow = std::fs::read(root.join("execution-workflow.json")).unwrap();
+    assert!(serde_json::from_slice::<ExternalExecution>(&workflow).is_err());
+    assert!(serde_json::from_slice::<HostWorkflowExecution>(&external).is_err());
+    // These are wire descriptions, not replacements for selected-field readers.
+    // Missing required shape discriminators and malformed index states still fail.
+    let mut index: Value =
+        serde_json::from_slice(&std::fs::read(root.join("job-index-queued.json")).unwrap())
+            .unwrap();
+    index["status"] = json!({"malformed":true});
+    assert!(serde_json::from_value::<LocalJobIndex>(index).is_err());
+}

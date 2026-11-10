@@ -421,6 +421,18 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             std::fs::create_dir_all(&dir)?;
             let schemas = [
                 (
+                    "external-execution",
+                    schemars::schema_for!(basecraft_protocol::records::ExternalExecution),
+                ),
+                (
+                    "host-workflow-execution",
+                    schemars::schema_for!(basecraft_protocol::records::HostWorkflowExecution),
+                ),
+                (
+                    "local-job-index",
+                    schemars::schema_for!(basecraft_protocol::records::LocalJobIndex),
+                ),
+                (
                     "store-marker",
                     schemars::schema_for!(basecraft_protocol::records::StoreMarker),
                 ),
