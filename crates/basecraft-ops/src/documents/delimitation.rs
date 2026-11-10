@@ -126,6 +126,7 @@ mod tests {
         assert_eq!(doc.revision(42), 42);
         let state = doc.fingerprint();
         assert!(doc.apply(&Op::TreeMidpointRoot {}).is_err());
+        assert!(doc.revert(&Inverse::Alignment(Vec::new())).is_err());
         assert!(
             doc.revert(&Inverse::Delimitation(Box::new(initial.clone())))
                 .is_ok()
@@ -157,6 +158,8 @@ mod tests {
 
     #[test]
     fn exchange_companion_and_record_bytes_keep_existing_writers() {
+        // The Session save boundary holds this lock and prepares registry storage.
+        let _lock = crate::input_evidence::lock().unwrap();
         let initial = basecraft_io::spart::parse_text(SPART).unwrap();
         for name in ["copy.spart", "copy.spartxml"] {
             let dir = tempfile::tempdir().unwrap();
@@ -218,6 +221,7 @@ mod tests {
         let target = dir.path().join("partial.spart");
         let work = basecraft_io::spart::parse_text(SPART).unwrap();
         let run = crate::analysis_store::ArtifactRun::create(&target, "partial-test").unwrap();
+        std::fs::write(&target, SPART).unwrap();
         run.bind(&target).unwrap();
         let side = files::tree_sidecar(&target);
         std::fs::create_dir(&side).unwrap();
