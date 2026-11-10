@@ -59,7 +59,7 @@ baselines explicitly report `unavailable`; they are **not a passing budget**.
 `budgets.toml` preserves the plan's 30% benchmark and 2x gross-CI comparison
 semantics as observations. No timing gate is enabled, no single run establishes
 a trusted threshold, and no direct PRD target is asserted by these headless
-scenarios. First-paint/input-to-screen, tree, peak memory and startup
+scenarios. First-paint/input-to-screen, peak memory and startup
 measurements remain subsequent work. CI continues to run existing exact counters;
 its timing placeholder is intentionally deferred to the later gate stage.
 
@@ -142,3 +142,42 @@ become timings. Existing exact-output budget tests remain separate strict checks
 These headless builders measure no pixels, Qt/GPU rendering, GUI first paint,
 input-to-screen latency or allocation/peak memory. No PRD qualification or new
 timing gate follows from these observations.
+
+
+Tree cases are opt-in in the same executable/report:
+
+```sh
+just bench --machine workstation-a --cache "$BENCH_CACHE" --samples 5 \
+  --scenario tree-open-50000 --scenario tree-midpoint-50000
+```
+
+Both generate the same 50,000 unique `tipNNNNN` names in a balanced binary
+Newick tree: recursively split each contiguous tip range into floor(count/2)
+and the remainder (maximum depth 16). Every nonroot branch has the positive
+integer length `1 + (start*17 + count*13) % 97`, where start/count describe that
+subtree. Rooting is explicitly unrooted. Generation, source hashing, one untimed
+recoverable warmup open, and construction of the measured Session precede timing.
+`tree-open-50000` measures only `Session::open`. `tree-midpoint-50000` measures
+one typed `Op::TreeMidpointRoot` through `Session::apply`, including its normal
+candidate preparation, whole-tree undo state, first-edit recovery promotion and
+durable journaling. It is a first edit, with no prior edit or recovery promotion.
+Undo/redo/replay are untimed verification, not a separate undo timing scenario.
+No scientific implementation or production fast path is changed.
+
+Outside timing, bounded traversals verify every tip identity exactly once,
+reachability, reciprocal parents/children, binary topology and finite nonnegative
+branch lengths. The rerooted tree must declare rooting and preserve total branch
+length within relative 1e-12. Undo must restore original Newick/rooting semantics
+and Session save hashes; redo must reproduce the rerooted semantics. The normal
+recovery journal must contain the operation and pass the existing replay verifier.
+Source bytes/hash remain unchanged. These are structural/round-trip checks, not
+an independent all-pairs scientific proof or an assertion about GUI performance.
+
+Mandatory tree `work` metadata includes tip count, shape, name/branch generator,
+method, recovery mode, operation count and exact input hash. These participate
+in sample/baseline compatibility using additive schema-2 metadata. The runner
+hash now covers the tree module; previous reports remain historical and are
+incompatible by runner hash, without relabelling old samples. Default Session and
+frame scenario definitions, input/output byte meanings and tracked history stay
+unchanged. Refused/failed tree operations use the shared explicit nonzero failure
+path and retain diagnostics/fixtures; they never become successful timings.

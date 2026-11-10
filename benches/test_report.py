@@ -83,9 +83,35 @@ class ReportTests(unittest.TestCase):
         current["scenarios"][sample["scenario"]] = {"status": "failed_or_refused", "completed_samples": 2}
         self.assertEqual(compare(current, previous, budgets)["scenarios"][sample["scenario"]]["status"], "unavailable")
 
+    def test_tree_work_identity(self):
+        sample = {**self.sample(1000), "scenario": "tree-midpoint-50000",
+                  "operations": 1, "rows": 50000, "columns": None, "edits": 1,
+                  "work": {"tips": 50000, "shape": "balanced", "branches": "varying",
+                           "method": "midpoint", "recovery": "durable", "operation_count": 1}}
+        current = self.report()
+        current["scenarios"] = {sample["scenario"]: summarize([sample] * 3)}
+        budgets = dict(benchmark_ratio=1.3, gross_ci_ratio=2)
+        self.assertEqual(compare(current, copy.deepcopy(current), budgets)["scenarios"][sample["scenario"]]["status"], "compared")
+        for key in sample["work"]:
+            previous = copy.deepcopy(current)
+            previous["scenarios"][sample["scenario"]]["work"][key] = "changed"
+            self.assertEqual(compare(current, previous, budgets)["scenarios"][sample["scenario"]]["status"], "unavailable")
+            changed = copy.deepcopy(sample)
+            changed["work"][key] = "changed"
+            with self.assertRaises(ValueError):
+                summarize([sample, changed])
+        missing = copy.deepcopy(sample)
+        del missing["work"]
+        with self.assertRaises(KeyError):
+            summarize([missing])
+
+    def test_failed_tree_child_is_retained_and_next_scenario_runs(self):
+        self.failed_child("tree-midpoint-50000", "tree-open-50000")
+
     def test_failed_frame_child_is_retained_and_next_scenario_runs(self):
-        failed = "frame-first-alignment"
-        following = "frame-warm-alignment"
+        self.failed_child("frame-first-alignment", "frame-warm-alignment")
+
+    def failed_child(self, failed, following):
         sample = {**self.sample(1000), "scenario": following, "operations": 1,
                   "work": {"frames": 1}, "output_counts": [5000]}
         with tempfile.TemporaryDirectory() as directory:

@@ -13,6 +13,8 @@ use std::time::Instant;
 
 #[path = "interaction/frame_cases.rs"]
 mod frame_cases;
+#[path = "interaction/tree_cases.rs"]
+mod tree_cases;
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 const ROWS: usize = 32;
@@ -76,6 +78,9 @@ fn run() -> Result<()> {
         return Err("expected SCENARIO WORK_DIRECTORY (use benches/run.py)".into());
     }
     let scenario = &args[0];
+    if scenario.starts_with("tree-") {
+        return tree_cases::run(scenario, Path::new(&args[1]));
+    }
     if scenario.starts_with("frame-") {
         return frame_cases::run(scenario, Path::new(&args[1]));
     }

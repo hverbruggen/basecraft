@@ -21,6 +21,7 @@ FRAME_SCENARIOS = tuple(f"frame-{phase}-{case}"
                         for case in ("alignment", "alignment-hidden", "genome-linear",
                                      "genome-wrapped", "genome-wrapped-hidden")
                         for phase in ("first", "warm", "scroll"))
+TREE_SCENARIOS = ("tree-open-50000", "tree-midpoint-50000")
 PROTOCOL = "session-warm-v1"
 SCHEMA_VERSION = 2
 
@@ -44,13 +45,13 @@ def summarize(samples):
         raise ValueError("unsupported sample schema; regenerate rather than reinterpret old fixture sizes")
     keys = ("scenario", "operations", "fixture_bytes", "rows", "columns", "edits",
             "source_commit", "debug_assertions")
-    keys += ("work",) if samples[0]["scenario"].startswith("frame-") else ()
+    keys += ("work",) if samples[0]["scenario"].startswith(("frame-", "tree-")) else ()
     identity = {key: samples[0][key] for key in keys}
     if any({key: s[key] for key in keys} != identity for s in samples):
         raise ValueError("inconsistent sample parameters")
     if identity["operations"] <= 0 or any(s["duration_ns"] <= 0 for s in samples):
         raise ValueError("invalid duration or operation count")
-    if "work" in keys and any(
+    if samples[0]["scenario"].startswith("frame-") and any(
             len(s.get("output_counts", [])) != s["operations"]
             or any(n <= 0 for n in s["output_counts"]) for s in samples):
         raise ValueError("missing frame output verification counts")
@@ -73,7 +74,7 @@ def compare(report, baseline, budgets):
             results[name] = {"status": "unavailable", "reason": "scenario not measured in both runs"}
             continue
         keys = ("operations", "fixture_bytes", "rows", "columns", "edits", "unit")
-        keys += ("work",) if name.startswith("frame-") else ()
+        keys += ("work",) if name.startswith(("frame-", "tree-")) else ()
         median = previous.get("median", 0)
         if (any(current[k] != previous.get(k) for k in keys)
                 or not isinstance(median, (int, float)) or not math.isfinite(median) or median <= 0):
@@ -93,7 +94,7 @@ def main():
     parser.add_argument("--samples", type=int, default=5)
     parser.add_argument("--baseline", type=Path, help="reviewed report.json from a compatible run")
     parser.add_argument("--history", type=Path, help="opt-in external JSONL summary history (review before publishing)")
-    parser.add_argument("--scenario", action="append", choices=SCENARIOS + FRAME_SCENARIOS,
+    parser.add_argument("--scenario", action="append", choices=SCENARIOS + FRAME_SCENARIOS + TREE_SCENARIOS,
                         help="measure selected Session or frame scenarios (repeatable)")
     parser.add_argument("--large", action="store_true", help="also open 1 GB decimal FASTA (may refuse)")
     parser.add_argument("--executable", type=Path, help="reuse a release bench binary built with this source revision")
@@ -117,7 +118,8 @@ def main():
     budgets = tomllib.loads((ROOT / "benches/budgets.toml").read_text())
     runner_hash = hashlib.sha256(b"".join((ROOT / name).read_bytes() for name in (
         "benches/run.py", "crates/basecraft-ops/benches/interaction.rs",
-        "crates/basecraft-ops/benches/interaction/frame_cases.rs", "benches/budgets.toml",
+        "crates/basecraft-ops/benches/interaction/frame_cases.rs",
+        "crates/basecraft-ops/benches/interaction/tree_cases.rs", "benches/budgets.toml",
         "crates/basecraft-ops/Cargo.toml"))).hexdigest()
     run_dir = Path(tempfile.mkdtemp(prefix="interaction-", dir=cache))
     env = os.environ.copy()
