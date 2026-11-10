@@ -689,13 +689,18 @@ impl Session {
             }
         }
         if self.log.is_some() {
-            let source_root = serde_json::to_value(&self.root)?;
             let baseline = serde_json::to_value(&entry)?;
-            let manifest = serde_json::to_vec_pretty(&serde_json::json!({
-                "schema_version": 1, "session": self.id,
-                "source_root": source_root, "status": "unsaved",
-                "baseline": baseline, "object_policy_limit": OBJECT_STORE_LIMIT
-            }))?;
+            let manifest = serde_json::to_vec_pretty(&serde_json::to_value(
+                basecraft_protocol::records::RecoveryManifest {
+                    schema_version: 1,
+                    session: self.id.clone(),
+                    source_root: self.root.clone(),
+                    status: basecraft_protocol::records::RecoveryStatus::Unsaved,
+                    baseline,
+                    object_policy_limit: OBJECT_STORE_LIMIT,
+                    extra: std::collections::BTreeMap::new(),
+                },
+            )?)?;
             std::fs::create_dir_all(&self.storage_root)?;
             basecraft_io::write_atomic(&self.storage_root.join("recovery.json"), |w| {
                 w.write_all(&manifest)
@@ -977,12 +982,18 @@ impl Session {
         let before = basecraft_io::hash_file(&target).ok();
         let expected = self.save_hashes_at(id, &target)?;
         if self.log.is_some() {
-            let target_value = serde_json::to_value(&target)?;
-            let intent = serde_json::to_vec_pretty(&serde_json::json!({
-                "schema_version": 1, "session": self.id, "target": target_value,
-                "before_hash": before, "expected_hashes": expected,
-                "status": "pending", "note": "data and provenance are separate writes"
-            }))?;
+            let intent = serde_json::to_vec_pretty(&serde_json::to_value(
+                basecraft_protocol::records::PendingSave {
+                    schema_version: 1,
+                    session: self.id.clone(),
+                    target: target.clone(),
+                    before_hash: before.clone(),
+                    expected_hashes: expected.clone(),
+                    status: basecraft_protocol::records::RecoveryStatus::Pending,
+                    note: "data and provenance are separate writes".into(),
+                    extra: std::collections::BTreeMap::new(),
+                },
+            )?)?;
             std::fs::create_dir_all(&self.storage_root)?;
             basecraft_io::write_atomic(&self.storage_root.join("pending-save.json"), |w| {
                 w.write_all(&intent)

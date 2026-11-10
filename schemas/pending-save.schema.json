@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PendingSave",
+  "description": "`pending-save.json`; data and provenance remain separate writes.",
+  "type": "object",
+  "properties": {
+    "before_hash": {
+      "description": "Always emitted, including JSON null when the target did not exist.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "expected_hashes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "note": {
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "session": {
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/RecoveryStatus"
+    },
+    "target": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "session",
+    "target",
+    "expected_hashes",
+    "status",
+    "note"
+  ],
+  "$defs": {
+    "RecoveryStatus": {
+      "description": "Recovery lifecycle labels. Retain an unfamiliar label without reinterpreting it.",
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "unsaved",
+            "pending"
+          ]
+        },
+        {
+          "type": "string"
+        }
+      ]
+    }
+  }
+}
