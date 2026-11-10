@@ -977,10 +977,6 @@ impl qobject::GenomeController {
         text: &QString,
         root: &QString,
     ) -> QString {
-        let access_thread = self.qt_thread();
-        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
-            crate::bridge::checked_document!(sync self, session.doc(doc));
-        }
         if self.rust().session.is_some() || self.rust().busy {
             return QString::from("This controller already owns a document");
         }
@@ -1000,13 +996,14 @@ impl qobject::GenomeController {
             Ok(created) => created,
             Err(error) => return QString::from(&error),
         };
+        let sequence = match session.doc(doc) {
+            Ok(sequence) => sequence,
+            Err(error) => return QString::from(error.to_string()),
+        };
         {
             let mut r = self.as_mut().rust_mut();
             r.view.mode = Mode::Wrapped;
-            r.view.fit_doc(crate::bridge::checked_document!(
-                access_thread,
-                session.doc(doc)
-            ));
+            r.view.fit_doc(sequence);
             r.session = Some(session);
             r.doc = Some(doc);
         }

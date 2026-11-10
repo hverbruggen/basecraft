@@ -779,9 +779,6 @@ impl qobject::MetadataController {
     /// Inclusion presets belong to this already-open metadata owner, keeping its
     /// undo stack, dirty state and accepted disk revision coherent with specimen edits.
     pub fn inclusion_presets(mut self: Pin<&mut Self>, save: &QString) -> QString {
-        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
-            crate::bridge::checked_document!(sync self, session.metadata(doc));
-        }
         if !save.is_empty() {
             let planned = (|| -> Result<_, String> {
                 let rule: basecraft_protocol::submission::InclusionRule =
@@ -819,10 +816,10 @@ impl qobject::MetadataController {
             }
         }
         match self.rust().current() {
-            Ok((session, doc)) => {
-                let metadata = crate::bridge::checked_document!(sync self, session.metadata(doc));
-                qs(&json!(metadata.import.inclusion_rules))
-            }
+            Ok((session, doc)) => match session.metadata(doc) {
+                Ok(metadata) => qs(&json!(metadata.import.inclusion_rules)),
+                Err(error) => qs(&json!({"error": error.to_string()})),
+            },
             Err(_) => qs(&json!([])),
         }
     }

@@ -1696,9 +1696,6 @@ impl qobject::TreeController {
         project: &QString,
         fields: &QString,
     ) -> QString {
-        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
-            crate::bridge::checked_document!(sync self, session.tree(doc));
-        }
         let planned = (|| -> Result<(TreeStyle, usize), String> {
             let r = self.rust();
             let (session, doc) = r.session.as_ref().zip(r.doc).ok_or("No tree open")?;
