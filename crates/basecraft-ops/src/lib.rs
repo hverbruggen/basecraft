@@ -1,5 +1,6 @@
 //! Operation registry, undo and redo, the operation log and replay.
 
+pub mod access;
 pub mod alignment_add;
 pub mod analysis_store;
 pub mod blast;

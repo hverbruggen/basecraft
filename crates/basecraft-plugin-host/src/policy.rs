@@ -1,6 +1,7 @@
 //! Caller-owned path/effect restrictions, shared by all operation adapters.
 //! This constrains host actions; trusted plugin code is not OS-sandboxed.
 
+use basecraft_ops::access::{Access, AccessError, Denial, ResourceAction};
 use basecraft_platform::files::{identity, link_count};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
@@ -206,53 +207,139 @@ impl SessionPolicy {
     /// Refuse traversal and symbolic ancestors before canonical resolution. The
     /// runner rechecks destination ownership immediately before publication.
     pub fn path(&self, supplied: &str, output: bool) -> Result<PathBuf> {
-        let path = Path::new(supplied);
-        if supplied.is_empty() || path.components().any(|c| matches!(c, Component::ParentDir)) {
-            return Err(denied("path must not be empty or contain parent traversal"));
-        }
-        let path = if path.is_absolute() {
-            path.to_path_buf()
+        let action = if output {
+            ResourceAction::CreateFile
         } else {
-            self.root.join(path)
+            ResourceAction::ReadFile
         };
-        if !path.starts_with(&self.root) {
-            return Err(denied("path lies outside session root"));
-        }
-        let mut current = self.root.clone();
-        let relative = path
-            .strip_prefix(&self.root)
-            .map_err(|_| denied("path lies outside session root"))?;
-        for component in relative.components() {
-            current.push(component);
-            match current.symlink_metadata() {
-                Ok(metadata) if metadata.file_type().is_symlink() => {
-                    return Err(denied("symbolic links are not allowed in bindings"));
+        // Existing operation dispatch owns effects for this legacy entry point.
+        // Both entry points share the same path resolver, with typed foundation
+        // errors converted only at this existing protocol boundary.
+        self.resolve_resource(Path::new(supplied), action)
+            .map_err(|error| match error {
+                AccessError::Denied(reason) => denied(&reason.to_string()),
+                AccessError::DestinationExists => {
+                    Error::Protocol("output_conflict: destination already exists".into())
                 }
-                Ok(_) => {}
-                Err(e) if output && e.kind() == std::io::ErrorKind::NotFound && current == path => {
-                }
-                Err(e) => return Err(e.into()),
-            }
+                AccessError::Io(error) => error.into(),
+            })
+    }
+
+    fn resolve_resource(
+        &self,
+        supplied: &Path,
+        action: ResourceAction,
+    ) -> basecraft_ops::access::Result<PathBuf> {
+        self.resolve_resource_with(
+            supplied,
+            action,
+            &mut |path| path.symlink_metadata(),
+            &mut link_count,
+        )
+    }
+
+    // Inject the two existing platform probes for deny-before-probe tests. This
+    // is the one resolver used by both public bindings and the access seam.
+    fn resolve_resource_with(
+        &self,
+        supplied: &Path,
+        action: ResourceAction,
+        metadata: &mut impl FnMut(&Path) -> std::io::Result<std::fs::Metadata>,
+        links: &mut impl FnMut(&Path) -> std::io::Result<u64>,
+    ) -> basecraft_ops::access::Result<PathBuf> {
+        use basecraft_ops::access::Result;
+        let reject = |reason| Err(AccessError::Denied(reason));
+        if supplied.as_os_str().is_empty()
+            || supplied
+                .components()
+                .any(|c| matches!(c, Component::ParentDir))
+        {
+            return reject(Denial::InvalidPath);
         }
-        if output {
-            if path.symlink_metadata().is_ok() {
-                return Err(Error::Protocol(
-                    "output_conflict: destination already exists".into(),
-                ));
-            }
-            let parent = path
-                .parent()
-                .ok_or_else(|| denied("missing destination parent"))?
-                .canonicalize()?;
-            if !parent.starts_with(&self.root) {
-                return Err(denied("destination parent lies outside root"));
-            }
+        let path = if supplied.is_absolute() {
+            supplied.to_path_buf()
         } else {
-            let metadata = path.metadata()?;
-            if !metadata.is_file() || link_count(&path)? != 1 {
-                return Err(denied(
-                    "input must be a regular file without hardlink aliases",
-                ));
+            self.root.join(supplied)
+        };
+        let relative: PathBuf = path
+            .strip_prefix(&self.root)
+            .map_err(|_| AccessError::Denied(Denial::OutsideRoot))?
+            .components()
+            .filter(|component| !matches!(component, Component::CurDir))
+            .collect();
+        let path = self.root.join(&relative);
+        if relative.as_os_str().is_empty()
+            && matches!(
+                action,
+                ResourceAction::ReplaceFile
+                    | ResourceAction::RenameSource
+                    | ResourceAction::Cleanup
+            )
+        {
+            return reject(Denial::RootMutation);
+        }
+        // Check the root itself, but never probe its ancestors. The configured
+        // canonical root is established by SessionPolicy::new. This is not a
+        // handle-relative guarantee against concurrent namespace replacement.
+        let check_directory = |info: &std::fs::Metadata| -> Result<()> {
+            if info.file_type().is_symlink() {
+                Err(AccessError::Denied(Denial::SymbolicLink))
+            } else if !info.is_dir() {
+                Err(AccessError::Denied(Denial::ResourceType))
+            } else {
+                Ok(())
+            }
+        };
+        let root_metadata = metadata(&self.root)?;
+        check_directory(&root_metadata)?;
+        let mut leaf = Some(root_metadata);
+        let mut current = self.root.clone();
+        for component in relative.components() {
+            if matches!(component, Component::CurDir) {
+                continue;
+            }
+            current.push(component);
+            match metadata(&current) {
+                Ok(info) => {
+                    if info.file_type().is_symlink() {
+                        return reject(Denial::SymbolicLink);
+                    }
+                    if current != path {
+                        check_directory(&info)?;
+                    }
+                    leaf = Some(info);
+                }
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::NotFound
+                        && current == path
+                        && (action.creates() || action == ResourceAction::Probe) =>
+                {
+                    leaf = None;
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        if action.creates() {
+            if leaf.is_some() {
+                return Err(AccessError::DestinationExists);
+            }
+        } else if let Some(info) = leaf {
+            if !info.is_file() && !info.is_dir() {
+                return reject(Denial::ResourceType);
+            }
+            if matches!(
+                action,
+                ResourceAction::ReadFile | ResourceAction::ReplaceFile | ResourceAction::SyncFile
+            ) && !info.is_file()
+                || matches!(
+                    action,
+                    ResourceAction::ReadDirectory | ResourceAction::SyncDirectory
+                ) && !info.is_dir()
+            {
+                return reject(Denial::ResourceType);
+            }
+            if info.is_file() && links(&path)? != 1 {
+                return reject(Denial::Hardlink);
             }
         }
         Ok(path)
@@ -393,3 +480,26 @@ impl CredentialGrant {
             && self.name == name
     }
 }
+
+impl Access for SessionPolicy {
+    fn boundary(&self) -> Option<&Path> {
+        Some(&self.root)
+    }
+
+    fn resource(
+        &self,
+        path: &Path,
+        action: ResourceAction,
+    ) -> basecraft_ops::access::Result<PathBuf> {
+        // Recovery mutation may change both documents and evidence artifacts.
+        // Do not infer permission from the selected root, handle or receipt.
+        if action.writes() && (!self.document_write || !self.artifact_write) {
+            return Err(AccessError::Denied(Denial::ReadOnly));
+        }
+        self.resolve_resource(path, action)
+    }
+}
+
+#[cfg(test)]
+#[path = "policy_access_tests.rs"]
+mod access_tests;
