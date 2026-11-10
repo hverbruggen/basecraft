@@ -25,6 +25,8 @@ use crate::log::LogWriter;
 mod creation;
 mod extraction;
 mod proposals;
+#[cfg(test)]
+mod retention_tests;
 pub(crate) mod save_authority;
 mod save_decision;
 pub use save_decision::{EvidenceAction, SaveCheck, SaveDecision, SaveOutcome, SaveWarning};
@@ -727,14 +729,14 @@ impl Session {
         if self.tracked {
             for (key, hash) in &entry.result.hashes {
                 let source = self.resolve(key);
-                if basecraft_io::hash_file(&source)? != *hash {
-                    return Err(invalid(
-                        "source changed since opening; reopen it before editing",
-                    ));
-                }
                 if self.store_objects {
                     self.store_object(&source, hash)?;
                 } else {
+                    if basecraft_io::hash_file(&source)? != *hash {
+                        return Err(invalid(
+                            "source changed since opening; reopen it before editing",
+                        ));
+                    }
                     self.snapshot_file(&source)?;
                 }
             }
@@ -920,22 +922,55 @@ impl Session {
     }
 
     fn store_object(&self, path: &Path, hash: &str) -> Result<()> {
+        let dest = objects_dir(&self.storage_root).join(hash.trim_start_matches("b3:"));
+        // These probes select an acquisition strategy, never establish identity.
+        // Keep streaming verification (and its errors) for known/oversize inputs.
+        let capture =
+            !dest.exists() && std::fs::metadata(path).is_ok_and(|m| m.len() <= OBJECT_STORE_LIMIT);
+        #[cfg(test)]
+        retention_tests::boundary(retention_tests::Stage::BeforeRead, path);
+        let (captured, current_hash) = if capture {
+            let (source, current_hash) = basecraft_io::Source::open_hashed(path)?;
+            (Some(source), current_hash)
+        } else {
+            (None, basecraft_io::hash_file(path)?)
+        };
+        if current_hash != hash {
+            return Err(invalid(
+                "source changed since opening; reopen it before editing",
+            ));
+        }
+        #[cfg(test)]
+        retention_tests::boundary(retention_tests::Stage::AfterRead, path);
         let size = std::fs::metadata(path)?.len();
         if size > OBJECT_STORE_LIMIT {
             return Err(invalid(format!(
                 "original input is {size} bytes; exact recovery retention currently supports at most {OBJECT_STORE_LIMIT} bytes"
             )));
         }
-        let dest = objects_dir(&self.storage_root).join(hash.trim_start_matches("b3:"));
+        if let Some(source) = &captured {
+            let size = source.bytes().len() as u64;
+            if size > OBJECT_STORE_LIMIT {
+                return Err(invalid(format!(
+                    "original input is {size} bytes; exact recovery retention currently supports at most {OBJECT_STORE_LIMIT} bytes"
+                )));
+            }
+        }
         if !dest.exists() {
             std::fs::create_dir_all(objects_dir(&self.storage_root))?;
-            let bytes = std::fs::read(path)?;
-            #[cfg(feature = "test-counters")]
-            basecraft_io::counters::record_read(path, bytes.len() as u64);
-            if basecraft_io::hash_bytes(&bytes) != hash {
-                return Err(invalid("source changed while retaining its snapshot"));
-            }
-            basecraft_io::write_atomic(&dest, |w| w.write_all(&bytes))?;
+            let fallback;
+            let bytes = if let Some(source) = &captured {
+                source.bytes()
+            } else {
+                fallback = std::fs::read(path)?;
+                #[cfg(feature = "test-counters")]
+                basecraft_io::counters::record_read(path, fallback.len() as u64);
+                if basecraft_io::hash_bytes(&fallback) != hash {
+                    return Err(invalid("source changed while retaining its snapshot"));
+                }
+                &fallback
+            };
+            basecraft_io::write_atomic(&dest, |w| w.write_all(bytes))?;
         }
         Ok(())
     }

@@ -50,7 +50,8 @@ fn scenario(
         counters::reset();
         session.apply(doc, edit(i)).unwrap();
         let expected = if i == 0 {
-            (2, 2 * original_size, 2, 2)
+            // One fresh owned read now both verifies and retains cold originals.
+            (1, original_size, 2, 2)
         } else {
             (0, 0, 1, 0)
         };

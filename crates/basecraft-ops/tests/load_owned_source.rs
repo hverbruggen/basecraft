@@ -606,3 +606,68 @@ fn isolated_capture_test(name: &str) -> bool {
     assert!(status.success(), "isolated capture test failed: {name}");
     false
 }
+
+#[test]
+fn cold_recoverable_retention_reads_each_raw_input_once_and_recovers_without_sources() {
+    if !isolated_capture_test(
+        "cold_recoverable_retention_reads_each_raw_input_once_and_recovers_without_sources",
+    ) {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("séquences.fasta");
+    let sidecar = files::gff_sidecar(&path);
+    let main = ">a café\nACGT\n>b retained\nTTAA\n".as_bytes();
+    let gff = b"##gff-version 3\na\t.\tgene\t1\t3\t.\t+\t.\tID=gene1;Name=example\n";
+    std::fs::write(&path, main).unwrap();
+    std::fs::write(&sidecar, gff).unwrap();
+    let mut session = Session::recoverable(dir.path()).unwrap();
+    let (id, _) = session.open_classified(&path).unwrap();
+    let recovery = session.recovery_root().to_path_buf();
+    assert!(!recovery.exists());
+    #[cfg(feature = "test-counters")]
+    basecraft_io::counters::reset();
+    session
+        .apply(
+            id,
+            basecraft_protocol::Op::SeqReplace {
+                start: 0,
+                end: 1,
+                residues: "G".into(),
+            },
+        )
+        .unwrap();
+    #[cfg(feature = "test-counters")]
+    {
+        let counts = basecraft_io::counters::snapshot();
+        assert_eq!(counts.unresolved_reads, 0);
+        for (file, bytes) in [(&path, main), (&sidecar, gff.as_slice())] {
+            assert_eq!(
+                counts.reads[&file.canonicalize().unwrap()],
+                basecraft_io::counters::Reads {
+                    full_reads: 1,
+                    bytes: bytes.len() as u64,
+                }
+            );
+        }
+    }
+    let expected = session.doc(id).unwrap().to_genbank();
+    for bytes in [main, gff.as_slice()] {
+        assert_eq!(
+            std::fs::read(
+                basecraft_ops::session::objects_dir(&recovery)
+                    .join(hash_bytes(bytes).trim_start_matches("b3:"))
+            )
+            .unwrap(),
+            bytes
+        );
+    }
+    std::fs::remove_file(&path).unwrap();
+    std::fs::remove_file(&sidecar).unwrap();
+    drop(session);
+    let destination = dir.path().join("recovered");
+    basecraft_ops::replay::recover(&recovery, &destination).unwrap();
+    let restored = files::open(&destination.join("séquences.fasta")).unwrap();
+    assert_eq!(restored.doc.to_genbank(), expected);
+    assert_eq!(restored.fasta.unwrap().index.records.len(), 2);
+}
