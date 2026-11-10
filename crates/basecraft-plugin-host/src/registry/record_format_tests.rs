@@ -607,6 +607,7 @@ fn original_load_index_reader_observations() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn original_writer_limits_and_reached_failure_stages() {
     assert!(
