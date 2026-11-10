@@ -72,10 +72,37 @@ pub fn read_record(path: &Path) -> Result<Vec<u8>> {
 
 /// Share the per-record cap with callers enforcing an aggregate read budget.
 pub(crate) fn read_record_with_budget(path: &Path, remaining: &mut u64) -> Result<Vec<u8>> {
+    read_record_with_access(path, remaining, &crate::access::TrustedLegacy)
+}
+
+/// Authorize before this reader's metadata/open and use the returned spelling.
+/// This raw-byte entry is unwired: namespace safety belongs to the supplied
+/// access owner, not this reader. It does not decode records or call services.
+pub(crate) fn read_record_with_access(
+    path: &Path,
+    remaining: &mut u64,
+    access: &dyn crate::access::Access,
+) -> Result<Vec<u8>> {
+    read_record_with_access_open(path, remaining, access, |path| {
+        let file = basecraft_platform::files::open_regular_read(path)?;
+        let length = file.metadata()?.len();
+        Ok((file, length))
+    })
+}
+
+// One bounded body for both entry points; the opener seam permits observing
+// denial ordering and partial read errors without a second test algorithm.
+fn read_record_with_access_open<R: std::io::Read>(
+    path: &Path,
+    remaining: &mut u64,
+    access: &dyn crate::access::Access,
+    open: impl FnOnce(&Path) -> std::io::Result<(R, u64)>,
+) -> Result<Vec<u8>> {
     use std::io::Read;
+    let checked = access.resource(path, crate::access::ResourceAction::ReadFile)?;
     let limit = (*remaining).min(64 << 20);
-    let file = basecraft_platform::files::open_regular_read(path)?;
-    if file.metadata()?.len() > limit {
+    let (file, length) = open(&checked)?;
+    if length > limit {
         return Err(invalid(
             "provenance record exceeds reading limit (at most 64 MiB)",
         ));
@@ -91,6 +118,10 @@ pub(crate) fn read_record_with_budget(path: &Path, remaining: &mut u64) -> Resul
     }
     Ok(bytes)
 }
+
+#[cfg(test)]
+#[path = "provenance/record_access_tests.rs"]
+mod record_access_tests;
 
 fn copy_atomic(source: &Path, target: &Path) -> Result<()> {
     basecraft_io::write_atomic(target, |writer| {

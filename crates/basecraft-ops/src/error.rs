@@ -3,6 +3,8 @@ use std::path::PathBuf;
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error(transparent)]
+    Access(#[from] crate::access::AccessError),
+    #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Format(#[from] basecraft_io::Error),
@@ -47,7 +49,9 @@ impl Error {
         match self {
             Self::UnknownDocument { .. } => "unknown_document",
             Self::WrongKind { .. } => "wrong_document_kind",
-            Self::Io(_) => "io",
+            Self::Access(crate::access::AccessError::Denied(_)) => "permission_denied",
+            Self::Access(crate::access::AccessError::DestinationExists) => "output_conflict",
+            Self::Access(crate::access::AccessError::Io(_)) | Self::Io(_) => "io",
             Self::Format(_) => "format",
             Self::Json(_) => "json",
             Self::UnknownFormat(_) => "unknown_format",

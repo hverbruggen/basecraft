@@ -1,7 +1,11 @@
 //! Headless presentation of the shared Session save boundary.
 use std::path::Path;
 
-use basecraft_ops::{DocId, Error, Session, input_evidence::SavePolicy};
+use basecraft_ops::{
+    DocId, Error, Session,
+    access::{AccessError, Denial},
+    input_evidence::SavePolicy,
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -62,12 +66,18 @@ impl Options {
 /// Typed errors stay typed through CLI, MCP and Python, including the fresh check.
 pub(crate) fn error_value(error: &Error) -> Value {
     let code = match error {
-        Error::Io(e) | Error::Format(basecraft_io::Error::Io(e))
+        Error::Access(AccessError::Denied(_)) => "permission_denied",
+        Error::Access(AccessError::DestinationExists) => "output_conflict",
+        Error::Access(AccessError::Io(e))
+        | Error::Io(e)
+        | Error::Format(basecraft_io::Error::Io(e))
             if e.kind() == std::io::ErrorKind::PermissionDenied =>
         {
             "permission_denied"
         }
-        Error::Io(_) | Error::Format(basecraft_io::Error::Io(_)) => "io_error",
+        Error::Access(AccessError::Io(_))
+        | Error::Io(_)
+        | Error::Format(basecraft_io::Error::Io(_)) => "io_error",
         Error::Format(_) => "format_error",
         Error::Json(_) | Error::Invalid(_) => "invalid_arguments",
         Error::UnknownFormat(_) => "unknown_format",
@@ -84,6 +94,25 @@ pub(crate) fn error_value(error: &Error) -> Value {
     };
     let mut value = json!({"state":"failed", "errors":[{"code":code,"message":error.to_string()}]});
     match error {
+        Error::Access(AccessError::Denied(reason)) => {
+            let reason = match reason {
+                Denial::InvalidPath => "invalid_path",
+                Denial::OutsideRoot => "outside_root",
+                Denial::ReadOnly => "read_only",
+                Denial::SymbolicLink => "symbolic_link",
+                Denial::Hardlink => "hardlink",
+                Denial::ResourceType => "resource_type",
+                Denial::RootMutation => "root_mutation",
+                Denial::ServiceUnavailable => "service_unavailable",
+            };
+            value["access"] = json!({"kind":"policy_denied", "reason":reason});
+        }
+        Error::Access(AccessError::DestinationExists) => {
+            value["access"] = json!({"kind":"destination_exists"});
+        }
+        Error::Access(AccessError::Io(error)) => {
+            value["access"] = json!({"kind":"io", "raw_os_error":error.raw_os_error()});
+        }
         Error::PublishedWithFailure(failure) => {
             value["state"] = json!("published_with_failure");
             value["completion"] = json!(failure.completion);
@@ -135,7 +164,7 @@ mod tests {
         };
         let expected = serde_json::to_value(&completion).unwrap();
         let error = Error::PublishedWithFailure(Box::new(PublishedWithFailure {
-            completion,
+            completion: completion.clone(),
             cause: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "registry denied")
                 .into(),
         }));
@@ -149,6 +178,93 @@ mod tests {
         let transported: Value =
             serde_json::from_slice(&serde_json::to_vec(&value).unwrap()).unwrap();
         assert_eq!(transported, value);
+        for cause in [
+            AccessError::Denied(Denial::ServiceUnavailable),
+            AccessError::Io(std::io::Error::from_raw_os_error(13)),
+            AccessError::DestinationExists,
+        ] {
+            let cause: Error = cause.into();
+            let expected_cause = error_value(&cause);
+            let nested = error_value(&Error::PublishedWithFailure(Box::new(
+                PublishedWithFailure {
+                    completion: completion.clone(),
+                    cause,
+                },
+            )));
+            let roundtrip: Value =
+                serde_json::from_slice(&serde_json::to_vec(&nested).unwrap()).unwrap();
+            assert_eq!(roundtrip["completion"], expected);
+            assert_eq!(roundtrip["cause"], expected_cause);
+            assert_eq!(roundtrip["state"], "published_with_failure");
+        }
+    }
+
+    #[test]
+    fn access_denial_reasons_are_structured_and_not_waivable_checks() {
+        for (reason, wire) in [
+            (Denial::InvalidPath, "invalid_path"),
+            (Denial::OutsideRoot, "outside_root"),
+            (Denial::ReadOnly, "read_only"),
+            (Denial::SymbolicLink, "symbolic_link"),
+            (Denial::Hardlink, "hardlink"),
+            (Denial::ResourceType, "resource_type"),
+            (Denial::RootMutation, "root_mutation"),
+            (Denial::ServiceUnavailable, "service_unavailable"),
+        ] {
+            let value = error_value(&AccessError::Denied(reason).into());
+            let value: Value =
+                serde_json::from_slice(&serde_json::to_vec(&value).unwrap()).unwrap();
+            assert_eq!(value["errors"][0]["code"], "permission_denied");
+            assert_eq!(
+                value["access"],
+                json!({"kind":"policy_denied", "reason":wire})
+            );
+            assert_eq!(value["state"], "failed");
+            assert!(value.get("check").is_none());
+            assert!(value.get("evidence").is_none());
+        }
+    }
+
+    #[test]
+    fn access_io_and_conflict_keep_categories_without_message_matching() {
+        let permission = error_value(
+            &AccessError::Io(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "ordinary OS denial",
+            ))
+            .into(),
+        );
+        assert_eq!(permission["errors"][0]["code"], "permission_denied");
+        assert_eq!(
+            permission["access"],
+            json!({"kind":"io", "raw_os_error":null})
+        );
+        let raw = std::io::Error::from_raw_os_error(13);
+        let expected_code = if raw.kind() == std::io::ErrorKind::PermissionDenied {
+            "permission_denied"
+        } else {
+            "io_error"
+        };
+        let value = error_value(&AccessError::Io(raw).into());
+        assert_eq!(value["errors"][0]["code"], expected_code);
+        assert_eq!(value["access"], json!({"kind":"io", "raw_os_error":13}));
+        let text = error_value(
+            &AccessError::Io(std::io::Error::other(
+                "permission_denied output_conflict evidence_check_incomplete",
+            ))
+            .into(),
+        );
+        assert_eq!(text["errors"][0]["code"], "io_error");
+        assert_eq!(text["access"]["kind"], "io");
+        assert!(text.get("check").is_none());
+        let conflict = error_value(&AccessError::DestinationExists.into());
+        assert_eq!(conflict["errors"][0]["code"], "output_conflict");
+        assert_eq!(conflict["access"], json!({"kind":"destination_exists"}));
+        for value in [permission, value, text, conflict] {
+            let roundtrip: Value =
+                serde_json::from_slice(&serde_json::to_vec(&value).unwrap()).unwrap();
+            assert_eq!(roundtrip, value);
+        }
     }
 
     #[test]
