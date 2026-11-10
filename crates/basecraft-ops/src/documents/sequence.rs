@@ -244,7 +244,7 @@ mod tests {
         let source = root.path().join("sequence.fasta");
         std::fs::write(&source, b">sequence\nACGT\n").unwrap();
         let mut loaded = files::load(&source).unwrap();
-        let document = loaded.as_document_mut().unwrap();
+        let document = loaded.as_document_mut();
         let initial = document.saved_hashes(&source).unwrap();
         let revision = document.revision(99);
         for op in [
@@ -307,7 +307,7 @@ mod tests {
             let mut expected_side = Vec::new();
             let side = files::write_sidecar(&opened, &mut expected_side).map(|r| r.unwrap());
             let mut loaded = files::Loaded::Sequence(opened);
-            let document = loaded.as_document_mut().unwrap();
+            let document = loaded.as_document_mut();
             let initial = document.saved_hashes(&source).unwrap();
             assert_eq!(initial[0], basecraft_io::hash_bytes(&expected_main));
             let (inverse, _) = document

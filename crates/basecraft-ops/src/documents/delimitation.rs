@@ -122,7 +122,7 @@ mod tests {
     fn dispatch_rejects_wrong_operations_and_restores_snapshot() {
         let initial = basecraft_io::spart::parse_text(SPART).unwrap();
         let mut loaded = files::Loaded::Delimitation(initial.clone());
-        let doc = loaded.as_document_mut().unwrap();
+        let doc = loaded.as_document_mut();
         assert_eq!(doc.revision(42), 42);
         let state = doc.fingerprint();
         assert!(doc.apply(&Op::TreeMidpointRoot {}).is_err());
@@ -165,7 +165,7 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let target = dir.path().join(name);
             let loaded = files::Loaded::Delimitation(initial.clone());
-            let doc = loaded.as_document().unwrap();
+            let doc = loaded.as_document();
             let mut main = Vec::new();
             files::write_delimitation(&initial, files::delimitation_xml(&target), &mut main)
                 .unwrap();

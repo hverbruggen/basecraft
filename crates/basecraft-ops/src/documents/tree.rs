@@ -169,7 +169,7 @@ mod tests {
         let source = root.path().join("tree.nwk");
         std::fs::write(&source, "((a:1,b:1):1,c:2);\n(d:1,e:1);\n").unwrap();
         let mut loaded = files::load(&source).unwrap();
-        let document = loaded.as_document_mut().unwrap();
+        let document = loaded.as_document_mut();
         let before = document.saved_hashes(&source).unwrap();
         let revision = document.revision(0);
         for op in [
@@ -209,7 +209,7 @@ mod tests {
             let source = root.path().join(name);
             std::fs::write(&source, bytes).unwrap();
             let mut loaded = files::load(&source).unwrap();
-            let document = loaded.as_document_mut().unwrap();
+            let document = loaded.as_document_mut();
             let initial = document.saved_hashes(&source).unwrap();
             let revision = document.revision(0);
             let (inverse, feature) = document

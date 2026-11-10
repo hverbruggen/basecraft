@@ -134,25 +134,25 @@ pub enum Loaded {
 
 impl Loaded {
     /// Borrow the shared behavior of the existing document payloads.
-    pub(crate) fn as_document(&self) -> Option<&dyn crate::documents::Document> {
+    pub(crate) fn as_document(&self) -> &dyn crate::documents::Document {
         match self {
-            Self::Submission(sub) => Some(sub),
-            Self::Metadata(opened) => Some(opened),
-            Self::Alignment(opened) => Some(opened),
-            Self::Tree(opened) => Some(opened),
-            Self::Sequence(opened) => Some(opened),
-            Self::Delimitation(work) => Some(work),
+            Self::Submission(sub) => sub,
+            Self::Metadata(opened) => opened,
+            Self::Alignment(opened) => opened,
+            Self::Tree(opened) => opened,
+            Self::Sequence(opened) => opened,
+            Self::Delimitation(work) => work,
         }
     }
 
-    pub(crate) fn as_document_mut(&mut self) -> Option<&mut dyn crate::documents::Document> {
+    pub(crate) fn as_document_mut(&mut self) -> &mut dyn crate::documents::Document {
         match self {
-            Self::Submission(sub) => Some(sub),
-            Self::Metadata(opened) => Some(opened),
-            Self::Alignment(opened) => Some(opened),
-            Self::Tree(opened) => Some(opened),
-            Self::Sequence(opened) => Some(opened),
-            Self::Delimitation(work) => Some(work),
+            Self::Submission(sub) => sub,
+            Self::Metadata(opened) => opened,
+            Self::Alignment(opened) => opened,
+            Self::Tree(opened) => opened,
+            Self::Sequence(opened) => opened,
+            Self::Delimitation(work) => work,
         }
     }
 }

@@ -2077,9 +2077,7 @@ impl Session {
             | Loaded::Metadata(_)
             | Loaded::Alignment(_)
             | Loaded::Tree(_)) => {
-                let document = migrated
-                    .as_document()
-                    .ok_or_else(|| invalid("document interface unavailable"))?;
+                let document = migrated.as_document();
                 document.saved_hashes(target)
             }
         }
@@ -2226,7 +2224,7 @@ impl Session {
         let Some(merged) = self.docs[doc.0]
             .content
             .as_document()
-            .and_then(|document| document.merge(&p.entry.op, op))
+            .merge(&p.entry.op, op)
         else {
             return Ok(false);
         };
@@ -2527,10 +2525,7 @@ fn redact_operation_paths(operation: &mut Op) {
 }
 
 fn restore_inverse(content: &mut Loaded, inverse: &Inverse) -> Result<()> {
-    if let Some(document) = content.as_document_mut() {
-        return document.revert(inverse);
-    }
-    Err(invalid("edit rollback has incompatible document type"))
+    content.as_document_mut().revert(inverse)
 }
 
 /// Edits whose log entries can grow into a burst.
