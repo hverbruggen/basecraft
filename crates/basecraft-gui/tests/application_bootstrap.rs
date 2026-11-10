@@ -18,11 +18,16 @@ mod application_test_bridge;
 #[path = "../src/bridge.rs"]
 #[allow(unused_imports)] // harness=false omits the included module's #[test] bodies.
 mod bridge;
+#[path = "controller_theme/mod.rs"]
+mod controller_theme;
 #[path = "../src/delimitation_bridge.rs"]
 #[allow(unused_imports, dead_code)] // harness=false omits test bodies but retains their helpers.
 mod delimitation_bridge;
 #[path = "../src/document_jobs.rs"]
 mod document_jobs;
+#[path = "../src/editor_core.rs"]
+#[allow(dead_code)] // harness=false omits pure #[test] bodies.
+mod editor_core;
 #[path = "../src/figure_png.rs"]
 #[allow(unused_imports, dead_code)] // harness=false omits the included module's test bodies.
 mod figure_png;
@@ -165,6 +170,8 @@ fn main() {
         font.family().expect("application font family").to_string(),
         ""
     );
+
+    controller_theme::run();
 
     // Real QML-created controllers; inject invalid owned IDs without exposing
     // production invokables or constructing placeholder document payloads.

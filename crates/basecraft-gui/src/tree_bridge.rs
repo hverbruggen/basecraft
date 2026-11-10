@@ -1487,32 +1487,25 @@ impl qobject::TreeController {
     }
 
     pub fn check_theme(mut self: Pin<&mut Self>) {
-        let font = QString::from(&monospace_font());
-        if font != self.rust().mono_font {
-            self.as_mut().set_mono_font(font);
+        if let Some(font) = crate::editor_core::prepare_font(&self.rust().mono_font.to_string()) {
+            self.as_mut().set_mono_font(QString::from(&font));
         }
 
-        let stamp = theme_stamp();
-        if stamp == self.rust().theme_stamp {
-            return;
-        }
-        if let Some((theme, stamp)) = load_theme() {
-            let (bg, fg, ac) = (
-                css(theme.background),
-                css(theme.foreground),
-                css(theme.accent),
-            );
-            let (ok, err) = (css(theme.nearest_hue(120.0)), css(theme.nearest_hue(0.0)));
+        if let Some(update) =
+            crate::editor_core::prepare_theme(&self.rust().theme_stamp, theme_stamp, load_theme)
+        {
             {
                 let mut r = self.as_mut().rust_mut();
-                r.theme = theme;
-                r.theme_stamp = stamp;
+                r.theme = update.theme;
+                r.theme_stamp = update.stamp;
             }
-            self.as_mut().set_background(QString::from(&bg));
-            self.as_mut().set_foreground(QString::from(&fg));
-            self.as_mut().set_accent(QString::from(&ac));
-            self.as_mut().set_ok_color(QString::from(&ok));
-            self.as_mut().set_error_color(QString::from(&err));
+            self.as_mut()
+                .set_background(QString::from(&update.background));
+            self.as_mut()
+                .set_foreground(QString::from(&update.foreground));
+            self.as_mut().set_accent(QString::from(&update.accent));
+            self.as_mut().set_ok_color(QString::from(&update.ok));
+            self.as_mut().set_error_color(QString::from(&update.error));
             self.refresh();
         }
     }

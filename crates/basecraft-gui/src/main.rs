@@ -14,6 +14,7 @@ mod application;
 mod bridge;
 mod delimitation_bridge;
 mod document_jobs;
+mod editor_core;
 mod figure_png;
 mod find_bridge;
 mod metadata_bridge;
