@@ -93,7 +93,7 @@ class ReportTests(unittest.TestCase):
             executable = cache / "binary"
             executable.write_bytes(b"mock release binary")
             argv = ["run.py", "--machine", "neutral", "--cache", directory,
-                    "--samples", "3", "--executable", str(executable),
+                    "--samples", "3", "--revision", "a" * 40, "--executable", str(executable),
                     "--scenario", failed, "--scenario", following]
             children = [subprocess.CompletedProcess([], 1, "", "geometry failed")] + [
                 subprocess.CompletedProcess([], 0, json.dumps(sample), "") for _ in range(3)]
