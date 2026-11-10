@@ -358,3 +358,35 @@ fn typed_execution_and_index_examples_roundtrip() {
     index["status"] = json!({"malformed":true});
     assert!(serde_json::from_value::<LocalJobIndex>(index).is_err());
 }
+
+#[test]
+fn original_prepared_run_writer() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    std::fs::write(root.join("input.txt"), b"abc\n").unwrap();
+    let registry = registry(root);
+    let prepared = prepare(root, &registry, "normal");
+    capture(
+        "run-prepared",
+        &prepared.run.artifact("run.json").unwrap(),
+        &json!({"schema_version":1,"id":prepared.run.id(),"result":"normal.json","status":"prepared"}),
+    );
+    // No-export registered operations use their full operation ID as label.
+    let mut request = prepared.request.clone();
+    request.destinations.clear();
+    let operation = registry.resolve(&request.operation, None).unwrap().clone();
+    let prepared = PreparedOperation::prepare(
+        operation,
+        request,
+        SessionPolicy::new(root, true).unwrap(),
+        "record fixture".into(),
+        None,
+        &registry,
+    )
+    .unwrap();
+    capture(
+        "run-prepared-no-export",
+        &prepared.run.artifact("run.json").unwrap(),
+        &json!({"schema_version":1,"id":prepared.run.id(),"result":"org.example.registry-fixture/count@1","status":"prepared"}),
+    );
+}
