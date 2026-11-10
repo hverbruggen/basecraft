@@ -142,4 +142,5 @@ mod tests;
 #[cfg(test)]
 mod frame;
 #[cfg(test)]
+#[path = "startup_frame_bridge.rs"]
 mod frame_bridge;
