@@ -1,6 +1,6 @@
 //! Kind-specific behavior borrowed by the shared Session.
 //!
-//! Migration is incremental: Submission, Metadata, Alignment and Tree implement this interface today.
+//! Migration is incremental: Submission, Metadata, Alignment, Tree and Sequence implement this interface today.
 //! `Loaded::as_document` returns `None` for legacy kinds. Their existing paths
 //! remain until each is migrated; no placeholder implementations are required.
 //! Payloads are not constrained to a single sequence/record, so future result,
@@ -17,6 +17,7 @@ use crate::session::Inverse;
 
 mod alignment;
 mod metadata;
+mod sequence;
 mod submission;
 mod tree;
 
@@ -51,3 +52,6 @@ pub(crate) use submission::companions as submission_companions;
 
 // Shared by staged support import and drawing-edit replay on detached TreeDocs.
 pub(crate) use tree::execute_tree;
+
+// Detached proposal staging uses the same sequence semantics as live documents.
+pub(crate) use sequence::{execute_sequence, sequence_state};

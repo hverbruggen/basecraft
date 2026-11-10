@@ -1,12 +1,13 @@
 //! One staged proposal/commit owner. Kind adapters supply only candidate edits
 //! and fingerprints; Session retains pins, actors, journal and undo ownership.
-use super::{Applied, Inverse, Session, Slot, execute_sequence};
+use super::{Applied, Inverse, Session, Slot};
+use crate::documents::{execute_sequence, sequence_state};
 use crate::{
     DocId, Result,
     error::invalid,
     files::{Loaded, Opened},
 };
-use basecraft_docs::{FeatureId, SequenceDoc};
+use basecraft_docs::FeatureId;
 use basecraft_protocol::{Actor, DocState, LogEntry, Op, OpResult};
 
 type Execute = fn(&mut Loaded, &Op) -> Result<(Inverse, Option<FeatureId>)>;
@@ -25,14 +26,6 @@ struct PreparedBatch {
     candidate: Loaded,
     edits: Vec<PreparedEdit>,
     entries: Vec<LogEntry>,
-}
-
-pub(super) fn sequence_state(doc: &SequenceDoc) -> DocState {
-    DocState {
-        len: doc.len(),
-        features: doc.feature_count() as u64,
-        rows: None,
-    }
 }
 
 pub(super) fn delimitation_state(

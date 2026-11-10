@@ -430,7 +430,7 @@ impl Session {
     /// generation for workspace, metadata and submission documents without a separate version.
     pub fn revision(&self, id: DocId) -> u64 {
         match &self.docs[id.0].content {
-            Loaded::Sequence(opened) => opened.doc.version(),
+            Loaded::Sequence(opened) => opened.revision(self.docs[id.0].generation),
             Loaded::Alignment(opened) => opened.revision(self.docs[id.0].generation),
             Loaded::Tree(opened) => opened.revision(self.docs[id.0].generation),
             Loaded::Submission(sub) => sub.revision(self.docs[id.0].generation),
@@ -469,7 +469,7 @@ impl Session {
     /// The fingerprint the log records after each operation.
     pub fn state(&self, id: DocId) -> DocState {
         match &self.docs[id.0].content {
-            Loaded::Sequence(o) => proposals::sequence_state(&o.doc),
+            Loaded::Sequence(o) => o.fingerprint(),
             Loaded::Alignment(o) => o.fingerprint(),
             Loaded::Delimitation(work) => proposals::delimitation_state(work),
             Loaded::Metadata(opened) => opened.fingerprint(),
@@ -1241,31 +1241,11 @@ impl Session {
             }
             Loaded::Sequence(o) => o,
         };
-        if format != opened.format {
-            return Err(invalid("saving to a different format isn't supported yet"));
-        }
-        basecraft_io::write_atomic(&target, |w| {
-            let mut hw = HashingWriter::new(w);
-            files::write_main(opened, &mut hw)?;
-            main_hash = hw.hash();
-            Ok(())
-        })?;
-        hashes.push((self.relative(&target), main_hash));
-        let sidecar = files::gff_sidecar(&target);
-        let mut side_hash = None;
-        if format == files::Format::Fasta {
-            basecraft_io::write_atomic(&sidecar, |w| {
-                let mut hw = HashingWriter::new(w);
-                if let Some(r) = files::write_sidecar(opened, &mut hw) {
-                    r?;
-                }
-                side_hash = Some(hw.hash());
-                Ok(())
-            })?;
-        }
-        if let Some(h) = side_hash {
-            hashes.push((self.relative(&sidecar), h));
-        }
+        let hashes = opened
+            .write(&target, format, &self.storage_root)?
+            .into_iter()
+            .map(|(path, hash)| (self.relative(&path), hash))
+            .collect();
         self.log_save(id, &target, hashes)
     }
 
@@ -2082,7 +2062,7 @@ impl Session {
     /// Replay a save using its actual exchange format, including Save As.
     pub fn save_hashes_at(&self, id: DocId, target: &Path) -> Result<Vec<String>> {
         let content = &self.docs[id.0].content;
-        let opened = match content {
+        match content {
             Loaded::Delimitation(work) => {
                 let mut main = HashingWriter::new(std::io::sink());
                 files::write_delimitation(work, files::delimitation_xml(target), &mut main)?;
@@ -2094,28 +2074,19 @@ impl Session {
                     &self.resolve(&target.to_string_lossy()),
                     &mut side,
                 )?;
-                return Ok(vec![hash, side.hash()]);
+                Ok(vec![hash, side.hash()])
             }
-            Loaded::Sequence(o) => o,
-            migrated @ (Loaded::Submission(_)
+            migrated @ (Loaded::Sequence(_)
+            | Loaded::Submission(_)
             | Loaded::Metadata(_)
             | Loaded::Alignment(_)
             | Loaded::Tree(_)) => {
                 let document = migrated
                     .as_document()
                     .ok_or_else(|| invalid("document interface unavailable"))?;
-                return document.saved_hashes(target);
+                document.saved_hashes(target)
             }
-        };
-        let mut hw = HashingWriter::new(std::io::sink());
-        files::write_main(opened, &mut hw)?;
-        let mut out = vec![hw.hash()];
-        let mut hw = HashingWriter::new(std::io::sink());
-        if let Some(r) = files::write_sidecar(opened, &mut hw) {
-            r?;
-            out.push(hw.hash());
         }
-        Ok(out)
     }
 
     /// Retain failure and cancellation diagnostics without creating a hypothesis.
@@ -2250,67 +2221,20 @@ impl Session {
 
     /// Merge an insertion into the pending burst if it continues it.
     fn try_merge(&mut self, doc: DocId, op: &Op, actor: &Actor) -> Result<bool> {
-        if let Some(p) = &self.pending
-            && p.doc == doc
-            && p.entry.actor == *actor
-            && p.last.elapsed() < MERGE_WINDOW
-            && let Some(document) = self.docs[doc.0].content.as_document()
-            && let Some(merged) = document.merge(&p.entry.op, op)
-        {
-            let (Inverse::Alignment(steps), _) = self.execute(doc, op)? else {
-                return Err(invalid("alignment edit without alignment undo"));
-            };
-            let state = self.state(doc);
-            let slot = &mut self.docs[doc.0];
-            slot.redo.clear();
-            let top = slot
-                .undo
-                .last_mut()
-                .ok_or_else(|| invalid("pending burst without undo entry"))?;
-            if let Inverse::Alignment(first) = &mut top.inverse {
-                first.extend(steps);
-            }
-            top.op = merged.clone();
-            if let Some(p) = &mut self.pending {
-                p.entry.op = merged;
-                p.entry.state = state;
-                p.last = Instant::now();
-            }
-            return Ok(true);
-        }
-        let Op::SeqReplace {
-            start,
-            end,
-            residues,
-        } = op
-        else {
-            return Ok(false);
-        };
         let Some(p) = &self.pending else {
             return Ok(false);
         };
-        let Op::SeqReplace {
-            start: p_start,
-            residues: p_res,
-            ..
-        } = &p.entry.op
+        if p.doc != doc || p.entry.actor != *actor || p.last.elapsed() >= MERGE_WINDOW {
+            return Ok(false);
+        }
+        let Some(merged) = self.docs[doc.0]
+            .content
+            .as_document()
+            .and_then(|document| document.merge(&p.entry.op, op))
         else {
             return Ok(false);
         };
-        let continues = start == end
-            && !residues.is_empty()
-            && p.doc == doc
-            && p.entry.actor == *actor
-            && *start == p_start + p_res.len() as u64
-            && p.last.elapsed() < MERGE_WINDOW;
-        if !continues {
-            return Ok(false);
-        }
-        let residues = normalise(residues)?;
-        let Loaded::Sequence(opened) = &mut self.docs[doc.0].content else {
-            return Ok(false);
-        };
-        let result = opened.doc.insert(*start, residues.as_bytes());
+        let (inverse, _) = self.execute(doc, op)?;
         let state = self.state(doc);
         let slot = &mut self.docs[doc.0];
         slot.redo.clear();
@@ -2318,28 +2242,32 @@ impl Session {
             .undo
             .last_mut()
             .ok_or_else(|| invalid("pending burst without undo entry"))?;
-        if let (
-            Op::SeqReplace { residues: r, .. },
-            Inverse::Residues {
-                inserted,
-                result: first,
-            },
-        ) = (&mut top.op, &mut top.inverse)
-        {
-            r.push_str(&residues);
-            *inserted += residues.len() as u64;
-            // Keep the pre-burst state of each feature; add features the
-            // burst touched later.
-            for (id, f) in result.before {
-                if !first.before.iter().any(|(i, _)| *i == id) {
-                    first.before.push((id, f));
+        match (&mut top.inverse, inverse) {
+            (Inverse::Alignment(first), Inverse::Alignment(steps)) => first.extend(steps),
+            (
+                Inverse::Residues {
+                    inserted,
+                    result: first,
+                },
+                Inverse::Residues {
+                    inserted: added,
+                    result,
+                },
+            ) => {
+                *inserted += added;
+                // Keep the pre-burst state of each feature; add features the
+                // burst touched later.
+                for (id, f) in result.before {
+                    if !first.before.iter().any(|(i, _)| *i == id) {
+                        first.before.push((id, f));
+                    }
                 }
             }
+            _ => return Err(invalid("merged edit has incompatible undo")),
         }
+        top.op = merged.clone();
         if let Some(p) = &mut self.pending {
-            if let Op::SeqReplace { residues: r, .. } = &mut p.entry.op {
-                r.push_str(&residues);
-            }
+            p.entry.op = merged;
             p.entry.state = state;
             p.last = Instant::now();
         }
@@ -2348,17 +2276,14 @@ impl Session {
 
     /// Carry out an edit on the document; returns its inverse.
     fn execute(&mut self, id: DocId, op: &Op) -> Result<(Inverse, Option<FeatureId>)> {
-        let doc = match &mut self.docs[id.0].content {
-            Loaded::Sequence(o) => &mut o.doc,
-            Loaded::Delimitation(work) => {
-                return proposals::execute_delimitation(work, op);
-            }
-            Loaded::Metadata(opened) => return opened.apply(op),
-            Loaded::Submission(sub) => return sub.apply(op),
-            Loaded::Alignment(a) => return a.apply(op),
-            Loaded::Tree(t) => return t.apply(op),
-        };
-        execute_sequence(doc, op)
+        match &mut self.docs[id.0].content {
+            Loaded::Sequence(o) => o.apply(op),
+            Loaded::Delimitation(work) => proposals::execute_delimitation(work, op),
+            Loaded::Metadata(opened) => opened.apply(op),
+            Loaded::Submission(sub) => sub.apply(op),
+            Loaded::Alignment(a) => a.apply(op),
+            Loaded::Tree(t) => t.apply(op),
+        }
     }
 
     /// Undo the last operation on a document; returns the undone entry's id.
@@ -2435,7 +2360,7 @@ impl Session {
             }
             (Loaded::Metadata(opened), inverse) => opened.revert(inverse)?,
             (Loaded::Submission(sub), inverse) => sub.revert(inverse)?,
-            (Loaded::Sequence(o), inverse) => undo_sequence(&mut o.doc, inverse),
+            (Loaded::Sequence(o), inverse) => o.revert(inverse)?,
             (Loaded::Delimitation(_), _) => {
                 return Err(invalid("undo of the wrong kind of edit"));
             }
@@ -2522,100 +2447,6 @@ pub fn apply_drawing_edits(
 ) {
     for edit in edits {
         let _ = execute_tree(doc, &edit.to_op());
-    }
-}
-
-/// Carry out a tree edit; returns the tree as it was.
-fn execute_sequence(doc: &mut SequenceDoc, op: &Op) -> Result<(Inverse, Option<FeatureId>)> {
-    match op {
-        Op::SeqReplace {
-            start,
-            end,
-            residues,
-        } => {
-            if start > end || *end > doc.len() {
-                return Err(invalid(format!(
-                    "range {start}..{end} outside 0..{}",
-                    doc.len()
-                )));
-            }
-            let residues = normalise(residues)?;
-            let result = doc.replace(*start, *end, residues.as_bytes());
-            Ok((
-                Inverse::Residues {
-                    inserted: residues.len() as u64,
-                    result,
-                },
-                None,
-            ))
-        }
-        Op::FeatureAdd { feature } => {
-            check_location(feature, doc.len())?;
-            let fid = doc.add_feature(feature.clone());
-            Ok((
-                Inverse::Feature {
-                    id: fid,
-                    before: None,
-                },
-                Some(fid),
-            ))
-        }
-        Op::FeatureRemove { id } => {
-            let fid = FeatureId(*id);
-            let before = doc
-                .remove_feature(fid)
-                .ok_or_else(|| invalid(format!("no feature {id}")))?;
-            Ok((
-                Inverse::Feature {
-                    id: fid,
-                    before: Some(before),
-                },
-                None,
-            ))
-        }
-        Op::FeatureUpdate { id, feature } => {
-            check_location(feature, doc.len())?;
-            let fid = FeatureId(*id);
-            if doc.feature(fid).is_none() {
-                return Err(invalid(format!("no feature {id}")));
-            }
-            let before = doc.update_feature(fid, feature.clone());
-            Ok((Inverse::Feature { id: fid, before }, None))
-        }
-        Op::AlnReplace { .. }
-        | Op::AlnInsert { .. }
-        | Op::AlnFill { .. }
-        | Op::AlnInsertGaps { .. }
-        | Op::AlnDelete { .. }
-        | Op::AlnShift { .. }
-        | Op::AlnRemoveGapColumns {}
-        | Op::AlnMoveRows { .. }
-        | Op::AlnRenameRow { .. }
-        | Op::AlnAddSequences { .. }
-        | Op::AlnRemoveRows { .. } => Err(invalid(format!("{} needs an alignment", op.name()))),
-        Op::TreeReroot { .. }
-        | Op::TreeMidpointRoot {}
-        | Op::TreeMinimumVarianceRoot {}
-        | Op::TreeRootPosition { .. }
-        | Op::TreeRotate { .. }
-        | Op::TreeLadderize { .. }
-        | Op::TreeRenameTip { .. }
-        | Op::TreeAnnotate { .. }
-        | Op::TreeAddSupport { .. }
-        | Op::TreeRemoveSupport { .. }
-        | Op::TreeStyle { .. } => Err(invalid(format!("{} needs a tree", op.name()))),
-        Op::DelimitationEdit { .. } => Err(invalid("this needs a delimitation workspace")),
-        Op::MetadataEdit { .. } => Err(invalid("this needs the project metadata")),
-        Op::SubmissionEdit { .. } => Err(invalid("this needs a submission document")),
-        Op::JobFinished { .. } => Err(invalid("use log_job_finished")),
-        Op::Open { .. }
-        | Op::CreateSequence { .. }
-        | Op::Save { .. }
-        | Op::Extract { .. }
-        | Op::Export { .. }
-        | Op::ToolRun { .. }
-        | Op::Undo { .. }
-        | Op::Redo { .. } => Err(invalid(format!("{} is not an edit", op.name()))),
     }
 }
 
@@ -2709,29 +2540,10 @@ fn restore_inverse(content: &mut Loaded, inverse: &Inverse) -> Result<()> {
         return document.revert(inverse);
     }
     match (content, inverse) {
-        (Loaded::Sequence(opened), inverse) => undo_sequence(&mut opened.doc, inverse),
         (Loaded::Delimitation(work), Inverse::Delimitation(before)) => *work = (**before).clone(),
         _ => return Err(invalid("edit rollback has incompatible document type")),
     }
     Ok(())
-}
-
-fn undo_sequence(doc: &mut SequenceDoc, inverse: &Inverse) {
-    match inverse {
-        Inverse::Residues { inserted, result } => {
-            let pos = result.change.pos;
-            doc.replace(pos, pos + inserted, &result.removed);
-            for (fid, f) in &result.before {
-                doc.restore_feature(*fid, Some(f.clone()));
-            }
-        }
-        Inverse::Feature { id: fid, before } => doc.restore_feature(*fid, before.clone()),
-        Inverse::Alignment(_)
-        | Inverse::Tree(_)
-        | Inverse::Delimitation(_)
-        | Inverse::Metadata(_)
-        | Inverse::Submission(_) => {}
-    }
 }
 
 /// Edits whose log entries can grow into a burst.
@@ -2795,21 +2607,6 @@ pub(crate) fn normalise(residues: &str) -> Result<String> {
         return Err(invalid(format!("{c:?} is not a base or amino acid")));
     }
     Ok(residues.to_ascii_uppercase())
-}
-
-fn check_location(f: &Feature, len: u64) -> Result<()> {
-    if f.location.segments.is_empty() {
-        return Err(invalid("feature has no segments"));
-    }
-    for s in &f.location.segments {
-        if s.start > s.end || s.end > len {
-            return Err(invalid(format!(
-                "segment {}..{} outside 0..{len}",
-                s.start, s.end
-            )));
-        }
-    }
-    Ok(())
 }
 
 impl Session {

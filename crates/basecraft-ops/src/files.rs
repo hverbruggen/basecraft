@@ -140,7 +140,8 @@ impl Loaded {
             Self::Metadata(opened) => Some(opened),
             Self::Alignment(opened) => Some(opened),
             Self::Tree(opened) => Some(opened),
-            _ => None,
+            Self::Sequence(opened) => Some(opened),
+            Self::Delimitation(_) => None,
         }
     }
 
@@ -150,7 +151,8 @@ impl Loaded {
             Self::Metadata(opened) => Some(opened),
             Self::Alignment(opened) => Some(opened),
             Self::Tree(opened) => Some(opened),
-            _ => None,
+            Self::Sequence(opened) => Some(opened),
+            Self::Delimitation(_) => None,
         }
     }
 }
