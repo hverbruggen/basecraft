@@ -5,7 +5,7 @@ mod inspection;
 use super::{SangerReviewSession, StoredReview};
 use crate::{analysis_store::ArtifactRun, error::invalid, input_evidence as inputs};
 use basecraft_docs::sanger::{SangerDraft, SangerPlacement};
-use basecraft_protocol::provenance::{ArtifactRevision, Completeness, InputReference, Publication};
+use basecraft_protocol::provenance::{ArtifactRevision, Completeness, Publication};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
