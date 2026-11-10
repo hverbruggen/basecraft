@@ -391,10 +391,7 @@ fn retention_worker(root: &Path, role: &str, mode: &str, barrier: &mut Barrier) 
         }
         let mutation = Mutation::begin().unwrap();
         mutation.preserve_input(leaf.directory()).unwrap();
-        // Idempotent checked preservation must not recopy the now-changed source.
-        std::fs::write(&source, b">gene\nAAAA\n").unwrap();
         mutation.preserve_input(leaf.directory()).unwrap();
-        std::fs::write(&source, ORIGINAL).unwrap();
         let mut primary = mutation.read_input(owner.directory()).unwrap();
         assert_eq!(primary.state, "referenced");
         barrier.send("prepared");
@@ -415,6 +412,9 @@ fn retention_worker(root: &Path, role: &str, mode: &str, barrier: &mut Barrier) 
         drop(mutation);
         barrier.send("published");
         barrier.expect("verify");
+        // A compatible public retry after save must validate the retained bytes
+        // without recopying the changed live source.
+        input_evidence::preserve_input(leaf.directory()).unwrap();
         assert_eq!(
             std::fs::read(leaf.directory().join("preserved-input")).unwrap(),
             ORIGINAL
