@@ -22,6 +22,7 @@ FRAME_SCENARIOS = tuple(f"frame-{phase}-{case}"
                                      "genome-wrapped", "genome-wrapped-hidden")
                         for phase in ("first", "warm", "scroll"))
 TREE_SCENARIOS = ("tree-open-50000", "tree-midpoint-50000")
+HEAP_SCENARIOS = ("heap-open-compact", "heap-open-100mb", "heap-open-error")
 PROTOCOL = "session-warm-v1"
 SCHEMA_VERSION = 2
 
@@ -45,10 +46,26 @@ def summarize(samples):
         raise ValueError("unsupported sample schema; regenerate rather than reinterpret old fixture sizes")
     keys = ("scenario", "operations", "fixture_bytes", "rows", "columns", "edits",
             "source_commit", "debug_assertions")
-    keys += ("work",) if samples[0]["scenario"].startswith(("frame-", "tree-")) else ()
+    keys += ("work",) if samples[0]["scenario"].startswith(("frame-", "tree-", "heap-")) else ()
     identity = {key: samples[0][key] for key in keys}
     if any({key: s[key] for key in keys} != identity for s in samples):
         raise ValueError("inconsistent sample parameters")
+    if identity["scenario"].startswith("heap-"):
+        fields = ("baseline_bytes", "peak_bytes", "incremental_peak_bytes", "live_after_open_bytes",
+                  "live_after_drop_bytes", "successful_reallocations", "failed_reallocations", "failed_allocations")
+        for sample in samples:
+            heap = sample["heap"]
+            if (any(type(heap.get(k)) is not int or heap[k] < 0 for k in fields)
+                    or heap["peak_bytes"] < max(heap["baseline_bytes"], heap["live_after_open_bytes"])
+                    or heap["incremental_peak_bytes"] != heap["peak_bytes"] - heap["baseline_bytes"]
+                    or heap["failed_reallocations"] or heap["failed_allocations"]
+                    or sample["work"].get("instrumentation") != "system-requested-live-v1"
+                    or sample["work"].get("unit") != "requested bytes"
+                    or identity["operations"] != 1):
+                raise ValueError("invalid requested-heap accounting")
+        return {**identity, "status": "measured", "samples": len(samples),
+                "unit": "requested bytes", "median": statistics.median(s["heap"]["incremental_peak_bytes"] for s in samples),
+                "heap_medians": {k: statistics.median(s["heap"][k] for s in samples) for k in fields}}
     if identity["operations"] <= 0 or any(s["duration_ns"] <= 0 for s in samples):
         raise ValueError("invalid duration or operation count")
     if samples[0]["scenario"].startswith("frame-") and any(
@@ -74,7 +91,7 @@ def compare(report, baseline, budgets):
             results[name] = {"status": "unavailable", "reason": "scenario not measured in both runs"}
             continue
         keys = ("operations", "fixture_bytes", "rows", "columns", "edits", "unit")
-        keys += ("work",) if name.startswith(("frame-", "tree-")) else ()
+        keys += ("work",) if name.startswith(("frame-", "tree-", "heap-")) else ()
         median = previous.get("median", 0)
         if (any(current[k] != previous.get(k) for k in keys)
                 or not isinstance(median, (int, float)) or not math.isfinite(median) or median <= 0):
@@ -94,7 +111,7 @@ def main():
     parser.add_argument("--samples", type=int, default=5)
     parser.add_argument("--baseline", type=Path, help="reviewed report.json from a compatible run")
     parser.add_argument("--history", type=Path, help="opt-in external JSONL summary history (review before publishing)")
-    parser.add_argument("--scenario", action="append", choices=SCENARIOS + FRAME_SCENARIOS + TREE_SCENARIOS,
+    parser.add_argument("--scenario", action="append", choices=SCENARIOS + FRAME_SCENARIOS + TREE_SCENARIOS + HEAP_SCENARIOS,
                         help="measure selected Session or frame scenarios (repeatable)")
     parser.add_argument("--large", action="store_true", help="also open 1 GB decimal FASTA (may refuse)")
     parser.add_argument("--executable", type=Path, help="reuse a release bench binary built with this source revision")
@@ -102,6 +119,9 @@ def main():
     args = parser.parse_args()
     if args.samples < 3 or not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", args.machine):
         parser.error("need at least 3 samples and a neutral alphanumeric machine label")
+    heap_mode = any(n.startswith("heap-") for n in (args.scenario or ()))
+    if heap_mode and (args.large or any(not n.startswith("heap-") for n in args.scenario)):
+        parser.error("run heap instrumentation separately from wall timings")
     cache = external(args.cache)
     cache.mkdir(parents=True, exist_ok=True)
     revision = args.revision
@@ -120,6 +140,9 @@ def main():
         "benches/run.py", "crates/basecraft-ops/benches/interaction.rs",
         "crates/basecraft-ops/benches/interaction/frame_cases.rs",
         "crates/basecraft-ops/benches/interaction/tree_cases.rs", "benches/budgets.toml",
+        "crates/basecraft-ops/benches/interaction/fixtures.rs",
+        "crates/basecraft-ops/benches/interaction/memory_cases.rs",
+        "crates/basecraft-io/src/heap.rs", "crates/basecraft-io/Cargo.toml",
         "crates/basecraft-ops/Cargo.toml"))).hexdigest()
     run_dir = Path(tempfile.mkdtemp(prefix="interaction-", dir=cache))
     env = os.environ.copy()
@@ -135,7 +158,8 @@ def main():
         env["TMPDIR"] = str(compiler_tmp)
         env["CARGO_BUILD_JOBS"] = str(min(24, int(env.get("CARGO_BUILD_JOBS", "24"))))
         build = subprocess.run(["cargo", "build", "--locked", "--offline", "--release",
-                                "-p", "basecraft-ops", "--bench", "interaction", "--message-format=json"],
+                                "-p", "basecraft-ops", "--bench", "interaction", "--message-format=json",
+                                *(["--features", "test-heap"] if heap_mode else [])],
                                cwd=ROOT, env=env, text=True, stdout=subprocess.PIPE, check=True)
         artifacts = [json.loads(line) for line in build.stdout.splitlines()]
         executable = Path(next(a["executable"] for a in artifacts if a.get("executable")
@@ -181,7 +205,9 @@ def main():
                         item.unlink()
         else:
             report["scenarios"][name] = summarize(samples)
-            print(f"{name}: {report['scenarios'][name]['median'] / 1e6:.3f} ms/operation ({len(samples)} samples)", flush=True)
+            summary = report["scenarios"][name]
+            value = f"{summary['median']:.0f} requested bytes" if heap_mode else f"{summary['median'] / 1e6:.3f} ms/operation"
+            print(f"{name}: {value} ({len(samples)} samples)", flush=True)
     report["comparison"] = compare(report, baseline, budgets["comparison"])
     report_path = run_dir / "report.json"
     report_path.write_text(json.dumps(report, indent=2) + "\n")

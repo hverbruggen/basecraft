@@ -10,6 +10,7 @@ license.workspace = true
 
 [features]
 test-counters = ["basecraft-io/test-counters"]
+test-heap = ["basecraft-io/test-heap"]
 
 [dependencies]
 fs4 = "0.13"

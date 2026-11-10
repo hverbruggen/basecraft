@@ -10,6 +10,7 @@ license.workspace = true
 
 [features]
 test-counters = []
+test-heap = []
 
 [dependencies]
 # Spreadsheet parsing and ZIP template/container handling.

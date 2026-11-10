@@ -7,7 +7,6 @@ use basecraft_platform::paths::AppPaths;
 use basecraft_protocol::Op;
 use serde_json::json;
 use std::error::Error;
-use std::io::Write;
 use std::path::Path;
 use std::time::Instant;
 
@@ -15,6 +14,15 @@ use std::time::Instant;
 mod frame_cases;
 #[path = "interaction/tree_cases.rs"]
 mod tree_cases;
+
+#[path = "interaction/fixtures.rs"]
+mod fixtures;
+#[cfg(feature = "test-heap")]
+#[path = "interaction/memory_cases.rs"]
+mod memory_cases;
+#[cfg(feature = "test-heap")]
+#[global_allocator]
+static ALLOCATOR: basecraft_io::heap::Allocator = basecraft_io::heap::Allocator;
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 const ROWS: usize = 32;
@@ -47,37 +55,24 @@ fn verify(session: &Session, id: basecraft_ops::DocId, edited: bool) -> Result<(
     Ok(())
 }
 
-fn fixture(path: &Path, bytes: Option<u64>) -> Result<()> {
-    let mut out = std::io::BufWriter::new(std::fs::File::create(path)?);
-    if let Some(bytes) = bytes {
-        // Exact decimal file bytes, one single-record sequence with wrapped lines.
-        out.write_all(b">large\n")?;
-        let mut remaining = bytes - 7;
-        let line = [b"ACGT".repeat(20), vec![b'\n']].concat();
-        while remaining > 0 {
-            let count = usize::try_from(remaining.min(line.len() as u64))?;
-            out.write_all(&line[..count])?;
-            remaining -= count as u64;
-        }
-    } else {
-        for row in 0..ROWS {
-            writeln!(out, ">row{row:03}")?;
-            for col in 0..WIDTH {
-                out.write_all(&[b"ACGT"[(row + col) % 4]])?;
-            }
-            writeln!(out)?;
-        }
-    }
-    out.flush()?;
-    Ok(())
-}
-
 fn run() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.len() != 2 {
         return Err("expected SCENARIO WORK_DIRECTORY (use benches/run.py)".into());
     }
     let scenario = &args[0];
+    if scenario.starts_with("heap-") {
+        #[cfg(feature = "test-heap")]
+        {
+            println!("{}", memory_cases::measure(scenario, Path::new(&args[1]))?);
+            return Ok(());
+        }
+        #[cfg(not(feature = "test-heap"))]
+        return Err("heap scenarios require test-heap feature".into());
+    }
+    if cfg!(feature = "test-heap") {
+        return Err("instrumented binary only supports heap scenarios; rebuild without test-heap for timings".into());
+    }
     if scenario.starts_with("tree-") {
         return tree_cases::run(scenario, Path::new(&args[1]));
     }
@@ -100,7 +95,7 @@ fn run() -> Result<()> {
     } else {
         "alignment.afa"
     });
-    fixture(&file, bytes)?;
+    fixtures::fixture(&file, bytes)?;
     let fixture_bytes = file.metadata()?.len();
     // Explicit untimed warmup, including index/cache population; no cold-cache claim.
     let mut warm = Session::recoverable_with_paths(root, &paths)?;
