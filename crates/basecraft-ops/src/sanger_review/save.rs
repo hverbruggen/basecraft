@@ -126,7 +126,7 @@ impl SangerReviewSession {
         self.authority()?.0.pending.publish(check)
     }
 
-    /// Bind a token to the live root's pending check, like Session::decide_save.
+    /// Bind a token to the live root's pending check, like `Session::decide_save`.
     /// This does not rescan or authorize IO. A future writer must consume origin
     /// on entry and compare a fresh guarded scope, including public-field edits.
     pub fn decide_save(

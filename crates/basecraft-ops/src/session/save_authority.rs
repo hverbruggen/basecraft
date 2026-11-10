@@ -455,6 +455,35 @@ mod participant_tests {
     }
 
     #[test]
+    fn real_sanger_checks_bind_direct_public_changes_without_publishing_biology() {
+        let name = "session::save_authority::participant_tests::real_sanger_checks_bind_direct_public_changes_without_publishing_biology";
+        let Some(root) = crate::isolated_profile::enter(name) else {
+            return;
+        };
+        let input = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../testdata/fixtures/compact/sanger-review/forward.ab1");
+        let mut review = crate::sanger_review::instrument_review(&input).unwrap();
+        let target = root.join("new.json");
+        let before = review.check_save(&target).unwrap();
+        let repeated = review.check_save(&target).unwrap();
+        assert!(before.same_scope(&repeated));
+        review.settings.strong_score += 1;
+        let after = review.check_save(&target).unwrap();
+        assert!(!before.same_scope(&after));
+        // Only private participant binding changed: no biology enters diagnostics.
+        assert_eq!(
+            serde_json::to_vec(&before.scope).unwrap(),
+            serde_json::to_vec(&after.scope).unwrap()
+        );
+        review.settings.strong_score -= 1;
+        assert!(before.same_scope(&review.check_save(&target).unwrap()));
+        // Direct mutate-and-restore chronology is deliberately not claimed.
+        review.mask.start += 1;
+        assert!(!before.same_scope(&review.check_save(&target).unwrap()));
+        assert!(!target.exists());
+    }
+
+    #[test]
     fn poisoned_invalidation_cannot_leave_usable_consent() {
         let owner = PendingSaveAuthority::default();
         let _ = std::panic::catch_unwind(|| {
