@@ -493,7 +493,7 @@ pub(crate) fn publish_delimitation(
     target: &Path,
     main_hash: &str,
     new_run: Option<&ArtifactRun>,
-    publication: &crate::documents::WritePublication,
+    placement: &crate::documents::WritePublication,
 ) -> Result<()> {
     if let Some(run) = new_run {
         let input = crate::input_evidence::SubmittedInput {
@@ -524,7 +524,7 @@ pub(crate) fn publish_delimitation(
                 extra: std::collections::BTreeMap::new(),
             })?,
         )?;
-        publication.register(run)?;
+        placement.register(run)?;
         run.bind(target)?;
     }
     if let Some(run) = crate::analysis_store::ArtifactRun::for_result(target)? {
@@ -543,7 +543,7 @@ pub(crate) fn publish_delimitation(
             let bytes = crate::provenance::read_record(&dependency.join("manifest.json"))?;
             let publication: basecraft_protocol::provenance::Publication =
                 serde_json::from_slice(&bytes)?;
-            let reference = serde_json::json!({"bundle":crate::input_evidence::relative(&publication.logical(&run)?, &dependency)?,"id":publication.id,"hash":basecraft_io::hash_bytes(&bytes)});
+            let reference = serde_json::json!({"bundle":crate::input_evidence::relative(&placement.logical(&run)?, &dependency)?,"id":publication.id,"hash":basecraft_io::hash_bytes(&bytes)});
             if !upstream.contains(&reference) {
                 upstream.push(reference);
             }
