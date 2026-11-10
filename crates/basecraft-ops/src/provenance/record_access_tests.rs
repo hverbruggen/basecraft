@@ -235,3 +235,31 @@ fn access_carrier_keeps_typed_denial_io_source_and_raw_os_code() {
     };
     assert!(error.get_ref().unwrap().is::<Cause>());
 }
+
+#[test]
+fn extracted_body_preserves_caps_growth_charge_and_labels() {
+    use super::{RecordLimit, read_record_from_open};
+    for (label, message) in [
+        (RecordLimit::Registry, "known-store registry exceeds 1 MiB"),
+        (
+            RecordLimit::Provenance,
+            "provenance record exceeds reading limit (at most 64 MiB)",
+        ),
+    ] {
+        let mut remaining = 100;
+        let result =
+            read_record_from_open(std::io::Cursor::new(b"abcdef"), 0, &mut remaining, 4, label);
+        assert_eq!(remaining, 95); // limit+1 actually read, not just the cap
+        assert!(matches!(result, Err(crate::Error::Invalid(text)) if text == message));
+    }
+    let mut remaining = 100;
+    let result = read_record_from_open(
+        std::io::empty(),
+        65 << 20,
+        &mut remaining,
+        u64::MAX,
+        RecordLimit::Provenance,
+    );
+    assert!(result.is_err());
+    assert_eq!(remaining, 100);
+}

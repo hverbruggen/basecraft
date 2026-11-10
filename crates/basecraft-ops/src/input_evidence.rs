@@ -301,14 +301,18 @@ impl Inspection {
 
     fn record_bounded(&mut self, path: &Path, mut limit: u64) -> Result<Vec<u8>> {
         let result = crate::provenance::read_record_with_budget(path, &mut limit);
+        self.observe(path, &result);
+        result
+    }
+
+    fn observe(&mut self, path: &Path, result: &Result<Vec<u8>>) {
         self.observations.insert(
             path.into(),
-            match &result {
+            match result {
                 Ok(bytes) => basecraft_io::hash_bytes(bytes),
                 Err(error) => format!("unavailable: {error}"),
             },
         );
-        result
     }
 
     fn input(&mut self, run: &Path) -> Result<SubmittedInput> {
@@ -468,7 +472,11 @@ pub fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
 fn registry() -> Result<PathBuf> {
     let paths =
         basecraft_platform::paths::AppPaths::discover().map_err(|e| invalid(e.to_string()))?;
-    Ok(paths.state.join("analysis-stores.json"))
+    Ok(registry_location(&paths))
+}
+
+pub(crate) fn registry_location(paths: &basecraft_platform::paths::AppPaths) -> PathBuf {
+    paths.state.join("analysis-stores.json")
 }
 
 /// Shared lock covers registration and the entire guarded replacement, including
@@ -490,39 +498,473 @@ pub fn lock() -> Result<std::fs::File> {
     Ok(lock)
 }
 
+fn empty_registry() -> StoreRegistry {
+    StoreRegistry {
+        schema_version: 1,
+        stores: Vec::new(),
+        extra: BTreeMap::new(),
+    }
+}
+
+fn parse_store_registry(bytes: &[u8]) -> Result<StoreRegistry> {
+    let value: serde_json::Value = serde_json::from_slice(bytes)?;
+    if value["schema_version"] != 1 || !value["stores"].is_array() {
+        return Err(invalid("unsupported known-store registry"));
+    }
+    Ok(serde_json::from_value(value)?)
+}
+
 fn store_registry() -> Result<StoreRegistry> {
-    use std::io::Read as _;
     match std::fs::File::open(registry()?) {
         Ok(file) => {
-            if file.metadata()?.len() > 1024 * 1024 {
-                return Err(invalid("known-store registry exceeds 1 MiB"));
-            }
-            let mut bytes = Vec::new();
-            file.take(1024 * 1024 + 1).read_to_end(&mut bytes)?;
-            if bytes.len() > 1024 * 1024 {
-                return Err(invalid("known-store registry exceeds 1 MiB"));
-            }
-            let value: serde_json::Value = serde_json::from_slice(&bytes)?;
-            if value["schema_version"] != 1 || !value["stores"].is_array() {
-                return Err(invalid("unsupported known-store registry"));
-            }
-            Ok(serde_json::from_value(value)?)
+            let length = file.metadata()?.len();
+            let bytes = crate::provenance::read_record_from_open(
+                file,
+                length,
+                &mut (1 << 20),
+                1 << 20,
+                crate::provenance::RecordLimit::Registry,
+            )?;
+            parse_store_registry(&bytes)
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(StoreRegistry {
-            schema_version: 1,
-            stores: Vec::new(),
-            extra: BTreeMap::new(),
-        }),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(empty_registry()),
         Err(e) => Err(e.into()),
+    }
+}
+
+// Unwired contextual consumers. Keep the original missing-component error until
+// the selected consumer observes or explicitly projects the checked absence.
+#[allow(dead_code)]
+mod service_registry {
+    use super::*;
+    use crate::{access::Access, provenance::RecordLimit, service_reads::ServiceReadContext};
+    use basecraft_platform::files::CheckedRead;
+
+    enum RegistryBytes {
+        Present(Vec<u8>),
+        Absent { missing: std::io::Error },
+    }
+    struct RegistryByteRead {
+        location: PathBuf,
+        outcome: Result<RegistryBytes>,
+    }
+
+    fn registry_bytes_with_access(
+        context: &ServiceReadContext,
+        access: &dyn Access,
+        remaining: &mut u64,
+        label: RecordLimit,
+    ) -> RegistryByteRead {
+        let outcome = context
+            .registry_input(access)
+            .and_then(|input| match input {
+                CheckedRead::File(file) => {
+                    let length = file.metadata()?.len();
+                    let result = crate::provenance::read_record_from_open(
+                        file,
+                        length,
+                        remaining,
+                        1 << 20,
+                        label,
+                    );
+                    result.map(RegistryBytes::Present)
+                }
+                CheckedRead::Absent(absence) => {
+                    let (_, missing) = absence.into_parts();
+                    Ok(RegistryBytes::Absent { missing })
+                }
+            });
+        RegistryByteRead {
+            location: context.registry_location().into(),
+            outcome,
+        }
+    }
+
+    fn store_registry_with_access(
+        context: &ServiceReadContext,
+        access: &dyn Access,
+    ) -> Result<StoreRegistry> {
+        let read =
+            registry_bytes_with_access(context, access, &mut (1 << 20), RecordLimit::Registry);
+        let value = match read.outcome? {
+            RegistryBytes::Present(bytes) => parse_store_registry(&bytes)?,
+            RegistryBytes::Absent { .. } => empty_registry(),
+        };
+        validate_store_paths(&value.stores)?;
+        Ok(value)
+    }
+
+    impl Inspection {
+        fn registry_with_access(
+            &mut self,
+            context: &ServiceReadContext,
+            access: &dyn Access,
+            remaining: &mut u64,
+        ) -> Result<Vec<PathBuf>> {
+            self.registry_read(registry_bytes_with_access(
+                context,
+                access,
+                remaining,
+                RecordLimit::Provenance,
+            ))
+        }
+
+        fn registry_read(&mut self, read: RegistryByteRead) -> Result<Vec<PathBuf>> {
+            // Hard access/namespace failures must never look like inspected data.
+            if matches!(
+                &read.outcome,
+                Err(crate::Error::Access(
+                    crate::access::AccessError::Denied(_)
+                        | crate::access::AccessError::DestinationExists
+                ))
+            ) {
+                return read.outcome.map(|_| Vec::new());
+            }
+            let result = match read.outcome {
+                Ok(RegistryBytes::Present(bytes)) => Ok(bytes),
+                Ok(RegistryBytes::Absent { missing }) => {
+                    let error = crate::Error::Io(missing);
+                    self.observe(&read.location, &Err(error));
+                    return Ok(Vec::new());
+                }
+                Err(error) => Err(error),
+            };
+            self.observe(&read.location, &result);
+            // Unlike checked absence, a content/metadata NotFound is an ordinary
+            // failed read and must produce an issue, never empty success.
+            Ok(self.parse_registry(&read.location, result))
+        }
+    }
+    #[cfg(all(test, target_os = "linux"))]
+    mod tests {
+        use super::*;
+        use crate::service_reads::tests::{Bound, context};
+        use std::io::{self, Read};
+
+        #[test]
+        fn checked_absence_keeps_logical_leaf_original_error_and_budget() {
+            for existing_parent in [false, true] {
+                let temp = tempfile::tempdir().unwrap();
+                let context = context(temp.path());
+                let path = context.registry_location();
+                if existing_parent {
+                    std::fs::create_dir(path.parent().unwrap()).unwrap();
+                }
+                let mut budget = 123;
+                let read = registry_bytes_with_access(
+                    &context,
+                    &Bound(&context),
+                    &mut budget,
+                    RecordLimit::Registry,
+                );
+                assert_eq!(budget, 123);
+                assert_eq!(read.location, path);
+                let Ok(RegistryBytes::Absent { ref missing }) = read.outcome else {
+                    panic!()
+                };
+                assert_eq!(missing.kind(), io::ErrorKind::NotFound);
+                assert_eq!(missing.raw_os_error(), Some(2));
+                let expected = format!("unavailable: {missing}");
+                let mut inspection = Inspection::default();
+                assert!(inspection.registry_read(read).unwrap().is_empty());
+                assert_eq!(inspection.observations.len(), 1);
+                assert_eq!(inspection.observations[path], expected);
+                assert!(inspection.issues.is_empty());
+                assert!(
+                    store_registry_with_access(&context, &Bound(&context))
+                        .unwrap()
+                        .stores
+                        .is_empty()
+                );
+                assert_eq!(path.parent().unwrap().exists(), existing_parent);
+                assert!(!path.exists());
+            }
+        }
+
+        #[test]
+        fn default_and_structural_denials_create_no_observation_or_default() {
+            let temp = tempfile::tempdir().unwrap();
+            let context = context(temp.path());
+            let mut inspection = Inspection::default();
+            let mut budget = 999;
+            assert!(
+                inspection
+                    .registry_with_access(&context, &crate::access::TrustedLegacy, &mut budget)
+                    .is_err()
+            );
+            assert_eq!(budget, 999);
+            assert!(inspection.observations.is_empty());
+            assert!(inspection.issues.is_empty());
+            std::fs::create_dir(temp.path().join("state")).unwrap();
+            std::os::unix::fs::symlink(temp.path().join("missing"), context.registry_location())
+                .unwrap();
+            assert!(
+                inspection
+                    .registry_with_access(&context, &Bound(&context), &mut budget)
+                    .is_err()
+            );
+            assert_eq!(budget, 999);
+            assert!(inspection.observations.is_empty());
+            assert!(inspection.issues.is_empty());
+        }
+
+        #[test]
+        fn present_unknown_fields_limits_and_distinct_parser_contracts() {
+            let temp = tempfile::tempdir().unwrap();
+            let context = context(temp.path());
+            let path = context.registry_location();
+            std::fs::create_dir(path.parent().unwrap()).unwrap();
+            let outside = temp.path().join("outside-not-created");
+            let value = serde_json::json!({"schema_version": 1, "stores": [outside], "future": {"keep":true}});
+            let bytes = serde_json::to_vec(&value).unwrap();
+            std::fs::write(path, &bytes).unwrap();
+            let store = store_registry_with_access(&context, &Bound(&context)).unwrap();
+            assert_eq!(store.extra["future"], value["future"]);
+            let mut inspection = Inspection::default();
+            let mut budget = 1 << 20;
+            assert_eq!(
+                inspection
+                    .registry_with_access(&context, &Bound(&context), &mut budget)
+                    .unwrap(),
+                [outside.clone()]
+            );
+            assert_eq!(budget, (1 << 20) - bytes.len() as u64);
+            assert_eq!(
+                inspection.observations[path],
+                basecraft_io::hash_bytes(&bytes)
+            );
+            assert!(!outside.exists());
+            // Inspection retains valid entries and issues for invalid entries;
+            // the ordinary typed parser rejects the entire mixed inventory.
+            std::fs::write(
+                path,
+                serde_json::to_vec(
+                    &serde_json::json!({"schema_version":1,"stores":[outside,17,"relative"]}),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            assert!(store_registry_with_access(&context, &Bound(&context)).is_err());
+            let mut inspection = Inspection::default();
+            assert_eq!(
+                inspection
+                    .registry_with_access(&context, &Bound(&context), &mut (1 << 20))
+                    .unwrap(),
+                [outside.clone()]
+            );
+            assert_eq!(inspection.issues.len(), 2);
+            for count in [4096, 4097] {
+                std::fs::write(path, serde_json::to_vec(&serde_json::json!({"schema_version":1,"stores": vec![outside.clone(); count]})).unwrap()).unwrap();
+                assert_eq!(
+                    store_registry_with_access(&context, &Bound(&context)).is_ok(),
+                    count == 4096
+                );
+                let mut inspection = Inspection::default();
+                assert_eq!(
+                    inspection
+                        .registry_with_access(&context, &Bound(&context), &mut (1 << 20))
+                        .unwrap()
+                        .len(),
+                    4096
+                );
+                assert_eq!(inspection.issues.len(), usize::from(count > 4096));
+            }
+            std::fs::write(path, vec![b' '; (1 << 20) + 1]).unwrap();
+            assert!(
+                matches!(store_registry_with_access(&context, &Bound(&context)), Err(crate::Error::Invalid(s)) if s == "known-store registry exceeds 1 MiB")
+            );
+            let mut inspection = Inspection::default();
+            let mut budget = 1 << 22;
+            inspection
+                .registry_with_access(&context, &Bound(&context), &mut budget)
+                .unwrap();
+            assert_eq!(budget, 1 << 22); // metadata rejection precedes content
+            assert!(
+                inspection.observations[path].contains("provenance record exceeds reading limit")
+            );
+        }
+
+        #[test]
+        fn ordinary_permission_failure_is_not_absence() {
+            use std::os::unix::fs::PermissionsExt;
+            let temp = tempfile::tempdir().unwrap();
+            let context = context(temp.path());
+            let path = context.registry_location();
+            std::fs::create_dir(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"{}").unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0)).unwrap();
+            let read = registry_bytes_with_access(
+                &context,
+                &Bound(&context),
+                &mut 100,
+                RecordLimit::Registry,
+            );
+            assert!(
+                matches!(&read.outcome, Err(crate::Error::Access(crate::access::AccessError::Io(e))) if e.kind() == io::ErrorKind::PermissionDenied && e.raw_os_error() == Some(13))
+            );
+            let mut inspection = Inspection::default();
+            inspection.registry_read(read).unwrap();
+            assert_eq!(inspection.issues.len(), 1);
+            assert_eq!(inspection.observations.len(), 1);
+            assert!(store_registry_with_access(&context, &Bound(&context)).is_err());
+        }
+
+        #[test]
+        fn validated_denial_has_no_observation_or_default() {
+            struct Revoke<'a>(&'a ServiceReadContext);
+            impl Access for Revoke<'_> {
+                fn boundary(&self) -> Option<&Path> {
+                    None
+                }
+                fn resource(
+                    &self,
+                    _: &Path,
+                    _: crate::access::ResourceAction,
+                ) -> crate::access::Result<PathBuf> {
+                    panic!("resource")
+                }
+                fn service_read(
+                    &self,
+                    request: &crate::service_reads::ServiceReadRequest<'_>,
+                    phase: crate::service_reads::ServiceReadPhase<'_>,
+                ) -> crate::access::Result<()> {
+                    use crate::service_reads::ServiceReadPhase;
+                    assert!(request.permits(self.0, ServiceReadPhase::Eligibility));
+                    if matches!(phase, ServiceReadPhase::Validated(_)) {
+                        Err(crate::access::AccessError::Denied(
+                            crate::access::Denial::ServiceUnavailable,
+                        ))
+                    } else {
+                        Ok(())
+                    }
+                }
+            }
+            let temp = tempfile::tempdir().unwrap();
+            let context = context(temp.path());
+            let mut inspection = Inspection::default();
+            let mut budget = 100;
+            assert!(
+                inspection
+                    .registry_with_access(&context, &Revoke(&context), &mut budget)
+                    .is_err()
+            );
+            assert_eq!(budget, 100);
+            assert!(inspection.observations.is_empty());
+            assert!(inspection.issues.is_empty());
+            assert!(store_registry_with_access(&context, &Revoke(&context)).is_err());
+        }
+
+        #[test]
+        fn observation_seam_consumes_original_absence_source() {
+            let source = std::sync::Arc::new(());
+            let missing = io::Error::new(io::ErrorKind::NotFound, Source(source.clone()));
+            let path = PathBuf::from("logical-leaf");
+            // Injection only at the actual observation seam. Production Absent
+            // construction requires platform checked absence above.
+            let read = RegistryByteRead {
+                location: path.clone(),
+                outcome: Ok(RegistryBytes::Absent { missing }),
+            };
+            let Ok(RegistryBytes::Absent { ref missing }) = read.outcome else {
+                panic!()
+            };
+            assert!(std::sync::Arc::ptr_eq(
+                &source,
+                &missing
+                    .get_ref()
+                    .unwrap()
+                    .downcast_ref::<Source>()
+                    .unwrap()
+                    .0
+            ));
+            let mut inspection = Inspection::default();
+            assert!(inspection.registry_read(read).unwrap().is_empty());
+            assert_eq!(
+                inspection.observations[&path],
+                "unavailable: retained custom source"
+            );
+            assert_eq!(std::sync::Arc::strong_count(&source), 1);
+            assert!(inspection.issues.is_empty());
+        }
+
+        #[derive(Debug)]
+        struct Source(std::sync::Arc<()>);
+        impl std::fmt::Display for Source {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("retained custom source")
+            }
+        }
+        impl std::error::Error for Source {}
+        #[test]
+        fn partial_failure_charges_bytes_and_retains_source_without_success_hash() {
+            struct Failing {
+                first: bool,
+                error: Option<io::Error>,
+            }
+            impl Read for Failing {
+                fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+                    if self.first {
+                        self.first = false;
+                        bytes[..3].copy_from_slice(b"abc");
+                        Ok(3)
+                    } else {
+                        Err(self.error.take().unwrap())
+                    }
+                }
+            }
+            let source = std::sync::Arc::new(());
+            let mut budget = 100;
+            let outcome = crate::provenance::read_record_from_open(
+                Failing {
+                    first: true,
+                    error: Some(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        Source(source.clone()),
+                    )),
+                },
+                0,
+                &mut budget,
+                1 << 20,
+                RecordLimit::Registry,
+            )
+            .map(RegistryBytes::Present);
+            assert_eq!(budget, 97);
+            let Err(crate::Error::Io(error)) = &outcome else {
+                panic!()
+            };
+            assert!(std::sync::Arc::ptr_eq(
+                &source,
+                &error.get_ref().unwrap().downcast_ref::<Source>().unwrap().0
+            ));
+            let path = PathBuf::from("logical-registry");
+            let mut inspection = Inspection::default();
+            inspection
+                .registry_read(RegistryByteRead {
+                    location: path.clone(),
+                    outcome,
+                })
+                .unwrap();
+            assert_eq!(
+                inspection.observations[&path],
+                "unavailable: retained custom source"
+            );
+            assert_eq!(inspection.issues.len(), 1);
+            assert_eq!(std::sync::Arc::strong_count(&source), 1);
+        }
     }
 }
 
 fn stores() -> Result<Vec<PathBuf>> {
     let paths = store_registry()?.stores;
+    validate_store_paths(&paths)?;
+    Ok(paths)
+}
+
+fn validate_store_paths(paths: &[PathBuf]) -> Result<()> {
     if paths.len() > 4096 || paths.iter().any(|p| !p.is_absolute()) {
         return Err(invalid("known-store paths must be absolute and bounded"));
     }
-    Ok(paths)
+    Ok(())
 }
 
 /// Resolve an immutable run by identity only in registered stores. This avoids
@@ -623,43 +1065,11 @@ fn conservative(check: EvidenceCheck) -> Result<EvidenceConflict> {
 pub fn check(target: &Path) -> Result<EvidenceCheck> {
     let mut inspection = Inspection::default();
     let path = registry()?;
-    let mut all = Vec::new();
-    match inspection.record_bounded(&path, 1 << 20) {
-        Ok(bytes) => {
-            let parsed = serde_json::from_slice::<serde_json::Value>(&bytes);
-            match parsed {
-                Ok(value) if value["schema_version"] == 1 && value["stores"].is_array() => {
-                    if let Some(paths) = value["stores"].as_array() {
-                        if paths.len() > 4096 {
-                            inspection.issue(
-                                InspectionCode::LimitExceeded,
-                                &path,
-                                "known-store registry exceeds 4096 stores",
-                            );
-                        }
-                        for (index, entry) in paths.iter().take(4096).enumerate() {
-                            match entry.as_str().map(PathBuf::from) {
-                                Some(store) if store.is_absolute() => all.push(store),
-                                _ => inspection.issue(
-                                    InspectionCode::RegistryUnavailable,
-                                    &path,
-                                    format!("known-store entry {index} must be an absolute path"),
-                                ),
-                            }
-                        }
-                    }
-                }
-                Ok(_) => inspection.issue(
-                    InspectionCode::RegistryUnavailable,
-                    &path,
-                    "unsupported known-store registry",
-                ),
-                Err(error) => inspection.issue(InspectionCode::RegistryUnavailable, &path, error),
-            }
-        }
-        Err(crate::Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => inspection.issue(InspectionCode::RegistryUnavailable, &path, error),
-    }
+    let result = inspection.record_bounded(&path, 1 << 20);
+    let mut all = match result {
+        Err(crate::Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        result => inspection.parse_registry(&path, result),
+    };
     let target = std::path::absolute(target)?;
     let canonical = target.canonicalize().unwrap_or_else(|_| target.clone());
     for parent in canonical.ancestors().skip(1) {
@@ -671,6 +1081,50 @@ pub fn check(target: &Path) -> Result<EvidenceCheck> {
         }
     }
     inspect_in(&canonical, &all, inspection)
+}
+
+impl Inspection {
+    fn parse_registry(&mut self, path: &Path, result: Result<Vec<u8>>) -> Vec<PathBuf> {
+        let mut all = Vec::new();
+        match result {
+            Ok(bytes) => {
+                let parsed = serde_json::from_slice::<serde_json::Value>(&bytes);
+                match parsed {
+                    Ok(value) if value["schema_version"] == 1 && value["stores"].is_array() => {
+                        if let Some(paths) = value["stores"].as_array() {
+                            if paths.len() > 4096 {
+                                self.issue(
+                                    InspectionCode::LimitExceeded,
+                                    path,
+                                    "known-store registry exceeds 4096 stores",
+                                );
+                            }
+                            for (index, entry) in paths.iter().take(4096).enumerate() {
+                                match entry.as_str().map(PathBuf::from) {
+                                    Some(store) if store.is_absolute() => all.push(store),
+                                    _ => self.issue(
+                                        InspectionCode::RegistryUnavailable,
+                                        path,
+                                        format!(
+                                            "known-store entry {index} must be an absolute path"
+                                        ),
+                                    ),
+                                }
+                            }
+                        }
+                    }
+                    Ok(_) => self.issue(
+                        InspectionCode::RegistryUnavailable,
+                        path,
+                        "unsupported known-store registry",
+                    ),
+                    Err(error) => self.issue(InspectionCode::RegistryUnavailable, path, error),
+                }
+            }
+            Err(error) => self.issue(InspectionCode::RegistryUnavailable, path, error),
+        }
+        all
+    }
 }
 
 #[derive(Default)]

@@ -513,3 +513,131 @@ impl Access for SessionPolicy {
 #[cfg(test)]
 #[path = "policy_access_tests.rs"]
 mod access_tests;
+
+// Deliberately private and unwired. Runtime construction needs separate review.
+#[allow(dead_code)]
+struct SessionServiceReadAccess<'a> {
+    policy: &'a SessionPolicy,
+    context: &'a basecraft_ops::service_reads::ServiceReadContext,
+}
+
+impl Access for SessionServiceReadAccess<'_> {
+    fn boundary(&self) -> Option<&Path> {
+        self.policy.boundary()
+    }
+    fn resource(
+        &self,
+        path: &Path,
+        action: ResourceAction,
+    ) -> basecraft_ops::access::Result<PathBuf> {
+        self.policy.resource(path, action)
+    }
+    fn service_read(
+        &self,
+        request: &basecraft_ops::service_reads::ServiceReadRequest<'_>,
+        phase: basecraft_ops::service_reads::ServiceReadPhase<'_>,
+    ) -> basecraft_ops::access::Result<()> {
+        if request.permits(self.context, phase) {
+            Ok(())
+        } else {
+            Err(AccessError::Denied(Denial::ServiceUnavailable))
+        }
+    }
+}
+
+#[cfg(test)]
+mod service_read_tests {
+    use super::*;
+    use basecraft_ops::access::{ServiceAction, TrustedLegacy};
+    use basecraft_ops::service_reads::{ServiceReadContext, ServiceReadPhase, ServiceReadRequest};
+    use std::cell::Cell;
+
+    #[test]
+    fn only_explicit_bound_readonly_adapter_allows_eligibility() {
+        let root = tempfile::tempdir().unwrap();
+        let policy = SessionPolicy::new(root.path(), false).unwrap();
+        let context = ServiceReadContext::from_process().unwrap();
+        let other = ServiceReadContext::from_process().unwrap();
+        let adapter = SessionServiceReadAccess {
+            policy: &policy,
+            context: &context,
+        };
+        struct Inspect<'a> {
+            adapter: &'a SessionServiceReadAccess<'a>,
+            other: &'a ServiceReadContext,
+            called: Cell<bool>,
+        }
+        impl Access for Inspect<'_> {
+            fn boundary(&self) -> Option<&Path> {
+                self.adapter.boundary()
+            }
+            fn resource(
+                &self,
+                _: &Path,
+                _: ResourceAction,
+            ) -> basecraft_ops::access::Result<PathBuf> {
+                panic!()
+            }
+            fn service_read(
+                &self,
+                request: &ServiceReadRequest<'_>,
+                phase: ServiceReadPhase<'_>,
+            ) -> basecraft_ops::access::Result<()> {
+                assert!(matches!(phase, ServiceReadPhase::Eligibility));
+                assert!(self.adapter.service_read(request, phase).is_ok());
+                assert!(
+                    self.adapter
+                        .policy
+                        .service_read(request, ServiceReadPhase::Eligibility)
+                        .is_err()
+                );
+                assert!(
+                    TrustedLegacy
+                        .service_read(request, ServiceReadPhase::Eligibility)
+                        .is_err()
+                );
+                assert!(
+                    SessionServiceReadAccess {
+                        policy: self.adapter.policy,
+                        context: self.other
+                    }
+                    .service_read(request, ServiceReadPhase::Eligibility)
+                    .is_err()
+                );
+                self.called.set(true);
+                // Stop before any real process configuration is probed.
+                Err(AccessError::Denied(Denial::ServiceUnavailable))
+            }
+        }
+        let inspect = Inspect {
+            adapter: &adapter,
+            other: &other,
+            called: Cell::new(false),
+        };
+        assert!(context.preferences(&inspect).is_err());
+        assert_eq!(
+            inspect.called.get(),
+            basecraft_platform::files::namespace_read_supported()
+        );
+        for action in [
+            ServiceAction::ReadPreferences,
+            ServiceAction::ReadAnalysisRegistry,
+            ServiceAction::LockAnalysisEvidence,
+            ServiceAction::ReserveSaveTarget,
+            ServiceAction::RegisterFinalStore,
+        ] {
+            assert!(adapter.service(action).is_err());
+        }
+        // Service binding neither grants outside resource reads nor write effects.
+        let outside = root.path().parent().unwrap().join("outside-not-probed");
+        assert!(matches!(
+            adapter.resource(&outside, ResourceAction::Probe),
+            Err(AccessError::Denied(Denial::OutsideRoot))
+        ));
+        assert!(matches!(
+            adapter.resource(&root.path().join("new"), ResourceAction::CreateFile),
+            Err(AccessError::Denied(Denial::ReadOnly))
+        ));
+        assert_eq!(adapter.boundary(), policy.boundary());
+    }
+}

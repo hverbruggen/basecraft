@@ -98,23 +98,41 @@ fn read_record_with_access_open<R: std::io::Read>(
     access: &dyn crate::access::Access,
     open: impl FnOnce(&Path) -> std::io::Result<(R, u64)>,
 ) -> Result<Vec<u8>> {
-    use std::io::Read;
     let checked = access.resource(path, crate::access::ResourceAction::ReadFile)?;
-    let limit = (*remaining).min(64 << 20);
     let (file, length) = open(&checked)?;
+    read_record_from_open(file, length, remaining, 64 << 20, RecordLimit::Provenance)
+}
+
+pub(crate) enum RecordLimit {
+    Provenance,
+    Registry,
+}
+impl RecordLimit {
+    fn message(&self) -> &'static str {
+        match self {
+            Self::Provenance => "provenance record exceeds reading limit (at most 64 MiB)",
+            Self::Registry => "known-store registry exceeds 1 MiB",
+        }
+    }
+}
+
+pub(crate) fn read_record_from_open(
+    file: impl std::io::Read,
+    length: u64,
+    remaining: &mut u64,
+    cap: u64,
+    label: RecordLimit,
+) -> Result<Vec<u8>> {
+    let limit = (*remaining).min(64 << 20).min(cap);
     if length > limit {
-        return Err(invalid(
-            "provenance record exceeds reading limit (at most 64 MiB)",
-        ));
+        return Err(invalid(label.message()));
     }
     let mut bytes = Vec::new();
     let result = file.take(limit + 1).read_to_end(&mut bytes);
     *remaining = remaining.saturating_sub(bytes.len() as u64);
     result?;
     if bytes.len() as u64 > limit {
-        return Err(invalid(
-            "provenance record exceeds reading limit (at most 64 MiB)",
-        ));
+        return Err(invalid(label.message()));
     }
     Ok(bytes)
 }

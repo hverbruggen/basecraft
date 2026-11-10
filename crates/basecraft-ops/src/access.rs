@@ -95,6 +95,14 @@ pub trait Access {
 
     /// Fail closed until service owners can validate namespace integrity and the
     /// operation's target/owned-store context. No caller-selected service paths.
+    fn service_read(
+        &self,
+        _request: &crate::service_reads::ServiceReadRequest<'_>,
+        _phase: crate::service_reads::ServiceReadPhase<'_>,
+    ) -> Result<()> {
+        Err(AccessError::Denied(Denial::ServiceUnavailable))
+    }
+
     fn service(&self, _action: ServiceAction) -> Result<()> {
         Err(AccessError::Denied(Denial::ServiceUnavailable))
     }
