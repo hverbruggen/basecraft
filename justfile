@@ -33,6 +33,8 @@ check:
     cargo clippy --workspace --all-targets -- -D warnings
     cargo test --workspace
     cargo test -p basecraft-ops --features test-counters --test budgets
+    cargo test -p basecraft-io --features test-heap heap::tests
+    cargo test -p basecraft-ops --features test-heap --test heap_budgets
     pixi run ruff check python plugins
 
 # Everything. Run before every push.

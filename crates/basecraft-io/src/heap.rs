@@ -64,18 +64,19 @@ static STATE: State = State(UnsafeCell::new(Ledger {
 }));
 static LOCK: AtomicBool = AtomicBool::new(false);
 
+struct Unlock;
+impl Drop for Unlock {
+    fn drop(&mut self) {
+        LOCK.store(false, Ordering::Release);
+    }
+}
+
 fn locked<T>(f: impl FnOnce(&mut Ledger) -> T) -> T {
     while LOCK
         .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
         .is_err()
     {
         std::hint::spin_loop();
-    }
-    struct Unlock;
-    impl Drop for Unlock {
-        fn drop(&mut self) {
-            LOCK.store(false, Ordering::Release);
-        }
     }
     let _unlock = Unlock;
     // SAFETY: exclusive lock held, reference cannot escape this private closure.
@@ -239,9 +240,16 @@ mod tests {
             assert!((0..64).all(|i| *p.add(i) == 0));
             let m = Measurement::start().unwrap();
             assert!(Measurement::start().is_err());
-            std::thread::spawn(|| assert!(Measurement::start().is_err()))
-                .join()
-                .unwrap();
+            std::thread::spawn(|| {
+                assert!(Measurement::start().is_err());
+                let layout = Layout::from_size_align(32, 8).unwrap();
+                let p = Allocator.alloc(layout);
+                assert!(!p.is_null());
+                assert_eq!(live_bytes().unwrap(), 96);
+                Allocator.dealloc(p, layout);
+            })
+            .join()
+            .unwrap();
             let p = a.realloc(p, layout, 256);
             assert!(!p.is_null());
             let large = Layout::from_size_align(256, 8).unwrap();

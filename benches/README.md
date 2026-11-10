@@ -182,3 +182,51 @@ incompatible by runner hash, without relabelling old samples. Default Session an
 frame scenario definitions, input/output byte meanings and tracked history stay
 unchanged. Refused/failed tree operations use the shared explicit nonzero failure
 path and retain diagnostics/fixtures; they never become successful timings.
+
+Requested-heap scenarios use the same runner in a **separate invocation**:
+
+```sh
+just bench --machine workstation-a --cache "$BENCH_CACHE" --samples 5 \
+  --scenario heap-open-compact --scenario heap-open-100mb --scenario heap-open-error
+```
+
+The runner builds with the explicit `test-heap` feature only for these scenarios.
+Only the benchmark and dedicated integration-test binaries opt into the counting
+System allocator. Normal application builds do not enable it. Instrumented
+binaries refuse timing scenarios, and mixed heap/timing requests are rejected;
+these runs are not comparable to uninstrumented wall timings.
+
+`system-requested-live-v1` counts requested sizes of successful Rust global
+allocations on **all threads**, from process start. Deallocation subtracts the
+original requested layout; successful realloc replaces old size with new size,
+including shrinking, while failed realloc retains the original allocation.
+Hooks serialize System calls and accounting with an allocation-free spin lock.
+They do no logging, TLS initialization, collection allocation or formatting.
+Overflow/underflow invalidates subsequent measurements rather than wrapping.
+Only one process-wide measurement owner is permitted; drop releases it on error.
+Unrelated threads would contaminate a measurement, hence isolated sample processes.
+
+The window covers exactly the real recoverable `Session::open` call, including
+its normal loading/recovery work and error cleanup before returning. Generation,
+profile and Session construction, warmup and full bounded-buffer payload checking
+are outside the window. Compact uses an exact 4,096-byte single-record FASTA;
+large uses the existing exact 100,000,000-byte generator. Error uses malformed
+FASTA through the real loader, without a warmup that could consume its failure.
+The opened Session is dropped after verification, before the cleanup reading.
+No production loader/recovery code is changed.
+
+Raw `heap` fields report existing `baseline_bytes`, total `peak_bytes`,
+`incremental_peak_bytes = peak - baseline`, retained `live_after_open_bytes`,
+and `live_after_drop_bytes` (absolute process live requested bytes), plus successful
+realloc and allocation-failure counts. Peak starts at the baseline even if live
+bytes subsequently fall. Summary medians retain all these fields in
+`heap_medians`; the primary `median`/`unit` is incremental peak **requested bytes**,
+not ns/operation. Mandatory `work` includes instrumentation identity, units,
+window, recovery, warmup, fixture and expected-error semantics. Runner hashing
+covers shared fixtures and allocator implementation. Historical reports remain
+historical; missing/different instrumentation or units cannot be compared.
+
+This does **not** measure allocator metadata, size-class slack, transient internal
+copies during System realloc, memory mappings, foreign allocations bypassing
+Rust's global allocator, process RSS, GUI/startup memory or the 1 GB boundary.
+Neither total nor incremental requested bytes are total process memory.
