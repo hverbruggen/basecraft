@@ -317,6 +317,13 @@ class Session:
         """Open a project document. Returns its state, including the document ID."""
         return self.call("open", {"path": str(path)})
 
+    def delimitation_linked_alignment(self, document):
+        """Return the live workspace's unverified hint (str or None, keeping "").
+
+        Does not read/validate the hinted path or authorize an analysis.
+        """
+        return self.call("delimitation_linked_alignment", {"document": document})["path"]
+
     def delimitation_candidates(self, paths):
         """Inspect saved hypotheses in recommendation order without writing."""
         return self.call("delimitation_candidates", {"paths": [str(p) for p in paths]})

@@ -6,6 +6,38 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// Inspect the loaded workspace's unverified linked-alignment hint.
+///
+/// An explicit snapshot wins even when empty. Otherwise use the first ordered
+/// FASTA-like source key shared by every specimen. Preserve the stored spelling;
+/// this does no I/O, resolution, hashing or mutation. Analysis execution must
+/// still use `checked_alignment` and the registered runner's input checks.
+pub fn linked_alignment(session: &Session, doc: DocId) -> Result<Option<&str>> {
+    let workspace = session.delimitation(doc)?;
+    if let Some(snapshot) = workspace
+        .exchange_fields
+        .get("basecraft_alignment_snapshot")
+    {
+        return Ok(Some(snapshot));
+    }
+    Ok(workspace.specimens.first().and_then(|first| {
+        first
+            .sources
+            .keys()
+            .find(|path| {
+                Path::new(path).extension().is_some_and(|ext| {
+                    ["fa", "fasta", "afa", "fas", "fna"]
+                        .iter()
+                        .any(|e| ext.eq_ignore_ascii_case(e))
+                }) && workspace
+                    .specimens
+                    .iter()
+                    .all(|specimen| specimen.sources.contains_key(*path))
+            })
+            .map(String::as_str)
+    }))
+}
+
 /// Publish a new canonical exchange file without replacing a user file. The
 /// authoritative workspace is hidden; native per-fit SPARTs stay in their runs.
 pub fn publish_workspace(

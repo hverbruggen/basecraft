@@ -112,3 +112,21 @@ in the document's history. A request pinned to an older revision is refused.
 
 See [headless save decisions](headless-saving.md) for structured save checks,
 one-attempt acknowledgement, independent known-analysis policies and warnings.
+
+
+Linked-alignment inspection uses the same read-only selector as species-workspace
+open in the GUI. `basecraft delimitation linked-alignment species.spart --project
+/project` prints `{"path": <string or null>}`. MCP's
+`delimitation_linked_alignment {"document": id}` inspects the loaded document and
+is available in read-only sessions. Python exposes
+`session.delimitation_linked_alignment(document)` and
+`basecraft.delimitation.linked_alignment(path, project=project)`, returning a
+string or `None`. The convenience call and CLI inspect saved state; a persistent
+Session sees its current loaded workspace, including unsaved edits.
+
+An explicit `basecraft_alignment_snapshot` wins even when empty (`""`, distinct
+from null). Otherwise the first ordered FASTA-like source key common to every
+specimen is returned, preserving its loaded spelling. The hint is unverified:
+inspection does not open, hash or resolve that path, authorize analysis, or write
+history or provenance. Execution still requires existing checked inputs and the
+registered runner. Missing/wrong-kind documents are errors, not absent hints.

@@ -191,13 +191,23 @@ fn main() {
                     .downcast_pin::<alignment_bridge::qobject::AlignmentController>(
                 ) {
                     alignment_bridge::refusal_tests::run(controller);
+                } else if let Some(controller) =
+                    object
+                        .as_mut()
+                        .downcast_pin::<delimitation_bridge::qobject::DelimitationController>()
+                {
+                    delimitation_bridge::inspection_tests::run(controller);
                 } else {
                     panic!("unexpected controller type");
                 }
                 count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             })
             .release();
-        for controller in ["TreeController", "AlignmentController"] {
+        for controller in [
+            "TreeController",
+            "AlignmentController",
+            "DelimitationController",
+        ] {
             engine.pin_mut().load_data(
                 &QByteArray::from(format!("import Basecraft; {controller} {{}}").as_str()),
                 &QUrl::default(),
@@ -205,8 +215,8 @@ fn main() {
         }
         assert_eq!(
             checked.load(std::sync::atomic::Ordering::Relaxed),
-            2,
-            "both real controller regressions ran"
+            3,
+            "all real controller regressions ran"
         );
     }
 

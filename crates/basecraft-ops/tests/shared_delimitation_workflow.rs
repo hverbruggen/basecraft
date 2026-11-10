@@ -326,3 +326,213 @@ fn repeated_combine_and_refused_save_preserve_retained_objects_and_recover() {
         assert_eq!(std::fs::read_to_string(path).unwrap(), SPART);
     }
 }
+
+// Keep these independent of combine's retained-evidence/alias fixtures.
+fn hint_workspace(
+    root: &std::path::Path,
+    name: &str,
+    change: impl FnOnce(&mut basecraft_protocol::delimitation::DelimitationWorkspace),
+) -> PathBuf {
+    let path = root.join(name);
+    std::fs::write(&path, SPART).unwrap();
+    let mut work = files::load_delimitation(&path).unwrap();
+    change(&mut work);
+    files::write_delimitation_sidecar(
+        &work,
+        &basecraft_io::hash_file(&path).unwrap(),
+        &mut std::fs::File::create(files::tree_sidecar(&path)).unwrap(),
+    )
+    .unwrap();
+    path
+}
+
+#[test]
+fn linked_alignment_selector_preserves_presence_order_extensions_and_spelling() {
+    let dir = tempfile::tempdir().unwrap();
+    let cases: Vec<(Option<&str>, Vec<Vec<&str>>, Option<&str>)> = vec![
+        (
+            Some("Outside/../missing.FA"),
+            vec![vec!["a.fa"]],
+            Some("Outside/../missing.FA"),
+        ),
+        (Some(""), vec![vec!["a.fa"]], Some("")),
+        (None, vec![], None),
+        (None, vec![vec![]], None),
+        (None, vec![vec!["x.fastq", "x.phy", "x.nex"]], None),
+        (None, vec![vec!["x.fa"], vec![]], None),
+        (None, vec![vec!["a.fa"], vec!["b.fa"]], None),
+        (
+            None,
+            vec![vec!["b.fa", "A.FASTA"], vec!["b.fa", "A.FASTA"]],
+            Some("A.FASTA"),
+        ),
+        (None, vec![vec!["a.fa"], vec!["A.fa"]], None),
+    ];
+    for (index, (snapshot, sources, expected)) in cases.into_iter().enumerate() {
+        let path = hint_workspace(dir.path(), &format!("case-{index}.spart"), |work| {
+            work.hypotheses.clear();
+            let specimen = work.specimens[0].clone();
+            work.specimens = sources
+                .into_iter()
+                .enumerate()
+                .map(|(i, keys)| {
+                    let mut item = specimen.clone();
+                    item.id = format!("id-{i}"); // Equal labels still have distinct identities.
+                    item.sources = keys
+                        .into_iter()
+                        .map(|p| (p.into(), "different-evidence".into()))
+                        .collect();
+                    item
+                })
+                .collect();
+            if let Some(snapshot) = snapshot {
+                work.exchange_fields
+                    .insert("basecraft_alignment_snapshot".into(), snapshot.into());
+            }
+        });
+        let mut session = Session::unlogged(dir.path());
+        let doc = session.open(&path).unwrap();
+        let before = session.delimitation(doc).unwrap().clone();
+        #[cfg(feature = "test-counters")]
+        basecraft_io::counters::reset();
+        assert_eq!(workflow::linked_alignment(&session, doc).unwrap(), expected);
+        #[cfg(feature = "test-counters")]
+        assert_eq!(
+            basecraft_io::counters::snapshot(),
+            basecraft_io::counters::Counters::default()
+        );
+        assert_eq!(session.delimitation(doc).unwrap(), &before);
+        assert!(!session.can_undo(doc));
+        assert!(!session.can_redo(doc));
+        assert!(!dir.path().join(".basecraft").exists());
+    }
+    for extension in ["fa", "FASTA", "aFa", "Fas", "fNA"] {
+        let key = format!("not-present/Original.{extension}");
+        let path = hint_workspace(dir.path(), "extension.spart", |w| {
+            for specimen in &mut w.specimens {
+                specimen.sources = [(key.clone(), "unused-hash".into())].into();
+            }
+        });
+        let mut session = Session::unlogged(dir.path());
+        let doc = session.open(&path).unwrap();
+        assert_eq!(
+            workflow::linked_alignment(&session, doc).unwrap(),
+            Some(key.as_str())
+        );
+    }
+}
+
+#[test]
+fn linked_alignment_refuses_all_other_kinds_and_missing_ids() {
+    use basecraft_ops::{DocId, Error};
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = Session::unlogged(dir.path());
+    let sequence = session.create_sequence("sequence", "ACGT").unwrap();
+    let alignment = dir.path().join("alignment.afa");
+    std::fs::write(&alignment, ">a\nACGT\n>b\nAGGT\n").unwrap();
+    let aligned = session.open(&alignment).unwrap();
+    let tree = dir.path().join("tree.nwk");
+    std::fs::write(&tree, "(a:1,b:1);").unwrap();
+    let tree = session.open(&tree).unwrap();
+    let metadata = basecraft_ops::metadata::open(&mut session, true)
+        .unwrap()
+        .unwrap();
+    let submission = basecraft_ops::submission::create(
+        &mut session,
+        &dir.path().join("review.submission.json"),
+        &alignment,
+    )
+    .unwrap();
+    for doc in [sequence, aligned, tree, metadata, submission] {
+        let before = (
+            session.revision(doc),
+            session.doc_key(doc).to_owned(),
+            session.can_undo(doc),
+            session.can_redo(doc),
+        );
+        assert!(matches!(
+            workflow::linked_alignment(&session, doc),
+            Err(Error::WrongKind { .. })
+        ));
+        assert_eq!(
+            (
+                session.revision(doc),
+                session.doc_key(doc).to_owned(),
+                session.can_undo(doc),
+                session.can_redo(doc)
+            ),
+            before
+        );
+    }
+    for doc in [DocId(usize::MAX), DocId(submission.0 + 1)] {
+        assert!(matches!(
+            workflow::linked_alignment(&session, doc),
+            Err(Error::UnknownDocument { .. })
+        ));
+    }
+}
+
+#[test]
+fn linked_alignment_observation_preserves_unsaved_undo_redo_journal_and_replay() {
+    use basecraft_protocol::delimitation::DelimitationEdit;
+    let dir = tempfile::tempdir().unwrap();
+    let path = hint_workspace(dir.path(), "edited.spart", |_| {});
+    let original_bytes = std::fs::read(&path).unwrap();
+    let mut session = Session::new(dir.path());
+    let doc = session.open(&path).unwrap();
+    let mut view = session.delimitation(doc).unwrap().view.clone();
+    view.visible.reverse();
+    session
+        .apply(
+            doc,
+            Op::DelimitationEdit {
+                edit: Box::new(DelimitationEdit::SetView { view }),
+            },
+        )
+        .unwrap();
+    session.flush().unwrap();
+    for step in 0..3 {
+        let before = (
+            session.delimitation(doc).unwrap().clone(),
+            session.revision(doc),
+            session.doc_key(doc).to_owned(),
+            session.can_undo(doc),
+            session.can_redo(doc),
+            serde_json::to_value(session.document_record(doc).unwrap()).unwrap(),
+        );
+        let replay_before = basecraft_ops::replay::replay(dir.path()).unwrap();
+        let _hint = workflow::linked_alignment(&session, doc).unwrap();
+        assert_eq!(
+            (
+                session.delimitation(doc).unwrap().clone(),
+                session.revision(doc),
+                session.doc_key(doc).to_owned(),
+                session.can_undo(doc),
+                session.can_redo(doc),
+                serde_json::to_value(session.document_record(doc).unwrap()).unwrap()
+            ),
+            before
+        );
+        let replay_after = basecraft_ops::replay::replay(dir.path()).unwrap();
+        assert!(replay_before.ok(), "{:?}", replay_before.problems);
+        assert_eq!(
+            (
+                replay_after.sessions,
+                replay_after.entries,
+                replay_after.problems
+            ),
+            (
+                replay_before.sessions,
+                replay_before.entries,
+                replay_before.problems
+            )
+        );
+        if step == 0 {
+            session.undo(doc).unwrap();
+        }
+        if step == 1 {
+            session.redo(doc).unwrap();
+        }
+    }
+    assert_eq!(std::fs::read(path).unwrap(), original_bytes);
+}

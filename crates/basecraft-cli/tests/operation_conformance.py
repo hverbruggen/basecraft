@@ -123,6 +123,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--root", type=Path, required=True)
+    parser.add_argument("--only-linked-alignment", action="store_true",
+                        help="Run only read-only linked-alignment inspection conformance")
     parser.add_argument("--only-delimitation", action="store_true",
                         help="Run only the shared native delimitation workflow slice")
     args = parser.parse_args()
@@ -174,6 +176,76 @@ def main():
     for filename in ("first.spart", "second.spart"):
         shutil.copyfile(spart, project / filename)
     paths = [str(project / "first.spart"), str(project / "second.spart")]
+    # Saved inspection and live Session observation share one selector. Sidecar
+    # fixtures use the existing v1 reader to preserve literal path spellings.
+    readonly = Mcp(binary, project, env, writable=False)
+    try:
+        assert "delimitation_linked_alignment" in {t["name"] for t in readonly.tools()}
+        opened = readonly.tool("open", {"path": paths[0]})["structuredContent"]
+        workspace = readonly.tool("read", {"document": opened["document"]})["structuredContent"]
+        assert readonly.tool("delimitation_linked_alignment", {"document": 999999})["isError"]
+        (project / "wrong.fa").write_text(">a\nACGT\n")
+        wrong = readonly.tool("open", {"path": "wrong.fa"})["structuredContent"]
+        assert readonly.tool("delimitation_linked_alignment", {"document": wrong["document"]})["isError"]
+        assert readonly.tool("open", {"path": str(root / "a.txt")})["isError"]
+        for index, (snapshot, keys, expected) in enumerate([
+                (None, [], None), ("", ["candidate.fa"], ""),
+                ("../Outside/../missing.FASTA", ["candidate.fa"], "../Outside/../missing.FASTA"),
+                (None, ["z.fa", "A.FNA"], "A.FNA")]):
+            path = project / f"hint-{index}.spart"
+            shutil.copyfile(spart, path)
+            work = copy.deepcopy(workspace)
+            work["exchange_fields"].pop("basecraft_alignment_snapshot", None)
+            if snapshot is not None:
+                work["exchange_fields"]["basecraft_alignment_snapshot"] = snapshot
+            for specimen in work["specimens"]:
+                specimen["sources"] = {key: "unverified" for key in keys}
+            side = Path(str(path) + ".basecraft.json")
+            payload = {"version": 1, "exchange_hash": hashlib.sha256(path.read_bytes()).hexdigest(),
+                       "workspace": work}
+            side.write_text(json.dumps(payload))
+            before = {p: p.read_bytes() for p in project.rglob("*") if p.is_file()}
+            inspected, _ = cli("delimitation", "linked-alignment", str(path), "--project", str(project))
+            assert inspected == {"path": expected}
+            assert delimitation.linked_alignment(path, project=project) == expected
+            doc = readonly.tool("open", {"path": str(path)})["structuredContent"]["document"]
+            assert readonly.tool("delimitation_linked_alignment", {"document": doc})["structuredContent"] == inspected
+            with Session(project) as py:
+                live = py.open(path)["document"]
+                assert py.delimitation_linked_alignment(live) == expected
+            assert {p: p.read_bytes() for p in project.rglob("*") if p.is_file()} == before
+        # Keep an unsaved view edit live while the saved workspace changes.
+        with Session(project, writes=True) as py:
+            state = py.open(path)
+            live = state["document"]
+            py.apply(live, state["version"], {"op": "delimitation.edit", "params": {
+                "edit": {"action": "set_view", "view": {"visible": [], "selected": []}}}})
+            payload["workspace"]["exchange_fields"]["basecraft_alignment_snapshot"] = "saved-only.fa"
+            side.write_text(json.dumps(payload))
+            state_before = py.state(live)
+            record_before = py.call("document_record", {"document": live})
+            assert py.delimitation_linked_alignment(live) == expected
+            assert py.state(live) == state_before
+            assert py.call("document_record", {"document": live}) == record_before
+            assert delimitation.linked_alignment(path, project=project) == "saved-only.fa"
+            inspected, _ = cli("delimitation", "linked-alignment", str(path), "--project", str(project))
+            assert inspected == {"path": "saved-only.fa"}
+            py.undo(live)
+            assert py.delimitation_linked_alignment(live) == expected
+            py.redo(live)
+            assert py.delimitation_linked_alignment(live) == expected
+        # Existing companion validation remains authoritative.
+        payload["exchange_hash"] = "damaged"
+        side.write_text(json.dumps(payload))
+        assert readonly.tool("open", {"path": str(path)})["isError"]
+    finally:
+        readonly.close()
+    record("Linked-alignment hints agree across CLI, read-only MCP and persistent/convenience Python; null/empty/spelling, saved/live, refusal and no writes")
+    if args.only_linked_alignment:
+        receipt["status"] = "passed"
+        receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
+        print(json.dumps(receipt, indent=2))
+        return
     selection = {paths[0]: ["partition-2"], paths[1]: ["partition-3"]}
     candidates, _ = cli("delimitation", "candidates", *paths)
     assert candidates == delimitation.candidates(paths, project=project)

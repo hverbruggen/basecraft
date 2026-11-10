@@ -261,6 +261,9 @@ impl Server {
                 self.session.flush()?;
                 Ok(json!({"output":target,"hash":basecraft_io::hash_file(&target)?}))
             }
+            "delimitation_linked_alignment" => Ok(json!({
+                "path": basecraft_ops::delimitation::linked_alignment(&self.session, self.doc(args)?)?
+            })),
             "delimitation_candidates" | "delimitation_name" | "delimitation_combine" => {
                 let paths: Vec<String> = serde_json::from_value(
                     args.get("paths").cloned().ok_or("Provide input paths")?,
@@ -610,6 +613,7 @@ fn tools() -> Value {
         tool("save_check","Inspect a save without writing. Returns a single-attempt token owned by this live Session; newer checks supersede it. Known policy and incomplete acknowledgement are separate.",json!({"document":doc,"path":string}), &["document"]),
         tool("file_record","Read history and methods for a saved project file as it is on disk, including saved Sanger reviews. Same output as `basecraft history --json`; writes nothing.",json!({"path":string}), &["path"]),
         tool("extract","Extract the inspected sequence revision to a new GenBank file with source ancestry. Coordinates are zero-based, half-open; optional splice segments are in biological order, followed by optional reverse complement. Existing destinations are refused.",json!({"document":doc,"version":{"type":"integer","minimum":0},"path":string,"start":{"type":"integer","minimum":0},"end":{"type":"integer","minimum":0},"segments":{"type":"array","items":{"type":"array","items":{"type":"integer","minimum":0},"minItems":2,"maxItems":2}},"reverse":{"type":"boolean"}}), &["document","version","path","start","end"]),
+        tool("delimitation_linked_alignment","Inspect the loaded species workspace's unverified alignment hint. Returns path:string|null, preserving an explicit empty string; does not read or validate that path or authorize analysis.",json!({"document":doc}), &["document"]),
         tool("delimitation_candidates","Inspect saved species hypotheses in recommendation order, without writing records.",json!({"paths":{"type":"array","items":{"type":"string"}}}), &["paths"]),
         tool("delimitation_name","Suggest a free combined SPART filename beside the last input; writes nothing.",json!({"paths":{"type":"array","items":{"type":"string"}}}), &["paths"]),
         tool("delimitation_combine","Combine explicit saved hypotheses into a new file. Omitted selection keeps all; supplied selection maps input paths to hypothesis IDs, with missing paths keeping none. Existing output or companion is refused. Requires writes.",json!({"paths":{"type":"array","items":{"type":"string"},"minItems":2},"output":string,"selection":{"type":"object","additionalProperties":{"type":"array","items":{"type":"string"}}}}), &["paths","output"]),

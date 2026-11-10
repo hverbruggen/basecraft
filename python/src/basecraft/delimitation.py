@@ -92,3 +92,14 @@ def combine(paths, output, *, project, selection=None):
     from .session import Session
     with Session(project, writes=True) as session:
         return session.combine_delimitation(paths, output, selection=selection)
+
+
+def linked_alignment(path, *, project):
+    """Inspect a saved workspace's unverified hint (str or None, keeping "").
+
+    Uses a read-only session with an explicit project. Does not see unsaved
+    edits in another session or read/validate the hinted path for execution.
+    """
+    from .session import Session
+    with Session(project) as session:
+        return session.delimitation_linked_alignment(session.open(path)["document"])

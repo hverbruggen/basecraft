@@ -449,35 +449,15 @@ impl qobject::DelimitationController {
                     "This file is not a species workspace".into(),
                 ));
             }
-            Ok((s, d))
+            let linked = basecraft_ops::delimitation::linked_alignment(&s, d)?.map(str::to_owned);
+            Ok((s, d, linked))
         })();
         match result {
-            Ok((s, d)) => {
+            Ok((s, d, linked)) => {
                 let w = crate::bridge::checked_document!(access_thread, s.delimitation(d));
                 let display = w.view.display_tree.clone();
-                let linked = w
-                    .specimens
-                    .first()
-                    .and_then(|first| {
-                        first.sources.keys().find(|path| {
-                            Path::new(path).extension().is_some_and(|ext| {
-                                ["fa", "fasta", "afa", "fas", "fna"]
-                                    .iter()
-                                    .any(|e| ext.eq_ignore_ascii_case(e))
-                            }) && w
-                                .specimens
-                                .iter()
-                                .all(|specimen| specimen.sources.contains_key(*path))
-                        })
-                    })
-                    .cloned()
-                    .unwrap_or_default();
-                let linked = w
-                    .exchange_fields
-                    .get("basecraft_alignment_snapshot")
-                    .cloned()
-                    .unwrap_or(linked);
-                self.as_mut().set_linked_alignment(QString::from(linked));
+                self.as_mut()
+                    .set_linked_alignment(QString::from(linked.unwrap_or_default()));
                 // Edit a hypothesis that can be edited, if there is one.
                 let active = w
                     .hypotheses
@@ -2506,5 +2486,114 @@ mod naming_tests {
         ] {
             assert!(!generated_workspace(name), "{name}");
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(dead_code)] // Called by the real application_bootstrap controller harness.
+pub(crate) mod inspection_tests {
+    use super::*;
+
+    fn state(controller: &qobject::DelimitationController, original: DocId) -> Value {
+        let r = controller.rust();
+        let session = r.session.as_ref().unwrap();
+        json!({
+            "doc": r.doc.map(|d| d.0), "session": session.id(),
+            "key": session.doc_key(original), "revision": session.revision(original),
+            "record": session.document_record(original).unwrap(),
+            "undo": session.can_undo(original), "redo": session.can_redo(original),
+            "workspace": r.workspace_json.to_string(), "path": r.file_path.to_string(),
+            "linked": r.linked_alignment.to_string(), "active": r.active_hypothesis.to_string(),
+            "selection": r.selection.specimens, "origin": r.selection.origin,
+            "selection_json": r.selection_json.to_string(), "preview": r.preview,
+            "display": r.display_path.to_string(), "tree_edits": r.tree_edits.to_string(),
+            "find": crate::find_bridge::status(&r.find, 0.0),
+            "find_revision": r.find.revision(), "find_status_revision": r.find_status_revision,
+            "find_pending": r.find.busy(), "busy": r.busy, "dirty": r.dirty,
+            "analysis_pending": r.analysis.is_some(),
+        })
+    }
+
+    pub(crate) fn run(mut controller: Pin<&mut qobject::DelimitationController>) {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("linked.spart");
+        let plain = folder.path().join("plain.spart");
+        let source = include_str!("../../../testdata/fixtures/delimitation/manual.spart");
+        for path in [&path, &plain] {
+            std::fs::write(path, source).unwrap();
+        }
+        let mut work = basecraft_ops::files::load_delimitation(&path).unwrap();
+        work.exchange_fields.insert(
+            "basecraft_alignment_snapshot".into(),
+            "Missing/Original.FA".into(),
+        );
+        basecraft_ops::files::write_delimitation_sidecar(
+            &work,
+            &basecraft_io::hash_file(&path).unwrap(),
+            &mut std::fs::File::create(basecraft_ops::files::tree_sidecar(&path)).unwrap(),
+        )
+        .unwrap();
+        let linked = QString::from(path.to_str().unwrap());
+        let plain = QString::from(plain.to_str().unwrap());
+        assert!(controller.as_mut().open_file(&linked));
+        assert_eq!(
+            controller.rust().linked_alignment.to_string(),
+            "Missing/Original.FA"
+        );
+        assert!(controller.as_mut().open_file(&plain));
+        assert!(controller.rust().linked_alignment.is_empty());
+        assert!(controller.as_mut().open_file(&linked));
+        let original = controller.rust().doc.unwrap();
+        let mut view = work.view;
+        view.visible.reverse();
+        controller
+            .as_mut()
+            .edit(DelimitationEdit::SetView { view })
+            .unwrap();
+        controller
+            .as_mut()
+            .rust_mut()
+            .selection
+            .specimens
+            .insert("a".into());
+        controller
+            .as_mut()
+            .rust_mut()
+            .find
+            .set_query("a".into(), false);
+        let wrong_path = folder.path().join("wrong.fa");
+        std::fs::write(&wrong_path, ">a\nACGT\n").unwrap();
+        let wrong = controller
+            .as_mut()
+            .rust_mut()
+            .session
+            .as_mut()
+            .unwrap()
+            .open(&wrong_path)
+            .unwrap();
+        for invalid in [wrong, DocId(usize::MAX)] {
+            controller.as_mut().rust_mut().doc = Some(invalid);
+            let before = state(&controller, original);
+            assert!(!controller.as_mut().open_file(&plain));
+            assert_eq!(state(&controller, original), before);
+        }
+        controller.as_mut().rust_mut().doc = Some(original);
+        for busy in [false, true] {
+            controller.as_mut().rust_mut().busy = busy;
+            let before = state(&controller, original);
+            assert!(
+                !controller
+                    .as_mut()
+                    .open_file(&QString::from(wrong_path.to_str().unwrap()))
+            );
+            assert_eq!(state(&controller, original), before);
+            assert!(!controller.as_mut().open_file(&QString::from(
+                folder.path().join("missing.spart").to_str().unwrap()
+            )));
+            assert_eq!(state(&controller, original), before);
+        }
+        controller.as_mut().rust_mut().busy = false;
+        assert_eq!(std::fs::read_to_string(path).unwrap(), source);
+        println!("Delimitation real-controller linked hint/reopen/refusal passed");
     }
 }

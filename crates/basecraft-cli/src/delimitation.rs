@@ -8,6 +8,13 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 #[derive(Subcommand)]
 pub enum DelimitationCommand {
+    /// Inspect an unverified alignment hint; does not read or validate the hint.
+    LinkedAlignment {
+        path: PathBuf,
+        /// Explicit root of the read-only session; no membership is inferred.
+        #[arg(long)]
+        project: PathBuf,
+    },
     /// Inspect hypotheses in recommendation order without writing records.
     Candidates { paths: Vec<PathBuf> },
     /// Suggest a free combined SPART filename beside the last input.
@@ -33,6 +40,11 @@ fn absolute(path: PathBuf) -> std::io::Result<PathBuf> {
 
 pub fn run(command: DelimitationCommand) -> Result<()> {
     let value = match command {
+        DelimitationCommand::LinkedAlignment { path, project } => {
+            let mut session = basecraft_ops::Session::unlogged(absolute(project)?);
+            let doc = session.open(&absolute(path)?)?;
+            serde_json::json!({"path": delimitation::linked_alignment(&session, doc)?})
+        }
         DelimitationCommand::Candidates { paths } => {
             serde_json::to_value(delimitation::combine_candidates(&paths)?)?
         }
