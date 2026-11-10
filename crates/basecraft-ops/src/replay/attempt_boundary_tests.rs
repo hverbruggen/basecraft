@@ -1,7 +1,7 @@
 use super::*;
 use crate::session::save_attempt_observation::{
     self as save, Call, Observer,
-    tests::{assert_writer, fixture, injected, inventory, observer},
+    tests::{assert_writer, fixture, inventory, observer},
 };
 
 #[derive(Default)]
@@ -29,7 +29,7 @@ impl AdvanceHooks for ObserverAdvance {
     fn artifacts(&mut self, path: &Path, site: AdvanceSite) -> Result<Vec<ArtifactObservation>> {
         if self.artifacts_fault == Some(site) {
             self.artifacts_fault = None;
-            return Err(injected());
+            return Err(std::io::Error::other("injected artifact inspection").into());
         }
         artifacts(path)
     }
@@ -110,7 +110,15 @@ fn actual_recovery_four_states() {
                 ..Default::default()
             },
         );
-        assert!(observed.result.is_err(), "case {case}");
+        match (case, observed.result.as_ref().unwrap_err()) {
+            (0, Error::Format(basecraft_io::Error::Io(error))) => {
+                assert!(error.raw_os_error().is_some())
+            }
+            (1 | 4 | 5 | 7, Error::Io(error)) => {
+                assert_eq!(error.to_string(), "injected boundary failure")
+            }
+            (_, error) => panic!("unexpected recovery primary: {error:?}"),
+        }
         assert_writer(observed.facts.as_ref().unwrap(), case);
         let facts = observed.facts.as_ref().unwrap();
         if case >= 4 {
@@ -186,6 +194,16 @@ fn distinct_artifact_and_precomputed_observation_errors() {
         );
         assert!(observed.result.is_err());
         assert_eq!(observed.diagnostics.len(), 1);
+        if case == 7 {
+            assert_eq!(
+                observed.result.as_ref().unwrap_err().to_string(),
+                "injected artifact inspection"
+            );
+            assert_eq!(
+                observed.diagnostics[0].1.to_string(),
+                "injected boundary failure"
+            );
+        }
         assert_eq!(
             observed.diagnostics[0].0,
             if case == 0 {

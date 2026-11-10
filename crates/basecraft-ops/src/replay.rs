@@ -805,7 +805,7 @@ impl RecoveryAttempt {
                         match hooks.artifacts(stage.path(), AdvanceSite::FailedArtifacts) {
                             Ok(observed) => self.artifacts = observed,
                             Err(secondary) => {
-                                hooks.secondary(AdvanceSite::FailedArtifacts, secondary)
+                                hooks.secondary(AdvanceSite::FailedArtifacts, secondary);
                             }
                         }
                     }

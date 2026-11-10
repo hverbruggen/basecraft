@@ -83,6 +83,8 @@ pub(crate) enum Call {
 }
 #[cfg(test)]
 #[derive(Debug)]
+// Independent executed milestones, not an alternate save state machine.
+#[allow(clippy::struct_excessive_bools)]
 pub(crate) struct Facts {
     pub failure: Option<Site>,
     pub disposition: Disposition,
@@ -318,7 +320,7 @@ pub(crate) mod tests {
                         fs::remove_file(fact.destination())?;
                         fs::create_dir(fact.destination())
                     }),
-                ))
+                ));
             }
             1 => observer.document_hooks.returning = Some(Box::new(|| Err(injected()))),
             2 => {
@@ -330,7 +332,7 @@ pub(crate) mod tests {
                         log.faults.rollback_sync = true;
                         Ok(())
                     }),
-                ))
+                ));
             }
             3 => {
                 observer.fault = Some((
@@ -341,7 +343,7 @@ pub(crate) mod tests {
                         fs::write(bundle, b"blocked provenance bundle")?;
                         Ok(())
                     }),
-                ))
+                ));
             }
             4 => observer.fault = Some((Site::SavedHashes, Box::new(|_| Err(injected())))),
             5 => observer.fault = Some((Site::DiskStamp, Box::new(|_| Err(injected())))),
@@ -383,12 +385,10 @@ pub(crate) mod tests {
         );
         assert_eq!(
             facts.record,
-            if case < 2 {
-                Call::NotEntered
-            } else if case == 2 {
-                Call::Entered
-            } else {
-                Call::ReturnedOk
+            match case {
+                0 | 1 => Call::NotEntered,
+                2 => Call::Entered,
+                _ => Call::ReturnedOk,
             }
         );
     }
@@ -415,12 +415,12 @@ pub(crate) mod tests {
             assert!(attempt.result.is_err(), "case {case}");
             match (case, attempt.result.as_ref().unwrap_err()) {
                 (0, Error::Format(basecraft_io::Error::Io(error))) => {
-                    assert!(error.raw_os_error().is_some())
+                    assert!(error.raw_os_error().is_some());
                 }
                 (2, Error::Invalid(_)) => {} // Journal owner already formatted its IO cause.
                 (3, Error::Io(error)) => assert!(error.raw_os_error().is_some()),
                 (1 | 4..=6, Error::Io(error)) => {
-                    assert_eq!(error.to_string(), "injected boundary failure")
+                    assert_eq!(error.to_string(), "injected boundary failure");
                 }
                 (_, error) => panic!("unexpected primary for case {case}: {error:?}"),
             }
