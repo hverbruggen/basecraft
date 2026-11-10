@@ -1185,3 +1185,66 @@ fn parsed_full_middle_names_and_initials_reach_distinct_export_citations() {
     let replayed = replay::replay(root.path()).unwrap();
     assert!(replayed.ok(), "{:?}", replayed.problems);
 }
+
+#[test]
+fn rejected_edit_and_wrong_save_format_preserve_submission_undo_redo() {
+    let root = tempfile::tempdir().unwrap();
+    project(root.path());
+    let mut session = Session::new(root.path());
+    let doc = rbcl(&mut session);
+    let before = session.submission(doc).clone();
+    let mut changed = before.publication.clone();
+    changed.title = "Changed publication for undo compatibility".into();
+    submission::edit(
+        &mut session,
+        doc,
+        SubmissionEdit::SetPublication {
+            publication: changed.clone(),
+        },
+    )
+    .unwrap();
+    let edited = session.submission(doc).clone();
+    assert_ne!(edited, before);
+    let revision = session.revision(doc);
+    let hashes = session.save_hashes(doc).unwrap();
+
+    assert!(
+        session
+            .apply(
+                doc,
+                basecraft_protocol::Op::AlnRenameRow {
+                    row: 0,
+                    name: "wrong kind".into(),
+                }
+            )
+            .is_err()
+    );
+    assert_eq!(session.submission(doc), &edited);
+    assert_eq!(session.revision(doc), revision);
+    assert_eq!(session.save_hashes(doc).unwrap(), hashes);
+
+    changed.title = "invalid\npublication".into();
+    assert!(
+        submission::edit(
+            &mut session,
+            doc,
+            SubmissionEdit::SetPublication {
+                publication: changed,
+            }
+        )
+        .is_err()
+    );
+    assert_eq!(session.submission(doc), &edited);
+    assert_eq!(session.revision(doc), revision);
+
+    let wrong_target = root.path().join("wrong.fasta");
+    assert!(session.save(doc, Some(&wrong_target)).is_err());
+    assert!(!wrong_target.exists());
+    assert_eq!(session.submission(doc), &edited);
+    session.undo(doc).unwrap();
+    assert_eq!(session.submission(doc), &before);
+    session.redo(doc).unwrap();
+    assert_eq!(session.submission(doc), &edited);
+    session.save(doc, None).unwrap();
+    assert!(replay::replay(root.path()).unwrap().ok());
+}

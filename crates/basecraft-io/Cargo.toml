@@ -8,6 +8,9 @@ publish.workspace = true
 repository.workspace = true
 license.workspace = true
 
+[features]
+test-counters = []
+
 [dependencies]
 # Spreadsheet parsing and ZIP template/container handling.
 calamine = { version = "0.38", features = ["chrono"] }

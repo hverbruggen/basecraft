@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "stores": [
+    "/synthetic/records-v1/.basecraft/analyses-v1"
+  ],
+  "z_extension": {
+    "a": 1,
+    "b": [
+      null,
+      {
+        "extra": true
+      }
+    ]
+  }
+}

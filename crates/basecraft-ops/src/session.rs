@@ -17,6 +17,7 @@ use basecraft_docs::{AlignmentDoc, EditResult, FeatureId, SequenceDoc, TreeDoc};
 use basecraft_protocol::ops::LOG_VERSION;
 use basecraft_protocol::{Actor, DocState, Feature, LogEntry, Op, OpResult};
 
+use crate::documents::Document;
 use crate::error::invalid;
 use crate::files::{self, HashingWriter, Loaded, Opened, OpenedAlignment, OpenedTree};
 use crate::log::LogWriter;
@@ -37,7 +38,7 @@ pub const OBJECT_STORE_LIMIT: u64 = 100 << 20;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct DocId(pub usize);
 
-enum Inverse {
+pub(crate) enum Inverse {
     Residues {
         inserted: u64,
         result: EditResult,
@@ -431,9 +432,8 @@ impl Session {
             Loaded::Sequence(opened) => opened.doc.version(),
             Loaded::Alignment(opened) => opened.doc.version(),
             Loaded::Tree(opened) => opened.doc.version(),
-            Loaded::Delimitation(_) | Loaded::Metadata(_) | Loaded::Submission(_) => {
-                self.docs[id.0].generation
-            }
+            Loaded::Submission(sub) => sub.revision(self.docs[id.0].generation),
+            Loaded::Delimitation(_) | Loaded::Metadata(_) => self.docs[id.0].generation,
         }
     }
 
@@ -487,11 +487,7 @@ impl Session {
                 features: opened.metadata.identifications.len() as u64,
                 rows: Some(opened.metadata.links.len() as u64),
             },
-            Loaded::Submission(sub) => DocState {
-                len: sub.rows.len() as u64,
-                features: sub.frames.len() as u64,
-                rows: Some(sub.accessions.len() as u64),
-            },
+            Loaded::Submission(sub) => sub.fingerprint(),
             Loaded::Tree(o) => DocState {
                 len: o.doc.tip_count() as u64,
                 features: o.doc.annotations().len() as u64,
@@ -571,7 +567,7 @@ impl Session {
             files::Format::Metadata => crate::metadata::files(path).split_off(1),
             files::Format::Tree | files::Format::Delimitation => vec![files::tree_sidecar(path)],
             files::Format::GenBank | files::Format::Fasta => vec![files::gff_sidecar(path)],
-            files::Format::Submission => Vec::new(),
+            files::Format::Submission => crate::documents::submission_companions(path),
         };
         let hash_companions = || -> Result<Vec<Option<String>>> {
             companions
@@ -689,13 +685,18 @@ impl Session {
             }
         }
         if self.log.is_some() {
-            let source_root = serde_json::to_value(&self.root)?;
             let baseline = serde_json::to_value(&entry)?;
-            let manifest = serde_json::to_vec_pretty(&serde_json::json!({
-                "schema_version": 1, "session": self.id,
-                "source_root": source_root, "status": "unsaved",
-                "baseline": baseline, "object_policy_limit": OBJECT_STORE_LIMIT
-            }))?;
+            let manifest = serde_json::to_vec_pretty(&serde_json::to_value(
+                basecraft_protocol::records::RecoveryManifest {
+                    schema_version: 1,
+                    session: self.id.clone(),
+                    source_root: self.root.clone(),
+                    status: basecraft_protocol::records::RecoveryStatus::Unsaved,
+                    baseline,
+                    object_policy_limit: OBJECT_STORE_LIMIT,
+                    extra: std::collections::BTreeMap::new(),
+                },
+            )?)?;
             std::fs::create_dir_all(&self.storage_root)?;
             basecraft_io::write_atomic(&self.storage_root.join("recovery.json"), |w| {
                 w.write_all(&manifest)
@@ -828,6 +829,13 @@ impl Session {
     }
 
     pub fn snapshot_file(&self, path: &Path) -> Result<String> {
+        #[cfg(feature = "test-counters")]
+        {
+            let bytes = std::fs::read(path)?;
+            basecraft_io::counters::record_read(path, bytes.len() as u64);
+            self.snapshot_bytes(&bytes)
+        }
+        #[cfg(not(feature = "test-counters"))]
         self.snapshot_bytes(&std::fs::read(path)?)
     }
 
@@ -867,6 +875,8 @@ impl Session {
         if !dest.exists() {
             std::fs::create_dir_all(objects_dir(&self.storage_root))?;
             let bytes = std::fs::read(path)?;
+            #[cfg(feature = "test-counters")]
+            basecraft_io::counters::record_read(path, bytes.len() as u64);
             if basecraft_io::hash_bytes(&bytes) != hash {
                 return Err(invalid("source changed while retaining its snapshot"));
             }
@@ -968,12 +978,18 @@ impl Session {
         let before = basecraft_io::hash_file(&target).ok();
         let expected = self.save_hashes_at(id, &target)?;
         if self.log.is_some() {
-            let target_value = serde_json::to_value(&target)?;
-            let intent = serde_json::to_vec_pretty(&serde_json::json!({
-                "schema_version": 1, "session": self.id, "target": target_value,
-                "before_hash": before, "expected_hashes": expected,
-                "status": "pending", "note": "data and provenance are separate writes"
-            }))?;
+            let intent = serde_json::to_vec_pretty(&serde_json::to_value(
+                basecraft_protocol::records::PendingSave {
+                    schema_version: 1,
+                    session: self.id.clone(),
+                    target: target.clone(),
+                    before_hash: before.clone(),
+                    expected_hashes: expected.clone(),
+                    status: basecraft_protocol::records::RecoveryStatus::Pending,
+                    note: "data and provenance are separate writes".into(),
+                    extra: std::collections::BTreeMap::new(),
+                },
+            )?)?;
             std::fs::create_dir_all(&self.storage_root)?;
             basecraft_io::write_atomic(&self.storage_root.join("pending-save.json"), |w| {
                 w.write_all(&intent)
@@ -1075,15 +1091,11 @@ impl Session {
         let mut main_hash = String::new();
         let opened = match &self.docs[id.0].content {
             Loaded::Submission(sub) => {
-                if format != files::Format::Submission {
-                    return Err(invalid(format!(
-                        "a submission is saved as *{}",
-                        crate::submission::SUFFIX
-                    )));
-                }
-                let bytes = crate::submission::encode(sub)?;
-                basecraft_io::write_atomic(&target, |w| w.write_all(&bytes))?;
-                hashes.push((self.relative(&target), basecraft_io::hash_bytes(&bytes)));
+                let hashes = sub
+                    .write(&target, format)?
+                    .into_iter()
+                    .map(|(path, hash)| (self.relative(&path), hash))
+                    .collect();
                 return self.log_save(id, &target, hashes);
             }
             Loaded::Metadata(opened) => {
@@ -1605,6 +1617,8 @@ impl Session {
         let retain =
             |path: &Path, hash: &str, revision: String, name: String| -> Result<ArtifactRevision> {
                 let bytes = std::fs::read(path)?;
+                #[cfg(feature = "test-counters")]
+                basecraft_io::counters::record_read(path, bytes.len() as u64);
                 if basecraft_io::hash_bytes(&bytes) != hash {
                     return Err(invalid("artifact changed during provenance publication"));
                 }
@@ -2146,12 +2160,8 @@ impl Session {
 
     /// Replay a save using its actual exchange format, including Save As.
     pub fn save_hashes_at(&self, id: DocId, target: &Path) -> Result<Vec<String>> {
-        let opened = match &self.docs[id.0].content {
-            Loaded::Submission(sub) => {
-                return Ok(vec![basecraft_io::hash_bytes(&crate::submission::encode(
-                    sub,
-                )?)]);
-            }
+        let content = &self.docs[id.0].content;
+        let opened = match content {
             Loaded::Metadata(opened) => {
                 return Ok(crate::metadata::encode(&opened.metadata)?
                     .iter()
@@ -2183,6 +2193,12 @@ impl Session {
                 let mut side = HashingWriter::new(std::io::sink());
                 files::write_tree_sidecar_at(&t.doc, &hw.hash(), &mut side)?;
                 return Ok(vec![hw.hash(), side.hash()]);
+            }
+            migrated @ Loaded::Submission(_) => {
+                let document = migrated
+                    .as_document()
+                    .ok_or_else(|| invalid("document interface unavailable"))?;
+                return document.saved_hashes(target);
             }
         };
         let mut hw = HashingWriter::new(std::io::sink());
@@ -2447,17 +2463,7 @@ impl Session {
                     .map_err(|e| invalid(e.0))?;
                 return Ok((Inverse::Metadata(before), None));
             }
-            Loaded::Submission(sub) => {
-                let Op::SubmissionEdit { edit } = op else {
-                    return Err(invalid(format!(
-                        "{} can't be applied to a submission",
-                        op.name()
-                    )));
-                };
-                let before = Box::new(sub.clone());
-                basecraft_docs::submission::apply(sub, edit).map_err(|e| invalid(e.0))?;
-                return Ok((Inverse::Submission(before), None));
-            }
+            Loaded::Submission(sub) => return sub.apply(op),
             Loaded::Alignment(a) => {
                 return execute_alignment(a, op).map(|u| (Inverse::Alignment(u), None));
             }
@@ -2630,16 +2636,13 @@ impl Session {
             (Loaded::Metadata(opened), Inverse::Metadata(before)) => {
                 opened.metadata = (**before).clone();
             }
-            (Loaded::Submission(sub), Inverse::Submission(before)) => {
-                *sub = (**before).clone();
-            }
+            (Loaded::Submission(sub), inverse) => sub.revert(inverse)?,
             (Loaded::Sequence(o), inverse) => undo_sequence(&mut o.doc, inverse),
             (
                 Loaded::Alignment(_)
                 | Loaded::Tree(_)
                 | Loaded::Delimitation(_)
-                | Loaded::Metadata(_)
-                | Loaded::Submission(_),
+                | Loaded::Metadata(_),
                 _,
             ) => {
                 return Err(invalid("undo of the wrong kind of edit"));
@@ -2962,6 +2965,9 @@ fn redact_operation_paths(operation: &mut Op) {
 }
 
 fn restore_inverse(content: &mut Loaded, inverse: &Inverse) -> Result<()> {
+    if let Some(document) = content.as_document_mut() {
+        return document.revert(inverse);
+    }
     match (content, inverse) {
         (Loaded::Sequence(opened), inverse) => undo_sequence(&mut opened.doc, inverse),
         (Loaded::Alignment(opened), Inverse::Alignment(steps)) => opened.doc.undo(steps),
@@ -2970,7 +2976,6 @@ fn restore_inverse(content: &mut Loaded, inverse: &Inverse) -> Result<()> {
         (Loaded::Metadata(opened), Inverse::Metadata(before)) => {
             opened.metadata = (**before).clone();
         }
-        (Loaded::Submission(sub), Inverse::Submission(before)) => *sub = (**before).clone(),
         _ => return Err(invalid("edit rollback has incompatible document type")),
     }
     Ok(())

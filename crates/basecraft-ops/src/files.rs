@@ -132,6 +132,23 @@ pub enum Loaded {
     Tree(OpenedTree),
 }
 
+impl Loaded {
+    /// Only migrated kinds participate; legacy kinds retain their existing paths.
+    pub(crate) fn as_document(&self) -> Option<&dyn crate::documents::Document> {
+        match self {
+            Self::Submission(sub) => Some(sub),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn as_document_mut(&mut self) -> Option<&mut dyn crate::documents::Document> {
+        match self {
+            Self::Submission(sub) => Some(sub),
+            _ => None,
+        }
+    }
+}
+
 /// Open a file as whatever it holds: see [`kind`].
 pub fn load(path: &Path) -> Result<Loaded> {
     if Format::from_path(path)? == Format::Metadata {
@@ -263,6 +280,8 @@ pub(crate) fn load_tree_from_verified_snapshot(path: &Path) -> Result<OpenedTree
 
 fn load_tree_metadata(path: &Path, verified_snapshot: bool) -> Result<OpenedTree> {
     let text = std::fs::read_to_string(path)?;
+    #[cfg(feature = "test-counters")]
+    basecraft_io::counters::record_read(path, text.len() as u64);
     let nexus = newick::is_nexus(&text);
     let mut parsed_trees = newick::parse_trees(&text)?.into_iter();
     let parsed = parsed_trees
@@ -488,6 +507,8 @@ pub fn open(path: &Path) -> Result<Opened> {
         ))),
         Format::GenBank => {
             let bytes = std::fs::read(path)?;
+            #[cfg(feature = "test-counters")]
+            basecraft_io::counters::record_read(path, bytes.len() as u64);
             let rec = genbank::parse(&bytes)?
                 .into_iter()
                 .next()

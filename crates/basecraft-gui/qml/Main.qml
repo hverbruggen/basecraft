@@ -290,14 +290,15 @@ ApplicationWindow {
 
     // Open a file in a tab, or switch to its tab if it's already open.
     function openPath(path) {
+        const kind = shell.file_kind(path)
         // The specimen table is project data, edited on the Export tab.
-        if (shell.file_kind(path) === "metadata") {
+        if (kind === "metadata") {
             ribbonTabName = "Export"
             specimenTable.open()
             return
         }
         // Submissions are project documents edited on the Export tab.
-        if (shell.file_kind(path) === "submission") {
+        if (kind === "submission") {
             ribbonTabName = "Export"
             window.openSubmission(path)
             return
@@ -307,7 +308,7 @@ ApplicationWindow {
             if (openFiles.get(i).path === path) { tabs.currentIndex = i; Qt.callLater(refreshCurrent); return }
         }
         if (!shell.project_dir.length) shell.use_project_of(path)
-        openFiles.append({ path: path, dirty: false, kind: shell.file_kind(path) })
+        openFiles.append({ path: path, dirty: false, kind: kind })
         tabs.currentIndex = openFiles.count - 1
     }
 

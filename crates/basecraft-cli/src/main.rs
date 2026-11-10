@@ -428,6 +428,22 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             std::fs::create_dir_all(&dir)?;
             let schemas = [
                 (
+                    "store-marker",
+                    schemars::schema_for!(basecraft_protocol::records::StoreMarker),
+                ),
+                (
+                    "store-registry",
+                    schemars::schema_for!(basecraft_protocol::records::StoreRegistry),
+                ),
+                (
+                    "recovery-manifest",
+                    schemars::schema_for!(basecraft_protocol::records::RecoveryManifest),
+                ),
+                (
+                    "pending-save",
+                    schemars::schema_for!(basecraft_protocol::records::PendingSave),
+                ),
+                (
                     "operation-contract",
                     schemars::schema_for!(basecraft_protocol::operation::OperationContract),
                 ),

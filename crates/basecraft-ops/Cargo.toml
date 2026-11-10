@@ -8,6 +8,9 @@ publish.workspace = true
 repository.workspace = true
 license.workspace = true
 
+[features]
+test-counters = ["basecraft-io/test-counters"]
+
 [dependencies]
 fs4 = "0.13"
 basecraft-docs.workspace = true

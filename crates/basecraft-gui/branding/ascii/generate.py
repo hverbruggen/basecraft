@@ -1,5 +1,6 @@
 """Animated ASCII art for the About dialog: a chromatogram trace, a cladogram with species
-brackets, an alignment, a sequence loom and a paper shuttle.
+brackets, an alignment, a sequence loom, a paper shuttle and the etched wordmark.
+Etch traces the branding SVG at generation time and requires rsvg-convert.
 
     python3 generate.py play <name>     play in the terminal (Ctrl-C to stop)
     python3 generate.py list            list the animation names
@@ -12,8 +13,12 @@ case of any of these (plus 'x' for plain) inverts the cell.
 import json
 import math
 import random
+import re
+import struct
+import subprocess
 import sys
 import time
+import zlib
 from pathlib import Path
 
 # Palette from the dark wordmark: its background, letter ink, sage stem and amber fold.
@@ -468,8 +473,234 @@ def shuttle_frames():
     return {"fps": 20, "frames": frames}
 
 
+
+# Etched wordmark: generated from the portable branding artwork, never at app runtime.
+BRANDING = Path(__file__).resolve().parents[1]
+SUBTITLE = ["A workbench for evolutionary biology and taxonomy,",
+            "bringing together hands-on analysis, automation and AI assistance,",
+            "with provenance built in."]
+WIDTH, MARK_COLS = 68, 66                    # canvas and wordmark width in characters
+SCALE = 0.85                                 # shown smaller in the dialog, like the cladogram
+DOT_ASPECT = 0.9                             # braille dot pitch, across over down, in a monospace cell
+# Style of each piece of the folded b; the crease highlights are left out.
+B_PIECES = {"stem": "A", "stem-tip": "A", "stem-crossing": "A", "crossing-fold": "m",
+            "bowl-back": "G", "bottom-return": "G", "upper-fold": "w", "right-strip": "T",
+            "bottom-fold": "T"}
+
+
+def read_png(data):
+    """Decode the 8-bit RGBA, non-interlaced PNG that rsvg-convert writes: (width, height, rows)."""
+    pos, idat = 8, []
+    while pos < len(data):
+        size, kind = struct.unpack(">I4s", data[pos:pos + 8])
+        body = data[pos + 8:pos + 8 + size]
+        if kind == b"IHDR":
+            w, h, depth, colour, _, _, interlace = struct.unpack(">IIBBBBB", body)
+            if (depth, colour, interlace) != (8, 6, 0):
+                raise ValueError("expected an 8-bit RGBA PNG without interlacing")
+        elif kind == b"IDAT":
+            idat.append(body)
+        pos += 12 + size
+    raw, stride = zlib.decompress(b"".join(idat)), w * 4
+    rows, prev = [], bytearray(stride)
+    for y in range(h):
+        kind, line = raw[y * (stride + 1)], bytearray(raw[y * (stride + 1) + 1:(y + 1) * (stride + 1)])
+        for i in range(stride):
+            a, b, c = (line[i - 4] if i >= 4 else 0), prev[i], (prev[i - 4] if i >= 4 else 0)
+            if kind == 1:
+                line[i] = (line[i] + a) & 255
+            elif kind == 2:
+                line[i] = (line[i] + b) & 255
+            elif kind == 3:
+                line[i] = (line[i] + (a + b) // 2) & 255
+            elif kind == 4:
+                p = a + b - c
+                pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                line[i] = (line[i] + (a if pa <= pb and pa <= pc else b if pb <= pc else c)) & 255
+        rows.append(line)
+        prev = line
+    return w, h, rows
+
+
+def wordmark():
+    """Trace the wordmark into braille. Each piece of the b and the lettering is filled with a flat
+    label colour first, so every dot knows which piece it belongs to."""
+    svg = (BRANDING / "wordmark-dark.svg").read_text()
+    labels = {(0, 0, 255): "."}
+    for i, (piece, style) in enumerate(B_PIECES.items()):
+        svg, n = re.subn(rf'(<path id="{piece}"[^>]*?)fill="[^"]*"', rf'\1fill="#{20 * (i + 1):02x}0000"', svg)
+        if n != 1:
+            raise ValueError(f"wordmark-dark.svg has no single piece {piece}")
+        labels[(20 * (i + 1), 0, 0)] = style
+    svg = re.sub(r'<g id="crease-light".*?</g>', "", svg, flags=re.S)
+    svg = re.sub(r'<g clip-path="url\(#letter-interiors\)">.*?</g></g>', "", svg, flags=re.S)
+    svg = svg.replace('fill="#81978F" fill-opacity=".18"', 'fill="#0000ff"')
+    png = subprocess.run(["rsvg-convert", "-w", "680"], input=svg.encode(), capture_output=True, check=True).stdout
+    w, h, rows = read_png(png)
+    inked = [(x, y) for y in range(h) for x in range(w) if rows[y][4 * x + 3] >= 128]
+    x0, x1 = min(x for x, _ in inked), max(x for x, _ in inked) + 1
+    y0, y1 = min(y for _, y in inked), max(y for _, y in inked) + 1
+    dots_w = MARK_COLS * 2
+    mark_rows = round((y1 - y0) / (x1 - x0) * dots_w * DOT_ASPECT / 4)
+    dots_h = mark_rows * 4
+    br = Braille(MARK_COLS, mark_rows)
+    for j in range(dots_h):
+        for i in range(dots_w):
+            px = range(x0 + i * (x1 - x0) // dots_w, x0 + (i + 1) * (x1 - x0) // dots_w)
+            py = range(y0 + j * (y1 - y0) // dots_h, y0 + (j + 1) * (y1 - y0) // dots_h)
+            covered, votes = 0, {}
+            for y in py:
+                for x in px:
+                    r, g, b, a = rows[y][4 * x:4 * x + 4]
+                    if a >= 128:
+                        covered += 1
+                        style = labels.get((r, g, b))
+                        if style:
+                            votes[style] = votes.get(style, 0) + 1
+            if votes and covered >= 0.45 * len(px) * len(py):
+                br.dot(i, j, max(votes, key=votes.get))
+    cv = Canvas(MARK_COLS, mark_rows)
+    br.blit(cv)
+    return cv
+
+
+class Logo:
+    """The wordmark in braille over the subtitle in text, as cells (x, y) -> (char, style)."""
+
+    def __init__(self):
+        mark = wordmark()
+        self.w, self.h = WIDTH, mark.h + 1 + len(SUBTITLE)
+        self.cells, self.marks = {}, set()
+        ox = (WIDTH - mark.w) // 2
+        for y in range(mark.h):
+            for x in range(mark.w):
+                if mark.chars[y][x] != " ":
+                    self.cells[(ox + x, y)] = (mark.chars[y][x], mark.styles[y][x])
+                    self.marks.add((ox + x, y))
+        for i, line in enumerate(SUBTITLE):
+            ox = (WIDTH - len(line)) // 2
+            for j, ch in enumerate(line):
+                if ch != " ":
+                    self.cells[(ox + j, mark.h + 1 + i)] = (ch, ".")
+        self.text = sorted(set(self.cells) - self.marks, key=lambda c: (c[1], c[0]))
+
+    def pieces(self):
+        """Connected groups of wordmark cells, left to right: the b, then each letter."""
+        left, groups = set(self.marks), []
+        while left:
+            stack = [min(left)]
+            group = set(stack)
+            left -= group
+            while stack:
+                x, y = stack.pop()
+                for n in [(x + dx, y + dy) for dx in (-1, 0, 1) for dy in (-1, 0, 1)]:
+                    if n in left:
+                        left.discard(n)
+                        group.add(n)
+                        stack.append(n)
+            groups.append(group)
+        return sorted(groups, key=min)
+
+
+# --- etch --------------------------------------------------------------------------------------
+
+def walk(cells, rng):
+    """Visit cells depth first from the bottom-left one, preferring straight steps, so the laser
+    traces a piece in one meandering stroke with the odd jump back."""
+    start = min(cells, key=lambda c: (-c[1], c[0]))
+    order, seen, stack = [start], {start}, [start]
+    while stack:
+        x, y = stack[-1]
+        steps = [(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)]
+        rng.shuffle(steps)
+        diagonal = [(x + dx, y + dy) for dx in (-1, 1) for dy in (-1, 1)]
+        rng.shuffle(diagonal)
+        step = next((n for n in steps + diagonal if n in cells and n not in seen), None)
+        if step is None:
+            stack.pop()
+        else:
+            seen.add(step)
+            order.append(step)
+            stack.append(step)
+    return order
+
+
+def etch_frames():
+    """A laser from above the top-right corner etches the wordmark piece by piece, then runs along
+    the subtitle. Each etched cell glows white, amber and terracotta before settling to its own
+    colour; sparks fall from the beam and cool the same way. A highlight sweeps the finished
+    logo, which then dims and crumbles away."""
+    logo = Logo()
+    rng = random.Random(13)
+    path = [c for piece in logo.pieces() for c in walk(piece, rng)]
+    lead = 6
+    when = {c: lead + k // 2 for k, c in enumerate(path)}               # two wordmark cells a frame
+    text0 = lead + (len(path) + 1) // 2 + 4
+    when.update({c: text0 + k // 3 for k, c in enumerate(logo.text)})   # three letters a frame
+    target = {}
+    for c in path + logo.text:
+        target[when[c]] = c
+    done = max(when.values())
+    sparks = []
+    for f in range(lead, done + 1):
+        if f in target:
+            x, y = target[f]
+            for _ in range(2 if target[f] in logo.marks else 1):
+                sparks.append((f, x + 0.5, y + 0.5, rng.uniform(-0.8, 0.8), rng.uniform(-0.45, 0.0)))
+    sweep0 = done + 12
+    hold0 = sweep0 + 30
+    dim0 = hold0 + 60
+    crumble0 = dim0 + 10
+    end = crumble0 + 24
+    gone = {c: crumble0 + rng.randrange(16) for c in logo.cells}
+    source = (2 * logo.w + 10, -20)                                      # the laser, in braille dots
+
+    def glow(age, style):
+        return "w" if age < 2 else "G" if age < 5 else "T" if age < 8 else style
+
+    frames = []
+    for f in range(end):
+        cv = Canvas(logo.w, logo.h)
+        band = (f - sweep0) / (hold0 - sweep0) * (logo.w + 2 * logo.h + 12) - 6
+        for (x, y), (ch, style) in logo.cells.items():
+            if when[(x, y)] <= f < gone[(x, y)]:
+                if f >= dim0:
+                    style = "d"
+                elif sweep0 <= f < hold0 and abs(x + 2 * y - band) < 2.5:
+                    style = "w"
+                else:
+                    style = glow(f - when[(x, y)], style)
+                cv.put(x, y, ch, style)
+        for born, x, y, vx, vy in sparks:
+            age = f - born
+            if 0 <= age < 18:
+                sx, sy = int(x + vx * age), int(y + vy * age + 0.035 * age * age)
+                if 0 <= sx < logo.w and 0 <= sy < logo.h and cv.chars[sy][sx] == " ":
+                    ch, st = ("*", "w") if age < 3 else ("•", "G") if age < 7 else ("·", "T") if age < 12 else (".", "d")
+                    cv.put(sx, sy, ch, st)
+        if lead <= f <= done:
+            last = max(t for t in target if t <= f)
+            tx, ty = target[last][0] * 2 + 1, target[last][1] * 4 + 2
+            beam = Braille(logo.w, logo.h)
+            span = math.hypot(source[0] - tx, source[1] - ty)
+            kx, ky = tx + (source[0] - tx) * 5 / span, ty + (source[1] - ty) * 5 / span
+            beam.line(source[0], source[1], kx, ky, "C")
+            beam.line(kx, ky, tx, ty, "w")
+            for y in range(logo.h):
+                for x in range(logo.w):
+                    bits = beam.bits[y][x]
+                    ch = cv.chars[y][x]
+                    if not bits or not (ch == " " or 0x2800 <= ord(ch) <= 0x28ff):
+                        continue
+                    keys = beam.keys[y][x]
+                    style = "w" if "w" in keys else "C"
+                    cv.put(x, y, chr((ord(ch) if ch != " " else 0x2800) | bits), style)
+        frames.append(cv.frame())
+    return {"fps": 24, "frames": frames, "scale": SCALE}
+
+
 ANIMS = {"trace": trace_frames, "cladogram": cladogram_frames, "alignment": alignment_frames,
-         "loom": loom_frames, "shuttle": shuttle_frames}
+         "loom": loom_frames, "shuttle": shuttle_frames, "etch": etch_frames}
 
 
 def _ansi(style):
