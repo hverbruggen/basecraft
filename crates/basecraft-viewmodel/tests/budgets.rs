@@ -238,3 +238,204 @@ fn genome_frames_depend_on_visible_tracks() {
         }
     }
 }
+
+fn close(a: f32, b: f32) -> bool {
+    (a - b).abs() < 0.01
+}
+
+fn residue_rects(frame: &Frame, width: f32, height: f32, top: f32) -> usize {
+    frame
+        .floats()
+        .as_chunks::<FLOATS_PER_INSTANCE>()
+        .0
+        .iter()
+        .filter(|q| {
+            q[14] == 0.0 && q[1] >= top && close(q[2] - q[0], width) && close(q[5] - q[1], height)
+        })
+        .count()
+}
+
+// Compare actual atlas payloads with independently specified fixture residues.
+// Size/vertical position separate residues from names, rulers and feature labels.
+fn assert_residue_glyphs(frame: &Frame, size: f32, top: f32, expected: &[u8]) {
+    let mut actual: Vec<_> = frame
+        .floats()
+        .as_chunks::<FLOATS_PER_INSTANCE>()
+        .0
+        .iter()
+        .filter(|q| q[14] > 0.0 && q[1] >= top && close(q[2] - q[0], size))
+        .map(|q| {
+            [
+                q[12].to_bits(),
+                q[13].to_bits(),
+                q[14].to_bits(),
+                q[15].to_bits(),
+            ]
+        })
+        .collect();
+    let mut reference = Frame::new();
+    for &base in expected {
+        reference.glyph(0.0, 0.0, size, base, [1.0; 4]);
+    }
+    let mut expected: Vec<_> = reference
+        .floats()
+        .as_chunks::<FLOATS_PER_INSTANCE>()
+        .0
+        .iter()
+        .map(|q| {
+            [
+                q[12].to_bits(),
+                q[13].to_bits(),
+                q[14].to_bits(),
+                q[15].to_bits(),
+            ]
+        })
+        .collect();
+    actual.sort_unstable();
+    expected.sort_unstable();
+    assert_eq!(actual, expected, "visible scientific glyph payload");
+}
+
+#[test]
+fn alignment_pan_and_zoom_keep_exact_visible_residue_budgets() {
+    let theme = Theme::default();
+    for (rows, cols) in [(128, 4096), (512, 16384)] {
+        let doc = alignment(rows, cols);
+        let mut view = AlignmentView::new(WIDTH, HEIGHT);
+        let mut frame = Frame::new();
+        // Source geometry: 630 px grid, one extra column/row for overscan.
+        // 11 px: 59 columns x22 rows (17.05 px high, 57.05 px header).
+        // 22 px: 30 columns x14 rows (26 px high, 66 px header).
+        // 5.5 px: 116 columns x44 rows (8.525 px high, 40 px header).
+        // Ceilings include grid output, eight-character row names, consensus/
+        // identity bars and rulers: <=840+112+248 at 22 px, and
+        // <=5104+352+744 at 5.5 px. Existing 11 px ceiling is retained.
+        // A 16-column pan preserves this fixture's 16-base phase; returning
+        // past the left edge must clamp back to the original page.
+        for (step, (first, columns, visible_rows, ceiling)) in [
+            (0, 59, 22, 3200),
+            (16, 59, 22, 3200),
+            (16, 30, 14, 1200),
+            (16, 116, 44, 6200),
+            (0, 116, 44, 6200),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            match step {
+                1 => view.pan(176.0),
+                2 => view.zoom_at(view.name_width, 0.0, 2.0),
+                3 => view.zoom_at(view.name_width, 0.0, 0.25),
+                4 => view.pan(-1_000_000.0),
+                _ => {}
+            }
+            view.build(&doc, &theme, &mut frame);
+            assert_eq!(view.start, f64::from(first));
+            let residues: Vec<_> = b"ACGTACGT--ACGTAC"
+                .iter()
+                .copied()
+                .cycle()
+                .skip(usize::try_from(first).unwrap())
+                .take(columns)
+                .collect();
+            let occupied = residues.iter().filter(|&&b| b != b'-').count();
+            let (width, height) = match step {
+                2 => (21.0, 25.0), // one-pixel padding at large letter zoom
+                3 | 4 => (5.5, 7.525),
+                _ => (11.0, 17.05),
+            };
+            assert_eq!(
+                residue_rects(
+                    &frame,
+                    width,
+                    height,
+                    view.header_height() - view.row_height(),
+                ),
+                occupied * visible_rows,
+                "exact grid backgrounds at step {step}"
+            );
+            if step < 3 {
+                assert_residue_glyphs(
+                    &frame,
+                    if step == 2 { 23.0 } else { 14.05 },
+                    view.header_height() - view.row_height(),
+                    &residues.repeat(visible_rows),
+                );
+            }
+            assert!(frame.len() <= ceiling, "alignment transition step {step}");
+        }
+    }
+}
+
+#[test]
+fn genome_pan_and_zoom_rebuild_visible_tracks() {
+    let theme = Theme::default();
+    for len in [4000, 20_000] {
+        let doc = genome(len);
+        for mode in [Mode::Linear, Mode::Wrapped] {
+            let mut view = GenomeView::new(WIDTH, HEIGHT);
+            view.mode = mode;
+            view.bp_per_px = 1.0 / 8.0;
+            let mut frame = Frame::new();
+            // Annotated wrapped tracks are 106 px high: 76 px feature top,
+            // one 14 px lane, 16 px block gap. Four tracks intersect 400 px;
+            // scrolling half a track admits five, including both edge tracks.
+            // 800 px holds 100/50/400 bases at 8/16/2 px per base.
+            for (step, (bases_per_track, cell_width, tracks)) in [
+                (100, 8.0, 4),
+                (100, 8.0, 4),
+                (50, 15.0, 4),
+                (400, 2.0, 4),
+                (400, 2.0, 5),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                match step {
+                    1 if mode == Mode::Wrapped => view.scroll_by(106.0),
+                    1 => view.pan(-128.0, doc.len()), // 16 bases to the right
+                    2 => view.zoom_at(0.0, 2.0, doc.len()),
+                    3 => view.zoom_at(0.0, 0.125, doc.len()),
+                    4 if mode == Mode::Wrapped => view.scroll_by(53.0),
+                    4 => view.pan(1_000_000.0, doc.len()), // clamped 5% margin
+                    _ => {}
+                }
+                view.build(&doc, &theme, &mut frame);
+                // Wrapped build leaves start at the last drawn track; linear
+                // zoom at x=0 retains the panned left boundary until clamped.
+                let start = if mode == Mode::Wrapped {
+                    [300.0, 400.0, 250.0, 1200.0, 1600.0][step]
+                } else {
+                    [0.0, 16.0, 16.0, 16.0, -20.0][step]
+                };
+                assert_eq!(view.start, start, "{mode:?} transition step {step}");
+                let tracks = if mode == Mode::Linear { 1 } else { tracks };
+                let cells = if mode == Mode::Linear && step == 4 {
+                    380 // 400-base span minus the 20-base leading margin
+                } else {
+                    bases_per_track * tracks
+                };
+                assert_eq!(
+                    residue_rects(&frame, cell_width, 20.0, f32::NEG_INFINITY),
+                    cells,
+                    "exact sequence cells: {mode:?} step {step}"
+                );
+                if step < 3 {
+                    assert_residue_glyphs(
+                        &frame,
+                        if step == 2 { 17.0 } else { 16.0 },
+                        f32::NEG_INFINITY,
+                        &b"ACGT"
+                            .iter()
+                            .copied()
+                            .cycle()
+                            .take(cells)
+                            .collect::<Vec<_>>(),
+                    );
+                }
+                assert_eq!(view.hidden, 0);
+                assert!(frame.len() <= 600 * tracks, "{mode:?} step {step}");
+            }
+        }
+    }
+}
