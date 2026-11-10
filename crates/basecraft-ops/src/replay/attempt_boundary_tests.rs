@@ -112,10 +112,10 @@ fn actual_recovery_four_states() {
         );
         match (case, observed.result.as_ref().unwrap_err()) {
             (0, Error::Format(basecraft_io::Error::Io(error))) => {
-                assert!(error.raw_os_error().is_some())
+                assert!(error.raw_os_error().is_some());
             }
             (1 | 4 | 5 | 7, Error::Io(error)) => {
-                assert_eq!(error.to_string(), "injected boundary failure")
+                assert_eq!(error.to_string(), "injected boundary failure");
             }
             (_, error) => panic!("unexpected recovery primary: {error:?}"),
         }
