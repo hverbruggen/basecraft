@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "LocalJobIndex",
-  "description": "Lightweight application-state `jobs/<id>/manifest.json`. The pointed-to\nOperationOutcome in runtime.json stays authoritative; this is not JobRecord.\nExisting selected-field readers and owner/receipt checks remain unchanged.",
+  "description": "Lightweight application-state `jobs/<id>/manifest.json`. The pointed-to\n`OperationOutcome` in runtime.json stays authoritative; this is not `JobRecord`.\nExisting selected-field readers and owner/receipt checks remain unchanged.",
   "type": "object",
   "properties": {
     "diagnostics": {
@@ -75,7 +75,7 @@
   ],
   "$defs": {
     "JobIndexPlugin": {
-      "description": "The existing two-field plugin identity in the local index. Neither Actor's\ntagged representation nor OperationPins has this shape.",
+      "description": "The existing two-field plugin identity in the local index. Neither `Actor`'s\ntagged representation nor `OperationPins` has this shape.",
       "type": "object",
       "properties": {
         "id": {
@@ -92,7 +92,7 @@
       ]
     },
     "JobIndexSource": {
-      "description": "Existing display path wrapper; not a hashed InputReference or a new path rule.",
+      "description": "Existing display path wrapper; not a hashed `InputReference` or a new path rule.",
       "type": "object",
       "properties": {
         "path": {

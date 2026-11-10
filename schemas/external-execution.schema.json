@@ -5,7 +5,7 @@
   "type": "object",
   "properties": {
     "context": {
-      "description": "The public invocation context rejects unknown fields, including in input\nevidence. Retain its complete snapshot for lossless nested extensions;\nproduction still constructs this from the shared InvocationContext.",
+      "description": "The public invocation context rejects unknown fields, including in input\nevidence. Retain its complete snapshot for lossless nested extensions;\nproduction still constructs this from the shared `InvocationContext`.",
       "$ref": "#/$defs/InvocationContext"
     },
     "descriptor_digest": {
@@ -13,7 +13,7 @@
     },
     "effective_parameters": true,
     "execution": {
-      "description": "ExecutionInfo and MethodsInfo currently discard extras. Preserve nested\nprocess evidence rather than introducing a lossy parsing boundary.",
+      "description": "`ExecutionInfo` and `MethodsInfo` currently discard extras. Preserve nested\nprocess evidence rather than introducing a lossy parsing boundary.",
       "anyOf": [
         {
           "$ref": "#/$defs/ExecutionInfo"
@@ -27,7 +27,7 @@
       "type": "string"
     },
     "initiator": {
-      "description": "Existing caller label, not an Actor serialization or a new identity.",
+      "description": "Existing caller label, not an `Actor` serialization or a new identity.",
       "type": "string"
     },
     "interpreter": {
@@ -64,7 +64,7 @@
       "type": "string"
     },
     "tool": {
-      "description": "ToolInfo currently discards extras. Keep the original snapshot; null is\nalways emitted, including on process failure. No production parse changes.",
+      "description": "`ToolInfo` currently discards extras. Keep the original snapshot; null is\nalways emitted, including on process failure. No production parse changes.",
       "anyOf": [
         {
           "$ref": "#/$defs/ToolInfo"

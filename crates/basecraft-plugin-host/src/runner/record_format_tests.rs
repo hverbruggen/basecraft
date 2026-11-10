@@ -9,11 +9,11 @@ fn bytes(value: &Value) -> Vec<u8> {
     bytes
 }
 
-fn capture(name: &str, path: &Path, expected: Value) {
+fn capture(name: &str, path: &Path, expected: &Value) {
     let actual = std::fs::read(path).unwrap();
     let temp = tempfile::tempdir().unwrap();
     let old_path = temp.path().join("original.json");
-    input_evidence::write_json(&old_path, &expected).unwrap();
+    input_evidence::write_json(&old_path, expected).unwrap();
     let original = std::fs::read(old_path).unwrap();
     assert_eq!(actual, original, "original writer oracle: {name}");
     if let Some(root) = std::env::var_os("BASECRAFT_RECORD_CAPTURE") {
@@ -85,7 +85,7 @@ fn original_execution_and_index_writers() {
         capture(
             &format!("execution-{mode}"),
             &receipt,
-            json!({
+            &json!({
                 "schema":1,"operation":prepared.operation.id,
                 "package_version":prepared.operation.package.manifest.version,
                 "package_digest":prepared.operation.package.digest,
@@ -173,7 +173,7 @@ fn original_execution_and_index_writers() {
             capture(
                 &format!("job-index-{label}"),
                 &path,
-                json!({
+                &json!({
                     "schema_version":1,"id":prepared.run.id(),"status":label,
                     "owner_instance":basecraft_platform::process_instance(),"started":prepared.started,
                     // No injected clock in production: validate the time shape above,
@@ -202,7 +202,7 @@ fn original_execution_and_index_writers() {
     capture(
         "execution-workflow",
         &prepared.run.artifact("execution.json").unwrap(),
-        json!({
+        &json!({
             "schema":1,"workflow":"fixture-unknown","initiator":prepared.initiator,
             "executor":"basecraft.host","requested_parameters":prepared.request.parameters,
             "effective_parameters":prepared.effective_parameters(),
@@ -286,7 +286,7 @@ plugin.run()
     capture(
         "execution-workflow-success",
         &prepared.run.artifact("execution.json").unwrap(),
-        json!({
+        &json!({
             "schema":1,"workflow":"asap_alignment","initiator":prepared.initiator,
             "executor":"basecraft.host","requested_parameters":prepared.request.parameters,
             "effective_parameters":prepared.effective_parameters(),
