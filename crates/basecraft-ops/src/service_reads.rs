@@ -16,12 +16,34 @@ pub struct ServiceReadContext {
     registry: PathBuf,
 }
 
+/// Only the finite owner constructs requests; a wire path/action is not a grant.
+/// ```compile_fail
+/// use basecraft_ops::{access::ServiceAction, service_reads::{ServiceReadContext, ServiceReadRequest}};
+/// fn forge(context: &ServiceReadContext) {
+///     let request = ServiceReadRequest { context, action: ServiceAction::ReadPreferences };
+/// }
+/// ```
 pub struct ServiceReadRequest<'a> {
     context: &'a ServiceReadContext,
     action: ServiceAction,
 }
 
 /// Borrows the exact request, so a ticket cannot outlive or move its request.
+/// A ticket is consumed once, and cannot escape the live request lifetime.
+/// ```compile_fail
+/// use basecraft_ops::service_reads::CheckedServiceNamespace;
+/// fn replay(ticket: CheckedServiceNamespace<'_>) {
+///     let first = ticket;
+///     let second = ticket;
+///     drop((first, second));
+/// }
+/// ```
+/// ```compile_fail
+/// use basecraft_ops::service_reads::CheckedServiceNamespace;
+/// fn escape<'a>(ticket: CheckedServiceNamespace<'a>) -> CheckedServiceNamespace<'static> {
+///     ticket
+/// }
+/// ```
 pub struct CheckedServiceNamespace<'a> {
     request: &'a ServiceReadRequest<'a>,
     namespace: ReadNamespace,
