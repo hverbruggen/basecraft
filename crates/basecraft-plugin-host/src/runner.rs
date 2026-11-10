@@ -306,6 +306,8 @@ pub struct PreparedOperation {
     pub context: InvocationContext,
     pub policy: SessionPolicy,
     pub ledger_inputs: Vec<ArtifactRevision>,
+    /// Exact original ledger from which the primary reference was prepared.
+    primary_input_owner: Option<PathBuf>,
     pub initiator: String,
     started: String,
     workflow_registry: Option<Arc<crate::registry::Registry>>,
@@ -788,12 +790,13 @@ impl PreparedOperation {
             });
             if first_input.is_none() {
                 record.source = Some(reference);
-                first_input = Some(record);
+                first_input = Some((record, ledger.directory().to_path_buf()));
             }
         }
         // Reuse a normal primary ledger and its established upstream links. Each
         // contributing original also owns its own normal reference ledger.
-        if let Some(mut input) = first_input {
+        let primary_input_owner = first_input.as_ref().map(|(_, owner)| owner.clone());
+        if let Some((mut input, _)) = first_input {
             input.extra.insert("upstream".into(), json!(upstream));
             mutation.write_input(run.directory(), &input)?;
             // The save guard names a registered run by its run.json and treats a
@@ -944,6 +947,7 @@ impl PreparedOperation {
             context,
             policy,
             ledger_inputs,
+            primary_input_owner,
             initiator,
             started: basecraft_platform::now_rfc3339(),
             workflow_registry,
@@ -1021,7 +1025,11 @@ impl PreparedOperation {
                     .iter()
                     .filter(|(binding, _)| retained_bindings.contains(*binding))
                     .flat_map(|(_, records)| records)
-                    .find(|record| record.source_hash.as_ref() == Some(&source.hash))
+                    .find(|record| {
+                        self.primary_input_owner.as_deref()
+                            == Some(Path::new(&record.run_directory))
+                            && record.source_hash.as_ref() == Some(&source.hash)
+                    })
             {
                 input.extra.insert(
                     "origin_run".into(),
@@ -2424,6 +2432,87 @@ impl PreparedOperation {
 #[cfg(test)]
 mod completed_result_tests {
     use super::*;
+    #[test]
+    fn retained_primary_owner_survives_reversed_evidence_binding_order() {
+        use crate::registry::{Registry, RegistryConfig};
+        let temp = tempfile::tempdir().unwrap();
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/registry-plugin");
+        let package = temp.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        for name in ["plugin.toml", "plugin.py", "operations.json"] {
+            std::fs::copy(fixture.join(name), package.join(name)).unwrap();
+        }
+        let path = package.join("operations.json");
+        let mut contract: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let binding = json!({"view":"bytes", "media_type":"application/octet-stream",
+            "min":1, "max":1, "retain":true});
+        contract["operations"][0]["inputs"] = json!({"a_first":binding, "sources":binding});
+        std::fs::write(path, serde_json::to_vec(&contract).unwrap()).unwrap();
+        let config = RegistryConfig {
+            bundled: temp.path().join("no-bundle"),
+            packages: temp.path().join("plugins"),
+            index: temp.path().join("index.json"),
+        };
+        crate::registry::install(&config, &package).unwrap();
+        let registry = Registry::load(&config).unwrap();
+        std::fs::write(temp.path().join("z.txt"), b"equal originals").unwrap();
+        std::fs::write(temp.path().join("a.txt"), b"equal originals").unwrap();
+        let request: OperationRequest = serde_json::from_value(json!({
+            "operation":"org.example.registry-fixture/count@1",
+            "inputs":{"a_first":[{"kind":"file","path":"z.txt"}],
+                "sources":[{"kind":"file","path":"a.txt"}]},
+            "destinations":{"report":"report.json"}, "parameters":{}
+        }))
+        .unwrap();
+        let operation = registry.resolve(&request.operation, None).unwrap();
+        let mut prepared = PreparedOperation::prepare(
+            operation,
+            request,
+            SessionPolicy::new(temp.path(), true).unwrap(),
+            "ownership probe".into(),
+            None,
+            &registry,
+        )
+        .unwrap();
+        let owner = prepared.context.input_evidence["a_first"][0]
+            .run_directory
+            .clone();
+        let mut first = prepared.context.input_evidence.remove("a_first").unwrap();
+        let mut other = prepared.context.input_evidence.remove("sources").unwrap();
+        assert_ne!(first[0].original_path, other[0].original_path);
+        assert_eq!(first[0].source_hash, other[0].source_hash);
+        // Preparation naturally uses the same BTreeMap order as evidence. This
+        // synthetic permutation exercises delegation independent of that order
+        // on a real registered prepared operation, without a production hook.
+        std::mem::swap(&mut first, &mut other);
+        prepared
+            .context
+            .input_evidence
+            .insert("a_first".into(), first);
+        prepared
+            .context
+            .input_evidence
+            .insert("sources".into(), other);
+        prepared.retain_inputs().unwrap();
+        let primary = input_evidence::read_input(prepared.run.directory()).unwrap();
+        let origin = primary.extra["origin_run"].as_str().unwrap();
+        assert_eq!(
+            prepared
+                .run
+                .directory()
+                .join(origin)
+                .canonicalize()
+                .unwrap(),
+            Path::new(&owner).canonicalize().unwrap(),
+            "binding iteration must not replace the original primary owner"
+        );
+        assert_eq!(
+            std::fs::read(Path::new(&owner).join("preserved-input")).unwrap(),
+            b"equal originals"
+        );
+    }
+
     #[test]
     fn lookup_reports_corrupt_future_and_incomplete_inventory_without_creating_a_store() {
         let tmp = tempfile::tempdir().unwrap();

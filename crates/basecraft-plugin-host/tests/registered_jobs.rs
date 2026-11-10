@@ -13,9 +13,12 @@ fn registry(root: &Path) -> Registry {
     registry_retention(root, false)
 }
 fn registry_retention(root: &Path, retain: bool) -> Registry {
+    registry_inputs(root, retain, None)
+}
+fn registry_inputs(root: &Path, retain: bool, inputs: Option<serde_json::Value>) -> Registry {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/registry-plugin");
-    let fixture = if retain {
+    let fixture = if retain || inputs.is_some() {
         let package = root.join("retained-fixture");
         std::fs::create_dir(&package).unwrap();
         for name in ["plugin.toml", "plugin.py", "operations.json"] {
@@ -24,7 +27,12 @@ fn registry_retention(root: &Path, retain: bool) -> Registry {
         let mut contract: serde_json::Value =
             serde_json::from_slice(&std::fs::read(package.join("operations.json")).unwrap())
                 .unwrap();
-        contract["operations"][0]["inputs"]["sources"]["retain"] = json!(true);
+        if retain {
+            contract["operations"][0]["inputs"]["sources"]["retain"] = json!(true);
+        }
+        if let Some(inputs) = inputs {
+            contract["operations"][0]["inputs"] = inputs;
+        }
         std::fs::write(
             package.join("operations.json"),
             serde_json::to_vec(&contract).unwrap(),
@@ -1194,6 +1202,167 @@ fn retained_inputs_survive_job_drop_and_temporary_source_removal() {
         basecraft_ops::provenance::verify(&temp.path().join("report.json")).unwrap(),
         Vec::<String>::new()
     );
+}
+
+/// Exercise the real registered runner, with equal original bytes but different
+/// paths, ledgers and submitted transformations. Path ordering must not own data.
+#[test]
+fn equal_content_retention_keeps_exact_primary_owner_and_leaf_lifecycles() {
+    use basecraft_ops::input_evidence::{self, AffectedAnalysis, EvidenceConflict, SavePolicy};
+    for retain_primary in [false, true] {
+        for reverse_paths in [false, true] {
+            for policy in [SavePolicy::BreakEvidence, SavePolicy::RemoveAnalysis] {
+                let temp = tempfile::tempdir().unwrap();
+                let (first, other) = if reverse_paths {
+                    ("z.afa", "a.afa")
+                } else {
+                    ("a.afa", "z.afa")
+                };
+                let original = b">row description\nAC-G\n";
+                std::fs::write(temp.path().join(first), original).unwrap();
+                std::fs::write(temp.path().join(other), original).unwrap();
+                let registry = registry_inputs(
+                    temp.path(),
+                    false,
+                    Some(json!({
+                        "a_primary": {"view":"ungapped_fasta", "media_type":"text/x-fasta",
+                            "min":1, "max":1, "retain":retain_primary},
+                        "sources": {"view":"bytes", "media_type":"application/octet-stream",
+                            "min":1, "max":1, "retain":true}
+                    })),
+                );
+                let request = serde_json::from_value(json!({
+                    "operation":"org.example.registry-fixture/count@1",
+                    "inputs":{"a_primary":[{"kind":"file","path":first}],
+                        "sources":[{"kind":"file","path":other}]},
+                    "parameters":{"mode":"normal"}, "destinations":{"report":"report.json"}
+                }))
+                .unwrap();
+                let mut jobs = JobManager::default();
+                let accepted = jobs
+                    .submit(
+                        &registry,
+                        request,
+                        SessionPolicy::new(temp.path(), true).unwrap(),
+                        "equal originals",
+                    )
+                    .unwrap();
+                let outcome = wait(&jobs, &accepted.run_id);
+                assert_eq!(outcome.state, RuntimeState::Completed, "{outcome:?}");
+                let run = Path::new(outcome.evidence.as_ref().unwrap());
+                let execution: serde_json::Value =
+                    serde_json::from_slice(&std::fs::read(run.join("execution.json")).unwrap())
+                        .unwrap();
+                let context = &execution["context"];
+                let evidence = &context["input_evidence"];
+                let a = &evidence["a_primary"][0];
+                let b = &evidence["sources"][0];
+                let owner = Path::new(a["run_directory"].as_str().unwrap());
+                let sibling = Path::new(b["run_directory"].as_str().unwrap());
+                assert_ne!(owner, sibling);
+                assert_ne!(a["original_path"], b["original_path"]);
+                assert_eq!(a["source_hash"], b["source_hash"]);
+                assert_ne!(a["submitted_hash"], a["source_hash"]);
+                assert_eq!(b["submitted_hash"], b["source_hash"]);
+                let primary = input_evidence::read_input(run).unwrap();
+                let source = primary.source.as_ref().unwrap();
+                assert_eq!(
+                    run.join(&source.path).canonicalize().unwrap(),
+                    temp.path().join(first).canonicalize().unwrap()
+                );
+                // This ownership assertion fails on the former hash-only lookup
+                // when only the equal-byte sibling binding is retained.
+                if retain_primary {
+                    let origin = primary.extra["origin_run"].as_str().unwrap();
+                    assert_eq!(
+                        run.join(origin).canonicalize().unwrap(),
+                        owner.canonicalize().unwrap()
+                    );
+                    assert_eq!(primary.state, "preserved");
+                    assert_eq!(
+                        std::fs::read(owner.join("preserved-input")).unwrap(),
+                        original
+                    );
+                } else {
+                    assert!(
+                        !primary.extra.contains_key("origin_run"),
+                        "unretained primary delegated to a distinct equal-byte original"
+                    );
+                    assert_eq!(primary.state, "referenced");
+                    assert_eq!(
+                        input_evidence::read_input(owner).unwrap().state,
+                        "referenced"
+                    );
+                }
+                assert_eq!(
+                    std::fs::read(sibling.join("preserved-input")).unwrap(),
+                    original
+                );
+                let submitted = Path::new(context["inputs"]["a_primary"][0].as_str().unwrap());
+                let basecraft_ops::files::Loaded::Alignment(loaded) =
+                    basecraft_ops::files::load(&temp.path().join(first)).unwrap()
+                else {
+                    panic!("fixture alignment")
+                };
+                let mut expected = Vec::new();
+                basecraft_ops::files::write_ungapped(&loaded.doc, &mut expected).unwrap();
+                assert_eq!(std::fs::read(submitted).unwrap(), expected);
+                assert_eq!(
+                    std::fs::read(Path::new(context["inputs"]["sources"][0].as_str().unwrap()))
+                        .unwrap(),
+                    original
+                );
+                assert!(
+                    basecraft_ops::provenance::verify(&temp.path().join("report.json"))
+                        .unwrap()
+                        .is_empty()
+                );
+                drop(jobs);
+                // Direct leaf lifecycle decisions must not rewrite a distinct
+                // primary/owner. Full logical analysis closure still includes B.
+                let before = std::fs::read(run.join("input.json")).unwrap();
+                let owner_before = std::fs::read(owner.join("input.json")).unwrap();
+                let conflict = EvidenceConflict {
+                    target: temp.path().join(other),
+                    analyses: vec![AffectedAnalysis {
+                        run: sibling.into(),
+                        result: "other leaf".into(),
+                        source_hash: b["source_hash"].as_str().unwrap().into(),
+                        can_preserve: true,
+                        direct: true,
+                        backing_analyses: vec![],
+                    }],
+                    options: vec![policy],
+                };
+                {
+                    let _mutation = input_evidence::Mutation::begin().unwrap();
+                    input_evidence::resolve(&conflict, policy).unwrap();
+                }
+                assert_eq!(std::fs::read(run.join("input.json")).unwrap(), before);
+                assert_eq!(
+                    std::fs::read(owner.join("input.json")).unwrap(),
+                    owner_before
+                );
+                if policy == SavePolicy::BreakEvidence {
+                    assert_eq!(input_evidence::read_input(sibling).unwrap().state, "broken");
+                } else {
+                    assert!(!sibling.exists());
+                }
+                let leaf = input_evidence::read_input(owner).unwrap();
+                let live =
+                    input_evidence::verified_source(owner, leaf.source.as_ref().unwrap()).unwrap();
+                assert_eq!(std::fs::read(live).unwrap(), original);
+                if retain_primary {
+                    std::fs::remove_file(temp.path().join(first)).unwrap();
+                    let retained =
+                        input_evidence::verified_source(owner, leaf.source.as_ref().unwrap())
+                            .unwrap();
+                    assert_eq!(std::fs::read(retained).unwrap(), original);
+                }
+                assert_eq!(std::fs::read(temp.path().join(other)).unwrap(), original);
+            }
+        }
+    }
 }
 
 #[test]
