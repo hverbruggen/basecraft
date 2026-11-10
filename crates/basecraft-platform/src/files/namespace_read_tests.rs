@@ -160,13 +160,13 @@ fn lexical_refusal_and_raw_io() {
             inspect_read_namespace(Path::new(path)),
             Err(NamespaceReadError::Unsupported)
         ));
-        assert!(trace().is_empty());
+        assert_eq!(trace(), []);
     }
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("denied");
     std::fs::write(&path, "data").unwrap();
     let ticket = inspect_read_namespace(&path).unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0)).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o0)).unwrap();
     let result = ticket.open_read();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
     let Err(NamespaceReadError::Io(error)) = result else {
@@ -177,4 +177,39 @@ fn lexical_refusal_and_raw_io() {
     let custom = io::Error::other("symbolic link: misleading text");
     let error = NamespaceReadError::from(custom);
     assert!(matches!(error, NamespaceReadError::Io(_)));
+}
+
+#[test]
+fn intermediate_appearance_and_ancestor_redirect_are_not_absence() {
+    let dir = tempfile::tempdir().unwrap();
+    let parent = dir.path().join("parent");
+    let path = parent.join("still-missing/leaf");
+    let ticket = inspect_read_namespace(&path).unwrap();
+    std::fs::create_dir(&parent).unwrap();
+    assert!(matches!(
+        ticket.open_read(),
+        Err(NamespaceReadError::Changed)
+    ));
+    let ticket = inspect_read_namespace(&path).unwrap();
+    std::fs::rename(&parent, dir.path().join("retained")).unwrap();
+    symlink(dir.path().join("retained"), &parent).unwrap();
+    assert!(matches!(
+        ticket.open_read(),
+        Err(NamespaceReadError::Redirected)
+    ));
+}
+
+#[test]
+fn inaccessible_parent_preserves_original_io() {
+    let dir = tempfile::tempdir().unwrap();
+    let parent = dir.path().join("denied");
+    std::fs::create_dir(&parent).unwrap();
+    std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o0)).unwrap();
+    let result = inspect_read_namespace(&parent.join("leaf"));
+    std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let Err(NamespaceReadError::Io(error)) = result else {
+        panic!("requires ordinary user")
+    };
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    assert!(error.raw_os_error().is_some());
 }

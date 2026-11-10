@@ -26,6 +26,7 @@ pub enum NamespaceReadError {
 
 #[derive(Debug)]
 pub struct ReadNamespace {
+    _private: (),
     #[cfg(unix)]
     inner: unix::Namespace,
 }
@@ -78,7 +79,10 @@ pub fn inspect_read_namespace(path: &Path) -> Result<ReadNamespace, NamespaceRea
     }
     #[cfg(unix)]
     {
-        unix::inspect(path).map(|inner| ReadNamespace { inner })
+        unix::inspect(path).map(|inner| ReadNamespace {
+            _private: (),
+            inner,
+        })
     }
     #[cfg(not(unix))]
     {
@@ -102,12 +106,17 @@ impl ReadNamespace {
 
 #[cfg(unix)]
 mod unix {
-    use super::*;
+    use super::{CheckedAbsence, CheckedRead, CheckedReadFile, NamespaceReadError, ReadNamespace};
     use crate::files::{ObjectIdentity, OrdinaryKind, handle_object_identity};
     use rustix::fs::{AtFlags, CWD, FileType, Mode, OFlags, Stat, openat, statat};
     use std::{
         ffi::OsString,
         os::unix::{ffi::OsStrExt, fs::MetadataExt},
+    };
+    use std::{
+        fs::File,
+        io,
+        path::{Path, PathBuf},
     };
 
     #[derive(Debug)]

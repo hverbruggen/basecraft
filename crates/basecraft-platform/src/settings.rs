@@ -685,9 +685,9 @@ mod tests {
             b"schema_version = 0\n[ui]\nshow_gc = false\n[future]\nvalue = 42\n".to_vec(),
             b"broken = [".to_vec(),
             vec![0xff],
-            vec![b' '; MAX_BYTES as usize + 1],
+            vec![b' '; usize::try_from(MAX_BYTES).unwrap() + 1],
             {
-                let mut bytes = vec![b' '; MAX_BYTES as usize + 1];
+                let mut bytes = vec![b' '; usize::try_from(MAX_BYTES).unwrap() + 1];
                 bytes[0] = 0xff;
                 bytes
             },
