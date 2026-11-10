@@ -235,6 +235,63 @@ def main():
             capture_output=True, text=True, timeout=45)
         assert duplicate_cli.returncode != 0 and not (project / "ambiguous-cli.spart").exists()
         assert not (project / "ambiguous-mcp.spart").exists()
+        # REV-0036 final review: root.join must not collapse relative/absolute
+        # keys before canonical-alias validation, even for equal selections.
+        opened_source = mcp.tool("open", {"path": "first.spart"})
+        assert not opened_source.get("isError"), opened_source
+        def mcp_documents():
+            documents = mcp.tool("documents", {})["structuredContent"]
+            contents = [mcp.tool("read", {"document": doc["document"]})["structuredContent"]
+                        for doc in documents]
+            return documents, contents
+        before_documents = mcp_documents()
+        before_sources = {path: Path(path).read_bytes() for path in paths}
+        for case, absolute_id in (("conflicting", "partition-3"), ("identical", "partition-2")):
+            mixed = {"first.spart": ["partition-2"], paths[0]: [absolute_id],
+                     "second.spart": ["partition-2"]}
+            for ordering, entries in (("forward", mixed), ("reverse", dict(reversed(list(mixed.items()))))):
+                suffix = f"{case}-{ordering}"
+                refused = subprocess.run([str(binary), "delimitation", "combine", *paths,
+                    "--project", str(project), "--output", f"mixed-cli-{suffix}.spart",
+                    "--selection", json.dumps(entries)], cwd=project, env=env,
+                    capture_output=True, text=True, timeout=45)
+                assert refused.returncode != 0, refused.stdout
+                refused = mcp.tool("delimitation_combine", {"paths": paths,
+                    "output": f"mixed-mcp-{suffix}.spart", "selection": entries})
+                assert refused["isError"], refused
+                assert mcp_documents() == before_documents
+                with Session(project, writes=True) as py:
+                    source = py.open("first.spart")["document"]
+                    before = py.documents(), py.state(source), py.read(source)
+                    try:
+                        py.combine_delimitation(paths, f"mixed-python-{suffix}.spart", selection=entries)
+                    except operations.OperationError:
+                        pass
+                    else:
+                        raise AssertionError("Python accepted duplicate relative/absolute selection keys")
+                    assert (py.documents(), py.state(source), py.read(source)) == before
+                try:
+                    delimitation.combine(paths, f"mixed-convenience-{suffix}.spart",
+                                         project=project, selection=entries)
+                except operations.OperationError:
+                    pass
+                else:
+                    raise AssertionError("Python convenience API accepted duplicate aliases")
+                for route in ("cli", "mcp", "python", "convenience"):
+                    output = project / f"mixed-{route}-{suffix}.spart"
+                    assert not output.exists(), output
+                    assert not Path(str(output) + ".basecraft.json").exists(), output
+                assert {path: Path(path).read_bytes() for path in paths} == before_sources
+        # Keep security checks on selection keys before joining them as well.
+        outside = root / "outside.spart"
+        shutil.copyfile(spart, outside)
+        refused = mcp.tool("delimitation_combine", {"paths": paths,
+            "output": "outside-selection.spart", "selection": {str(outside): ["partition-2"]}})
+        assert refused["isError"], refused
+        assert mcp_documents() == before_documents
+        assert not (project / "outside-selection.spart").exists()
+        assert outside.read_bytes() == spart.read_bytes()
+        assert {path: Path(path).read_bytes() for path in paths} == before_sources
         for rejection in (
             {"paths": paths, "output": "mcp.spart"},
             {"paths": paths, "output": "stale.spart", "selection": {paths[1]: ["missing"]}},

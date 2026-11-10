@@ -4,7 +4,7 @@ use basecraft_ops::{DocId, Session};
 use basecraft_protocol::{Actor, Op};
 use serde_json::{Value, json};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, btree_map::Entry},
     io::Write,
     path::{Path, PathBuf},
 };
@@ -272,16 +272,21 @@ impl Server {
                     .map(serde_json::from_value)
                     .transpose()?;
                 let keep = keep
-                    .map(|keep| {
-                        keep.into_iter()
-                            .map(|(path, ids)| {
-                                let text = path.to_str().ok_or("Selection path must be UTF-8")?;
-                                // Validate security here, but preserve aliases until
-                                // shared normalization can reject duplicate keys.
-                                self.path(text)?;
-                                Ok((self.session.root().join(path), ids))
-                            })
-                            .collect::<Result<basecraft_ops::delimitation::CombineSelection>>()
+                    .map(|keep| -> Result<basecraft_ops::delimitation::CombineSelection> {
+                        let mut selected = basecraft_ops::delimitation::CombineSelection::new();
+                        for (path, ids) in keep {
+                            let text = path.to_str().ok_or("Selection path must be UTF-8")?;
+                            self.path(text)?;
+                            // Joining relative and absolute spellings can collide
+                            // before shared canonicalization sees either alias.
+                            match selected.entry(self.session.root().join(path)) {
+                                Entry::Vacant(entry) => { entry.insert(ids); }
+                                Entry::Occupied(_) => return Err(
+                                    "Hypothesis selection names the same input through multiple path aliases".into()
+                                ),
+                            }
+                        }
+                        Ok(selected)
                     })
                     .transpose()?;
                 let doc = basecraft_ops::delimitation::combine_to(
