@@ -60,6 +60,7 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut Report) -> Re
                 .push(format!("{} {} {}: {msg}", e.id, e.op.name(), e.doc));
         };
         if let Op::CreateSequence { name, residues } = &e.op {
+            docs.remove(e.doc.as_str());
             if !safe_key(&e.doc) {
                 problem("unsafe document identity".into());
                 continue;
@@ -74,6 +75,8 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut Report) -> Re
             continue;
         }
         if let Op::Open { path } = &e.op {
+            // A refused baseline must not leave later edits targeting an older document.
+            docs.remove(e.doc.as_str());
             if !safe_key(path) || !safe_key(&e.doc) || path != &e.doc {
                 problem("unsafe or inconsistent document identity".into());
                 continue;
@@ -240,9 +243,15 @@ fn materialise(
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
-        if std::fs::hard_link(&source, &dest).is_err() {
-            std::fs::copy(&source, &dest).map_err(|e| e.to_string())?;
-        }
+        // Always replace with an independent inode. The destination may already
+        // alias a retained input (or contain bytes from an earlier baseline).
+        // Copying onto it in place would truncate the immutable source.
+        basecraft_io::write_atomic(&dest, |writer| {
+            let mut input = std::fs::File::open(&source)?;
+            std::io::copy(&mut input, writer)?;
+            Ok(())
+        })
+        .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -381,4 +390,155 @@ fn recover_entries(
     drop(session);
     std::fs::rename(staging.path(), destination)?;
     Ok(outputs)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn materialise_replaces_aliases_and_different_baselines_without_touching_sources() {
+        let root = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(objects_dir(root.path())).unwrap();
+        for retained in [false, true] {
+            let bytes = if retained { b"retained" } else { b"original" };
+            let hash = basecraft_io::hash_bytes(bytes);
+            let source = if retained {
+                objects_dir(root.path()).join(hash.strip_prefix("b3:").unwrap())
+            } else {
+                root.path().join("a.fa")
+            };
+            std::fs::write(&source, bytes).unwrap();
+            let dest = work.path().join("a.fa");
+            if dest.exists() {
+                std::fs::remove_file(&dest).unwrap();
+            }
+            std::fs::hard_link(&source, &dest).unwrap();
+            let inputs = vec![("a.fa".into(), hash.clone())];
+            materialise(root.path(), work.path(), &inputs).unwrap();
+            assert_eq!(std::fs::read(&dest).unwrap(), bytes);
+            // Editing scratch must also be independent of the retained inode.
+            std::fs::write(&dest, "scratch edit").unwrap();
+            assert_eq!(basecraft_io::hash_file(&source).unwrap(), hash);
+            materialise(root.path(), work.path(), &inputs).unwrap();
+            assert_eq!(std::fs::read(&dest).unwrap(), bytes);
+            assert_eq!(basecraft_io::hash_file(&source).unwrap(), hash);
+        }
+    }
+
+    #[test]
+    fn materialise_failure_preserves_destination_and_cleans_temporary_files() {
+        let root = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(objects_dir(root.path())).unwrap();
+        let hash = basecraft_io::hash_bytes(b"expected");
+        let object = objects_dir(root.path()).join(hash.strip_prefix("b3:").unwrap());
+        std::fs::write(&object, "corrupt").unwrap();
+        let inputs = vec![("a.fa".into(), hash)];
+        let dest = work.path().join("a.fa");
+        std::fs::write(&dest, "previous").unwrap();
+        assert!(materialise(root.path(), work.path(), &inputs).is_err());
+        assert_eq!(std::fs::read(&object).unwrap(), b"corrupt");
+        assert_eq!(std::fs::read(&dest).unwrap(), b"previous");
+        std::fs::remove_file(&object).unwrap();
+        assert!(materialise(root.path(), work.path(), &inputs).is_err());
+        std::fs::write(root.path().join("a.fa"), "changed").unwrap();
+        assert!(materialise(root.path(), work.path(), &inputs).is_err());
+        // Force atomic persistence failure after the temporary copy is written.
+        std::fs::write(root.path().join("a.fa"), "expected").unwrap();
+        std::fs::remove_file(&dest).unwrap();
+        std::fs::create_dir(&dest).unwrap();
+        assert!(materialise(root.path(), work.path(), &inputs).is_err());
+        assert_eq!(std::fs::read_dir(work.path()).unwrap().count(), 1);
+        assert_eq!(
+            std::fs::read(root.path().join("a.fa")).unwrap(),
+            b"expected"
+        );
+        for rel in ["../escape", "/absolute"] {
+            assert!(
+                materialise(
+                    root.path(),
+                    work.path(),
+                    &[(rel.into(), inputs[0].1.clone())]
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn refused_baselines_invalidate_previous_mapping() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("a.fa");
+        std::fs::write(&path, ">a\nACGT\n").unwrap();
+        let mut session = Session::new(root.path());
+        let doc = session.open(&path).unwrap();
+        session
+            .apply(
+                doc,
+                Op::SeqReplace {
+                    start: 0,
+                    end: 1,
+                    residues: "T".into(),
+                },
+            )
+            .unwrap();
+        session.flush().unwrap();
+        let entries = log::read_all(root.path()).unwrap();
+        let baseline = entries
+            .iter()
+            .find(|e| matches!(e.op, Op::Open { .. }))
+            .unwrap();
+        let edit = entries
+            .iter()
+            .find(|e| matches!(e.op, Op::SeqReplace { .. }))
+            .unwrap();
+        let mut attempts = Vec::new();
+        let mut missing = baseline.clone();
+        missing.result.hashes[0].1 = basecraft_io::hash_bytes(b"missing");
+        attempts.push(missing);
+        let mut unsafe_open = baseline.clone();
+        unsafe_open.op = Op::Open {
+            path: "../escape".into(),
+        };
+        attempts.push(unsafe_open);
+        let mut invalid_create = baseline.clone();
+        invalid_create.op = Op::CreateSequence {
+            name: "invalid name".into(),
+            residues: "!".into(),
+        };
+        attempts.push(invalid_create);
+        let mut divergent_create = baseline.clone();
+        divergent_create.op = Op::CreateSequence {
+            name: "new".into(),
+            residues: "ACGTACGT".into(),
+        };
+        attempts.push(divergent_create);
+        for attempt in attempts {
+            let mut report = Report::default();
+            replay_session(root.path(), &[baseline, &attempt, edit], &mut report).unwrap();
+            assert_eq!(report.problems.len(), 2, "{report:#?}");
+            assert!(
+                report.problems[1].contains("document wasn't opened"),
+                "{report:#?}"
+            );
+            let destination = root.path().join("recovered");
+            assert!(
+                recover_entries(
+                    root.path(),
+                    &destination,
+                    vec![baseline.clone(), attempt, edit.clone()]
+                )
+                .is_err()
+            );
+            assert!(!destination.exists());
+            assert!(!std::fs::read_dir(root.path()).unwrap().any(|e| {
+                e.unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".basecraft-recover-")
+            }));
+        }
+    }
 }
