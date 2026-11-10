@@ -66,10 +66,9 @@ fn unchanged(session: &Session, id: DocId, before: &basecraft_io::genbank::Recor
 
 #[test]
 fn current_source_is_verified_even_with_a_known_object() {
-    let Some(root) = crate::isolated_profile::enter(concat!(
-        module_path!(),
-        "::current_source_is_verified_even_with_a_known_object"
-    )) else {
+    let Some(root) = crate::isolated_profile::enter(
+        "session::retention_tests::current_source_is_verified_even_with_a_known_object",
+    ) else {
         return;
     };
     for known in [false, true] {
@@ -152,10 +151,9 @@ fn current_source_is_verified_even_with_a_known_object() {
 
 #[test]
 fn acquisition_boundary_keeps_verified_bytes_not_later_path_contents() {
-    let Some(root) = crate::isolated_profile::enter(concat!(
-        module_path!(),
-        "::acquisition_boundary_keeps_verified_bytes_not_later_path_contents"
-    )) else {
+    let Some(root) = crate::isolated_profile::enter(
+        "session::retention_tests::acquisition_boundary_keeps_verified_bytes_not_later_path_contents",
+    ) else {
         return;
     };
     for stage in [Stage::BeforeRead, Stage::AfterRead] {
@@ -188,10 +186,9 @@ fn acquisition_boundary_keeps_verified_bytes_not_later_path_contents() {
 
 #[test]
 fn real_write_failures_preserve_baseline_and_retry_once() {
-    let Some(root) = crate::isolated_profile::enter(concat!(
-        module_path!(),
-        "::real_write_failures_preserve_baseline_and_retry_once"
-    )) else {
+    let Some(root) = crate::isolated_profile::enter(
+        "session::retention_tests::real_write_failures_preserve_baseline_and_retry_once",
+    ) else {
         return;
     };
     for failure in 0..4 {
@@ -245,10 +242,9 @@ fn real_write_failures_preserve_baseline_and_retry_once() {
 
 #[test]
 fn actual_limit_growth_and_changed_oversize_precedence() {
-    let Some(root) = crate::isolated_profile::enter(concat!(
-        module_path!(),
-        "::actual_limit_growth_and_changed_oversize_precedence"
-    )) else {
+    let Some(root) = crate::isolated_profile::enter(
+        "session::retention_tests::actual_limit_growth_and_changed_oversize_precedence",
+    ) else {
         return;
     };
     let session = Session::new(&root);
@@ -308,10 +304,9 @@ fn actual_limit_growth_and_changed_oversize_precedence() {
 
 #[test]
 fn retention_modes_and_known_objects_keep_their_read_counts() {
-    let Some(root) = crate::isolated_profile::enter(concat!(
-        module_path!(),
-        "::retention_modes_and_known_objects_keep_their_read_counts"
-    )) else {
+    let Some(root) = crate::isolated_profile::enter(
+        "session::retention_tests::retention_modes_and_known_objects_keep_their_read_counts",
+    ) else {
         return;
     };
     for mode in 0..5 {
@@ -376,10 +371,9 @@ fn retention_modes_and_known_objects_keep_their_read_counts() {
 
 #[test]
 fn post_verification_errors_keep_their_native_stage() {
-    let Some(root) = crate::isolated_profile::enter(concat!(
-        module_path!(),
-        "::post_verification_errors_keep_their_native_stage"
-    )) else {
+    let Some(root) = crate::isolated_profile::enter(
+        "session::retention_tests::post_verification_errors_keep_their_native_stage",
+    ) else {
         return;
     };
     for mode in 0..3 {
@@ -448,10 +442,9 @@ fn post_verification_errors_keep_their_native_stage() {
 
 #[test]
 fn proposals_export_save_and_empty_creation_use_the_shared_promotion() {
-    let Some(root) = crate::isolated_profile::enter(concat!(
-        module_path!(),
-        "::proposals_export_save_and_empty_creation_use_the_shared_promotion"
-    )) else {
+    let Some(root) = crate::isolated_profile::enter(
+        "session::retention_tests::proposals_export_save_and_empty_creation_use_the_shared_promotion",
+    ) else {
         return;
     };
     for route in 0..3 {
