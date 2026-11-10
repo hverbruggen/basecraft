@@ -769,7 +769,6 @@ impl SangerReviewSession {
         let outcome = (|| -> crate::Result<()> {
             // Preparing support and exact bytes does not mutate the live review.
             let prepared = write.prepare(self)?;
-            self.evidence.clone_from(&write.evidence);
             let replacing = crate::save_guard::Revision::check(self.accepted.as_ref(), path)?;
             prepared.publish(replacing)?;
             self.accepted = Some(crate::save_guard::Revision::accepted(path, prepared.bytes()).map_err(|error| invalid(format!("review data saved; target verification incomplete: {error}; repair evidence: {}", write.run.directory().display())))?);
@@ -795,6 +794,7 @@ impl SangerReviewSession {
                 recovery.map_or_else(|e| e, |()| "retained".into())
             )));
         }
+        self.evidence.clone_from(&write.evidence);
         self.anchor = absolute;
         self.checkpoint().map_err(|error| invalid(format!("review data and binding saved; recovery checkpoint incomplete: {error}; repair evidence: {}", write.run.directory().display())))
     }
