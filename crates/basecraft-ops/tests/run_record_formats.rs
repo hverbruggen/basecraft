@@ -218,8 +218,8 @@ fn run_examples_roundtrip_and_preserve_extensions() {
 
 #[test]
 fn original_extraction_run_writer_inventory() {
-    // This sixth writer is inventoried separately from the five authorized
-    // constructor substitutions. Its production literal remains unchanged.
+    // Captured while the sixth production constructor was still the original
+    // literal, before the user expanded scope to include its substitution.
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("source.fasta");
     std::fs::write(&source, b">sample\nACGT\n").unwrap();

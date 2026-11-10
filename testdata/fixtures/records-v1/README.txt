@@ -73,10 +73,11 @@ inputs, allocated run identity and expected output bytes (not run/publication
 JSON). Round-trip tests additionally exercise unknown status and nested extras;
 those mutations are tests, not original writer captures. Representative shapes
 only; not exhaustive OS/path/error coverage. Extraction's additional constructor
-is inventoried in schemas/README.md and remains outside the five-hunk slice.
+is inventoried in schemas/README.md; the user subsequently authorized its inclusion.
 
 run-extracted.json: ninth raw original-writer example from Session::extract,
 captured at 5b9fc1f, after the other five substitutions. Extraction production
-source is identical to baseline a856d62; its literal has not been replaced.
-This separately identified inventory capture has no normalization. The type
-round-trips it too; five-constructor scope is not claimed to type all six sites.
+source at that capture is identical to baseline a856d62. The user subsequently
+expanded scope to replace this sixth constructor with the same AnalysisRun type.
+This separately identified original capture has no normalization; the type
+round-trips it too, and the runtime oracle now checks the sixth typed writer.

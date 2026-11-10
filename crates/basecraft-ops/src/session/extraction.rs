@@ -108,9 +108,17 @@ impl Session {
         if let Some(run) = &run {
             crate::input_evidence::write_json(
                 &run.artifact("run.json")?,
-                &serde_json::json!({
-                    "schema_version":1,"id":run.id(),"result":path.file_name().and_then(|name| name.to_str()),"status":"saved"
-                }),
+                &serde_json::to_value(basecraft_protocol::records::AnalysisRun {
+                    schema_version: 1,
+                    id: run.id().into(),
+                    result: path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .map(str::to_owned),
+                    status: basecraft_protocol::records::AnalysisRunStatus::Saved,
+                    outputs: None,
+                    extra: BTreeMap::new(),
+                })?,
             )?;
             crate::input_evidence::register(run)?;
         }

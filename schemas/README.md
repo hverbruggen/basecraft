@@ -32,7 +32,7 @@ is changed here outside the selected recovery, store marker, version-one registr
 | `recovery-integrity-error.json`: verified length and durability diagnostic | R / project | `LogWriter::append_batch` failed rollback | `replay::recover` refuses poisoned recovery | `schema_version: 1` | protocol `records::RecoveryIntegrityError` / [recovery-integrity-error.schema.json](recovery-integrity-error.schema.json) | Typed round-trip keeps extras; reader checks presence; no rewrite |
 | `manifest.json`, `records/<publication-id>.json`: publication, ancestry, artifacts, events, effective edits, completeness | P / A | [provenance.rs](../crates/basecraft-ops/src/provenance.rs) `publish`, `publish_operation`; session publication routines | `inspect`, `verify`, `package`; `document_record::read_origin`, evidence ancestry readers | `schema_version: 1` | protocol `Publication` / [provenance-publication.schema.json](provenance-publication.schema.json) | Rejected at publication and several nested record types; `InputReference.extra` kept |
 | `input.json`: source evidence, submitted hash/size, transformation, evidence state, optional ancestry/ledger references | A / P | [input_evidence.rs](../crates/basecraft-ops/src/input_evidence.rs) `reference_input_with_dependencies`, `link_generated_input`, `resolve`, `relink`; session/provenance/runner/Sanger adapters | `read_input`, `conflicts_in`, `verified_source`, packaging/ancestry readers | `schema_version: 1` | ops `SubmittedInput`; reuses protocol `InputReference`, `FileStamp`; no own schema | Kept via `extra` on input/reference; source stamp has no extra map; evidence state still string |
-| `run.json`: id, result name, status and sometimes outputs | A | `Session::save_inner`, `publish_referenced_analysis`, `publish_extraction`; `input_evidence` reference/generated helpers; runner `prepare` | `input_evidence::result_name`, `scan_run`; artifact binding | `schema_version: 1` | protocol `records::AnalysisRun` / [analysis-run.schema.json](analysis-run.schema.json); extraction constructor remains literal pending scope allocation | Selective `Value` reads unchanged; typed round-trip retains unknown status/extras; outputs omitted or array, result null or string; fresh records |
+| `run.json`: id, result name, status and sometimes outputs | A | `Session::save_inner`, `publish_referenced_analysis`, `publish_extraction`; `input_evidence` reference/generated helpers; runner `prepare` | `input_evidence::result_name`, `scan_run`; artifact binding | `schema_version: 1` | protocol `records::AnalysisRun` / [analysis-run.schema.json](analysis-run.schema.json) | Selective `Value` reads unchanged; typed round-trip retains unknown status/extras; outputs omitted or array, result null or string; fresh records |
 | `store.json`: analysis namespace marker | `.basecraft/analyses-v1` | [analysis_store.rs](../crates/basecraft-ops/src/analysis_store.rs) `ArtifactRun::create`, compact JSON plus newline | `ArtifactRun::validate_store` | `format: basecraft.analysis-store`, `schema_version: 1` | protocol `StoreMarker` / [store-marker.schema.json](store-marker.schema.json) | Top-level extras kept by type; validation ignores extras; marker not rewritten |
 | Result binding (hash-derived filename): run, result filename/hash | `.basecraft/analyses-v1` binding namespace | `ArtifactRun::bind` | `ArtifactRun::for_result` | `schema_version: 1` | protocol `records::ResultBinding` / [result-binding.schema.json](result-binding.schema.json) | Typed round-trip keeps extras; selective reads; fresh writes |
 | `analysis-stores.json`: absolute known store paths | C state | `input_evidence::register` | `store_registry`, `stores`, save conflict scan | `schema_version: 1` | protocol `StoreRegistry` / [store-registry.schema.json](store-registry.schema.json) | Top-level extras kept on registration update; absolute path array/count validated |
@@ -239,7 +239,7 @@ module boundaries, typed errors and writer-version policy remain separate work.
 strings. These are distinct from `runtime.json` lifecycle states. Result is always
 emitted as string or null. Outputs are omitted before referenced publication,
 then present as an array (including an empty array). No field/version/policy is
-added; five constructors retain recursively sorted pretty JSON plus one newline
+added; all six constructors retain recursively sorted pretty JSON plus one newline
 through Value and the existing atomic writer. Existing selective readers are
 unchanged; fresh writes do not merge older extras.
 
@@ -265,8 +265,8 @@ A ninth raw example (`run-extracted.json`) captures this unchanged writer throug
 `Session::extract`, and round-trips through the same AnalysisRun type. Its capture
 was taken after the other five substitutions, while extraction still matched
 the baseline production source.
-Its literal is recorded but remains unchanged under the assigned five-constructor
-scope pending coordinator allocation. Scientific producer `<result>.run.json`
+The user explicitly expanded scope to include this sixth constructor after its
+original capture. All six constructors now use the one shared record type. Scientific producer `<result>.run.json`
 files are separate formats listed above, not analysis-store run records.
 SubmittedInput/evidence states, remaining records/module boundaries, typed errors,
 writer-version/replay policy, runner stages and user compatibility decisions
