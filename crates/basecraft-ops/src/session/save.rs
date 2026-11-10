@@ -279,16 +279,15 @@ impl Session {
                             .content
                             .as_document()
                             .saved_companion(&target),
-                    ) {
-                        if basecraft_io::hash_file(&sidecar).ok().as_ref() == Some(expected_sidecar)
-                        {
-                            let key = self.relative(&sidecar);
-                            self.docs[id.0].absent_sidecars.retain(|p| *p != key);
-                            self.docs[id.0].accepted_hashes.retain(|(p, _)| *p != key);
-                            self.docs[id.0]
-                                .accepted_hashes
-                                .push((key, expected_sidecar.clone()));
-                        }
+                    ) && basecraft_io::hash_file(&sidecar).ok().as_ref()
+                        == Some(expected_sidecar)
+                    {
+                        let key = self.relative(&sidecar);
+                        self.docs[id.0].absent_sidecars.retain(|p| *p != key);
+                        self.docs[id.0].accepted_hashes.retain(|(p, _)| *p != key);
+                        self.docs[id.0]
+                            .accepted_hashes
+                            .push((key, expected_sidecar.clone()));
                     }
                 }
                 hooks.project(error, |error| invalid(format!(
