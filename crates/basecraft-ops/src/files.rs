@@ -141,7 +141,7 @@ impl Loaded {
             Self::Alignment(opened) => Some(opened),
             Self::Tree(opened) => Some(opened),
             Self::Sequence(opened) => Some(opened),
-            Self::Delimitation(_) => None,
+            Self::Delimitation(work) => Some(work),
         }
     }
 
@@ -152,7 +152,7 @@ impl Loaded {
             Self::Alignment(opened) => Some(opened),
             Self::Tree(opened) => Some(opened),
             Self::Sequence(opened) => Some(opened),
-            Self::Delimitation(_) => None,
+            Self::Delimitation(work) => Some(work),
         }
     }
 }

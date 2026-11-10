@@ -1,6 +1,6 @@
 //! Kind-specific behavior borrowed by the shared Session.
 //!
-//! Migration is incremental: Submission, Metadata, Alignment, Tree and Sequence implement this interface today.
+//! Migration is incremental: Submission, Metadata, Alignment, Tree, Sequence and Delimitation implement this interface today.
 //! `Loaded::as_document` returns `None` for legacy kinds. Their existing paths
 //! remain until each is migrated; no placeholder implementations are required.
 //! Payloads are not constrained to a single sequence/record, so future result,
@@ -16,6 +16,7 @@ use crate::files::Format;
 use crate::session::Inverse;
 
 mod alignment;
+mod delimitation;
 mod metadata;
 mod sequence;
 mod submission;

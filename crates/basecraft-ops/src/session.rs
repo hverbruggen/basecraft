@@ -461,7 +461,7 @@ impl Session {
             Loaded::Tree(opened) => opened.revision(self.docs[id.0].generation),
             Loaded::Submission(sub) => sub.revision(self.docs[id.0].generation),
             Loaded::Metadata(opened) => opened.revision(self.docs[id.0].generation),
-            Loaded::Delimitation(_) => self.docs[id.0].generation,
+            Loaded::Delimitation(work) => work.revision(self.docs[id.0].generation),
         }
     }
 
@@ -497,7 +497,7 @@ impl Session {
         match &self.docs[id.0].content {
             Loaded::Sequence(o) => o.fingerprint(),
             Loaded::Alignment(o) => o.fingerprint(),
-            Loaded::Delimitation(work) => proposals::delimitation_state(work),
+            Loaded::Delimitation(work) => work.fingerprint(),
             Loaded::Metadata(opened) => opened.fingerprint(),
             Loaded::Submission(sub) => sub.fingerprint(),
             Loaded::Tree(o) => o.fingerprint(),
@@ -1181,8 +1181,6 @@ impl Session {
             self.check_save_source(id)?;
         }
         let format = files::Format::from_path(&target)?;
-        let mut hashes = Vec::new();
-        let mut main_hash = String::new();
         let opened = match &self.docs[id.0].content {
             Loaded::Submission(sub) => {
                 let hashes = sub
@@ -1201,108 +1199,11 @@ impl Session {
                 return self.log_save(id, &target, hashes);
             }
             Loaded::Delimitation(work) => {
-                if format != files::Format::Delimitation {
-                    return Err(invalid(
-                        "a delimitation workspace requires SPART or SPART-XML",
-                    ));
-                }
-                let new_run = if crate::analysis_store::ArtifactRun::for_result(&target)?.is_none()
-                {
-                    Some(crate::analysis_store::ArtifactRun::create(
-                        &target,
-                        &ulid::Ulid::generate().to_string(),
-                    )?)
-                } else {
-                    None
-                };
-                let xml = files::delimitation_xml(&target);
-                basecraft_io::write_atomic(&target, |w| {
-                    let mut hw = HashingWriter::new(w);
-                    files::write_delimitation(work, xml, &mut hw)?;
-                    main_hash = hw.hash();
-                    Ok(())
-                })?;
-                let sidecar = if let Some(run) = &new_run {
-                    run.artifact(&format!(
-                        "{}.basecraft.json",
-                        target
-                            .file_name()
-                            .and_then(|n| n.to_str())
-                            .ok_or_else(|| invalid("SPART filename must be UTF-8"))?
-                    ))?
-                } else {
-                    files::tree_sidecar(&target)
-                };
-                let mut side_hash = String::new();
-                basecraft_io::write_atomic(&sidecar, |w| {
-                    let mut hw = HashingWriter::new(w);
-                    files::write_delimitation_sidecar_at(work, &main_hash, &target, &mut hw)?;
-                    side_hash = hw.hash();
-                    Ok(())
-                })?;
-                if let Some(run) = &new_run {
-                    let input = crate::input_evidence::SubmittedInput {
-                        schema_version: 1,
-                        source: None,
-                        submitted_hash: main_hash.clone(),
-                        submitted_size: std::fs::metadata(&target)?.len(),
-                        transformation: "identity-v1".into(),
-                        state: "generated".into(),
-                        extra: std::collections::BTreeMap::new(),
-                    };
-                    basecraft_io::write_atomic(&run.artifact("submitted.fasta")?, |w| {
-                        std::io::copy(&mut std::fs::File::open(&target)?, w)?;
-                        Ok(())
-                    })?;
-                    crate::input_evidence::write_json(&run.artifact("input.json")?, &input)?;
-                    crate::input_evidence::write_json(
-                        &run.artifact("run.json")?,
-                        &serde_json::to_value(basecraft_protocol::records::AnalysisRun {
-                            schema_version: 1,
-                            id: run.id().into(),
-                            result: target
-                                .file_name()
-                                .and_then(|n| n.to_str())
-                                .map(str::to_owned),
-                            status: basecraft_protocol::records::AnalysisRunStatus::Saved,
-                            outputs: None,
-                            extra: std::collections::BTreeMap::new(),
-                        })?,
-                    )?;
-                    crate::input_evidence::register(run)?;
-                    run.bind(&target)?;
-                }
-                if let Some(run) = crate::analysis_store::ArtifactRun::for_result(&target)? {
-                    let mut input = crate::input_evidence::read_input(&run)?;
-                    let mut upstream = input
-                        .extra
-                        .get("upstream")
-                        .and_then(serde_json::Value::as_array)
-                        .cloned()
-                        .unwrap_or_default();
-                    for dependency in crate::delimitation::dependencies(work)? {
-                        let dependency = dependency.canonicalize()?;
-                        if dependency == run {
-                            continue;
-                        }
-                        let bytes =
-                            crate::provenance::read_record(&dependency.join("manifest.json"))?;
-                        let publication: basecraft_protocol::provenance::Publication =
-                            serde_json::from_slice(&bytes)?;
-                        let reference = serde_json::json!({"bundle":crate::input_evidence::relative(&run, &dependency)?,"id":publication.id,"hash":basecraft_io::hash_bytes(&bytes)});
-                        if !upstream.contains(&reference) {
-                            upstream.push(reference);
-                        }
-                    }
-                    if !upstream.is_empty() {
-                        input
-                            .extra
-                            .insert("upstream".into(), serde_json::json!(upstream));
-                    }
-                    crate::input_evidence::write_json(&run.join("input.json"), &input)?;
-                }
-                hashes.push((self.relative(&target), main_hash));
-                hashes.push((self.relative(&sidecar), side_hash));
+                let hashes = work
+                    .write(&target, format, &self.storage_root)?
+                    .into_iter()
+                    .map(|(path, hash)| (self.relative(&path), hash))
+                    .collect();
                 return self.log_save(id, &target, hashes);
             }
             Loaded::Alignment(a) => {
@@ -2169,17 +2070,7 @@ impl Session {
         let content = &self.docs[id.0].content;
         match content {
             Loaded::Delimitation(work) => {
-                let mut main = HashingWriter::new(std::io::sink());
-                files::write_delimitation(work, files::delimitation_xml(target), &mut main)?;
-                let hash = main.hash();
-                let mut side = HashingWriter::new(std::io::sink());
-                files::write_delimitation_sidecar_at(
-                    work,
-                    &hash,
-                    &self.resolve(&target.to_string_lossy()),
-                    &mut side,
-                )?;
-                Ok(vec![hash, side.hash()])
+                work.saved_hashes(&self.resolve(&target.to_string_lossy()))
             }
             migrated @ (Loaded::Sequence(_)
             | Loaded::Submission(_)
@@ -2383,7 +2274,7 @@ impl Session {
     fn execute(&mut self, id: DocId, op: &Op) -> Result<(Inverse, Option<FeatureId>)> {
         match &mut self.docs[id.0].content {
             Loaded::Sequence(o) => o.apply(op),
-            Loaded::Delimitation(work) => proposals::execute_delimitation(work, op),
+            Loaded::Delimitation(work) => work.apply(op),
             Loaded::Metadata(opened) => opened.apply(op),
             Loaded::Submission(sub) => sub.apply(op),
             Loaded::Alignment(a) => a.apply(op),
@@ -2460,15 +2351,10 @@ impl Session {
         match (&mut self.docs[id.0].content, &applied.inverse) {
             (Loaded::Alignment(a), inverse) => a.revert(inverse)?,
             (Loaded::Tree(t), inverse) => t.revert(inverse)?,
-            (Loaded::Delimitation(work), Inverse::Delimitation(before)) => {
-                *work = (**before).clone();
-            }
+            (Loaded::Delimitation(work), inverse) => work.revert(inverse)?,
             (Loaded::Metadata(opened), inverse) => opened.revert(inverse)?,
             (Loaded::Submission(sub), inverse) => sub.revert(inverse)?,
             (Loaded::Sequence(o), inverse) => o.revert(inverse)?,
-            (Loaded::Delimitation(_), _) => {
-                return Err(invalid("undo of the wrong kind of edit"));
-            }
         }
         self.docs[id.0].generation += 1;
         let of = applied.entry_id.clone();
@@ -2644,11 +2530,7 @@ fn restore_inverse(content: &mut Loaded, inverse: &Inverse) -> Result<()> {
     if let Some(document) = content.as_document_mut() {
         return document.revert(inverse);
     }
-    match (content, inverse) {
-        (Loaded::Delimitation(work), Inverse::Delimitation(before)) => *work = (**before).clone(),
-        _ => return Err(invalid("edit rollback has incompatible document type")),
-    }
-    Ok(())
+    Err(invalid("edit rollback has incompatible document type"))
 }
 
 /// Edits whose log entries can grow into a burst.
