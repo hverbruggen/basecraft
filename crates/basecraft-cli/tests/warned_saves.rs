@@ -171,3 +171,30 @@ with Session(project, writes=True) as session:
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn missing_document_save_errors_keep_their_typed_code() {
+    let Some(root) = isolated_profile::enter("missing_document_save_errors_keep_their_typed_code")
+    else {
+        return;
+    };
+    let output = Command::new("python3")
+        .arg(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/unknown_save_document_conformance.py"),
+        )
+        .arg(&root)
+        .env("BASECRAFT", env!("CARGO_BIN_EXE_basecraft"))
+        .env(
+            "PYTHONPATH",
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../python/src"),
+        )
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

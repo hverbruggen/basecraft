@@ -331,9 +331,7 @@ impl Server {
                 Ok(self.state(doc))
             }
             "save" | "save_check" => {
-                let doc = self
-                    .doc(args)
-                    .map_err(|e| basecraft_ops::Error::Invalid(e.to_string()))?;
+                let doc = self.doc(args)?;
                 let path = args
                     .get("path")
                     .map(|value| {
