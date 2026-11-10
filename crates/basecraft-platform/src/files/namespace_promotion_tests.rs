@@ -165,7 +165,7 @@ fn raw_rename_failure_preserves_os_error() {
     let retained = root.path().join("retained");
     let old = source.clone();
     hook(Seam::BeforeRename, move || {
-        std::fs::rename(old, retained).unwrap()
+        std::fs::rename(old, retained).unwrap();
     });
     let Err(DirectoryPromotionError::NotMoved(NamespaceReadError::Io(error))) =
         src.promote_directory_to(dst)
@@ -241,4 +241,40 @@ fn source_replaced_at_syscall_seam_cannot_mint_valid_observation() {
         events(),
         [Seam::BeforePrecheck, Seam::BeforeRename, Seam::AfterRename]
     );
+}
+
+#[test]
+fn distinct_retained_parents_and_destination_parent_substitution() {
+    for replace in [false, true] {
+        let (root, source, _) = fixture();
+        let parent = root.path().join("other-parent");
+        std::fs::create_dir(&parent).unwrap();
+        let destination = parent.join("destination");
+        let src = observe(&source);
+        let identity = src.metadata().unwrap().identity().clone();
+        let dst = observe(&destination);
+        if replace {
+            let saved = root.path().join("saved-parent");
+            hook(Seam::BeforePrecheck, move || {
+                std::fs::rename(&parent, saved).unwrap();
+                std::fs::create_dir(parent).unwrap();
+            });
+        }
+        let result = src.promote_directory_to(dst);
+        if replace {
+            assert!(matches!(result, Err(DirectoryPromotionError::NotMoved(_))));
+            assert!(source.is_dir());
+            assert!(!destination.exists());
+            assert_eq!(events(), [Seam::BeforePrecheck]);
+        } else {
+            let moved = result.unwrap();
+            moved.destination().recheck().unwrap();
+            assert_eq!(
+                moved.destination().metadata().unwrap().identity(),
+                &identity
+            );
+            assert!(!source.exists());
+            assert!(destination.is_dir());
+        }
+    }
 }

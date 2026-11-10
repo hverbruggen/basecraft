@@ -235,6 +235,13 @@ impl TargetNamespace {
     ///     let replay = source.promote_directory_to(destination);
     /// }
     /// ```
+    /// ```compile_fail
+    /// use basecraft_platform::files::TargetNamespace;
+    /// fn reuse_destination(source: TargetNamespace, destination: TargetNamespace) {
+    ///     let result = source.promote_directory_to(destination);
+    ///     destination.recheck();
+    /// }
+    /// ```
     pub fn promote_directory_to(
         self,
         destination: TargetNamespace,
