@@ -51,7 +51,7 @@ ApplicationWindow {
         const out = []
         for (let i = 0; i < openFiles.count; i++) {
             const d = window.documentAt(i)
-            if (d && d.controller.dirty) out.push(i)
+            if (d && d.controller.dirty) out.push(documentTarget(i))
         }
         return out
     }
@@ -84,6 +84,19 @@ ApplicationWindow {
         if (index < 0 || index >= openFiles.count) return null
         const slot = docs.itemAt(index)
         return slot && slot.adoptedSlot === true ? (slot.ready ? slot.documentView : null) : slot
+    }
+    // Consent belongs to a tab lifetime and owner, never its shifting row.
+    function documentTarget(index) {
+        const document = documentAt(index)
+        if (!document) return null
+        const row = openFiles.get(index)
+        return {token: row.openToken, controller: document.controller, path: row.path}
+    }
+    function targetIndex(target) {
+        if (!target || !target.controller) return -1
+        const index = requestIndex(target.token)
+        const document = documentAt(index)
+        return document && document.controller === target.controller && openFiles.get(index).path === target.path ? index : -1
     }
     function appendLegacy(row) {
         row.openToken = documentOpens.track(row.path)
@@ -580,7 +593,7 @@ ApplicationWindow {
     function closeTab(i) {
         documentOpens.revoke_focus()
         const d = window.documentAt(i)
-        if (d && d.controller.dirty) { confirmClose.index = i; confirmClose.open(); return }
+        if (d && d.controller.dirty) { confirmClose.target = documentTarget(i); confirmClose.saveError = ""; confirmClose.open(); return }
         discardEmptyDraft(d)
         window.removeDocument(i)
         Qt.callLater(refreshCurrent)
@@ -2094,43 +2107,63 @@ ApplicationWindow {
 
     property var pendingEvidenceSave: null
     function saveDocument(index, path, continuation) {
-        const d = window.documentAt(index)
-        if (!d) return
-        if (!path && openFiles.get(index).path.startsWith("untitled:")) {
-            saveDialog.index = index
+        saveTarget(documentTarget(index), path, continuation)
+    }
+    function saveTarget(owner, path, continuation) {
+        const index = targetIndex(owner)
+        if (index < 0) { if (continuation) continuation(false); return }
+        if (!path && owner.path.startsWith("untitled:")) {
+            saveDialog.target = owner
             saveDialog.continuation = continuation
-            saveDialog.selectedFile = shell.local_file_url(openFiles.get(index).path.split("/").pop())
+            saveDialog.selectedFile = shell.local_file_url(owner.path.split("/").pop())
             saveDialog.open()
             return
         }
-        const target = path || openFiles.get(index).path
+        const target = path || owner.path
         const conflict = JSON.parse(provenance.save_conflicts(target))
         if (conflict.error) { provenance.notification(target, conflict.error, "fail"); return }
         const perform = function() {
+            const row = targetIndex(owner)
+            if (row < 0) { if (continuation) continuation(false); return }
             let success
             if (path) {
-                success = d.controller.save_as(path)
-                if (success) { openFiles.setProperty(index, "path", path); documentOpens.path_changed(openFiles.get(index).openToken || "", path, d.controller.file_path); Qt.callLater(window.refreshCurrent) }
-            } else { d.controller.save(); success = !d.controller.dirty }
+                success = owner.controller.save_as(path)
+                if (success) {
+                    const savedRow = targetIndex(owner)
+                    if (savedRow < 0) { if (continuation) continuation(false); return }
+                    openFiles.setProperty(savedRow, "path", path)
+                    documentOpens.path_changed(owner.token, path, owner.controller.file_path)
+                    owner.path = path
+                    Qt.callLater(window.refreshCurrent)
+                }
+            } else { owner.controller.save(); success = !owner.controller.dirty }
             if (continuation) continuation(success)
         }
         if ((conflict.analyses || []).length) {
-            pendingEvidenceSave = {target: target, perform: perform}
+            pendingEvidenceSave = {owner: owner, target: target, perform: perform}
             evidenceSaveDialog.conflict = conflict
             evidenceSaveDialog.errorText = ""
             evidenceSaveDialog.open()
         } else perform()
     }
+    function validEvidenceSave() {
+        const pending = pendingEvidenceSave
+        if (pending && targetIndex(pending.owner) >= 0) return pending
+        pendingEvidenceSave = null
+        evidenceSaveDialog.close()
+        return null
+    }
     AnalysisEvidenceDialog {
         id: evidenceSaveDialog
+        objectName: "evidenceSaveDialog"
         onRejected: window.pendingEvidenceSave = null
         onRelinkOriginal: function(path) {
+            const pending = window.validEvidenceSave()
+            if (!pending) return
             for (const analysis of conflict.analyses || []) {
                 if (analysis.direct === false) continue
                 if (!provenance.relink_run(analysis.run, path)) { errorText = provenance.message; return }
             }
-            const pending = window.pendingEvidenceSave
-            if (!pending) return
             conflict = JSON.parse(provenance.save_conflicts(pending.target))
             errorText = "Original input verified. Cancel to review it, or choose how to continue saving."
             if (!(conflict.analyses || []).length) {
@@ -2140,7 +2173,7 @@ ApplicationWindow {
             }
         }
         onChoice: function(policy) {
-            const pending = window.pendingEvidenceSave
+            const pending = window.validEvidenceSave()
             if (!pending) return
             if (!provenance.resolve_save(pending.target, policy)) {
                 errorText = provenance.message
@@ -2151,8 +2184,8 @@ ApplicationWindow {
             pending.perform()
         }
     }
-    function saveBeforeQuit(indexes, offset) {
-        if (offset >= indexes.length) {
+    function saveBeforeQuit(targets, offset) {
+        if (offset >= targets.length) {
             const left = window.unsavedTabs()
             if (left.length) {
                 quitDialog.unsaved = left
@@ -2161,8 +2194,13 @@ ApplicationWindow {
             } else { window.closeConfirmed = true; window.close() }
             return
         }
-        window.saveDocument(indexes[offset], "", function(success) {
-            if (success) window.saveBeforeQuit(indexes, offset + 1)
+        if (targetIndex(targets[offset]) < 0) {
+            quitDialog.ask(window.unsavedTabs())
+            quitError.text = "The open documents changed. Review them before closing."
+            return
+        }
+        window.saveTarget(targets[offset], "", function(success) {
+            if (success) window.saveBeforeQuit(targets, offset + 1)
         })
     }
 
@@ -2170,7 +2208,7 @@ ApplicationWindow {
     function saveAs() {
         if (!window.current) return
         if (window.traceOpen) { window.traceDocument.saveReview(); return }
-        saveDialog.index = tabs.currentIndex
+        saveDialog.target = documentTarget(tabs.currentIndex)
         saveDialog.continuation = null
         saveDialog.selectedFile = shell.local_file_url(window.currentPath.startsWith("untitled:") ? window.fileName(window.currentPath) : window.currentPath)
         saveDialog.open()
@@ -2185,18 +2223,21 @@ ApplicationWindow {
     Shortcut { sequences: ["Ctrl+Shift+Z", "Ctrl+Y"]; enabled: !submissionDialog.opened && window.current !== null && !window.traceOpen; onActivated: window.current.redo() }
     FileDialog {
         id: saveDialog
-        property int index: -1
+        objectName: "saveDocumentDialog"
+        onRejected: { target = null; continuation = null }
+        property var target: null
         property var continuation: null
         title: "Save as"
         fileMode: FileDialog.SaveFile
         currentFolder: window.activeFolder()
         onVisibleChanged: if (visible) currentFolder = window.activeFolder()
         onAccepted: {
-            const d = window.documentAt(index)
+            const owner = target
             const path = window.localPath(selectedFile)
             const next = continuation
+            target = null
             continuation = null
-            if (d) window.saveDocument(index, path, next)
+            window.saveTarget(owner, path, next)
         }
     }
 
@@ -2913,14 +2954,15 @@ ApplicationWindow {
     // stay.
     AppFormDialog {
         id: quitDialog
+        objectName: "quitDocumentsDialog"
         onRejected: window.discardAuthoredOnQuit = false
         property var unsaved: []
         title: "Save changes before closing?"
         modal: true
         anchors.centerIn: Overlay.overlay
         standardButtons: Dialog.Save | Dialog.Discard | Dialog.Cancel
-        function ask(indexes) {
-            unsaved = indexes
+        function ask(targets) {
+            unsaved = targets
             quitError.text = ""
             open()
         }
@@ -2934,8 +2976,8 @@ ApplicationWindow {
                 Label {
                     Layout.fillWidth: true
                     wrapMode: Text.Wrap
-                    required property int modelData
-                    text: "  " + window.fileName(openFiles.get(modelData).path)
+                    required property var modelData
+                    text: "  " + window.fileName(modelData.path)
                     font.bold: true
                 }
             }
@@ -2945,6 +2987,13 @@ ApplicationWindow {
             window.saveBeforeQuit(unsaved, 0)
         }
         onDiscarded: {
+            const current = window.unsavedTabs()
+            if (unsaved.some(target => window.targetIndex(target) < 0) ||
+                    current.some(target => !unsaved.some(consent => consent.token === target.token && consent.controller === target.controller && consent.path === target.path))) {
+                ask(current)
+                quitError.text = "The open documents changed. Review them before closing."
+                return
+            }
             close()
             window.closeConfirmed = true
             window.close()
@@ -2953,7 +3002,8 @@ ApplicationWindow {
 
     AppFormDialog {
         id: confirmClose
-        property int index: -1
+        objectName: "closeDocumentDialog"
+        property var target: null
         property string saveError: ""
         title: "Save changes?"
         modal: true
@@ -2967,21 +3017,27 @@ ApplicationWindow {
             text: confirmClose.saveError.length ? confirmClose.saveError : "This file has unsaved changes."
         }
         onAccepted: {
-            const controller = window.documentAt(index).controller
-            window.saveDocument(index, "", function(success) {
+            const owner = target
+            if (window.targetIndex(owner) < 0) return
+            window.saveTarget(owner, "", function(success) {
+                const row = window.targetIndex(owner)
+                if (row < 0) return
                 if (!success) {
-                    confirmClose.saveError = controller.message || "Save the review to a file first"
+                    confirmClose.target = owner
+                    confirmClose.saveError = owner.controller.message || "Save the review to a file first"
                     confirmClose.open()
                     return
                 }
                 confirmClose.saveError = ""
-                window.removeDocument(confirmClose.index)
+                window.removeDocument(row)
                 Qt.callLater(window.refreshCurrent)
             })
         }
         onDiscarded: {
+            const row = window.targetIndex(target)
             close()
-            window.removeDocument(index)
+            if (row < 0) return
+            window.removeDocument(row)
             Qt.callLater(window.refreshCurrent)
         }
     }

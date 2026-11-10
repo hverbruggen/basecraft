@@ -218,7 +218,8 @@ impl qobject::DocumentOpens {
                     }
                 };
                 #[cfg(test)]
-                let queued = if fault == faults::Fault::Queue {
+                let queued = if fault == faults::Fault::Queue || fault == faults::Fault::DoubleQueue
+                {
                     drop(delivery);
                     Err(cxx_qt::ThreadingQueueError::InvokeMethodFailed)
                 } else {
@@ -231,7 +232,13 @@ impl qobject::DocumentOpens {
                     // A failed invoke on a surviving endpoint gets one error
                     // delivery attempt. Destruction drops the candidate and
                     // the endpoint's request lifetimes without joining workers.
-                    let _ = thread.queue(move |this| this.reject(id, &OpenError::Queue));
+                    #[cfg(test)]
+                    let retry = fault != faults::Fault::DoubleQueue;
+                    #[cfg(not(test))]
+                    let retry = true;
+                    if retry {
+                        let _ = thread.queue(move |this| this.reject(id, &OpenError::Queue));
+                    }
                 }
                 #[cfg(test)]
                 barriers::finished(&completion_path);
@@ -526,6 +533,7 @@ pub(crate) mod faults {
         Spawn,
         Worker,
         Queue,
+        DoubleQueue,
     }
     thread_local! { static NEXT: RefCell<BTreeMap<String, Fault>> = const { RefCell::new(BTreeMap::new()) }; }
     #[allow(dead_code)] // harness=false bootstrap sets fault cases.

@@ -268,6 +268,181 @@ fn main() {
         );
     }
 
+    #[cfg(feature = "test-counters")]
+    let mut consent_folders = Vec::new();
+    #[cfg(feature = "test-counters")]
+    for scenario in [
+        "close-discard",
+        "close-save",
+        "saveas",
+        "evidence",
+        "quit-save",
+        "quit-discard",
+        "quit-batch",
+        "stale-close-discard",
+        "stale-close-save",
+        "stale-saveas",
+        "stale-evidence",
+        "stale-quit-save",
+    ] {
+        let folder = tempfile::tempdir().unwrap();
+        let original =
+            include_bytes!("../../../testdata/fixtures/compact/sequences-annotations/locus.gb");
+        for name in ["B.gb", "C.gb", "D.gb"] {
+            std::fs::write(folder.path().join(name), original).unwrap();
+        }
+        if scenario.contains("evidence") || scenario == "quit-batch" {
+            let chosen = folder.path().join(if scenario == "quit-batch" {
+                "B.gb"
+            } else {
+                "chosen.gb"
+            });
+            std::fs::write(&chosen, original).unwrap();
+            basecraft_ops::input_evidence::reference_input_with_dependencies(
+                &folder.path().join("result.txt"),
+                &chosen,
+                &basecraft_io::hash_file(&chosen).unwrap(),
+                &[],
+                "consent regression",
+            )
+            .unwrap();
+            assert!(
+                !basecraft_ops::input_evidence::conflicts(&chosen)
+                    .unwrap()
+                    .analyses
+                    .is_empty()
+            );
+        }
+        // The last ready sibling acknowledges on the GUI callback that opens consent.
+        // Releasing A here cannot deliver its queued failure until that callback returns.
+        app_bridge::barriers::configure(
+            folder
+                .path()
+                .join("missing.gb")
+                .to_string_lossy()
+                .into_owned(),
+            folder
+                .path()
+                .join(if scenario == "quit-batch" {
+                    "D.gb"
+                } else {
+                    "C.gb"
+                })
+                .to_string_lossy()
+                .into_owned(),
+        );
+        let source = include_str!("fixtures/open-consent.qml")
+            .replace(
+                "OPEN_TEST_FOLDER",
+                &serde_json::to_string(folder.path()).unwrap(),
+            )
+            .replace(
+                "OPEN_TEST_SCENARIO",
+                &serde_json::to_string(scenario).unwrap(),
+            );
+        let mut engine = QQmlApplicationEngine::new();
+        engine
+            .pin_mut()
+            .on_object_creation_failed(|_, _| std::process::exit(4))
+            .release();
+        engine
+            .pin_mut()
+            .load_data(&QByteArray::from(&source), &QUrl::default());
+        assert_eq!(app.as_mut().exec(), 0, "real consent {scenario}");
+        assert_eq!(
+            app_bridge::testing::take().len(),
+            if scenario == "quit-batch" { 3 } else { 2 }
+        );
+        assert_eq!(
+            std::fs::read(folder.path().join(if scenario == "quit-batch" {
+                "D.gb"
+            } else {
+                "C.gb"
+            }))
+            .unwrap(),
+            original
+        );
+        if scenario.starts_with("stale-")
+            || scenario == "close-discard"
+            || scenario == "quit-discard"
+        {
+            assert_eq!(std::fs::read(folder.path().join("B.gb")).unwrap(), original);
+        }
+        if scenario == "stale-saveas" {
+            assert!(!folder.path().join("chosen.gb").exists());
+        }
+        if scenario == "stale-evidence" {
+            let chosen = folder.path().join("chosen.gb");
+            assert_eq!(std::fs::read(&chosen).unwrap(), original);
+            assert!(
+                !basecraft_ops::input_evidence::conflicts(&chosen)
+                    .unwrap()
+                    .analyses
+                    .is_empty(),
+                "stale consent mutated evidence"
+            );
+        }
+        consent_folders.push(folder);
+    }
+
+    #[cfg(feature = "test-counters")]
+    for scenario in [
+        "loader-error",
+        "close-before-ack",
+        "double-queue-next",
+        "double-queue-close",
+    ] {
+        let folder = tempfile::tempdir().unwrap();
+        std::fs::write(
+            folder.path().join("sequence.gb"),
+            include_bytes!("../../../testdata/fixtures/compact/sequences-annotations/locus.gb"),
+        )
+        .unwrap();
+        std::fs::write(
+            folder.path().join("tree.nwk"),
+            include_bytes!("../../../testdata/fixtures/compact/tree-inference/unrooted.nwk"),
+        )
+        .unwrap();
+        if scenario.starts_with("double-queue") {
+            let path = folder
+                .path()
+                .join("sequence.gb")
+                .to_string_lossy()
+                .into_owned();
+            app_bridge::faults::set(path.clone(), app_bridge::faults::Fault::DoubleQueue);
+            app_bridge::barriers::configure(path, String::new());
+        }
+        let source = include_str!("fixtures/open-boundaries.qml")
+            .replace(
+                "OPEN_TEST_FOLDER",
+                &serde_json::to_string(folder.path()).unwrap(),
+            )
+            .replace(
+                "OPEN_TEST_SCENARIO",
+                &serde_json::to_string(scenario).unwrap(),
+            );
+        let mut engine = QQmlApplicationEngine::new();
+        engine
+            .pin_mut()
+            .on_object_creation_failed(|_, _| std::process::exit(4))
+            .release();
+        engine
+            .pin_mut()
+            .load_data(&QByteArray::from(&source), &QUrl::default());
+        if scenario.starts_with("double-queue") {
+            app_bridge::barriers::release_and_wait();
+        }
+        assert_eq!(app.as_mut().exec(), 0, "real lifecycle boundary {scenario}");
+        assert_eq!(
+            app_bridge::testing::take().len(),
+            if scenario.starts_with("double-queue") {
+                1
+            } else {
+                2
+            }
+        );
+    }
+
     // Saved legacy reviews register their evidence in the shared test profile.
     // Retain those fixture stores until every bootstrap save assertion finishes.
     #[cfg(feature = "test-counters")]
