@@ -390,3 +390,164 @@ fn original_prepared_run_writer() {
         &json!({"schema_version":1,"id":prepared.run.id(),"result":"org.example.registry-fixture/count@1","status":"prepared"}),
     );
 }
+
+// Test-prepared registered collection: real validation/finalization, synthetic
+// files only. No plugin process or scientific engine is executed.
+fn publication_setup(
+    root: &Path,
+    visible: bool,
+    member: bool,
+) -> (
+    PreparedOperation,
+    InvokeResult,
+    Vec<(String, PathBuf, String)>,
+    OperationOutcome,
+) {
+    std::fs::write(root.join("input.txt"), b"fixture input\n").unwrap();
+    let registry = registry(root);
+    let request: OperationRequest = serde_json::from_value(json!({
+        "operation":"org.example.registry-fixture/count@1",
+        "inputs":{"sources":[{"kind":"file","path":"input.txt"}]},
+        "parameters":{},"destinations":{}
+    }))
+    .unwrap();
+    let mut operation = registry.resolve(&request.operation, None).unwrap().clone();
+    let binding = operation.descriptor.outputs.get_mut("report").unwrap();
+    binding.collection = true;
+    binding.max = 8;
+    let mut prepared = PreparedOperation::prepare(
+        operation,
+        request,
+        SessionPolicy::new(root, true).unwrap(),
+        "publication fixture".into(),
+        None,
+        &registry,
+    )
+    .unwrap();
+    if visible {
+        prepared
+            .request
+            .destinations
+            .insert("report".into(), "visible λ collection".into());
+    }
+    if member {
+        prepared
+            .request
+            .destinations
+            .insert("report/a/file.txt".into(), "member λ.txt".into());
+    }
+    let staging = Path::new(&prepared.context.outputs["report"]);
+    let names = ["a/file.txt", "a0.txt", "λ space/quote\".txt"];
+    for (index, name) in names.iter().enumerate() {
+        let path = staging.join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, format!("synthetic {index}\n")).unwrap();
+    }
+    let result: InvokeResult = serde_json::from_value(json!({"data":{"bytes":3},
+        "artifacts":names.iter().map(|name|json!({"role":"report","path":name})).collect::<Vec<_>>()
+    }))
+    .unwrap();
+    let validated = prepared.validate_result(&result).unwrap();
+    let outcome = OperationOutcome {
+        schema: 1,
+        operation: prepared.operation.id.clone(),
+        run_id: prepared.run.id().into(),
+        state: RuntimeState::Finalizing,
+        pins: OperationPins {
+            generation: "fixture".into(),
+            package_digest: prepared.operation.package.digest.clone(),
+            descriptor_digest: prepared.operation.descriptor_digest.clone(),
+        },
+        requested_parameters: prepared.request.parameters.clone(),
+        effective_parameters: prepared.effective_parameters(),
+        data: None,
+        artifacts: vec![],
+        proposals: None,
+        warnings: vec![],
+        errors: vec![],
+        evidence: None,
+    };
+    (prepared, result, validated, outcome)
+}
+
+fn publication_expected(
+    prepared: &PreparedOperation,
+    validated: &[(String, PathBuf, String)],
+) -> BTreeMap<PathBuf, String> {
+    let staging = Path::new(&prepared.context.outputs["report"]);
+    validated
+        .iter()
+        .map(|(_, path, hash)| {
+            (
+                path.strip_prefix(staging).unwrap().to_path_buf(),
+                hash.clone(),
+            )
+        })
+        .collect()
+}
+
+fn member_oracle(destination: &Path, hash: &str) -> Value {
+    // Independent actual promoted-file stat/hash, never receipt-derived values.
+    assert_eq!(basecraft_io::hash_file(destination).unwrap(), hash);
+    assert_eq!(link_count(destination).unwrap(), 1);
+    json!({"schema":1,"destination":destination,"hash":hash,
+        "device":identity(destination).unwrap().0,"inode":identity(destination).unwrap().1,
+        "size":std::fs::metadata(destination).unwrap().len()})
+}
+
+#[test]
+fn publication_original_producer_bytes() {
+    let temp = if let Some(root) = std::env::var_os("BASECRAFT_PUBLICATION_FIXTURE_ROOT") {
+        tempfile::tempdir_in(root).unwrap()
+    } else {
+        tempfile::tempdir().unwrap()
+    };
+    let root = temp.path();
+    let (prepared, result, validated, mut outcome) = publication_setup(root, true, true);
+    let expected = publication_expected(&prepared, &validated);
+    prepared
+        .finalize(&result, &validated, &mut outcome, false)
+        .unwrap();
+    capture(
+        "collection-intent",
+        &prepared
+            .run
+            .artifact("collection-report-intent.json")
+            .unwrap(),
+        &json!({"schema":1,"members":expected}),
+    );
+    capture(
+        "collection-export",
+        &prepared
+            .run
+            .artifact("collection-report-export.json")
+            .unwrap(),
+        &json!({"schema":1,"destination":root.join("visible λ collection"),"members":expected}),
+    );
+    let destination = root.join("member λ.txt");
+    let receipt = prepared
+        .run
+        .artifact(&format!(
+            "member-{}-export.json",
+            basecraft_io::hash_bytes(destination.as_os_str().as_encoded_bytes())
+                .trim_start_matches("b3:")
+        ))
+        .unwrap();
+    capture(
+        "member-export",
+        &receipt,
+        &member_oracle(&destination, &expected[Path::new("a/file.txt")]),
+    );
+    assert_eq!(std::fs::read(&destination).unwrap(), b"synthetic 0\n");
+    let source = root.join("empty");
+    std::fs::write(&source, []).unwrap();
+    let destination = root.join("empty λ.txt");
+    let receipt = root.join("empty-receipt.json");
+    let hash = basecraft_io::hash_bytes(b"");
+    export_member(&source, &destination, &hash, &receipt).unwrap();
+    capture(
+        "member-export-empty",
+        &receipt,
+        &member_oracle(&destination, &hash),
+    );
+}

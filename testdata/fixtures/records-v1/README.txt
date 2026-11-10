@@ -121,3 +121,18 @@ byte-array object (or Windows UTF-16-unit object on that writer platform), not a
 string. Unix guard fixtures have typed OsString round-trip assertions on Unix;
 other platforms inspect their exact JSON bytes. This does not add cross-platform
 native-filename decoding or change the production selected-field reader.
+
+EX11/EX12/EX13 original publication captures
+-----------------------------------------
+collection-intent.json, collection-export.json, member-export.json and
+member-export-empty.json were captured before typed producer substitution by
+runner::record_format_tests::publication_original_producer_bytes. The real
+finalize/export_member helpers validated and published test-prepared synthetic
+collection files from the existing registry fixture package; no scientific
+engine or plugin process ran. Each raw capture was compared byte for byte with
+an independent original literal at identical inputs through the existing writer.
+Member identity/size/hash came independently from the actual promoted file.
+The synthetic absolute /fixture namespace avoids private paths without replacing
+bytes. Random directory names, Unicode/native path spelling and actual Unix
+filesystem device/inode values are retained, not portable identity guarantees.
+All four captures use pretty recursively sorted JSON and one terminal LF.
