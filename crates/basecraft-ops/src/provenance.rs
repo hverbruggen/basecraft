@@ -123,6 +123,7 @@ pub(crate) fn read_record_from_open(
     cap: u64,
     label: RecordLimit,
 ) -> Result<Vec<u8>> {
+    use std::io::Read as _;
     let limit = (*remaining).min(64 << 20).min(cap);
     if length > limit {
         return Err(invalid(label.message()));

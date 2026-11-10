@@ -1,5 +1,6 @@
 use super::*;
 use crate::access::{ResourceAction, TrustedLegacy};
+#[cfg(target_os = "linux")]
 use std::cell::RefCell;
 
 pub(crate) fn context(root: &Path) -> ServiceReadContext {

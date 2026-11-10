@@ -98,7 +98,9 @@ impl ServiceReadContext {
                 || path.components().any(|c| {
                     !matches!(
                         c,
-                        std::path::Component::RootDir | std::path::Component::Normal(_)
+                        std::path::Component::RootDir
+                            | std::path::Component::Prefix(_)
+                            | std::path::Component::Normal(_)
                     )
                 })
             {
