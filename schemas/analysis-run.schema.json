@@ -1,0 +1,168 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AnalysisRun",
+  "description": "The existing version-one analysis-store `run.json` family.\nThis describes fresh writer shapes; production readers retain their selective\nJSON checks. Serialize through `Value` for recursive sorting before `write_json`.",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "outputs": {
+      "description": "Absent until referenced publication; a completed run can have an empty\narray. Reuse `ArtifactRevision`'s schema, retaining its JSON snapshot because\nthe public type rejects unknown extensions on deserialization. Fresh\nwriters still construct these snapshots from the public `ArtifactRevision`.",
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "$ref": "#/$defs/ArtifactRevision"
+      }
+    },
+    "result": {
+      "description": "Always emitted, including null for a non-UTF-8 reference anchor filename.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "schema_version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "status": {
+      "$ref": "#/$defs/AnalysisRunStatus"
+    }
+  },
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "id",
+    "status"
+  ],
+  "$defs": {
+    "AnalysisRunStatus": {
+      "description": "Labels in `run.json`, distinct from the registered operation runtime lifecycle.\nUnfamiliar labels survive a typed round-trip without being reinterpreted.",
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "referenced",
+            "prepared",
+            "saved",
+            "completed"
+          ]
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
+    "ArtifactRevision": {
+      "type": "object",
+      "properties": {
+        "hash": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "logical_name": {
+          "type": "string"
+        },
+        "reference": {
+          "description": "Original disk evidence. Relative to the publication bundle; never a write destination.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InputReference"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "retained": {
+          "description": "Relative path inside the bundle; None means bytes are unavailable.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "size": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "logical_name",
+        "hash",
+        "size"
+      ]
+    },
+    "FileStamp": {
+      "description": "Cheap change signal captured during an existing verified read. Matching time\nand length alone do not prove content identity.",
+      "type": "object",
+      "properties": {
+        "device": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "inode": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "modified_nanos": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "modified_seconds": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "size": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "size",
+        "modified_seconds",
+        "modified_nanos"
+      ]
+    },
+    "InputReference": {
+      "type": "object",
+      "properties": {
+        "hash": {
+          "description": "Source bytes hash reused from the verified document read.",
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "stamp": {
+          "$ref": "#/$defs/FileStamp"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "path",
+        "stamp",
+        "hash"
+      ]
+    }
+  }
+}
