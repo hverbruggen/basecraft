@@ -1,5 +1,6 @@
 //! Qt transport for transient, new-tab canvas opens.
 use crate::document_open::{Candidate, OpenError, Opens, Phase};
+use basecraft_ops::files::Kind;
 use cxx_qt::{CxxQtType, Threading, casting::Downcast};
 use cxx_qt_lib::QString;
 use std::pin::Pin;
@@ -18,6 +19,13 @@ pub mod qobject {
         #[qobject]
         #[qml_element]
         type DocumentOpens = super::OpenRust;
+        #[qinvokable]
+        unsafe fn link_taxa(
+            self: &DocumentOpens,
+            source: *mut OpenObject,
+            target: *mut OpenObject,
+            names: &QString,
+        );
         #[qinvokable]
         fn eligible(self: &DocumentOpens, path: &QString) -> bool;
         #[qinvokable]
@@ -80,7 +88,96 @@ pub struct OpenRust {
 fn token(value: &QString) -> Option<u64> {
     value.to_string().parse().ok()
 }
+// Owned, transient descriptions: no QObject borrow survives receiver dispatch.
+struct TaxaEndpoint {
+    kind: Kind,
+    path: String,
+    linked_alignment: String,
+}
+impl TaxaEndpoint {
+    fn describe(object: &cxx_qt::QObject) -> Option<Self> {
+        if let Some(ctl) =
+            object.downcast::<crate::alignment_bridge::qobject::AlignmentController>()
+        {
+            Some(Self {
+                kind: Kind::Alignment,
+                path: ctl.file_path().to_string(),
+                linked_alignment: String::new(),
+            })
+        } else if let Some(ctl) = object.downcast::<crate::tree_bridge::qobject::TreeController>() {
+            Some(Self {
+                kind: Kind::Tree,
+                path: ctl.file_path().to_string(),
+                linked_alignment: ctl.linked_alignment().to_string(),
+            })
+        } else {
+            object
+                .downcast::<crate::delimitation_bridge::qobject::DelimitationController>()
+                .map(|ctl| Self {
+                    kind: Kind::Delimitation,
+                    path: ctl.file_path().to_string(),
+                    linked_alignment: ctl.linked_alignment().to_string(),
+                })
+        }
+    }
+}
+fn linked_taxa_target(source: &TaxaEndpoint, target: &TaxaEndpoint) -> bool {
+    match source.kind {
+        Kind::Alignment => {
+            !source.path.is_empty()
+                && matches!(target.kind, Kind::Tree | Kind::Delimitation)
+                && target.linked_alignment == source.path
+        }
+        Kind::Tree | Kind::Delimitation => {
+            !source.linked_alignment.is_empty()
+                && target.kind == Kind::Alignment
+                && target.path == source.linked_alignment
+        }
+        _ => false,
+    }
+}
 impl qobject::DocumentOpens {
+    unsafe fn link_taxa(
+        &self,
+        source: *mut cxx_qt::QObject,
+        target: *mut cxx_qt::QObject,
+        names: &QString,
+    ) {
+        if source.is_null() || target.is_null() || source == target {
+            return;
+        }
+        // SAFETY: QML supplies live objects for this synchronous call. Copy only
+        // endpoint values, then release every object borrow before highlight_taxa
+        // can refresh and reenter QML. No pointer is retained by this adapter.
+        let endpoints =
+            unsafe { TaxaEndpoint::describe(&*source).zip(TaxaEndpoint::describe(&*target)) };
+        let Some((source, destination)) = endpoints else {
+            return;
+        };
+        if !linked_taxa_target(&source, &destination) {
+            return;
+        }
+        // SAFETY: self exclusion above and owned descriptors ensure no source or
+        // target reference aliases this pinned receiver. Qt owns its lifetime.
+        let mut object = unsafe { Pin::new_unchecked(&mut *target) };
+        if let Some(ctl) = object
+            .as_mut()
+            .downcast_pin::<crate::alignment_bridge::qobject::AlignmentController>()
+        {
+            ctl.highlight_taxa(names);
+        } else if let Some(ctl) = object
+            .as_mut()
+            .downcast_pin::<crate::tree_bridge::qobject::TreeController>()
+        {
+            ctl.highlight_taxa(names);
+        } else if let Some(ctl) = object
+            .as_mut()
+            .downcast_pin::<crate::delimitation_bridge::qobject::DelimitationController>(
+        ) {
+            ctl.highlight_taxa(names);
+        }
+    }
+
     fn path_changed(
         mut self: Pin<&mut Self>,
         value: &QString,
@@ -542,5 +639,40 @@ pub(crate) mod faults {
     }
     pub fn take(path: &str) -> Fault {
         NEXT.with(|next| next.borrow_mut().remove(path).unwrap_or_default())
+    }
+}
+
+#[cfg(test)]
+mod linked_taxa_tests {
+    #[test]
+    fn exact_relationships_in_both_directions() {
+        use super::{TaxaEndpoint, linked_taxa_target};
+        use basecraft_ops::files::Kind;
+        let endpoint = |kind, path: &str, link: &str| TaxaEndpoint {
+            kind,
+            path: path.into(),
+            linked_alignment: link.into(),
+        };
+        let alignment = endpoint(Kind::Alignment, "data/a.afa", "");
+        for kind in [Kind::Tree, Kind::Delimitation] {
+            let linked = endpoint(kind, "data/other", "data/a.afa");
+            assert!(linked_taxa_target(&alignment, &linked));
+            assert!(linked_taxa_target(&linked, &alignment));
+            assert!(!linked_taxa_target(&linked, &linked));
+            for path in ["", "data/b.afa", "data/./a.afa", "DATA/a.afa"] {
+                let other = endpoint(Kind::Alignment, path, "");
+                assert!(!linked_taxa_target(&other, &linked));
+                assert!(!linked_taxa_target(&linked, &other));
+            }
+            let unlinked = endpoint(kind, "data/a.afa", "");
+            assert!(!linked_taxa_target(&alignment, &unlinked));
+            assert!(!linked_taxa_target(&unlinked, &alignment));
+        }
+        assert!(!linked_taxa_target(&alignment, &alignment));
+        for kind in [Kind::Sequence, Kind::Metadata, Kind::Submission] {
+            let other = endpoint(kind, "data/a.afa", "data/a.afa");
+            assert!(!linked_taxa_target(&alignment, &other));
+            assert!(!linked_taxa_target(&other, &alignment));
+        }
     }
 }

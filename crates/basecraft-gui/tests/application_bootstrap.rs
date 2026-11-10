@@ -12,6 +12,7 @@
 #[path = "../src/alignment_bridge.rs"]
 mod alignment_bridge;
 #[path = "../src/app_bridge.rs"]
+#[allow(unused_imports)] // harness=false omits pure predicate test bodies.
 mod app_bridge;
 #[path = "../src/application.rs"]
 mod application;
@@ -116,6 +117,204 @@ fn check_identity_case(case: &str) {
     println!("Identity case {case} passed");
 }
 
+// One real-Main journey, with Rust-only state inspection between event-loop
+// checkpoints. No Qt events or deletion occur while controller borrows are held.
+#[cfg(feature = "test-counters")]
+fn linked_taxa_journey(mut app: std::pin::Pin<&mut cxx_qt_lib_extras::QApplication>) {
+    use cxx_qt::casting::Downcast;
+    use cxx_qt_lib::QObjectExt;
+    use std::{
+        collections::BTreeMap,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+    fn files(folder: &Path) -> BTreeMap<std::path::PathBuf, Vec<u8>> {
+        let mut result = BTreeMap::new();
+        for entry in std::fs::read_dir(folder).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                result.extend(files(&path));
+            } else {
+                result.insert(path.clone(), std::fs::read(path).unwrap());
+            }
+        }
+        result
+    }
+    let folder = tempfile::tempdir().unwrap();
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../testdata/fixtures/compact/species-delimitation");
+    for (source, name) in [
+        ("specimens.afa", "alignment.afa"),
+        ("specimens.afa", "unrelated.afa"),
+        ("specimens.afa", "pending.afa"),
+        ("substitutions.nwk", "tree.nwk"),
+        ("substitutions.nwk", "unlinked.nwk"),
+        ("hypotheses.spart", "workspace.spart"),
+    ] {
+        std::fs::copy(fixtures.join(source), folder.path().join(name)).unwrap();
+    }
+    let workspace = folder.path().join("workspace.spart");
+    let mut work = basecraft_ops::files::load_delimitation(&workspace).unwrap();
+    work.exchange_fields.insert(
+        "basecraft_alignment_snapshot".into(),
+        folder
+            .path()
+            .join("alignment.afa")
+            .to_string_lossy()
+            .into_owned(),
+    );
+    work.view.display_tree = Some(
+        folder
+            .path()
+            .join("tree.nwk")
+            .to_string_lossy()
+            .into_owned(),
+    );
+    let hypothesis = &work.hypotheses[0];
+    let group = &hypothesis.groups[0];
+    let source = include_str!("fixtures/linked-taxa-controllers.qml")
+        .replace(
+            "LINKED_TEST_FOLDER",
+            &serde_json::to_string(folder.path()).unwrap(),
+        )
+        .replace(
+            "LINKED_HYPOTHESIS",
+            &serde_json::to_string(&hypothesis.id).unwrap(),
+        )
+        .replace("LINKED_GROUP", &serde_json::to_string(&group.id).unwrap())
+        .replace(
+            "LINKED_MEMBERS",
+            &serde_json::to_string(&group.members).unwrap(),
+        );
+    basecraft_ops::files::write_delimitation_sidecar(
+        &work,
+        &basecraft_io::cache::content_hash(&workspace).unwrap(),
+        &mut std::fs::File::create(basecraft_ops::files::tree_sidecar(&workspace)).unwrap(),
+    )
+    .unwrap();
+    app_bridge::barriers::configure(
+        folder
+            .path()
+            .join("pending.afa")
+            .to_string_lossy()
+            .into_owned(),
+        String::new(),
+    );
+    let root = Arc::new(AtomicUsize::new(0));
+    let created = root.clone();
+    let mut engine = QQmlApplicationEngine::new();
+    engine
+        .pin_mut()
+        .on_object_creation_failed(|_, _| std::process::exit(4))
+        .release();
+    engine
+        .pin_mut()
+        .on_object_created(move |_, object, _| {
+            created.store(object as usize, Ordering::Relaxed);
+        })
+        .release();
+    engine
+        .pin_mut()
+        .load_data(&QByteArray::from(&source), &QUrl::default());
+    let mut baseline = BTreeMap::new();
+    for checkpoint in 0..9 {
+        let status = app.as_mut().exec();
+        // SAFETY: the engine owns Main; this synchronous read emits no signals.
+        let diagnostic = unsafe {
+            (root.load(Ordering::Relaxed) as *mut cxx_qt::QObject)
+                .as_ref()
+                .unwrap()
+        }
+        .object_name()
+        .to_string();
+        assert_eq!(
+            status, 0,
+            "linked taxa checkpoint {checkpoint}: {diagnostic}"
+        );
+        assert_eq!(
+            diagnostic,
+            format!("checkpoint:{}", checkpoint + 1),
+            "journey skipped a checkpoint"
+        );
+        if checkpoint == 0 {
+            baseline = files(folder.path());
+        } else {
+            assert_eq!(
+                files(folder.path()),
+                baseline,
+                "routing wrote document/sidecar/journal files at {checkpoint}"
+            );
+        }
+        // SAFETY: Main and its fixture-owned references remain live throughout
+        // this synchronous inspection; no event processing or mutation occurs.
+        let main = unsafe {
+            (root.load(Ordering::Relaxed) as *mut cxx_qt::QObject)
+                .as_ref()
+                .unwrap()
+        };
+        let mut checked = 0;
+        for property in [
+            c"a",
+            c"duplicate",
+            c"tree",
+            c"workspace",
+            c"unrelated",
+            c"unlinked",
+            c"displayTree",
+        ] {
+            let value = application_test_bridge::property(main, property);
+            let pointer = value
+                .value::<cxx_qt_lib::QObjectMutPtr>()
+                .expect("typed receiver property")
+                .as_mut_ptr();
+            if pointer.is_null() {
+                assert!(
+                    property == c"tree" && matches!(checkpoint, 6 | 7),
+                    "only the closed receiver may be null"
+                );
+                continue;
+            }
+            // SAFETY: the fixture clears its reference before removing a tab.
+            // Reacquire each current receiver after every event-loop checkpoint.
+            let object = unsafe { pointer.as_ref().unwrap() };
+            let name = object.object_name().to_string();
+            if let Some(expected) = name.strip_prefix("linked-check:") {
+                let expected: Vec<String> = serde_json::from_str(expected).unwrap();
+                let actual = if let Some(ctl) =
+                    object.downcast::<alignment_bridge::qobject::AlignmentController>()
+                {
+                    ctl.linked_taxa_snapshot()
+                } else if let Some(ctl) = object.downcast::<tree_bridge::qobject::TreeController>()
+                {
+                    ctl.linked_taxa_snapshot()
+                } else if let Some(ctl) =
+                    object.downcast::<delimitation_bridge::qobject::DelimitationController>()
+                {
+                    serde_json::from_str::<Vec<String>>(&ctl.selection_json().to_string()).unwrap()
+                } else {
+                    panic!("unexpected marked controller");
+                };
+                assert_eq!(
+                    actual, expected,
+                    "receiver state at checkpoint {checkpoint}: {name}"
+                );
+                checked += 1;
+            }
+        }
+        assert_eq!(
+            checked,
+            if matches!(checkpoint, 6 | 7) { 6 } else { 7 },
+            "all live receivers checked: {diagnostic}"
+        );
+    }
+    app_bridge::testing::take();
+    println!(
+        "Real Main linked taxa: directions, lifecycle, clear, identity, focus and unchanged files passed"
+    );
+}
+
 fn main() {
     // The test must never open desktop windows, including when run manually.
     if std::env::var("QT_QPA_PLATFORM").as_deref() != Ok("offscreen")
@@ -185,6 +384,12 @@ fn main() {
         font.family().expect("application font family").to_string(),
         ""
     );
+
+    #[cfg(feature = "test-counters")]
+    if std::env::args().nth(1).as_deref() == Some("--linked-taxa") {
+        linked_taxa_journey(app.as_mut());
+        return;
+    }
 
     #[cfg(feature = "test-counters")]
     {
@@ -603,6 +808,9 @@ fn main() {
             "Destroyed real shell rejected late worker delivery without joining on the GUI path"
         );
     }
+
+    #[cfg(feature = "test-counters")]
+    linked_taxa_journey(app.as_mut());
 
     controller_theme::run();
 

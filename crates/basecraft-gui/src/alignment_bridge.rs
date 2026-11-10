@@ -785,6 +785,14 @@ impl qobject::AlignmentController {
         }
     }
 
+    #[cfg(test)]
+    #[allow(dead_code)] // Read by the real-controller bootstrap journey.
+    pub(crate) fn linked_taxa_snapshot(&self) -> Vec<String> {
+        let mut taxa: Vec<_> = self.rust().view.linked_taxa.iter().cloned().collect();
+        taxa.sort();
+        taxa
+    }
+
     pub fn highlight_taxa(mut self: Pin<&mut Self>, names: &QString) {
         if let Ok(taxa) =
             serde_json::from_str::<std::collections::HashSet<String>>(&names.to_string())

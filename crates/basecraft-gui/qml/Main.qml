@@ -571,16 +571,9 @@ ApplicationWindow {
         target: window.current
         ignoreUnknownSignals: true
         function onTaxaSelected(names) {
-            if (!window.current) return
-            const source = (window.treeOpen || window.delimitationOpen) ? window.current.linked_alignment : window.current.file_path
-            if (!source) return
             for (let i = 0; i < docs.count; i++) {
                 const d = window.documentAt(i)
-                if (!d || d.controller === window.current) continue
-                if ((window.treeOpen || window.delimitationOpen) && d.kind === "alignment" && d.controller.file_path === source)
-                    d.controller.highlight_taxa(names)
-                else if (window.alignmentOpen && (d.kind === "tree" || d.kind === "delimitation") && d.controller.linked_alignment === source)
-                    d.controller.highlight_taxa(names)
+                if (d) documentOpens.link_taxa(window.current, d.controller, names)
             }
         }
     }
