@@ -103,6 +103,7 @@ fn read_record_with_access_open<R: std::io::Read>(
     read_record_from_open(file, length, remaining, 64 << 20, RecordLimit::Provenance)
 }
 
+#[derive(Clone, Copy)]
 pub(crate) enum RecordLimit {
     Provenance,
     Registry,

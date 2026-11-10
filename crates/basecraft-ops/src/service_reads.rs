@@ -34,7 +34,7 @@ pub enum ServiceReadPhase<'a> {
 
 impl ServiceReadRequest<'_> {
     /// Pure policy predicate; no path resolution, operation verification or IO.
-    pub fn permits(&self, context: &ServiceReadContext, phase: ServiceReadPhase<'_>) -> bool {
+    pub fn permits(&self, context: &ServiceReadContext, phase: &ServiceReadPhase<'_>) -> bool {
         std::ptr::eq(self.context, context)
             && matches!(
                 self.action,
@@ -66,7 +66,7 @@ impl ServiceReadRequest<'_> {
         inspect: impl FnOnce(&Path) -> Result<ReadNamespace, NamespaceReadError>,
         consume: impl FnOnce(ReadNamespace) -> Result<CheckedRead, NamespaceReadError>,
     ) -> crate::Result<CheckedRead> {
-        if !self.permits(self.context, ServiceReadPhase::Eligibility) {
+        if !self.permits(self.context, &ServiceReadPhase::Eligibility) {
             return Err(AccessError::Denied(Denial::ServiceUnavailable).into());
         }
         let location = self.location()?;
@@ -84,13 +84,13 @@ impl ServiceReadContext {
     /// Capture existing process configuration once. Discovery performs no IO.
     pub fn from_process() -> crate::Result<Self> {
         let paths = AppPaths::discover().map_err(|e| crate::error::invalid(e.to_string()))?;
-        Self::from_paths(paths)
+        Self::from_paths(&paths)
     }
 
-    fn from_paths(paths: AppPaths) -> crate::Result<Self> {
+    fn from_paths(paths: &AppPaths) -> crate::Result<Self> {
         let context = Self {
             preferences: paths.preferences(),
-            registry: crate::input_evidence::registry_location(&paths),
+            registry: crate::input_evidence::registry_location(paths),
         };
         for path in [&context.preferences, &context.registry] {
             // Mirror the supported lexical shape without probing/canonicalizing.

@@ -536,7 +536,10 @@ fn store_registry() -> Result<StoreRegistry> {
 // the selected consumer observes or explicitly projects the checked absence.
 #[allow(dead_code)]
 mod service_registry {
-    use super::*;
+    use super::{
+        Inspection, PathBuf, Result, StoreRegistry, empty_registry, parse_store_registry,
+        validate_store_paths,
+    };
     use crate::{access::Access, provenance::RecordLimit, service_reads::ServiceReadContext};
     use basecraft_platform::files::CheckedRead;
 
@@ -640,6 +643,7 @@ mod service_registry {
         use super::*;
         use crate::service_reads::tests::{Bound, context};
         use std::io::{self, Read};
+        use std::path::Path;
 
         #[test]
         fn checked_absence_keeps_logical_leaf_original_error_and_budget() {
@@ -666,15 +670,16 @@ mod service_registry {
                 assert_eq!(missing.raw_os_error(), Some(2));
                 let expected = format!("unavailable: {missing}");
                 let mut inspection = Inspection::default();
-                assert!(inspection.registry_read(read).unwrap().is_empty());
+                assert_eq!(inspection.registry_read(read).unwrap().len(), 0);
                 assert_eq!(inspection.observations.len(), 1);
                 assert_eq!(inspection.observations[path], expected);
-                assert!(inspection.issues.is_empty());
-                assert!(
+                assert_eq!(inspection.issues.len(), 0);
+                assert_eq!(
                     store_registry_with_access(&context, &Bound(&context))
                         .unwrap()
                         .stores
-                        .is_empty()
+                        .len(),
+                    0
                 );
                 assert_eq!(path.parent().unwrap().exists(), existing_parent);
                 assert!(!path.exists());
@@ -694,7 +699,7 @@ mod service_registry {
             );
             assert_eq!(budget, 999);
             assert!(inspection.observations.is_empty());
-            assert!(inspection.issues.is_empty());
+            assert_eq!(inspection.issues.len(), 0);
             std::fs::create_dir(temp.path().join("state")).unwrap();
             std::os::unix::fs::symlink(temp.path().join("missing"), context.registry_location())
                 .unwrap();
@@ -705,7 +710,7 @@ mod service_registry {
             );
             assert_eq!(budget, 999);
             assert!(inspection.observations.is_empty());
-            assert!(inspection.issues.is_empty());
+            assert_eq!(inspection.issues.len(), 0);
         }
 
         #[test]
@@ -726,7 +731,7 @@ mod service_registry {
                 inspection
                     .registry_with_access(&context, &Bound(&context), &mut budget)
                     .unwrap(),
-                [outside.clone()]
+                std::slice::from_ref(&outside)
             );
             assert_eq!(budget, (1 << 20) - bytes.len() as u64);
             assert_eq!(
@@ -750,7 +755,7 @@ mod service_registry {
                 inspection
                     .registry_with_access(&context, &Bound(&context), &mut (1 << 20))
                     .unwrap(),
-                [outside.clone()]
+                std::slice::from_ref(&outside)
             );
             assert_eq!(inspection.issues.len(), 2);
             for count in [4096, 4097] {
@@ -792,7 +797,7 @@ mod service_registry {
             let path = context.registry_location();
             std::fs::create_dir(path.parent().unwrap()).unwrap();
             std::fs::write(path, b"{}").unwrap();
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0)).unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o0)).unwrap();
             let read = registry_bytes_with_access(
                 &context,
                 &Bound(&context),
@@ -829,7 +834,7 @@ mod service_registry {
                     phase: crate::service_reads::ServiceReadPhase<'_>,
                 ) -> crate::access::Result<()> {
                     use crate::service_reads::ServiceReadPhase;
-                    assert!(request.permits(self.0, ServiceReadPhase::Eligibility));
+                    assert!(request.permits(self.0, &ServiceReadPhase::Eligibility));
                     if matches!(phase, ServiceReadPhase::Validated(_)) {
                         Err(crate::access::AccessError::Denied(
                             crate::access::Denial::ServiceUnavailable,
@@ -850,7 +855,7 @@ mod service_registry {
             );
             assert_eq!(budget, 100);
             assert!(inspection.observations.is_empty());
-            assert!(inspection.issues.is_empty());
+            assert_eq!(inspection.issues.len(), 0);
             assert!(store_registry_with_access(&context, &Revoke(&context)).is_err());
         }
 
@@ -878,13 +883,13 @@ mod service_registry {
                     .0
             ));
             let mut inspection = Inspection::default();
-            assert!(inspection.registry_read(read).unwrap().is_empty());
+            assert_eq!(inspection.registry_read(read).unwrap().len(), 0);
             assert_eq!(
                 inspection.observations[&path],
                 "unavailable: retained custom source"
             );
             assert_eq!(std::sync::Arc::strong_count(&source), 1);
-            assert!(inspection.issues.is_empty());
+            assert_eq!(inspection.issues.len(), 0);
         }
 
         #[derive(Debug)]

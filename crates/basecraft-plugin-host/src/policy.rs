@@ -537,7 +537,7 @@ impl Access for SessionServiceReadAccess<'_> {
         request: &basecraft_ops::service_reads::ServiceReadRequest<'_>,
         phase: basecraft_ops::service_reads::ServiceReadPhase<'_>,
     ) -> basecraft_ops::access::Result<()> {
-        if request.permits(self.context, phase) {
+        if request.permits(self.context, &phase) {
             Ok(())
         } else {
             Err(AccessError::Denied(Denial::ServiceUnavailable))
@@ -554,14 +554,6 @@ mod service_read_tests {
 
     #[test]
     fn only_explicit_bound_readonly_adapter_allows_eligibility() {
-        let root = tempfile::tempdir().unwrap();
-        let policy = SessionPolicy::new(root.path(), false).unwrap();
-        let context = ServiceReadContext::from_process().unwrap();
-        let other = ServiceReadContext::from_process().unwrap();
-        let adapter = SessionServiceReadAccess {
-            policy: &policy,
-            context: &context,
-        };
         struct Inspect<'a> {
             adapter: &'a SessionServiceReadAccess<'a>,
             other: &'a ServiceReadContext,
@@ -609,6 +601,14 @@ mod service_read_tests {
                 Err(AccessError::Denied(Denial::ServiceUnavailable))
             }
         }
+        let root = tempfile::tempdir().unwrap();
+        let policy = SessionPolicy::new(root.path(), false).unwrap();
+        let context = ServiceReadContext::from_process().unwrap();
+        let other = ServiceReadContext::from_process().unwrap();
+        let adapter = SessionServiceReadAccess {
+            policy: &policy,
+            context: &context,
+        };
         let inspect = Inspect {
             adapter: &adapter,
             other: &other,

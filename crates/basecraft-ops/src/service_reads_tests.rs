@@ -9,7 +9,7 @@ pub(crate) fn context(root: &Path) -> ServiceReadContext {
         _ => None,
     })
     .unwrap();
-    ServiceReadContext::from_paths(paths).unwrap()
+    ServiceReadContext::from_paths(&paths).unwrap()
 }
 
 pub(crate) struct Bound<'a>(pub &'a ServiceReadContext);
@@ -25,7 +25,7 @@ impl Access for Bound<'_> {
         request: &ServiceReadRequest<'_>,
         phase: ServiceReadPhase<'_>,
     ) -> crate::access::Result<()> {
-        if request.permits(self.0, phase) {
+        if request.permits(self.0, &phase) {
             Ok(())
         } else {
             Err(AccessError::Denied(Denial::ServiceUnavailable))
@@ -75,13 +75,6 @@ fn eligibility_refusal_never_bootstraps() {
 #[cfg(target_os = "linux")]
 #[test]
 fn real_phase_order_and_validated_revocation() {
-    let temp = tempfile::tempdir().unwrap();
-    let context = context(temp.path());
-    let request = ServiceReadRequest {
-        context: &context,
-        action: ServiceAction::ReadPreferences,
-    };
-    let trace = RefCell::new(Vec::new());
     struct Policy<'a> {
         context: &'a ServiceReadContext,
         trace: &'a RefCell<Vec<&'static str>>,
@@ -105,7 +98,7 @@ fn real_phase_order_and_validated_revocation() {
             } else {
                 "eligibility"
             });
-            assert!(request.permits(self.context, phase));
+            assert!(request.permits(self.context, &phase));
             if validated && self.revoke {
                 Err(AccessError::Denied(Denial::ReadOnly))
             } else {
@@ -113,35 +106,67 @@ fn real_phase_order_and_validated_revocation() {
             }
         }
     }
-    for revoke in [true, false] {
-        trace.borrow_mut().clear();
-        let result = request.read_with(
-            &Policy {
-                context: &context,
-                trace: &trace,
-                revoke,
-            },
-            |path| {
-                trace.borrow_mut().push("metadata");
-                inspect_read_namespace(path)
-            },
-            |ticket| {
-                trace.borrow_mut().push("consume");
-                ticket.open_read()
-            },
-        );
-        if revoke {
-            assert!(result.is_err());
-            assert_eq!(*trace.borrow(), ["eligibility", "metadata", "validated"]);
-        } else {
-            assert!(matches!(result.unwrap(), CheckedRead::Absent(_)));
-            assert_eq!(
-                *trace.borrow(),
-                ["eligibility", "metadata", "validated", "consume"]
-            );
+    let temp = tempfile::tempdir().unwrap();
+    let context = context(temp.path());
+    let request = ServiceReadRequest {
+        context: &context,
+        action: ServiceAction::ReadPreferences,
+    };
+    let trace = RefCell::new(Vec::new());
+    for present in [false, true] {
+        if present {
+            std::fs::create_dir(context.preferences.parent().unwrap()).unwrap();
+            std::fs::write(&context.preferences, b"fixture").unwrap();
         }
+        for revoke in [true, false] {
+            trace.borrow_mut().clear();
+            let result = request.read_with(
+                &Policy {
+                    context: &context,
+                    trace: &trace,
+                    revoke,
+                },
+                |path| {
+                    trace.borrow_mut().push("metadata");
+                    inspect_read_namespace(path)
+                },
+                |ticket| {
+                    trace.borrow_mut().push("consume");
+                    ticket.open_read()
+                },
+            );
+            if revoke {
+                assert!(result.is_err());
+                assert_eq!(*trace.borrow(), ["eligibility", "metadata", "validated"]);
+            } else {
+                match result.unwrap() {
+                    CheckedRead::Absent(_) => {
+                        assert!(!present);
+                        assert_eq!(
+                            *trace.borrow(),
+                            ["eligibility", "metadata", "validated", "consume"]
+                        );
+                    }
+                    CheckedRead::File(mut file) => {
+                        use std::io::Read as _;
+                        assert!(present);
+                        trace.borrow_mut().push("content");
+                        let mut bytes = Vec::new();
+                        file.read_to_end(&mut bytes).unwrap();
+                        assert_eq!(bytes, b"fixture");
+                        assert_eq!(
+                            *trace.borrow(),
+                            ["eligibility", "metadata", "validated", "consume", "content"]
+                        );
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            std::fs::read_dir(temp.path()).unwrap().count(),
+            usize::from(present)
+        );
     }
-    assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 0);
 }
 
 #[cfg(target_os = "linux")]
@@ -215,7 +240,7 @@ fn settings_reuses_checked_parser_and_never_writes() {
         match (checked, legacy) {
             (Ok(a), Ok(b)) => assert_eq!(a, b),
             (Err(crate::Error::Io(a)), Err(basecraft_platform::settings::Error::Io(b))) => {
-                assert_eq!(a.kind(), b.kind())
+                assert_eq!(a.kind(), b.kind());
             }
             (
                 Err(crate::Error::Invalid(a)),
