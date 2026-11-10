@@ -50,7 +50,7 @@ fn fixture(path: &Path, bytes: Option<u64>) -> Result<()> {
         let mut remaining = bytes - 7;
         let line = [b"ACGT".repeat(20), vec![b'\n']].concat();
         while remaining > 0 {
-            let count = remaining.min(line.len() as u64) as usize;
+            let count = usize::try_from(remaining.min(line.len() as u64))?;
             out.write_all(&line[..count])?;
             remaining -= count as u64;
         }
