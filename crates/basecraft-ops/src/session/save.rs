@@ -1,9 +1,10 @@
 //! Shared save guards, writes, hashes and acceptance.
+use super::SaveCheck;
 use super::{
     DerivedTarget, DocId, Error, LegacySave, Loaded, Op, OpResult, Path, Result, SaveDisposition,
     SaveHooks, SaveMilestone, SaveSite, files, invalid,
 };
-use super::{Document, PathBuf, SaveDecision, SaveOutcome, Session, save_decision};
+use super::{Document, SaveDecision, SaveOutcome, Session};
 
 impl Session {
     /// Save a document to its own path, or to `path`.

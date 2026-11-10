@@ -1,4 +1,5 @@
 //! Shared edit, grouping, undo, redo and journal ownership.
+use super::Document;
 use super::execute_tree;
 use super::{
     Actor, Applied, DocId, Error, FeatureId, Instant, Inverse, LOG_VERSION, Loaded, LogEntry,

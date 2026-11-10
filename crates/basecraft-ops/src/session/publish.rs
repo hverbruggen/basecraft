@@ -4,6 +4,7 @@ use super::{
     Actor, DocId, LogEntry, Op, Path, Result, copy_ancestry, files, invalid,
     portable_analysis_activity,
 };
+use super::{PathBuf, objects_dir, redact_operation_paths};
 
 impl Session {
     /// Publish exact submitted analysis inputs and its output ancestry after a

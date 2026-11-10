@@ -1,4 +1,6 @@
 //! Document loading, baseline tracking and retained originals.
+#[cfg(test)]
+use super::retention_tests;
 use super::{DocId, Op, OpResult, Path, PathBuf, Result, Slot, files, invalid, objects_dir};
 use super::{Loaded, OBJECT_STORE_LIMIT, Session, save_authority};
 

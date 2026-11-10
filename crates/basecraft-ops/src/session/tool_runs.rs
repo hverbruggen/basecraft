@@ -1,6 +1,7 @@
 //! Recording tool runs and job outcomes.
 use super::Session;
 use super::{Actor, DocId, Op, OpResult, Result};
+use super::{PathBuf, invalid};
 
 impl Session {
     /// Log a plugin run that read and wrote files, such as an aligner. Its
