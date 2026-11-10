@@ -3,6 +3,9 @@
 //! stages through registered child jobs with the same lifecycle as other runs.
 use basecraft_ops::links::AlignmentLinkExt;
 use basecraft_platform::files::{identity, link_count};
+use basecraft_protocol::publication_records::{
+    CollectionExportIntent, CollectionIntent, MemberExportReceipt,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{
@@ -1597,7 +1600,13 @@ impl PreparedOperation {
                 verify_collection(&retained, &expected)?;
             } else {
                 verify_collection(&staging, &expected)?;
-                input_evidence::write_json(&intent, &json!({"schema":1,"members":expected}))?;
+                input_evidence::write_json(
+                    &intent,
+                    &serde_json::to_value(CollectionIntent {
+                        schema: 1,
+                        members: expected.clone(),
+                    })?,
+                )?;
                 for path in expected.keys() {
                     basecraft_platform::files::sync_file(&staging.join(path))?;
                 }
@@ -1634,7 +1643,11 @@ impl PreparedOperation {
                     let destination = self.policy.path(destination, true)?;
                     input_evidence::write_json(
                         &intent,
-                        &json!({"schema":1,"destination":destination,"members":expected}),
+                        &serde_json::to_value(CollectionExportIntent {
+                            schema: 1,
+                            destination: destination.clone(),
+                            members: expected.clone(),
+                        })?,
                     )?;
                     export_collection(&retained, &destination, &expected)?;
                 }
@@ -2379,9 +2392,17 @@ fn export_member(source: &Path, destination: &Path, hash: &str, intent: &Path) -
     let metadata = pending.as_file().metadata()?;
     input_evidence::write_json(
         intent,
-        &json!({"schema":1,"destination":destination,
-        "hash":hash,"device":identity(pending.path())?.0,"inode":identity(pending.path())?.1,"size":metadata.len()}),
+        &serde_json::to_value(MemberExportReceipt {
+            schema: 1,
+            destination: destination.to_path_buf(),
+            hash: hash.into(),
+            device: identity(pending.path())?.0,
+            inode: identity(pending.path())?.1,
+            size: metadata.len(),
+        })?,
     )?;
+    #[cfg(test)]
+    record_format_tests::member_promotion_hook(pending.path(), destination, intent);
     basecraft_platform::atomic::rename_noreplace(pending.path(), destination).map_err(|error| {
         if error.kind() == std::io::ErrorKind::AlreadyExists {
             Error::Protocol("output_conflict: destination exists".into())

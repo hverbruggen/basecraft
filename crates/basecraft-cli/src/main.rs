@@ -485,6 +485,24 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     schemars::schema_for!(basecraft_protocol::link_records::AlignmentLinkUnavailable),
                 ),
                 (
+                    "collection-intent",
+                    schemars::schema_for!(
+                        basecraft_protocol::publication_records::CollectionIntent
+                    ),
+                ),
+                (
+                    "collection-export-intent",
+                    schemars::schema_for!(
+                        basecraft_protocol::publication_records::CollectionExportIntent
+                    ),
+                ),
+                (
+                    "member-export-receipt",
+                    schemars::schema_for!(
+                        basecraft_protocol::publication_records::MemberExportReceipt
+                    ),
+                ),
+                (
                     "analysis-run",
                     schemars::schema_for!(basecraft_protocol::records::AnalysisRun),
                 ),

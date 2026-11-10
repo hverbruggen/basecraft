@@ -79,9 +79,9 @@ are described below; their readers and fresh-write behavior remain distinct.
 | **EX08** `validated-artifacts.json`: validated artifact array | A | Same output-validation paths | finalization/repair | No outer version; run contract supplies context | `Vec<(String, PathBuf, String)>` role/path/digest tuples; no schema | Tuple length/types checked; no object extras |
 | **EX09** `stages.json`: child operation outcome array | A workflow | [delimitation_pipeline.rs](../crates/basecraft-plugin-host/src/delimitation_pipeline.rs) `AlignmentWorkflow::persist` | runner workflow repair/reconciliation | No outer version; each outcome `schema: 1` | `Vec<OperationOutcome>`; outcome schema for each item | Same as outcome |
 | **EX10** `query-preparation.json`: query/remote submission plan | A | `PreparedOperation::prepare` | runner lifecycle validation/receipt handling | BLAST plan's existing `schema: 1`; operation-dependent plan payload | ops `blast::Plan` or operation plan JSON; no unified schema | BLAST plan structs drop extras; raw remote plan uses Value |
-| **EX11** `collection-<role>-intent.json`: expected member map | A | `PreparedOperation::finalize` | finalizer checks intent presence; `verify_collection` checks retained collection against reconstructed expected map | `schema: 1` | `Value`; no schema | Intent contents are not parsed on retry; created before publication, no general rewrite |
-| **EX12** `collection-<role>-export.json`: destination and expected members | A | `PreparedOperation::finalize` | finalizer checks export intent presence; `verify_collection` checks destination against reconstructed expected map | `schema: 1` | `Value`; no schema | Intent contents are not parsed on retry; no general rewrite |
-| **EX13** `member-<hash>-export.json`: destination and content hash | A | `export_member` | `verify_member_receipt` parses selected schema/destination/hash/device/inode/size fields and verifies destination bytes | `schema: 1` | `Value`; no schema | Unknown JSON fields ignored by selected-field checks; no general rewrite |
+| **EX11** `collection-<role>-intent.json`: expected member map | A | `PreparedOperation::finalize` | finalizer checks intent presence; `verify_collection` checks retained collection against reconstructed expected map | `schema: 1` | protocol `publication_records::CollectionIntent`; [collection-intent.schema.json](collection-intent.schema.json) | Intent contents are not parsed on retry; created before publication, no general rewrite |
+| **EX12** `collection-<role>-export.json`: destination and expected members | A | `PreparedOperation::finalize` | finalizer checks export intent presence; `verify_collection` checks destination against reconstructed expected map | `schema: 1` | protocol `publication_records::CollectionExportIntent`; [collection-export-intent.schema.json](collection-export-intent.schema.json) | Intent contents are not parsed on retry; no general rewrite |
+| **EX13** `member-<hash>-export.json`: destination and content hash | A | `export_member` | `verify_member_receipt` parses selected schema/destination/hash/device/inode/size fields and verifies destination bytes | `schema: 1` | protocol `publication_records::MemberExportReceipt`; [member-export-receipt.schema.json](member-export-receipt.schema.json) | Unknown JSON fields ignored by selected-field checks; no general rewrite |
 | **EX14** Cancellation flag file | A | `jobs::cancel_job` atomic write | plugin cancellation context / process monitor | No version; marker bytes | Not JSON | Not applicable |
 | **EX15** Workflow `fit.json`, unavailable `fit.json.run.json` | A staged/published artifacts | `AlignmentWorkflow::run` copies/augments registered stage output | `files::load_delimitation`, workflow/runner output validation | Report `version: 1` where present; producer-dependent fit payload | Protocol `DelimitationResult`/`JobRecord` for compatible reports; augmented `Value`; [delimitation-result.schema.json](delimitation-result.schema.json), [job-record.schema.json](job-record.schema.json) cover typed forms only | Preserve Value while augmenting; typed reader rules vary |
 | **EX16** Plugin scientific outputs: reports, input evidence, collections, tool stdout/stderr and native files | A `pending` / `artifacts`, declared destinations | Registered plugin; runner freezes, validates and publishes exact bytes | Contract validation, format-specific readers, artifact digest verification | Producer/standard-specific; declared in operation output contract | Public `PluginArtifact`, `PublishedArtifact`, `ArtifactRevision`; arbitrary scientific JSON is **not** a host record schema | Opaque artifacts remain byte-preserved; do not impose host record fields |
@@ -519,3 +519,27 @@ JSON error before recovery retention, guard installation or main-data replacemen
 rather than panicking in the former literal builder. Existing staged snapshots
 can already exist and remain retained. No bytes, versions, defaults, unknown-field
 policy, history/replay or compatibility horizon change.
+
+### EX11–EX13 producer typing evidence
+
+The `collection-intent`, `collection-export`, `member-export` and
+`member-export-empty` records-v1 examples are immutable original-writer captures,
+committed before substitution. Real finalization/export helpers used synthetic
+validated staged files and a test-prepared registered collection descriptor,
+without executing a scientific engine. Absolute `/fixture` paths, random names
+and Unix file identity values are raw capture evidence, not portable identity
+promises. Runtime original-literal oracles use independent source inputs and
+actual promoted-file stat/hash, never identity parsed from the new receipt.
+Known-shape byte round trips retain schema 1, required fields, path strings,
+recursive Value ordering, full-width integers and one final LF.
+
+Production readers are unchanged: EX11/12 only require intent presence during
+repair and independently verify collection membership/bytes. Malformed/empty or
+wrong-schema/destination intent contents still satisfy that presence gate. EX13
+selects schema/destination/hash/device/inode/size and checks actual ownership,
+links and bytes; unknown fields remain ignored. These types are not strict
+production decoders or extension-preserving repair interfaces. Fallible producer
+serialization now returns the existing host JSON error for unrepresentable native
+paths at the original publication stages; the separate member-reader destination
+comparison is outside this correction. Earlier retained publication and stale
+intent bytes/temporary cleanup retain their existing behavior.

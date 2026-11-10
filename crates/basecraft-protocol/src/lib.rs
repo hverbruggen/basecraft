@@ -11,6 +11,7 @@ pub mod operation;
 pub mod ops;
 pub mod plugin;
 pub mod provenance;
+pub mod publication_records;
 pub mod records;
 pub mod sanger;
 pub mod submission;
