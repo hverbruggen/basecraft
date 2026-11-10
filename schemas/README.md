@@ -261,6 +261,10 @@ same runtime, not by pretending cross-run random identities are constant.
 Typed round-trips retain the exact captured bytes and unknown nested extras.
 
 Inventory also found `Session::publish_extraction` writing the same run family.
+A ninth raw example (`run-extracted.json`) captures this unchanged writer through
+`Session::extract`, and round-trips through the same AnalysisRun type. Its capture
+was taken after the other five substitutions, while extraction still matched
+the baseline production source.
 Its literal is recorded but remains unchanged under the assigned five-constructor
 scope pending coordinator allocation. Scientific producer `<result>.run.json`
 files are separate formats listed above, not analysis-store run records.

@@ -166,6 +166,7 @@ fn run_examples_roundtrip_and_preserve_extensions() {
     let fixture_root =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/records-v1");
     for name in [
+        "run-extracted.json",
         "run-referenced.json",
         "run-null.json",
         "run-generated.json",
