@@ -175,7 +175,7 @@ pub(crate) fn run() {
                     if $retain_fixture {
                         // Review recovery retains input references. Keep them valid
                         // until the isolated bootstrap profile itself is removed.
-                        folder.keep();
+                        let _ = folder.keep();
                     }
                 }};
             }
