@@ -5,6 +5,7 @@
 
 pub mod annotation;
 pub mod delimitation;
+pub mod export_records;
 pub mod installation_records;
 pub mod link_records;
 pub mod metadata;

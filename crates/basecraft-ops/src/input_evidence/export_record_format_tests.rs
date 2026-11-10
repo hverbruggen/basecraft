@@ -357,3 +357,26 @@ fn reached_final_map_obstruction() {
     );
     println!("final map obstruction: {}: {error}", error.code());
 }
+
+#[test]
+fn typed_export_maps_round_trip_original_fixtures() {
+    use basecraft_protocol::export_records::ProvenanceExportMap;
+
+    for bytes in [
+        include_bytes!("../../../../testdata/fixtures/records-v1/provenance-export-map-empty.json")
+            .as_slice(),
+        include_bytes!(
+            "../../../../testdata/fixtures/records-v1/provenance-export-map-single.json"
+        )
+        .as_slice(),
+        include_bytes!(
+            "../../../../testdata/fixtures/records-v1/provenance-export-map-shared-ancestry.json"
+        )
+        .as_slice(),
+    ] {
+        let map: ProvenanceExportMap = serde_json::from_slice(bytes).unwrap();
+        let encoded = serde_json::to_vec_pretty(&serde_json::to_value(map).unwrap()).unwrap();
+        assert_eq!(encoded, bytes);
+        assert_ne!(encoded.last(), Some(&b'\n'));
+    }
+}

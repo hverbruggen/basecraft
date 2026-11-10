@@ -2305,7 +2305,12 @@ fn export_history(
         basecraft_io::write_atomic(&target.join(&name), |w| w.write_all(&bytes))?;
         let old_id = publication.id.clone();
         publication.id = ulid::Ulid::generate().to_string();
-        mapping.push(serde_json::json!({"original_id":old_id,"original_hash":hash,"export_id":publication.id}));
+        mapping.push(basecraft_protocol::export_records::ProvenanceExportMapping {
+            original_id: old_id.clone(),
+            original_hash: hash.clone(),
+            export_id: publication.id.clone(),
+            extra: BTreeMap::new(),
+        });
         archives.push(ArtifactRevision {
             id: format!("{}:original-record", publication.id),
             logical_name: format!("original-record-{old_id}.json"),
@@ -2346,8 +2351,13 @@ fn export_history(
         hashes.insert(key.clone(), basecraft_io::hash_file(&path)?);
         rebased.insert(key, publication);
     }
-    let bytes =
-        serde_json::to_vec_pretty(&serde_json::json!({"schema_version":1,"records":mapping}))?;
+    let bytes = serde_json::to_vec_pretty(&serde_json::to_value(
+        basecraft_protocol::export_records::ProvenanceExportMap {
+            schema_version: 1,
+            records: mapping,
+            extra: BTreeMap::new(),
+        },
+    )?)?;
     let hash = basecraft_io::hash_bytes(&bytes);
     let name = format!("artifacts/{}", hash.trim_start_matches("b3:"));
     basecraft_io::write_atomic(&target.join(&name), |w| w.write_all(&bytes))?;

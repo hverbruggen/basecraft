@@ -534,6 +534,10 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     schemars::schema_for!(basecraft_protocol::records::ResultBinding),
                 ),
                 (
+                    "provenance-export-map",
+                    schemars::schema_for!(basecraft_protocol::export_records::ProvenanceExportMap),
+                ),
+                (
                     "plugin-installation-index",
                     schemars::schema_for!(
                         basecraft_protocol::installation_records::InstallationIndex

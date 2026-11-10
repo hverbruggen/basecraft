@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ProvenanceExportMap",
+  "description": "Ordered relocations of publications whose original bytes are also retained.",
+  "type": "object",
+  "properties": {
+    "records": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ProvenanceExportMapping"
+      }
+    },
+    "schema_version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "records"
+  ],
+  "$defs": {
+    "ProvenanceExportMapping": {
+      "description": "One original publication identity and byte hash, with its relocated identity.",
+      "type": "object",
+      "properties": {
+        "export_id": {
+          "type": "string"
+        },
+        "original_hash": {
+          "type": "string"
+        },
+        "original_id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "original_id",
+        "original_hash",
+        "export_id"
+      ]
+    }
+  }
+}

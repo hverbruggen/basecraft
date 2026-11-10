@@ -36,7 +36,7 @@ are described below; their readers and fresh-write behavior remain distinct.
 | **RP08** `store.json`: analysis namespace marker | `.basecraft/analyses-v1` | [analysis_store.rs](../crates/basecraft-ops/src/analysis_store.rs) `ArtifactRun::create`, compact JSON plus newline | `ArtifactRun::validate_store` | `format: basecraft.analysis-store`, `schema_version: 1` | protocol `StoreMarker` / [store-marker.schema.json](store-marker.schema.json) | Top-level extras kept by type; validation ignores extras; marker not rewritten |
 | **RP09** Result binding (hash-derived filename): run, result filename/hash | `.basecraft/analyses-v1` binding namespace | `ArtifactRun::bind` | `ArtifactRun::for_result` | `schema_version: 1` | protocol `records::ResultBinding` / [result-binding.schema.json](result-binding.schema.json) | Typed round-trip keeps extras; selective reads; fresh writes |
 | **RP10** `analysis-stores.json`: absolute known store paths | C state | `input_evidence::register` | `store_registry`, `stores`, save conflict scan | `schema_version: 1` | protocol `StoreRegistry` / [store-registry.schema.json](store-registry.schema.json) | Top-level extras kept on registration update; absolute path array/count validated |
-| **RP11** `artifacts/<hash>` with logical name `export-map.json`: old/new publication mapping | E packaged P | `input_evidence::export_history` | retained artifact inspection; no dedicated in-app deserializer | `schema_version: 1` | `Value`; no schema | Generated artifact; original records also retained, no rewrite reader |
+| **RP11** `artifacts/<hash>` with logical name `export-map.json`: old/new publication mapping | E packaged P | `input_evidence::export_history` | retained artifact inspection; no dedicated in-app deserializer | `schema_version: 1` | protocol `export_records::ProvenanceExportMap` / `ProvenanceExportMapping`; [provenance-export-map.schema.json](provenance-export-map.schema.json) | Generated artifact; original records also retained, no rewrite reader |
 | **RP12** `reports/manifest.json`: publication, template, output hashes, redactions, citations | P / A | `provenance::write_reports` | report consumer / inspection (no dedicated typed in-app reader) | `schema_version: 1`, `template_version: 2` | protocol `report_records::ProvenanceReportManifest` / [provenance-report-manifest.schema.json](provenance-report-manifest.schema.json) | Generated afresh |
 | **RP13** `reports/source-map.json`: paragraph/activity array | P / A | `provenance::write_reports` | report consumer / inspection | No version field | protocol `Vec<report_records::ReportSourceMapEntry>` / [report-source-map.schema.json](report-source-map.schema.json) | Generated afresh |
 | **RP14** `reports/history.md`, `methods.generated.md`, `parameters.tsv`, bundle `README.md` | P / A | `provenance::write_reports`, `publish` | human/report consumers | Report manifest template version | Markdown / TSV, not JSON records | Not applicable; user-authored `reports/methods.md` is preserved, never regenerated |
@@ -414,7 +414,7 @@ rather than a fabricated common JSON golden.
 | RP06 | Analysis-store, evidence/save safety and provenance workflow tests create inputs at runtime | No committed original-writer SubmittedInput golden covering reference/generated/preserved/broken/removed/dependency shapes |
 | RP07 | Nine `records-v1/run-*.json`; ops `tests/run_record_formats.rs`, runner `record_format_tests` | Capture origins and runtime oracle limits documented above; not a lifecycle/replay compatibility horizon |
 | RP08, RP10 | `records-v1/store*.json`; ops `tests/store_registry_formats.rs` | Empty registry is synthetic missing-file default; local paths are deliberately synthetic |
-| RP11 | Export-history/package tests | No committed export-map original-writer golden |
+| RP11 | Original export-history helper byte oracle, typed fixture round-trips and package ancestry tests | Three raw `records-v1/provenance-export-map-*.json` original-writer artifacts; unchanged generated identities, bytes and ordering |
 | RP15–RP19 | `document_record` tests and GUI document-record QML tests | No committed complete Report::write_files golden for these distinct export shapes; provenance-v1 is a different writer |
 | DS01–DS02 | `files`, tree/Delimitation save, provenance/replay and plugin tests | No committed original-writer tree or v1/v2 delimitation wrapper golden; SPART inputs and workspace schema cover different bytes |
 | DS03 | Five `records-v1/link-*.json`; ops `tests/link_record_formats.rs` | Both versions captured; unknown extra cases are share/update captures, not fresh-create merge guarantees |
@@ -588,3 +588,24 @@ closure/load refusal and Unix path serialization, not replacement faults, lock
 contention, partial installation, power loss or ENOSPC. Provisioning/discovery,
 retained-job semantics, generated native runtime paths and Windows/Mac execution
 remain separate validation. EX03's opaque runtime snapshot is unchanged.
+
+## Provenance export identity map (RP11)
+
+`export_records` describes the existing ordered export-map artifact and its rows.
+The writer still serializes through recursively sorted `Value` and the existing
+pretty serializer, without a final newline; hash, size and retained path cover
+those exact bytes. Original publication records remain separately archived,
+including their original formatting. The immutable empty/single/shared-ancestry
+fixtures were captured before type substitution; fresh helper runs compare full
+bytes to the frozen old Value recipe using independently returned identities.
+Empty roots are a helper control, not a normal empty user package journey.
+
+All existing map/row fields are required in the model, without defaults or new
+identity/hash/version validation. Unknown nested values at map/row level survive
+model round-trips. This is test-only decoding evidence: packaging still has no
+production export-map decoder, extension-merging rewrite or schema gate. The
+schema describes data, not ancestry safety, byte/hash validation or a const-1
+version policy. Publication's existing unknown-field rejection is unchanged.
+Traversal, duplicate-owner identity, original archival/materialization and
+partial-failure behavior stay host-owned; native faults and compatibility horizon
+remain separate qualification and policy decisions.
