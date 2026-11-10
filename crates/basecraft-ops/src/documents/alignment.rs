@@ -16,11 +16,10 @@ impl Document for OpenedAlignment {
     }
 
     fn fingerprint(&self) -> DocState {
-        DocState {
-            len: self.doc.width(),
-            features: 0,
-            rows: Some(self.doc.row_count() as u64),
-        }
+        DocState::from_counts(basecraft_protocol::ops::DocumentCounts::Alignment {
+            columns: self.doc.width(),
+            rows: self.doc.row_count() as u64,
+        })
     }
 
     fn apply(&mut self, op: &Op) -> Result<(Inverse, Option<FeatureId>)> {

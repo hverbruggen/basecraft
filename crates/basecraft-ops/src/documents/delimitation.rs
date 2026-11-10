@@ -111,11 +111,10 @@ impl Document for DelimitationWorkspace {
 pub(crate) fn delimitation_state(
     work: &basecraft_protocol::delimitation::DelimitationWorkspace,
 ) -> DocState {
-    DocState {
-        len: work.specimens.len() as u64,
-        features: work.hypotheses.len() as u64,
-        rows: None,
-    }
+    DocState::from_counts(basecraft_protocol::ops::DocumentCounts::Delimitation {
+        specimens: work.specimens.len() as u64,
+        hypotheses: work.hypotheses.len() as u64,
+    })
 }
 
 pub(crate) fn execute_delimitation(

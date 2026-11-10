@@ -1,0 +1,12 @@
+{"len":10,"features":2}
+{"len":10,"features":2,"counts":{"kind":"sequence","residues":10,"features":2}}
+{"len":10,"features":0,"rows":3}
+{"len":10,"features":0,"rows":3,"counts":{"kind":"alignment","columns":10,"rows":3}}
+{"len":4,"features":2}
+{"len":4,"features":2,"counts":{"kind":"tree","tips":4,"annotations":2}}
+{"len":4,"features":1}
+{"len":4,"features":1,"counts":{"kind":"delimitation","specimens":4,"hypotheses":1}}
+{"len":4,"features":2,"rows":3}
+{"len":4,"features":2,"rows":3,"counts":{"kind":"metadata","specimens":4,"identifications":2,"links":3}}
+{"len":4,"features":2,"rows":1}
+{"len":4,"features":2,"rows":1,"counts":{"kind":"submission","records":4,"frames":2,"accessions":1}}

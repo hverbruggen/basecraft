@@ -128,6 +128,54 @@ fn scenario<T: Debug + PartialEq>(
     assert_eq!(report.sessions, 1);
     assert_eq!(report.entries, entries.len());
     assert_eq!(log::read_all(dir.path()).unwrap().len(), entries.len());
+
+    // Old journals have only the legacy counts. Re-encode this real workflow
+    // through the actual checksummed writer, rather than bypassing integrity.
+    assert!(entries.iter().all(|entry| entry.state.counts.is_some()));
+    let mut legacy = entries.clone();
+    for entry in &mut legacy {
+        entry.state.counts = None;
+    }
+    replace_fixture_log(dir.path(), &legacy);
+    let legacy_report = replay::replay(dir.path()).unwrap();
+    assert!(
+        legacy_report.ok(),
+        "legacy {name}: {:#?}",
+        legacy_report.problems
+    );
+    assert_eq!(legacy_report.entries, entries.len());
+
+    // Equal legacy counts do not make different document kinds equivalent.
+    let mut wrong_kind = entries;
+    let state = &mut wrong_kind[1].state;
+    use basecraft_protocol::ops::DocumentCounts;
+    state.counts = Some(
+        if matches!(state.counts, Some(DocumentCounts::Sequence { .. })) {
+            DocumentCounts::Tree {
+                tips: state.len,
+                annotations: state.features,
+            }
+        } else {
+            DocumentCounts::Sequence {
+                residues: state.len,
+                features: state.features,
+            }
+        },
+    );
+    replace_fixture_log(dir.path(), &wrong_kind);
+    assert!(
+        !replay::replay(dir.path()).unwrap().ok(),
+        "{name}: wrong kind accepted"
+    );
+}
+
+/// Only the disposable scenario's journal is replaced; original inputs and
+/// retained objects stay available to the real replay owner.
+fn replace_fixture_log(root: &Path, entries: &[basecraft_protocol::LogEntry]) {
+    std::fs::remove_dir_all(log::log_dir(root)).unwrap();
+    log::LogWriter::new(root, "fingerprint-compatibility")
+        .append_batch(entries)
+        .unwrap();
 }
 
 #[test]

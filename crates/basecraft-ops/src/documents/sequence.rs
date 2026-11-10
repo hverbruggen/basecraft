@@ -101,11 +101,10 @@ impl Document for Opened {
 }
 
 pub(crate) fn sequence_state(doc: &SequenceDoc) -> DocState {
-    DocState {
-        len: doc.len(),
+    DocState::from_counts(basecraft_protocol::ops::DocumentCounts::Sequence {
+        residues: doc.len(),
         features: doc.feature_count() as u64,
-        rows: None,
-    }
+    })
 }
 
 /// Carry out a sequence edit, retaining an edit-sized inverse.

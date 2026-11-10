@@ -634,3 +634,15 @@ constraints. Writers, locks, transitions, filesystem verification and errors
 remain host-owned and unchanged. String-state typing debt and A2 adapter capture
 are separate work; this extraction makes no all-producer qualification claim and
 does not complete parent M6.
+
+## Document fingerprints in operation logs
+
+`LogEntry.state` retains the original `len`, `features` and optional `rows`
+fields. New entries additionally emit optional `counts`, tagged by document
+`kind`, with named per-kind fields. Their legacy projection is unchanged.
+Unmodified old entries reserialize without adding this field. Replay checks
+all recorded legacy counts and, when present, the entire named descriptor;
+it does not infer a kind for old entries or weaken ordinary equality.
+The shared operation-log additive-field compatibility rule applies: `v: 1`
+and operation meanings remain unchanged. The generated log-entry schema
+and document-fingerprints.jsonl examples describe the extension.

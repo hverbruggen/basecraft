@@ -708,6 +708,7 @@ mod activity_tests {
             },
             result: basecraft_protocol::OpResult::default(),
             state: basecraft_protocol::DocState {
+                counts: None,
                 len: 4,
                 features: 0,
                 rows: None,

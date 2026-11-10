@@ -67,7 +67,7 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut Report) -> Re
                 continue;
             }
             match session.create_sequence_with_key(&e.doc, name, residues) {
-                Ok(id) if session.state(id) == e.state => {
+                Ok(id) if session.state(id).matches_recorded(&e.state) => {
                     docs.insert(&e.doc, id);
                 }
                 Ok(_) => problem("created sequence state differs".into()),
@@ -163,7 +163,7 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut Report) -> Re
             },
         }
         let state = session.state(doc);
-        if state != e.state {
+        if !state.matches_recorded(&e.state) {
             report.problems.push(format!(
                 "{} {}: state {state:?}, expected {:?}",
                 e.id,
@@ -382,7 +382,7 @@ fn recover_entries(
                 return Err(crate::error::invalid("unsafe recovery document identity"));
             }
             let doc = session.create_sequence_with_key(&entry.doc, name, residues)?;
-            if session.state(doc) != entry.state {
+            if !session.state(doc).matches_recorded(&entry.state) {
                 return Err(crate::error::invalid("created sequence state differs"));
             }
             documents.insert(entry.doc.clone(), doc);
@@ -420,7 +420,7 @@ fn recover_entries(
                 session.apply_as(doc, operation, entry.actor)?;
             }
         }
-        if session.state(doc) != entry.state {
+        if !session.state(doc).matches_recorded(&entry.state) {
             return Err(crate::error::invalid(format!(
                 "recovery state differs at {}",
                 entry.id

@@ -1976,6 +1976,7 @@ impl PreparedOperation {
                     feature: None,
                 },
                 state: basecraft_protocol::DocState {
+                    counts: None,
                     len: 0,
                     features: 0,
                     rows: None,

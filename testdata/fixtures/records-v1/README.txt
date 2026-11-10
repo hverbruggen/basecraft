@@ -285,3 +285,10 @@ bytes/partial artifacts. The atomic-write obstruction starts with a test-prepare
 retained copy, reaches the writer, then verifies an idempotent retry. Unix
 permissions/symlinks and Linux error text/copy-read coverage are platform scoped.
 No version, schema, state policy, compatibility or production behavior changes.
+
+Document fingerprint compatibility (M1): document-fingerprints.jsonl contains
+explicit old/new pairs for six document kinds. Original len/features/rows
+semantics and legacy serialization are unchanged; counts adds a tagged named
+descriptor. These are hand-declared protocol examples, not captured producer
+output. kind_conformance separately exercises actual six-kind journal/replay
+with modern counts, legacy-only counts and a mismatched modern kind.

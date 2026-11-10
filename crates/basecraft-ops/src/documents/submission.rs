@@ -20,11 +20,11 @@ impl Document for Submission {
     }
 
     fn fingerprint(&self) -> DocState {
-        DocState {
-            len: self.rows.len() as u64,
-            features: self.frames.len() as u64,
-            rows: Some(self.accessions.len() as u64),
-        }
+        DocState::from_counts(basecraft_protocol::ops::DocumentCounts::Submission {
+            records: self.rows.len() as u64,
+            frames: self.frames.len() as u64,
+            accessions: self.accessions.len() as u64,
+        })
     }
 
     fn apply(&mut self, op: &Op) -> Result<(Inverse, Option<FeatureId>)> {

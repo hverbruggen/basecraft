@@ -309,6 +309,87 @@ pub struct DocState {
     /// Rows of an alignment.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rows: Option<u64>,
+    /// Named counts and document kind. Absent in logs written before these
+    /// descriptors were introduced; the original fields retain their meaning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub counts: Option<DocumentCounts>,
+}
+
+/// A document fingerprint names what it counts instead of interpreting a
+/// metadata link as an alignment row or a submission frame as a feature.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DocumentCounts {
+    Sequence {
+        residues: u64,
+        features: u64,
+    },
+    Alignment {
+        columns: u64,
+        rows: u64,
+    },
+    Tree {
+        tips: u64,
+        annotations: u64,
+    },
+    Delimitation {
+        specimens: u64,
+        hypotheses: u64,
+    },
+    Metadata {
+        specimens: u64,
+        identifications: u64,
+        links: u64,
+    },
+    Submission {
+        records: u64,
+        frames: u64,
+        accessions: u64,
+    },
+}
+
+impl DocState {
+    /// Write named counts alongside their unchanged legacy projection.
+    pub fn from_counts(counts: DocumentCounts) -> Self {
+        let (len, features, rows) = match &counts {
+            DocumentCounts::Sequence { residues, features } => (*residues, *features, None),
+            DocumentCounts::Alignment { columns, rows } => (*columns, 0, Some(*rows)),
+            DocumentCounts::Tree { tips, annotations } => (*tips, *annotations, None),
+            DocumentCounts::Delimitation {
+                specimens,
+                hypotheses,
+            } => (*specimens, *hypotheses, None),
+            DocumentCounts::Metadata {
+                specimens,
+                identifications,
+                links,
+            } => (*specimens, *identifications, Some(*links)),
+            DocumentCounts::Submission {
+                records,
+                frames,
+                accessions,
+            } => (*records, *frames, Some(*accessions)),
+        };
+        Self {
+            len,
+            features,
+            rows,
+            counts: Some(counts),
+        }
+    }
+
+    /// Compare a current fingerprint to a recorded one. Old entries require
+    /// all their original counts; new entries additionally require the named
+    /// counts and kind. This is deliberately not a relaxed `PartialEq`.
+    pub fn matches_recorded(&self, recorded: &Self) -> bool {
+        self.len == recorded.len
+            && self.features == recorded.features
+            && self.rows == recorded.rows
+            && recorded
+                .counts
+                .as_ref()
+                .is_none_or(|counts| self.counts.as_ref() == Some(counts))
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -355,6 +436,53 @@ mod tests {
     use super::*;
 
     #[test]
+    fn named_fingerprints_preserve_legacy_bytes_and_counts() {
+        let fixtures =
+            include_str!("../../../testdata/fixtures/records-v1/document-fingerprints.jsonl");
+        let lines: Vec<_> = fixtures.lines().collect();
+        assert_eq!(lines.len(), 12);
+        for pair in lines.chunks_exact(2) {
+            let old: DocState = serde_json::from_str(pair[0]).unwrap();
+            let current: DocState = serde_json::from_str(pair[1]).unwrap();
+            assert_eq!(serde_json::to_string(&old).unwrap(), pair[0]);
+            assert_eq!(serde_json::to_string(&current).unwrap(), pair[1]);
+            assert!(old.counts.is_none());
+            assert!(current.counts.is_some());
+            assert_eq!(
+                DocState::from_counts(current.counts.clone().unwrap()),
+                current
+            );
+            assert!(current.matches_recorded(&old));
+            assert!(current.matches_recorded(&current));
+            assert!(!old.matches_recorded(&current));
+            assert_ne!(current, old);
+            let mut wrong = old.clone();
+            wrong.len += 1;
+            assert!(!current.matches_recorded(&wrong));
+            wrong = old.clone();
+            wrong.features += 1;
+            assert!(!current.matches_recorded(&wrong));
+            wrong = old;
+            wrong.rows = Some(wrong.rows.unwrap_or(0) + 1);
+            assert!(!current.matches_recorded(&wrong));
+        }
+        let sequence = DocState::from_counts(DocumentCounts::Sequence {
+            residues: 10,
+            features: 2,
+        });
+        let tree = DocState::from_counts(DocumentCounts::Tree {
+            tips: 10,
+            annotations: 2,
+        });
+        assert_eq!(
+            (sequence.len, sequence.features, sequence.rows),
+            (tree.len, tree.features, tree.rows)
+        );
+        assert!(!sequence.matches_recorded(&tree));
+        assert!(!tree.matches_recorded(&sequence));
+    }
+
+    #[test]
     fn entry_json_shape_and_roundtrip() {
         let e = LogEntry {
             v: LOG_VERSION,
@@ -371,6 +499,7 @@ mod tests {
             },
             result: OpResult::default(),
             state: DocState {
+                counts: None,
                 len: 101,
                 features: 3,
                 rows: None,

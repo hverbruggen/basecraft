@@ -17,11 +17,10 @@ impl Document for OpenedTree {
     }
 
     fn fingerprint(&self) -> DocState {
-        DocState {
-            len: self.doc.tip_count() as u64,
-            features: self.doc.annotations().len() as u64,
-            rows: None,
-        }
+        DocState::from_counts(basecraft_protocol::ops::DocumentCounts::Tree {
+            tips: self.doc.tip_count() as u64,
+            annotations: self.doc.annotations().len() as u64,
+        })
     }
 
     fn apply(&mut self, op: &Op) -> Result<(Inverse, Option<FeatureId>)> {

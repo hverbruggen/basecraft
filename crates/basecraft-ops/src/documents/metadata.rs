@@ -16,11 +16,11 @@ impl Document for OpenedMetadata {
     }
 
     fn fingerprint(&self) -> DocState {
-        DocState {
-            len: self.metadata.specimens.rows.len() as u64,
-            features: self.metadata.identifications.len() as u64,
-            rows: Some(self.metadata.links.len() as u64),
-        }
+        DocState::from_counts(basecraft_protocol::ops::DocumentCounts::Metadata {
+            specimens: self.metadata.specimens.rows.len() as u64,
+            identifications: self.metadata.identifications.len() as u64,
+            links: self.metadata.links.len() as u64,
+        })
     }
 
     fn apply(&mut self, op: &Op) -> Result<(Inverse, Option<FeatureId>)> {
