@@ -301,8 +301,9 @@ fn repeated_combine_and_refused_save_preserve_retained_objects_and_recover() {
     let recovered = tempfile::tempdir().unwrap();
     let destination = recovered.path().join("recovered");
     let outputs = basecraft_ops::replay::recover(dir.path(), &destination).unwrap();
-    assert!(
-        outputs.iter().next().is_some(),
+    assert_ne!(
+        outputs,
+        Vec::<PathBuf>::new(),
         "recovery returned no documents"
     );
     for output in outputs {
