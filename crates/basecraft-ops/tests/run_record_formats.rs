@@ -95,7 +95,9 @@ fn original_delimitation_save_run_writer() {
         .apply(
             doc,
             basecraft_protocol::Op::DelimitationEdit {
-                edit: Box::new(basecraft_ops::delimitation::DelimitationEdit::SetView { view }),
+                edit: Box::new(
+                    basecraft_protocol::delimitation::DelimitationEdit::SetView { view },
+                ),
             },
         )
         .unwrap();
