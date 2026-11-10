@@ -1087,6 +1087,44 @@ fn preserve_input_locked(bundle: &Path) -> Result<()> {
     )
 }
 
+/// Resolve a group under the caller's existing mutation guard. Two target
+/// groups can contain the very same backing ledger. Removal of that exact
+/// ledger is performed once; equal hashes/names never identify two ledgers.
+/// The original groups remain intact in the Session receipt and action report.
+pub(crate) fn resolve_group(
+    conflict: &EvidenceConflict,
+    policy: SavePolicy,
+    removed: &mut std::collections::BTreeSet<PathBuf>,
+) -> Result<()> {
+    if policy != SavePolicy::RemoveAnalysis {
+        return resolve(conflict, policy);
+    }
+    let mut remaining = conflict.clone();
+    remaining.analyses.retain_mut(|analysis| {
+        if analysis.backing_analyses.is_empty() {
+            return !removed.contains(&analysis.run);
+        }
+        analysis
+            .backing_analyses
+            .retain(|backing| !removed.contains(&backing.run));
+        !analysis.backing_analyses.is_empty()
+    });
+    resolve(&remaining, policy)?;
+    for analysis in remaining.analyses {
+        if analysis.backing_analyses.is_empty() {
+            removed.insert(analysis.run);
+        } else {
+            removed.extend(
+                analysis
+                    .backing_analyses
+                    .into_iter()
+                    .map(|backing| backing.run),
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Apply explicit decisions before overwrite. A partial decision failure aborts
 /// the save; earlier preserved copies/removed metadata remain recoverable.
 pub fn resolve(conflict: &EvidenceConflict, policy: SavePolicy) -> Result<()> {

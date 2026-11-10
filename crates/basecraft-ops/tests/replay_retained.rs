@@ -46,6 +46,9 @@ fn qualify(root: &Path, recovered: &Path) {
 
 #[test]
 fn repeated_open_with_edits_preserves_inputs_in_replay_and_recovery() {
+    // Successful recovery registers its final store. Keep each fixture alive
+    // until the other cases finish inspecting that shared test profile.
+    let mut retained = Vec::new();
     for source_state in ["unchanged", "changed", "missing"] {
         let parent = tempfile::tempdir().unwrap();
         let root = parent.path().join("project");
@@ -81,6 +84,7 @@ fn repeated_open_with_edits_preserves_inputs_in_replay_and_recovery() {
         assert_eq!(path.exists().then(|| fingerprint(&path)), source);
         let loaded = basecraft_ops::files::load_delimitation(&recovered.join("a.spart")).unwrap();
         assert_eq!(loaded.hypotheses.len(), 2);
+        retained.push(parent);
     }
 }
 

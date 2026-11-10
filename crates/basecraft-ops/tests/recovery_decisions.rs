@@ -282,6 +282,19 @@ fn stage_and_final_policies_validate_all_groups_before_any_mutation() {
             .unwrap();
     let stage_file = attempt.check(0).unwrap().target().to_path_buf();
     let stage_run = reference(&root.join("stage-analysis/result"), &stage_file);
+    let owner = reference(&root.join("owner/result"), &root.join("source/0.fasta"));
+    for run in [&stage_run, &final_run] {
+        let mut input = basecraft_ops::input_evidence::read_input(run.directory()).unwrap();
+        input.extra.insert(
+            "analysis_run".into(),
+            serde_json::json!(
+                basecraft_ops::input_evidence::relative(run.directory(), owner.directory())
+                    .unwrap()
+            ),
+        );
+        basecraft_ops::input_evidence::write_json(&run.directory().join("input.json"), &input)
+            .unwrap();
+    }
     let original = std::fs::read(stage_run.directory().join("input.json")).unwrap();
     let check = attempt.check(0).unwrap();
     let groups: Vec<_> = check.evidence_groups().collect();
@@ -298,9 +311,21 @@ fn stage_and_final_policies_validate_all_groups_before_any_mutation() {
             .options
             .contains(&SavePolicy::PreserveCopy)
     );
-    assert_ne!(
-        groups[0].conflict.analyses[0].run,
-        groups[1].conflict.analyses[0].run
+    assert!(!groups[0].is_complete());
+    assert!(groups[1].is_complete());
+    assert_eq!(groups[0].conflict.analyses[0].run, owner.directory());
+    assert_eq!(groups[1].conflict.analyses[0].run, owner.directory());
+    assert!(
+        groups[0].conflict.analyses[0]
+            .backing_analyses
+            .iter()
+            .any(|backing| backing.run == stage_run.directory() && backing.direct)
+    );
+    assert!(
+        groups[1].conflict.analyses[0]
+            .backing_analyses
+            .iter()
+            .any(|backing| backing.run == final_run.directory() && backing.direct)
     );
     assert!(matches!(
         attempt.advance(0, Some(check.decide(SavePolicy::Cancel, true))),
@@ -580,4 +605,67 @@ fn permission_and_preservation_failures_spend_receipts_without_publication() {
         std::fs::read(run.directory().join("preserved-input")).unwrap(),
         original
     );
+}
+
+#[test]
+fn removal_of_shared_backing_ledgers_across_target_groups_is_once() {
+    let Some(root) =
+        isolated_profile::enter("removal_of_shared_backing_ledgers_across_target_groups_is_once")
+    else {
+        return;
+    };
+    let session = source(&root, 1);
+    let destination = root.join("out");
+    std::fs::create_dir(&destination).unwrap();
+    std::fs::write(destination.join("0.fasta"), b">old\nAAAA\n").unwrap();
+    let final_run = reference(&root.join("final/result"), &destination.join("0.fasta"));
+    std::fs::remove_file(destination.join("0.fasta")).unwrap();
+    std::fs::remove_dir(&destination).unwrap();
+    let mut attempt =
+        replay::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
+            .unwrap();
+    let stage_run = reference(
+        &root.join("stage/result"),
+        attempt.check(0).unwrap().target(),
+    );
+    let owner = reference(&root.join("owner/result"), &root.join("source/0.fasta"));
+    for run in [&stage_run, &final_run] {
+        let mut input = basecraft_ops::input_evidence::read_input(run.directory()).unwrap();
+        input.extra.insert(
+            "analysis_run".into(),
+            serde_json::json!(
+                basecraft_ops::input_evidence::relative(run.directory(), owner.directory())
+                    .unwrap()
+            ),
+        );
+        basecraft_ops::input_evidence::write_json(&run.directory().join("input.json"), &input)
+            .unwrap();
+    }
+    let check = attempt.check(0).unwrap();
+    attempt
+        .advance(0, Some(check.decide(SavePolicy::RemoveAnalysis, true)))
+        .unwrap();
+    let complete = match attempt.publish() {
+        Ok(complete) => complete,
+        Err(error) => {
+            let check = required(error);
+            attempt
+                .advance(0, Some(check.decide(SavePolicy::Cancel, true)))
+                .unwrap();
+            attempt.publish().unwrap()
+        }
+    };
+    assert_eq!(complete.evidence_actions.len(), 2);
+    assert!(complete.evidence_actions.iter().all(|a| a.completed));
+    for run in [stage_run, final_run, owner] {
+        assert!(!run.directory().exists());
+        let trash = run
+            .directory()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("trash");
+        assert_eq!(std::fs::read_dir(trash).unwrap().count(), 1);
+    }
 }

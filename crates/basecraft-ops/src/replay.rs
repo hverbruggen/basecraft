@@ -706,12 +706,11 @@ impl RecoveryAttempt {
             let outcome = match outcome {
                 Ok(outcome) => outcome,
                 Err(error) => {
-                    self.artifacts = artifacts(
-                        self.staging
-                            .as_ref()
-                            .ok_or_else(|| crate::error::invalid("recovery stage missing"))?
-                            .path(),
-                    )?;
+                    if let Some(stage) = &self.staging
+                        && let Ok(observed) = artifacts(stage.path())
+                    {
+                        self.artifacts = observed;
+                    }
                     return Err(error);
                 }
             };
@@ -746,6 +745,25 @@ impl RecoveryAttempt {
     }
 
     pub fn publish(&mut self) -> Result<RecoveryCompletion> {
+        let result = self.publish_inner();
+        if !self.published
+            && result.as_ref().is_err_and(|error| {
+                !matches!(
+                    error,
+                    crate::Error::SaveCheckRequired(_) | crate::Error::SaveDecisionStale(_)
+                )
+            })
+        {
+            for doc in &mut self.documents {
+                if let Some(observation) = &mut doc.saved {
+                    observation.require_final_decision();
+                }
+            }
+        }
+        result
+    }
+
+    fn publish_inner(&mut self) -> Result<RecoveryCompletion> {
         self.validate()?;
         let _target = crate::save_guard::lock(&self.destination)?;
         let evidence = crate::input_evidence::Mutation::begin()?;

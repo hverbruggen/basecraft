@@ -1016,13 +1016,17 @@ impl Session {
         }
         if decision.is_none() && !history_only && self.log.is_some() && path.is_none() && clean {
             return Ok(SaveOutcome {
-                warnings,
                 recovery_observation: None,
+                warnings,
             });
         }
         // Cooperating Basecraft processes serialize the entire data + sidecar +
         // provenance publication. External programs still require hash checks.
-        let _save_lock = if self.tracked {
+        let _save_lock = if self.tracked
+            || matches!(
+                self.write_publication,
+                crate::documents::WritePublication::Recovery { .. }
+            ) {
             Some(crate::save_guard::lock(&target)?)
         } else {
             None
@@ -1207,8 +1211,8 @@ impl Session {
             None
         };
         Ok(SaveOutcome {
-            warnings,
             recovery_observation,
+            warnings,
         })
     }
 

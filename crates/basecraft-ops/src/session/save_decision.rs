@@ -97,6 +97,7 @@ impl SaveCheck {
                 ));
             }
         }
+        let mut removed = std::collections::BTreeSet::new();
         for group in self.evidence_groups() {
             if group.conflict.analyses.is_empty() {
                 continue;
@@ -115,7 +116,7 @@ impl SaveCheck {
                     completed: false,
                 });
             }
-            crate::input_evidence::resolve(&group.conflict, policy)?;
+            crate::input_evidence::resolve_group(&group.conflict, policy, &mut removed)?;
             if let Some(actions) = &mut actions
                 && let Some(action) = actions.last_mut()
             {
@@ -127,7 +128,7 @@ impl SaveCheck {
 
     /// A post-write observation may describe newly discovered issues. It must
     /// force finalization consent, never grant authority from that observation.
-    pub(super) fn require_final_decision(&mut self) {
+    pub(crate) fn require_final_decision(&mut self) {
         self.scope_revision.clear();
     }
 
