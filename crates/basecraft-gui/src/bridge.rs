@@ -1877,14 +1877,17 @@ impl qobject::GenomeController {
 
     pub fn genetic_code(&self) -> i32 {
         let access_thread = self.qt_thread();
-        self.with_doc(|s, d| {
-            crate::bridge::checked_document!(access_thread, s.doc(d))
-                .features()
-                .filter(|(_, f)| f.kind == "CDS")
-                .find_map(|(_, f)| f.qualifier("transl_table")?.trim().parse().ok())
-        })
-        .flatten()
-        .unwrap_or(11)
+        let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) else {
+            return 11;
+        };
+        // A refused read must not be confused with a sequence without a CDS
+        // annotation, for which the existing UI suggestion is code 11.
+        let sequence = crate::bridge::checked_document!(access_thread, session.doc(doc));
+        sequence
+            .features()
+            .filter(|(_, f)| f.kind == "CDS")
+            .find_map(|(_, f)| f.qualifier("transl_table")?.trim().parse().ok())
+            .unwrap_or(11)
     }
 
     /// Run an annotating plugin operation over the sequence or the
