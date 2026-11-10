@@ -11,6 +11,9 @@ use std::io::Write;
 use std::path::Path;
 use std::time::Instant;
 
+#[path = "interaction/frame_cases.rs"]
+mod frame_cases;
+
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 const ROWS: usize = 32;
 const WIDTH: usize = 4096;
@@ -73,6 +76,9 @@ fn run() -> Result<()> {
         return Err("expected SCENARIO WORK_DIRECTORY (use benches/run.py)".into());
     }
     let scenario = &args[0];
+    if scenario.starts_with("frame-") {
+        return frame_cases::run(scenario, Path::new(&args[1]));
+    }
     let bytes = match scenario.as_str() {
         "open-fasta-100mb" => Some(100_000_000),
         "open-fasta-1gb" => Some(1_000_000_000),

@@ -23,6 +23,9 @@ tempfile.workspace = true
 thiserror.workspace = true
 ulid.workspace = true
 
+# Bench-only public viewmodel client; never a production ops dependency.
+[dev-dependencies]
+basecraft-viewmodel.workspace = true
 
 [lints]
 workspace = true

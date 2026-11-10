@@ -345,6 +345,7 @@ dependencies = [
  "basecraft-io",
  "basecraft-platform",
  "basecraft-protocol",
+ "basecraft-viewmodel",
  "fs4",
  "serde",
  "serde_json",

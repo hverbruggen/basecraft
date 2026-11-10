@@ -57,6 +57,23 @@ class ReportTests(unittest.TestCase):
         result = compare(current, previous, budgets)
         self.assertEqual(result["scenarios"]["save-alignment"]["status"], "unavailable")
 
+    def test_frame_work_identity_and_output_counts(self):
+        sample = {**self.sample(1000), "scenario": "frame-scroll-alignment",
+                  "operations": 200, "work": {"width": 3840, "frames": 200},
+                  "output_counts": [5000] * 200}
+        current = self.report()
+        current["scenarios"] = {sample["scenario"]: summarize([sample] * 3)}
+        previous = copy.deepcopy(current)
+        budgets = dict(benchmark_ratio=1.3, gross_ci_ratio=2)
+        self.assertEqual(compare(current, previous, budgets)["scenarios"][sample["scenario"]]["status"], "compared")
+        previous["scenarios"][sample["scenario"]]["work"]["width"] = 800
+        self.assertEqual(compare(current, previous, budgets)["scenarios"][sample["scenario"]]["status"], "unavailable")
+        for bad in ({"work": {}}, {"output_counts": []}, {"output_counts": [0] * 200}):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                summarize([sample, {**sample, **bad}])
+        current["scenarios"][sample["scenario"]] = {"status": "failed_or_refused", "completed_samples": 2}
+        self.assertEqual(compare(current, previous, budgets)["scenarios"][sample["scenario"]]["status"], "unavailable")
+
     def test_old_size_semantics_require_new_samples(self):
         old_sample = self.sample(1000)
         del old_sample["schema_version"]

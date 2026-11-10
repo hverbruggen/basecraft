@@ -29,3 +29,16 @@ measurement = "Session::save only; reopen and all-row verification outside timer
 fixture = "1000000000 decimal file bytes; opt-in single sequence"
 measurement = "warm-cache Session::open; failures/refusals reported explicitly"
 prd_context = "1 s first paint for 1 GB is a separate unmeasured GUI target"
+
+# Explicitly selected frame cases share these work parameters; see raw `work`.
+[frames]
+protocol = "headless-frame-v1"
+viewport = [3840, 2160]
+zoom_px = 8.0
+theme = "Theme::default"
+alignment = "256/1024 rows x 4096 columns; ACGT; rowNNNNN"
+genome = "100000 bases linear/wrapped; 1000000 bases wrapped; two gene markers per 100 bases"
+first = "fresh view/sync + empty Frame + first build; document/index/theme already constructed"
+warm = "one origin build with warmed view/cache and reused Frame"
+scroll = "sum of 200 scroll_to + build durations, i/199 across full clamped range; both alignment axes"
+verification = "finite labelled residue geometry, visible annotations, full float equality to fresh-view replay outside timing"
