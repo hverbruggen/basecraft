@@ -74,7 +74,7 @@ fn target_metadata_is_content_free_and_retains_absence() {
     let missing = dir.path().join("absent");
     let target = inspect_target_namespace(&missing).unwrap();
     let error = target.absence_error().unwrap();
-    let original = error as *const io::Error;
+    let original = std::ptr::from_ref(error);
     assert_eq!(
         error.raw_os_error(),
         Some(rustix::io::Errno::NOENT.raw_os_error())
@@ -82,7 +82,7 @@ fn target_metadata_is_content_free_and_retains_absence() {
     assert!(target.metadata().is_none());
     target.recheck().unwrap();
     assert_eq!(
-        target.absence_error().unwrap() as *const io::Error,
+        std::ptr::from_ref(target.absence_error().unwrap()),
         original
     );
     assert_eq!(
@@ -317,7 +317,7 @@ fn opened_handle_association_is_rechecked_and_never_unlinked() {
         *hook = Some(Box::new(move || {
             std::fs::rename(&replacement, moved).unwrap();
             std::fs::write(replacement, "new").unwrap();
-        }))
+        }));
     });
     assert!(matches!(
         ticket.open_file(),
@@ -398,4 +398,86 @@ fn invalid_spelling_and_wrong_steps_have_no_effect() {
     ));
     assert_eq!(effects(), []);
     assert!(!dir.path().join("missing").exists());
+}
+
+#[test]
+fn foreign_owned_service_parent_is_not_repaired() {
+    assert_ne!(
+        rustix::process::geteuid().as_raw(),
+        0,
+        "requires ordinary user"
+    );
+    assert_eq!(std::fs::metadata("/").unwrap().uid(), 0);
+    effects();
+    assert!(matches!(
+        inspect_lock_namespace(
+            Path::new("/basecraft-namespace-test-never-created.lock"),
+            LockDirectoryMode::Private
+        ),
+        Err(NamespaceReadError::Unsupported)
+    ));
+    assert_eq!(effects(), []);
+}
+
+#[test]
+fn inherited_umask_repairs_only_one_owned_directory_per_step() {
+    const CHILD: &str = "BASECRAFT_NAMESPACE_UMASK_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        // Set a restrictive umask only in a fresh subprocess. Never mutate the
+        // shared test process umask (other tests run concurrently).
+        let status = std::process::Command::new("sh")
+            .args(["-c", "umask 0200; exec \"$@\"", "namespace-umask"])
+            .arg(std::env::current_exe().unwrap())
+            .args(["--exact", "files::namespace::lock_tests::inherited_umask_repairs_only_one_owned_directory_per_step", "--nocapture"])
+            .env(CHILD, "1").status().unwrap();
+        assert!(status.success());
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    permissions(dir.path(), 0o700); // fixture setup, not the production owner
+    let path = dir.path().join("one/two/lock");
+    effects();
+    let ticket = lock(&path).create_next_directory().unwrap();
+    assert_eq!(effects(), [LockStep::CreateDirectory]);
+    assert_eq!(mode(&dir.path().join("one")), 0o500);
+    assert_eq!(ticket.next_step().unwrap(), LockStep::SetPermissions);
+    assert!(!dir.path().join("one/two").exists());
+    let ticket = ticket.set_next_permissions().unwrap();
+    assert_eq!(effects(), [LockStep::SetPermissions]);
+    assert_eq!(mode(&dir.path().join("one")), 0o700);
+    let ticket = ticket.create_next_directory().unwrap();
+    assert_eq!(effects(), [LockStep::CreateDirectory]);
+    assert_eq!(mode(&dir.path().join("one/two")), 0o500);
+    let ticket = ticket.set_next_permissions().unwrap();
+    assert_eq!(effects(), [LockStep::SetPermissions]);
+    let opened = ticket.open_file().unwrap();
+    assert_eq!(effects(), [LockStep::OpenFile]);
+    assert_eq!(mode(&path), 0o400);
+    opened.recheck().unwrap();
+}
+
+#[test]
+fn descriptor_chmod_detects_parent_substitution_without_repairing_replacement() {
+    let dir = tempfile::tempdir().unwrap();
+    let parent = dir.path().join("private");
+    std::fs::create_dir(&parent).unwrap();
+    permissions(&parent, 0o750);
+    let ticket = inspect_lock_namespace(&parent.join("lock"), LockDirectoryMode::Private).unwrap();
+    let old = dir.path().join("old");
+    let renamed = old.clone();
+    let replaced = parent.clone();
+    before(move || {
+        std::fs::rename(&replaced, renamed).unwrap();
+        std::fs::create_dir(&replaced).unwrap();
+        permissions(&replaced, 0o755);
+    });
+    effects();
+    assert!(matches!(
+        ticket.set_next_permissions(),
+        Err(NamespaceReadError::Changed)
+    ));
+    assert_eq!(effects(), [LockStep::SetPermissions]);
+    assert_eq!(mode(&old), 0o700); // authorized old inode effect is not rolled back
+    assert_eq!(mode(&parent), 0o755); // replacement never chmodded by pathname
+    assert!(!parent.join("lock").exists());
 }
