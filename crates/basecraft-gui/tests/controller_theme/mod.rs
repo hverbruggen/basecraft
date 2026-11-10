@@ -17,7 +17,7 @@ pub(crate) fn run() {
     // provider itself never mutates global environment or desktop settings.
     let profile = std::env::var_os("BASECRAFT_PROFILE_DIR").expect("isolated bootstrap profile");
     let paths = basecraft_platform::paths::AppPaths::discover().unwrap();
-    assert!(paths.preferences().starts_with(profile));
+    assert!(paths.preferences().starts_with(&profile));
     basecraft_platform::settings::SettingsStore::new(paths.preferences())
         .update(basecraft_platform::settings::Change::ShowGc(true))
         .unwrap();
@@ -36,9 +36,9 @@ pub(crate) fn run() {
             // These are assertions on the common public controller interface,
             // not a production abstraction over document/selection ownership.
             macro_rules! check {
-                ($controller:expr, $file:expr, $bytes:expr, $select:expr, $selection:expr, $after:expr) => {{
+                ($controller:expr, $file:expr, $bytes:expr, $select:expr, $selection:expr, $after:expr, $retain_fixture:expr) => {{
                     let mut controller = $controller;
-                    let folder = tempfile::tempdir().unwrap();
+                    let folder = tempfile::tempdir_in(&profile).unwrap();
                     let path = folder.path().join($file);
                     std::fs::write(&path, $bytes).unwrap();
                     assert!(
@@ -172,6 +172,11 @@ pub(crate) fn run() {
                         "theme update changed Find state"
                     );
                     $after(controller.as_mut());
+                    if $retain_fixture {
+                        // Review recovery retains input references. Keep them valid
+                        // until the isolated bootstrap profile itself is removed.
+                        folder.keep();
+                    }
                 }};
             }
             if let Some(controller) = object
@@ -188,7 +193,8 @@ pub(crate) fn run() {
                         assert!(c.has_selection());
                     },
                     |c: &bridge::qobject::GenomeController| c.selection_text(),
-                    |_| {}
+                    |_| {},
+                    false
                 );
             } else if let Some(controller) = object
                 .as_mut()
@@ -203,7 +209,8 @@ pub(crate) fn run() {
                         assert!(!c.selection_text().is_empty());
                     },
                     |c: &alignment_bridge::qobject::AlignmentController| c.selection_text(),
-                    |_| {}
+                    |_| {},
+                    false
                 );
             } else if let Some(controller) = object
                 .as_mut()
@@ -218,7 +225,8 @@ pub(crate) fn run() {
                         assert!(*c.has_selection());
                     },
                     |c: &tree_bridge::qobject::TreeController| *c.has_selection(),
-                    |_| {}
+                    |_| {},
+                    false
                 );
             } else if let Some(controller) = object
                 .as_mut()
@@ -267,7 +275,8 @@ pub(crate) fn run() {
                         c.as_mut().review_redo();
                         assert_eq!(c.mask_settings(), &masks, "mask redo lost");
                         assert!(*c.dirty());
-                    }
+                    },
+                    true
                 );
             } else {
                 panic!("unexpected theme controller");
