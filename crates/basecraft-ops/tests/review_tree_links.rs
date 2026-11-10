@@ -1,4 +1,5 @@
 //! Independent REV-0004 probes: failures describe the required persistence contract.
+use basecraft_ops::links::AlignmentLinkExt;
 use basecraft_ops::{Session, files, links, links::AlignmentLink};
 
 fn write_alignment(path: &std::path::Path, bases: &str) {

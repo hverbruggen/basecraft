@@ -81,3 +81,23 @@ source at that capture is identical to baseline a856d62. The user subsequently
 expanded scope to replace this sixth constructor with the same AnalysisRun type.
 This separately identified original capture has no normalization; the type
 round-trips it too, and the runtime oracle now checks the sixth typed writer.
+
+Alignment-link original-writer captures (DATA-0025):
+link-snapshot-inferred.json: create, schema 1, inferred input, parent-relative
+  Unicode source, random retained snapshot filename, no trailing newline.
+link-explicit-view.json: associate after inferred origin, schema 1, explicit
+  presentation association, equal labels do not imply scientific inference.
+link-snapshot-extra.json: share_to, schema 1, retained snapshot and nested extra.
+link-referenced.json: create_referenced, schema 2, artifact-run reference,
+  empty snapshot path, pretty JSON with one trailing newline.
+link-referenced-extra.json: share_to, schema 2, same run and nested extra.
+All five are raw actual original-writer bytes captured at 9dd2e416b5e2 before
+moving AlignmentLink. No normalization, path or ID substitutions, injected
+fields or newline changes. Snapshot names and run IDs remain fixture-specific.
+The extra cases use the original share writer after an explicit test extension
+on the loaded link; they are not claims that fresh create writers merge extras.
+Runtime byte oracles use the frozen original wire declaration and fields derived
+from source bytes, constructor inputs, returned snapshot paths and allocated run,
+not parsed output metadata. Round-trip tests use the protocol type directly.
+Rust callers using the ops re-export now also import links::AlignmentLinkExt
+for associated functions and methods; public fields/struct literals remain.

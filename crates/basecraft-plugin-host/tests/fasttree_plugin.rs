@@ -1,5 +1,6 @@
 //! End to end: infer a tree from an alignment with the registered `FastTree`
 //! operation, open it, and record the run. Skips when `FastTree` isn't available.
+use basecraft_ops::links::AlignmentLinkExt;
 mod common;
 
 use std::fmt::Write as _;

@@ -1,4 +1,5 @@
 //! Failure and overwrite coverage supplementing the unchanged REV-0004 probes.
+use basecraft_ops::links::AlignmentLinkExt;
 use basecraft_ops::{Session, files, links, links::AlignmentLink};
 use std::path::{Path, PathBuf};
 

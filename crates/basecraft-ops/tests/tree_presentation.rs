@@ -1,4 +1,5 @@
 //! Support formatting is presentation; scientific strings and inference input survive edits.
+use basecraft_ops::links::AlignmentLinkExt;
 use basecraft_ops::{Session, files, links::AlignmentLink};
 use basecraft_protocol::{Op, SupportKind};
 use serde_json::json;

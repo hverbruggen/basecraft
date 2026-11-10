@@ -1,4 +1,5 @@
 //! Viewer names remain annotations: save, history and links preserve scientific identity.
+use basecraft_ops::links::AlignmentLinkExt;
 use basecraft_ops::{Session, files, links::AlignmentLink, replay};
 use basecraft_protocol::{CladeAnnotation, Op};
 

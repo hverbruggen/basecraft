@@ -1,7 +1,7 @@
 //! Explicit tree–alignment provenance. Snapshots retain unsaved input exactly.
 use crate::{Result, error::invalid};
 use basecraft_docs::TreeDoc;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Write as _,
@@ -9,19 +9,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AlignmentLink {
-    pub schema: u32,
-    pub source: PathBuf,
-    pub source_hash: String,
-    pub snapshot: PathBuf,
-    pub snapshot_hash: String,
-    pub alignment_version: u64,
-    /// False for an explicitly associated imported tree: matching names is not inference provenance.
-    pub inferred: bool,
-    #[serde(default, flatten)]
-    pub extra: BTreeMap<String, serde_json::Value>,
-}
+pub use basecraft_protocol::records::AlignmentLink;
 
 fn hidden_sidecar(run: &Path, tree: &Path) -> PathBuf {
     let digest = basecraft_io::hash_bytes(tree.file_name().unwrap_or_default().as_encoded_bytes());
@@ -340,189 +328,44 @@ pub fn validate_taxa(tree: &TreeDoc, alignment: &Path, allow_extra: bool) -> Res
     Ok(())
 }
 
-impl AlignmentLink {
-    /// Associate an imported tree, keeping a standard FASTA snapshot beside it.
-    pub fn associate(tree_path: &Path, tree: &TreeDoc, source: &Path) -> Result<Vec<PathBuf>> {
-        validate_taxa(tree, source, false)?;
-        let origin_inferred =
-            metadata_present(&sidecar(tree_path))? && Self::read(tree_path)?.inferred;
-        let target = if origin_inferred || metadata_present(&view_sidecar(tree_path))? {
-            view_tree(tree_path)
-        } else {
-            tree_path.to_path_buf()
-        };
-        Self::create(&target, source, source, 0, false, None)
-    }
-
-    /// Reference-first inferred association. Clean disk input is never copied;
-    /// dirty submitted input is already retained once by the job's artifact run.
-    pub fn create_referenced(
+/// Operations on the shared alignment-link wire record.
+///
+/// Rust callers must import this trait alongside `AlignmentLink` to use its
+/// associated functions and methods. Serialization and public fields are unchanged.
+pub trait AlignmentLinkExt: Sized {
+    fn associate(tree_path: &Path, tree: &TreeDoc, source: &Path) -> Result<Vec<PathBuf>>;
+    fn create_referenced(
         tree: &Path,
         source: &Path,
         input: &Path,
         version: u64,
         run: &crate::analysis_store::ArtifactRun,
-    ) -> Result<Vec<PathBuf>> {
-        names(input)?;
-        let record = crate::input_evidence::read_input(run.directory())?;
-        let link = Self {
-            schema: 2,
-            source: relative_to(&std::path::absolute(source)?, tree)?,
-            source_hash: record
-                .source
-                .as_ref()
-                .map_or_else(String::new, |r| r.hash.clone()),
-            snapshot: PathBuf::new(),
-            snapshot_hash: record.submitted_hash,
-            alignment_version: version,
-            inferred: true,
-            extra: [(
-                "analysis_run".into(),
-                serde_json::json!(relative_to(run.directory(), tree)?),
-            )]
-            .into_iter()
-            .collect(),
-        };
-        let metadata = hidden_sidecar(run.directory(), tree);
-        crate::input_evidence::write_json(&metadata, &link)?;
-        run.bind(tree)?;
-        Ok(vec![metadata])
-    }
-
-    /// Called with the exact alignment supplied to a tree tool.
-    pub fn create(
+    ) -> Result<Vec<PathBuf>>;
+    fn create(
         tree: &Path,
         source: &Path,
         input: &Path,
         version: u64,
         inferred: bool,
         source_hash: Option<&str>,
-    ) -> Result<Vec<PathBuf>> {
-        names(input)?;
-        let source = source.canonicalize()?;
-        let source_hash = source_hash
-            .map(str::to_owned)
-            .map_or_else(|| basecraft_io::hash_file(&source), Ok)?;
-        let snapshot_hash = basecraft_io::hash_file(input)?;
-        let snapshot = retain_snapshot(tree, input, &snapshot_hash)?;
-        let link = Self {
-            schema: 1,
-            source_hash,
-            source: relative_to(&source, tree)?,
-            snapshot: snapshot
-                .file_name()
-                .ok_or_else(|| invalid("snapshot filename"))?
-                .into(),
-            snapshot_hash,
-            alignment_version: version,
-            inferred,
-            extra: BTreeMap::new(),
-        };
-        let metadata = sidecar(tree);
-        let bytes = serde_json::to_vec_pretty(&link)?;
-        basecraft_io::write_atomic(&metadata, |out| out.write_all(&bytes)).map_err(|error| invalid(format!(
-            "alignment metadata replacement failed; previous snapshots are unchanged; staged snapshot retained at {}: {error}", snapshot.display()
-        )))?;
-        Ok(vec![snapshot, metadata])
-    }
+    ) -> Result<Vec<PathBuf>>;
+    fn read(tree: &Path) -> Result<Self>;
+    fn read_view(tree: &Path) -> Result<Self>;
+    fn status(&self, tree_path: &Path, tree: &TreeDoc) -> String;
+    fn checked_snapshot(&self, tree_path: &Path, tree: &TreeDoc) -> Result<PathBuf>;
+    fn share_to(&self, from: &Path, to: &Path) -> Result<PathBuf>;
+    fn copy_to(&self, from: &Path, to: &Path) -> Result<Vec<PathBuf>>;
+    fn source_changed(&self) -> bool;
+}
 
-    pub fn read(tree: &Path) -> Result<Self> {
-        crate::analysis_store::ArtifactRun::for_result(tree)?;
-        let metadata: serde_json::Value =
-            serde_json::from_reader(std::fs::File::open(sidecar(tree))?)?;
-        if let Some(reason) = metadata
-            .get("unavailable")
-            .and_then(serde_json::Value::as_str)
-        {
-            let recovery = metadata.get("recovery").and_then(serde_json::Value::as_str);
-            return Err(invalid(recovery.map_or_else(
-                || reason.to_owned(),
-                |path| {
-                    format!(
-                        "{reason}; recover association metadata from {}",
-                        tree.parent().unwrap_or(Path::new(".")).join(path).display()
-                    )
-                },
-            )));
-        }
-        let mut link: Self = serde_json::from_value(metadata)?;
-        if !matches!(link.schema, 1 | 2) {
-            return Err(invalid("unsupported tree–alignment link version"));
-        }
-        if link.source.is_relative() {
-            link.source = tree
-                .parent()
-                .unwrap_or(Path::new("."))
-                .canonicalize()?
-                .join(&link.source);
-        }
-        link.source = link.source.canonicalize().unwrap_or(link.source);
-        Ok(link)
-    }
+// Evidence helpers remain private to ops; protocol contains only wire data.
+trait LinkEvidence {
+    fn snapshot_path(&self, tree_path: &Path) -> PathBuf;
+    fn evidence_run(&self, tree_path: &Path) -> Result<PathBuf>;
+    fn verify_snapshot(&self, tree_path: &Path) -> Result<PathBuf>;
+}
 
-    /// Prefer an explicit view association. A damaged view link is an error, never a fallback.
-    pub fn read_view(tree: &Path) -> Result<Self> {
-        Self::read(&if metadata_present(&view_sidecar(tree))? {
-            view_tree(tree)
-        } else {
-            tree.to_path_buf()
-        })
-    }
-
-    /// Status describes retained evidence and never reads changed source data as input.
-    pub fn status(&self, tree_path: &Path, tree: &TreeDoc) -> String {
-        let label = if self.inferred {
-            "Source alignment"
-        } else {
-            "Linked alignment"
-        };
-        let mut status = format!("{label}: {}", self.source.display());
-        if self.schema == 2 {
-            return match self
-                .evidence_run(tree_path)
-                .and_then(|run| crate::input_evidence::read_input(&run).map(|input| (run, input)))
-            {
-                Ok((_, input)) if input.state == "generated" => {
-                    format!("{status}; exact submitted input retained")
-                }
-                Ok((_, input)) if input.state == "preserved" => {
-                    format!("{status}; original preserved (verify before use)")
-                }
-                Ok((_, input)) if input.state == "broken" => {
-                    format!("{status}; evidence explicitly broken")
-                }
-                Ok((run, input)) => {
-                    if input.source.as_ref().is_some_and(|r| {
-                        crate::input_evidence::stamp(&run.join(&r.path)).is_ok_and(|s| {
-                            s.size == r.stamp.size
-                                && s.modified_seconds == r.stamp.modified_seconds
-                                && s.modified_nanos == r.stamp.modified_nanos
-                        })
-                    }) {
-                        format!(
-                            "{status}; referenced input metadata unchanged (content not rechecked)"
-                        )
-                    } else {
-                        format!("{status}; original missing or changed; verify or relink original")
-                    }
-                }
-                Err(e) => format!("{status}; evidence unavailable: {e}"),
-            };
-        }
-        if !self.source.exists() {
-            status.push_str(" (source missing or moved)");
-        } else if self.source_changed() {
-            status.push_str(" (source changed)");
-        }
-        match self.checked_snapshot(tree_path, tree) {
-            Ok(_) => status.push_str("; retained snapshot available"),
-            Err(e) => {
-                let _ = write!(status, "; retained snapshot unavailable: {e}");
-            }
-        }
-        status
-    }
-
+impl LinkEvidence for AlignmentLink {
     fn snapshot_path(&self, tree_path: &Path) -> PathBuf {
         tree_path
             .parent()
@@ -623,15 +466,199 @@ impl AlignmentLink {
         }
         Ok(snapshot)
     }
+}
 
-    pub fn checked_snapshot(&self, tree_path: &Path, tree: &TreeDoc) -> Result<PathBuf> {
+impl AlignmentLinkExt for AlignmentLink {
+    /// Associate an imported tree, keeping a standard FASTA snapshot beside it.
+    fn associate(tree_path: &Path, tree: &TreeDoc, source: &Path) -> Result<Vec<PathBuf>> {
+        validate_taxa(tree, source, false)?;
+        let origin_inferred =
+            metadata_present(&sidecar(tree_path))? && Self::read(tree_path)?.inferred;
+        let target = if origin_inferred || metadata_present(&view_sidecar(tree_path))? {
+            view_tree(tree_path)
+        } else {
+            tree_path.to_path_buf()
+        };
+        Self::create(&target, source, source, 0, false, None)
+    }
+
+    /// Reference-first inferred association. Clean disk input is never copied;
+    /// dirty submitted input is already retained once by the job's artifact run.
+    fn create_referenced(
+        tree: &Path,
+        source: &Path,
+        input: &Path,
+        version: u64,
+        run: &crate::analysis_store::ArtifactRun,
+    ) -> Result<Vec<PathBuf>> {
+        names(input)?;
+        let record = crate::input_evidence::read_input(run.directory())?;
+        let link = Self {
+            schema: 2,
+            source: relative_to(&std::path::absolute(source)?, tree)?,
+            source_hash: record
+                .source
+                .as_ref()
+                .map_or_else(String::new, |r| r.hash.clone()),
+            snapshot: PathBuf::new(),
+            snapshot_hash: record.submitted_hash,
+            alignment_version: version,
+            inferred: true,
+            extra: [(
+                "analysis_run".into(),
+                serde_json::json!(relative_to(run.directory(), tree)?),
+            )]
+            .into_iter()
+            .collect(),
+        };
+        let metadata = hidden_sidecar(run.directory(), tree);
+        crate::input_evidence::write_json(&metadata, &link)?;
+        run.bind(tree)?;
+        Ok(vec![metadata])
+    }
+
+    /// Called with the exact alignment supplied to a tree tool.
+    fn create(
+        tree: &Path,
+        source: &Path,
+        input: &Path,
+        version: u64,
+        inferred: bool,
+        source_hash: Option<&str>,
+    ) -> Result<Vec<PathBuf>> {
+        names(input)?;
+        let source = source.canonicalize()?;
+        let source_hash = source_hash
+            .map(str::to_owned)
+            .map_or_else(|| basecraft_io::hash_file(&source), Ok)?;
+        let snapshot_hash = basecraft_io::hash_file(input)?;
+        let snapshot = retain_snapshot(tree, input, &snapshot_hash)?;
+        let link = Self {
+            schema: 1,
+            source_hash,
+            source: relative_to(&source, tree)?,
+            snapshot: snapshot
+                .file_name()
+                .ok_or_else(|| invalid("snapshot filename"))?
+                .into(),
+            snapshot_hash,
+            alignment_version: version,
+            inferred,
+            extra: BTreeMap::new(),
+        };
+        let metadata = sidecar(tree);
+        let bytes = serde_json::to_vec_pretty(&link)?;
+        basecraft_io::write_atomic(&metadata, |out| out.write_all(&bytes)).map_err(|error| invalid(format!(
+            "alignment metadata replacement failed; previous snapshots are unchanged; staged snapshot retained at {}: {error}", snapshot.display()
+        )))?;
+        Ok(vec![snapshot, metadata])
+    }
+
+    fn read(tree: &Path) -> Result<Self> {
+        crate::analysis_store::ArtifactRun::for_result(tree)?;
+        let metadata: serde_json::Value =
+            serde_json::from_reader(std::fs::File::open(sidecar(tree))?)?;
+        if let Some(reason) = metadata
+            .get("unavailable")
+            .and_then(serde_json::Value::as_str)
+        {
+            let recovery = metadata.get("recovery").and_then(serde_json::Value::as_str);
+            return Err(invalid(recovery.map_or_else(
+                || reason.to_owned(),
+                |path| {
+                    format!(
+                        "{reason}; recover association metadata from {}",
+                        tree.parent().unwrap_or(Path::new(".")).join(path).display()
+                    )
+                },
+            )));
+        }
+        let mut link: Self = serde_json::from_value(metadata)?;
+        if !matches!(link.schema, 1 | 2) {
+            return Err(invalid("unsupported tree–alignment link version"));
+        }
+        if link.source.is_relative() {
+            link.source = tree
+                .parent()
+                .unwrap_or(Path::new("."))
+                .canonicalize()?
+                .join(&link.source);
+        }
+        link.source = link.source.canonicalize().unwrap_or(link.source);
+        Ok(link)
+    }
+
+    /// Prefer an explicit view association. A damaged view link is an error, never a fallback.
+    fn read_view(tree: &Path) -> Result<Self> {
+        Self::read(&if metadata_present(&view_sidecar(tree))? {
+            view_tree(tree)
+        } else {
+            tree.to_path_buf()
+        })
+    }
+
+    /// Status describes retained evidence and never reads changed source data as input.
+    fn status(&self, tree_path: &Path, tree: &TreeDoc) -> String {
+        let label = if self.inferred {
+            "Source alignment"
+        } else {
+            "Linked alignment"
+        };
+        let mut status = format!("{label}: {}", self.source.display());
+        if self.schema == 2 {
+            return match self
+                .evidence_run(tree_path)
+                .and_then(|run| crate::input_evidence::read_input(&run).map(|input| (run, input)))
+            {
+                Ok((_, input)) if input.state == "generated" => {
+                    format!("{status}; exact submitted input retained")
+                }
+                Ok((_, input)) if input.state == "preserved" => {
+                    format!("{status}; original preserved (verify before use)")
+                }
+                Ok((_, input)) if input.state == "broken" => {
+                    format!("{status}; evidence explicitly broken")
+                }
+                Ok((run, input)) => {
+                    if input.source.as_ref().is_some_and(|r| {
+                        crate::input_evidence::stamp(&run.join(&r.path)).is_ok_and(|s| {
+                            s.size == r.stamp.size
+                                && s.modified_seconds == r.stamp.modified_seconds
+                                && s.modified_nanos == r.stamp.modified_nanos
+                        })
+                    }) {
+                        format!(
+                            "{status}; referenced input metadata unchanged (content not rechecked)"
+                        )
+                    } else {
+                        format!("{status}; original missing or changed; verify or relink original")
+                    }
+                }
+                Err(e) => format!("{status}; evidence unavailable: {e}"),
+            };
+        }
+        if !self.source.exists() {
+            status.push_str(" (source missing or moved)");
+        } else if self.source_changed() {
+            status.push_str(" (source changed)");
+        }
+        match self.checked_snapshot(tree_path, tree) {
+            Ok(_) => status.push_str("; retained snapshot available"),
+            Err(e) => {
+                let _ = write!(status, "; retained snapshot unavailable: {e}");
+            }
+        }
+        status
+    }
+
+    fn checked_snapshot(&self, tree_path: &Path, tree: &TreeDoc) -> Result<PathBuf> {
         let snapshot = self.verify_snapshot(tree_path)?;
         validate_taxa(tree, &snapshot, self.inferred)?;
         Ok(snapshot)
     }
 
     /// Forest members share the same retained alignment instead of copying it per tree.
-    pub fn share_to(&self, from: &Path, to: &Path) -> Result<PathBuf> {
+    fn share_to(&self, from: &Path, to: &Path) -> Result<PathBuf> {
         let mut link = self.clone();
         if self.schema == 2 {
             let run = self.evidence_run(from)?;
@@ -668,13 +695,13 @@ impl AlignmentLink {
     }
 
     /// Preserve a link when a tree is saved under a new name or directory.
-    pub fn copy_to(&self, from: &Path, to: &Path) -> Result<Vec<PathBuf>> {
+    fn copy_to(&self, from: &Path, to: &Path) -> Result<Vec<PathBuf>> {
         PreparedLinks::with_origin(Some(self), from, to)?
             .publish(|| Ok(()))
             .map(|((), outputs)| outputs)
     }
 
-    pub fn source_changed(&self) -> bool {
+    fn source_changed(&self) -> bool {
         if self.schema == 2 {
             return !self.source.exists();
         }

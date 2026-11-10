@@ -1,4 +1,5 @@
 //! Referenced-input lifecycle. Only known stores are inspected, never filesystem trees.
+use crate::links::AlignmentLinkExt;
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 

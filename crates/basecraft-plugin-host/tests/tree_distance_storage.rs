@@ -1,4 +1,5 @@
 //! Real engines and real directory listings for registered tree and matrix runs.
+use basecraft_ops::links::AlignmentLinkExt;
 mod common;
 
 use std::path::Path;

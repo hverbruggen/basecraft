@@ -1,0 +1,16 @@
+{
+  "schema": 2,
+  "source": "source.afa",
+  "source_hash": "b3:f1d993752f7b946232a7c95734b60256035fda36a66ef08326bba1bffd1f8dee",
+  "snapshot": "",
+  "snapshot_hash": "b3:f1d993752f7b946232a7c95734b60256035fda36a66ef08326bba1bffd1f8dee",
+  "alignment_version": 9,
+  "inferred": true,
+  "analysis_run": ".basecraft/analyses-v1/runs/01M72MXRXZ8DGVW27P4Q7KV7F9",
+  "future": {
+    "nested": [
+      null,
+      "kept"
+    ]
+  }
+}

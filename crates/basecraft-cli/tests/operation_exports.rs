@@ -1,4 +1,5 @@
 //! A destination `role/member` exports one validated collection member as a file.
+use basecraft_ops::links::AlignmentLinkExt;
 use std::process::Command;
 
 use serde_json::{Value, json};

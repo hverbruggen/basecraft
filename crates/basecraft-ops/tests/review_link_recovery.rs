@@ -1,5 +1,6 @@
 //! Independent correction review: recovery evidence must be usable, not merely present.
 #![cfg(unix)]
+use basecraft_ops::links::AlignmentLinkExt;
 
 use basecraft_ops::{Session, files, links, links::AlignmentLink};
 use serde_json::Value;

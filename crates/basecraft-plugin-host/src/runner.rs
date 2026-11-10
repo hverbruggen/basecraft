@@ -1,6 +1,7 @@
 //! Registered-operation preparation, execution and validated finalization: the
 //! one route every interface uses to run an analysis. Host workflows run their
 //! stages through registered child jobs with the same lifecycle as other runs.
+use basecraft_ops::links::AlignmentLinkExt;
 use basecraft_platform::files::{identity, link_count};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};

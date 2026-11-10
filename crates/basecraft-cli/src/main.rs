@@ -428,6 +428,10 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             std::fs::create_dir_all(&dir)?;
             let schemas = [
                 (
+                    "alignment-link",
+                    schemars::schema_for!(basecraft_protocol::records::AlignmentLink),
+                ),
+                (
                     "analysis-run",
                     schemars::schema_for!(basecraft_protocol::records::AnalysisRun),
                 ),

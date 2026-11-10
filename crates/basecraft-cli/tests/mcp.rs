@@ -1,3 +1,4 @@
+use basecraft_ops::links::AlignmentLinkExt;
 use serde_json::{Value, json};
 use std::{
     io::Write,

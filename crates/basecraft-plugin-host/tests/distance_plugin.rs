@@ -1,4 +1,5 @@
 //! Registered distance operations: outputs, provenance, history and replay.
+use basecraft_ops::links::AlignmentLinkExt;
 mod common;
 
 use std::path::Path;

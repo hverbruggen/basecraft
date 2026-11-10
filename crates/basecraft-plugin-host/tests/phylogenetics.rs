@@ -1,4 +1,5 @@
 //! Real local/pixi tool runs through the same registered route as the GUI.
+use basecraft_ops::links::AlignmentLinkExt;
 mod common;
 
 use basecraft_ops::Session;

@@ -238,3 +238,19 @@ pub struct AnalysisRun {
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
+
+/// Existing tree–alignment association, schema 1 (snapshot) or 2 (reference).
+/// Field order and direct pretty serialization are part of the existing wire shape.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct AlignmentLink {
+    pub schema: u32,
+    pub source: PathBuf,
+    pub source_hash: String,
+    pub snapshot: PathBuf,
+    pub snapshot_hash: String,
+    pub alignment_version: u64,
+    /// False for an explicitly associated imported tree: matching names is not inference provenance.
+    pub inferred: bool,
+    #[serde(default, flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
+}

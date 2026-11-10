@@ -1,6 +1,7 @@
 //! Actual public socket/SDK/native-engine workflows through registered
 //! operations; no mock numerical results. Cancellation uses a gated engine
 //! wrapper to hold execution without relying on scientific workload duration.
+use basecraft_ops::links::AlignmentLinkExt;
 mod common;
 
 use basecraft_ops::{Session, input_evidence, replay};

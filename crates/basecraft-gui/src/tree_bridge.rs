@@ -4,6 +4,7 @@
 //! it into viewport changes, selections and operations, and every edit goes
 //! through the ops session.
 
+use basecraft_ops::links::AlignmentLinkExt;
 #[cxx_qt::bridge]
 pub mod qobject {
     impl cxx_qt::Threading for TreeController {}
