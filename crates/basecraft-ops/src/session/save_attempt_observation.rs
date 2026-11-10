@@ -413,6 +413,30 @@ pub(crate) mod tests {
                 observer(case),
             );
             assert!(attempt.result.is_err(), "case {case}");
+            match (case, attempt.result.as_ref().unwrap_err()) {
+                (0, Error::Format(basecraft_io::Error::Io(error))) => {
+                    assert!(error.raw_os_error().is_some())
+                }
+                (2, Error::Invalid(_)) => {} // Journal owner already formatted its IO cause.
+                (3, Error::Io(error)) => assert!(error.raw_os_error().is_some()),
+                (1 | 4..=6, Error::Io(error)) => {
+                    assert_eq!(error.to_string(), "injected boundary failure")
+                }
+                (_, error) => panic!("unexpected primary for case {case}: {error:?}"),
+            }
+            assert_eq!(
+                attempt.facts.failure,
+                Some(match case {
+                    0 | 1 => Site::Document,
+                    2 => Site::SaveRecord,
+                    3 => Site::Provenance,
+                    4 => Site::SavedHashes,
+                    5 => Site::DiskStamp,
+                    6 => Site::PendingRemove,
+                    _ => unreachable!(),
+                })
+            );
+            assert_eq!(attempt.facts.accepted_log, case >= 3);
             assert_writer(&attempt.facts, case);
             assert_eq!(attempt.facts.reconciled, case < 4);
             assert_eq!(attempt.facts.saved_hashes, case >= 5);
@@ -540,5 +564,118 @@ pub(crate) mod tests {
         let before = inventory(&root);
         drop(observed);
         assert_eq!(inventory(&root), before);
+    }
+    #[test]
+    fn prewriter_refusals_have_no_document_facts() {
+        let Some(root) = crate::isolated_profile::enter(
+            "session::save_attempt_observation::tests::prewriter_refusals_have_no_document_facts",
+        ) else {
+            return;
+        };
+        for case in 0..4 {
+            let root = root.join(case.to_string());
+            fs::create_dir_all(&root).unwrap();
+            let (mut session, id, target) = fixture(&root);
+            let decision = if case == 0 {
+                let decision = session
+                    .check_save(id, None)
+                    .unwrap()
+                    .decide(crate::input_evidence::SavePolicy::Cancel, false);
+                session.undo(id).unwrap();
+                Some(decision)
+            } else {
+                None
+            };
+            if case == 1 {
+                fs::create_dir(session.storage_root.join("pending-save.json")).unwrap();
+            }
+            if case == 2 {
+                fs::write(&target, b"changed externally").unwrap();
+            }
+            let _guard = if case == 3 {
+                Some(crate::save_guard::lock(&target).unwrap())
+            } else {
+                None
+            };
+            let before = inventory(&root.join("source"));
+            let observed = session.save_observed(
+                id,
+                None,
+                crate::input_evidence::SavePolicy::Cancel,
+                true,
+                false,
+                decision,
+                Observer::default(),
+            );
+            assert!(observed.result.is_err());
+            assert_eq!(observed.facts.document, Call::NotEntered);
+            assert_eq!(observed.facts.record, Call::NotEntered);
+            assert!(observed.facts.metadata.is_none());
+            assert_eq!(
+                observed.facts.failure,
+                Some(match case {
+                    0 => Site::Evidence,
+                    1 => Site::PendingWrite,
+                    2 => Site::SourceCheck,
+                    _ => Site::TargetGuard,
+                })
+            );
+            assert_eq!(inventory(&root.join("source")), before);
+        }
+    }
+    pub(crate) fn replacing_observer() -> Observer {
+        let mut observer = Observer::default();
+        observer.document_hooks.inspect = Some((
+            4,
+            Box::new(|path| {
+                let bytes = fs::read(path)?;
+                fs::hard_link(path, path.with_extension("held"))?;
+                basecraft_io::write_atomic(path, |w| w.write_all(&bytes))?;
+                Ok(())
+            }),
+        ));
+        observer
+    }
+    pub(crate) fn assert_distinct_identity(facts: &Facts) {
+        use crate::analysis_store::publication_observation::TargetObservation;
+        let file = &facts.metadata.as_ref().unwrap().files[4];
+        let PersistFact::Committed { witness } = file.persist() else {
+            panic!("missing persist witness")
+        };
+        let TargetObservation::Present {
+            identity,
+            hash,
+            size,
+        } = file.target()
+        else {
+            panic!("missing current target")
+        };
+        assert_ne!(witness.identity(), identity);
+        assert_eq!(witness.hash(), hash);
+        assert_eq!(witness.size(), *size);
+    }
+    #[test]
+    fn same_bytes_new_identity_is_passive() {
+        let Some(root) = crate::isolated_profile::enter(
+            "session::save_attempt_observation::tests::same_bytes_new_identity_is_passive",
+        ) else {
+            return;
+        };
+        let (mut session, id, _) = fixture(&root);
+        let observed = session.save_observed(
+            id,
+            None,
+            crate::input_evidence::SavePolicy::Cancel,
+            true,
+            false,
+            None,
+            replacing_observer(),
+        );
+        assert!(observed.result.is_ok());
+        assert_distinct_identity(&observed.facts);
+        let before = inventory(&root);
+        drop(observed);
+        assert_eq!(inventory(&root), before);
+        assert!(session.is_open(id));
     }
 }

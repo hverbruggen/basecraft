@@ -197,3 +197,76 @@ fn distinct_artifact_and_precomputed_observation_errors() {
         assert_eq!(attempt.documents[0].written, case == 7);
     }
 }
+
+#[test]
+fn same_bytes_new_identity_reaches_recovery() {
+    let Some(root) = crate::isolated_profile::enter(
+        "replay::attempt_boundary_tests::same_bytes_new_identity_reaches_recovery",
+    ) else {
+        return;
+    };
+    let (source, _, _) = fixture(&root);
+    let mut attempt = prepare_recovery(
+        source.recovery_root(),
+        &root.join("final"),
+        RecoveryMode::Strict,
+    )
+    .unwrap();
+    let check = attempt.check(0).unwrap();
+    let observed = attempt.advance_observed(
+        0,
+        Some(check.decide(crate::input_evidence::SavePolicy::Cancel, false)),
+        ObserverAdvance {
+            save: Some(save::tests::replacing_observer()),
+            ..Default::default()
+        },
+    );
+    assert!(observed.result.is_ok());
+    assert_eq!(observed.session_return, Call::ReturnedOk);
+    save::tests::assert_distinct_identity(observed.facts.as_ref().unwrap());
+    let before = inventory(&root);
+    drop(observed);
+    assert_eq!(inventory(&root), before);
+    assert!(attempt.documents[0].written);
+}
+
+#[test]
+fn pre_session_refusal_discards_actual_consent() {
+    let Some(root) = crate::isolated_profile::enter(
+        "replay::attempt_boundary_tests::pre_session_refusal_discards_actual_consent",
+    ) else {
+        return;
+    };
+    let (source, _, _) = fixture(&root);
+    let mut attempt = prepare_recovery(
+        source.recovery_root(),
+        &root.join("final"),
+        RecoveryMode::Strict,
+    )
+    .unwrap();
+    let check = attempt.check(0).unwrap();
+    let before = inventory(&root);
+    let observed = attempt.advance_observed(
+        usize::MAX,
+        Some(
+            check
+                .clone()
+                .decide(crate::input_evidence::SavePolicy::Cancel, false),
+        ),
+        ObserverAdvance::default(),
+    );
+    assert!(observed.result.is_err());
+    assert_eq!(observed.failure, Some(AdvanceSite::Validate));
+    assert_eq!(observed.session_return, Call::NotEntered);
+    assert!(observed.facts.is_none());
+    assert!(observed.diagnostics.is_empty());
+    assert_eq!(inventory(&root), before);
+    let spent = attempt.advance_observed(
+        0,
+        Some(check.decide(crate::input_evidence::SavePolicy::Cancel, false)),
+        ObserverAdvance::default(),
+    );
+    assert!(matches!(spent.result, Err(Error::SaveDecisionStale(_))));
+    assert_eq!(spent.facts.as_ref().unwrap().document, Call::NotEntered);
+    assert!(!attempt.documents[0].written);
+}
