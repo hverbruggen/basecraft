@@ -25,6 +25,8 @@ use crate::log::LogWriter;
 mod creation;
 mod extraction;
 mod proposals;
+mod save_decision;
+pub use save_decision::{SaveCheck, SaveDecision, SaveOutcome, SaveWarning};
 pub mod support_import;
 use crate::{Error, Result};
 
@@ -939,6 +941,23 @@ impl Session {
         overwrite: bool,
         history_only: bool,
     ) -> Result<()> {
+        self.save_attempt(id, path, policy, overwrite, history_only, None)
+            .map(|_| ())
+    }
+
+    fn save_attempt(
+        &mut self,
+        id: DocId,
+        path: Option<&Path>,
+        policy: crate::input_evidence::SavePolicy,
+        overwrite: bool,
+        history_only: bool,
+        decision: Option<SaveDecision>,
+    ) -> Result<SaveOutcome> {
+        if !self.is_open(id) {
+            return Err(invalid("save document is not open"));
+        }
+        let mut warnings = Vec::new();
         let new_sequence = self.docs[id.0].accepted_hashes.is_empty();
         if new_sequence && path.is_none() {
             return Err(invalid(
@@ -952,8 +971,8 @@ impl Session {
         if history_only && !clean {
             return Err(invalid("history publication requires a saved document"));
         }
-        if !history_only && self.log.is_some() && path.is_none() && clean {
-            return Ok(());
+        if decision.is_none() && !history_only && self.log.is_some() && path.is_none() && clean {
+            return Ok(SaveOutcome { warnings });
         }
         // Cooperating Basecraft processes serialize the entire data + sidecar +
         // provenance publication. External programs still require hash checks.
@@ -967,8 +986,33 @@ impl Session {
         }
         let _evidence_lock = crate::input_evidence::lock()?;
         if !history_only {
-            let conflict = crate::input_evidence::conflicts(&target)?;
-            crate::input_evidence::resolve(&conflict, policy)?;
+            let evidence = crate::input_evidence::check(&target)?;
+            if decision.is_some() || !evidence.is_complete() {
+                let fresh = self.save_check_scope(id, &target, evidence)?;
+                if let Some(decision) = decision {
+                    if fresh != decision.check {
+                        return Err(Error::SaveDecisionStale(Box::new(fresh)));
+                    }
+                    if !fresh.evidence().is_complete() && !decision.acknowledge_incomplete {
+                        return Err(Error::SaveCheckRequired(Box::new(fresh)));
+                    }
+                } else {
+                    return Err(Error::SaveCheckRequired(Box::new(fresh)));
+                }
+                // Changed original/sidecar acceptance is not waivable and must
+                // fail before mutating known evidence.
+                if path.is_none() {
+                    self.check_save_source(id)?;
+                }
+                crate::input_evidence::resolve(&fresh.evidence().conflict, policy)?;
+                if !fresh.evidence().is_complete() {
+                    warnings.push(SaveWarning::EvidenceNotChecked {
+                        issues: fresh.evidence().issues.clone(),
+                    });
+                }
+            } else {
+                crate::input_evidence::resolve(&evidence.conflict, policy)?;
+            }
         }
         if history_only {
             self.check_save_source(id)?;
@@ -1061,7 +1105,7 @@ impl Session {
             } else {
                 error
             }
-        })
+        }).map(|()| SaveOutcome { warnings })
     }
 
     fn check_save_source(&self, id: DocId) -> Result<()> {

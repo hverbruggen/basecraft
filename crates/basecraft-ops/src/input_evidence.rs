@@ -202,7 +202,7 @@ pub enum SavePolicy {
     BreakEvidence,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AffectedAnalysis {
     pub run: PathBuf,
     pub result: String,
@@ -215,11 +215,100 @@ pub struct AffectedAnalysis {
     pub backing_analyses: Vec<AffectedAnalysis>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EvidenceConflict {
     pub target: PathBuf,
     pub analyses: Vec<AffectedAnalysis>,
     pub options: Vec<SavePolicy>,
+}
+
+/// Failure of an inspection, never authority to ignore a save/write failure.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InspectionCode {
+    RegistryUnavailable,
+    StoreUnavailable,
+    RunUnavailable,
+    LedgerInvalid,
+    DependencyUnavailable,
+    DisplayMetadataUnavailable,
+    LimitExceeded,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InspectionIssue {
+    pub code: InspectionCode,
+    pub location: PathBuf,
+    /// No distance-based unrelatedness inference is made. An unreadable record
+    /// can hide a direct reference, an alias, an owner or an ancestor edge.
+    pub reason: String,
+}
+
+/// Advisory snapshot. It performs no registration, preservation or writes.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct EvidenceCheck {
+    pub conflict: EvidenceConflict,
+    pub issues: Vec<InspectionIssue>,
+    /// Ephemeral digest of inspected inventory, including damaged bytes.
+    pub inventory_revision: String,
+}
+
+impl EvidenceCheck {
+    pub fn is_complete(&self) -> bool {
+        self.issues.is_empty()
+    }
+}
+
+#[derive(Default)]
+struct Inspection {
+    observations: BTreeMap<PathBuf, String>,
+    issues: Vec<InspectionIssue>,
+}
+
+impl Inspection {
+    fn issue(&mut self, code: InspectionCode, location: &Path, error: impl std::fmt::Display) {
+        self.issues.push(InspectionIssue {
+            code,
+            location: location.into(),
+            reason: error.to_string(),
+        });
+    }
+
+    fn record(&mut self, path: &Path) -> Result<Vec<u8>> {
+        let result = crate::provenance::read_record(path);
+        self.observations.insert(
+            path.into(),
+            match &result {
+                Ok(bytes) => basecraft_io::hash_bytes(bytes),
+                Err(error) => format!("unavailable: {error}"),
+            },
+        );
+        result
+    }
+
+    fn input(&mut self, run: &Path) -> Result<SubmittedInput> {
+        // Keep the existing unsafe-record and schema validation in one owner.
+        let bytes = self.record(&run.join("input.json"))?;
+        validate_input(run, &bytes)
+    }
+
+    fn name(&mut self, run: &Path) -> String {
+        let path = run.join("run.json");
+        let result = self.record(&path).and_then(|bytes| {
+            let value: serde_json::Value = serde_json::from_slice(&bytes)?;
+            Ok(value["result"]
+                .as_str()
+                .unwrap_or("Unpublished analysis")
+                .to_owned())
+        });
+        match result {
+            Ok(name) => name,
+            Err(error) => {
+                self.issue(InspectionCode::DisplayMetadataUnavailable, &path, error);
+                "Unpublished analysis".into()
+            }
+        }
+    }
 }
 
 impl std::fmt::Display for EvidenceConflict {
@@ -303,12 +392,16 @@ pub fn relative(base: &Path, target: &Path) -> Result<String> {
 }
 
 pub fn read_input(run: &Path) -> Result<SubmittedInput> {
+    let bytes = crate::provenance::read_record(&run.join("input.json"))?;
+    validate_input(run, &bytes)
+}
+
+fn validate_input(run: &Path, bytes: &[u8]) -> Result<SubmittedInput> {
     let metadata = std::fs::symlink_metadata(run.join("input.json"))?;
     if !metadata.is_file() || metadata.file_type().is_symlink() {
         return Err(invalid("unsafe input evidence record"));
     }
-    let record: SubmittedInput =
-        serde_json::from_slice(&crate::provenance::read_record(&run.join("input.json"))?)?;
+    let record: SubmittedInput = serde_json::from_slice(bytes)?;
     if record.schema_version != 1
         || !matches!(
             record.state.as_str(),
@@ -485,57 +578,41 @@ fn lexical(path: &Path) -> PathBuf {
 
 /// Metadata-only UI query. Matching metadata is a signal, never a hash verdict.
 pub fn conflicts(target: &Path) -> Result<EvidenceConflict> {
-    let mut all = stores()?;
+    conservative(check(target)?)
+}
+
+fn conservative(check: EvidenceCheck) -> Result<EvidenceConflict> {
+    if !check.is_complete() {
+        return Err(crate::Error::EvidenceCheckIncomplete(Box::new(check)));
+    }
+    Ok(check.conflict)
+}
+
+/// Side-effect-free full inspection; callers must recheck under `lock` before
+/// acting. Failure of the lock or of an actual write is never an inspection issue.
+pub fn check(target: &Path) -> Result<EvidenceCheck> {
+    let mut inspection = Inspection::default();
+    let mut all = match stores() {
+        Ok(stores) => stores,
+        Err(error) => {
+            let path = registry()?;
+            // Observe damaged registry bytes as well as the validation failure.
+            let _ = inspection.record(&path);
+            inspection.issue(InspectionCode::RegistryUnavailable, &path, error);
+            Vec::new()
+        }
+    };
     let target = std::path::absolute(target)?;
     let canonical = target.canonicalize().unwrap_or_else(|_| target.clone());
     for parent in canonical.ancestors().skip(1) {
         let nearby = parent.join(".basecraft/analyses-v1");
-        if nearby.exists() && !all.contains(&nearby) {
-            all.push(nearby);
+        match nearby.try_exists() {
+            Ok(true) if !all.contains(&nearby) => all.push(nearby),
+            Err(error) => inspection.issue(InspectionCode::StoreUnavailable, &nearby, error),
+            _ => {}
         }
     }
-    conflicts_in(&canonical, &all)
-}
-
-// A folder can move/disappear outside the cooperative evidence lock. Treat it
-// exactly like metadata already unavailable at query start, but never suppress
-// missing/corrupt records in a directory that is still present. Partial scan results
-// are discarded so unavailable stores cannot contribute dangling conflicts.
-fn directory_present(path: &Path) -> Result<bool> {
-    match std::fs::symlink_metadata(path) {
-        Ok(_) => Ok(true),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(error.into()),
-    }
-}
-
-fn available_directory<T>(
-    directory: &Path,
-    mut inspect: impl FnMut() -> Result<T>,
-) -> Result<Option<T>> {
-    // Removal unlinks children before the directory itself. A missing record
-    // while its directory still exists can therefore be a short teardown window.
-    // Retry only NotFound, then keep the original refusal if damage persists.
-    let mut delays = [1, 4, 16].into_iter();
-    loop {
-        if !directory_present(directory)? {
-            return Ok(None);
-        }
-        match inspect() {
-            Ok(value) => return Ok(directory_present(directory)?.then_some(value)),
-            Err(crate::Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
-                if !directory_present(directory)? {
-                    return Ok(None);
-                }
-                if let Some(delay) = delays.next() {
-                    std::thread::sleep(std::time::Duration::from_millis(delay));
-                } else {
-                    return Err(error.into());
-                }
-            }
-            Err(error) => return Err(error),
-        }
-    }
+    inspect_in(&canonical, &all, inspection)
 }
 
 #[derive(Default)]
@@ -545,32 +622,50 @@ struct StoreScan {
     metadata_bytes: u64,
 }
 
-fn scan_store(store: &Path, target: &Path, metadata_bytes: u64) -> Result<StoreScan> {
-    let mut scan = StoreScan {
-        metadata_bytes,
-        ..StoreScan::default()
-    };
-    ArtifactRun::validate_store(store)?;
-    let runs = store.join("runs");
-    let mut count = 0;
-    for entry in std::fs::read_dir(&runs)? {
-        count += 1;
-        if count > 4096 {
-            return Err(invalid(
-                "store exceeds 4096 runs; explicit inspection required",
-            ));
+fn scan_store(store: &Path, target: &Path, scan: &mut StoreScan, inspection: &mut Inspection) {
+    // The marker can be damaged in different ways with the same parse error.
+    // Its observed bytes participate in consent, even when validation fails.
+    let _ = inspection.record(&store.join("store.json"));
+    let result = ArtifactRun::validate_store(store)
+        .and_then(|()| Ok(std::fs::read_dir(store.join("runs"))?));
+    let entries = match result {
+        Ok(entries) => entries,
+        Err(error) => {
+            inspection.issue(InspectionCode::StoreUnavailable, store, error);
+            return;
         }
-        let entry = entry?;
+    };
+    for (count, entry) in entries.enumerate() {
+        if count >= 4096 {
+            inspection.issue(
+                InspectionCode::LimitExceeded,
+                store,
+                "store exceeds 4096 runs; explicit inspection required",
+            );
+            break;
+        }
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                inspection.issue(InspectionCode::RunUnavailable, &store.join("runs"), error);
+                continue;
+            }
+        };
         let run = entry.path();
-        if let Some(Some((input, analysis, bytes))) =
-            available_directory(&run, || scan_run(&entry, target, scan.metadata_bytes))?
-        {
-            scan.metadata_bytes = bytes;
-            scan.runs.push((run, input));
-            scan.analyses.extend(analysis);
+        match scan_run(&entry, target, &mut scan.metadata_bytes, inspection) {
+            Ok(Some((input, analysis, bytes))) => {
+                scan.metadata_bytes = bytes;
+                scan.runs.push((run, input));
+                scan.analyses.extend(analysis);
+            }
+            Ok(None) => {}
+            Err(error) => inspection.issue(
+                InspectionCode::LedgerInvalid,
+                &run.join("input.json"),
+                error,
+            ),
         }
     }
-    Ok(scan)
 }
 
 type RunScan = (SubmittedInput, Option<AffectedAnalysis>, u64);
@@ -578,7 +673,8 @@ type RunScan = (SubmittedInput, Option<AffectedAnalysis>, u64);
 fn scan_run(
     entry: &std::fs::DirEntry,
     target: &Path,
-    metadata_bytes: u64,
+    metadata_bytes: &mut u64,
+    inspection: &mut Inspection,
 ) -> Result<Option<RunScan>> {
     if !entry.file_type()?.is_dir() {
         return Err(invalid("unsafe entry in analysis store"));
@@ -588,12 +684,51 @@ fn scan_run(
         return Ok(None); // Reserved, no input registered yet.
     }
     let bytes = metadata_bytes.saturating_add(std::fs::metadata(run.join("input.json"))?.len());
+    *metadata_bytes = bytes;
     if bytes > 64 << 20 {
-        return Err(invalid(
+        inspection.issue(
+            InspectionCode::LimitExceeded,
+            &run.join("input.json"),
             "known analysis metadata exceeds 64 MiB query limit",
-        ));
+        );
+        return Ok(None);
     }
-    let input = read_input(&run)?;
+    let input = inspection.input(&run)?;
+    for field in ["analysis_run", "origin_run"] {
+        if input
+            .extra
+            .get(field)
+            .is_some_and(|value| !value.is_string())
+        {
+            inspection.issue(
+                InspectionCode::DependencyUnavailable,
+                &run.join("input.json"),
+                format!("{field} location is invalid"),
+            );
+        }
+    }
+    if input
+        .extra
+        .get("upstream")
+        .is_some_and(|value| !value.is_array())
+    {
+        inspection.issue(
+            InspectionCode::DependencyUnavailable,
+            &run.join("input.json"),
+            "upstream inventory is invalid",
+        );
+    }
+    if input
+        .extra
+        .get(PROPOSAL_TARGET)
+        .is_some_and(|value| !value.is_boolean())
+    {
+        inspection.issue(
+            InspectionCode::LedgerInvalid,
+            &run.join("input.json"),
+            "proposal target marker is invalid",
+        );
+    }
     let mut analysis = None;
     let proposal_target = input.extra.get(PROPOSAL_TARGET) == Some(&serde_json::json!(true));
     if input.state == "referenced"
@@ -607,7 +742,7 @@ fn scan_run(
                 && s.modified_nanos == reference.stamp.modified_nanos
         });
         analysis = Some(AffectedAnalysis {
-            result: result_name(&run)?,
+            result: inspection.name(&run),
             run,
             source_hash: reference.hash.clone(),
             can_preserve,
@@ -619,18 +754,26 @@ fn scan_run(
 }
 
 pub fn conflicts_in(target: &Path, stores: &[PathBuf]) -> Result<EvidenceConflict> {
-    let mut analyses = Vec::new();
-    let mut known_runs = Vec::new();
-    let mut metadata_bytes = 0u64;
+    conservative(check_in(target, stores)?)
+}
+
+pub fn check_in(target: &Path, stores: &[PathBuf]) -> Result<EvidenceCheck> {
+    inspect_in(target, stores, Inspection::default())
+}
+
+fn inspect_in(
+    target: &Path,
+    stores: &[PathBuf],
+    mut inspection: Inspection,
+) -> Result<EvidenceCheck> {
+    let mut scan = StoreScan::default();
     for store in stores {
-        if let Some(scan) =
-            available_directory(store, || scan_store(store, target, metadata_bytes))?
-        {
-            metadata_bytes = scan.metadata_bytes;
-            known_runs.extend(scan.runs);
-            analyses.extend(scan.analyses);
-        }
+        scan_store(store, target, &mut scan, &mut inspection);
     }
+    let mut analyses = scan.analyses;
+    let mut known_runs = scan.runs;
+    known_runs.sort_by(|a, b| a.0.cmp(&b.0));
+    analyses.sort_by(|a, b| a.run.cmp(&b.run));
     // Metadata-only transitive closure: preserving the direct original repairs
     // descendants through their owning ledger, while removal lists every record
     // that would otherwise be left with a missing ancestor.
@@ -647,16 +790,28 @@ pub fn conflicts_in(target: &Path, stores: &[PathBuf]) -> Result<EvidenceConflic
                 .and_then(serde_json::Value::as_array)
             {
                 for parent in parents {
-                    let path = parent["bundle"]
-                        .as_str()
-                        .ok_or_else(|| invalid("ancestor location is missing"))?;
-                    dependent |= depends_on(&run.join(path), &analyses)?;
+                    let Some(path) = parent["bundle"].as_str() else {
+                        inspection.issue(
+                            InspectionCode::DependencyUnavailable,
+                            &run.join("input.json"),
+                            "ancestor location is missing",
+                        );
+                        continue;
+                    };
+                    match depends_on_inspected(&run.join(path), &analyses, &mut inspection) {
+                        Ok(found) => dependent |= found,
+                        Err(error) => inspection.issue(
+                            InspectionCode::DependencyUnavailable,
+                            &run.join(path),
+                            error,
+                        ),
+                    }
                 }
             }
             if dependent {
                 analyses.push(AffectedAnalysis {
                     run: run.clone(),
-                    result: result_name(run)?,
+                    result: inspection.name(run),
                     source_hash: String::new(),
                     can_preserve: true,
                     direct: false,
@@ -719,7 +874,7 @@ pub fn conflicts_in(target: &Path, stores: &[PathBuf]) -> Result<EvidenceConflic
         {
             backing.push(AffectedAnalysis {
                 run: run.clone(),
-                result: result_name(run)?,
+                result: inspection.name(run),
                 source_hash: String::new(),
                 can_preserve: true,
                 direct: false,
@@ -732,7 +887,7 @@ pub fn conflicts_in(target: &Path, stores: &[PathBuf]) -> Result<EvidenceConflic
         .map(|(owner, mut backing)| {
             backing.sort_by_key(|a| a.run != owner);
             Ok(AffectedAnalysis {
-                result: result_name(&owner)?,
+                result: inspection.name(&owner),
                 run: owner,
                 source_hash: backing
                     .iter()
@@ -752,16 +907,35 @@ pub fn conflicts_in(target: &Path, stores: &[PathBuf]) -> Result<EvidenceConflic
     if !analyses.is_empty() && analyses.iter().all(|a| a.can_preserve) {
         options.insert(1, SavePolicy::PreserveCopy);
     }
-    Ok(EvidenceConflict {
+    let conflict = EvidenceConflict {
         target: target.into(),
         analyses,
         options,
+    };
+    inspection
+        .issues
+        .sort_by(|a, b| a.location.cmp(&b.location).then(a.reason.cmp(&b.reason)));
+    inspection.issues.dedup();
+    let inventory_revision = basecraft_io::hash_bytes(&serde_json::to_vec(&(
+        stores,
+        &known_runs,
+        &inspection.observations,
+        &inspection.issues,
+    ))?);
+    Ok(EvidenceCheck {
+        conflict,
+        issues: inspection.issues,
+        inventory_revision,
     })
 }
 
 // Save As companions are not store runs. Include each delegation location
 // before reading it, so a removed owner can still be matched by its old path.
-fn depends_on(bundle: &Path, analyses: &[AffectedAnalysis]) -> Result<bool> {
+fn depends_on_inspected(
+    bundle: &Path,
+    analyses: &[AffectedAnalysis],
+    inspection: &mut Inspection,
+) -> Result<bool> {
     let mut location = lexical(bundle);
     let mut seen = std::collections::HashSet::new();
     for _ in 0..32 {
@@ -772,9 +946,9 @@ fn depends_on(bundle: &Path, analyses: &[AffectedAnalysis]) -> Result<bool> {
             return Err(invalid("input evidence contains a cycle"));
         }
         if !location.join("input.json").try_exists()? {
-            return Ok(false);
+            return Err(invalid("ancestor input evidence is unavailable"));
         }
-        let input = read_input(&location)?;
+        let input = inspection.input(&location)?;
         let Some(origin) = input
             .extra
             .get("origin_run")
@@ -785,15 +959,6 @@ fn depends_on(bundle: &Path, analyses: &[AffectedAnalysis]) -> Result<bool> {
         location = lexical(&location.join(origin));
     }
     Err(invalid("input evidence ancestry exceeds 32 references"))
-}
-
-fn result_name(run: &Path) -> Result<String> {
-    let value: serde_json::Value =
-        serde_json::from_slice(&crate::provenance::read_record(&run.join("run.json"))?)?;
-    Ok(value["result"]
-        .as_str()
-        .unwrap_or("Unpublished analysis")
-        .into())
 }
 
 /// Retain one owned input ledger before a temporary source disappears. Uses
@@ -1803,112 +1968,44 @@ mod store_scan_tests {
     }
 
     #[test]
-    fn store_disappearing_mid_scan_does_not_block_unrelated_save() {
-        // Move/delete at a deterministic scan boundary, without timing sleeps.
+    fn disappearing_store_keeps_prior_evidence_and_marks_uncertainty() {
         for delete in [false, true] {
             let root = tempfile::tempdir().unwrap();
             let source = root.path().join("input.nwk");
             std::fs::write(&source, "(a:1,b:1);").unwrap();
             let run = fixture(root.path(), &source);
             let store = run.directory().parent().unwrap().parent().unwrap();
-            let result = available_directory(store, || {
-                let partial = scan_store(store, &source, 0)?;
-                assert_eq!(partial.analyses.len(), 1);
-                if delete {
-                    std::fs::remove_dir_all(store).unwrap();
-                } else {
-                    std::fs::rename(store, root.path().join("moved-store")).unwrap();
-                }
-                // The next real evidence read fails exactly as in the packaging
-                // race. Discard the earlier conflict along with the failed scan.
-                let read = read_input(run.directory());
-                assert!(matches!(&read, Err(crate::Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound));
-                read?;
-                Ok(partial)
-            })
-            .unwrap();
-            assert!(result.is_none());
-            assert_eq!(std::fs::read_to_string(&source).unwrap(), "(a:1,b:1);");
+            let mut scan = StoreScan::default();
+            let mut inspection = Inspection::default();
+            scan_store(store, &source, &mut scan, &mut inspection);
+            assert_eq!(scan.analyses.len(), 1);
+            if delete {
+                std::fs::remove_dir_all(store).unwrap();
+            } else {
+                std::fs::rename(store, root.path().join("moved-store")).unwrap();
+            }
+            // Controlled transition between two actual inspection boundaries.
+            // Never discard successfully inspected evidence on a later failure.
+            scan_store(store, &source, &mut scan, &mut inspection);
+            assert_eq!(scan.analyses.len(), 1);
+            assert_eq!(inspection.issues[0].code, InspectionCode::StoreUnavailable);
+            let check = check_in(&source, &[store.into()]).unwrap();
+            assert!(!check.is_complete());
+            assert!(conflicts_in(&source, &[store.into()]).is_err());
         }
     }
 
     #[test]
-    fn moved_scan_discards_partial_conflicts_and_keeps_available_directory_guard() {
+    fn missing_store_does_not_discard_other_store_conflicts() {
         let root = tempfile::tempdir().unwrap();
         let source = root.path().join("input.nwk");
         std::fs::write(&source, "(a:1,b:1);").unwrap();
         let run = fixture(root.path(), &source);
         let store = run.directory().parent().unwrap().parent().unwrap();
-        let result = available_directory(store, || {
-            let scan = scan_store(store, &source, 0)?;
-            assert_eq!(scan.analyses.len(), 1);
-            std::fs::rename(store, root.path().join("moved-store")).unwrap();
-            Ok(scan)
-        })
-        .unwrap();
-        assert!(result.is_none());
-        let live = tempfile::tempdir().unwrap();
-        let live_run = fixture(live.path(), &source);
-        let live_store = live_run.directory().parent().unwrap().parent().unwrap();
-        let conflict = conflicts_in(&source, &[store.into(), live_store.into()]).unwrap();
-        assert_eq!(conflict.analyses.len(), 1);
-        assert_eq!(conflict.analyses[0].run, live_run.directory());
-        assert!(matches!(
-            resolve(&conflict, SavePolicy::Cancel),
-            Err(crate::Error::EvidenceConflict(_))
-        ));
-    }
-
-    #[test]
-    fn partial_directory_teardown_is_rechecked_without_accepting_live_damage() {
-        let root = tempfile::tempdir().unwrap();
-        let source = root.path().join("input.nwk");
-        std::fs::write(&source, "(a:1,b:1);").unwrap();
-        let run = fixture(root.path(), &source);
-        let store = run.directory().parent().unwrap().parent().unwrap();
-        let mut inspections = 0;
-        let result = available_directory(store, || {
-            if inspections == 0 {
-                std::fs::remove_file(store.join("store.json")).unwrap();
-                assert!(store.is_dir());
-            } else {
-                std::fs::remove_dir_all(store).unwrap();
-            }
-            inspections += 1;
-            scan_store(store, &source, 0)
-        })
-        .unwrap();
-        assert!(result.is_none());
-        assert_eq!(inspections, 2);
-    }
-
-    #[test]
-    fn individual_run_trashed_during_scan_is_discarded() {
-        let root = tempfile::tempdir().unwrap();
-        let source = root.path().join("input.nwk");
-        std::fs::write(&source, "(a:1,b:1);").unwrap();
-        let run = fixture(root.path(), &source);
-        let store = run.directory().parent().unwrap().parent().unwrap();
-        let entry = std::fs::read_dir(run.directory().parent().unwrap())
-            .unwrap()
-            .next()
-            .unwrap()
-            .unwrap();
-        let result = available_directory(run.directory(), || {
-            let partial = scan_run(&entry, &source, 0)?.unwrap();
-            assert!(partial.1.is_some());
-            std::fs::rename(run.directory(), store.join("trashed-run")).unwrap();
-            scan_run(&entry, &source, 0)
-        })
-        .unwrap();
-        assert!(result.is_none());
-        assert!(store.is_dir());
-        assert!(
-            conflicts_in(&source, &[store.into()])
-                .unwrap()
-                .analyses
-                .is_empty()
-        );
+        let check = check_in(&source, &[root.path().join("missing"), store.into()]).unwrap();
+        assert!(!check.is_complete());
+        assert_eq!(check.conflict.analyses.len(), 1);
+        assert_eq!(check.conflict.analyses[0].run, run.directory());
     }
 
     #[cfg(unix)]
@@ -1933,9 +2030,10 @@ mod store_scan_tests {
         let store = run.directory().parent().unwrap().parent().unwrap();
         // A registered reference cannot silently lose its run details.
         std::fs::remove_file(run.artifact("run.json").unwrap()).unwrap();
-        assert!(
-            matches!(conflicts_in(&source, &[store.into()]), Err(crate::Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound)
-        );
+        assert!(matches!(
+            conflicts_in(&source, &[store.into()]),
+            Err(crate::Error::EvidenceCheckIncomplete(_))
+        ));
         std::fs::write(run.artifact("input.json").unwrap(), "damaged").unwrap();
         assert!(conflicts_in(&source, &[store.into()]).is_err());
         std::fs::remove_file(store.join("store.json")).unwrap();

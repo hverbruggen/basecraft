@@ -16,6 +16,12 @@ pub enum Error {
     Invalid(String),
     #[error("{0}")]
     EvidenceConflict(Box<crate::input_evidence::EvidenceConflict>),
+    #[error("evidence_check_incomplete: could not check all analysis evidence")]
+    EvidenceCheckIncomplete(Box<crate::input_evidence::EvidenceCheck>),
+    #[error("evidence_check_incomplete: explicit save decision required")]
+    SaveCheckRequired(Box<crate::session::SaveCheck>),
+    #[error("save_decision_stale: review the refreshed save check")]
+    SaveDecisionStale(Box<crate::session::SaveCheck>),
     #[error("nothing to {0}")]
     NothingTo(&'static str),
 }
