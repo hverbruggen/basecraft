@@ -36,7 +36,7 @@ pub struct AlignmentLinkRecovery {
 pub struct AlignmentLinkUnavailable {
     pub schema: u32,
     pub unavailable: String,
-    /// Existing native OsStr basename representation (Unix bytes / Windows units),
+    /// Existing native `OsStr` basename representation (Unix bytes / Windows units),
     /// or null. The selected-field reader only displays a recovery hint for a
     /// string supplied in an externally authored guard; it does not decode this.
     #[schemars(with = "Option<NativeFilename>")]
@@ -44,7 +44,7 @@ pub struct AlignmentLinkUnavailable {
 }
 
 /// Schema description of Serde's existing OsStr/OsString representation.
-/// Production serialization uses OsString itself, without a conversion policy.
+/// Production serialization uses `OsString` itself, without a conversion policy.
 #[derive(JsonSchema)]
 pub enum NativeFilename {
     Unix(Vec<u8>),

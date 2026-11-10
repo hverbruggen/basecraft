@@ -5,7 +5,7 @@
   "type": "object",
   "properties": {
     "recovery": {
-      "description": "Existing native OsStr basename representation (Unix bytes / Windows units),\nor null. The selected-field reader only displays a recovery hint for a\nstring supplied in an externally authored guard; it does not decode this.",
+      "description": "Existing native `OsStr` basename representation (Unix bytes / Windows units),\nor null. The selected-field reader only displays a recovery hint for a\nstring supplied in an externally authored guard; it does not decode this.",
       "anyOf": [
         {
           "$ref": "#/$defs/NativeFilename"
@@ -30,7 +30,7 @@
   ],
   "$defs": {
     "NativeFilename": {
-      "description": "Schema description of Serde's existing OsStr/OsString representation.\nProduction serialization uses OsString itself, without a conversion policy.",
+      "description": "Schema description of Serde's existing OsStr/OsString representation.\nProduction serialization uses `OsString` itself, without a conversion policy.",
       "oneOf": [
         {
           "type": "object",
