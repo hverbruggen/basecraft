@@ -464,9 +464,11 @@ fn retention_worker(root: &Path, role: &str, mode: &str, barrier: &mut Barrier) 
                 assert_eq!(
                     mutation
                         .read_input(
-                            ArtifactRun::create(&root.join("result.txt"), "owner")
+                            &ArtifactRun::runs_for_anchor(&root.join("result.txt"), 10)
                                 .unwrap()
-                                .directory()
+                                .into_iter()
+                                .find(|path| path.file_name().unwrap() == "owner")
+                                .unwrap()
                         )
                         .unwrap()
                         .state,
