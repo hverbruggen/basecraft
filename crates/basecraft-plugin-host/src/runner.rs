@@ -2465,7 +2465,7 @@ mod completed_result_tests {
             "destinations":{"report":"report.json"}, "parameters":{}
         }))
         .unwrap();
-        let operation = registry.resolve(&request.operation, None).unwrap();
+        let operation = registry.resolve(&request.operation, None).unwrap().clone();
         let mut prepared = PreparedOperation::prepare(
             operation,
             request,
