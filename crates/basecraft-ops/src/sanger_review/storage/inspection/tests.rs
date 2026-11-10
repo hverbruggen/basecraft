@@ -139,7 +139,12 @@ fn current_membership_is_borrowed_without_simulation_or_authority_changes() {
                 r.sets[0].sources[0].source,
                 &s.evidence.sources[0]
             ));
+            assert_eq!(
+                r.sets[0].inputs[0].requirement(),
+                SourceRequirement::ExistingEntry
+            );
             for input in &r.sets[1].inputs {
+                assert_eq!(input.requirement(), SourceRequirement::ReferenceIfUnchanged);
                 assert_eq!(input.input.sha256, s.draft.inputs[0].sha256);
                 let Selection::Unmatched { probe, provenance } = &input.selection else {
                     panic!("no simulated append")
@@ -393,13 +398,15 @@ fn direct_manifest_membership_and_recovery_roles_are_observations() {
     #[cfg(feature = "test-counters")]
     {
         basecraft_io::counters::reset();
-        let r = inspect(&s, &target);
+        let mut reads = BTreeMap::new();
+        let r = inspect_with_manifest_reader(&s, &target, |path| {
+            *reads.entry(path.to_path_buf()).or_insert(0usize) += 1;
+            crate::provenance::read_record(path)
+        });
         let counts = basecraft_io::counters::snapshot();
         for dep in &r.dependencies {
             let p = dep.path.join("manifest.json");
-            if p.is_file() {
-                assert_eq!(counts.reads[&p.canonicalize().unwrap()].full_reads, 1);
-            }
+            assert_eq!(reads[&p], 1);
         }
         assert_eq!(counts.sync_all, 0);
         assert_eq!(counts.sync_data, 0);
@@ -608,6 +615,10 @@ fn symlink_and_denied_diagnostics_never_fall_back_or_write() {
     let source = s.draft.inputs[0].path.clone();
     fs::set_permissions(&source, fs::Permissions::from_mode(0o000)).unwrap();
     unchanged(&root, &s, &target, |r| {
+        assert_eq!(
+            r.sets[0].inputs[0].requirement(),
+            SourceRequirement::UnavailableUnderLegacyFallback
+        );
         let Selection::Unmatched {
             probe: Ok(probe), ..
         } = &r.sets[0].inputs[0].selection
@@ -643,6 +654,10 @@ fn placement_and_recovery_diagnostics_preserve_errors_and_remaining_facts() {
     let target = root.join("missing-parent/out.json");
     let error = s.retained[0].placement().unwrap_err();
     unchanged(&root, &s, &target, |r| {
+        assert_eq!(
+            r.sets[1].inputs[0].requirement(),
+            SourceRequirement::CandidateUnresolved
+        );
         assert!(matches!(
             r.sets[0].inputs[0].selection,
             Selection::Unmatched { probe: Ok(_), .. }

@@ -49,6 +49,36 @@ enum ProspectiveProvenance {
     // to certify prospective ancestry, or mistake uninspected for none.
     UninspectedLegacyResolver,
 }
+#[derive(Debug, PartialEq, Eq)]
+enum SourceRequirement {
+    ExistingEntry,
+    ReferenceIfUnchanged,
+    UnavailableUnderLegacyFallback,
+    CandidateUnresolved,
+}
+impl InputInspection<'_> {
+    // Conditional role only, never a prediction that registration will succeed.
+    fn requirement(&self) -> SourceRequirement {
+        match &self.selection {
+            Selection::Existing(_) => SourceRequirement::ExistingEntry,
+            Selection::Unmatched { probe: Err(_), .. } => SourceRequirement::CandidateUnresolved,
+            Selection::Unmatched {
+                probe: Ok(probe), ..
+            } => {
+                if probe
+                    .sha256
+                    .as_ref()
+                    .is_ok_and(|hash| hash.eq_ignore_ascii_case(&self.input.sha256))
+                {
+                    SourceRequirement::ReferenceIfUnchanged
+                } else {
+                    SourceRequirement::UnavailableUnderLegacyFallback
+                }
+            }
+        }
+    }
+}
+
 struct SourceInspection<'a> {
     source: &'a Source,
     checked: crate::Result<PathBuf>,
@@ -108,6 +138,15 @@ struct PathRole<'a> {
 }
 
 fn inspect<'a>(root: &'a SangerReviewSession, target: &'a Path) -> Inspection<'a> {
+    inspect_with_manifest_reader(root, target, crate::provenance::read_record)
+}
+
+// Narrow observation seam: tests count calls while delegating to the real reader.
+fn inspect_with_manifest_reader<'a>(
+    root: &'a SangerReviewSession,
+    target: &'a Path,
+    mut read_manifest: impl FnMut(&Path) -> crate::Result<Vec<u8>>,
+) -> Inspection<'a> {
     let mut sets = Vec::new();
     inspect_set(root, target, &mut sets);
     let paths: BTreeSet<_> = sets
@@ -126,7 +165,7 @@ fn inspect<'a>(root: &'a SangerReviewSession, target: &'a Path) -> Inspection<'a
     let dependencies = paths
         .into_iter()
         .map(|path| {
-            let manifest = crate::provenance::read_record(&path.join("manifest.json"))
+            let manifest = read_manifest(&path.join("manifest.json"))
                 .map(|bytes| serde_json::from_slice(&bytes));
             Dependency { path, manifest }
         })
