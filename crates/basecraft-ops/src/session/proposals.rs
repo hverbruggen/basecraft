@@ -1,19 +1,16 @@
 //! One staged proposal/commit owner. Kind adapters supply only candidate edits
 //! and fingerprints; Session retains pins, actors, journal and undo ownership.
 use super::{Applied, Inverse, Session, Slot};
-use crate::documents::{
-    delimitation_state, execute_delimitation, execute_sequence, sequence_state,
-};
+use crate::documents::{execute_delimitation, execute_sequence};
 use crate::{
     DocId, Result,
     error::invalid,
     files::{Loaded, Opened},
 };
 use basecraft_docs::FeatureId;
-use basecraft_protocol::{Actor, DocState, LogEntry, Op, OpResult};
+use basecraft_protocol::{Actor, LogEntry, Op, OpResult};
 
 type Execute = fn(&mut Loaded, &Op) -> Result<(Inverse, Option<FeatureId>)>;
-type Fingerprint = fn(&Loaded) -> Result<DocState>;
 
 struct PreparedEdit {
     op: Op,
@@ -48,13 +45,6 @@ fn sequence_edit(content: &mut Loaded, op: &Op) -> Result<(Inverse, Option<Featu
     execute_sequence(&mut sequence.doc, op)
 }
 
-fn sequence_fingerprint(content: &Loaded) -> Result<DocState> {
-    let Loaded::Sequence(sequence) = content else {
-        return Err(invalid("proposals require a sequence document"));
-    };
-    Ok(sequence_state(&sequence.doc))
-}
-
 fn delimitation_edit(content: &mut Loaded, op: &Op) -> Result<(Inverse, Option<FeatureId>)> {
     use basecraft_protocol::delimitation::DelimitationEdit;
     if !matches!(op, Op::DelimitationEdit { edit } if matches!(edit.as_ref(), DelimitationEdit::Remove { .. } | DelimitationEdit::Combine { .. }))
@@ -67,13 +57,6 @@ fn delimitation_edit(content: &mut Loaded, op: &Op) -> Result<(Inverse, Option<F
         return Err(invalid("proposals require a species workspace"));
     };
     execute_delimitation(work, op)
-}
-
-fn delimitation_fingerprint(content: &Loaded) -> Result<DocState> {
-    let Loaded::Delimitation(work) = content else {
-        return Err(invalid("proposals require a species workspace"));
-    };
-    Ok(delimitation_state(work))
 }
 
 impl Session {
@@ -116,14 +99,7 @@ impl Session {
             format: sequence.format,
             fasta: sequence.fasta.clone(),
         });
-        let batch = self.stage_proposals(
-            id,
-            ops,
-            actor,
-            candidate,
-            sequence_edit,
-            sequence_fingerprint,
-        )?;
+        let batch = self.stage_proposals(id, ops, actor, candidate, sequence_edit)?;
         self.commit_proposals(batch)
     }
 
@@ -141,14 +117,7 @@ impl Session {
             return Err(invalid("proposals require a species workspace"));
         };
         let candidate = Loaded::Delimitation(work.clone());
-        let batch = self.stage_proposals(
-            id,
-            ops,
-            &self.actor,
-            candidate,
-            delimitation_edit,
-            delimitation_fingerprint,
-        )?;
+        let batch = self.stage_proposals(id, ops, &self.actor, candidate, delimitation_edit)?;
         self.commit_proposals(batch)
     }
 
@@ -159,7 +128,6 @@ impl Session {
         actor: &Actor,
         mut candidate: Loaded,
         execute: Execute,
-        fingerprint: Fingerprint,
     ) -> Result<PreparedBatch> {
         let mut edits = Vec::with_capacity(ops.len());
         let mut entries = Vec::with_capacity(ops.len());
@@ -174,13 +142,7 @@ impl Session {
                     feature: feature.map(|id| id.0),
                 },
             );
-            // Reuse the migrated Document interface when the payload supports
-            // it; legacy adapters delegate to the same helpers as Session state.
-            entry.state = if let Some(document) = candidate.as_document() {
-                document.fingerprint()
-            } else {
-                fingerprint(&candidate)?
-            };
+            entry.state = candidate.as_document().fingerprint();
             edits.push(PreparedEdit {
                 op: op.clone(),
                 inverse,
@@ -354,7 +316,6 @@ mod tests {
                 &session.actor,
                 candidate,
                 delimitation_edit,
-                delimitation_fingerprint,
             )
             .unwrap();
         session.apply(doc, remove("partition-3")).unwrap();

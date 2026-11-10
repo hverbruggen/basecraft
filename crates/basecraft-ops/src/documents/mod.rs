@@ -55,7 +55,7 @@ pub(crate) use submission::companions as submission_companions;
 pub(crate) use tree::execute_tree;
 
 // Detached proposal staging uses the same sequence semantics as live documents.
-pub(crate) use sequence::{execute_sequence, sequence_state};
+pub(crate) use sequence::execute_sequence;
 
 // Detached proposals share Delimitation mutations and fingerprints with Session.
-pub(crate) use delimitation::{delimitation_state, execute_delimitation};
+pub(crate) use delimitation::execute_delimitation;

@@ -334,11 +334,7 @@ mod tests {
             }
             let reopened = files::load(&target).unwrap();
             assert_eq!(
-                reopened
-                    .as_document()
-                    .unwrap()
-                    .saved_hashes(&target)
-                    .unwrap(),
+                reopened.as_document().saved_hashes(&target).unwrap(),
                 initial
             );
         }
