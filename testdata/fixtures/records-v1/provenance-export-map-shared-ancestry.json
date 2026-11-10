@@ -1,0 +1,25 @@
+{
+  "records": [
+    {
+      "export_id": "01M736877MSXHB8MECT0VC34XP",
+      "original_hash": "b3:b779baebc56e93a1dc8e4a47ac7de0f5ee22fba4e20c127a977ac4268adbf348",
+      "original_id": "Shared"
+    },
+    {
+      "export_id": "01M736877S7SJSSV7MCSWY3DZB",
+      "original_hash": "b3:5896c26ccacafbf6d249a924af38123c4e31ef6c854c4067000c6496f0af322c",
+      "original_id": "Shared"
+    },
+    {
+      "export_id": "01M736877X40F88GB5F840CXG8",
+      "original_hash": "b3:7c3e6145f1b1c611b5c28adf18afcd26cd2c19fe7aa37aa9ca2bfa11d7089ba3",
+      "original_id": "Right"
+    },
+    {
+      "export_id": "01M7368781BCEVXX462BKYQ9N1",
+      "original_hash": "b3:f21d5f791668472801fd18238b2c02f83e64d748721cddda6246e55690bcd52d",
+      "original_id": "Left"
+    }
+  ],
+  "schema_version": 1
+}

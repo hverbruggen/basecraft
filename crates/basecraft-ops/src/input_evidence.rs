@@ -2662,3 +2662,7 @@ mod windows_paths {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "input_evidence/export_record_format_tests.rs"]
+mod export_record_format_tests;
