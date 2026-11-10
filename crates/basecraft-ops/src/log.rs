@@ -623,6 +623,57 @@ fn actor_note(actor: &Actor) -> String {
 mod activity_tests {
     use super::*;
 
+    // Run against the literal writer before its typed replacement.
+    #[test]
+    fn poison_marker_writer_bytes() {
+        let root = tempfile::tempdir().unwrap();
+        let entry = parse_entry(
+            include_str!(
+                "../../../testdata/fixtures/provenance-v1/floating-metrics-baseline.jsonl"
+            )
+            .lines()
+            .next()
+            .unwrap(),
+        )
+        .unwrap();
+        for populated in [false, true] {
+            let work = root
+                .path()
+                .join(if populated { "nonempty" } else { "empty" });
+            let mut writer = LogWriter::new(&work, "probe");
+            if populated {
+                writer.append(&entry).unwrap();
+            }
+            let length = writer
+                .open
+                .as_ref()
+                .map_or(0, |(_, f)| f.metadata().unwrap().len());
+            writer.faults.after_bytes = Some(7);
+            writer.faults.rollback_sync = true;
+            assert!(writer.append(&entry).is_err());
+            let bytes = fs::read(work.join("recovery-integrity-error.json")).unwrap();
+            let expected = serde_json::to_vec_pretty(&serde_json::json!({
+                "schema_version": 1, "verified_length": length,
+                "error": "append failed and rollback durability could not be confirmed"
+            }))
+            .unwrap();
+            assert_eq!(bytes, expected);
+            assert!(writer.append(&entry).is_err());
+            if let Some(capture) = std::env::var_os("BASECRAFT_RECORD_CAPTURE") {
+                fs::create_dir_all(&capture).unwrap();
+                fs::write(
+                    Path::new(&capture).join(if populated {
+                        "integrity-nonempty.json"
+                    } else {
+                        "integrity-empty.json"
+                    }),
+                    bytes,
+                )
+                .unwrap();
+            }
+        }
+    }
+
     #[test]
     fn floating_tool_metrics_roundtrip_in_batches_and_reject_tampering() {
         let parent = std::env::var_os("BASECRAFT_JOURNAL_PROBE_DIR")
