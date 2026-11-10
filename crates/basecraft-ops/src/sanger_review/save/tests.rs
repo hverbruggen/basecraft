@@ -220,13 +220,33 @@ fn binding_covers_public_inactive_inverse_evidence_and_operational_state() {
             })
         },
         |s| s.events.push(ReviewOp::Undo),
-        |s| s.undo[0].columns.push(99),
-        |s| s.undo[0].before.push(ReviewChoice::Reject),
-        |s| s.undo[0].after.push(ReviewChoice::Accept),
-        |s| s.undo[0].manual_before.push(true),
-        |s| s.undo[0].manual_after.push(true),
-        |s| s.undo[0].mask = Some((s.mask.clone(), s.mask.clone())),
-        |s| s.undo[0].triage = Some((s.settings.clone(), None, s.settings.clone(), None)),
+        // Inverse internals now belong to the document layer. The owner can
+        // replace a whole prepared delta, but cannot forge individual fields.
+        |s| {
+            s.undo[0] = s
+                .prepare_change(&ReviewOp::Set {
+                    columns: vec![1],
+                    choice: ReviewChoice::Reject,
+                })
+                .unwrap()
+        },
+        |s| {
+            s.undo[0] = s
+                .prepare_change(&ReviewOp::Mask {
+                    settings: s.mask.clone(),
+                })
+                .unwrap()
+        },
+        |s| {
+            s.undo[0] = s
+                .prepare_change(&ReviewOp::Evaluate {
+                    version: 2,
+                    settings: s.settings.clone(),
+                    calls: vec![None; s.decisions.len()],
+                    reference: s.reference.clone(),
+                })
+                .unwrap()
+        },
         |s| s.redo.push(s.undo[0].clone()),
         |s| s.evidence.schema_version += 1,
         |s| s.evidence.runs.push(PathBuf::from("support")),
