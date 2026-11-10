@@ -459,10 +459,10 @@ fn bound_tree_snapshot_verification_keeps_binding_run_namespace_and_metadata_gua
 
 #[test]
 fn captured_companion_refusals_preserve_baseline_undo_and_journal() {
+    use basecraft_protocol::Op;
     if !isolated_capture_test("captured_companion_refusals_preserve_baseline_undo_and_journal") {
         return;
     }
-    use basecraft_protocol::Op;
     for change_main in [false, true] {
         for save in [false, true] {
             let dir = tempfile::tempdir().unwrap();
@@ -491,9 +491,7 @@ fn captured_companion_refusals_preserve_baseline_undo_and_journal() {
                 .set_modified(modified)
                 .unwrap();
             let result = if save {
-                session
-                    .save(id, Some(&dir.path().join("copy.fasta")))
-                    .map(|_| ())
+                session.save(id, Some(&dir.path().join("copy.fasta")))
             } else {
                 session
                     .apply(
@@ -517,7 +515,10 @@ fn captured_companion_refusals_preserve_baseline_undo_and_journal() {
                 serde_json::to_value(session.document_record(id).unwrap()).unwrap(),
                 serde_json::to_value(before).unwrap()
             );
-            assert!(basecraft_ops::log::read_all(dir.path()).unwrap().is_empty());
+            assert_eq!(
+                basecraft_ops::log::read_all(dir.path()).unwrap(),
+                Vec::new()
+            );
             assert!(!dir.path().join("recovery.json").exists());
             assert!(!dir.path().join("copy.fasta").exists());
         }

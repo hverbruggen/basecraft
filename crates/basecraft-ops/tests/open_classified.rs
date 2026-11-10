@@ -435,7 +435,7 @@ fn unreadable_gff_is_not_absent_and_direct_errors_remain_io() {
     let sidecar = files::gff_sidecar(&path);
     std::fs::write(&path, b">a\nACGT\n").unwrap();
     std::fs::write(&sidecar, b"##gff-version 3\n").unwrap();
-    std::fs::set_permissions(&sidecar, std::fs::Permissions::from_mode(0)).unwrap();
+    std::fs::set_permissions(&sidecar, std::fs::Permissions::from_mode(0o0)).unwrap();
     // This test intentionally requires an ordinary user, as does validation.
     assert_eq!(
         std::fs::read(&sidecar).unwrap_err().kind(),
