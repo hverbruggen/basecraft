@@ -107,6 +107,65 @@ pub(crate) struct FilePublicationObservation {
     target: TargetObservation,
 }
 impl FilePublicationObservation {
+    pub(crate) fn new(destination: &Path) -> Self {
+        Self {
+            destination: destination.into(),
+            persist: PersistFact::NotAttempted { staged: None },
+            parent_sync: ParentSync::NotAttempted,
+            target: TargetObservation::NotRequested,
+        }
+    }
+    pub(crate) fn staged(&mut self, file: &File, hash: String, size: u64) -> io::Result<()> {
+        let identity = handle_object_identity(file, OrdinaryKind::File)?;
+        self.persist = PersistFact::NotAttempted {
+            staged: Some(StagedWitness {
+                identity,
+                hash,
+                size,
+            }),
+        };
+        Ok(())
+    }
+    pub(crate) fn attempting(&mut self) {
+        let prior = std::mem::replace(
+            &mut self.persist,
+            PersistFact::NotAttempted { staged: None },
+        );
+        self.persist = match prior {
+            PersistFact::NotAttempted {
+                staged: Some(staged),
+            } => PersistFact::NoCommitWitness { staged },
+            other => other,
+        };
+    }
+    pub(crate) fn persisted(&mut self) {
+        let prior = std::mem::replace(
+            &mut self.persist,
+            PersistFact::NotAttempted { staged: None },
+        );
+        self.persist = match prior {
+            PersistFact::NoCommitWitness { staged } => PersistFact::Committed { witness: staged },
+            other => other,
+        };
+    }
+    pub(crate) fn inspected(
+        &mut self,
+        result: Result<TargetObservation>,
+    ) -> Option<ObservationFailure> {
+        match result {
+            Ok(target) => {
+                self.target = target;
+                None
+            }
+            Err(cause) => {
+                self.target = TargetObservation::Unavailable;
+                Some(ObservationFailure {
+                    phase: ObservationPhase::PostWriteInspection,
+                    cause,
+                })
+            }
+        }
+    }
     pub(crate) fn destination(&self) -> &Path {
         &self.destination
     }
@@ -180,12 +239,7 @@ struct Collector {
 impl Collector {
     fn new(destination: &Path) -> Self {
         Self {
-            observation: FilePublicationObservation {
-                destination: destination.into(),
-                persist: PersistFact::NotAttempted { staged: None },
-                parent_sync: ParentSync::NotAttempted,
-                target: TargetObservation::NotRequested,
-            },
+            observation: FilePublicationObservation::new(destination),
             phase: ProducerPhase::Validation,
             inspect: false,
             #[cfg(test)]
@@ -196,16 +250,9 @@ impl Collector {
         let mut diagnostics = Vec::new();
         if self.inspect {
             let inspected = self.inspect_target();
-            self.observation.target = match inspected {
-                Ok(target) => target,
-                Err(cause) => {
-                    diagnostics.push(ObservationFailure {
-                        phase: ObservationPhase::PostWriteInspection,
-                        cause,
-                    });
-                    TargetObservation::Unavailable
-                }
-            };
+            if let Some(failure) = self.observation.inspected(inspected) {
+                diagnostics.push(failure);
+            }
         }
         ObservedSecondaryPublication {
             observation: self.observation,
@@ -240,16 +287,10 @@ impl SecondaryHooks for Collector {
         if let Some(hook) = self.hooks.staged.take() {
             hook(file)?;
         }
-        let identity = handle_object_identity(file, OrdinaryKind::File)?;
-        self.observation.persist = PersistFact::NotAttempted {
-            staged: Some(StagedWitness {
-                identity,
-                hash,
-                size,
-            }),
-        };
+        self.observation.staged(file, hash, size)?;
         Ok(())
     }
+
     #[cfg(test)]
     fn before_persist(&mut self, destination: &Path) -> Result<()> {
         if let Some(hook) = self.hooks.before_persist.take() {
@@ -258,16 +299,7 @@ impl SecondaryHooks for Collector {
         Ok(())
     }
     fn attempting(&mut self) {
-        let prior = std::mem::replace(
-            &mut self.observation.persist,
-            PersistFact::NotAttempted { staged: None },
-        );
-        self.observation.persist = match prior {
-            PersistFact::NotAttempted {
-                staged: Some(staged),
-            } => PersistFact::NoCommitWitness { staged },
-            other => other,
-        };
+        self.observation.attempting();
     }
     #[cfg(test)]
     fn persist(&mut self, candidate: tempfile::NamedTempFile, destination: &Path) -> Result<()> {
@@ -282,14 +314,7 @@ impl SecondaryHooks for Collector {
         Ok(())
     }
     fn persisted(&mut self) {
-        let prior = std::mem::replace(
-            &mut self.observation.persist,
-            PersistFact::NotAttempted { staged: None },
-        );
-        self.observation.persist = match prior {
-            PersistFact::NoCommitWitness { staged } => PersistFact::Committed { witness: staged },
-            other => other,
-        };
+        self.observation.persisted();
         #[cfg(test)]
         {
             self.hooks.latch_calls += 1;
@@ -322,7 +347,7 @@ pub(super) fn observe(
 /// Strict path identities bracket same-handle hashing and full identity. This
 /// rejects stable leaf links, but is not an atomic snapshot or hostile-mutator
 /// confinement: ancestors and content may change, and paths can rebind later.
-fn inspect_target(path: &Path) -> Result<TargetObservation> {
+pub(crate) fn inspect_target(path: &Path) -> Result<TargetObservation> {
     let before = match object_identity(path, OrdinaryKind::File) {
         Ok(identity) => identity,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
