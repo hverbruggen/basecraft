@@ -77,6 +77,8 @@ pub(crate) fn error_value(error: &Error) -> Value {
             "evidence_check_incomplete"
         }
         Error::SaveDecisionStale(_) => "save_decision_stale",
+        Error::UnknownDocument { .. } => "unknown_document",
+        Error::WrongKind { .. } => "wrong_document_kind",
         Error::NothingTo(_) => "nothing_to_do",
     };
     let mut value = json!({"state":"failed", "errors":[{"code":code,"message":error.to_string()}]});

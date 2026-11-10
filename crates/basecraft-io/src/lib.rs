@@ -5,11 +5,11 @@ pub mod archive;
 pub mod cache;
 #[cfg(feature = "test-counters")]
 pub mod counters;
-#[cfg(feature = "test-heap")]
-pub mod heap;
 pub mod fasta;
 pub mod genbank;
 pub mod gff3;
+#[cfg(feature = "test-heap")]
+pub mod heap;
 pub mod ncbi;
 pub mod newick;
 pub mod source;

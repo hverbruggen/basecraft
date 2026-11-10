@@ -572,13 +572,7 @@ fn call_error(name: &str, error: &(dyn std::error::Error + 'static)) -> Value {
         value["errors"][0]["operation"] = json!(name);
         return value;
     }
-    basecraft_plugin_host::jobs::error_value(
-        name,
-        basecraft_plugin_host::jobs::error_code(&basecraft_plugin_host::Error::Protocol(
-            error.to_string(),
-        )),
-        error.to_string(),
-    )
+    basecraft_plugin_host::jobs::error_value(name, core_error_code(error), error.to_string())
 }
 
 fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {

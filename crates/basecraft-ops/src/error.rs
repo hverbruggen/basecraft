@@ -52,6 +52,10 @@ impl Error {
             Self::Empty(_) => "empty_document",
             Self::Invalid(_) => "invalid_operation",
             Self::EvidenceConflict(_) => "evidence_conflict",
+            Self::EvidenceCheckIncomplete(_) | Self::SaveCheckRequired(_) => {
+                "evidence_check_incomplete"
+            }
+            Self::SaveDecisionStale(_) => "save_decision_stale",
             Self::NothingTo(_) => "nothing_to_do",
         }
     }
