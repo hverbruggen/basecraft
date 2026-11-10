@@ -306,6 +306,39 @@ pub fn combine_selected(
     paths: &[PathBuf],
     keep: Option<&BTreeMap<PathBuf, BTreeSet<String>>>,
 ) -> Result<()> {
+    if !session.is_open(doc) {
+        return Err(invalid("unknown document"));
+    }
+    let generation = session.generation(doc);
+    let revision = session.revision(doc);
+    let hypotheses = combined_hypotheses(session, doc, paths, keep)?;
+    if hypotheses.is_empty() {
+        if keep.is_some() && !session.delimitation(doc).hypotheses.is_empty() {
+            return Ok(());
+        }
+        return Err(invalid("The selected files contain no hypotheses"));
+    }
+    session.apply_delimitation_proposals(
+        doc,
+        generation,
+        revision,
+        &[Op::DelimitationEdit {
+            edit: Box::new(DelimitationEdit::Combine { hypotheses }),
+        }],
+    )?;
+    Ok(())
+}
+
+/// Plan exact imported payloads and source evidence without changing the target.
+fn combined_hypotheses(
+    session: &Session,
+    doc: DocId,
+    paths: &[PathBuf],
+    keep: Option<&CombineSelection>,
+) -> Result<Vec<basecraft_protocol::delimitation::Hypothesis>> {
+    if !session.is_open(doc) {
+        return Err(invalid("unknown document"));
+    }
     if !session.is_delimitation(doc) {
         return Err(invalid("Choose a species workspace"));
     }
@@ -408,20 +441,7 @@ pub fn combine_selected(
             hypotheses.push(hypothesis);
         }
     }
-    if hypotheses.is_empty() {
-        // A deliberate selection may keep hypotheses only from the first file.
-        if keep.is_some() && !session.delimitation(doc).hypotheses.is_empty() {
-            return Ok(());
-        }
-        return Err(invalid("The selected files contain no hypotheses"));
-    }
-    session.apply(
-        doc,
-        Op::DelimitationEdit {
-            edit: Box::new(DelimitationEdit::Combine { hypotheses }),
-        },
-    )?;
-    Ok(())
+    Ok(hypotheses)
 }
 
 /// Explicit hypothesis IDs by source path. Missing files in a supplied map keep
@@ -540,41 +560,44 @@ pub fn combine_to(
     if !session.is_delimitation(doc) {
         return Err(invalid("Choose saved species hypothesis files"));
     }
-    session.begin_group();
-    let applied = (|| -> Result<()> {
-        if let Some(keep) = keep {
-            let wanted = keep.get(&paths[0]).cloned().unwrap_or_default();
-            let available: BTreeSet<_> = session
-                .delimitation(doc)
-                .hypotheses
-                .iter()
-                .map(|h| h.id.clone())
-                .collect();
-            if !wanted.is_subset(&available) {
-                return Err(invalid(
-                    "Selected hypothesis no longer exists in the first input",
-                ));
-            }
-            let dropped = available
-                .difference(&wanted)
-                .cloned()
-                .collect::<BTreeSet<_>>();
-            if !dropped.is_empty() {
-                session.apply(
-                    doc,
-                    Op::DelimitationEdit {
-                        edit: Box::new(DelimitationEdit::Remove {
-                            hypotheses: dropped,
-                        }),
-                    },
-                )?;
-            }
+    let generation = session.generation(doc);
+    let revision = session.revision(doc);
+    let mut ops = Vec::new();
+    let current = session.delimitation(doc);
+    let retained = if let Some(keep) = keep {
+        let wanted = keep.get(&paths[0]).cloned().unwrap_or_default();
+        let available: BTreeSet<_> = current.hypotheses.iter().map(|h| h.id.clone()).collect();
+        if !wanted.is_subset(&available) {
+            return Err(invalid(
+                "Selected hypothesis no longer exists in the first input",
+            ));
         }
-        combine_selected(session, doc, &paths[1..], keep)?;
-        Ok(())
-    })();
-    session.end_group();
-    applied?;
+        let dropped = available
+            .difference(&wanted)
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        if !dropped.is_empty() {
+            ops.push(Op::DelimitationEdit {
+                edit: Box::new(DelimitationEdit::Remove {
+                    hypotheses: dropped,
+                }),
+            });
+        }
+        wanted.len()
+    } else {
+        current.hypotheses.len()
+    };
+    let hypotheses = combined_hypotheses(session, doc, &paths[1..], keep)?;
+    if hypotheses.is_empty() {
+        if keep.is_none() || retained == 0 {
+            return Err(invalid("The selected files contain no hypotheses"));
+        }
+    } else {
+        ops.push(Op::DelimitationEdit {
+            edit: Box::new(DelimitationEdit::Combine { hypotheses }),
+        });
+    }
+    session.apply_delimitation_proposals(doc, generation, revision, &ops)?;
     session.save(doc, Some(output))?;
     Ok(doc)
 }

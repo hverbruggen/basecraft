@@ -14,6 +14,14 @@ pub fn log_dir(root: &Path) -> PathBuf {
     root.join(".basecraft").join("log")
 }
 
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct Faults {
+    pub fail_after_bytes: Option<usize>,
+    pub fail_sync: bool,
+    pub fail_rollback_sync: bool,
+}
+
 pub struct LogWriter {
     dir: PathBuf,
     open: Option<(String, File)>,
@@ -22,6 +30,8 @@ pub struct LogWriter {
     segment: u64,
     poisoned: bool,
     poison_marker: PathBuf,
+    #[cfg(test)]
+    pub(crate) faults: Faults,
 }
 
 impl LogWriter {
@@ -34,6 +44,8 @@ impl LogWriter {
             segment: 0,
             poisoned: false,
             poison_marker: root.join("recovery-integrity-error.json"),
+            #[cfg(test)]
+            faults: Faults::default(),
         }
     }
 
@@ -87,13 +99,28 @@ impl LogWriter {
             // One write per line: with O_APPEND, a crash can't interleave
             // half lines.
             let previous_length = f.metadata()?.len();
-            if let Err(error) = f.write_all(&line).and_then(|()| {
+            let written = (|| -> std::io::Result<()> {
+                #[cfg(test)]
+                if let Some(bytes) = self.faults.fail_after_bytes.take() {
+                    f.write_all(&line[..bytes.min(line.len())])?;
+                    return Err(std::io::Error::other("injected partial journal write"));
+                }
+                f.write_all(&line)?;
+                #[cfg(test)]
+                if std::mem::take(&mut self.faults.fail_sync) {
+                    return Err(std::io::Error::other("injected journal sync failure"));
+                }
                 #[cfg(feature = "test-counters")]
                 basecraft_io::counters::record_sync_data();
                 f.sync_data()
-            }) {
+            })();
+            if let Err(error) = written {
                 if f.set_len(previous_length)
                     .and_then(|()| {
+                        #[cfg(test)]
+                        if std::mem::take(&mut self.faults.fail_rollback_sync) {
+                            return Err(std::io::Error::other("injected rollback sync failure"));
+                        }
                         #[cfg(feature = "test-counters")]
                         basecraft_io::counters::record_sync_data();
                         f.sync_data()

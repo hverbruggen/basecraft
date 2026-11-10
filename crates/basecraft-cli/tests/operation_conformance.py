@@ -190,6 +190,13 @@ def main():
         reply = mcp.tool("delimitation_combine", {"paths": paths, "output": "mcp.spart",
                                                 "selection": selection})
         assert not reply.get("isError"), reply
+        combined_document = reply["structuredContent"]["document"]
+        assert not mcp.tool("undo", {"document": combined_document}).get("isError")
+        baseline = mcp.tool("read", {"document": combined_document})["structuredContent"]
+        assert [h["name"] for h in baseline["hypotheses"]] == ["first", "second", "partial"]
+        assert not mcp.tool("redo", {"document": combined_document}).get("isError")
+        proposed = mcp.tool("read", {"document": combined_document})["structuredContent"]
+        assert [h["name"] for h in proposed["hypotheses"]] == ["second", "partial"]
         # Same partitions/exchange bytes despite fresh imported IDs and actor/history.
         assert (project / "cli.spart").read_bytes() == (project / "mcp.spart").read_bytes()
         assert (project / "cli.spart").read_bytes() == (project / "python.spart").read_bytes()
