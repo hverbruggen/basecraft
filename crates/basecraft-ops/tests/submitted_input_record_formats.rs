@@ -954,3 +954,75 @@ fn reached_atomic_ledger_write_obstruction_retains_original_and_copy() {
         .insert("preserved_original_bytes".into(), json!(0));
     capture("partial-retry", run.directory(), &retried);
 }
+
+// Phase B: compare the extracted data type with the immutable Phase A1 oracle.
+#[test]
+fn protocol_submitted_input_preserves_all_original_observations() {
+    use basecraft_protocol::input_records::SubmittedInput;
+
+    // Both assignments require type identity, including the original host path.
+    fn through_host(value: SubmittedInput) -> evidence::SubmittedInput {
+        value
+    }
+    fn through_protocol(value: evidence::SubmittedInput) -> SubmittedInput {
+        value
+    }
+    let Some(root) =
+        isolated_profile::enter("protocol_submitted_input_preserves_all_original_observations")
+    else {
+        return;
+    };
+    let frozen: Vec<Value> = serde_json::from_str(READER_OBSERVATIONS).unwrap();
+    let cases = reader_cases();
+    assert_eq!(cases.len(), 181);
+    assert_eq!(frozen.len(), cases.len());
+    let (mut direct_accepted, mut host_accepted) = (0, 0);
+    for ((name, input), expected) in cases.into_iter().zip(frozen) {
+        assert_eq!(expected["case"], name);
+        assert_eq!(expected["input"], input);
+        let direct = match serde_json::from_str::<SubmittedInput>(&input) {
+            Ok(new) => {
+                direct_accepted += 1;
+                let old: OldSubmittedInput = serde_json::from_str(&input).unwrap();
+                assert_eq!(bytes(&new), bytes(&old), "{name}");
+                let new = through_protocol(through_host(new));
+                json!({"accepted":serde_json::to_value(new).unwrap()})
+            }
+            Err(e) => json_error(&e),
+        };
+        assert_eq!(direct, expected["direct"], "direct: {name}");
+        fs::write(root.join("input.json"), input.as_bytes()).unwrap();
+        let host = match evidence::read_input(&root) {
+            Ok(v) => {
+                host_accepted += 1;
+                json!({"accepted":serde_json::to_value(v).unwrap()})
+            }
+            Err(e) => error(&e),
+        };
+        assert_eq!(host, expected["host"], "host: {name}");
+    }
+    assert_eq!((direct_accepted, host_accepted), (64, 34));
+}
+
+#[test]
+fn protocol_submitted_input_preserves_eight_direct_pretty_lf_fixtures() {
+    use basecraft_protocol::input_records::SubmittedInput;
+
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/records-v1");
+    for name in [
+        "referenced",
+        "referenced-upstream",
+        "generated",
+        "generated-upstream",
+        "preserved",
+        "preserved-delegated",
+        "broken",
+        "relinked",
+    ] {
+        let raw = fs::read(root.join(format!("submitted-input-{name}.json"))).unwrap();
+        let old: OldSubmittedInput = serde_json::from_slice(&raw).unwrap();
+        let new: SubmittedInput = serde_json::from_slice(&raw).unwrap();
+        assert_eq!(bytes(&old), raw, "old: {name}");
+        assert_eq!(bytes(&new), raw, "protocol: {name}");
+    }
+}

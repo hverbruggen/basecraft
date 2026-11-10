@@ -522,6 +522,10 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 ),
                 ("report-citations", schemars::schema_for!(Vec<String>)),
                 (
+                    "submitted-input",
+                    schemars::schema_for!(basecraft_protocol::input_records::SubmittedInput),
+                ),
+                (
                     "analysis-run",
                     schemars::schema_for!(basecraft_protocol::records::AnalysisRun),
                 ),

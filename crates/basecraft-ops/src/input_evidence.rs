@@ -203,18 +203,7 @@ fn reference_input_locked(
     Ok(run)
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct SubmittedInput {
-    pub schema_version: u32,
-    pub source: Option<InputReference>,
-    pub submitted_hash: String,
-    pub submitted_size: u64,
-    /// canonical-fasta-v1 or ungapped-fasta-v1; generated inputs retain their bytes.
-    pub transformation: String,
-    pub state: String,
-    #[serde(flatten)]
-    pub extra: BTreeMap<String, serde_json::Value>,
-}
+pub use basecraft_protocol::input_records::SubmittedInput;
 
 /// `input.json` field marking a referenced source that is also the document
 /// a sequence-proposal run applied its proposals to. Saving that document is

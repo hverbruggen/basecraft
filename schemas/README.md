@@ -31,7 +31,7 @@ are described below; their readers and fresh-write behavior remain distinct.
 | **RP03** `.basecraft/log/<stream>/<month>-<id>-<segment>.jsonl`: checksummed, sequenced events | R / project | [log.rs](../crates/basecraft-ops/src/log.rs) `LogWriter::append_batch` | `read_all`, `read_readable`, `verified_prefix`, `parse_entry`; replay | `v: 1`; `_checksum`, `_sequence` envelope | protocol `LogEntry` / [log-entry.schema.json](log-entry.schema.json); checksum/sequence envelope untyped | Envelope verified then stripped; unknown event fields dropped by `LogEntry`; future operation variants rejected |
 | **RP04** `recovery-integrity-error.json`: verified length and durability diagnostic | R / project | `LogWriter::append_batch` failed rollback | `replay::recover` refuses poisoned recovery | `schema_version: 1` | protocol `records::RecoveryIntegrityError` / [recovery-integrity-error.schema.json](recovery-integrity-error.schema.json) | Typed round-trip keeps extras; reader checks presence; no rewrite |
 | **RP05** `manifest.json`, `records/<publication-id>.json`: publication, ancestry, artifacts, events, effective edits, completeness | P / A | [provenance.rs](../crates/basecraft-ops/src/provenance.rs) `publish`, `publish_operation`; session publication routines | `inspect`, `verify`, `package`; `document_record::read_origin`, evidence ancestry readers | `schema_version: 1` | protocol `Publication` / [provenance-publication.schema.json](provenance-publication.schema.json) | Rejected at publication and several nested record types; `InputReference.extra` kept |
-| **RP06** `input.json`: source evidence, submitted hash/size, transformation, evidence state, optional ancestry/ledger references | A / P | [input_evidence.rs](../crates/basecraft-ops/src/input_evidence.rs) `reference_input_with_dependencies`, `link_generated_input`, `resolve`, `relink`; session/provenance/runner/Sanger adapters | `read_input`, `conflicts_in`, `verified_source`, packaging/ancestry readers | `schema_version: 1` | ops `SubmittedInput`; reuses protocol `InputReference`, `FileStamp`; no own schema | Kept via `extra` on input/reference; source stamp has no extra map; evidence state still string |
+| **RP06** `input.json`: source evidence, submitted hash/size, transformation, evidence state, optional ancestry/ledger references | A / P | [input_evidence.rs](../crates/basecraft-ops/src/input_evidence.rs) `reference_input_with_dependencies`, `link_generated_input`, `resolve`, `relink`; session/provenance/runner/Sanger adapters | `read_input`, `conflicts_in`, `verified_source`, packaging/ancestry readers | `schema_version: 1` | protocol `input_records::SubmittedInput` (ops public re-export); reuses unchanged `InputReference`, `FileStamp`; [submitted-input.schema.json](submitted-input.schema.json) | Kept via `extra` on input/reference; source stamp has no extra map; evidence state still string |
 | **RP07** `run.json`: id, result name, status and sometimes outputs | A | `Session::save_inner`, `publish_referenced_analysis`, `publish_extraction`; `input_evidence` reference/generated helpers; runner `prepare` | `input_evidence::result_name`, `scan_run`; artifact binding | `schema_version: 1` | protocol `records::AnalysisRun` / [analysis-run.schema.json](analysis-run.schema.json) | Selective `Value` reads unchanged; typed round-trip retains unknown status/extras; outputs omitted or array, result null or string; fresh records |
 | **RP08** `store.json`: analysis namespace marker | `.basecraft/analyses-v1` | [analysis_store.rs](../crates/basecraft-ops/src/analysis_store.rs) `ArtifactRun::create`, compact JSON plus newline | `ArtifactRun::validate_store` | `format: basecraft.analysis-store`, `schema_version: 1` | protocol `StoreMarker` / [store-marker.schema.json](store-marker.schema.json) | Top-level extras kept by type; validation ignores extras; marker not rewritten |
 | **RP09** Result binding (hash-derived filename): run, result filename/hash | `.basecraft/analyses-v1` binding namespace | `ArtifactRun::bind` | `ArtifactRun::for_result` | `schema_version: 1` | protocol `records::ResultBinding` / [result-binding.schema.json](result-binding.schema.json) | Typed round-trip keeps extras; selective reads; fresh writes |
@@ -411,7 +411,7 @@ rather than a fabricated common JSON golden.
 | RP03 | `provenance-v1/floating-metrics-baseline.jsonl`, submission `legacy-history/events.jsonl`; log/replay tests | Legacy log examples are not golden coverage for every checksummed envelope/event/operation variant or future operation |
 | RP04, RP09 | `records-v1/integrity-{empty,nonempty}.json`, `binding.json`, `binding-nested.json`; ops log/analysis-store format tests | Presence-only poison reader differs from typed parser; no new automatic repair guarantee |
 | RP05, RP12–RP14 | Complete `provenance-v1/gene.fasta.provenance` bundle; [verify_provenance.py](verify_provenance.py), ops provenance tests | Captured bundle/report/hash compatibility evidence, not full extension-safe rewriting or all publication routes |
-| RP06 | Analysis-store, evidence/save safety and provenance workflow tests create inputs at runtime | No committed original-writer SubmittedInput golden covering reference/generated/preserved/broken/removed/dependency shapes |
+| RP06 | Eight frozen `records-v1/submitted-input-*.json`; ops `tests/submitted_input_record_formats.rs`: original direct-struct byte oracle, core public writer/transitions and 181 direct/host reader observations; protocol comparison | Core A1 evidence only; A2 Session/save/LocalOnly, runner/proposal/retention/pipeline, selected-event/portable-export and Sanger adapters remain unqualified. Cancel/removal write no new state |
 | RP07 | Nine `records-v1/run-*.json`; ops `tests/run_record_formats.rs`, runner `record_format_tests` | Capture origins and runtime oracle limits documented above; not a lifecycle/replay compatibility horizon |
 | RP08, RP10 | `records-v1/store*.json`; ops `tests/store_registry_formats.rs` | Empty registry is synthetic missing-file default; local paths are deliberately synthetic |
 | RP11 | Original export-history helper byte oracle, typed fixture round-trips and package ancestry tests | Three raw `records-v1/provenance-export-map-*.json` original-writer artifacts; unchanged generated identities, bytes and ordering |
@@ -454,10 +454,11 @@ edit concurrent shared registration hunks.
 | 4. DS12–DS14 Sanger invocation/index/checkpoint | `ops/src/sanger_review/storage.rs`; storage format tests and separate protocol record module/schemas | Reuse existing source/path concepts; do not substitute LocalJobIndex or ExternalExecution shapes. Confirm owner/status/primary-output nulls and absent artifact_run on recovery manifest. Capture failed/interrupted/support_retained and checkpoint writers; preserve both run/index records and separate-write failure semantics |
 | 5. LC01 InstallationIndex / LC02 Runtime | Data types now in protocol `installation_records`; host envelope alias and transparent runtime wrapper | Representation-only substitution with frozen original captures. Host provisioning, verification, discovery and partial effects remain unchanged; broader producer/native qualification remains separate |
 
-RP06 SubmittedInput is important but larger: mutations touch input_evidence,
-analysis_store, Session, provenance, runner and Sanger adapters and overlap active
-save/registry work. Reuse InputReference/FileStamp and the existing ledger; capture
-all states and mutation rewrites before scheduling it. DS01/DS02/DS06/DS09 are also
+RP06 SubmittedInput now has a data-only protocol declaration, reusing unchanged
+InputReference/FileStamp and the existing ledger. Core A1 captures cover the
+existing states and transitions; broader adapter evidence and state typing remain
+separate work across input_evidence, analysis_store, Session, provenance, runner
+and Sanger. DS01/DS02/DS06/DS09 are also
 not merely derive moves: outer/nested extension loss, legacy hash/path trust,
 relative bases and version 1/2 call sets need bounded compatibility work. Public
 schemas for existing payloads do not remove these gaps. AU13/AU15 remote-action
@@ -609,3 +610,27 @@ version policy. Publication's existing unknown-field rejection is unchanged.
 Traversal, duplicate-owner identity, original archival/materialization and
 partial-failure behavior stay host-owned; native faults and compatibility horizon
 remain separate qualification and policy decisions.
+
+## RP06 submitted-input data and host boundaries
+
+`input_records::SubmittedInput` extracts the existing declaration only. Its
+required `schema_version` remains numeric `u32`; `state` and `transformation`
+remain arbitrary strings in data decoding. Missing or null `source` decodes as
+None and serializes as explicit null. Required `submitted_size` remains `u64`.
+Top-level and InputReference extension maps retain semantic JSON; FileStamp
+unknown fields remain discarded by that unchanged nested type. Direct struct
+pretty serialization plus one LF preserves the eight frozen original bytes.
+
+The schema describes objects, including FileStamp. The reused FileStamp serde
+decoder also accepts three- and five-element positional sequences; the schema
+is not a complete model of serde's accepted inputs. Neither the decoder nor the
+schema is tightened to make them identical. Duplicate-key behavior remains with
+the original serde owners, as frozen in the reader matrix.
+
+Host `read_input`/inspection still enforce safe regular records, bounded reads,
+version 1, supported states/transformations and source/state consistency at their
+existing stages. These host checks are not protocol constructors or schema
+constraints. Writers, locks, transitions, filesystem verification and errors
+remain host-owned and unchanged. String-state typing debt and A2 adapter capture
+are separate work; this extraction makes no all-producer qualification claim and
+does not complete parent M6.
