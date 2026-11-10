@@ -80,9 +80,15 @@ pub(crate) fn error_value(error: &Error) -> Value {
         Error::UnknownDocument { .. } => "unknown_document",
         Error::WrongKind { .. } => "wrong_document_kind",
         Error::NothingTo(_) => "nothing_to_do",
+        Error::PublishedWithFailure(_) => "published_with_failure",
     };
     let mut value = json!({"state":"failed", "errors":[{"code":code,"message":error.to_string()}]});
     match error {
+        Error::PublishedWithFailure(failure) => {
+            value["state"] = json!("published_with_failure");
+            value["completion"] = json!(failure.completion);
+            value["cause"] = error_value(&failure.cause);
+        }
         Error::EvidenceConflict(conflict) => value["conflict"] = json!(conflict),
         Error::EvidenceCheckIncomplete(evidence) => value["evidence"] = json!(evidence),
         Error::SaveCheckRequired(check) | Error::SaveDecisionStale(check) => {
@@ -91,4 +97,84 @@ pub(crate) fn error_value(error: &Error) -> Value {
         _ => {}
     }
     value
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use basecraft_ops::{
+        input_evidence::{EvidenceConflict, InspectionCode, InspectionIssue, InspectionRelevance},
+        replay::{PublishedWithFailure, RecoveryCompletion},
+        session::{EvidenceAction, SaveWarning},
+    };
+
+    #[test]
+    fn published_failure_envelope_retains_completion_and_typed_cause() {
+        let completion = RecoveryCompletion {
+            destination: "recovered".into(),
+            outputs: vec!["recovered/a.spart".into(), "recovered/nested/b.xml".into()],
+            warnings: vec![SaveWarning::EvidenceNotChecked {
+                issues: vec![InspectionIssue {
+                    code: InspectionCode::StoreUnavailable,
+                    location: "unavailable-store".into(),
+                    relevance: InspectionRelevance::Unknown,
+                    reason: "store is unavailable".into(),
+                }],
+            }],
+            damage: Some("retained verified prefix before torn entry".into()),
+            registered_stores: vec!["recovered/.basecraft/analyses-v1".into()],
+            evidence_actions: vec![EvidenceAction {
+                conflict: EvidenceConflict {
+                    target: "recovered/a.spart".into(),
+                    analyses: Vec::new(),
+                    options: vec![SavePolicy::Cancel, SavePolicy::BreakEvidence],
+                },
+                policy: SavePolicy::BreakEvidence,
+                completed: true,
+            }],
+        };
+        let expected = serde_json::to_value(&completion).unwrap();
+        let error = Error::PublishedWithFailure(Box::new(PublishedWithFailure {
+            completion,
+            cause: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "registry denied")
+                .into(),
+        }));
+        let value = error_value(&error);
+        assert_eq!(value["state"], "published_with_failure");
+        assert_eq!(value["errors"][0]["code"], "published_with_failure");
+        assert_eq!(value["completion"], expected);
+        assert_eq!(value["cause"]["errors"][0]["code"], "permission_denied");
+        assert_eq!(value["cause"]["errors"][0]["message"], "registry denied");
+        // The actual JSON transport must preserve the same partial outcome.
+        let transported: Value =
+            serde_json::from_slice(&serde_json::to_vec(&value).unwrap()).unwrap();
+        assert_eq!(transported, value);
+    }
+
+    #[test]
+    fn published_failure_without_registrations_is_not_an_unpublished_error() {
+        let error = Error::PublishedWithFailure(Box::new(PublishedWithFailure {
+            completion: RecoveryCompletion {
+                destination: "recovered".into(),
+                outputs: vec!["recovered/a.fasta".into()],
+                warnings: Vec::new(),
+                damage: None,
+                registered_stores: Vec::new(),
+                evidence_actions: Vec::new(),
+            },
+            cause: std::io::Error::other("parent sync failed").into(),
+        }));
+        let value = error_value(&error);
+        assert_eq!(value["state"], "published_with_failure");
+        assert_eq!(value["completion"]["destination"], "recovered");
+        assert_eq!(value["completion"]["outputs"], json!(["recovered/a.fasta"]));
+        assert_eq!(value["completion"]["registered_stores"], json!([]));
+        assert_eq!(value["completion"]["warnings"], json!([]));
+        assert_eq!(value["completion"]["evidence_actions"], json!([]));
+        assert_eq!(value["completion"]["damage"], Value::Null);
+        assert_eq!(value["cause"]["errors"][0]["code"], "io_error");
+        let ordinary = error_value(&std::io::Error::other("write failed").into());
+        assert_eq!(ordinary["state"], "failed");
+        assert!(ordinary.get("completion").is_none());
+    }
 }
