@@ -10,7 +10,7 @@ use std::{
     },
 };
 
-use crate::{alignment_bridge, bridge, editor_core, tree_bridge};
+use crate::{alignment_bridge, bridge, editor_core, sanger_bridge, tree_bridge};
 
 pub(crate) fn run() {
     // Only the dedicated temporary bootstrap profile may be written. The
@@ -36,7 +36,7 @@ pub(crate) fn run() {
             // These are assertions on the common public controller interface,
             // not a production abstraction over document/selection ownership.
             macro_rules! check {
-                ($controller:expr, $file:expr, $bytes:expr, $select:expr, $selection:expr) => {{
+                ($controller:expr, $file:expr, $bytes:expr, $select:expr, $selection:expr, $after:expr) => {{
                     let mut controller = $controller;
                     let folder = tempfile::tempdir().unwrap();
                     let path = folder.path().join($file);
@@ -49,17 +49,20 @@ pub(crate) fn run() {
                     controller.as_mut().resize(800.0, 500.0);
                     $select(controller.as_mut());
                     controller.as_mut().find_query(&QString::from("A"), false);
+                    let mut find_complete = false;
                     for _ in 0..1000 {
                         let result = controller.as_mut().find_poll(0).to_string();
                         if !result.is_empty() {
                             let result: serde_json::Value = serde_json::from_str(&result).unwrap();
                             if result["busy"] == false {
                                 assert!(result["count"].as_u64().unwrap() > 0);
+                                find_complete = true;
                                 break;
                             }
                         }
                         std::thread::sleep(std::time::Duration::from_millis(1));
                     }
+                    assert!(find_complete, "Find did not complete");
                     assert_ne!(controller.overview_matches().to_string(), "[]");
                     macro_rules! state {
                         () => {
@@ -92,17 +95,18 @@ pub(crate) fn run() {
                     let old_palette = palette!();
                     let theme =
                         basecraft_viewmodel::Theme::publication().with_color_blind_friendly(true);
-                    let appearance = |font: &str, loaded| {
+                    let captured_stamp = bridge::theme_stamp();
+                    let appearance = |font: &str, observed, loaded| {
                         Rc::new(editor_core::testing::Appearance {
                             font: font.into(),
-                            observed: bridge::ThemeStamp::default(),
+                            observed,
                             loaded,
                             loads: Cell::new(0),
                         })
                     };
                     let sentinel = QByteArray::from("no refresh");
                     controller.as_mut().set_frame(sentinel.clone());
-                    let failed = appearance("theme-test-failed-font", None);
+                    let failed = appearance("theme-test-failed-font", bridge::ThemeStamp::default(), None);
                     editor_core::testing::with(failed.clone(), || {
                         controller.as_mut().check_theme()
                     });
@@ -118,7 +122,8 @@ pub(crate) fn run() {
 
                     let success = appearance(
                         "theme-test-font",
-                        Some((theme.clone(), bridge::ThemeStamp::default())),
+                        bridge::ThemeStamp::default(),
+                        Some((theme.clone(), captured_stamp.clone())),
                     );
                     editor_core::testing::with(success.clone(), || {
                         controller.as_mut().check_theme()
@@ -151,7 +156,7 @@ pub(crate) fn run() {
                     );
 
                     controller.as_mut().set_frame(sentinel.clone());
-                    let unchanged = appearance("theme-test-independent-font", None);
+                    let unchanged = appearance("theme-test-independent-font", captured_stamp, None);
                     editor_core::testing::with(unchanged.clone(), || {
                         controller.as_mut().check_theme()
                     });
@@ -166,6 +171,7 @@ pub(crate) fn run() {
                         controller.as_mut().find_poll(0).is_empty(),
                         "theme update changed Find state"
                     );
+                    $after(controller.as_mut());
                 }};
             }
             if let Some(controller) = object
@@ -181,7 +187,8 @@ pub(crate) fn run() {
                             .key(bridge::KEY_A, &QString::default(), bridge::CTRL);
                         assert!(c.has_selection());
                     },
-                    |c: &bridge::qobject::GenomeController| c.selection_text()
+                    |c: &bridge::qobject::GenomeController| c.selection_text(),
+                    |_| {}
                 );
             } else if let Some(controller) = object
                 .as_mut()
@@ -195,7 +202,8 @@ pub(crate) fn run() {
                         c.as_mut().select_block(0, 0, 1, 2);
                         assert!(!c.selection_text().is_empty());
                     },
-                    |c: &alignment_bridge::qobject::AlignmentController| c.selection_text()
+                    |c: &alignment_bridge::qobject::AlignmentController| c.selection_text(),
+                    |_| {}
                 );
             } else if let Some(controller) = object
                 .as_mut()
@@ -209,7 +217,57 @@ pub(crate) fn run() {
                         c.as_mut().select_clade(&QString::from("[\"A\",\"B\"]"));
                         assert!(*c.has_selection());
                     },
-                    |c: &tree_bridge::qobject::TreeController| *c.has_selection()
+                    |c: &tree_bridge::qobject::TreeController| *c.has_selection(),
+                    |_| {}
+                );
+            } else if let Some(controller) = object
+                .as_mut()
+                .downcast_pin::<sanger_bridge::qobject::SangerController>()
+            {
+                check!(
+                    controller,
+                    "forward.ab1",
+                    include_bytes!("../../../../testdata/fixtures/compact/sanger-review/forward.ab1"),
+                    |mut c: std::pin::Pin<&mut sanger_bridge::qobject::SangerController>| {
+                        assert!(*c.review_mode());
+                        c.as_mut().cancel_calls();
+                        assert!(!*c.calling());
+                        assert!(c.as_mut().review_set(&QString::from("edit"), &QString::from("G")));
+                        let end = *c.consensus_columns() - 1;
+                        assert!(c.as_mut().mask_ends(2, end));
+                        assert!(*c.dirty());
+                        assert!(c.as_mut().go_to_column(false, &QString::from("2")));
+                    },
+                    |c: &sanger_bridge::qobject::SangerController| (
+                        (
+                            *c.selected_column(),
+                            c.review_sequence().clone(),
+                            c.review_decision().clone(),
+                            c.review_details().clone(),
+                            c.review_settings().clone(),
+                            c.mask_settings().clone(),
+                        ),
+                        (
+                            c.call_sets().clone(),
+                            c.selected_call_set().clone(),
+                            *c.calling(),
+                            *c.busy(),
+                            *c.review_mode(),
+                        ),
+                    ),
+                    |mut c: std::pin::Pin<&mut sanger_bridge::qobject::SangerController>| {
+                        let masks = c.mask_settings().clone();
+                        let sequence = c.review_sequence().clone();
+                        c.as_mut().review_undo();
+                        assert_ne!(c.mask_settings(), &masks, "mask undo lost");
+                        c.as_mut().review_undo();
+                        assert_ne!(c.review_sequence(), &sequence, "manual edit undo lost");
+                        c.as_mut().review_redo();
+                        assert_eq!(c.review_sequence(), &sequence, "manual edit redo lost");
+                        c.as_mut().review_redo();
+                        assert_eq!(c.mask_settings(), &masks, "mask redo lost");
+                        assert!(*c.dirty());
+                    }
                 );
             } else {
                 panic!("unexpected theme controller");
@@ -217,12 +275,17 @@ pub(crate) fn run() {
             count.fetch_add(1, Ordering::Relaxed);
         })
         .release();
-    for name in ["GenomeController", "AlignmentController", "TreeController"] {
+    for name in [
+        "GenomeController",
+        "AlignmentController",
+        "TreeController",
+        "SangerController",
+    ] {
         engine.pin_mut().load_data(
             &QByteArray::from(format!("import Basecraft; {name} {{}}").as_str()),
             &QUrl::default(),
         );
     }
-    assert_eq!(checked.load(Ordering::Relaxed), 3);
-    println!("Three real editor theme/font, unchanged stamp and failed-load regressions passed");
+    assert_eq!(checked.load(Ordering::Relaxed), 4);
+    println!("Four real editor theme/font, unchanged stamp and failed-load regressions passed");
 }
