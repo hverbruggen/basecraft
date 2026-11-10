@@ -1390,6 +1390,8 @@ mod moved_and_failed_recovery_tests {
 
     #[test]
     fn external_missing_recreated_and_save_as_targets_are_guarded() {
+        // Registered stores must outlive every iteration in this test profile.
+        let mut fixtures = Vec::new();
         for mutation in ["external", "missing", "recreated"] {
             let tmp = tempfile::tempdir().unwrap();
             let folder = tmp.path().join("source");
@@ -1435,6 +1437,7 @@ mod moved_and_failed_recovery_tests {
                 reopened.retained[0].decision(0),
                 Some(&ReviewChoice::Edit('G'))
             );
+            fixtures.push(tmp);
         }
     }
 
@@ -1467,6 +1470,8 @@ mod moved_and_failed_recovery_tests {
     #[test]
     fn referenced_review_uses_shared_cancel_preserve_and_break_policy() {
         use crate::input_evidence::{self as inputs, SavePolicy};
+        // Registered stores must outlive every iteration in this test profile.
+        let mut fixtures = Vec::new();
         for policy in [SavePolicy::PreserveCopy, SavePolicy::BreakEvidence] {
             let tmp = tempfile::tempdir().unwrap();
             let folder = tmp.path().join("source");
@@ -1518,6 +1523,7 @@ mod moved_and_failed_recovery_tests {
                 SangerReviewSession::load(&path).unwrap().decision(1),
                 Some(&ReviewChoice::Edit('T'))
             );
+            fixtures.push(tmp);
         }
     }
 

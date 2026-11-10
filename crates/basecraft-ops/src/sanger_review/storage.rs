@@ -1504,7 +1504,7 @@ mod tests {
         let package = tmp.path().join("export");
         crate::provenance::package(&result, &package).unwrap();
         drop(session);
-        std::fs::remove_dir_all(folder).unwrap();
+        std::fs::remove_dir_all(&folder).unwrap();
         let result = package.join("added.afa");
         assert_eq!(
             crate::provenance::verify(&result).unwrap(),
@@ -1513,7 +1513,46 @@ mod tests {
         let mut session = crate::Session::recoverable(&package).unwrap();
         let doc = session.open(&result).unwrap();
         let saved_again = package.join("saved-again.afa");
-        session.save(doc, Some(&saved_again)).unwrap();
+        let packaged_bytes = std::fs::read(&result).unwrap();
+        let refused = match session.save(doc, Some(&saved_again)).unwrap_err() {
+            crate::Error::SaveCheckRequired(check) => check,
+            error => panic!("expected incomplete-inspection consent, got {error}"),
+        };
+        assert!(!refused.evidence().is_complete());
+        assert!(!saved_again.exists());
+        assert_eq!(std::fs::read(&result).unwrap(), packaged_bytes);
+
+        // Inspect a fresh check, then explicitly acknowledge only this missing
+        // store on the same Session/document. Unknown inspection is independent
+        // of known-conflict policy; no known conflicts authorize a policy change.
+        let check = session.check_save(doc, Some(&saved_again)).unwrap();
+        assert_ne!(check.token(), refused.token());
+        assert_eq!(check.target(), saved_again);
+        assert!(check.evidence().conflict.analyses.is_empty());
+        assert!(matches!(
+            &check.evidence().issues[..],
+            [issue] if issue.code == inputs::InspectionCode::StoreUnavailable
+                && issue.relevance == inputs::InspectionRelevance::Unknown
+                && issue.location == folder.join(".basecraft/analyses-v1")
+        ));
+        let decision = session
+            .decide_save(
+                doc,
+                Some(&saved_again),
+                check.token(),
+                inputs::SavePolicy::Cancel,
+                true,
+            )
+            .unwrap();
+        let outcome = session
+            .save_with_decision(doc, Some(&saved_again), decision)
+            .unwrap();
+        assert!(matches!(
+            &outcome.warnings[..],
+            [crate::session::SaveWarning::EvidenceNotChecked { issues }]
+                if issues == &check.evidence().issues
+        ));
+        assert_eq!(std::fs::read(&saved_again).unwrap(), packaged_bytes);
         assert_eq!(
             crate::provenance::verify(&saved_again).unwrap(),
             Vec::<String>::new()
