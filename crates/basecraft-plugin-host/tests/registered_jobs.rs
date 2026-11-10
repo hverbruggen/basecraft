@@ -1397,3 +1397,94 @@ fn gui_scientific_calls_cannot_reintroduce_direct_plugin_invocation() {
         "CLI plugin entry must use the registered runner"
     );
 }
+
+#[test]
+fn registered_target_preparation_preserves_permissions_and_session_identity() {
+    use basecraft_plugin_host::runner::PreparedOperation;
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("a.txt"), b"a").unwrap();
+    std::fs::write(root.path().join("b.txt"), b"b").unwrap();
+    std::fs::write(root.path().join("target.afa"), ">a\nACGT\n>b\nAC-T\n").unwrap();
+    let registry = registry(root.path());
+    let operation = registry
+        .resolve(&request("normal").operation, None)
+        .unwrap();
+    let prepare = |target: Option<serde_json::Value>, write, session| {
+        let mut request = request("normal");
+        request.target = target.map(|value| serde_json::from_value(value).unwrap());
+        let mut policy = SessionPolicy::new(root.path(), true).unwrap();
+        policy.document_write = write;
+        PreparedOperation::prepare(
+            operation.clone(),
+            request,
+            policy,
+            "test".into(),
+            session,
+            &registry,
+        )
+    };
+    // No explicit target needs no session, even without document-write permission.
+    assert!(prepare(None, false, None).is_ok());
+    let file = json!({"kind":"file","path":"target.afa"});
+    assert!(
+        prepare(Some(file.clone()), false, None)
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("a target document needs an owning session")
+    );
+    let mut session = basecraft_ops::Session::new(root.path());
+    // A missing/out-of-root path must not obscure the permission error or open a document.
+    for path in ["target.afa", "missing.afa", "../outside.afa"] {
+        let error = prepare(
+            Some(json!({"kind":"file","path":path})),
+            false,
+            Some(&mut session),
+        )
+        .err()
+        .unwrap()
+        .to_string();
+        assert!(
+            error.contains("permission_denied: saving a target document needs writes"),
+            "{error}"
+        );
+        assert!(!session.is_open(basecraft_ops::DocId(0)));
+    }
+    let prepared = prepare(Some(file), true, Some(&mut session)).unwrap();
+    let target = prepared.document.as_ref().unwrap();
+    assert!(target.save);
+    let id = target.doc;
+    assert!(session.is_open(id));
+    let document = json!({"kind":"document","doc":id.0.to_string(),
+        "generation":session.generation(id),"revision":session.revision(id)});
+    let prepared = prepare(Some(document.clone()), false, Some(&mut session)).unwrap();
+    let target = prepared.document.as_ref().unwrap();
+    assert_eq!(target.doc, id);
+    assert!(!target.save);
+    for (field, value, message) in [
+        ("doc", json!("bad-id"), "invalid session document ID"),
+        (
+            "doc",
+            json!(usize::MAX.to_string()),
+            "stale_revision: target document changed",
+        ),
+        (
+            "generation",
+            json!(session.generation(id) + 1),
+            "stale_revision: target document changed",
+        ),
+        (
+            "revision",
+            json!(session.revision(id) + 1),
+            "stale_revision: target document changed",
+        ),
+    ] {
+        let mut stale = document.clone();
+        stale[field] = value;
+        let error = prepare(Some(stale), true, Some(&mut session))
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(error.contains(message), "{error}");
+    }
+}

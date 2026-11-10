@@ -487,6 +487,52 @@ fn prepare_inputs(
     })
 }
 
+/// Resolve the explicit target in its owning session before freezing inputs.
+fn prepare_target(
+    request: &OperationRequest,
+    policy: &SessionPolicy,
+    session: &mut Option<&mut basecraft_ops::Session>,
+) -> Result<Option<(basecraft_ops::DocId, bool)>> {
+    let target = match &request.target {
+        None => None,
+        Some(reference) => {
+            let session = session.as_deref_mut().ok_or_else(|| {
+                Error::Protocol("a target document needs an owning session".into())
+            })?;
+            Some(match reference {
+                InputReference::File { path } => {
+                    if !policy.document_write {
+                        return Err(Error::Protocol(
+                            "permission_denied: saving a target document needs writes".into(),
+                        ));
+                    }
+                    (session.open(&policy.path(path, false)?)?, true)
+                }
+                InputReference::Document {
+                    doc,
+                    generation,
+                    revision,
+                } => {
+                    let id = basecraft_ops::DocId(
+                        doc.parse()
+                            .map_err(|_| Error::Protocol("invalid session document ID".into()))?,
+                    );
+                    if !session.is_open(id)
+                        || session.generation(id) != *generation
+                        || session.revision(id) != *revision
+                    {
+                        return Err(Error::Protocol(
+                            "stale_revision: target document changed".into(),
+                        ));
+                    }
+                    (id, false)
+                }
+            })
+        }
+    };
+    Ok(target)
+}
+
 pub struct PreparedOperation {
     pub(crate) lifecycle: crate::lifecycle::Lifecycle,
     pub(crate) input_diagnostics: Vec<String>,
@@ -540,43 +586,7 @@ impl PreparedOperation {
             accepted_hashes,
             bindings,
         } = prepare_inputs(&operation, &request, &policy, &mut session)?;
-        let target = match &request.target {
-            None => None,
-            Some(reference) => {
-                let session = session.as_deref_mut().ok_or_else(|| {
-                    Error::Protocol("a target document needs an owning session".into())
-                })?;
-                Some(match reference {
-                    InputReference::File { path } => {
-                        if !policy.document_write {
-                            return Err(Error::Protocol(
-                                "permission_denied: saving a target document needs writes".into(),
-                            ));
-                        }
-                        (session.open(&policy.path(path, false)?)?, true)
-                    }
-                    InputReference::Document {
-                        doc,
-                        generation,
-                        revision,
-                    } => {
-                        let id =
-                            basecraft_ops::DocId(doc.parse().map_err(|_| {
-                                Error::Protocol("invalid session document ID".into())
-                            })?);
-                        if !session.is_open(id)
-                            || session.generation(id) != *generation
-                            || session.revision(id) != *revision
-                        {
-                            return Err(Error::Protocol(
-                                "stale_revision: target document changed".into(),
-                            ));
-                        }
-                        (id, false)
-                    }
-                })
-            }
-        };
+        let target = prepare_target(&request, &policy, &mut session)?;
         let input_diagnostics = lifecycle.verify_retained(&bindings.inputs)?;
         let mut supplied_parameters = request.parameters.clone();
         if lifecycle.external() && supplied_parameters.get("contact_email").is_none() {
