@@ -481,3 +481,65 @@ fn descriptor_chmod_detects_parent_substitution_without_repairing_replacement() 
     assert_eq!(mode(&parent), 0o755); // replacement never chmodded by pathname
     assert!(!parent.join("lock").exists());
 }
+
+#[test]
+fn absence_extraction_moves_original_error_and_returns_present_observation() {
+    #[derive(Debug)]
+    struct Cause(std::sync::Arc<()>);
+    impl std::fmt::Display for Cause {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("original absence")
+        }
+    }
+    impl std::error::Error for Cause {}
+    let dir = tempfile::tempdir().unwrap();
+    let absent = inspect_target_namespace(&dir.path().join("missing")).unwrap();
+    let code = absent.absence_error().unwrap().raw_os_error();
+    assert_eq!(absent.into_absence_error().unwrap().raw_os_error(), code);
+    let source = std::sync::Arc::new(());
+    let mut absent = inspect_target_namespace(&dir.path().join("missing")).unwrap();
+    absent.inner.missing = Some(io::Error::new(
+        io::ErrorKind::NotFound,
+        Cause(source.clone()),
+    ));
+    let error = absent.into_absence_error().unwrap();
+    assert!(std::sync::Arc::ptr_eq(
+        &source,
+        &error.get_ref().unwrap().downcast_ref::<Cause>().unwrap().0
+    ));
+    let present = inspect_target_namespace(dir.path())
+        .unwrap()
+        .into_absence_error()
+        .unwrap_err();
+    present.recheck().unwrap();
+    assert_eq!(
+        present.metadata().unwrap().kind(),
+        crate::files::OrdinaryKind::Directory
+    );
+}
+
+#[test]
+fn advisory_forwarding_uses_retained_file_and_drop_releases_it() {
+    use fs4::fs_std::FileExt;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("lock");
+    let opened = lock(&path).open_file().unwrap();
+    let other = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&path)
+        .unwrap();
+    assert!(opened.try_lock_exclusive().unwrap());
+    assert!(!FileExt::try_lock_exclusive(&other).unwrap());
+    drop(opened);
+    assert!(FileExt::try_lock_exclusive(&other).unwrap());
+    let opened = lock(&path).open_file().unwrap();
+    assert!(!opened.try_lock_exclusive().unwrap());
+    FileExt::unlock(&other).unwrap();
+    opened.lock_exclusive().unwrap();
+    opened.recheck().unwrap();
+    assert!(!FileExt::try_lock_exclusive(&other).unwrap());
+    drop(opened);
+    assert!(FileExt::try_lock_exclusive(&other).unwrap());
+    assert!(path.exists());
+}

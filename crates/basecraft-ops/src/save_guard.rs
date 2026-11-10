@@ -27,11 +27,7 @@ pub(crate) fn same_target(a: &Path, b: &Path) -> bool {
 /// Cooperating processes hold this through data, binding and provenance writes.
 /// The evidence lock must be acquired afterwards; neither locks external editors.
 pub(crate) fn lock(target: &Path) -> Result<std::fs::File> {
-    let root = std::env::temp_dir().join(format!(
-        "basecraft-save-locks-{}",
-        basecraft_io::hash_bytes(basecraft_platform::username().as_bytes())
-            .trim_start_matches("b3:")
-    ));
+    let root = lock_root();
     std::fs::create_dir_all(&root)?;
     #[cfg(unix)]
     {
@@ -39,21 +35,53 @@ pub(crate) fn lock(target: &Path) -> Result<std::fs::File> {
         std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))?;
     }
     let canonical = target.canonicalize().or_else(|_| target_path(target))?;
-    let digest = basecraft_io::hash_bytes(canonical.as_os_str().as_encoded_bytes());
     let file = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .truncate(false)
-        .open(root.join(format!("{}.lock", digest.trim_start_matches("b3:"))))?;
-    // `Ok(false)` means another holder has it; only `Ok(true)` is a lock.
-    if file.try_lock_exclusive()? {
-        Ok(file)
+        .open(lock_path(&root, &canonical))?;
+    require_reservation(file.try_lock_exclusive()?)?;
+    Ok(file)
+}
+
+pub(crate) fn lock_root() -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "basecraft-save-locks-{}",
+        basecraft_io::hash_bytes(basecraft_platform::username().as_bytes())
+            .trim_start_matches("b3:")
+    ))
+}
+pub(crate) fn lock_path(root: &Path, canonical: &Path) -> PathBuf {
+    let digest = basecraft_io::hash_bytes(canonical.as_os_str().as_encoded_bytes());
+    root.join(format!("{}.lock", digest.trim_start_matches("b3:")))
+}
+pub(crate) fn require_reservation(acquired: bool) -> Result<()> {
+    if acquired {
+        Ok(())
     } else {
         Err(invalid(
             "another Basecraft process is saving this target; retry shortly",
         ))
     }
+}
+
+#[allow(dead_code)]
+pub struct Reservation(crate::service_reads::ServiceLockGuard);
+#[allow(dead_code)]
+impl Reservation {
+    pub fn reauthorize(&self, access: &dyn crate::access::Access) -> Result<()> {
+        self.0.reauthorize(access)
+    }
+}
+#[allow(dead_code)]
+pub(crate) fn lock_with_access(
+    context: std::sync::Arc<crate::service_reads::ServiceContext>,
+    access: &dyn crate::access::Access,
+    target: &Path,
+    purpose: crate::service_reads::SaveTargetPurpose,
+) -> Result<Reservation> {
+    crate::service_reads::acquire_lock(context, access, Some((target, purpose))).map(Reservation)
 }
 
 pub(crate) fn check_hash(path: &Path, expected: &str) -> Result<()> {

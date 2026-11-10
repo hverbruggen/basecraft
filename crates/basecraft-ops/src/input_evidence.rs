@@ -28,12 +28,41 @@ pub fn reference_input_with_dependencies(
 /// Files remain separate atomic writes: failure may leave conservative partial
 /// evidence, and dropping this guard does not roll those writes back.
 pub struct Mutation {
-    _lock: std::fs::File,
+    _lock: EvidenceLock,
+}
+
+enum EvidenceLock {
+    Legacy { _file: std::fs::File },
+    Checked(crate::service_reads::ServiceLockGuard),
 }
 
 impl Mutation {
     pub fn begin() -> Result<Self> {
-        Ok(Self { _lock: lock()? })
+        Ok(Self {
+            _lock: EvidenceLock::Legacy { _file: lock()? },
+        })
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn begin_with_access(
+        context: std::sync::Arc<crate::service_reads::ServiceContext>,
+        access: &dyn crate::access::Access,
+    ) -> Result<Self> {
+        crate::service_reads::acquire_lock(context, access, None).map(|guard| Self {
+            _lock: EvidenceLock::Checked(guard),
+        })
+    }
+    /// Checks the retained guard only; never reacquires or authorizes legacy
+    /// write/register methods. Those remain outside confined activation.
+    #[allow(dead_code)]
+    pub fn reauthorize(&self, access: &dyn crate::access::Access) -> Result<()> {
+        match &self._lock {
+            EvidenceLock::Checked(guard) => guard.reauthorize(access),
+            EvidenceLock::Legacy { .. } => Err(crate::access::AccessError::Denied(
+                crate::access::Denial::ServiceUnavailable,
+            )
+            .into()),
+        }
     }
 
     pub fn read_input(&self, directory: &Path) -> Result<SubmittedInput> {
@@ -481,6 +510,10 @@ pub(crate) fn registry_location(paths: &basecraft_platform::paths::AppPaths) -> 
 
 /// Shared lock covers registration and the entire guarded replacement, including
 /// copy/decision publication. It does not claim to lock external editors or sync.
+pub(crate) fn evidence_lock_path(state: &Path) -> PathBuf {
+    state.join("analysis-evidence.lock")
+}
+
 pub fn lock() -> Result<std::fs::File> {
     let registry = registry()?;
     let parent = registry
@@ -492,7 +525,7 @@ pub fn lock() -> Result<std::fs::File> {
         .truncate(false)
         .read(true)
         .write(true)
-        .open(parent.join("analysis-evidence.lock"))?;
+        .open(evidence_lock_path(parent))?;
     lock.lock_exclusive()
         .map_err(|_| invalid("analysis evidence is busy; retry shortly"))?;
     Ok(lock)

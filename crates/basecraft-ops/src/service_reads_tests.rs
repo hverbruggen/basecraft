@@ -41,6 +41,7 @@ fn eligibility_refusal_never_bootstraps() {
     let request = ServiceReadRequest {
         context: &context,
         action: ServiceAction::ReadPreferences,
+        target: None,
     };
     for access in [&TrustedLegacy as &dyn Access, &Bound(&other)] {
         assert!(
@@ -57,6 +58,7 @@ fn eligibility_refusal_never_bootstraps() {
         let request = ServiceReadRequest {
             context: &context,
             action,
+            target: None,
         };
         assert!(
             request
@@ -111,6 +113,7 @@ fn real_phase_order_and_validated_revocation() {
     let request = ServiceReadRequest {
         context: &context,
         action: ServiceAction::ReadPreferences,
+        target: None,
     };
     let trace = RefCell::new(Vec::new());
     for present in [false, true] {
@@ -177,14 +180,17 @@ fn ticket_requires_exact_live_request_not_equal_context_action() {
     let first = ServiceReadRequest {
         context: &context,
         action: ServiceAction::ReadPreferences,
+        target: None,
     };
     let second = ServiceReadRequest {
         context: &context,
         action: ServiceAction::ReadPreferences,
+        target: None,
     };
     let registry = ServiceReadRequest {
         context: &context,
         action: ServiceAction::ReadAnalysisRegistry,
+        target: None,
     };
     let ticket = CheckedServiceNamespace {
         request: &first,
@@ -275,4 +281,275 @@ fn namespace_mapping_preserves_raw_io() {
         panic!()
     };
     assert_eq!(error.raw_os_error(), Some(13));
+}
+
+#[cfg(target_os = "linux")]
+mod locks {
+    use super::*;
+    use basecraft_platform::files::inspect_target_namespace;
+    use std::{
+        cell::{Cell, RefCell},
+        os::unix::fs::PermissionsExt,
+    };
+
+    fn fixture(root: &Path) -> Arc<ServiceContext> {
+        let mut context = super::context(root);
+        context.reservations = root.join("reservations");
+        Arc::new(context)
+    }
+    struct Policy<'a> {
+        context: &'a ServiceContext,
+        revoke: Cell<Option<ServiceEffect>>,
+        revoke_held: Cell<bool>,
+        trace: RefCell<Vec<(ServiceAction, &'static str)>>,
+        current: Cell<*const ()>,
+    }
+    impl<'a> Policy<'a> {
+        fn new(context: &'a ServiceContext) -> Self {
+            Self {
+                context,
+                revoke: Cell::new(None),
+                revoke_held: Cell::new(false),
+                trace: RefCell::new(Vec::new()),
+                current: Cell::new(std::ptr::null()),
+            }
+        }
+    }
+    impl Access for Policy<'_> {
+        fn boundary(&self) -> Option<&Path> {
+            None
+        }
+        fn resource(&self, _: &Path, _: ResourceAction) -> crate::access::Result<PathBuf> {
+            panic!("never use legacy resource before strict inspection")
+        }
+        fn service_context(
+            &self,
+            request: &ServiceRequest<'_>,
+            phase: ServicePhase<'_>,
+        ) -> crate::access::Result<()> {
+            if !request.permits_lock(self.context, &phase) {
+                return Err(unavailable());
+            }
+            let ptr = std::ptr::from_ref(request).cast::<()>();
+            let label = match phase {
+                ServicePhase::Eligibility => {
+                    self.current.set(ptr);
+                    "eligibility"
+                }
+                ServicePhase::LockValidated(_) => "validated",
+                ServicePhase::BeforeEffect(_, effect) => {
+                    assert_eq!(self.current.get(), ptr);
+                    if self.revoke.get() == Some(effect) {
+                        return Err(AccessError::Denied(Denial::ReadOnly));
+                    }
+                    match effect {
+                        ServiceEffect::CreateDirectory => "mkdir",
+                        ServiceEffect::SetPermissions => "chmod",
+                        ServiceEffect::OpenFile => "open",
+                        ServiceEffect::AcquireLock => "acquire",
+                    }
+                }
+                ServicePhase::Held(_) => {
+                    if self.revoke_held.get() {
+                        return Err(AccessError::Denied(Denial::ReadOnly));
+                    }
+                    "held"
+                }
+                ServicePhase::Validated(_) => panic!("read phase used for lock"),
+            };
+            self.trace.borrow_mut().push((request.action, label));
+            Ok(())
+        }
+        fn service_target<'a>(
+            &self,
+            request: &'a ServiceRequest<'a>,
+        ) -> crate::access::Result<CheckedServiceTarget<'a>> {
+            assert_eq!(self.current.get(), std::ptr::from_ref(request).cast::<()>());
+            let (path, _) = request.target().unwrap();
+            // Test policy supplies the real lower observation. Shared production
+            // action/root policy is separately exercised in plugin-host tests.
+            request.checked_target(
+                path.to_owned(),
+                inspect_target_namespace(path).map_err(namespace_error)?,
+            )
+        }
+    }
+    #[test]
+    fn lock_defaults_refuse_and_read_dispatch_never_grants_mutation() {
+        let dir = tempfile::tempdir().unwrap();
+        let context = fixture(dir.path());
+        let request = ServiceRequest {
+            context: &context,
+            action: ServiceAction::LockAnalysisEvidence,
+            target: None,
+        };
+        assert!(
+            TrustedLegacy
+                .service_context(&request, ServicePhase::Eligibility)
+                .is_err()
+        );
+        assert!(
+            Bound(&context)
+                .service_read(&request, ServicePhase::Eligibility)
+                .is_err()
+        );
+        assert!(context.lock_evidence(&TrustedLegacy).is_err());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+    #[test]
+    fn lock_ticket_rejects_equal_foreign_request_and_target_purpose() {
+        let dir = tempfile::tempdir().unwrap();
+        let context = fixture(dir.path());
+        let path = dir.path().join("target");
+        let first = ServiceRequest {
+            context: &context,
+            action: ServiceAction::ReserveSaveTarget,
+            target: Some((&path, SaveTargetPurpose::NewFile)),
+        };
+        let second = ServiceRequest {
+            context: &context,
+            action: first.action,
+            target: first.target,
+        };
+        let target = first
+            .checked_target(path.clone(), inspect_target_namespace(&path).unwrap())
+            .unwrap();
+        let ns = inspect_lock_namespace(
+            &context.reservations.join("lock"),
+            LockDirectoryMode::Private,
+        )
+        .unwrap();
+        let ticket = CheckedLockNamespace {
+            request: &first,
+            target: Some(&target.observation),
+            lock: LockObservation::Pending(&ns),
+        };
+        assert!(first.permits_lock(&context, &ServicePhase::LockValidated(&ticket)));
+        assert!(!second.permits_lock(&context, &ServicePhase::LockValidated(&ticket)));
+        let other = fixture(dir.path());
+        assert!(!first.permits_lock(&other, &ServicePhase::LockValidated(&ticket)));
+        let wrong = ServiceRequest {
+            context: &context,
+            action: first.action,
+            target: Some((&path, SaveTargetPurpose::FinalDirectory)),
+        };
+        assert!(!wrong.permits_lock(&context, &ServicePhase::LockValidated(&ticket)));
+        assert!(!first.permits(&context, &ServicePhase::LockValidated(&ticket)));
+        assert!(!first.permits_lock(
+            &context,
+            &ServicePhase::BeforeEffect(&ticket, ServiceEffect::AcquireLock)
+        ));
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+    #[test]
+    fn revocation_before_each_effect_preserves_only_prior_artifacts() {
+        use fs4::fs_std::FileExt;
+        for effect in [
+            ServiceEffect::CreateDirectory,
+            ServiceEffect::SetPermissions,
+            ServiceEffect::OpenFile,
+            ServiceEffect::AcquireLock,
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let context = fixture(dir.path());
+            let target = dir.path().join("target");
+            if effect != ServiceEffect::CreateDirectory {
+                std::fs::create_dir(&context.reservations).unwrap();
+                std::fs::set_permissions(
+                    &context.reservations,
+                    std::fs::Permissions::from_mode(if effect == ServiceEffect::SetPermissions {
+                        0o750
+                    } else {
+                        0o700
+                    }),
+                )
+                .unwrap();
+            }
+            let policy = Policy::new(&context);
+            policy.revoke.set(Some(effect));
+            assert!(matches!(
+                context.reserve_target(&policy, &target, SaveTargetPurpose::NewFile),
+                Err(crate::Error::Access(AccessError::Denied(Denial::ReadOnly)))
+            ));
+            let leaf = crate::save_guard::lock_path(&context.reservations, &target);
+            assert!(!target.exists());
+            assert_eq!(leaf.exists(), effect == ServiceEffect::AcquireLock);
+            if effect == ServiceEffect::CreateDirectory {
+                assert!(!context.reservations.exists());
+            }
+            if effect == ServiceEffect::SetPermissions {
+                assert_eq!(
+                    std::fs::metadata(&context.reservations)
+                        .unwrap()
+                        .permissions()
+                        .mode()
+                        & 0o777,
+                    0o750
+                );
+            }
+            if effect == ServiceEffect::AcquireLock {
+                let file = std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(&leaf)
+                    .unwrap();
+                assert!(file.try_lock_exclusive().unwrap());
+            }
+        }
+    }
+    #[test]
+    fn retained_guards_reauthorize_without_reacquisition_in_target_stage_evidence_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let context = fixture(dir.path());
+        let policy = Policy::new(&context);
+        let final_target = context
+            .reserve_target(
+                &policy,
+                &dir.path().join("final"),
+                SaveTargetPurpose::FinalDirectory,
+            )
+            .unwrap();
+        let stage_target = context
+            .reserve_target(
+                &policy,
+                &dir.path().join("stage"),
+                SaveTargetPurpose::StageFile,
+            )
+            .unwrap();
+        let evidence = context.lock_evidence(&policy).unwrap();
+        let acquired: Vec<_> = policy
+            .trace
+            .borrow()
+            .iter()
+            .filter(|(_, e)| *e == "acquire")
+            .map(|(a, _)| *a)
+            .collect();
+        assert_eq!(
+            acquired,
+            [
+                ServiceAction::ReserveSaveTarget,
+                ServiceAction::ReserveSaveTarget,
+                ServiceAction::LockAnalysisEvidence
+            ]
+        );
+        policy.trace.borrow_mut().clear();
+        final_target.reauthorize(&policy).unwrap();
+        stage_target.reauthorize(&policy).unwrap();
+        evidence.reauthorize(&policy).unwrap();
+        assert_eq!(
+            policy
+                .trace
+                .borrow()
+                .iter()
+                .map(|(_, e)| *e)
+                .collect::<Vec<_>>(),
+            ["held", "held", "held"]
+        );
+        policy.revoke_held.set(true);
+        assert!(final_target.reauthorize(&policy).is_err());
+        assert!(evidence.reauthorize(&policy).is_err());
+        drop((evidence, stage_target, final_target));
+        assert!(context.evidence.exists());
+        assert!(!dir.path().join("final").exists());
+    }
 }

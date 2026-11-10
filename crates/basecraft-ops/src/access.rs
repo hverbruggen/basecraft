@@ -103,6 +103,25 @@ pub trait Access {
         Err(AccessError::Denied(Denial::ServiceUnavailable))
     }
 
+    /// Contextual mutation services remain denied unless an explicitly bound
+    /// owner implements eligibility and every individual effect boundary.
+    fn service_context(
+        &self,
+        _request: &crate::service_reads::ServiceRequest<'_>,
+        _phase: crate::service_reads::ServicePhase<'_>,
+    ) -> Result<()> {
+        Err(AccessError::Denied(Denial::ServiceUnavailable))
+    }
+
+    /// Hand off the strict retained target observation, never a legacy path
+    /// check followed by another inspector. The response borrows this request.
+    fn service_target<'a>(
+        &self,
+        _request: &'a crate::service_reads::ServiceRequest<'a>,
+    ) -> Result<crate::service_reads::CheckedServiceTarget<'a>> {
+        Err(AccessError::Denied(Denial::ServiceUnavailable))
+    }
+
     fn service(&self, _action: ServiceAction) -> Result<()> {
         Err(AccessError::Denied(Denial::ServiceUnavailable))
     }

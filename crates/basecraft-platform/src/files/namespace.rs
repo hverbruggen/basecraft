@@ -191,6 +191,22 @@ pub fn inspect_target_namespace(path: &Path) -> Result<TargetNamespace, Namespac
     }
 }
 impl TargetNamespace {
+    /// Consume a checked absence without reconstructing its original IO error.
+    /// A present observation is returned intact for the caller to handle.
+    pub fn into_absence_error(self) -> Result<io::Error, Box<Self>> {
+        #[cfg(target_os = "linux")]
+        {
+            let mut observation = self;
+            match observation.inner.missing.take() {
+                Some(error) => Ok(error),
+                None => Err(Box::new(observation)),
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            Err(Box::new(self))
+        }
+    }
     pub fn metadata(&self) -> Option<&TargetMetadata> {
         #[cfg(target_os = "linux")]
         {
@@ -319,6 +335,28 @@ impl LockNamespace {
     }
 }
 impl OpenedLock {
+    /// Forward to fs4 on the one retained file. The owner must authorize this
+    /// effect and recheck the namespace after success, especially after a wait.
+    pub fn try_lock_exclusive(&self) -> Result<bool, NamespaceReadError> {
+        #[cfg(target_os = "linux")]
+        {
+            fs4::fs_std::FileExt::try_lock_exclusive(&self.inner.file).map_err(Into::into)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            Err(NamespaceReadError::Unsupported)
+        }
+    }
+    pub fn lock_exclusive(&self) -> Result<(), NamespaceReadError> {
+        #[cfg(target_os = "linux")]
+        {
+            fs4::fs_std::FileExt::lock_exclusive(&self.inner.file).map_err(Into::into)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            Err(NamespaceReadError::Unsupported)
+        }
+    }
     pub fn recheck(&self) -> Result<(), NamespaceReadError> {
         #[cfg(target_os = "linux")]
         {

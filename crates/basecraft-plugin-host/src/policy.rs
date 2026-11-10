@@ -620,6 +620,17 @@ pub(crate) enum StrictResourceError {
     Access(AccessError),
     Missing(Box<basecraft_platform::files::TargetNamespace>),
 }
+impl StrictResourceError {
+    fn into_access(self) -> AccessError {
+        match self {
+            Self::Access(error) => error,
+            Self::Missing(namespace) => match namespace.into_absence_error() {
+                Ok(error) => AccessError::Io(error),
+                Err(_) => AccessError::Denied(Denial::ServiceUnavailable),
+            },
+        }
+    }
+}
 impl From<AccessError> for StrictResourceError {
     fn from(error: AccessError) -> Self {
         Self::Access(error)
@@ -680,12 +691,36 @@ mod access_tests;
 
 // Deliberately private and unwired. Runtime construction needs separate review.
 #[allow(dead_code)]
-struct SessionServiceReadAccess<'a> {
+struct SessionServiceAccess<'a> {
     policy: &'a SessionPolicy,
     context: &'a basecraft_ops::service_reads::ServiceReadContext,
 }
 
-impl Access for SessionServiceReadAccess<'_> {
+type SessionServiceReadAccess<'a> = SessionServiceAccess<'a>;
+
+impl SessionServiceAccess<'_> {
+    fn lock_policy(
+        &self,
+        request: &basecraft_ops::service_reads::ServiceRequest<'_>,
+        phase: &basecraft_ops::service_reads::ServicePhase<'_>,
+    ) -> basecraft_ops::access::Result<()> {
+        self.policy.resource_effects(ResourceAction::ReplaceFile)?;
+        if !request.permits_lock(self.context, phase) {
+            return Err(AccessError::Denied(Denial::ServiceUnavailable));
+        }
+        if let Some((target, action)) = request.target() {
+            let (path, _) = self.policy.resource_path(target, action)?;
+            let parent = path
+                .parent()
+                .ok_or(AccessError::Denied(Denial::InvalidPath))?;
+            self.policy
+                .resource_path(parent, ResourceAction::ReadDirectory)?;
+        }
+        Ok(())
+    }
+}
+
+impl Access for SessionServiceAccess<'_> {
     fn boundary(&self) -> Option<&Path> {
         self.policy.boundary()
     }
@@ -695,6 +730,30 @@ impl Access for SessionServiceReadAccess<'_> {
         action: ResourceAction,
     ) -> basecraft_ops::access::Result<PathBuf> {
         self.policy.resource(path, action)
+    }
+    fn service_context(
+        &self,
+        request: &basecraft_ops::service_reads::ServiceRequest<'_>,
+        phase: basecraft_ops::service_reads::ServicePhase<'_>,
+    ) -> basecraft_ops::access::Result<()> {
+        self.lock_policy(request, &phase)
+    }
+    fn service_target<'a>(
+        &self,
+        request: &'a basecraft_ops::service_reads::ServiceRequest<'a>,
+    ) -> basecraft_ops::access::Result<basecraft_ops::service_reads::CheckedServiceTarget<'a>> {
+        self.lock_policy(
+            request,
+            &basecraft_ops::service_reads::ServicePhase::Eligibility,
+        )?;
+        let (target, action) = request
+            .target()
+            .ok_or(AccessError::Denied(Denial::ServiceUnavailable))?;
+        let resolved = self
+            .policy
+            .resolve_resource_strict(target, action)
+            .map_err(StrictResourceError::into_access)?;
+        request.checked_target(resolved.path, resolved.namespace)
     }
     fn service_read(
         &self,
