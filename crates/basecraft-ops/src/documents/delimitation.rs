@@ -5,19 +5,19 @@ use basecraft_docs::FeatureId;
 use basecraft_protocol::{DocState, Op, delimitation::DelimitationWorkspace};
 
 use super::Document;
-use crate::{Result, error::invalid, files, proposals, session::Inverse};
+use crate::{Result, error::invalid, files, session::Inverse};
 
 impl Document for DelimitationWorkspace {
     fn revision(&self, generation: u64) -> u64 {
         generation
     }
     fn fingerprint(&self) -> DocState {
-        proposals::delimitation_state(self)
+        delimitation_state(self)
     }
     fn apply(&mut self, op: &Op) -> Result<(Inverse, Option<FeatureId>)> {
         // Preserve the existing workspace snapshot inverse. Edit-sized inverses
         // remain separate debt; this migration does not change undo policy.
-        proposals::execute_delimitation(self, op)
+        execute_delimitation(self, op)
     }
     fn revert(&mut self, inverse: &Inverse) -> Result<()> {
         let Inverse::Delimitation(before) = inverse else {
@@ -85,6 +85,30 @@ impl Document for DelimitationWorkspace {
         files::write_delimitation_sidecar_at(self, &hash, target, &mut side)?;
         Ok(vec![hash, side.hash()])
     }
+}
+
+pub(crate) fn delimitation_state(
+    work: &basecraft_protocol::delimitation::DelimitationWorkspace,
+) -> DocState {
+    DocState {
+        len: work.specimens.len() as u64,
+        features: work.hypotheses.len() as u64,
+        rows: None,
+    }
+}
+
+pub(crate) fn execute_delimitation(
+    work: &mut basecraft_protocol::delimitation::DelimitationWorkspace,
+    op: &Op,
+) -> Result<(Inverse, Option<FeatureId>)> {
+    let Op::DelimitationEdit { edit } = op else {
+        return Err(invalid("this needs a delimitation edit"));
+    };
+    // Retain the existing inverse policy for these small hypothesis workspaces,
+    // which hold assignments/settings rather than sequence residues.
+    let before = Box::new(work.clone());
+    basecraft_docs::delimitation::apply(work, edit).map_err(|e| invalid(e.0))?;
+    Ok((Inverse::Delimitation(before), None))
 }
 
 #[cfg(test)]

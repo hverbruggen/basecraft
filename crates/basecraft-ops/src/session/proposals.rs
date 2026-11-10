@@ -1,7 +1,9 @@
 //! One staged proposal/commit owner. Kind adapters supply only candidate edits
 //! and fingerprints; Session retains pins, actors, journal and undo ownership.
 use super::{Applied, Inverse, Session, Slot};
-use crate::documents::{execute_sequence, sequence_state};
+use crate::documents::{
+    delimitation_state, execute_delimitation, execute_sequence, sequence_state,
+};
 use crate::{
     DocId, Result,
     error::invalid,
@@ -26,30 +28,6 @@ struct PreparedBatch {
     candidate: Loaded,
     edits: Vec<PreparedEdit>,
     entries: Vec<LogEntry>,
-}
-
-pub(super) fn delimitation_state(
-    work: &basecraft_protocol::delimitation::DelimitationWorkspace,
-) -> DocState {
-    DocState {
-        len: work.specimens.len() as u64,
-        features: work.hypotheses.len() as u64,
-        rows: None,
-    }
-}
-
-pub(super) fn execute_delimitation(
-    work: &mut basecraft_protocol::delimitation::DelimitationWorkspace,
-    op: &Op,
-) -> Result<(Inverse, Option<FeatureId>)> {
-    let Op::DelimitationEdit { edit } = op else {
-        return Err(invalid("this needs a delimitation edit"));
-    };
-    // Retain the existing inverse policy for these small hypothesis workspaces,
-    // which hold assignments/settings rather than sequence residues.
-    let before = Box::new(work.clone());
-    basecraft_docs::delimitation::apply(work, edit).map_err(|e| invalid(e.0))?;
-    Ok((Inverse::Delimitation(before), None))
 }
 
 fn sequence_edit(content: &mut Loaded, op: &Op) -> Result<(Inverse, Option<FeatureId>)> {

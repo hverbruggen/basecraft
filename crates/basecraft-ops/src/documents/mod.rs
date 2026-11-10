@@ -1,8 +1,7 @@
 //! Kind-specific behavior borrowed by the shared Session.
 //!
 //! Migration is incremental: Submission, Metadata, Alignment, Tree, Sequence and Delimitation implement this interface today.
-//! `Loaded::as_document` returns `None` for legacy kinds. Their existing paths
-//! remain until each is migrated; no placeholder implementations are required.
+//! All six existing payloads participate; Sanger review integration remains separate.
 //! Payloads are not constrained to a single sequence/record, so future result,
 //! multi-record and Sanger documents can retain their own models here.
 
@@ -30,7 +29,8 @@ pub(crate) trait Document {
     fn apply(&mut self, op: &Op) -> Result<(Inverse, Option<FeatureId>)>;
     fn revert(&mut self, inverse: &Inverse) -> Result<()>;
     /// Write using atomic replacement per file. Session owns save guards,
-    /// partial-save recovery and publication. Paths remain absolute/as supplied;
+    /// partial-save recovery and document provenance publication. Kind-specific
+    /// analysis records use the existing record owner from the writer. Paths remain absolute/as supplied;
     /// Session converts them to project-relative log keys. The recovery root is
     /// diagnostic context for partial multi-file saves, not owned by the payload.
     fn write(
@@ -56,3 +56,6 @@ pub(crate) use tree::execute_tree;
 
 // Detached proposal staging uses the same sequence semantics as live documents.
 pub(crate) use sequence::{execute_sequence, sequence_state};
+
+// Detached proposals share Delimitation mutations and fingerprints with Session.
+pub(crate) use delimitation::{delimitation_state, execute_delimitation};

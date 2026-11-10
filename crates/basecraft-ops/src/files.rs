@@ -133,7 +133,7 @@ pub enum Loaded {
 }
 
 impl Loaded {
-    /// Only migrated kinds participate; legacy kinds retain their existing paths.
+    /// Borrow the shared behavior of the existing document payloads.
     pub(crate) fn as_document(&self) -> Option<&dyn crate::documents::Document> {
         match self {
             Self::Submission(sub) => Some(sub),
