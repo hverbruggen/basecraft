@@ -39,7 +39,7 @@ check:
 
 # Everything. Run before every push.
 ci: check schemas-check deny protocol-license replay qml-test
-    @echo "instruction-count benchmarks: not set up yet"
+    @echo "Timing gate off: calibration and portable baseline provisioning pending (see benches/README.md)"
 
 # Generate JSON Schema and Arrow schemas from basecraft-protocol.
 schemas:

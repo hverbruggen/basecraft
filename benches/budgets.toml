@@ -1,8 +1,9 @@
-# Observational configuration. Ratios are the M5 plan's future gate semantics,
-# not validated thresholds or active CI gates. Review repeated baselines first.
+# Opt-in comparison limits from the M5 plan, not PRD qualification.
+# CI remains off pending reviewed calibration and baseline provisioning.
 [comparison]
 benchmark_ratio = 1.30
 gross_ci_ratio = 2.0
+minimum_gate_samples = 5
 
 [scenarios.open-alignment]
 fixture = "32 rows x 4096 columns; rowNNN; ACGT rotated by row; .afa"

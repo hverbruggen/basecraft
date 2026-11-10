@@ -56,12 +56,54 @@ and sanitize any material selected for publication.
 `--baseline PATH` compares a reviewed compatible report on the same machine
 label, profile, runner protocol/hash and fixture parameters. Missing/incompatible
 baselines explicitly report `unavailable`; they are **not a passing budget**.
-`budgets.toml` preserves the plan's 30% benchmark and 2x gross-CI comparison
-semantics as observations. No timing gate is enabled, no single run establishes
-a trusted threshold, and no direct PRD target is asserted by these headless
-scenarios. First-paint/input-to-screen and startup measurements remain subsequent
-work; requested-heap measurements are separate opt-in scenarios described below. CI continues to run existing exact counters;
-its timing placeholder is intentionally deferred to the later gate stage.
+`budgets.toml` defines two **opt-in** strict limits: `--gate gross` fails above
+2x; `--gate benchmark` fails above 1.3x. Equality passes. Without `--gate`, ratios
+remain observational. CI's timing hook stays off pending reviewed repeat-run
+calibration and portable baseline provisioning. Exact-count and requested-heap
+checks remain enabled and unchanged. These headless limits do not qualify PRD
+first-paint/input-to-screen/startup targets.
+
+```sh
+# Hold the site's exclusive compile lock through BOTH runs.
+just bench --machine workstation-a --cache "$BENCH_CACHE" --compact \
+  --samples 5 --environment "$BENCH_ENVIRONMENT"
+# BASELINE is the reviewed report.json from the baseline run.
+just bench --machine workstation-a --cache "$BENCH_CACHE" --compact \
+  --samples 5 --environment "$BENCH_ENVIRONMENT" --baseline "$BASELINE" --gate gross
+```
+
+`--compact` selects open/edit/undo/save alignment only, excluding the 100 MB open.
+Both gate modes require **all four** compact scenarios in both reports with at
+least five verified samples each. Extra selected scenarios must also compare
+successfully. A failed/refused workload, missing required scenario, insufficient
+samples, unavailable comparison, invalid median or exceeded ratio fails nonzero.
+The aggregate report retains gate status, threshold and failure reasons; an
+unreadable baseline or invalid environment descriptor also fails nonzero. Reports
+retain minimum, maximum and median absolute deviation (MAD), in ns/operation,
+alongside medians and external raw samples. No outlier is automatically discarded.
+Do not remove a failing workload or disable recovery to obtain a passing gate.
+
+`--environment` names an external, private JSON object with nonempty string
+fields `hardware`, `toolchain`, `runtime`, `storage`, `build`, and `isolation`.
+Describe CPU/memory/power policy, exact compiler/Cargo, OS/container image and
+Python, storage/filesystem, release flags/features/target, and shared-lock/load
+policy respectively. Retain the descriptor plus actual tool/version/load receipts
+with the raw measurements. Its canonical SHA256 is recorded as
+`environment_sha256`; strict gates require matching identities. This is a reviewed
+caller attestation, not automatic hardware detection or proof of isolation.
+Changing either descriptor or runner requires a fresh baseline; old reports are
+never relabelled. Revision and executable hashes may differ to compare production
+changes, while runner/work/fixture/environment identities must match. The runner
+hash already versions harness changes, so the additive summary fields do not
+reinterpret historical schema-2 timings.
+
+Before enabling a default CI timing gate, provision a reviewed baseline and its
+environment descriptor outside Git for each supported execution environment,
+retain repeat complete runs and variability under the shared lock, and have the
+reviewer validate the calibration and provisioning/failure path. No host-specific
+baseline, private environment descriptor or fabricated timing belongs in Git.
+There is currently no portable baseline provisioner; the CI hook explicitly
+reports off. Use the explicit gate command at an authorized benchmark checkpoint.
 
 `--history PATH` opts into appending summary reports to an **external** JSONL
 history. Tracked `history.jsonl` is deliberately not auto-written. Review neutral

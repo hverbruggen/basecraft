@@ -25,6 +25,7 @@ TREE_SCENARIOS = ("tree-open-50000", "tree-midpoint-50000")
 HEAP_SCENARIOS = ("heap-open-compact", "heap-open-100mb", "heap-open-error")
 PROTOCOL = "session-warm-v1"
 SCHEMA_VERSION = 2
+COMPACT_SCENARIOS = tuple(n for n in SCENARIOS if n != "open-fasta-100mb")
 
 
 def digest(path):
@@ -66,23 +67,26 @@ def summarize(samples):
         return {**identity, "status": "measured", "samples": len(samples),
                 "unit": "requested bytes", "median": statistics.median(s["heap"]["incremental_peak_bytes"] for s in samples),
                 "heap_medians": {k: statistics.median(s["heap"][k] for s in samples) for k in fields}}
-    if identity["operations"] <= 0 or any(s["duration_ns"] <= 0 for s in samples):
+    if (type(identity["operations"]) is not int or identity["operations"] <= 0
+            or any(type(s["duration_ns"]) is not int or s["duration_ns"] <= 0 for s in samples)):
         raise ValueError("invalid duration or operation count")
     if samples[0]["scenario"].startswith("frame-") and any(
             len(s.get("output_counts", [])) != s["operations"]
             or any(n <= 0 for n in s["output_counts"]) for s in samples):
         raise ValueError("missing frame output verification counts")
+    values = [s["duration_ns"] / s["operations"] for s in samples]
+    median = statistics.median(values)
     return {**identity, "status": "measured", "samples": len(samples),
-            "unit": "ns/operation", "median": statistics.median(
-                s["duration_ns"] / s["operations"] for s in samples)}
+            "unit": "ns/operation", "median": median, "minimum": min(values),
+            "maximum": max(values), "mad": statistics.median(abs(v - median) for v in values)}
 
 
 def compare(report, baseline, budgets):
     # Compare only compatible runner/fixture/machine identities. No baseline is a pass.
     if baseline is None:
         return {"status": "unavailable", "reason": "no comparison baseline supplied"}
-    for key in ("schema_version", "machine", "profile", "protocol", "runner_sha256"):
-        if baseline.get(key) != report[key]:
+    for key in ("schema_version", "machine", "profile", "protocol", "runner_sha256", "environment_sha256"):
+        if baseline.get(key) != report.get(key):
             return {"status": "unavailable", "reason": f"baseline {key} differs"}
     results = {}
     for name, current in report["scenarios"].items():
@@ -94,7 +98,8 @@ def compare(report, baseline, budgets):
         keys += ("work",) if name.startswith(("frame-", "tree-", "heap-")) else ()
         median = previous.get("median", 0)
         if (any(current[k] != previous.get(k) for k in keys)
-                or not isinstance(median, (int, float)) or not math.isfinite(median) or median <= 0):
+                or any(type(value) not in (int, float) or not math.isfinite(value) or value <= 0
+                       for value in (median, current.get("median")))):
             results[name] = {"status": "unavailable", "reason": "incompatible fixture or median"}
             continue
         ratio = current["median"] / median
@@ -104,11 +109,59 @@ def compare(report, baseline, budgets):
     return {"status": "observational", "scenarios": results, "gate_enabled": False}
 
 
+def timing_gate(report, baseline, budgets, mode):
+    """Fail closed: all compact workloads and all selected comparisons are required."""
+    threshold = budgets["gross_ci_ratio" if mode == "gross" else "benchmark_ratio"]
+    errors = []
+    for label, candidate in (("current", report), ("baseline", baseline or {})):
+        if not re.fullmatch(r"[a-f0-9]{64}", candidate.get("environment_sha256", "")):
+            errors.append(f"{label}: missing environment identity")
+        for key in ("machine", "runner_sha256", "source_commit", "executable_sha256"):
+            if not isinstance(candidate.get(key), str) or not candidate[key]:
+                errors.append(f"{label}: missing {key}")
+        if (candidate.get("schema_version") != SCHEMA_VERSION
+                or candidate.get("profile") != "release" or candidate.get("protocol") != PROTOCOL):
+            errors.append(f"{label}: unsupported schema/profile/protocol")
+        for name in COMPACT_SCENARIOS:
+            sample = candidate.get("scenarios", {}).get(name, {})
+            if (sample.get("status") != "measured" or sample.get("unit") != "ns/operation"
+                    or type(sample.get("samples")) is not int
+                    or sample["samples"] < budgets["minimum_gate_samples"]):
+                errors.append(f"{label}: {name} requires verified timing and at least "
+                              f"{budgets['minimum_gate_samples']} samples")
+    comparison = compare(report, baseline, budgets)
+    if comparison["status"] == "unavailable":
+        errors.append(comparison["reason"])
+    else:
+        for name, result in comparison["scenarios"].items():
+            if result["status"] != "compared":
+                errors.append(f"{name}: {result['reason']}")
+            elif result["ratio"] > threshold:
+                errors.append(f"{name}: ratio {result['ratio']:.6g} exceeds {threshold:g}")
+    return {"status": "failed" if errors else "passed", "gate_enabled": True,
+            "mode": mode, "threshold": threshold, "errors": errors}
+
+
+def environment_identity(path):
+    # Private, reviewed site descriptor: hardware, toolchain, runtime, storage,
+    # build flags and lock/isolation policy. Hash values, never publish its paths.
+    descriptor = json.loads(external(path).read_text())
+    required = ("hardware", "toolchain", "runtime", "storage", "build", "isolation")
+    if not isinstance(descriptor, dict) or any(
+            not isinstance(descriptor.get(k), str) or not descriptor[k].strip() for k in required):
+        raise ValueError("environment descriptor requires nonempty " + ", ".join(required))
+    return hashlib.sha256(json.dumps(descriptor, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--machine", required=True, help="user-chosen neutral label, never an actual hostname")
     parser.add_argument("--cache", required=True, type=Path, help="explicit external output and fixture cache")
     parser.add_argument("--samples", type=int, default=5)
+    parser.add_argument("--gate", choices=("gross", "benchmark"),
+                        help="opt-in strict 2x or 1.3x timing gate; requires all compact scenarios")
+    parser.add_argument("--environment", type=Path, help="external reviewed environment JSON descriptor")
+    parser.add_argument("--compact", action="store_true", help="only compact Session workloads")
     parser.add_argument("--baseline", type=Path, help="reviewed report.json from a compatible run")
     parser.add_argument("--history", type=Path, help="opt-in external JSONL summary history (review before publishing)")
     parser.add_argument("--scenario", action="append", choices=SCENARIOS + FRAME_SCENARIOS + TREE_SCENARIOS + HEAP_SCENARIOS,
@@ -119,6 +172,13 @@ def main():
     args = parser.parse_args()
     if args.samples < 3 or not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", args.machine):
         parser.error("need at least 3 samples and a neutral alphanumeric machine label")
+    if args.compact and (args.scenario or args.large):
+        parser.error("--compact cannot be combined with --scenario or --large")
+    selected = COMPACT_SCENARIOS if args.compact else (args.scenario or SCENARIOS)
+    if args.gate and (not args.baseline or not args.environment):
+        parser.error("strict gate requires --baseline and --environment")
+    if args.gate and not set(COMPACT_SCENARIOS).issubset(selected):
+        parser.error("strict gate requires all compact Session scenarios")
     heap_mode = any(n.startswith("heap-") for n in (args.scenario or ()))
     if heap_mode and (args.large or any(not n.startswith("heap-") for n in args.scenario)):
         parser.error("run heap instrumentation separately from wall timings")
@@ -169,9 +229,11 @@ def main():
               "executable_sha256": digest(executable), "date_utc": datetime.now(timezone.utc).isoformat(),
               "cache": "Session: warm OS/index cache; frame: cold view for first, warmed view for warm/scroll; see scenario work",
               "scenarios": {}}
+    if args.environment:
+        report["environment_sha256"] = environment_identity(args.environment)
     baseline = json.loads(args.baseline.read_text()) if args.baseline else None
     failed = False
-    for name in (*(args.scenario or SCENARIOS), *(("open-fasta-1gb",) if args.large else ())):
+    for name in (*selected, *(("open-fasta-1gb",) if args.large else ())):
         samples = []
         for index in range(args.samples):
             work = run_dir / f"{name}-{index}"
@@ -209,13 +271,22 @@ def main():
             value = f"{summary['median']:.0f} requested bytes" if heap_mode else f"{summary['median'] / 1e6:.3f} ms/operation"
             print(f"{name}: {value} ({len(samples)} samples)", flush=True)
     report["comparison"] = compare(report, baseline, budgets["comparison"])
+    if args.gate:
+        report["gate"] = timing_gate(report, baseline, budgets["comparison"], args.gate)
+        failed |= report["gate"]["status"] != "passed"
     report_path = run_dir / "report.json"
     report_path.write_text(json.dumps(report, indent=2) + "\n")
     if history:
         history.parent.mkdir(parents=True, exist_ok=True)
         with history.open("a") as stream:
             stream.write(json.dumps(report) + "\n")
-    print(f"comparison: {report['comparison']['status']}; no timing gate enabled")
+    print(f"comparison: {report['comparison']['status']}")
+    if args.gate:
+        print(f"timing gate: {report['gate']['status']}")
+        for error in report["gate"]["errors"]:
+            print(error, file=sys.stderr)
+    else:
+        print("timing gate: off (opt in with --gate)")
     print(f"report: {report_path}")
     return 1 if failed else 0
 
