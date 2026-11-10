@@ -5,9 +5,9 @@ use basecraft_ops::{Session, analysis_store::ArtifactRun, input_evidence};
 use basecraft_protocol::Actor;
 use serde_json::{Value, json};
 
-fn capture(name: &str, run: &Path, expected: Value) {
+fn capture(name: &str, run: &Path, expected: &Value) {
     let actual = std::fs::read(run.join("run.json")).unwrap();
-    let mut original = serde_json::to_vec_pretty(&expected).unwrap();
+    let mut original = serde_json::to_vec_pretty(expected).unwrap();
     original.push(b'\n');
     assert_eq!(actual, original, "{name}");
     if let Some(root) = std::env::var_os("BASECRAFT_RECORD_CAPTURE") {
@@ -37,7 +37,7 @@ fn original_reference_and_generated_run_writers() {
     capture(
         "run-referenced",
         run.directory(),
-        json!({"schema_version":1,"id":run.id(),"result":"ünicode result.txt","status":"referenced"}),
+        &json!({"schema_version":1,"id":run.id(),"result":"ünicode result.txt","status":"referenced"}),
     );
     let generated = ArtifactRun::create(&root.path().join("result.txt"), "run-generated").unwrap();
     input_evidence::link_generated_input(
@@ -51,7 +51,7 @@ fn original_reference_and_generated_run_writers() {
     capture(
         "run-generated",
         generated.directory(),
-        json!({"schema_version":1,"id":generated.id(),"result":"Document snapshot","status":"prepared"}),
+        &json!({"schema_version":1,"id":generated.id(),"result":"Document snapshot","status":"prepared"}),
     );
 }
 
@@ -74,7 +74,7 @@ fn original_reference_null_result() {
     capture(
         "run-null",
         run.directory(),
-        json!({"schema_version":1,"id":run.id(),"result":null,"status":"referenced"}),
+        &json!({"schema_version":1,"id":run.id(),"result":null,"status":"referenced"}),
     );
 }
 
@@ -97,7 +97,7 @@ fn original_delimitation_save_run_writer() {
     capture(
         "run-saved",
         &run,
-        json!({"schema_version":1,"id":id,"result":"saved.spart","status":"saved"}),
+        &json!({"schema_version":1,"id":id,"result":"saved.spart","status":"saved"}),
     );
 }
 
@@ -155,7 +155,7 @@ fn original_referenced_publication_run_writer() {
                 "run-completed-empty"
             },
             run.directory(),
-            json!({"schema_version":1,"id":run.id(),"result":"result.txt","status":"completed","outputs":artifacts}),
+            &json!({"schema_version":1,"id":run.id(),"result":"result.txt","status":"completed","outputs":artifacts}),
         );
     }
 }
@@ -232,6 +232,6 @@ fn original_extraction_run_writer_inventory() {
     capture(
         "run-extracted",
         &run,
-        json!({"schema_version":1,"id":id,"result":"extracted.gb","status":"saved"}),
+        &json!({"schema_version":1,"id":id,"result":"extracted.gb","status":"saved"}),
     );
 }
