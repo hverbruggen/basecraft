@@ -428,6 +428,14 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             std::fs::create_dir_all(&dir)?;
             let schemas = [
                 (
+                    "recovery-integrity-error",
+                    schemars::schema_for!(basecraft_protocol::records::RecoveryIntegrityError),
+                ),
+                (
+                    "result-binding",
+                    schemars::schema_for!(basecraft_protocol::records::ResultBinding),
+                ),
+                (
                     "external-execution",
                     schemars::schema_for!(basecraft_protocol::records::ExternalExecution),
                 ),

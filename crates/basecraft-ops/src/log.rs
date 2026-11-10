@@ -128,10 +128,15 @@ impl LogWriter {
                     .is_err()
                 {
                     self.poisoned = true;
-                    let bytes = serde_json::to_vec_pretty(&serde_json::json!({
-                        "schema_version": 1, "verified_length": previous_length,
-                        "error": "append failed and rollback durability could not be confirmed"
-                    }))?;
+                    let bytes = serde_json::to_vec_pretty(&serde_json::to_value(
+                        basecraft_protocol::records::RecoveryIntegrityError {
+                            schema_version: 1,
+                            verified_length: previous_length,
+                            error: "append failed and rollback durability could not be confirmed"
+                                .into(),
+                            extra: Default::default(),
+                        },
+                    )?)?;
                     let _ =
                         basecraft_io::write_atomic(&self.poison_marker, |w| w.write_all(&bytes));
                     return Err(crate::error::invalid(format!(

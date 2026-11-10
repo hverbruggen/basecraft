@@ -1,0 +1,5 @@
+{
+  "error": "append failed and rollback durability could not be confirmed",
+  "schema_version": 1,
+  "verified_length": 0
+}

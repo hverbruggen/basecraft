@@ -29,12 +29,12 @@ is changed here outside the selected recovery, store marker, version-one registr
 | `recovery.json`: session, source root, baseline event, retention limit, status | R (legacy sessions: project root) | [session.rs](../crates/basecraft-ops/src/session.rs) `Session::track` | [replay.rs](../crates/basecraft-ops/src/replay.rs) `recorded_source_root`; GUI `provenance_bridge::recovery_sessions` | `schema_version: 1` | protocol `records::RecoveryManifest`; [recovery-manifest.schema.json](recovery-manifest.schema.json) | Kept at top level and throughout opaque baseline; readers inspect selected fields |
 | `pending-save.json`: session, target, before hash or null, ordered expected hashes, status, note | R | `Session::save_checked` | save success removes it; `Session` drop/cleanup preserves recovery if present; user/repair tools inspect it | `schema_version: 1` | protocol `records::PendingSave`; [pending-save.schema.json](pending-save.schema.json) | Kept by type; writer creates a fresh intent, does not merge an earlier intent |
 | `.basecraft/log/<stream>/<month>-<id>-<segment>.jsonl`: checksummed, sequenced events | R / project | [log.rs](../crates/basecraft-ops/src/log.rs) `LogWriter::append_batch` | `read_all`, `read_readable`, `verified_prefix`, `parse_entry`; replay | `v: 1`; `_checksum`, `_sequence` envelope | protocol `LogEntry` / [log-entry.schema.json](log-entry.schema.json); checksum/sequence envelope untyped | Envelope verified then stripped; unknown event fields dropped by `LogEntry`; future operation variants rejected |
-| `recovery-integrity-error.json`: verified length and durability diagnostic | R / project | `LogWriter::append_batch` failed rollback | `replay::recover` refuses poisoned recovery | `schema_version: 1` | `Value`; no schema | Reader checks presence; no rewrite |
+| `recovery-integrity-error.json`: verified length and durability diagnostic | R / project | `LogWriter::append_batch` failed rollback | `replay::recover` refuses poisoned recovery | `schema_version: 1` | protocol `records::RecoveryIntegrityError` / [recovery-integrity-error.schema.json](recovery-integrity-error.schema.json) | Typed round-trip keeps extras; reader checks presence; no rewrite |
 | `manifest.json`, `records/<publication-id>.json`: publication, ancestry, artifacts, events, effective edits, completeness | P / A | [provenance.rs](../crates/basecraft-ops/src/provenance.rs) `publish`, `publish_operation`; session publication routines | `inspect`, `verify`, `package`; `document_record::read_origin`, evidence ancestry readers | `schema_version: 1` | protocol `Publication` / [provenance-publication.schema.json](provenance-publication.schema.json) | Rejected at publication and several nested record types; `InputReference.extra` kept |
 | `input.json`: source evidence, submitted hash/size, transformation, evidence state, optional ancestry/ledger references | A / P | [input_evidence.rs](../crates/basecraft-ops/src/input_evidence.rs) `reference_input_with_dependencies`, `link_generated_input`, `resolve`, `relink`; session/provenance/runner/Sanger adapters | `read_input`, `conflicts_in`, `verified_source`, packaging/ancestry readers | `schema_version: 1` | ops `SubmittedInput`; reuses protocol `InputReference`, `FileStamp`; no own schema | Kept via `extra` on input/reference; source stamp has no extra map; evidence state still string |
 | `run.json`: id, result name, status and sometimes outputs | A | `Session::save_inner`, `publish_referenced_analysis`; `input_evidence` reference/generated helpers; runner `prepare` | `input_evidence::result_name`, `scan_run`; artifact binding | `schema_version: 1` | `Value`; no schema | Selective `Value` reads; constructed afresh; variants differ in optional fields |
 | `store.json`: analysis namespace marker | `.basecraft/analyses-v1` | [analysis_store.rs](../crates/basecraft-ops/src/analysis_store.rs) `ArtifactRun::create`, compact JSON plus newline | `ArtifactRun::validate_store` | `format: basecraft.analysis-store`, `schema_version: 1` | protocol `StoreMarker` / [store-marker.schema.json](store-marker.schema.json) | Top-level extras kept by type; validation ignores extras; marker not rewritten |
-| Result binding (hash-derived filename): run, result filename/hash | `.basecraft/analyses-v1` binding namespace | `ArtifactRun::bind` | `ArtifactRun::for_result` | `schema_version: 1` | `Value`; no schema | Selective reads; fresh writes |
+| Result binding (hash-derived filename): run, result filename/hash | `.basecraft/analyses-v1` binding namespace | `ArtifactRun::bind` | `ArtifactRun::for_result` | `schema_version: 1` | protocol `records::ResultBinding` / [result-binding.schema.json](result-binding.schema.json) | Typed round-trip keeps extras; selective reads; fresh writes |
 | `analysis-stores.json`: absolute known store paths | C state | `input_evidence::register` | `store_registry`, `stores`, save conflict scan | `schema_version: 1` | protocol `StoreRegistry` / [store-registry.schema.json](store-registry.schema.json) | Top-level extras kept on registration update; absolute path array/count validated |
 | `artifacts/<hash>` with logical name `export-map.json`: old/new publication mapping | E packaged P | `input_evidence::export_history` | retained artifact inspection; no dedicated in-app deserializer | `schema_version: 1` | `Value`; no schema | Generated artifact; original records also retained, no rewrite reader |
 | `reports/manifest.json`: publication, template, output hashes, redactions, citations | P / A | `provenance::write_reports` | report consumer / inspection (no dedicated typed in-app reader) | `schema_version: 1`, `template_version: 2` | `Value`; no schema | Generated afresh |
@@ -198,3 +198,36 @@ receipt/hash verification and failure diagnostics are still enforced at the same
 production boundaries. No new format, compatibility promise, lifecycle transition,
 actor, dependency, cancellation, override or immutable-artifact behavior is added.
 Parent M6 remains incomplete.
+
+## Typed recovery-integrity and result-binding slice
+
+`RecoveryIntegrityError` and `ResultBinding` describe two existing version-one
+objects, without changing their writers' bytes or readers' acceptance rules.
+The poison marker retains pretty recursively sorted JSON with no final newline;
+the binding retains pretty recursively sorted JSON with one final newline.
+Both serialize through Value before the existing atomic writers. Small known
+fields are typed directly, with flattened extras retained on typed round-trip.
+There are no null or optional fields in either original shape, and none are added.
+
+The log marker is a diagnostic after failed rollback durability, not another log.
+Append sequencing, rollback, error handling and the best-effort marker write stay
+unchanged. Both recovery routes still refuse the marker's presence without
+parsing its contents, including empty, damaged or future-version contents.
+`ResultBinding` is not an `InputReference` (it has a run and relative result
+filename) or a `Publication`. Its result stays the existing UTF-8 string converted
+from a relative path. Fresh binding writes do not merge previous extras.
+
+Original-writer captures cover empty/nonempty verified journal prefixes and
+ordinary/nested Unicode result filenames. Full-byte runtime oracles retain the
+original literals and compare current writer bytes without normalization.
+Committed examples use those exact captures; the test setup uses synthetic labels
+and the records contain no private absolute paths, hosts or unpredictable IDs.
+The nonempty poison length is the captured test journal's byte length, not a
+promise that arbitrary future log entries have that size.
+
+Binding discovery, checked content verification, version/path/run validation,
+namespace safety and missing/corrupt record behavior remain in existing selective
+readers. The types and generated schemas describe current writer shapes, not
+stricter read gates or a new compatibility policy. No replay, save budget, hash
+API, operation, entry route, store or registry is introduced. Remaining M6 records,
+module boundaries, typed errors and writer-version policy remain separate work.

@@ -43,3 +43,15 @@ through the existing atomic JSON writer at the SAME runtime values, comparing
 all bytes to the current production file. stdout/stderr and terminal ended time
 are taken from that file; their keys/null rules/time shape are checked, while
 these oracles do not independently verify their contents or wall-clock accuracy.
+
+Integrity and binding examples are exact original-writer captures from DATA-0021
+baseline commit 334aaa1, before either literal constructor was replaced. No byte
+substitutions were required: setup uses synthetic run IDs, relative result paths
+and fixed result bytes. integrity-empty/nonempty.json exercise failed partial
+append plus rollback-sync failure using LogWriter's existing fault seam (verified
+length zero and one existing journal entry). These markers have no final newline.
+binding.json and binding-nested.json come from ArtifactRun::bind for ordinary and
+nested Unicode paths; they have one final newline. Runtime oracles compare all
+bytes against the original literals at the same inputs without normalization.
+Unknown nested extras are injected for typed round-trip tests, not produced by
+these fresh writers. The captured nonempty verified length is fixture-specific.

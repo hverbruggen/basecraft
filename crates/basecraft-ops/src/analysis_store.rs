@@ -409,7 +409,16 @@ impl ArtifactRun {
         let key = basecraft_io::hash_bytes(name.as_os_str().as_encoded_bytes());
         crate::input_evidence::write_json(
             &store.join("bindings").join(key.trim_start_matches("b3:")),
-            &serde_json::json!({"schema_version":1,"run":self.id,"result":name.to_str().ok_or_else(|| invalid("result filename is not UTF-8"))?,"result_hash":basecraft_io::hash_file(result)?}),
+            &serde_json::to_value(basecraft_protocol::records::ResultBinding {
+                schema_version: 1,
+                run: self.id.clone(),
+                result: name
+                    .to_str()
+                    .ok_or_else(|| invalid("result filename is not UTF-8"))?
+                    .into(),
+                result_hash: basecraft_io::hash_file(result)?,
+                extra: Default::default(),
+            })?,
         )
     }
 }

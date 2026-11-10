@@ -179,3 +179,28 @@ pub struct LocalJobIndex {
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
+
+/// Existing rollback-durability poison marker. Recovery refuses its presence,
+/// regardless of its contents; this model does not replace that safety check.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct RecoveryIntegrityError {
+    pub schema_version: u32,
+    pub verified_length: u64,
+    /// Existing human-readable diagnostic, not a new machine error code.
+    pub error: String,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+/// Existing hidden association written by `ArtifactRun::bind`. Runtime readers
+/// retain their selective version, namespace, path and content-hash checks.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct ResultBinding {
+    pub schema_version: u32,
+    pub run: String,
+    /// UTF-8 relative filename, using the existing writer's path conversion.
+    pub result: String,
+    pub result_hash: String,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
