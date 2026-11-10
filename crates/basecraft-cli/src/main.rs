@@ -453,6 +453,26 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             std::fs::create_dir_all(&dir)?;
             let schemas = [
                 (
+                    "sanger-saved-review",
+                    schemars::schema_for!(basecraft_protocol::sanger_records::SavedReview),
+                ),
+                (
+                    "sanger-saved-call-sets",
+                    schemars::schema_for!(basecraft_protocol::sanger_records::SavedCallSets),
+                ),
+                (
+                    "sanger-review-evidence",
+                    schemars::schema_for!(basecraft_protocol::sanger_records::ReviewEvidence),
+                ),
+                (
+                    "sanger-review-source",
+                    schemars::schema_for!(basecraft_protocol::sanger_records::ReviewSource),
+                ),
+                (
+                    "sanger-review-support",
+                    schemars::schema_for!(basecraft_protocol::sanger_records::ReviewSupport),
+                ),
+                (
                     "sanger-review-choice",
                     schemars::schema_for!(basecraft_protocol::sanger::ReviewChoice),
                 ),

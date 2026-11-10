@@ -11,7 +11,7 @@ pub(crate) use storage::{is_review, relocate_package};
 use std::path::{Path, PathBuf};
 
 use basecraft_docs::sanger::{ReviewReference, ReviewSettings, SangerDraft};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 /// Recognised saved Sanger evidence, determined from validated content.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -116,26 +116,10 @@ struct Change {
     mask: Option<(MaskSettings, MaskSettings)>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct StoredReview {
-    version: u32,
-    draft_path: PathBuf,
-    draft_sha256: String,
-    draft_json: String,
-    events: Vec<ReviewOp>,
-    #[serde(default)]
-    evidence: storage::ReviewEvidence,
-    #[serde(flatten)]
-    extra: std::collections::BTreeMap<String, serde_json::Value>,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct StoredCallSets {
-    version: u32,
-    selected: String,
-    sets: Vec<StoredReview>,
-}
+use basecraft_protocol::sanger_records::{
+    SavedCallSets as StoredCallSets, SavedReview as StoredReview,
+};
+use storage::EvidencePaths;
 
 pub struct SangerReviewSession {
     save_authority: Option<save::RootAuthority>,

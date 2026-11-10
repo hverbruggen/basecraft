@@ -1,7 +1,7 @@
 //! Current-input diagnostics only, deliberately compiled through tests until a
 //! caller is separately allocated. No future Source, run, receipt or permission
 //! is produced. Reads are not a pinned snapshot and cannot admit/refuse a save.
-use super::{CandidateProbe, SangerReviewSession, Source, probe_candidate};
+use super::{CandidateProbe, SangerReviewSession, Source, SourceAccess, probe_candidate};
 use basecraft_docs::sanger::InputRead;
 use basecraft_platform::paths::{AppPaths, PathError};
 use basecraft_protocol::provenance::Publication;

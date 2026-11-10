@@ -12,53 +12,16 @@ use std::{
     path::{Path, PathBuf},
 };
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub(super) struct ReviewEvidence {
-    pub schema_version: u32,
-    #[serde(flatten)]
-    pub extra: BTreeMap<String, serde_json::Value>,
-    #[serde(default)]
-    pub runs: Vec<PathBuf>,
-    #[serde(default)]
-    pub sources: Vec<Source>,
-    pub placement: Option<Support>,
+pub(super) use basecraft_protocol::sanger_records::{
+    ReviewEvidence, ReviewSource as Source, ReviewSupport as Support,
+};
+
+pub(super) trait EvidencePaths {
+    fn map_paths(&mut self, map: impl FnMut(&Path) -> crate::Result<PathBuf>) -> crate::Result<()>;
 }
 
-impl Default for ReviewEvidence {
-    fn default() -> Self {
-        Self {
-            schema_version: 1,
-            extra: BTreeMap::new(),
-            runs: vec![],
-            sources: vec![],
-            placement: None,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub(super) struct Source {
-    #[serde(flatten)]
-    pub extra: BTreeMap<String, serde_json::Value>,
-    // Identity in the immutable draft/placement, never rebased.
-    pub original: PathBuf,
-    pub sha256: String,
-    // Location relative to the saved review; ledger controls preserve/break decisions.
-    pub path: PathBuf,
-    pub ledger: Option<PathBuf>,
-    pub reference: Option<InputReference>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub(super) struct Support {
-    #[serde(flatten)]
-    pub extra: BTreeMap<String, serde_json::Value>,
-    pub path: PathBuf,
-    pub hash: String,
-}
-
-impl ReviewEvidence {
-    pub fn map_paths(
+impl EvidencePaths for ReviewEvidence {
+    fn map_paths(
         &mut self,
         mut map: impl FnMut(&Path) -> crate::Result<PathBuf>,
     ) -> crate::Result<()> {
@@ -128,7 +91,11 @@ fn source(path: &Path, sha256: &str, anchor: &Path) -> crate::Result<Source> {
     })
 }
 
-impl Source {
+pub(super) trait SourceAccess {
+    fn checked(&self) -> crate::Result<PathBuf>;
+}
+
+impl SourceAccess for Source {
     fn checked(&self) -> crate::Result<PathBuf> {
         let path = match (&self.ledger, &self.reference) {
             (Some(ledger), Some(reference)) => inputs::verified_source(ledger, reference)?,
