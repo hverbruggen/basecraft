@@ -245,11 +245,15 @@ impl Session {
         }
         outcome.map_err(|error| {
             hooks.executed(SaveMilestone::Reconciled);
-            if self.is_metadata(id) && target == self.resolve(&self.docs[id.0].key) {
+            if target == self.resolve(&self.docs[id.0].key) {
                 // Tables are replaced one by one before the manifest. Accept
                 // those already written, so a retry isn't refused as a
                 // conflicting outside change.
-                for (path, hash) in crate::metadata::files(&target).iter().zip(&expected) {
+                let independent = self.docs[id.0]
+                    .content
+                    .as_document()
+                    .independently_saved_files(&target);
+                for (path, hash) in independent.iter().zip(&expected) {
                     if basecraft_io::hash_file(path).ok().as_ref() == Some(hash) {
                         let key = self.relative(path);
                         let slot = &mut self.docs[id.0];
@@ -270,14 +274,12 @@ impl Session {
                             hash.clone_from(&expected[0]);
                         }
                     }
-                    if let Some(expected_sidecar) =
-                        expected.get(1).filter(|_| !self.is_metadata(id))
-                    {
-                        let sidecar = if self.is_tree(id) || self.is_delimitation(id) {
-                            files::tree_sidecar(&target)
-                        } else {
-                            files::gff_sidecar(&target)
-                        };
+                    if let Some((expected_sidecar, sidecar)) = expected.get(1).zip(
+                        self.docs[id.0]
+                            .content
+                            .as_document()
+                            .saved_companion(&target),
+                    ) {
                         if basecraft_io::hash_file(&sidecar).ok().as_ref() == Some(expected_sidecar)
                         {
                             let key = self.relative(&sidecar);

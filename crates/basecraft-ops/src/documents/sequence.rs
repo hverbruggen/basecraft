@@ -61,6 +61,10 @@ impl Document for Opened {
             self.apply(op).map(|(inverse, _)| inverse)
         }
     }
+    fn saved_companion(&self, target: &Path) -> Option<PathBuf> {
+        Some(files::gff_sidecar(target))
+    }
+
     fn write(
         &self,
         target: &Path,

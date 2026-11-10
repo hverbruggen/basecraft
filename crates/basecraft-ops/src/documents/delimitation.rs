@@ -57,6 +57,10 @@ impl Document for DelimitationWorkspace {
         *self = (**before).clone();
         Ok(())
     }
+    fn saved_companion(&self, target: &Path) -> Option<PathBuf> {
+        Some(files::tree_sidecar(target))
+    }
+
     fn write(
         &self,
         target: &Path,

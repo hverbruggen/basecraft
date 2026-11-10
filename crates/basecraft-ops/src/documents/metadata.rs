@@ -52,6 +52,10 @@ impl Document for OpenedMetadata {
         Ok(())
     }
 
+    fn independently_saved_files(&self, target: &Path) -> Vec<PathBuf> {
+        crate::metadata::files(target)
+    }
+
     fn write(
         &self,
         target: &Path,

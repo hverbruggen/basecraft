@@ -145,6 +145,19 @@ pub(crate) trait Document {
             metadata: None,
         }
     }
+    /// Files replaced independently before the primary file. Recovery accepts
+    /// each matching expected hash even when the primary replacement failed.
+    /// Ordering matches `saved_hashes` (metadata includes its manifest here).
+    fn independently_saved_files(&self, _target: &Path) -> Vec<PathBuf> {
+        Vec::new()
+    }
+
+    /// Companion accepted only after the main file matches the intended write.
+    /// Its expected hash is the second element of `saved_hashes`.
+    fn saved_companion(&self, _target: &Path) -> Option<PathBuf> {
+        None
+    }
+
     /// Whether saved hashes and their errors depend only on the complete payload.
     /// Opt-in requires stable transitive serializer inputs between Slot mutable
     /// accesses: no target, publication, filesystem, time or shared payload mutation.
