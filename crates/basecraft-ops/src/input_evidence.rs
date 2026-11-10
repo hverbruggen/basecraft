@@ -809,7 +809,11 @@ fn scan_run(
                 return true;
             }
             let source = run.join(&reference.path);
-            if let Err(error) = source.canonicalize() {
+            if let Err(error) = source
+                .canonicalize()
+                .map_err(crate::Error::from)
+                .and_then(|_| stamp(&source))
+            {
                 inspection.issue(InspectionCode::IdentityUnverified, &source, error);
             }
             false

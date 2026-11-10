@@ -85,6 +85,8 @@ fn damage(root: &Path, source: &Path) -> ArtifactRun {
     std::fs::write(&unrelated, ORIGINAL).unwrap();
     let run = reference(&folder(root, "distant"), &unrelated);
     assert_ne!(unrelated, source);
+    let original = std::fs::read(run.artifact("input.json").unwrap()).unwrap();
+    std::fs::write(run.directory().join("test-original-input"), original).unwrap();
     std::fs::write(run.artifact("input.json").unwrap(), b"damaged a").unwrap();
     run
 }
@@ -106,6 +108,33 @@ fn setup(root: &Path) -> (Session, DocId, std::path::PathBuf) {
 
 fn assert_recovery(session: &mut Session, root: &Path) {
     session.flush().unwrap();
+    let before =
+        serde_json::to_value(basecraft_ops::log::read_all(session.recovery_root()).unwrap())
+            .unwrap();
+    // Recovery itself uses conservative Session saving. Do not invent blanket
+    // consent for its private staging destination, or claim recovery succeeded
+    // while the same global inspection remains incomplete.
+    assert!(matches!(
+        replay::recover(session.recovery_root(), &root.join("recovered")),
+        Err(Error::SaveCheckRequired(_))
+    ));
+    assert!(!root.join("recovered").exists());
+    assert_eq!(
+        serde_json::to_value(basecraft_ops::log::read_all(session.recovery_root()).unwrap())
+            .unwrap(),
+        before
+    );
+    // Repair only the deliberately damaged test ledger, then prove the retained
+    // journal reconstructs exactly the original accepted edit, not changed disk bytes.
+    let runs = root.join("distant/.basecraft/analyses-v1/runs");
+    for entry in std::fs::read_dir(runs).unwrap() {
+        let run = entry.unwrap().path();
+        std::fs::write(
+            run.join("input.json"),
+            std::fs::read(run.join("test-original-input")).unwrap(),
+        )
+        .unwrap();
+    }
     let outputs = replay::recover(session.recovery_root(), &root.join("recovered")).unwrap();
     assert_eq!(std::fs::read(&outputs[0]).unwrap(), b">gene\nATGT\n");
 }

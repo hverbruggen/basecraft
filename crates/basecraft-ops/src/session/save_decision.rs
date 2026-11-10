@@ -53,6 +53,11 @@ impl SaveCheck {
         self.scope == other.scope
     }
 
+    pub(super) fn target_is_current(&self, target: &Path) -> Result<bool> {
+        Ok(crate::save_guard::target_path(target)? == self.scope.target
+            && target_revision(target)? == self.scope.target_revision)
+    }
+
     /// Consumes this advisory snapshot. `acknowledge_incomplete` is independent
     /// of known policy. SaveDecision is neither Clone nor Deserialize; Session
     /// also consumes the token, so cloning an advisory snapshot cannot replay it.
@@ -161,21 +166,7 @@ impl Session {
         evidence: EvidenceCheck,
     ) -> Result<SaveCheck> {
         let target = crate::save_guard::target_path(target)?;
-        // Unreadable/unsafe destinations are actual target errors, never an
-        // incomplete-analysis issue that acknowledgement can waive.
-        let target_revision = match std::fs::symlink_metadata(&target) {
-            Ok(metadata) => {
-                if !metadata.is_file() || metadata.file_type().is_symlink() {
-                    return Err(invalid("save target must be an ordinary file"));
-                }
-                Some(TargetRevision {
-                    hash: basecraft_io::hash_file(&target)?,
-                    stamp: crate::input_evidence::stamp(&target)?,
-                })
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-            Err(error) => return Err(error.into()),
-        };
+        let target_revision = target_revision(&target)?;
         Ok(SaveCheck {
             token: String::new(),
             scope: SaveScope {
@@ -212,4 +203,21 @@ impl Session {
     ) -> Result<SaveOutcome> {
         self.save_attempt(id, path, decision.known, false, false, Some(decision))
     }
+}
+
+// Unsafe/unreadable destinations remain actual target errors, never waivable issues.
+fn target_revision(target: &Path) -> Result<Option<TargetRevision>> {
+    Ok(match std::fs::symlink_metadata(target) {
+        Ok(metadata) => {
+            if !metadata.is_file() || metadata.file_type().is_symlink() {
+                return Err(invalid("save target must be an ordinary file"));
+            }
+            Some(TargetRevision {
+                hash: basecraft_io::hash_file(target)?,
+                stamp: crate::input_evidence::stamp(target)?,
+            })
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    })
 }

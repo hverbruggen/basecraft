@@ -965,6 +965,7 @@ impl Session {
             .transpose()?
             .unwrap_or(false);
         let mut warnings = Vec::new();
+        let mut target_check = None;
         let new_sequence = self.docs[id.0].accepted_hashes.is_empty();
         if new_sequence && path.is_none() {
             return Err(invalid(
@@ -1023,6 +1024,7 @@ impl Session {
                         issues: fresh.evidence().issues.clone(),
                     });
                 }
+                target_check = Some(fresh);
             } else {
                 crate::input_evidence::resolve(&evidence.conflict, policy)?;
             }
@@ -1051,6 +1053,18 @@ impl Session {
             basecraft_io::write_atomic(&self.storage_root.join("pending-save.json"), |w| {
                 w.write_all(&intent)
             })?;
+        }
+        // Preservation and pending-intent publication can take time. A decision
+        // cannot authorize an externally replaced destination during that work.
+        if let Some(check) = &target_check
+            && !check.target_is_current(&target)?
+        {
+            return Err(Error::SaveDecisionStale(Box::new(
+                self.check_save(id, Some(&target))?,
+            )));
+        }
+        if new_sequence || (!overwrite && path.is_some()) {
+            crate::save_guard::Revision::check(None, &target)?;
         }
         let outcome = if history_only {
             self.log_save(id, &target, self.docs[id.0].accepted_hashes.clone())

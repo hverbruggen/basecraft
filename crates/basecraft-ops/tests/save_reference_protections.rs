@@ -234,7 +234,27 @@ fn moved_project_store_is_discovered_with_stale_registry_location() {
             assert_eq!(found.analyses.len(), 1);
             assert_eq!(found.analyses[0].run, run);
             assert_eq!(std::fs::read(&source).unwrap(), ORIGINAL);
-            recoverable(&mut session, doc, &root.join("recovered"));
+            assert!(session.document_record(doc).unwrap().unsaved);
+            assert!(session.can_undo(doc));
+            session.flush().unwrap();
+            let journal = serde_json::to_value(
+                basecraft_ops::log::read_all(session.recovery_root()).unwrap(),
+            )
+            .unwrap();
+            // Recovery's internal save is conservative too. The unresolved old
+            // registry location cannot acquire implicit consent during replay.
+            assert!(matches!(
+                replay::recover(session.recovery_root(), &root.join("recovered")),
+                Err(Error::SaveCheckRequired(_))
+            ));
+            assert_eq!(
+                serde_json::to_value(
+                    basecraft_ops::log::read_all(session.recovery_root()).unwrap()
+                )
+                .unwrap(),
+                journal
+            );
+            assert!(!root.join("recovered").exists());
             session
                 .save_with_decision(doc, None, check.decide(SavePolicy::PreserveCopy, true))
                 .unwrap();
