@@ -21,10 +21,10 @@ fn changed_font(current: &str, font: String) -> Option<String> {
 
 fn theme_update<S: PartialEq>(
     current: &S,
-    observed: S,
+    observed: &S,
     load: impl FnOnce() -> Option<(Theme, S)>,
 ) -> Option<ThemeUpdate<S>> {
-    if *current == observed {
+    if current == observed {
         return None;
     }
     let (theme, stamp) = load()?;
@@ -53,10 +53,13 @@ pub(crate) fn prepare_theme(
     load: impl FnOnce() -> Option<(Theme, ThemeStamp)>,
 ) -> Option<ThemeUpdate> {
     #[cfg(test)]
-    if let Some(update) = testing::prepare(current) {
-        return update;
+    if let Some(provider) = testing::provider() {
+        return theme_update(current, &provider.observed, || {
+            provider.loads.set(provider.loads.get() + 1);
+            provider.loaded.clone()
+        });
     }
-    theme_update(current, observe(), load)
+    theme_update(current, &observe(), load)
 }
 
 // A scoped, application-thread-only provider for real-controller tests. No
@@ -64,7 +67,7 @@ pub(crate) fn prepare_theme(
 #[cfg(test)]
 #[allow(dead_code)] // Only the bootstrap target uses the scoped provider.
 pub(crate) mod testing {
-    use super::{Theme, ThemeStamp, ThemeUpdate, theme_update};
+    use super::{Theme, ThemeStamp};
     use std::{cell::RefCell, rc::Rc};
 
     pub(crate) struct Appearance {
@@ -93,12 +96,8 @@ pub(crate) mod testing {
         PROVIDER.with(|provider| provider.borrow().as_ref().map(|p| p.font.clone()))
     }
 
-    pub(super) fn prepare(current: &ThemeStamp) -> Option<Option<ThemeUpdate>> {
-        let provider = PROVIDER.with(|provider| provider.borrow().clone())?;
-        Some(theme_update(current, provider.observed.clone(), || {
-            provider.loads.set(provider.loads.get() + 1);
-            provider.loaded.clone()
-        }))
+    pub(super) fn provider() -> Option<Rc<Appearance>> {
+        PROVIDER.with(|provider| provider.borrow().clone())
     }
 }
 
@@ -110,14 +109,14 @@ mod tests {
     fn font_changes_even_when_theme_stamp_is_unchanged() {
         assert_eq!(changed_font("old", "new".into()), Some("new".into()));
         assert_eq!(changed_font("same", "same".into()), None);
-        assert!(theme_update(&1, 1, || panic!("unchanged stamp must not load")).is_none());
+        assert!(theme_update(&1, &1, || panic!("unchanged stamp must not load")).is_none());
     }
 
     #[test]
     fn failed_load_returns_no_replacement_and_can_retry() {
-        assert!(theme_update(&1, 2, || None).is_none());
+        assert!(theme_update(&1, &2, || None).is_none());
         let theme = Theme::publication().with_color_blind_friendly(true);
-        let update = theme_update(&1, 2, || Some((theme.clone(), 3))).unwrap();
+        let update = theme_update(&1, &2, || Some((theme.clone(), 3))).unwrap();
         assert_eq!(update.stamp, 3, "retain stamp captured by the loader");
         assert_eq!(update.theme, theme);
         assert_eq!(update.background, css(theme.background));
