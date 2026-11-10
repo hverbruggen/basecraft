@@ -8,6 +8,11 @@ use basecraft_ops::sanger_review::{ReviewChoice, ReviewOp, SangerReviewSession};
 use basecraft_protocol::Op;
 use serde_json::{Value, json};
 
+// Enter the isolated child before creating fixtures: in-process sessions also
+// discover AppPaths, and must never consult the parent harness's store registry.
+#[path = "../../basecraft-ops/tests/support/isolated_profile.rs"]
+mod isolated_profile;
+
 fn cli(profile: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_basecraft"))
         .args(args)
@@ -173,6 +178,9 @@ impl Mcp {
 
 #[test]
 fn saved_reviews_report_through_cli_and_mcp_as_in_the_gui() {
+    if isolated_profile::enter("saved_reviews_report_through_cli_and_mcp_as_in_the_gui").is_none() {
+        return;
+    }
     let temp = tempfile::tempdir().unwrap();
     let profile = temp.path().join("profile");
     let project = temp.path().join("project");
@@ -271,6 +279,11 @@ fn saved_reviews_report_through_cli_and_mcp_as_in_the_gui() {
 
 #[test]
 fn damaged_unknown_future_and_draft_files_are_refused_without_records() {
+    if isolated_profile::enter("damaged_unknown_future_and_draft_files_are_refused_without_records")
+        .is_none()
+    {
+        return;
+    }
     let temp = tempfile::tempdir().unwrap();
     let profile = temp.path().join("profile");
     let project = temp.path().join("project");
@@ -315,12 +328,11 @@ fn damaged_unknown_future_and_draft_files_are_refused_without_records() {
 /// Recovery writes every retained call set to a new destination only.
 #[test]
 fn review_recovery_restores_all_call_sets_into_a_new_folder() {
-    // The checkpoint lives in application state, which this process and the
-    // CLI must share; run only under an isolated validation profile.
-    if std::env::var_os("BASECRAFT_PROFILE_DIR").is_none() {
-        eprintln!("skipping: BASECRAFT_PROFILE_DIR is not set");
+    if isolated_profile::enter("review_recovery_restores_all_call_sets_into_a_new_folder").is_none()
+    {
         return;
     }
+    // The isolated child and its CLI share the checkpoint in application state.
     let temp = tempfile::tempdir().unwrap();
     let project = temp.path().join("project");
     let (_, v2) = reviews(&project);
@@ -400,6 +412,11 @@ fn import_event(target: &Path) -> Value {
 
 #[test]
 fn support_import_runs_headlessly_with_the_same_reference_evidence() {
+    if isolated_profile::enter("support_import_runs_headlessly_with_the_same_reference_evidence")
+        .is_none()
+    {
+        return;
+    }
     let temp = tempfile::tempdir().unwrap();
     let profile = temp.path().join("profile");
 
@@ -478,6 +495,13 @@ fn support_import_runs_headlessly_with_the_same_reference_evidence() {
 
 #[test]
 fn sequence_extraction_cli_mcp_and_python_share_source_and_mapping_semantics() {
+    if isolated_profile::enter(
+        "sequence_extraction_cli_mcp_and_python_share_source_and_mapping_semantics",
+    )
+    .is_none()
+    {
+        return;
+    }
     let temp = tempfile::tempdir().unwrap();
     let project = temp.path().join("project");
     let profile = temp.path().join("profile");
