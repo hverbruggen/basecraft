@@ -126,7 +126,7 @@ fn current_source_is_verified_even_with_a_known_object() {
                     assert!(matches!(err, Error::Invalid(_)));
                     assert_eq!(
                         err.to_string(),
-                        "source changed since opening; reopen it before editing"
+                        "invalid operation: source changed since opening; reopen it before editing"
                     );
                 } else {
                     assert!(
@@ -270,7 +270,7 @@ fn actual_limit_growth_and_changed_oversize_precedence() {
                 result
                     .unwrap_err()
                     .to_string()
-                    .starts_with("original input is ")
+                    .starts_with("invalid operation: original input is ")
             );
             assert!(!object(&session, &bytes).exists());
             assert_eq!(
@@ -278,7 +278,7 @@ fn actual_limit_growth_and_changed_oversize_precedence() {
                     .store_object(&path, "b3:changed")
                     .unwrap_err()
                     .to_string(),
-                "source changed since opening; reopen it before editing"
+                "invalid operation: source changed since opening; reopen it before editing"
             );
             // The hint sees a tiny source, acquisition sees >limit accepted bytes,
             // and the post-read metadata sees a tiny source again. Actual length wins.
@@ -295,7 +295,7 @@ fn actual_limit_growth_and_changed_oversize_precedence() {
                     .store_object(&path, &hash)
                     .unwrap_err()
                     .to_string()
-                    .starts_with("original input is ")
+                    .starts_with("invalid operation: original input is ")
             );
             assert!(
                 !objects_dir(&root)
@@ -372,4 +372,127 @@ fn retention_modes_and_known_objects_keep_their_read_counts() {
             assert!(!objects_dir(&dir).exists());
         }
     }
+}
+
+#[test]
+fn post_verification_errors_keep_their_native_stage() {
+    let Some(root) = crate::isolated_profile::enter(concat!(
+        module_path!(),
+        "::post_verification_errors_keep_their_native_stage"
+    )) else {
+        return;
+    };
+    for mode in 0..3 {
+        let dir = root.join(format!("stage-{mode}"));
+        let (mut session, id, main) = fixture(&dir);
+        let before = session.doc(id).unwrap().to_genbank();
+        let dest = object(&session, MAIN);
+        let parent = dest.parent().unwrap().to_path_buf();
+        if mode == 1 {
+            session.snapshot_bytes(MAIN).unwrap();
+        }
+        if mode == 2 {
+            std::fs::create_dir_all(&parent).unwrap();
+        }
+        let target = main.clone();
+        let parent_hook = parent.clone();
+        let guard = hook(move |stage, path| {
+            if stage != Stage::AfterRead || path != target {
+                return;
+            }
+            match mode {
+                0 => std::fs::remove_file(path).unwrap(),
+                1 => {
+                    std::fs::remove_file(&dest).unwrap();
+                    std::fs::write(path, b"changed after streaming verification").unwrap();
+                }
+                _ => {
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        std::fs::set_permissions(
+                            &parent_hook,
+                            std::fs::Permissions::from_mode(0o500),
+                        )
+                        .unwrap();
+                    }
+                }
+            }
+        });
+        let error = session.apply(id, edit()).unwrap_err();
+        drop(guard);
+        match mode {
+            0 => assert!(matches!(error, Error::Io(_))),
+            1 => assert_eq!(
+                error.to_string(),
+                "invalid operation: source changed while retaining its snapshot"
+            ),
+            _ => {
+                assert!(
+                    matches!(error, Error::Format(basecraft_io::Error::Io(_))),
+                    "{error:?}"
+                );
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
+                        .unwrap();
+                }
+            }
+        }
+        unchanged(&session, id, &before);
+        assert!(!dir.join("recovery.json").exists());
+        assert!(!object(&session, MAIN).exists());
+    }
+}
+
+#[test]
+fn proposals_export_save_and_empty_creation_use_the_shared_promotion() {
+    let Some(root) = crate::isolated_profile::enter(concat!(
+        module_path!(),
+        "::proposals_export_save_and_empty_creation_use_the_shared_promotion"
+    )) else {
+        return;
+    };
+    for route in 0..3 {
+        for changed in [false, true] {
+            let dir = root.join(format!("route-{route}-{changed}"));
+            let (mut session, id, main) = fixture(&dir);
+            let before = session.doc(id).unwrap().to_genbank();
+            let destination = dir.join("output.fasta");
+            if changed {
+                std::fs::write(&main, b"changed").unwrap();
+            }
+            let result = match route {
+                0 => session
+                    .apply_sequence_proposals(
+                        id,
+                        session.generation(id),
+                        session.revision(id),
+                        &[edit()],
+                        &session.actor.clone(),
+                    )
+                    .map(|_| ()),
+                1 => session.export(id, &destination, "text", |w| w.write_all(b"derived")),
+                _ => session.save(id, Some(&destination)),
+            };
+            if changed {
+                assert!(result.is_err());
+                unchanged(&session, id, &before);
+                assert!(!destination.exists());
+            } else {
+                result.unwrap();
+                assert!(session.docs[id.0].baseline.is_none());
+                assert_eq!(std::fs::read(object(&session, MAIN)).unwrap(), MAIN);
+                assert_eq!(std::fs::read(object(&session, GFF)).unwrap(), GFF);
+            }
+        }
+    }
+    let mut session = Session::recoverable(root.join("creation")).unwrap();
+    #[cfg(feature = "test-counters")]
+    basecraft_io::counters::reset();
+    let id = session.create_sequence("new", "ACGT").unwrap();
+    assert!(session.docs[id.0].baseline.is_none());
+    #[cfg(feature = "test-counters")]
+    assert!(basecraft_io::counters::snapshot().reads.is_empty());
 }
