@@ -1,4 +1,4 @@
-//! Finite, read-only namespace observations. These are not policy grants.
+//! Finite namespace observations and consuming mechanical transitions. These are not policy grants.
 //! Stable aliases and deterministic substitutions are refused. Concurrent hostile
 //! mutation, mount changes and in-place content edits are not excluded.
 use std::{
@@ -131,6 +131,39 @@ pub struct TargetNamespace {
     inner: linux::Namespace,
 }
 
+/// Structural evidence of an actual directory move, not publication consent.
+/// No caller-supplied identity, success flag or fresh path inspection can create it.
+/// ```compile_fail
+/// use basecraft_platform::files::PromotedDirectory;
+/// let forged = PromotedDirectory { destination: todo!() };
+/// ```
+/// ```compile_fail
+/// use basecraft_platform::files::PromotedDirectory;
+/// fn duplicate(moved: PromotedDirectory) { let copy = moved.clone(); }
+/// ```
+#[derive(Debug)]
+pub struct PromotedDirectory {
+    destination: TargetNamespace,
+}
+impl PromotedDirectory {
+    pub fn destination(&self) -> &TargetNamespace {
+        &self.destination
+    }
+    pub fn into_destination(self) -> TargetNamespace {
+        self.destination
+    }
+}
+
+/// Both input observations are consumed on every outcome. Neither failure
+/// permits retry with the old tickets. A reported move is never rolled back.
+#[derive(Debug, thiserror::Error)]
+pub enum DirectoryPromotionError {
+    #[error("no reported rename success: {0}")]
+    NotMoved(#[source] NamespaceReadError),
+    #[error("directory moved, but post-check failed: {0}")]
+    MovedWithPostcheckError(#[source] NamespaceReadError),
+}
+
 /// Existing evidence state directories retain their mode. A private reservation
 /// directory can be repaired to 0700 by a separately authorized step.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -191,6 +224,39 @@ pub fn inspect_target_namespace(path: &Path) -> Result<TargetNamespace, Namespac
     }
 }
 impl TargetNamespace {
+    /// Move this observed directory to the observed absent final leaf, once.
+    /// Existing retained parents and fixed endpoint names are required. This
+    /// performs no sync, cleanup, locking or publication-policy authorization.
+    /// Concurrent hostile namespace mutation and inode reuse are not excluded.
+    /// ```compile_fail
+    /// use basecraft_platform::files::TargetNamespace;
+    /// fn replay(source: TargetNamespace, destination: TargetNamespace) {
+    ///     let result = source.promote_directory_to(destination);
+    ///     let replay = source.promote_directory_to(destination);
+    /// }
+    /// ```
+    pub fn promote_directory_to(
+        self,
+        destination: TargetNamespace,
+    ) -> Result<PromotedDirectory, DirectoryPromotionError> {
+        #[cfg(target_os = "linux")]
+        {
+            linux::promote(self.inner, destination.inner).map(|inner| PromotedDirectory {
+                destination: TargetNamespace {
+                    _private: (),
+                    inner,
+                },
+            })
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = destination;
+            Err(DirectoryPromotionError::NotMoved(
+                NamespaceReadError::Unsupported,
+            ))
+        }
+    }
+
     /// Consume a checked absence without reconstructing its original IO error.
     /// A present observation is returned intact for the caller to handle.
     pub fn into_absence_error(self) -> Result<io::Error, Box<Self>> {
@@ -599,6 +665,49 @@ mod linux {
         recheck(ns)
     }
 
+    pub(super) fn promote(
+        source: Namespace,
+        mut destination: Namespace,
+    ) -> Result<Namespace, super::DirectoryPromotionError> {
+        use super::DirectoryPromotionError::{MovedWithPostcheckError, NotMoved};
+        #[cfg(test)]
+        super::promotion_tests::seam(super::promotion_tests::Seam::BeforePrecheck);
+        let precheck = || {
+            if source.metadata.as_ref().map(|m| m.kind) != Some(OrdinaryKind::Directory) {
+                return Err(NamespaceReadError::WrongKind);
+            }
+            if destination.missing.is_none() || destination.metadata.is_some() {
+                return Err(NamespaceReadError::Changed);
+            }
+            recheck_leaf(&source)?;
+            recheck_leaf(&destination)
+        };
+        precheck().map_err(NotMoved)?;
+        let expected = source
+            .metadata
+            .ok_or(NotMoved(NamespaceReadError::Changed))?;
+        let source_index = source.names.len() - 1;
+        let destination_index = destination.names.len() - 1;
+        #[cfg(test)]
+        super::promotion_tests::seam(super::promotion_tests::Seam::BeforeRename);
+        crate::atomic::renameat_noreplace(
+            &source.directories[source_index].handle,
+            &source.names[source_index],
+            &destination.directories[destination_index].handle,
+            &destination.names[destination_index],
+        )
+        .map_err(|error| NotMoved(NamespaceReadError::Io(error)))?;
+        // Success boundary: every subsequent failure is irrevocably a moved
+        // outcome. No fallible action can return NotMoved from here onward.
+        #[cfg(test)]
+        super::promotion_tests::seam(super::promotion_tests::Seam::AfterRename);
+        destination.leaf = Some(expected.identity.clone());
+        destination.metadata = Some(expected);
+        destination.missing = None;
+        recheck_leaf(&destination).map_err(MovedWithPostcheckError)?;
+        Ok(destination)
+    }
+
     #[derive(Debug)]
     struct OwnedDirectory {
         index: usize,
@@ -961,6 +1070,12 @@ mod unsupported_tests {
         ));
         assert!(target.metadata().is_none());
         assert!(target.absence_error().is_none());
+        assert!(matches!(
+            target.promote_directory_to(super::TargetNamespace { _private: () }),
+            Err(super::DirectoryPromotionError::NotMoved(
+                super::NamespaceReadError::Unsupported
+            ))
+        ));
     }
 
     #[test]
@@ -978,3 +1093,7 @@ mod unsupported_tests {
 #[cfg(all(test, target_os = "linux"))]
 #[path = "namespace_lock_tests.rs"]
 mod lock_tests;
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "namespace_promotion_tests.rs"]
+mod promotion_tests;

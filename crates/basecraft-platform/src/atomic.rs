@@ -3,10 +3,21 @@ use std::path::Path;
 // macOS: rustix maps NOREPLACE to renameatx_np(RENAME_EXCL).
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub fn rename_noreplace(source: &Path, destination: &Path) -> std::io::Result<()> {
+    renameat_noreplace(rustix::fs::CWD, source, rustix::fs::CWD, destination)
+}
+
+/// Shared single-syscall primitive; callers own endpoint validation.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) fn renameat_noreplace(
+    source_parent: impl std::os::fd::AsFd,
+    source: impl rustix::path::Arg,
+    destination_parent: impl std::os::fd::AsFd,
+    destination: impl rustix::path::Arg,
+) -> std::io::Result<()> {
     rustix::fs::renameat_with(
-        rustix::fs::CWD,
+        source_parent,
         source,
-        rustix::fs::CWD,
+        destination_parent,
         destination,
         rustix::fs::RenameFlags::NOREPLACE,
     )?;
