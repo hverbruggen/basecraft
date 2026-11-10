@@ -147,6 +147,45 @@ fn session_records_loaded_hash_and_refuses_edits_after_external_change() {
     assert_eq!(session.doc(id).read(0, 4), b"ACGT");
 }
 
+#[test]
+fn companion_hash_remains_guarded_on_the_legacy_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("sequence.fasta");
+    let sidecar = files::gff_sidecar(&path);
+    let gff = b"##gff-version 3\na\t.\tgene\t1\t3\t.\t+\t.\tID=gene1\n";
+    std::fs::write(&path, b">a\nACGT\n").unwrap();
+    std::fs::write(&sidecar, gff).unwrap();
+    let mut session = Session::new(dir.path());
+    let id = session.open(&path).unwrap();
+    assert_eq!(session.doc(id).features().count(), 1);
+    let record = session.document_record(id).unwrap();
+    let open = record
+        .events
+        .iter()
+        .find(|e| matches!(e.op, basecraft_protocol::Op::Open { .. }))
+        .unwrap();
+    assert!(
+        open.result
+            .hashes
+            .contains(&("sequence.gff3".into(), hash_bytes(gff)))
+    );
+    std::fs::write(sidecar, b"##gff-version 3\n").unwrap();
+    assert!(
+        session
+            .apply(
+                id,
+                basecraft_protocol::Op::SeqReplace {
+                    start: 0,
+                    end: 1,
+                    residues: "G".into(),
+                }
+            )
+            .is_err()
+    );
+    assert_eq!(session.doc(id).read(0, 4), b"ACGT");
+    assert_eq!(session.doc(id).features().count(), 1);
+}
+
 #[cfg(feature = "test-counters")]
 #[test]
 fn actual_session_read_counts_separate_kind_probe_and_companion_fallback() {

@@ -6,7 +6,7 @@ use basecraft_platform::paths::AppPaths;
 use basecraft_protocol::Op;
 use std::path::Path;
 
-// Baseline: 2026-11-10, base 267331ddb7b5ad0a585f2a66bb3cf803b077b892.
+// Baseline: 2026-11-10; owned-source open counts measured against ab006f5.
 // Counts describe current behavior, not a performance target or elapsed time.
 // Each child owns a profile: the save evidence lock discovers AppPaths directly,
 // independently of the paths supplied to Session. Do not mutate process env in
@@ -56,7 +56,8 @@ fn scenario(
     let original_size = file.metadata().unwrap().len();
     counters::reset();
     // Main.qml openPath resolves file_kind once and reuses it for routing
-    // and the tab row. FASTA open drops from the original 6 reads to 4.
+    // and the tab row. Its FASTA probe remains a separate read; Session now
+    // hashes and parses one owned main-file read when companions are absent.
     basecraft_ops::files::kind(&file).unwrap();
     let mut session = Session::recoverable_with_paths(&root, &paths).unwrap();
     let doc = session.open(&file).unwrap();
@@ -127,7 +128,7 @@ fn fasta() {
     scenario(
         "fasta",
         "alignment-editing/ambiguous-gappy.afa",
-        4,
+        2,
         1,
         12,
         |i| Op::AlnReplace {
@@ -141,7 +142,7 @@ fn fasta() {
 
 #[test]
 fn genbank() {
-    scenario("genbank", "sequences-annotations/locus.gb", 3, 1, 12, |i| {
+    scenario("genbank", "sequences-annotations/locus.gb", 1, 1, 12, |i| {
         Op::SeqReplace {
             start: u64::from(i),
             end: u64::from(i) + 1,
@@ -152,7 +153,7 @@ fn genbank() {
 
 #[test]
 fn newick() {
-    scenario("newick", "tree-inference/unrooted.nwk", 3, 2, 14, |i| {
+    scenario("newick", "tree-inference/unrooted.nwk", 1, 2, 14, |i| {
         Op::TreeRenameTip {
             from: if i == 0 { "a".into() } else { format!("a{i}") },
             to: format!("a{}", i + 1),
