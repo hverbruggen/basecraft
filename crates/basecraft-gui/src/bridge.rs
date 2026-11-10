@@ -2578,25 +2578,11 @@ fn feature_from_json(text: &str) -> Result<Feature, String> {
     })
 }
 
-crate::find_bridge::controller_find!(qobject::GenomeController, doc);
+crate::find_bridge::controller_find!(qobject::GenomeController, doc, |d| {
+    basecraft_viewmodel::find::Input::Sequence(d.clone())
+});
 
 impl qobject::GenomeController {
-    fn find_update(mut self: std::pin::Pin<&mut Self>) {
-        let access_thread = self.qt_thread();
-        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
-            crate::bridge::checked_document!(sync self, session.doc(doc));
-        }
-        let mut r = self.as_mut().rust_mut();
-        let r = &mut *r;
-        let (Some(session), Some(doc)) = (&r.session, r.doc) else {
-            return;
-        };
-        let key = crate::find_bridge::document_key(session, doc);
-        let d = crate::bridge::checked_document!(access_thread, session.doc(doc));
-        r.find.update(key, || {
-            basecraft_viewmodel::find::Input::Sequence(d.clone())
-        });
-    }
     fn find_reveal(mut self: std::pin::Pin<&mut Self>) {
         let access_thread = self.qt_thread();
         if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {

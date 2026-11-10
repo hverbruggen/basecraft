@@ -2258,31 +2258,17 @@ fn root_tree_copy(
     Ok(target)
 }
 
-crate::find_bridge::controller_find!(qobject::DelimitationController, delimitation);
+crate::find_bridge::controller_find!(qobject::DelimitationController, delimitation, |d| {
+    basecraft_viewmodel::find::Input::Names(
+        d.specimens
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (i, s.label.clone()))
+            .collect(),
+    )
+});
 
 impl qobject::DelimitationController {
-    fn find_update(mut self: std::pin::Pin<&mut Self>) {
-        let access_thread = self.qt_thread();
-        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
-            crate::bridge::checked_document!(sync self, session.delimitation(doc));
-        }
-        let mut r = self.as_mut().rust_mut();
-        let r = &mut *r;
-        let (Some(session), Some(doc)) = (&r.session, r.doc) else {
-            return;
-        };
-        let key = crate::find_bridge::document_key(session, doc);
-        let d = crate::bridge::checked_document!(access_thread, session.delimitation(doc));
-        r.find.update(key, || {
-            basecraft_viewmodel::find::Input::Names(
-                d.specimens
-                    .iter()
-                    .enumerate()
-                    .map(|(i, s)| (i, s.label.clone()))
-                    .collect(),
-            )
-        });
-    }
     fn find_reveal(mut self: std::pin::Pin<&mut Self>) {
         let access_thread = self.qt_thread();
         if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {

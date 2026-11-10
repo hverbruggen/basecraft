@@ -33,6 +33,25 @@ pub fn status(find: &Session, y: f32) -> String {
 }
 
 macro_rules! controller_find {
+    ($controller:ty, $getter:ident, |$document:ident| $snapshot:expr) => {
+        crate::find_bridge::controller_find!($controller, $getter);
+        impl $controller {
+            fn find_update(mut self: std::pin::Pin<&mut Self>) {
+                let access_thread = self.qt_thread();
+                if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
+                    crate::bridge::checked_document!(sync self, session.$getter(doc));
+                }
+                let mut r = self.as_mut().rust_mut();
+                let r = &mut *r;
+                let (Some(session), Some(doc)) = (&r.session, r.doc) else {
+                    return;
+                };
+                let key = crate::find_bridge::document_key(session, doc);
+                let $document = crate::bridge::checked_document!(access_thread, session.$getter(doc));
+                r.find.update(key, || $snapshot);
+            }
+        }
+    };
     ($controller:ty $(, $getter:ident)?) => {
         impl $controller {
             pub fn find_query(

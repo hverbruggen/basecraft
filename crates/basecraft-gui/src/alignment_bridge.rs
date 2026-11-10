@@ -2087,25 +2087,11 @@ fn component_trees(tool: &ActiveTool, outcome: &OperationOutcome) -> Vec<PathBuf
         .collect()
 }
 
-crate::find_bridge::controller_find!(qobject::AlignmentController, alignment);
+crate::find_bridge::controller_find!(qobject::AlignmentController, alignment, |d| {
+    basecraft_viewmodel::find::Input::Alignment(d.snapshot())
+});
 
 impl qobject::AlignmentController {
-    fn find_update(mut self: std::pin::Pin<&mut Self>) {
-        let access_thread = self.qt_thread();
-        if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {
-            crate::bridge::checked_document!(sync self, session.alignment(doc));
-        }
-        let mut r = self.as_mut().rust_mut();
-        let r = &mut *r;
-        let (Some(session), Some(doc)) = (&r.session, r.doc) else {
-            return;
-        };
-        let key = crate::find_bridge::document_key(session, doc);
-        let d = crate::bridge::checked_document!(access_thread, session.alignment(doc));
-        r.find.update(key, || {
-            basecraft_viewmodel::find::Input::Alignment(d.snapshot())
-        });
-    }
     fn find_reveal(mut self: std::pin::Pin<&mut Self>) {
         let access_thread = self.qt_thread();
         if let (Some(session), Some(doc)) = (&self.rust().session, self.rust().doc) {

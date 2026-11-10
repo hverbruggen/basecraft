@@ -6,17 +6,21 @@ Item {
     property string folder: FIND_TEST_FOLDER
     property int index: 0
     property int phase: 0
+    property var beforeFind: ({})
+    readonly property bool hasOverview: index !== 4
     readonly property var cases: [
         {controller: findGenome, file: "/sequence.fasta", query: "A"},
         {controller: findAlignment, file: "/alignment.afa", query: "specimen"},
         {controller: findTree, file: "/time-tree.nwk", query: "specimen"},
-        {controller: findTrace, file: "/trace.ab1", query: "A"}
+        {controller: findTrace, file: "/trace.ab1", query: "A"},
+        {controller: findWorkspace, file: "/hypotheses.spart", query: "specimen"}
     ]
     readonly property var current: cases[index].controller
     GenomeController { id: findGenome }
     AlignmentController { id: findAlignment }
     TreeController { id: findTree }
     SangerController { id: findTrace }
+    DelimitationController { id: findWorkspace }
     Item { id: findDocument; width: 400; height: 90 }
     FindBar {
         id: realFind
@@ -27,8 +31,8 @@ Item {
     DocumentOverview {
         id: realOverview
         width: 400; height: 30
-        miniature: findFlow.current.overview_content
-        matchMarks: JSON.parse(findFlow.current.overview_matches || "[]")
+        miniature: findFlow.hasOverview ? findFlow.current.overview_content : ""
+        matchMarks: findFlow.hasOverview ? JSON.parse(findFlow.current.overview_matches || "[]") : []
         viewportWidth: 0.5
         documentItem: findDocument
     }
@@ -38,7 +42,11 @@ Item {
     function startCase() {
         require(current.open_file(folder + cases[index].file), "fixture open failed")
         if (index === 3) current.cancel_calls()
-        current.resize(160, 100)
+        if (hasOverview) current.resize(160, 100)
+        beforeFind = {dirty: current.dirty, revision: current.record_revision()}
+        // Replace a submitted scan before accepting its result.
+        current.find_query("no-such-match!", false)
+        current.find_poll(1)
         realFind.query = cases[index].query
         realFind.openFind()
         phase = 0
@@ -50,34 +58,56 @@ Item {
             if (findFlow.phase === 0) {
                 if (realFind.result.busy || realFind.result.count === 0) return
                 const marks = realOverview.matchMarks
-                findFlow.require(marks.length > 0, "accepted Find hits did not reach overview")
+                findFlow.require(!findFlow.hasOverview || marks.length > 0, "accepted Find hits did not reach overview")
                 for (const mark of marks) {
                     findFlow.require(isFinite(mark.x) && isFinite(mark.y) && mark.x >= 0 && mark.y >= 0 && mark.x + mark.width <= 1.000001 && mark.y + mark.height <= 1.000001, "mark outside normalized data")
                 }
-                if (findFlow.index < 3) {
+                if (findFlow.index !== 3) {
                     const controller = findFlow.current
                     const identity = controller.file_path
                     const revision = controller.record_revision()
-                    const marksBefore = controller.overview_matches
+                    const marksBefore = findFlow.hasOverview ? controller.overview_matches : JSON.stringify(realFind.result.rows)
                     const wrongFile = findFlow.index === 0 ? "/alignment.afa" : "/sequence.fasta"
                     findFlow.require(!controller.open_file(findFlow.folder + wrongFile), "wrong-kind open reported success")
                     findFlow.require(controller.message.length > 0, "wrong-kind refusal has no explanation")
                     findFlow.require(controller.file_path === identity && controller.record_revision() === revision, "refusal replaced document identity or revision")
-                    findFlow.require(controller.overview_matches === marksBefore, "refusal cleared Find selection")
+                    findFlow.require((findFlow.hasOverview ? controller.overview_matches : JSON.stringify(realFind.result.rows)) === marksBefore, "refusal cleared Find selection")
                 }
+                if (!findFlow.hasOverview) {
+                    findFlow.require(JSON.stringify(realFind.result.rows) === "[0,1,2,3,4,5,6,7]", "workspace specimen order changed")
+                    findFlow.require(realFind.result.label === "specimen_01", "workspace first label changed")
+                }
+                findFlow.require(findFlow.current.dirty === findFlow.beforeFind.dirty && findFlow.current.record_revision() === findFlow.beforeFind.revision, "Find changed document state")
                 const count = realFind.result.count
                 realFind.poll(1)
                 findFlow.require(realFind.result.current === (count > 1 ? 2 : 1), "next result did not follow shared Find order")
-                findFlow.require(realOverview.matchMarks.length > 0, "navigation lost overview marks")
+                realFind.poll(-1)
+                findFlow.require(realFind.result.current === 1, "previous did not return to first hit")
+                realFind.poll(-1)
+                findFlow.require(realFind.result.current === count, "previous did not wrap")
+                if (!findFlow.hasOverview) findFlow.require(realFind.result.label === "specimen_08", "workspace last label changed")
+                realFind.poll(1)
+                findFlow.require(realFind.result.current === 1, "next did not wrap")
+                findFlow.require(!findFlow.hasOverview || realOverview.matchMarks.length > 0, "navigation lost overview marks")
                 realFind.query = "no-such-match!"
                 realFind.submit()
-                findFlow.require(JSON.parse(findFlow.current.overview_matches).length === 0, "query replacement retained stale overview marks")
+                findFlow.require(!findFlow.hasOverview || JSON.parse(findFlow.current.overview_matches).length === 0, "query replacement retained stale overview marks")
                 findFlow.phase = 1
-            } else {
+            } else if (findFlow.phase === 1) {
                 if (realFind.result.busy) return
                 findFlow.require(realFind.result.count === 0, "invalid/unmatched query unexpectedly matched")
                 realFind.closeFind()
-                findFlow.require(JSON.parse(findFlow.current.overview_matches).length === 0, "closing Find retained markers")
+                findFlow.require(!findFlow.hasOverview || JSON.parse(findFlow.current.overview_matches).length === 0, "closing Find retained markers")
+                // Reopen the same path: a fresh Session must be accepted at the same revision.
+                findFlow.require(findFlow.current.open_file(findFlow.folder + findFlow.cases[findFlow.index].file), "same-path replacement failed")
+                if (findFlow.index === 3) findFlow.current.cancel_calls()
+                realFind.query = findFlow.cases[findFlow.index].query
+                realFind.openFind()
+                findFlow.phase = 2
+            } else {
+                if (realFind.result.busy || realFind.result.count === 0) return
+                findFlow.require(realFind.result.current === 1, "replacement retained old result position")
+                realFind.closeFind()
                 if (findFlow.index === findFlow.cases.length - 1) {
                     findFlow.completed = true
                     console.log("Real Find/overview controller bindings passed")
