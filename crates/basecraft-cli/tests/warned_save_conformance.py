@@ -54,6 +54,8 @@ with Session(root, writes=True) as session:
     doc = open_edit(session, path)
     before = path.read_bytes()
     failure = refuses(lambda: session.save(doc), "evidence_check_incomplete")
+    assert failure["schema"] == 1 and failure["operation"] == "save"
+    assert failure["errors"][0]["operation"] == "save"
     check = failure["check"]
     assert check["evidence"]["issues"] and not check["evidence"]["conflict"]["analyses"]
     assert path.read_bytes() == before
@@ -211,6 +213,26 @@ out = cli("edit", path, json.dumps(operation), "--acknowledge-incomplete-evidenc
           "--save-known-policy", "preserve_copy", success=False)
 assert json.loads(out.stderr)["errors"][0]["code"] == "invalid_arguments" and path.read_bytes() == original
 blocked.rmdir()
+
+# CLI creation retains its original no-overwrite route under explicit consent.
+occupied = root / "occupied.gb"
+occupied.write_bytes(original)
+out = cli("new-sequence", "--name", "new", "--sequence", "ACGT", "--output", occupied,
+          "--acknowledge-incomplete-evidence", success=False)
+assert json.loads(out.stderr)["errors"][0]["code"] == "invalid_arguments"
+assert occupied.read_bytes() == original
+out = cli("new-sequence", "--name", "new", "--sequence", "ACGT", "--output", root / "new.gb",
+          "--acknowledge-incomplete-evidence", success=True)
+assert json.loads(out.stderr)["warnings"][0]["code"] == "evidence_not_checked"
+if os.geteuid() != 0:
+    path = source("cli-permission")
+    root.chmod(0o555)
+    try:
+        out = cli("edit", path, json.dumps(operation), "--acknowledge-incomplete-evidence", success=False)
+        assert json.loads(out.stderr)["errors"][0]["code"] == "permission_denied"
+        assert path.read_bytes() == original
+    finally:
+        root.chmod(0o755)
 
 # Repair only the deliberately damaged ledger; complete checks have no warning.
 Path(fixture["ledger"]).write_text(fixture["good"])

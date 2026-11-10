@@ -556,6 +556,27 @@ impl Server {
     }
 }
 
+/// Keep save refusals typed while retaining the existing MCP error envelope.
+fn call_error(name: &str, error: &(dyn std::error::Error + 'static)) -> Value {
+    if let Some(error) = error
+        .downcast_ref::<basecraft_ops::Error>()
+        .filter(|_| matches!(name, "save" | "save_check"))
+    {
+        let mut value = crate::save::error_value(error);
+        value["schema"] = json!(1);
+        value["operation"] = json!(name);
+        value["errors"][0]["operation"] = json!(name);
+        return value;
+    }
+    basecraft_plugin_host::jobs::error_value(
+        name,
+        basecraft_plugin_host::jobs::error_code(&basecraft_plugin_host::Error::Protocol(
+            error.to_string(),
+        )),
+        error.to_string(),
+    )
+}
+
 fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
     let mut definition = json!({"name":name,"description":description,"inputSchema":{"type":"object","required":required,"additionalProperties":false}});
     definition["inputSchema"]["properties"] = properties;
@@ -1063,23 +1084,7 @@ pub fn serve(root: &Path, writable: bool, kind: ClientKind, model: &str) -> Resu
                             }
                             Ok(match server.call(name, &args) {
                                 Ok(value) => structured(value, false),
-                                // The shared classifier maps coded refusals such as
-                                // permission_denied and stale_revision; others are
-                                // invalid_arguments.
-                                Err(error) => structured(
-                                    error
-                                        .downcast_ref::<basecraft_ops::Error>()
-                                        .filter(|_| matches!(name, "save" | "save_check"))
-                                        .map(crate::save::error_value)
-                                        .unwrap_or_else(|| {
-                                            basecraft_plugin_host::jobs::error_value(
-                                                name,
-                                                core_error_code(error.as_ref()),
-                                                error.to_string(),
-                                            )
-                                        }),
-                                    true,
-                                ),
+                                Err(error) => structured(call_error(name, error.as_ref()), true),
                             })
                         }
                         _ => Err((-32601, "Method not found".into())),

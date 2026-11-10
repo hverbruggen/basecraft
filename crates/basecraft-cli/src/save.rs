@@ -60,7 +60,6 @@ impl Options {
 }
 
 /// Typed errors stay typed through CLI, MCP and Python, including the fresh check.
-/// WF-0079's future Error::code integration must retain these explicit save arms.
 pub(crate) fn error_value(error: &Error) -> Value {
     let code = match error {
         Error::Io(e) | Error::Format(basecraft_io::Error::Io(e))
@@ -70,10 +69,9 @@ pub(crate) fn error_value(error: &Error) -> Value {
         }
         Error::Io(_) | Error::Format(basecraft_io::Error::Io(_)) => "io_error",
         Error::Format(_) => "format_error",
-        Error::Json(_) => "invalid_arguments",
+        Error::Json(_) | Error::Invalid(_) => "invalid_arguments",
         Error::UnknownFormat(_) => "unknown_format",
         Error::Empty(_) => "empty_document",
-        Error::Invalid(_) => "invalid_arguments",
         Error::EvidenceConflict(_) => "analysis_input_conflict",
         Error::EvidenceCheckIncomplete(_) | Error::SaveCheckRequired(_) => {
             "evidence_check_incomplete"
