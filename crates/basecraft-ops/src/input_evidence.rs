@@ -125,7 +125,17 @@ fn reference_input_locked(
     crate::input_evidence::write_json(&run.artifact("input.json")?, &input)?;
     crate::input_evidence::write_json(
         &run.artifact("run.json")?,
-        &serde_json::json!({"schema_version":1,"id":run.id(),"result":anchor.file_name().and_then(|n| n.to_str()),"status":"referenced"}),
+        &serde_json::to_value(basecraft_protocol::records::AnalysisRun {
+            schema_version: 1,
+            id: run.id().into(),
+            result: anchor
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(str::to_owned),
+            status: basecraft_protocol::records::AnalysisRunStatus::Referenced,
+            outputs: None,
+            extra: BTreeMap::new(),
+        })?,
     )?;
     crate::input_evidence::register(&run)?;
     let publication = Publication {
@@ -1748,7 +1758,14 @@ pub(crate) fn link_generated_input_locked(
     )?;
     crate::input_evidence::write_json(
         &run.artifact("run.json")?,
-        &serde_json::json!({"schema_version":1,"id":run.id(),"result":result_label,"status":"prepared"}),
+        &serde_json::to_value(basecraft_protocol::records::AnalysisRun {
+            schema_version: 1,
+            id: run.id().into(),
+            result: Some(result_label.into()),
+            status: basecraft_protocol::records::AnalysisRunStatus::Prepared,
+            outputs: None,
+            extra: BTreeMap::new(),
+        })?,
     )?;
     crate::input_evidence::register(run)
 }

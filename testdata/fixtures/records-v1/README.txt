@@ -55,3 +55,22 @@ nested Unicode paths; they have one final newline. Runtime oracles compare all
 bytes against the original literals at the same inputs without normalization.
 Unknown nested extras are injected for typed round-trip tests, not produced by
 these fresh writers. The captured nonempty verified length is fixture-specific.
+
+Analysis-run original-writer captures (DATA-0023):
+run-referenced.json: reference_input_locked, Unicode anchor filename.
+run-null.json: same writer, non-UTF-8 anchor filename represented as null (Unix).
+run-generated.json: link_generated_input_locked, prepared document snapshot.
+run-saved.json: Session Delimitation Save As, saved status, outputs absent.
+run-completed.json / run-completed-empty.json: publish_referenced_analysis,
+  outputs present as one public ArtifactRevision / an empty array.
+run-prepared.json / run-prepared-no-export.json: runner prepare, exported name /
+  operation ID label. No process execution is necessary for these captures.
+All eight files are raw actual original-writer bytes from committed baseline
+9c3f346, captured before constructor replacement. No normalization, injected
+fields, path substitutions or ID changes. Fresh ULIDs remain fixture-specific.
+The runtime literal oracles independently reconstruct every field from original
+inputs, allocated run identity and expected output bytes (not run/publication
+JSON). Round-trip tests additionally exercise unknown status and nested extras;
+those mutations are tests, not original writer captures. Representative shapes
+only; not exhaustive OS/path/error coverage. Extraction's additional constructor
+is inventoried in schemas/README.md and remains outside the five-hunk slice.

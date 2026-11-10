@@ -204,3 +204,37 @@ pub struct ResultBinding {
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
+
+/// Labels in `run.json`, distinct from the registered operation runtime lifecycle.
+/// Unfamiliar labels survive a typed round-trip without being reinterpreted.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AnalysisRunStatus {
+    Referenced,
+    Prepared,
+    Saved,
+    Completed,
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+/// The existing version-one analysis-store `run.json` family.
+/// This describes fresh writer shapes; production readers retain their selective
+/// JSON checks. Serialize through Value for recursive sorting before write_json.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct AnalysisRun {
+    pub schema_version: u32,
+    pub id: String,
+    /// Always emitted, including null for a non-UTF-8 reference anchor filename.
+    pub result: Option<String>,
+    pub status: AnalysisRunStatus,
+    /// Absent until referenced publication; a completed run can have an empty
+    /// array. Reuse ArtifactRevision's schema, retaining its JSON snapshot because
+    /// the public type rejects unknown extensions on deserialization. Fresh
+    /// writers still construct these snapshots from the public ArtifactRevision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<Vec<crate::provenance::ArtifactRevision>>")]
+    pub outputs: Option<Vec<Value>>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}

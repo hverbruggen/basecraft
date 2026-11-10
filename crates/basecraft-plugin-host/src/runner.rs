@@ -804,7 +804,14 @@ impl PreparedOperation {
                 .unwrap_or_else(|| operation.id.clone());
             input_evidence::write_json(
                 &run.artifact("run.json")?,
-                &json!({"schema_version":1,"id":run.id(),"result":result,"status":"prepared"}),
+                &serde_json::to_value(basecraft_protocol::records::AnalysisRun {
+                    schema_version: 1,
+                    id: run.id().into(),
+                    result: Some(result),
+                    status: basecraft_protocol::records::AnalysisRunStatus::Prepared,
+                    outputs: None,
+                    extra: BTreeMap::new(),
+                })?,
             )?;
             mutation.register(&run)?;
         }

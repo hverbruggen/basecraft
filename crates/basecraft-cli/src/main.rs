@@ -428,6 +428,10 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             std::fs::create_dir_all(&dir)?;
             let schemas = [
                 (
+                    "analysis-run",
+                    schemars::schema_for!(basecraft_protocol::records::AnalysisRun),
+                ),
+                (
                     "recovery-integrity-error",
                     schemars::schema_for!(basecraft_protocol::records::RecoveryIntegrityError),
                 ),

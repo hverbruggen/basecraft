@@ -1,0 +1,15 @@
+{
+  "id": "01M72HXADK0JS0731AKVCGTJGW",
+  "outputs": [
+    {
+      "hash": "b3:3129fca6d5849d9db9084e55c35c49c17da4cf5e9b8417a85ab09b47adce04b2",
+      "id": "01M72HXADK0JS0731AKVCGTJGW:output:0",
+      "logical_name": "result.txt",
+      "retained": null,
+      "size": 17
+    }
+  ],
+  "result": "result.txt",
+  "schema_version": 1,
+  "status": "completed"
+}

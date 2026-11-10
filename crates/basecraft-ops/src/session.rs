@@ -1163,7 +1163,17 @@ impl Session {
                     crate::input_evidence::write_json(&run.artifact("input.json")?, &input)?;
                     crate::input_evidence::write_json(
                         &run.artifact("run.json")?,
-                        &serde_json::json!({"schema_version":1,"id":run.id(),"result":target.file_name().and_then(|n| n.to_str()),"status":"saved"}),
+                        &serde_json::to_value(basecraft_protocol::records::AnalysisRun {
+                            schema_version: 1,
+                            id: run.id().into(),
+                            result: target
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .map(str::to_owned),
+                            status: basecraft_protocol::records::AnalysisRunStatus::Saved,
+                            outputs: None,
+                            extra: std::collections::BTreeMap::new(),
+                        })?,
                     )?;
                     crate::input_evidence::register(run)?;
                     run.bind(&target)?;
@@ -2826,7 +2836,26 @@ impl Session {
         }
         crate::input_evidence::write_json(
             &run.directory().join("run.json"),
-            &serde_json::json!({"schema_version":1,"id":run.id(),"result":target.file_name().and_then(|n| n.to_str()).ok_or_else(|| invalid("result filename is not UTF-8"))?,"status":"completed","outputs":publication.outputs}),
+            &serde_json::to_value(basecraft_protocol::records::AnalysisRun {
+                schema_version: 1,
+                id: run.id().into(),
+                result: Some(
+                    target
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .ok_or_else(|| invalid("result filename is not UTF-8"))?
+                        .into(),
+                ),
+                status: basecraft_protocol::records::AnalysisRunStatus::Completed,
+                outputs: Some(
+                    publication
+                        .outputs
+                        .iter()
+                        .map(serde_json::to_value)
+                        .collect::<std::result::Result<Vec<_>, _>>()?,
+                ),
+                extra: std::collections::BTreeMap::new(),
+            })?,
         )?;
         run.bind(target)
     }
