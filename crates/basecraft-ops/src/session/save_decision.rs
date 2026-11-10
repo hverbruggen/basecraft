@@ -177,13 +177,14 @@ impl Session {
             .unwrap_or(false);
         self.check_save_source(id)?;
         let fresh = self.recovery_snapshot(id)?;
+        let decided = decision.is_some();
         self.docs[id.0].save_authority.authorize_finalization(
             &fresh,
             expected,
-            decision.as_ref().map(|decision| (decision, valid)),
+            decision.map(|decision| (decision, valid)),
             Some(&self.evidence_actions),
         )?;
-        if decision.is_some() {
+        if decided {
             let mut observed = self.recovery_snapshot(id)?;
             if observed.issues() != fresh.issues()
                 || observed

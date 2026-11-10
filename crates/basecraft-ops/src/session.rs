@@ -1048,7 +1048,7 @@ impl Session {
                 let fresh = self.save_check_scope(id, &target, evidence)?;
                 warnings = self.docs[id.0].save_authority.authorize_write(
                     &fresh,
-                    decision.as_ref().map(|decision| (decision, valid_consent)),
+                    decision.map(|decision| (decision, valid_consent)),
                     policy,
                     || {
                         // Changed original/sidecar acceptance is not waivable.

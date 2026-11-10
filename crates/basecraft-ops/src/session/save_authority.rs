@@ -281,13 +281,14 @@ impl PendingSaveAuthority {
     pub(crate) fn authorize_write(
         &self,
         fresh: &SaveCheck,
-        decision: Option<(&SaveDecision, bool)>,
+        decision: Option<(SaveDecision, bool)>,
         policy: SavePolicy,
         validate_source: impl FnOnce() -> Result<()>,
         actions: Option<&Mutex<Vec<EvidenceAction>>>,
     ) -> Result<Vec<SaveWarning>> {
         if let Some((decision, consumed)) = decision {
-            self.validate_decision(fresh, decision, consumed)?;
+            self.validate_decision(fresh, &decision, consumed)?;
+            drop(decision);
         } else if !fresh.complete()
             || fresh
                 .evidence_groups()
@@ -314,12 +315,14 @@ impl PendingSaveAuthority {
         &self,
         fresh: &SaveCheck,
         expected: Option<&SaveCheck>,
-        decision: Option<(&SaveDecision, bool)>,
+        decision: Option<(SaveDecision, bool)>,
         actions: Option<&Mutex<Vec<EvidenceAction>>>,
     ) -> Result<()> {
         if let Some((decision, consumed)) = decision {
-            self.validate_decision(fresh, decision, consumed)?;
-            fresh.resolve(decision.known, actions)
+            self.validate_decision(fresh, &decision, consumed)?;
+            let policy = decision.known;
+            drop(decision);
+            fresh.resolve(policy, actions)
         } else if expected.is_some_and(|expected| fresh.same_scope(expected)) {
             Ok(())
         } else {
