@@ -266,6 +266,8 @@ fn safe_key(key: &str) -> bool {
 /// Reconstruct unsaved documents into a new directory without modifying sources
 /// or executing any tools. Strict reading rejects torn/corrupt journals; the
 /// error names how many events [`recover_verified_prefix`] would keep.
+/// This conservative wrapper drops its attempt on refusal. A returned check is
+/// advisory only; continuations must use [`prepare_recovery`] on a live attempt.
 pub fn recover(root: &Path, destination: &Path) -> Result<Vec<std::path::PathBuf>> {
     let mut attempt = prepare_recovery(root, destination, RecoveryMode::Strict)?;
     for document in 0..attempt.len() {
@@ -484,7 +486,7 @@ struct RecoveryDocument {
     saved: Option<crate::session::SaveCheck>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct RecoveryCompletion {
     pub destination: PathBuf,
     pub outputs: Vec<PathBuf>,
@@ -805,9 +807,15 @@ impl RecoveryAttempt {
             for run in stores {
                 let final_run = run.relocated(&stage, &self.destination)?;
                 evidence.register(&final_run)?;
-                completion
-                    .registered_stores
-                    .push(final_run.directory().to_path_buf());
+                let store = final_run
+                    .directory()
+                    .parent()
+                    .and_then(Path::parent)
+                    .ok_or_else(|| crate::error::invalid("recovery run has no store"))?
+                    .to_path_buf();
+                if !completion.registered_stores.contains(&store) {
+                    completion.registered_stores.push(store);
+                }
             }
             Ok(())
         })();

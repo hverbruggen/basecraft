@@ -320,9 +320,18 @@ fn stage_and_final_policies_validate_all_groups_before_any_mutation() {
     assert!(attempt.evidence_actions().unwrap().is_empty());
     let check = attempt.check(0).unwrap();
     attempt
-        .advance(0, Some(check.decide(SavePolicy::BreakEvidence, false)))
+        .advance(0, Some(check.decide(SavePolicy::BreakEvidence, true)))
         .unwrap();
-    let completed = attempt.publish().unwrap();
+    let completed = match attempt.publish() {
+        Ok(completed) => completed,
+        Err(error) => {
+            let check = required(error);
+            attempt
+                .advance(0, Some(check.decide(SavePolicy::Cancel, true)))
+                .unwrap();
+            attempt.publish().unwrap()
+        }
+    };
     assert_eq!(completed.evidence_actions.len(), 2);
     assert!(
         completed
@@ -349,6 +358,16 @@ fn nested_delimitation_registers_only_final_stores_and_reopens() {
     };
     let original = root.join("source");
     std::fs::create_dir_all(original.join("nested")).unwrap();
+    let external_input = root.join("external.fasta");
+    std::fs::write(&external_input, b">external\nAAAA\n").unwrap();
+    let external = reference(&root.join("external-store/result"), &external_input);
+    let ledger_path = external.directory().join("input.json");
+    let mut ledger: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&ledger_path).unwrap()).unwrap();
+    ledger["future_extension"] = serde_json::json!({"keep": [1, 2, 3]});
+    std::fs::write(&ledger_path, serde_json::to_vec(&ledger).unwrap()).unwrap();
+    let ledger_bytes = std::fs::read(&ledger_path).unwrap();
+    let registry_before = std::fs::read(registry()).unwrap();
     let mut source = Session::recoverable(&original).unwrap();
     for name in ["a.spart", "nested/b.spart.xml"] {
         let path = original.join(name);
@@ -359,10 +378,30 @@ fn nested_delimitation_registers_only_final_stores_and_reopens() {
         .unwrap();
         work.exchange_fields
             .insert("retained-unknown".into(), "keep".into());
+        work.exchange_fields.insert(
+            "basecraft_alignment_evidence_run".into(),
+            external.directory().to_str().unwrap().into(),
+        );
         basecraft_io::write_atomic(&path, |w| {
             basecraft_ops::files::write_delimitation(&work, name.ends_with("xml"), w)
         })
         .unwrap();
+        let sidecar = basecraft_ops::files::tree_sidecar(&path);
+        basecraft_io::write_atomic(&sidecar, |w| {
+            basecraft_ops::files::write_delimitation_sidecar_at(
+                &work,
+                &basecraft_io::hash_file(&path).map_err(std::io::Error::other)?,
+                &path,
+                w,
+            )
+        })
+        .unwrap();
+        assert_eq!(
+            basecraft_ops::files::load_delimitation(&path)
+                .unwrap()
+                .exchange_fields["retained-unknown"],
+            "keep"
+        );
         let doc = source.open(&path).unwrap();
         source
             .apply(
@@ -389,7 +428,7 @@ fn nested_delimitation_registers_only_final_stores_and_reopens() {
         .to_path_buf();
     attempt.advance(0, None).unwrap();
     attempt.advance(1, None).unwrap();
-    assert!(!registry().exists());
+    assert_eq!(std::fs::read(registry()).unwrap(), registry_before);
     // A second owned store can alter the earlier evidence inventory. Refresh
     // only the requested finalization check; never run the writers a second time.
     let complete = loop {
@@ -416,11 +455,22 @@ fn nested_delimitation_registers_only_final_stores_and_reopens() {
         let value: serde_json::Value =
             serde_json::from_slice(&std::fs::read(side).unwrap()).unwrap();
         assert_eq!(value["path_base"], file.parent().unwrap().to_str().unwrap());
-        assert!(
-            basecraft_ops::analysis_store::ArtifactRun::for_result(&file)
+        let run = basecraft_ops::analysis_store::ArtifactRun::for_result(&file)
+            .unwrap()
+            .unwrap();
+        let input = basecraft_ops::input_evidence::read_input(&run).unwrap();
+        let upstream = input.extra["upstream"].as_array().unwrap();
+        assert!(upstream.iter().any(|record| {
+            run.join(record["bundle"].as_str().unwrap())
+                .canonicalize()
                 .unwrap()
-                .is_some()
+                == external.directory()
+        }));
+        assert_eq!(
+            std::fs::read(run.join("submitted.fasta")).unwrap(),
+            std::fs::read(&file).unwrap()
         );
+        assert_eq!(std::fs::read(&ledger_path).unwrap(), ledger_bytes);
     }
 }
 
@@ -469,4 +519,65 @@ fn damaged_journal_requires_explicit_prefix_and_preserves_bytes() {
         b">gene\nATGT\n"
     );
     assert_eq!(std::fs::read(journal).unwrap(), bytes);
+}
+
+#[cfg(unix)]
+#[test]
+fn permission_and_preservation_failures_spend_receipts_without_publication() {
+    use std::os::unix::fs::PermissionsExt;
+    let Some(root) = isolated_profile::enter(
+        "permission_and_preservation_failures_spend_receipts_without_publication",
+    ) else {
+        return;
+    };
+    let session = source(&root, 1);
+    let destination = root.join("out");
+    let mut attempt =
+        replay::prepare_recovery(session.recovery_root(), &destination, RecoveryMode::Strict)
+            .unwrap();
+    let check = attempt.check(0).unwrap();
+    let stage_file = check.target().to_path_buf();
+    let stage = stage_file.parent().unwrap();
+    std::fs::set_permissions(stage, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let failed = attempt.advance(0, Some(check.clone().decide(SavePolicy::Cancel, false)));
+    std::fs::set_permissions(stage, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(matches!(failed, Err(Error::Format(_)) | Err(Error::Io(_))));
+    assert!(!destination.exists());
+    assert!(matches!(
+        attempt.advance(0, Some(check.decide(SavePolicy::Cancel, false))),
+        Err(Error::SaveDecisionStale(_))
+    ));
+    let run = reference(&root.join("known/result"), &stage_file);
+    let original = std::fs::read(&stage_file).unwrap();
+    let check = attempt.check(0).unwrap();
+    std::fs::set_permissions(run.directory(), std::fs::Permissions::from_mode(0o500)).unwrap();
+    let failed = attempt.advance(
+        0,
+        Some(check.clone().decide(SavePolicy::PreserveCopy, false)),
+    );
+    std::fs::set_permissions(run.directory(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(matches!(failed, Err(Error::Format(_)) | Err(Error::Io(_))));
+    assert_eq!(std::fs::read(&stage_file).unwrap(), original);
+    assert!(!destination.exists());
+    assert!(
+        !attempt
+            .evidence_actions()
+            .unwrap()
+            .last()
+            .unwrap()
+            .completed
+    );
+    assert!(matches!(
+        attempt.advance(0, Some(check.decide(SavePolicy::PreserveCopy, false))),
+        Err(Error::SaveDecisionStale(_))
+    ));
+    let check = attempt.check(0).unwrap();
+    attempt
+        .advance(0, Some(check.decide(SavePolicy::PreserveCopy, false)))
+        .unwrap();
+    attempt.publish().unwrap();
+    assert_eq!(
+        std::fs::read(run.directory().join("preserved-input")).unwrap(),
+        original
+    );
 }
