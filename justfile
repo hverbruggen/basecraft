@@ -81,7 +81,7 @@ qml-test:
     set -euo pipefail
     # Start the real application offscreen first: a QML load error in Main.qml
     # must fail here, not only when someone opens the app.
-    QT_QPA_PLATFORM=offscreen QT_QPA_PLATFORMTHEME= cargo test -p basecraft-gui --test application_bootstrap
+    cargo test -p basecraft-gui --test application_bootstrap -- --app-starts
     for scale in 1 1.25 1.5 2; do
         QML_XHR_ALLOW_FILE_READ=1 QT_QPA_PLATFORM=offscreen QT_QPA_PLATFORMTHEME= QT_QUICK_CONTROLS_STYLE=Basic QT_SCALE_FACTOR="$scale" \
             "$(qmake6 -query QT_HOST_BINS)/qmltestrunner" -input crates/basecraft-gui/tests/qml

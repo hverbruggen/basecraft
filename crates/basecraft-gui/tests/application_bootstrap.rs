@@ -324,7 +324,52 @@ fn linked_taxa_journey(mut app: std::pin::Pin<&mut cxx_qt_lib_extras::QApplicati
     );
 }
 
+/// The real application loads Main.qml offscreen, draws and quits. A QML load
+/// error or a startup hang fails here instead of in someone's hands.
+fn application_starts_offscreen_and_draws_its_window() {
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+    let root = tempfile::tempdir().unwrap();
+    let shot = root.path().join("start.png");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_basecraft-gui"))
+        .arg("--screenshot")
+        .arg(&shot)
+        .env("QT_QPA_PLATFORM", "offscreen")
+        .env("QT_QPA_PLATFORMTHEME", "")
+        .env("QT_QUICK_BACKEND", "software")
+        .env("BASECRAFT_PROFILE_DIR", root.path().join("profile"))
+        .env("BASECRAFT_STATE_DIR", root.path().join("profile/state"))
+        .env("BASECRAFT_CACHE_DIR", root.path().join("profile/cache"))
+        .env("BASECRAFT_SCRATCH_DIR", root.path().join("scratch"))
+        .env("HOME", root.path())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let started = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if started.elapsed() > Duration::from_secs(120) {
+            child.kill().unwrap();
+            panic!("the application did not quit within 120 s");
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    let output = child.wait_with_output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(status.success(), "{stderr}");
+    assert!(!stderr.contains("failed to load component"), "{stderr}");
+    assert!(shot.is_file(), "no window was drawn: {stderr}");
+}
+
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("--app-starts") {
+        application_starts_offscreen_and_draws_its_window();
+        println!("The application started offscreen and drew its window");
+        return;
+    }
     // The test must never open desktop windows, including when run manually.
     if std::env::var("QT_QPA_PLATFORM").as_deref() != Ok("offscreen")
         || std::env::var("QT_QPA_PLATFORMTHEME").as_deref() != Ok("")
