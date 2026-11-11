@@ -62,12 +62,24 @@ fn listing(root: &Path) -> Vec<(PathBuf, u64)> {
     found
 }
 
-fn edit(review: &mut SangerReview, column: usize, base: char) {
-    review
-        .apply(ReviewOp::Set {
-            columns: vec![column],
-            choice: ReviewChoice::Edit(base),
-        })
+fn edit(
+    session: &mut basecraft_ops::Session,
+    id: basecraft_ops::DocId,
+    call_set: &str,
+    column: usize,
+    base: char,
+) {
+    session
+        .apply(
+            id,
+            basecraft_protocol::Op::SangerReview {
+                call_set: call_set.into(),
+                edit: Box::new(ReviewOp::Set {
+                    columns: vec![column],
+                    choice: ReviewChoice::Edit(base),
+                }),
+            },
+        )
         .unwrap();
 }
 
@@ -82,23 +94,26 @@ fn reviews(project: &Path) -> (PathBuf, PathBuf) {
         &trace,
     )
     .unwrap();
-    let mut single = basecraft_ops::sanger_review::instrument_review(&trace).unwrap();
-    edit(&mut single, 0, 'G');
+    let single = basecraft_ops::sanger_review::instrument_review(&trace).unwrap();
+    let mut session = basecraft_ops::Session::recoverable(project).unwrap();
+    let id = session.create_sanger_review(&single).unwrap();
+    edit(&mut session, id, &single.draft_sha256, 0, 'G');
     let v1 = project.join("specimen.sanger-review.json");
-    single.save(&v1).unwrap();
-
-    let mut multi = basecraft_ops::sanger_review::instrument_review(&trace).unwrap();
-    edit(&mut multi, 0, 'G');
+    session.save(id, Some(&v1)).unwrap();
+    let mut multi = single.clone();
     let mut draft = multi.draft.clone();
     draft.engine = "Tracy".into();
     draft.mode = "basecall".into();
     draft.version_output = "synthetic caller".into();
     draft.engine_sha256 = "a".repeat(64);
-    let mut alternative = SangerReview::from_draft(draft, &multi.draft_path).unwrap();
-    edit(&mut alternative, 0, 'C');
+    let alternative = SangerReview::from_draft(draft, &multi.draft_path).unwrap();
+    let other = alternative.draft_sha256.clone();
     multi.retain_call_set(alternative).unwrap();
+    let id = session.create_sanger_review(&multi).unwrap();
+    edit(&mut session, id, &multi.draft_sha256, 0, 'G');
+    edit(&mut session, id, &other, 0, 'C');
     let v2 = project.join("multi.json");
-    multi.save(&v2).unwrap();
+    session.save(id, Some(&v2)).unwrap();
     (v1, v2)
 }
 
@@ -299,16 +314,7 @@ fn damaged_unknown_future_and_draft_files_are_refused_without_records() {
         let path = project.join(name);
         for command in ["history", "methods"] {
             let error = failure(&cli(&profile, &[command, path.to_str().unwrap()]));
-            assert!(error.contains("Sanger"), "{name}: {error}");
-            if *name == "future.json" {
-                assert!(
-                    error.contains("Unsupported Sanger review version"),
-                    "{error}"
-                );
-            }
-            if *name == "draft.json" {
-                assert!(error.contains("draft"), "{error}");
-            }
+            assert!(error.contains("unknown_format"), "{name}: {error}");
         }
     }
     assert_eq!(listing(&project), before);

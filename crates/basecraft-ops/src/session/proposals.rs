@@ -31,7 +31,7 @@ impl Session {
             .docs
             .get(id.0)
             .ok_or_else(|| invalid("unknown document"))?;
-        if slot.generation != generation || self.revision(id) != revision {
+        if slot.generation != generation || self.revision(id)? != revision {
             return Err(invalid("stale_revision: proposal target changed"));
         }
         if count > 4096 {
@@ -121,8 +121,8 @@ impl Session {
         }
         Ok(PreparedBatch {
             doc: id,
-            generation: self.generation(id),
-            revision: self.revision(id),
+            generation: self.generation(id)?,
+            revision: self.revision(id)?,
             candidate,
             edits,
             entries,
@@ -211,8 +211,8 @@ mod tests {
     fn apply(session: &mut Session, doc: DocId, ops: &[Op]) -> Result<Vec<String>> {
         session.apply_delimitation_proposals(
             doc,
-            session.generation(doc),
-            session.revision(doc),
+            session.generation(doc).unwrap(),
+            session.revision(doc).unwrap(),
             ops,
         )
     }
@@ -223,8 +223,8 @@ mod tests {
         session.apply(doc, remove("partition-3")).unwrap();
         session.undo(doc).unwrap();
         let before = session.delimitation(doc).unwrap().clone();
-        let generation = session.generation(doc);
-        let revision = session.revision(doc);
+        let generation = session.generation(doc).unwrap();
+        let revision = session.revision(doc).unwrap();
         let journal = crate::log::read_all(dir.path()).unwrap();
         let events = session.events.clone();
         assert!(
@@ -264,12 +264,12 @@ mod tests {
                 .is_err()
         );
         assert_eq!(session.delimitation(doc).unwrap(), &before);
-        assert_eq!(session.generation(doc), generation);
-        assert!(session.can_redo(doc));
+        assert_eq!(session.generation(doc).unwrap(), generation);
+        assert!(session.can_redo(doc).unwrap());
         assert_eq!(session.events, events);
         assert_eq!(crate::log::read_all(dir.path()).unwrap(), journal);
         assert_eq!(apply(&mut session, doc, &[]).unwrap(), Vec::<String>::new());
-        assert!(session.can_redo(doc));
+        assert!(session.can_redo(doc).unwrap());
         session.redo(doc).unwrap();
         assert_eq!(session.delimitation(doc).unwrap().hypotheses.len(), 2);
     }
@@ -287,7 +287,7 @@ mod tests {
         assert!(session.commit_proposals(batch).is_err());
         assert_eq!(session.delimitation(doc).unwrap(), &after_edit);
         assert_eq!(session.events, events);
-        assert_eq!(session.generation(doc), 1);
+        assert_eq!(session.generation(doc).unwrap(), 1);
     }
 
     fn journal_bytes(root: &Path) -> Vec<Vec<u8>> {
@@ -322,15 +322,15 @@ mod tests {
             let ops = [remove("partition-1"), remove("partition-3")];
             assert!(apply(&mut session, doc, &ops).is_err());
             assert_eq!(session.delimitation(doc).unwrap(), &before);
-            assert_eq!(session.generation(doc), 0);
-            assert!(!session.can_undo(doc));
+            assert_eq!(session.generation(doc).unwrap(), 0);
+            assert!(!session.can_undo(doc).unwrap());
             assert_eq!(session.events, events);
             assert_eq!(session.next_group, group);
             assert_eq!(journal_bytes(dir.path()), journal);
             let ids = apply(&mut session, doc, &ops).unwrap();
             assert_eq!(ids.len(), 2);
             assert_eq!(session.delimitation(doc).unwrap().hypotheses.len(), 1);
-            assert_eq!(session.generation(doc), 2);
+            assert_eq!(session.generation(doc).unwrap(), 2);
             let entries = crate::log::read_all(dir.path()).unwrap();
             assert_eq!(entries.len(), events.len() + 2);
             assert_eq!(entries[entries.len() - 2].state.features, 2);
@@ -355,8 +355,8 @@ mod tests {
         assert!(dir.path().join("recovery-integrity-error.json").exists());
         assert!(apply(&mut session, doc, &[remove("partition-1")]).is_err());
         assert_eq!(session.delimitation(doc).unwrap(), &before);
-        assert_eq!(session.generation(doc), 0);
-        assert!(!session.can_undo(doc));
+        assert_eq!(session.generation(doc).unwrap(), 0);
+        assert!(!session.can_undo(doc).unwrap());
     }
 
     #[test]
@@ -376,7 +376,7 @@ mod tests {
         assert!(apply(&mut session, doc, &[op]).is_err());
         assert_eq!(session.delimitation(doc).unwrap(), &before);
         assert_eq!(journal_bytes(dir.path()), journal);
-        assert_eq!(session.generation(doc), 0);
+        assert_eq!(session.generation(doc).unwrap(), 0);
         let path = dir.path().join("sequence.fa");
         std::fs::write(&path, ">a\nACGT\n").unwrap();
         let sequence = session.open(&path).unwrap();
@@ -406,8 +406,8 @@ mod tests {
             )
             .unwrap();
         assert!(session.pending.is_some());
-        let generation = session.generation(doc);
-        let revision = session.revision(doc);
+        let generation = session.generation(doc).unwrap();
+        let revision = session.revision(doc).unwrap();
         let journal = journal_bytes(dir.path());
         let op = Op::SeqReplace {
             start: 0,
@@ -428,7 +428,7 @@ mod tests {
         );
         assert!(session.pending.is_some());
         assert_eq!(session.doc(doc).unwrap().read(0, 5), b"ACGTA");
-        assert_eq!(session.generation(doc), generation);
+        assert_eq!(session.generation(doc).unwrap(), generation);
         assert_eq!(journal_bytes(dir.path()), journal);
         session
             .apply_sequence_proposals(doc, generation, revision, &[op], &Actor::External)
@@ -467,7 +467,7 @@ mod tests {
         );
         assert_eq!(journal_bytes(dir.path()), before);
         assert_eq!(session.doc(doc).unwrap().read(0, 4), b"ACGT");
-        assert_eq!(session.generation(doc), 0);
+        assert_eq!(session.generation(doc).unwrap(), 0);
         session
             .apply_sequence_proposals(doc, 0, 0, &[op], &actor)
             .unwrap();
@@ -493,8 +493,8 @@ mod tests {
             .unwrap();
         let mut changed = feature.clone();
         changed.kind = "gene".into();
-        let generation = session.generation(doc);
-        let revision = session.revision(doc);
+        let generation = session.generation(doc).unwrap();
+        let revision = session.revision(doc).unwrap();
         session
             .apply_sequence_proposals(
                 doc,

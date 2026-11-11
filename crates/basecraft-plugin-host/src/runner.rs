@@ -358,7 +358,7 @@ fn prepare_inputs(
                         .map_err(|_| Error::Protocol("invalid session document ID".into()))?,
                 );
                 let checked = session.checked_sequence(id)?;
-                if session.generation(id) != *generation || checked.version() != *revision {
+                if session.generation(id)? != *generation || checked.version() != *revision {
                     return Err(Error::Protocol(
                         "stale_revision: snapshot target changed".into(),
                     ));
@@ -383,9 +383,9 @@ fn prepare_inputs(
         sequence = Some(SequenceTarget {
             doc,
             session: session.id().into(),
-            generation: session.generation(doc),
+            generation: session.generation(doc)?,
             revision: checked.version(),
-            snapshot: crate::Snapshot::of(session.doc_key(doc), checked)?,
+            snapshot: crate::Snapshot::of(session.doc_key(doc)?, checked)?,
             dependencies: session
                 .document_record(doc)?
                 .origin_bundles()
@@ -410,8 +410,8 @@ fn prepare_inputs(
                             .map_err(|_| Error::Protocol("invalid session document ID".into()))?,
                     );
                     if !session.is_open(id)
-                        || session.generation(id) != binding.generation
-                        || session.revision(id) != binding.revision
+                        || session.generation(id)? != binding.generation
+                        || session.revision(id)? != binding.revision
                     {
                         return Err(Error::Protocol(
                             "stale_revision: input document changed".into(),
@@ -426,7 +426,7 @@ fn prepare_inputs(
                     input_record.include_input(&session.document_record(id)?);
                     let saved = session.saved_source(id)?;
                     if document.is_none() {
-                        let key = session.doc_key(id);
+                        let key = session.doc_key(id)?;
                         document = Some(DocumentTarget {
                             doc: id,
                             session: session.id().into(),
@@ -442,7 +442,7 @@ fn prepare_inputs(
                                 String::new(),
                             ),
                             saved: saved.as_ref().map(|(path, _, _)| path.clone()),
-                            path: session.root().join(session.doc_key(id)),
+                            path: session.root().join(session.doc_key(id)?),
                             receives_results: false,
                             save: false,
                         });
@@ -523,8 +523,8 @@ fn prepare_target(
                             .map_err(|_| Error::Protocol("invalid session document ID".into()))?,
                     );
                     if !session.is_open(id)
-                        || session.generation(id) != *generation
-                        || session.revision(id) != *revision
+                        || session.generation(id)? != *generation
+                        || session.revision(id)? != *revision
                     {
                         return Err(Error::Protocol(
                             "stale_revision: target document changed".into(),
@@ -570,7 +570,7 @@ impl PreparedOperation {
         initiator: String,
         mut session: Option<&mut basecraft_ops::Session>,
         registry: &crate::registry::Registry,
-        captured: &[basecraft_ops::input_evidence::CapturedInput],
+        captured: &[basecraft_ops::sanger_review::CapturedInput],
     ) -> Result<Self> {
         policy.check(&operation)?;
         let policy = policy.capture_ambient_credential(&operation)?;
@@ -2059,12 +2059,12 @@ impl PreparedOperation {
             .original_path
             .clone()
             .unwrap_or_else(|| "generated input".into());
-        let path = session.root().join(session.doc_key(doc));
+        let path = session.root().join(session.doc_key(doc)?);
         self.document = Some(DocumentTarget {
             doc,
             session: session.id().into(),
-            generation: session.generation(doc),
-            revision: session.revision(doc),
+            generation: session.generation(doc)?,
+            revision: session.revision(doc)?,
             record: session.document_record(doc)?,
             input: (key, evidence.submitted_hash.clone()),
             saved: session.saved_source(doc)?.map(|(path, _, _)| path),

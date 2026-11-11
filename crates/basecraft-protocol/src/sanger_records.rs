@@ -80,3 +80,11 @@ mod tests {
         }
     }
 }
+
+/// Immutable analysis data stored separately from edit-sized journal entries.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewRecord {
+    pub path: PathBuf,
+    pub hash: String,
+}

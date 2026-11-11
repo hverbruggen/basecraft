@@ -26,7 +26,7 @@ fn agree(path: &Path, expected: files::Kind) {
     let mut classified = Session::unlogged(root);
     let (id, kind) = classified.open_classified(path).unwrap();
     assert_eq!(kind, expected);
-    assert_eq!(classified.state(id), plain.state(old));
+    assert_eq!(classified.state(id).unwrap(), plain.state(old).unwrap());
     match kind {
         files::Kind::SangerReview => assert!(classified.sanger_review(id).is_ok()),
         files::Kind::Sequence => assert!(classified.checked_sequence(id).is_ok()),
@@ -282,7 +282,7 @@ fn classification_validates_through_the_last_record() {
 }
 
 #[test]
-fn bound_tree_errors_never_fall_back_to_an_unbound_payload() {
+fn bound_tree_errors_warn_and_preserve_the_standard_tree() {
     use basecraft_ops::analysis_store::ArtifactRun;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("bound.nwk");
@@ -296,10 +296,12 @@ fn bound_tree_errors_never_fall_back_to_an_unbound_payload() {
     std::fs::write(dir.path().join("bound.nwk.basecraft.json"), sidecar).unwrap();
     std::fs::write(&path, b"(other,tree);\n").unwrap();
     let mut session = Session::unlogged(dir.path());
-    assert!(session.open_classified(&path).is_err());
+    let (id, _) = session.open_classified(&path).unwrap();
+    assert!(session.tree_metadata_warning(id).unwrap().is_some());
+    assert_eq!(session.tree(id).unwrap().to_newick(), "(other,tree);");
     std::fs::write(&path, b"(a,b);\n").unwrap();
     let (id, kind) = session.open_classified(&path).unwrap();
-    assert_eq!((id, kind), (DocId(0), files::Kind::Tree));
+    assert_eq!((id, kind), (DocId(1), files::Kind::Tree));
     assert!(session.tree_metadata_warning(id).unwrap().is_some());
 }
 

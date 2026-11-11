@@ -737,7 +737,7 @@ fn new_unsaved_sequence_has_final_only_issue_group_and_explicit_recovery() {
     assert_eq!(complete.outputs.len(), 1);
     let mut reopened = Session::unlogged(&root);
     let doc = reopened.open(&complete.outputs[0]).unwrap();
-    assert_eq!(reopened.state(doc).len, 4);
+    assert_eq!(reopened.state(doc).unwrap().len, 4);
 }
 
 #[test]

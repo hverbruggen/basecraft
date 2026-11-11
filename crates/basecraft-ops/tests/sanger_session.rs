@@ -116,7 +116,7 @@ fn invalid_review_edit_preserves_redo_and_retained_call_sets() {
             .raw,
         before
     );
-    assert!(session.can_redo(id));
+    assert!(session.can_redo(id).unwrap());
     session.redo(id).unwrap();
     assert_eq!(
         session.sanger_review(id).unwrap().decision(0),
@@ -297,4 +297,209 @@ fn support_survives_private_history_and_recovery_publication() {
             Some(&ReviewChoice::Edit('G'))
         );
     }
+}
+
+#[test]
+fn selections_are_small_and_undo_restores_every_saved_byte() {
+    let Some(root) =
+        isolated_profile::enter("selections_are_small_and_undo_restores_every_saved_byte")
+    else {
+        return;
+    };
+    let mut session = Session::new(&root);
+    let id = session.create_sanger_review(&fixture()).unwrap();
+    let selected = session.sanger_review(id).unwrap().draft_sha256.clone();
+    let other = session.sanger_review(id).unwrap().call_sets()[1]
+        .0
+        .to_owned();
+    let before = root.join("before.json");
+    session.save_new(id, Some(&before)).unwrap();
+    let bytes = std::fs::read(&before).unwrap();
+    let entries = basecraft_ops::log::read_all(&root).unwrap().len();
+    for i in 0..200 {
+        session
+            .apply(
+                id,
+                Op::SangerSelect {
+                    call_set: if i % 2 == 0 {
+                        other.clone()
+                    } else {
+                        selected.clone()
+                    },
+                },
+            )
+            .unwrap();
+    }
+    session.flush().unwrap();
+    let log = basecraft_ops::log::read_all(&root).unwrap();
+    assert!(serde_json::to_vec(&log[entries..]).unwrap().len() < 200 * 1024);
+    for _ in 0..200 {
+        session.undo(id).unwrap();
+    }
+    assert_eq!(session.sanger_review(id).unwrap().draft_sha256, selected);
+    let raw = session
+        .sanger_review(id)
+        .unwrap()
+        .document_report(false)
+        .unwrap()
+        .raw;
+    // The edit is explicitly addressed to an inactive set.
+    session
+        .apply(
+            id,
+            Op::SangerReview {
+                call_set: other,
+                edit: Box::new(ReviewOp::Set {
+                    columns: vec![0],
+                    choice: ReviewChoice::Edit('N'),
+                }),
+            },
+        )
+        .unwrap();
+    assert_eq!(session.sanger_review(id).unwrap().draft_sha256, selected);
+    session.undo(id).unwrap();
+    assert_eq!(
+        session
+            .sanger_review(id)
+            .unwrap()
+            .document_report(false)
+            .unwrap()
+            .raw,
+        raw
+    );
+    let mut settings = session.sanger_review(id).unwrap().mask.clone();
+    settings.start = 1;
+    session
+        .apply(
+            id,
+            Op::SangerReview {
+                call_set: selected,
+                edit: Box::new(ReviewOp::Mask { settings }),
+            },
+        )
+        .unwrap();
+    session.undo(id).unwrap();
+    let after = root.join("after.json");
+    session.save_new(id, Some(&after)).unwrap();
+    assert_eq!(std::fs::read(&after).unwrap(), bytes);
+    assert!(replay::replay(&root).unwrap().ok());
+}
+
+#[test]
+fn content_recognition_and_unknown_handles_are_checked() {
+    let Some(root) = isolated_profile::enter("content_recognition_and_unknown_handles_are_checked")
+    else {
+        return;
+    };
+    let mut session = Session::new(&root);
+    let id = session.create_sanger_review(&fixture()).unwrap();
+    let path = root.join("review.without-json-extension");
+    session.save_new(id, Some(&path)).unwrap();
+    assert_eq!(
+        session.open_classified(&path).unwrap().1,
+        basecraft_ops::files::Kind::SangerReview
+    );
+    let json = root.join("unrelated.json");
+    std::fs::write(&json, b"{\"ordinary\":true}").unwrap();
+    assert!(matches!(
+        session.open(&json),
+        Err(basecraft_ops::Error::UnknownFormat(_))
+    ));
+    let missing = basecraft_ops::DocId(usize::MAX);
+    for result in [
+        session.doc_key(missing).map(|_| ()),
+        session.generation(missing).map(|_| ()),
+        session.revision(missing).map(|_| ()),
+        session.state(missing).map(|_| ()),
+        session.can_undo(missing).map(|_| ()),
+        session.can_redo(missing).map(|_| ()),
+        session.undo(missing).map(|_| ()),
+        session.redo(missing).map(|_| ()),
+    ] {
+        assert!(matches!(
+            result,
+            Err(basecraft_ops::Error::UnknownDocument { .. })
+        ));
+    }
+}
+
+#[test]
+fn direct_analysis_update_retains_its_record_and_history_is_readable_once() {
+    let Some(root) = isolated_profile::enter(
+        "direct_analysis_update_retains_its_record_and_history_is_readable_once",
+    ) else {
+        return;
+    };
+    let review_path = sanger_fixture::copy_to(&root, "multi.json");
+    let mut session = Session::new(&root);
+    let id = session.open(&review_path).unwrap();
+    let record = root.join("external-record");
+    std::fs::copy(&review_path, &record).unwrap();
+    let hash = basecraft_io::hash_file(&record).unwrap();
+    session
+        .apply(
+            id,
+            Op::SangerUpdate {
+                review: basecraft_protocol::sanger_records::ReviewRecord {
+                    path: record.clone(),
+                    hash,
+                },
+            },
+        )
+        .unwrap();
+    std::fs::remove_file(&record).unwrap();
+    let baseline = session
+        .sanger_review(id)
+        .unwrap()
+        .report_with_history(&session.document_record(id).unwrap())
+        .unwrap();
+    edit(&mut session, id, 'N');
+    let report = session
+        .sanger_review(id)
+        .unwrap()
+        .report_with_history(&session.document_record(id).unwrap())
+        .unwrap();
+    assert_eq!(report.history.len(), baseline.history.len() + 1);
+    let row = report.history.last().unwrap();
+    assert_eq!(row.summary, "Set 1 review columns to N");
+    session.undo(id).unwrap();
+    let report = session
+        .sanger_review(id)
+        .unwrap()
+        .report_with_history(&session.document_record(id).unwrap())
+        .unwrap();
+    assert_eq!(
+        report
+            .history
+            .iter()
+            .filter(|row| row.summary == "Set 1 review columns to N")
+            .count(),
+        1
+    );
+    assert!(replay::replay(&root).unwrap().ok());
+    replay::recover(&root, &root.join("recovered")).unwrap();
+    session
+        .save_new(id, Some(&root.join("saved.json")))
+        .unwrap();
+}
+
+#[test]
+fn previous_save_as_target_requires_explicit_replacement() {
+    let Some(root) =
+        isolated_profile::enter("previous_save_as_target_requires_explicit_replacement")
+    else {
+        return;
+    };
+    let mut session = Session::new(&root);
+    let id = session.create_sanger_review(&fixture()).unwrap();
+    let first = root.join("first.json");
+    let second = root.join("second.json");
+    session.save_new(id, Some(&first)).unwrap();
+    session.save_new(id, Some(&second)).unwrap();
+    let bytes = std::fs::read(&first).unwrap();
+    let replacement = root.join("replacement");
+    std::fs::write(&replacement, &bytes).unwrap();
+    std::fs::rename(replacement, &first).unwrap();
+    assert!(session.save_new(id, Some(&first)).is_err());
+    assert_eq!(std::fs::read(first).unwrap(), bytes);
 }

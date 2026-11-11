@@ -1,6 +1,7 @@
 //! Owned bytes shared by trace parsing, evidence registration and tool submission.
-use super::{FileStamp, stamp};
+use crate::input_evidence::stamp;
 use crate::{Error, Result};
+use basecraft_protocol::provenance::FileStamp;
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
@@ -25,7 +26,7 @@ impl CapturedInput {
             });
         }
         let (bytes, hash, sha256) =
-            basecraft_io::source::read_fingerprinted(&path, 128 * 1024 * 1024)?;
+            basecraft_io::Source::open_hashed_with_sha256(&path, 128 * 1024 * 1024)?;
         if stamp(&path)? != before {
             return Err(Error::ChangedOnDisk { path });
         }
@@ -64,5 +65,25 @@ impl CapturedInput {
         self.check_current()?;
         basecraft_io::write_atomic(path, |writer| writer.write_all(&self.bytes))?;
         Ok(())
+    }
+}
+
+impl crate::input_evidence::Mutation {
+    pub fn reference_captured(
+        &self,
+        anchor: &Path,
+        capture: &CapturedInput,
+        dependencies: &[PathBuf],
+        origin: &str,
+    ) -> Result<crate::analysis_store::ArtifactRun> {
+        capture.check_current()?;
+        crate::input_evidence::reference_input_locked(
+            anchor,
+            capture.path(),
+            capture.hash(),
+            dependencies,
+            origin,
+            Some(capture.stamp()),
+        )
     }
 }

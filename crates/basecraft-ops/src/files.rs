@@ -39,13 +39,17 @@ impl Format {
         if crate::submission::is_submission(path) {
             return Ok(Format::Submission);
         }
+        if crate::sanger_review::evidence_kind(path)
+            == Some(crate::sanger_review::EvidenceKind::Review)
+        {
+            return Ok(Format::SangerReview);
+        }
         let ext = path
             .extension()
             .and_then(|e| e.to_str())
             .map(str::to_ascii_lowercase)
             .unwrap_or_default();
         match ext.as_str() {
-            "json" => Ok(Format::SangerReview),
             "spart" | "spartxml" | "spart-xml" | "xml" => Ok(Format::Delimitation),
             "gb" | "gbk" | "genbank" | "gbff" => Ok(Format::GenBank),
             "fa" | "fasta" | "fna" | "fas" | "ffn" | "faa" | "afa" => Ok(Format::Fasta),
@@ -433,53 +437,59 @@ pub(crate) fn load_tree_from(path: &Path, source: Source) -> Result<OpenedTree> 
     let mut doc = TreeDoc::from_parsed(name, &parsed);
     drop(parsed);
     let mut metadata_warning = None;
-    // Errors in a hidden association must never select an adjacent legacy file.
-    let run = crate::analysis_store::ArtifactRun::for_result_with_hash(path, &exchange_hash)?;
-    let bound = run.is_some();
-    let sidecar = run.map_or_else(
-        || tree_sidecar(path),
-        |run| {
-            run.join(format!(
-                "{}.basecraft.json",
-                path.file_name().unwrap_or_default().to_string_lossy()
-            ))
-        },
-    );
-    if sidecar.exists() {
-        let side: TreeSidecar = serde_json::from_slice(&std::fs::read(&sidecar)?)?;
-        if side.schema_version != 1 {
-            return Err(Error::Unsupported(
-                "Unsupported tree metadata version".into(),
-            ));
+    let metadata = (|| -> Result<()> {
+        // Errors in a hidden association must never select an adjacent legacy file.
+        let run = crate::analysis_store::ArtifactRun::for_result_with_hash(path, &exchange_hash)?;
+        let bound = run.is_some();
+        let sidecar = run.map_or_else(
+            || tree_sidecar(path),
+            |run| {
+                run.join(format!(
+                    "{}.basecraft.json",
+                    path.file_name().unwrap_or_default().to_string_lossy()
+                ))
+            },
+        );
+        if sidecar.exists() {
+            let side: TreeSidecar = serde_json::from_slice(&std::fs::read(&sidecar)?)?;
+            if side.schema_version != 1 {
+                return Err(Error::Unsupported(
+                    "Unsupported tree metadata version".into(),
+                ));
+            }
+            if side.tree_hash != basecraft_io::hash_bytes(doc.to_newick().as_bytes())
+                || side
+                    .exchange_hash
+                    .as_ref()
+                    .is_some_and(|hash| *hash != exchange_hash)
+            {
+                return Err(Error::Damaged {
+                    path: sidecar,
+                    detail: "Tree metadata describes different exchange contents".into(),
+                });
+            }
+            let kinds: Vec<_> = side
+                .supports
+                .iter()
+                .map(|s| (s.name.clone(), s.kind))
+                .collect();
+            let names: Vec<(String, String)> = side
+                .supports
+                .into_iter()
+                .map(|s| (s.name, s.source))
+                .collect();
+            doc.restore(&names, side.annotations, side.style);
+            for (name, kind) in kinds {
+                doc.set_support_kind(&name, kind);
+            }
         }
-        if side.tree_hash != basecraft_io::hash_bytes(doc.to_newick().as_bytes())
-            || side
-                .exchange_hash
-                .as_ref()
-                .is_some_and(|hash| *hash != exchange_hash)
-        {
-            return Err(Error::Damaged {
-                path: sidecar,
-                detail: "Tree metadata describes different exchange contents".into(),
-            });
+        if bound && !sidecar.exists() {
+            metadata_warning = Some("Bound tree metadata is unavailable; exchange values remain open with unknown support meaning and default presentation.".into());
         }
-        let kinds: Vec<_> = side
-            .supports
-            .iter()
-            .map(|s| (s.name.clone(), s.kind))
-            .collect();
-        let names: Vec<(String, String)> = side
-            .supports
-            .into_iter()
-            .map(|s| (s.name, s.source))
-            .collect();
-        doc.restore(&names, side.annotations, side.style);
-        for (name, kind) in kinds {
-            doc.set_support_kind(&name, kind);
-        }
-    }
-    if bound && !sidecar.exists() {
-        metadata_warning = Some("Bound tree metadata is unavailable; exchange values remain open with unknown support meaning and default presentation.".into());
+        Ok(())
+    })();
+    if let Err(error) = metadata {
+        metadata_warning = Some(format!("Tree metadata was ignored: {error}"));
     }
     Ok(OpenedTree {
         doc,

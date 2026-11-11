@@ -23,7 +23,7 @@ pub struct SangerCaller {
 }
 
 struct Identity {
-    capture: basecraft_ops::input_evidence::CapturedInput,
+    capture: basecraft_ops::sanger_review::CapturedInput,
     source: PathBuf,
     sha256: String,
     query: CompletedResultQuery,
@@ -125,8 +125,8 @@ impl SangerCaller {
         sha256: &str,
         signal_threshold: u32,
     ) -> Result<Option<CalledDraft>, String> {
-        let capture = basecraft_ops::input_evidence::CapturedInput::open(source)
-            .map_err(|e| e.to_string())?;
+        let capture =
+            basecraft_ops::sanger_review::CapturedInput::open(source).map_err(|e| e.to_string())?;
         if capture.sha256() != sha256 {
             return Err("AB1 changed since opening; reopen it before calling".into());
         }
@@ -135,7 +135,7 @@ impl SangerCaller {
 
     pub fn start_captured(
         &mut self,
-        capture: basecraft_ops::input_evidence::CapturedInput,
+        capture: basecraft_ops::sanger_review::CapturedInput,
         signal_threshold: u32,
     ) -> Result<Option<CalledDraft>, String> {
         if !(1..=90).contains(&signal_threshold) {
@@ -270,7 +270,7 @@ mod tests {
             descriptor_digest: "contract".into(),
         };
         let identity = Identity {
-            capture: basecraft_ops::input_evidence::CapturedInput::open(&source).unwrap(),
+            capture: basecraft_ops::sanger_review::CapturedInput::open(&source).unwrap(),
             source: source.clone(),
             sha256: basecraft_io::sha256_file(&source).unwrap(),
             query: CompletedResultQuery {
@@ -342,12 +342,20 @@ mod live_tests {
         let sha256 = review.draft.inputs[0].sha256.clone();
         let mut caller = SangerCaller::default();
         assert!(caller.start(&source, &sha256, 20).unwrap().is_none());
-        // Review remains editable while the shared job runs.
-        review
-            .apply(ReviewOp::Set {
-                columns: vec![0],
-                choice: ReviewChoice::Edit('G'),
-            })
+        // Review remains editable through Session while the shared job runs.
+        let mut session = basecraft_ops::Session::recoverable(tmp.path()).unwrap();
+        let id = session.create_sanger_review(&review).unwrap();
+        session
+            .apply(
+                id,
+                basecraft_protocol::Op::SangerReview {
+                    call_set: instrument_id.clone(),
+                    edit: Box::new(ReviewOp::Set {
+                        columns: vec![0],
+                        choice: ReviewChoice::Edit('G'),
+                    }),
+                },
+            )
             .unwrap();
         let started = std::time::Instant::now();
         let called = loop {
@@ -407,13 +415,21 @@ mod live_tests {
         let mut computed = SangerReview::from_draft(called.draft, &source).unwrap();
         computed.attach_operation_run(&called.run).unwrap();
         let computed_id = computed.draft_sha256.clone();
-        computed
-            .apply(ReviewOp::Set {
-                columns: vec![0],
-                choice: ReviewChoice::Edit('C'),
-            })
-            .unwrap();
+        review = session.sanger_review(id).unwrap().clone();
         review.retain_call_set(computed).unwrap();
+        session.update_sanger_review(id, &review).unwrap();
+        session
+            .apply(
+                id,
+                basecraft_protocol::Op::SangerReview {
+                    call_set: computed_id.clone(),
+                    edit: Box::new(ReviewOp::Set {
+                        columns: vec![0],
+                        choice: ReviewChoice::Edit('C'),
+                    }),
+                },
+            )
+            .unwrap();
         assert_eq!(
             review.draft_sha256, instrument_id,
             "completion must not switch calls"
@@ -423,13 +439,34 @@ mod live_tests {
             caller.start(&source, &sha256, 20).unwrap().is_some(),
             "reuse completed receipt"
         );
-        review.select_call_set(&computed_id).unwrap();
+        session
+            .apply(
+                id,
+                basecraft_protocol::Op::SangerSelect {
+                    call_set: computed_id,
+                },
+            )
+            .unwrap();
         let saved = tmp.path().join("saved.json");
-        review.save(&saved).unwrap();
-        let mut reopened = SangerReview::load(&saved).unwrap();
-        assert_eq!(reopened.decision(0), Some(&ReviewChoice::Edit('C')));
-        reopened.select_call_set(&instrument_id).unwrap();
-        assert_eq!(reopened.decision(0), Some(&ReviewChoice::Edit('G')));
+        session.save(id, Some(&saved)).unwrap();
+        let mut reopened = basecraft_ops::Session::recoverable(tmp.path()).unwrap();
+        let id = reopened.open(&saved).unwrap();
+        assert_eq!(
+            reopened.sanger_review(id).unwrap().decision(0),
+            Some(&ReviewChoice::Edit('C'))
+        );
+        reopened
+            .apply(
+                id,
+                basecraft_protocol::Op::SangerSelect {
+                    call_set: instrument_id,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            reopened.sanger_review(id).unwrap().decision(0),
+            Some(&ReviewChoice::Edit('G'))
+        );
         assert!(caller.start(&source, &sha256, 19).unwrap().is_none());
         caller.cancel().unwrap();
         assert!(
@@ -451,6 +488,9 @@ mod live_tests {
         }
         std::fs::write(&source, "different bytes at the same path").unwrap();
         assert!(caller.start(&source, &sha256, 20).is_err());
-        assert_eq!(reopened.decision(0), Some(&ReviewChoice::Edit('G')));
+        assert_eq!(
+            reopened.sanger_review(id).unwrap().decision(0),
+            Some(&ReviewChoice::Edit('G'))
+        );
     }
 }

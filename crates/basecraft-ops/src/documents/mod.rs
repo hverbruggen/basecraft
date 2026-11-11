@@ -20,10 +20,6 @@ mod sequence;
 mod submission;
 mod tree;
 
-/// A payload staged before Session starts durable tracking. The live document
-/// stays unchanged until the journal owner is ready to apply the edit.
-pub(crate) type PreparedEdit = Box<dyn std::any::Any + Send>;
-
 pub(crate) trait Document {
     fn kind(&self) -> crate::files::Kind;
     /// Reject operations for another payload before durable tracking starts.
@@ -53,20 +49,8 @@ pub(crate) trait Document {
     fn fingerprint(&self) -> DocState;
     /// Apply transactionally: an error must leave the payload unchanged.
     /// Session owns actor, history, journal and external input verification.
-    fn prepare_edit(&self, _op: &Op, _root: &Path, _live: bool) -> Result<Option<PreparedEdit>> {
-        Ok(None)
-    }
-    fn apply_prepared(
-        &mut self,
-        op: &Op,
-        prepared: Option<PreparedEdit>,
-    ) -> Result<(Inverse, Option<FeatureId>)> {
-        if prepared.is_some() {
-            return Err(crate::Error::Unsupported(
-                "prepared edit has the wrong document kind".into(),
-            ));
-        }
-        self.apply(op)
+    fn validate(&self, _op: &Op, _root: &Path, _live: bool) -> Result<()> {
+        Ok(())
     }
     fn apply(&mut self, op: &Op) -> Result<(Inverse, Option<FeatureId>)>;
     fn revert(&mut self, inverse: &Inverse) -> Result<()>;

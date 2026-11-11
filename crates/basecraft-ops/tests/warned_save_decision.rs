@@ -128,7 +128,7 @@ fn incomplete_default_refuses_and_explicit_attempt_returns_warning() {
             assert!(check.evidence().conflict.analyses.is_empty());
             assert!(!check.evidence().is_complete());
             assert_eq!(std::fs::read(&file).unwrap(), ORIGINAL);
-            assert!(session.can_undo(doc));
+            assert!(session.can_undo(doc).unwrap());
             let check = required(
                 session
                     .save_with_decision(doc, None, check.decide(SavePolicy::Cancel, false))
@@ -359,7 +359,7 @@ fn partial_preservation_then_failed_save_remains_recoverable_and_retryable() {
                 std::fs::read(known.directory().join("preserved-input")).unwrap(),
                 ORIGINAL
             );
-            assert!(session.can_undo(doc));
+            assert!(session.can_undo(doc).unwrap());
             std::fs::remove_dir(&blocker).unwrap();
             let check = session.check_save(doc, None).unwrap();
             assert!(check.evidence().conflict.analyses.is_empty());
@@ -598,7 +598,7 @@ fn damaged_display_and_registry_entries_do_not_hide_known_conflicts() {
             assert!(check.evidence().issues.len() >= 2);
             assert_eq!(check.evidence().conflict.analyses[0].run, known.directory());
             assert_eq!(std::fs::read(&file).unwrap(), ORIGINAL);
-            assert!(session.can_undo(doc));
+            assert!(session.can_undo(doc).unwrap());
         },
     );
 }
@@ -644,7 +644,7 @@ fn invalid_document_attempt_consumes_originating_receipt() {
             );
             assert!(matches!(invalid, Err(Error::Invalid(_))));
             assert_eq!(std::fs::read(&file).unwrap(), ORIGINAL);
-            assert!(session.can_undo(doc));
+            assert!(session.can_undo(doc).unwrap());
             assert!(matches!(
                 session.save_with_decision(doc, None, duplicate),
                 Err(Error::SaveDecisionStale(_))

@@ -66,8 +66,8 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut Report) -> Re
                 problem("unsafe document identity".into());
                 continue;
             }
-            match session.create_sanger_review_with_key(&e.doc, review) {
-                Ok(id) if session.state(id).matches_recorded(&e.state) => {
+            match session.create_sanger_review_with_key(&e.doc, &review_record_at(root, review)) {
+                Ok(id) if session.state(id)?.matches_recorded(&e.state) => {
                     session.restore_replay_paths(id, work.path(), &source_root);
                     docs.insert(&e.doc, id);
                 }
@@ -83,7 +83,7 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut Report) -> Re
                 continue;
             }
             match session.create_sequence_with_key(&e.doc, name, residues) {
-                Ok(id) if session.state(id).matches_recorded(&e.state) => {
+                Ok(id) if session.state(id)?.matches_recorded(&e.state) => {
                     docs.insert(&e.doc, id);
                 }
                 Ok(_) => problem("created sequence state differs".into()),
@@ -99,7 +99,7 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut Report) -> Re
                 continue;
             }
             match materialise(root, work.path(), &e.result.hashes) {
-                Ok(()) => match session.open_replay_snapshot(&work.path().join(path)) {
+                Ok(()) => match session.open(&work.path().join(path)) {
                     Ok(id) => {
                         session.restore_replay_paths(id, work.path(), &source_root);
                         docs.insert(&e.doc, id);
@@ -159,20 +159,22 @@ fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut Report) -> Re
                     Err(err) => problem(err.to_string()),
                 }
             }
-            op => match session.apply_as(doc, op.clone(), e.actor.clone()) {
-                Ok(out) => {
-                    ids.insert(out.entry_id, e.id.clone());
-                    if out.feature.map(|f| f.0) != e.result.feature {
-                        problem(format!(
-                            "feature id {:?}, expected {:?}",
-                            out.feature, e.result.feature
-                        ));
+            op => {
+                match session.apply_as(doc, sanger_record_at(root, op.clone()), e.actor.clone()) {
+                    Ok(out) => {
+                        ids.insert(out.entry_id, e.id.clone());
+                        if out.feature.map(|f| f.0) != e.result.feature {
+                            problem(format!(
+                                "feature id {:?}, expected {:?}",
+                                out.feature, e.result.feature
+                            ));
+                        }
                     }
+                    Err(err) => problem(err.to_string()),
                 }
-                Err(err) => problem(err.to_string()),
-            },
+            }
         }
-        let state = session.state(doc);
+        let state = session.state(doc)?;
         if !state.matches_recorded(&e.state) {
             report.problems.push(format!(
                 "{} {}: state {state:?}, expected {:?}",
@@ -395,8 +397,9 @@ fn recover_entries(
                     "unsafe recovery document identity".into(),
                 ));
             }
-            let doc = session.create_sanger_review_with_key(&entry.doc, review)?;
-            if !session.state(doc).matches_recorded(&entry.state) {
+            let doc = session
+                .create_sanger_review_with_key(&entry.doc, &review_record_at(root, review))?;
+            if !session.state(doc)?.matches_recorded(&entry.state) {
                 return Err(Error::Damaged {
                     path: root.into(),
                     detail: "created review state differs".into(),
@@ -411,7 +414,7 @@ fn recover_entries(
                 return Err(crate::error::invalid("unsafe recovery document identity"));
             }
             let doc = session.create_sequence_with_key(&entry.doc, name, residues)?;
-            if !session.state(doc).matches_recorded(&entry.state) {
+            if !session.state(doc)?.matches_recorded(&entry.state) {
                 return Err(crate::error::invalid("created sequence state differs"));
             }
             documents.insert(entry.doc.clone(), doc);
@@ -446,10 +449,10 @@ fn recover_entries(
                 session.redo_single(doc)?;
             }
             operation => {
-                session.apply_as(doc, operation, entry.actor)?;
+                session.apply_as(doc, sanger_record_at(root, operation), entry.actor)?;
             }
         }
-        if !session.state(doc).matches_recorded(&entry.state) {
+        if !session.state(doc)?.matches_recorded(&entry.state) {
             return Err(crate::error::invalid(format!(
                 "recovery state differs at {}",
                 entry.id
@@ -1458,3 +1461,19 @@ trait AdvanceHooks {
 }
 struct LegacyAdvance;
 impl AdvanceHooks for LegacyAdvance {}
+
+fn review_record_at(
+    root: &Path,
+    record: &basecraft_protocol::sanger_records::ReviewRecord,
+) -> basecraft_protocol::sanger_records::ReviewRecord {
+    basecraft_protocol::sanger_records::ReviewRecord {
+        path: objects_dir(root).join(record.hash.trim_start_matches("b3:")),
+        hash: record.hash.clone(),
+    }
+}
+fn sanger_record_at(root: &Path, mut op: Op) -> Op {
+    if let Op::SangerUpdate { review } = &mut op {
+        *review = review_record_at(root, review);
+    }
+    op
+}

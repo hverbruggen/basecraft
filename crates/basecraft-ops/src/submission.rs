@@ -1156,7 +1156,7 @@ pub fn export(
         "destination": "genbank",
         "note": DISCLAIMER,
         "status": summary.status,
-        "submission": {"document": session.doc_key(doc), "hash": basecraft_io::hash_bytes(&encode(&sub)?)},
+        "submission": {"document": session.doc_key(doc)?, "hash": basecraft_io::hash_bytes(&encode(&sub)?)},
         "source": sub.source,
         "metadata_manifest_hash": review.metadata_hash,
         "batch": sub.batch,

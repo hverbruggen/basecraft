@@ -319,6 +319,22 @@ impl Session {
                 )?);
             }
         }
+        for event in self
+            .events
+            .iter()
+            .filter(|event| event.doc == self.docs[id.0].key)
+        {
+            if let Op::CreateSangerReview { review } | Op::SangerUpdate { review } = &event.op {
+                let source =
+                    objects_dir(&self.storage_root).join(review.hash.trim_start_matches("b3:"));
+                inputs.push(retain(
+                    &source,
+                    &review.hash,
+                    format!("{}:review", event.id),
+                    "Sanger analysis record".into(),
+                )?);
+            }
+        }
         for (key, hash) in analysis_inputs {
             let mut source = objects_dir(&self.storage_root).join(hash.trim_start_matches("b3:"));
             if !self.store_objects {
@@ -403,7 +419,6 @@ impl Session {
         let mut effective_edits: Vec<_> = self.docs[id.0]
             .undo
             .iter()
-            .filter(|a| events.iter().any(|event| event.id == a.entry_id))
             .map(|a| EditActivity {
                 id: a.entry_id.clone(),
                 operation: a.op.clone(),
@@ -543,7 +558,7 @@ impl Session {
             .iter()
             .rev()
             .find(|event| {
-                event.doc == self.doc_key(id)
+                self.doc_key(id).is_ok_and(|key| event.doc == key)
                     && matches!(&event.op,
                 Op::ToolRun { params, .. } if params["run_id"].as_str() == Some(run.id()))
             })

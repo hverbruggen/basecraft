@@ -654,7 +654,10 @@ impl qobject::DelimitationController {
                             return false;
                         };
                         basecraft_ops::delimitation::reference_input(
-                            &session.root().join(session.doc_key(doc)),
+                            &session.root().join(crate::bridge::checked_document!(
+                                access_thread,
+                                session.doc_key(doc)
+                            )),
                             &retained,
                             &hash,
                         )
@@ -1640,7 +1643,9 @@ impl qobject::DelimitationController {
                 return Err("Unknown analysis".into());
             }
             let display_job = method.starts_with("display_");
-            let workspace_path = session.root().join(session.doc_key(doc));
+            let workspace_path = session
+                .root()
+                .join(session.doc_key(doc).map_err(|e| e.to_string())?);
             let output = workspace_path
                 .parent()
                 .unwrap_or(session.root())
@@ -1787,8 +1792,11 @@ impl qobject::DelimitationController {
                 Value::Object(params),
                 exports,
                 output,
-                session.generation(doc),
-                (session.id().to_owned(), session.doc_key(doc).to_owned()),
+                session.generation(doc).map_err(|e| e.to_string())?,
+                (
+                    session.id().to_owned(),
+                    session.doc_key(doc).map_err(|e| e.to_string())?.to_owned(),
+                ),
             ))
         })();
         let (operation, role, analysis_input, params, exports, output, generation, identity) =
@@ -1890,10 +1898,12 @@ impl qobject::DelimitationController {
                 .as_mut()
                 .zip(state.doc)
                 .ok_or("Workspace closed")?;
-            if session.id() != analysis.identity.0 || session.doc_key(doc) != analysis.identity.1 {
+            if session.id() != analysis.identity.0
+                || session.doc_key(doc).map_err(|e| e.to_string())? != analysis.identity.1
+            {
                 return Err("Analysis completed for its original workspace; its result remains available for review".into());
             }
-            if session.generation(doc)
+            if session.generation(doc).map_err(|e| e.to_string())?
                 != analysis
                     .job
                     .finalized_generation()
@@ -2023,7 +2033,10 @@ impl qobject::DelimitationController {
             {
                 return false;
             }
-            session.root().join(session.doc_key(doc))
+            session.root().join(crate::bridge::checked_document!(
+                access_thread,
+                session.doc_key(doc)
+            ))
         };
         let generated = path
             .file_name()
@@ -2153,7 +2166,9 @@ pub(crate) fn create_workspace_in_session(
     doc: DocId,
     method: &str,
 ) -> Result<String, String> {
-    let source_path = session.root().join(session.doc_key(doc));
+    let source_path = session
+        .root()
+        .join(session.doc_key(doc).map_err(|e| e.to_string())?);
     let output = workspace_path(&source_path, method);
     let operation = bundled(
         "delimitation",
@@ -2485,9 +2500,9 @@ pub(crate) mod inspection_tests {
         let session = r.session.as_ref().unwrap();
         json!({
             "doc": r.doc.map(|d| d.0), "session": session.id(),
-            "key": session.doc_key(original), "revision": session.revision(original),
+            "key": session.doc_key(original).unwrap(), "revision": session.revision(original).unwrap(),
             "record": session.document_record(original).unwrap(),
-            "undo": session.can_undo(original), "redo": session.can_redo(original),
+            "undo": session.can_undo(original).unwrap(), "redo": session.can_redo(original).unwrap(),
             "workspace": r.workspace_json.to_string(), "path": r.file_path.to_string(),
             "linked": r.linked_alignment.to_string(), "active": r.active_hypothesis.to_string(),
             "selection": r.selection.specimens, "origin": r.selection.origin,

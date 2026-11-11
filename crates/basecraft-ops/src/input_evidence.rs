@@ -1,6 +1,4 @@
 //! Referenced-input lifecycle. Only known stores are inspected, never filesystem trees.
-mod captured;
-pub use captured::CapturedInput;
 
 use crate::links::AlignmentLinkExt;
 use std::collections::BTreeMap;
@@ -114,26 +112,9 @@ impl Mutation {
     ) -> Result<ArtifactRun> {
         reference_input_locked(anchor, source, hash, dependencies, origin, None)
     }
-    pub fn reference_captured(
-        &self,
-        anchor: &Path,
-        capture: &CapturedInput,
-        dependencies: &[PathBuf],
-        origin: &str,
-    ) -> Result<ArtifactRun> {
-        capture.check_current()?;
-        reference_input_locked(
-            anchor,
-            capture.path(),
-            capture.hash(),
-            dependencies,
-            origin,
-            Some(capture.stamp()),
-        )
-    }
 }
 
-fn reference_input_locked(
+pub(crate) fn reference_input_locked(
     anchor: &Path,
     source: &Path,
     hash: &str,
@@ -2374,14 +2355,12 @@ fn export_history(
         basecraft_io::write_atomic(&target.join(&name), |w| w.write_all(&bytes))?;
         let old_id = publication.id.clone();
         publication.id = ulid::Ulid::generate().to_string();
-        mapping.push(
-            basecraft_protocol::export_records::ProvenanceExportMapping {
-                original_id: old_id.clone(),
-                original_hash: hash.clone(),
-                export_id: publication.id.clone(),
-                extra: BTreeMap::new(),
-            },
-        );
+        mapping.push(basecraft_protocol::export_records::ProvenanceExportMapping {
+            original_id: old_id.clone(),
+            original_hash: hash.clone(),
+            export_id: publication.id.clone(),
+            extra: BTreeMap::new(),
+        });
         archives.push(ArtifactRevision {
             id: format!("{}:original-record", publication.id),
             logical_name: format!("original-record-{old_id}.json"),

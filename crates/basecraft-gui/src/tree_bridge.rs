@@ -878,8 +878,8 @@ impl qobject::TreeController {
                             "selection_tree".into(),
                             vec![InputReference::Document {
                                 doc: doc.0.to_string(),
-                                generation: session.generation(doc),
-                                revision: session.revision(doc),
+                                generation: session.generation(doc).map_err(|e| e.to_string())?,
+                                revision: session.revision(doc).map_err(|e| e.to_string())?,
                             }],
                         ),
                     ]
@@ -1058,8 +1058,8 @@ impl qobject::TreeController {
         Some((
             session.id().into(),
             doc,
-            session.generation(doc),
-            session.revision(doc),
+            session.generation(doc).unwrap(),
+            session.revision(doc).unwrap(),
         ))
     }
 
@@ -1786,7 +1786,9 @@ impl qobject::TreeController {
                 .map_err(|e| e.to_string())?;
             basecraft_ops::metadata::verify_label_owner(&previous_style, &source)
                 .map_err(|e| e.to_string())?;
-            let path = session.root().join(session.doc_key(doc));
+            let path = session
+                .root()
+                .join(session.doc_key(doc).map_err(|e| e.to_string())?);
             let request = basecraft_ops::metadata::ConsumerRequest::Labels {
                 document: path.to_string_lossy().into_owned(),
                 records: tree

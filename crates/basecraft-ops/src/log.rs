@@ -591,8 +591,9 @@ pub fn describe(op: &Op) -> String {
         Op::MetadataEdit { edit } => crate::metadata::describe(edit),
         Op::SubmissionEdit { edit } => crate::submission::describe(edit),
         Op::CreateSangerReview { .. } => "Created Sanger review".into(),
+        Op::SangerSelect { .. } => "Selected Sanger call set".into(),
         Op::SangerUpdate { .. } => "Updated Sanger call sets and supporting evidence".into(),
-        Op::SangerReview { call_set, edit } => format!("Sanger review {call_set}: {edit:?}"),
+        Op::SangerReview { edit, .. } => crate::sanger_review::describe(edit),
         Op::JobFinished { report } => format!("{} {:?}", report.method, report.status),
     }
 }

@@ -256,7 +256,7 @@ impl Session {
         self.actor = actor;
     }
 
-    /// A sequence document. Returns an error for a missing ID or a different document kind.
+    /// The Sanger review payload for a checked handle.
     pub fn sanger_review(&self, id: DocId) -> Result<&crate::sanger_review::SangerReview> {
         self.content(id)?.sanger_review().ok_or(Error::WrongKind {
             id,
@@ -264,6 +264,7 @@ impl Session {
         })
     }
 
+    /// A sequence document. Returns an error for a missing ID or a different document kind.
     pub fn doc(&self, id: DocId) -> Result<&SequenceDoc> {
         Ok(&self.sequence_of(id)?.doc)
     }
@@ -390,11 +391,12 @@ impl Session {
         self.doc(id)
     }
 
+    fn slot(&self, id: DocId) -> Result<&Slot> {
+        self.docs.get(id.0).ok_or(Error::UnknownDocument { id })
+    }
+
     fn content(&self, id: DocId) -> Result<&Loaded> {
-        self.docs
-            .get(id.0)
-            .map(|slot| &slot.content)
-            .ok_or(Error::UnknownDocument { id })
+        Ok(&self.slot(id)?.content)
     }
 
     /// Every record, with the current unsaved first record replacing its disk view.
@@ -402,13 +404,13 @@ impl Session {
         self.checked_sequence(id)?;
         let opened = self.sequence_of(id)?;
         let mut queries = if let Some(fasta) = &opened.fasta {
-            crate::blast::from_fasta(fasta.bytes(), self.doc_key(id))?
+            crate::blast::from_fasta(fasta.bytes(), self.doc_key(id)?)?
         } else {
             Vec::new()
         };
         let mut current = crate::blast::from_doc(&opened.doc, None, None)?;
         current.source["session"] = serde_json::json!(self.id());
-        current.source["generation"] = serde_json::json!(self.generation(id));
+        current.source["generation"] = serde_json::json!(self.generation(id)?);
         if queries.is_empty() {
             queries.push(current);
         } else {
@@ -428,8 +430,8 @@ impl Session {
             .map(DocId)
     }
 
-    pub fn doc_key(&self, id: DocId) -> &str {
-        &self.docs[id.0].key
+    pub fn doc_key(&self, id: DocId) -> Result<&str> {
+        Ok(&self.slot(id)?.key)
     }
 
     /// Whether `id` names a document in this session. Check before using an ID
@@ -438,23 +440,23 @@ impl Session {
         id.0 < self.docs.len()
     }
 
-    pub fn generation(&self, id: DocId) -> u64 {
-        self.docs[id.0].generation
+    pub fn generation(&self, id: DocId) -> Result<u64> {
+        Ok(self.slot(id)?.generation)
     }
 
     /// The edit revision callers pin a request to: the document version, or the
     /// generation for workspace, metadata and submission documents without a separate version.
-    pub fn revision(&self, id: DocId) -> u64 {
-        let slot = &self.docs[id.0];
-        slot.content.as_document().revision(slot.generation)
+    pub fn revision(&self, id: DocId) -> Result<u64> {
+        let slot = self.slot(id)?;
+        Ok(slot.content.as_document().revision(slot.generation))
     }
 
-    pub fn can_undo(&self, id: DocId) -> bool {
-        !self.docs[id.0].undo.is_empty()
+    pub fn can_undo(&self, id: DocId) -> Result<bool> {
+        Ok(!self.slot(id)?.undo.is_empty())
     }
 
-    pub fn can_redo(&self, id: DocId) -> bool {
-        !self.docs[id.0].redo.is_empty()
+    pub fn can_redo(&self, id: DocId) -> Result<bool> {
+        Ok(!self.slot(id)?.redo.is_empty())
     }
 
     /// Project-relative path, or the absolute path for files outside it.
@@ -477,8 +479,8 @@ impl Session {
     }
 
     /// The fingerprint the log records after each operation.
-    pub fn state(&self, id: DocId) -> DocState {
-        self.docs[id.0].content.as_document().fingerprint()
+    pub fn state(&self, id: DocId) -> Result<DocState> {
+        Ok(self.slot(id)?.content.as_document().fingerprint())
     }
 
     // Open and save.
@@ -579,6 +581,9 @@ fn redact_operation_paths(operation: &mut Op) {
             }
             _ => {}
         }
+    }
+    if let Op::CreateSangerReview { review } | Op::SangerUpdate { review } = operation {
+        review.path = Path::new("artifacts").join(review.hash.trim_start_matches("b3:"));
     }
     if let Op::ToolRun {
         inputs,

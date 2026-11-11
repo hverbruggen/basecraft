@@ -328,3 +328,36 @@ fn imported_supports_retain_recorded_names_kinds_and_evidence() {
     assert_eq!(unknown.supports()[0].name, "Support 1");
     assert_eq!(unknown.supports()[0].kind, SupportKind::Unknown);
 }
+
+#[test]
+fn unreadable_metadata_never_blocks_the_exchange_tree() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tree.nwk");
+    let original = b"((a,b)0.5,c);\n";
+    std::fs::write(&path, original).unwrap();
+    let tree = files::load_tree(&path).unwrap().doc;
+    let mut bytes = Vec::new();
+    files::write_tree_sidecar(&tree, &mut bytes).unwrap();
+    let mut side: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let sidecar = files::tree_sidecar(&path);
+    for version in [0, 99] {
+        side["schema_version"] = version.into();
+        std::fs::write(&sidecar, serde_json::to_vec(&side).unwrap()).unwrap();
+        let mut session = Session::unlogged(dir.path());
+        let id = session.open(&path).unwrap();
+        assert_eq!(session.tree(id).unwrap().to_newick(), tree.to_newick());
+        assert!(session.tree_metadata_warning(id).unwrap().is_some());
+    }
+    for bytes in [b"broken JSON".as_slice(), b"{}".as_slice()] {
+        std::fs::write(&sidecar, bytes).unwrap();
+        let mut session = Session::unlogged(dir.path());
+        let id = session.open(&path).unwrap();
+        assert!(session.tree_metadata_warning(id).unwrap().is_some());
+    }
+    std::fs::remove_file(&sidecar).unwrap();
+    std::fs::create_dir(&sidecar).unwrap();
+    let mut session = Session::unlogged(dir.path());
+    let id = session.open(&path).unwrap();
+    assert!(session.tree_metadata_warning(id).unwrap().is_some());
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+}

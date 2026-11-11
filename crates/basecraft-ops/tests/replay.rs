@@ -772,7 +772,7 @@ fn automatic_root_error_keeps_document_and_history() {
     for op in [Op::TreeMidpointRoot {}, Op::TreeMinimumVarianceRoot {}] {
         assert!(session.apply(doc, op).is_err());
         assert_eq!(session.tree(doc).unwrap().to_newick(), before);
-        assert!(!session.can_undo(doc));
+        assert!(!session.can_undo(doc).unwrap());
         session.flush().unwrap();
         assert_eq!(
             basecraft_ops::log::read_all(dir.path()).unwrap().len(),
@@ -788,7 +788,7 @@ fn strict_sequence_proposals_stage_invalid_batches_and_replay_one_undo_group() {
     std::fs::write(&path, ">sequence\nACGTACGT\n").unwrap();
     let mut session = Session::new(temp.path());
     let doc = session.open(&path).unwrap();
-    let generation = session.generation(doc);
+    let generation = session.generation(doc).unwrap();
     let revision = session.doc(doc).unwrap().version();
     let actor = basecraft_protocol::Actor::Plugin {
         id: "org.example.annotation".into(),
@@ -807,8 +807,8 @@ fn strict_sequence_proposals_stage_invalid_batches_and_replay_one_undo_group() {
             .is_err()
     );
     assert_eq!(session.doc(doc).unwrap().read(0, 8), before);
-    assert_eq!(session.generation(doc), generation);
-    assert!(!session.can_undo(doc));
+    assert_eq!(session.generation(doc).unwrap(), generation);
+    assert!(!session.can_undo(doc).unwrap());
     assert!(
         session
             .apply_sequence_proposals(doc, generation + 1, revision, &[replace(0, 1, "T")], &actor)

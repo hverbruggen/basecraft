@@ -418,8 +418,8 @@ fn linked_alignment_selector_preserves_presence_order_extensions_and_spelling() 
         );
         assert_eq!(session.delimitation(doc).unwrap(), &before);
         assert_eq!(hint_files(dir.path()), before_files);
-        assert!(!session.can_undo(doc));
-        assert!(!session.can_redo(doc));
+        assert!(!session.can_undo(doc).unwrap());
+        assert!(!session.can_redo(doc).unwrap());
         assert!(!dir.path().join(".basecraft").exists());
     }
     for extension in ["fa", "FASTA", "aFa", "Fas", "fNA"] {
@@ -461,10 +461,10 @@ fn linked_alignment_refuses_all_other_kinds_and_missing_ids() {
     .unwrap();
     for doc in [sequence, aligned, tree, metadata, submission] {
         let before = (
-            session.revision(doc),
-            session.doc_key(doc).to_owned(),
-            session.can_undo(doc),
-            session.can_redo(doc),
+            session.revision(doc).unwrap(),
+            session.doc_key(doc).unwrap().to_owned(),
+            session.can_undo(doc).unwrap(),
+            session.can_redo(doc).unwrap(),
         );
         assert!(matches!(
             workflow::linked_alignment(&session, doc),
@@ -472,10 +472,10 @@ fn linked_alignment_refuses_all_other_kinds_and_missing_ids() {
         ));
         assert_eq!(
             (
-                session.revision(doc),
-                session.doc_key(doc).to_owned(),
-                session.can_undo(doc),
-                session.can_redo(doc)
+                session.revision(doc).unwrap(),
+                session.doc_key(doc).unwrap().to_owned(),
+                session.can_undo(doc).unwrap(),
+                session.can_redo(doc).unwrap()
             ),
             before
         );
@@ -510,10 +510,10 @@ fn linked_alignment_observation_preserves_unsaved_undo_redo_journal_and_replay()
     for step in 0..3 {
         let before = (
             session.delimitation(doc).unwrap().clone(),
-            session.revision(doc),
-            session.doc_key(doc).to_owned(),
-            session.can_undo(doc),
-            session.can_redo(doc),
+            session.revision(doc).unwrap(),
+            session.doc_key(doc).unwrap().to_owned(),
+            session.can_undo(doc).unwrap(),
+            session.can_redo(doc).unwrap(),
             serde_json::to_value(session.document_record(doc).unwrap()).unwrap(),
         );
         let replay_before = basecraft_ops::replay::replay(dir.path()).unwrap();
@@ -522,10 +522,10 @@ fn linked_alignment_observation_preserves_unsaved_undo_redo_journal_and_replay()
         assert_eq!(
             (
                 session.delimitation(doc).unwrap().clone(),
-                session.revision(doc),
-                session.doc_key(doc).to_owned(),
-                session.can_undo(doc),
-                session.can_redo(doc),
+                session.revision(doc).unwrap(),
+                session.doc_key(doc).unwrap().to_owned(),
+                session.can_undo(doc).unwrap(),
+                session.can_redo(doc).unwrap(),
                 serde_json::to_value(session.document_record(doc).unwrap()).unwrap()
             ),
             before

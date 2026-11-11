@@ -2,7 +2,7 @@
 #[cfg(test)]
 use super::retention_tests;
 use super::{DocId, Op, OpResult, Path, PathBuf, Result, Slot, files, invalid, objects_dir};
-use super::{OBJECT_STORE_LIMIT, Session, save_authority};
+use super::{OBJECT_STORE_LIMIT, Session};
 
 impl Session {
     pub fn open(&mut self, path: &Path) -> Result<DocId> {
@@ -13,18 +13,10 @@ impl Session {
     /// Unlike a separate [`files::kind`] probe, this does not reread the main
     /// file to classify it. Existing companion validation still applies.
     pub fn open_classified(&mut self, path: &Path) -> Result<(DocId, files::Kind)> {
-        self.open_inner(path, false)
+        self.open_inner(path)
     }
 
-    pub(crate) fn open_replay_snapshot(&mut self, path: &Path) -> Result<DocId> {
-        self.open_inner(path, true).map(|(id, _)| id)
-    }
-
-    pub(super) fn open_inner(
-        &mut self,
-        path: &Path,
-        _verified_snapshot: bool,
-    ) -> Result<(DocId, files::Kind)> {
+    pub(super) fn open_inner(&mut self, path: &Path) -> Result<(DocId, files::Kind)> {
         self.flush()?;
         let disk_stamp = crate::input_evidence::stamp(path)?;
         let format = files::Format::from_path(path)?;
@@ -50,7 +42,11 @@ impl Session {
                 .iter()
                 .map(|c| {
                     if c.exists() {
-                        basecraft_io::hash_file(c).map(Some).map_err(Into::into)
+                        match basecraft_io::hash_file(c) {
+                            Ok(hash) => Ok(Some(hash)),
+                            Err(_) if format == files::Format::Tree => Ok(None),
+                            Err(error) => Err(error.into()),
+                        }
                     } else {
                         Ok(None)
                     }
@@ -109,25 +105,17 @@ impl Session {
             );
         }
         let kind = content.kind();
-        self.docs.push(Slot {
-            key: key.clone(),
+        let mut slot = Slot::new(
+            key.clone(),
             content,
-            current_saved_hashes: std::sync::OnceLock::new(),
-            generation: 0,
-            save_authority: save_authority::PendingSaveAuthority::default(),
-            undo: vec![],
-            redo: vec![],
-            baseline: None,
-            baseline_logged: false,
-            accepted_hashes: hashes.clone(),
-            saved_state_hashes: Vec::new(),
-            saved_target: None,
-            absent_sidecars,
-            origin,
-            origin_issue,
-            origin_bundle: crate::provenance::bundle_for_result(path),
+            crate::provenance::bundle_for_result(path),
             disk_stamp,
-        });
+        );
+        slot.accepted_hashes.clone_from(&hashes);
+        slot.absent_sidecars = absent_sidecars;
+        slot.origin = origin;
+        slot.origin_issue = origin_issue;
+        self.docs.push(slot);
         let id = DocId(self.docs.len() - 1);
         self.docs[id.0].saved_state_hashes = self.save_hashes(id)?;
         let entry = self.entry(
@@ -245,15 +233,12 @@ impl Session {
         {
             record.events.push(pending.entry.clone());
         }
-        record.effective.extend(
-            slot.undo
-                .iter()
-                .filter(|a| record.events.iter().any(|event| event.id == a.entry_id))
-                .map(|a| EditActivity {
-                    id: a.entry_id.clone(),
-                    operation: a.op.clone(),
-                }),
-        );
+        record
+            .effective
+            .extend(slot.undo.iter().map(|a| EditActivity {
+                id: a.entry_id.clone(),
+                operation: a.op.clone(),
+            }));
         record.deduplicate();
         crate::contributions::project(&record.events, &mut record.effective);
         Ok(record)

@@ -71,7 +71,7 @@ pub fn fixture_package(root: &Path, source: &str, operation: &str, script: &str)
 /// A request input naming `doc` at its current generation and revision.
 pub fn document(session: &Session, doc: DocId) -> Value {
     json!([{"kind":"document","doc":doc.0.to_string(),
-        "generation":session.generation(doc),"revision":session.revision(doc)}])
+        "generation":session.generation(doc).unwrap(),"revision":session.revision(doc).unwrap()}])
 }
 
 /// A request input naming a project file.

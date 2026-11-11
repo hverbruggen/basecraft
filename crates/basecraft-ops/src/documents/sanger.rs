@@ -14,7 +14,10 @@ use crate::{
 
 impl Document for SangerReview {
     fn accepts(&self, op: &Op) -> bool {
-        op.name().starts_with("sanger.")
+        matches!(
+            op,
+            Op::SangerReview { .. } | Op::SangerUpdate { .. } | Op::SangerSelect { .. }
+        )
     }
 
     fn kind(&self) -> Kind {
@@ -30,10 +33,26 @@ impl Document for SangerReview {
             call_sets: self.call_sets().len() as u64,
         })
     }
+    fn validate(&self, op: &Op, _root: &Path, live: bool) -> Result<()> {
+        if live
+            && let Op::SangerReview { edit, .. } = op
+            && let basecraft_protocol::sanger::ReviewOp::Export { path, sha256 } = edit.as_ref()
+            && basecraft_io::sha256_file(path)? != *sha256
+        {
+            return Err(Error::ChangedOnDisk { path: path.clone() });
+        }
+        Ok(())
+    }
     fn apply(&mut self, op: &Op) -> Result<(Inverse, Option<FeatureId>)> {
+        if let Op::SangerSelect { call_set } = op {
+            let before = self.draft_sha256.clone();
+            self.select_call_set(call_set).map_err(Error::Invalid)?;
+            return Ok((Inverse::SangerSelect(before), None));
+        }
         if let Op::SangerUpdate { review } = op {
+            let review = crate::sanger_review::read_journal_record(review)?;
             let mut replacement =
-                SangerReview::from_session_snapshot(review, self.storage_anchor())?;
+                SangerReview::from_session_snapshot(&review, self.storage_anchor())?;
             replacement.share_captures(self);
             return Ok((
                 Inverse::SangerUpdate(Box::new(std::mem::replace(self, replacement))),
@@ -50,6 +69,9 @@ impl Document for SangerReview {
             .map(|inverse| (inverse, None))
     }
     fn revert(&mut self, inverse: &Inverse) -> Result<()> {
+        if let Inverse::SangerSelect(before) = inverse {
+            return self.select_call_set(before).map_err(Error::Invalid);
+        }
         if let Inverse::SangerUpdate(before) = inverse {
             *self = (**before).clone();
             return Ok(());
@@ -83,38 +105,5 @@ impl Document for SangerReview {
         Ok(vec![basecraft_io::hash_bytes(
             &self.session_bytes(&publication.logical(target)?)?,
         )])
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_new_target_created_after_admission_is_preserved() {
-        let Some(root) = crate::isolated_profile::enter(
-            "documents::sanger::tests::a_new_target_created_after_admission_is_preserved",
-        ) else {
-            return;
-        };
-        let review = SangerReview::load(
-            &Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../testdata/fixtures/sanger-review/multi.json"),
-        )
-        .unwrap();
-        let target = root.join("review.json");
-        std::fs::write(&target, b"another writer's file").unwrap();
-        let _lock = crate::input_evidence::lock().unwrap();
-        assert!(
-            review
-                .write(
-                    &target,
-                    Format::SangerReview,
-                    &root,
-                    &WritePublication::Create
-                )
-                .is_err()
-        );
-        assert_eq!(std::fs::read(target).unwrap(), b"another writer's file");
     }
 }

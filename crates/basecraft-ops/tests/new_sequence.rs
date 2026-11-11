@@ -31,7 +31,7 @@ fn new_sequence_validates_before_creating_and_replays_unsaved_edits() {
     assert_eq!(id.0, 0);
     assert_eq!(session.doc(id).unwrap().read(0, 15), b"ACGTRYSWKMBDHVN");
     assert!(session.document_record(id).unwrap().unsaved);
-    assert!(!root.path().join(session.doc_key(id)).exists());
+    assert!(!root.path().join(session.doc_key(id).unwrap()).exists());
     assert!(session.save(id, None).is_err());
     // Cancelling a proposed annotation does not apply an operation.
     let before = session.record_revision(id).unwrap();

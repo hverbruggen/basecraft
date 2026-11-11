@@ -208,16 +208,19 @@ pub enum Op {
     SubmissionEdit {
         edit: Box<crate::submission::SubmissionEdit>,
     },
-    /// Initial review, retaining exact draft bytes and all older biological events.
+    /// Initial review referencing an immutable record of drafts and biological events.
     #[serde(rename = "doc.create_sanger_review")]
     CreateSangerReview {
-        review: Box<crate::sanger_records::SavedCallSets>,
+        review: crate::sanger_records::ReviewRecord,
     },
-    /// An explicit analysis continuation or selected call set. Decisions use `SangerReview`.
+    /// An explicit analysis continuation. Selection and decisions have their own operations.
     #[serde(rename = "sanger.update")]
     SangerUpdate {
-        review: Box<crate::sanger_records::SavedCallSets>,
+        review: crate::sanger_records::ReviewRecord,
     },
+    /// Select a retained call set without copying its evidence.
+    #[serde(rename = "sanger.select")]
+    SangerSelect { call_set: String },
     /// A decision addressed to an immutable Sanger call-set digest.
     #[serde(rename = "sanger.review")]
     SangerReview {
@@ -278,6 +281,7 @@ impl Op {
             Op::SangerReview { .. } => "sanger.review",
             Op::CreateSangerReview { .. } => "doc.create_sanger_review",
             Op::SangerUpdate { .. } => "sanger.update",
+            Op::SangerSelect { .. } => "sanger.select",
             Op::JobFinished { .. } => "job.finished",
             Op::Undo { .. } => "history.undo",
             Op::Redo { .. } => "history.redo",

@@ -872,7 +872,7 @@ os.execv({real_engine}, [{real_engine}, *sys.argv[1:]])
     let registry = common::registry(&bundled);
     let mut session = Session::new(root.path());
     let doc = session.open(&source).unwrap();
-    let generation = session.generation(doc);
+    let generation = session.generation(doc).unwrap();
     let mut manager = JobManager::default();
     let accepted = common::submit_in(&mut manager, &registry, &mut session, |s| json!({
         "operation":"basecraft.host/asap_alignment@1", "inputs":{"alignment":common::document(s,doc)},
@@ -902,7 +902,7 @@ os.execv({real_engine}, [{real_engine}, *sys.argv[1:]])
     manager.cancel(&accepted.run_id).unwrap();
     let cancelled = common::wait_in(&manager, &mut session, &accepted.run_id);
     assert_eq!(cancelled.state, RuntimeState::Cancelled);
-    assert_eq!(session.generation(doc), generation);
+    assert_eq!(session.generation(doc).unwrap(), generation);
     assert_eq!(
         finished(&session, doc),
         [(accepted.run_id, JobStatus::Cancelled)]

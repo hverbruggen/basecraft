@@ -259,7 +259,7 @@ fn installed_snapshot_proposals_commit_in_owner_and_stale_jobs_preserve_edits() 
     let doc = session.open(&source).unwrap();
     let mut manager = JobManager::default();
     let request: OperationRequest = serde_json::from_value(json!({"operation":"org.example.registry-sequence/annotate@1",
-        "inputs":{"sequence":[{"kind":"document","doc":doc.0.to_string(),"generation":session.generation(doc),"revision":session.doc(doc).unwrap().version()}]},"parameters":{}})).unwrap();
+        "inputs":{"sequence":[{"kind":"document","doc":doc.0.to_string(),"generation":session.generation(doc).unwrap(),"revision":session.doc(doc).unwrap().version()}]},"parameters":{}})).unwrap();
     let accepted = manager
         .submit_in_session(
             &registry,
@@ -290,7 +290,7 @@ fn installed_snapshot_proposals_commit_in_owner_and_stale_jobs_preserve_edits() 
     session.redo(doc).unwrap();
     assert_eq!(session.doc(doc).unwrap().feature_count(), 1);
     let stale: OperationRequest = serde_json::from_value(json!({"operation":"org.example.registry-sequence/annotate@1",
-        "inputs":{"sequence":[{"kind":"document","doc":doc.0.to_string(),"generation":session.generation(doc),"revision":session.doc(doc).unwrap().version()}]},"parameters":{"slow":true}})).unwrap();
+        "inputs":{"sequence":[{"kind":"document","doc":doc.0.to_string(),"generation":session.generation(doc).unwrap(),"revision":session.doc(doc).unwrap().version()}]},"parameters":{"slow":true}})).unwrap();
     let accepted = manager
         .submit_in_session(
             &registry,
@@ -470,7 +470,7 @@ fn committed_proposals_stay_partial_and_repair_requires_recorded_session_activit
         let request: OperationRequest = serde_json::from_value(json!({
             "operation":"org.example.registry-sequence/annotate@1",
             "inputs":{"sequence":[{"kind":"document","doc":doc.0.to_string(),
-                "generation":session.generation(doc),"revision":session.doc(doc).unwrap().version()}]},
+                "generation":session.generation(doc).unwrap(),"revision":session.doc(doc).unwrap().version()}]},
             "parameters":{}
         }))
         .unwrap();
@@ -651,7 +651,7 @@ fn document_inputs_read_the_session_revision_and_record_history() {
     let mut session = Session::new(temp.path());
     let doc = session.open(&source).unwrap();
     let mut manager = JobManager::default();
-    let document = |session: &Session| json!([{"kind":"document","doc":doc.0.to_string(),"generation":session.generation(doc),"revision":session.revision(doc)}]);
+    let document = |session: &Session| json!([{"kind":"document","doc":doc.0.to_string(),"generation":session.generation(doc).unwrap(),"revision":session.revision(doc).unwrap()}]);
     // A clean document is submitted as its saved file.
     let request = json!({"operation":"org.example.registry-fixture/count@1","inputs":{"sources":document(&session)},
             "parameters":{"mode":"normal"},"destinations":{"report":"clean.json"}});
@@ -761,7 +761,7 @@ fn document_inputs_read_the_session_revision_and_record_history() {
     let stale = manager.submit_in_session(
         &registry,
         serde_json::from_value(json!({"operation":"org.example.registry-fixture/count@1",
-            "inputs":{"sources":[{"kind":"document","doc":doc.0.to_string(),"generation":session.generation(doc),"revision":0}]},
+            "inputs":{"sources":[{"kind":"document","doc":doc.0.to_string(),"generation":session.generation(doc).unwrap(),"revision":0}]},
             "parameters":{"mode":"normal"},"destinations":{"report":"stale.json"}}))
         .unwrap(),
         SessionPolicy::new(temp.path(), true).unwrap(),
@@ -784,7 +784,7 @@ fn document_repair_waits_for_owner_history_and_does_not_repeat_activity() {
     let mut manager = JobManager::default();
     let accepted = manager.submit_in_session(&registry, serde_json::from_value(json!({
         "operation":"org.example.registry-fixture/count@1",
-        "inputs":{"sources":[{"kind":"document","doc":doc.0.to_string(),"generation":session.generation(doc),"revision":session.revision(doc)}]},
+        "inputs":{"sources":[{"kind":"document","doc":doc.0.to_string(),"generation":session.generation(doc).unwrap(),"revision":session.revision(doc).unwrap()}]},
         "parameters":{"mode":"delayed"},"destinations":{"report":"result.json"}
     })).unwrap(), SessionPolicy::new(root.path(), true).unwrap(), "test", &mut session).unwrap();
     let output = root.path().join("result.json");
@@ -930,7 +930,7 @@ fn unequal_alignment_inputs_are_refused_before_execution_for_files_and_documents
             json!({"kind":"file","path":"input.afa"})
         } else {
             json!({"kind":"document","doc":doc.0.to_string(),
-                "generation":session.generation(doc),"revision":session.revision(doc)})
+                "generation":session.generation(doc).unwrap(),"revision":session.revision(doc).unwrap()})
         };
         let request = serde_json::from_value(json!({
             "operation":"org.example.registry-fixture/count@1", "inputs":{"sources":[input]},
@@ -978,7 +978,7 @@ fn ungapped_alignment_input_accepts_unequal_lengths_without_padding() {
             json!({"kind":"file","path":"input.afa"})
         } else {
             json!({"kind":"document","doc":doc.0.to_string(),
-                "generation":session.generation(doc),"revision":session.revision(doc)})
+                "generation":session.generation(doc).unwrap(),"revision":session.revision(doc).unwrap()})
         };
         let outcome = run_in_session(
             &mut manager,
@@ -1019,7 +1019,7 @@ fn tasks_cancel_registered_document_run_through_owner_without_success_history() 
         let request = serde_json::from_value(json!({
             "operation":"org.example.registry-fixture/count@1",
             "inputs":{"sources":[{"kind":"document","doc":doc.0.to_string(),
-                "generation":session.generation(doc),"revision":session.revision(doc)}]},
+                "generation":session.generation(doc).unwrap(),"revision":session.revision(doc).unwrap()}]},
             "parameters":{"mode":mode},"destinations":{"report":"cancelled.json"}
         }))
         .unwrap();
@@ -1126,7 +1126,7 @@ fn tasks_refuse_document_publication_awaiting_owner_finalization() {
     let request = serde_json::from_value(json!({
         "operation":"org.example.registry-fixture/count@1",
         "inputs":{"sources":[{"kind":"document","doc":doc.0.to_string(),
-            "generation":session.generation(doc),"revision":session.revision(doc)}]},
+            "generation":session.generation(doc).unwrap(),"revision":session.revision(doc).unwrap()}]},
         "parameters":{},"destinations":{"report":"report.json"}
     }))
     .unwrap();
@@ -1458,7 +1458,7 @@ fn registered_target_preparation_preserves_permissions_and_session_identity() {
     let id = target.doc;
     assert!(session.is_open(id));
     let document = json!({"kind":"document","doc":id.0.to_string(),
-        "generation":session.generation(id),"revision":session.revision(id)});
+        "generation":session.generation(id).unwrap(),"revision":session.revision(id).unwrap()});
     let prepared = prepare(Some(document.clone()), false, Some(&mut session)).unwrap();
     let target = prepared.document.as_ref().unwrap();
     assert_eq!(target.doc, id);
@@ -1472,12 +1472,12 @@ fn registered_target_preparation_preserves_permissions_and_session_identity() {
         ),
         (
             "generation",
-            json!(session.generation(id) + 1),
+            json!(session.generation(id).unwrap() + 1),
             "stale_revision: target document changed",
         ),
         (
             "revision",
-            json!(session.revision(id) + 1),
+            json!(session.revision(id).unwrap() + 1),
             "stale_revision: target document changed",
         ),
     ] {
@@ -1494,7 +1494,7 @@ fn registered_target_preparation_preserves_permissions_and_session_identity() {
 #[test]
 #[cfg(feature = "test-counters")]
 fn captured_inputs_reach_the_registered_caller_without_rereading_originals() {
-    use basecraft_ops::input_evidence::CapturedInput;
+    use basecraft_ops::sanger_review::CapturedInput;
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
     let paths = [root.join("a.txt"), root.join("b.txt")];

@@ -114,6 +114,8 @@ impl Session {
                 "Choose a destination with Save as for this new sequence",
             ));
         }
+        let requested = path.map_or_else(|| self.resolve(&self.docs[id.0].key), Path::to_path_buf);
+        self.check_target_identity(id, &requested)?;
         let path = path.filter(|p| !self.is_own_file(id, p));
         let target = path.map_or_else(|| self.resolve(&self.docs[id.0].key), Path::to_path_buf);
         hooks.at(SaveSite::CleanHashes);
@@ -144,7 +146,7 @@ impl Session {
         if (new_sequence || (!overwrite && path.is_some()))
             && !self.check_previous_save_target(id, &target)?
         {
-            crate::save_guard::Revision::check(None, &target)?;
+            crate::save_guard::check_new_target(&target)?;
         }
         hooks.at(SaveSite::Evidence);
         let _evidence_lock = crate::input_evidence::lock()?;
@@ -214,6 +216,7 @@ impl Session {
         // Preservation and pending-intent publication can take time. A decision
         // cannot authorize an externally replaced destination during that work.
         hooks.at(SaveSite::Recheck);
+        self.check_target_identity(id, &target)?;
         if let Some(check) = &target_check
             && !check.target_is_current(&target)?
         {
@@ -224,7 +227,7 @@ impl Session {
         if (new_sequence || (!overwrite && path.is_some()))
             && !self.check_previous_save_target(id, &target)?
         {
-            crate::save_guard::Revision::check(None, &target)?;
+            crate::save_guard::check_new_target(&target)?;
         }
         let outcome = if history_only {
             hooks.disposition(SaveDisposition::History);
@@ -274,6 +277,14 @@ impl Session {
                 }
             }
             let now = basecraft_io::hash_file(&target).ok();
+            if now.as_ref() == expected.first()
+                && let Ok(stamp) = crate::input_evidence::stamp(&target)
+            {
+                if self.is_own_file(id, &target) {
+                    self.docs[id.0].disk_stamp = stamp.clone();
+                }
+                self.docs[id.0].saved_target = Some((target.clone(), stamp, expected[0].clone()));
+            }
             if now != before && now.as_ref() == expected.first() {
                 // Our main-file replacement completed. Accept precisely that
                 // generation for retry, while retaining old sidecar checks.
@@ -368,7 +379,11 @@ impl Session {
             self.check_save_source(id)?;
         }
         hooks.at(SaveSite::Format);
-        let format = files::Format::from_path(&target)?;
+        let format = if self.docs[id.0].content.kind() == files::Kind::SangerReview {
+            files::Format::SangerReview
+        } else {
+            files::Format::from_path(&target)?
+        };
         let original = self.resolve(&self.docs[id.0].key);
         let document = self.docs[id.0].content.as_document();
         // Preserve the legacy observation marker; behaviour is delegated below.
@@ -505,5 +520,52 @@ impl Session {
             &self.resolve(&target.to_string_lossy()),
             &self.write_publication,
         )
+    }
+}
+
+impl Session {
+    fn check_target_identity(&self, id: DocId, target: &Path) -> Result<()> {
+        crate::save_guard::reject_link_target(target)?;
+        let slot = &self.docs[id.0];
+        let expected = slot
+            .saved_target
+            .as_ref()
+            .filter(|(path, _, _)| crate::save_guard::same_target(path, target))
+            .map(|(_, stamp, _)| stamp)
+            .or_else(|| {
+                (!slot.accepted_hashes.is_empty() && self.is_own_file(id, target))
+                    .then_some(&slot.disk_stamp)
+            });
+        if let Some(expected) = expected
+            && crate::input_evidence::stamp(target)? != *expected
+        {
+            return Err(Error::ChangedOnDisk {
+                path: target.into(),
+            });
+        }
+        Ok(())
+    }
+
+    // The latest Save As target remains owned by this session without changing the
+    // journal's stable document key or discarding its undo stack.
+    pub(super) fn check_previous_save_target(
+        &self,
+        id: DocId,
+        target: &std::path::Path,
+    ) -> Result<bool> {
+        if self.docs.iter().enumerate().any(|(index, slot)| {
+            index != id.0 && crate::save_guard::same_target(&self.resolve(&slot.key), target)
+        }) {
+            return Ok(false);
+        }
+        let Some((_, _, hash)) = self.docs[id.0]
+            .saved_target
+            .as_ref()
+            .filter(|(path, _, _)| crate::save_guard::same_target(path, target))
+        else {
+            return Ok(false);
+        };
+        crate::save_guard::check_hash(target, hash)?;
+        Ok(true)
     }
 }

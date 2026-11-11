@@ -125,18 +125,15 @@ fn changed_source_refused_before_mutation_and_before_save() {
             .to_string()
             .contains("source changed")
     );
-    assert_eq!(session.generation(doc), 0);
+    assert_eq!(session.generation(doc).unwrap(), 0);
     assert!(!dir.path().join(".basecraft").exists());
     let doc = session.open(&file).unwrap();
     session.apply(doc, edit()).unwrap();
     std::fs::write(&file, ">gene\nTTTT\n").unwrap();
-    assert!(
-        session
-            .save(doc, None)
-            .unwrap_err()
-            .to_string()
-            .contains("source changed")
-    );
+    assert!(matches!(
+        session.save(doc, None),
+        Err(basecraft_ops::Error::ChangedOnDisk { .. })
+    ));
     assert_eq!(std::fs::read_to_string(&file).unwrap(), ">gene\nTTTT\n");
 }
 
@@ -188,7 +185,10 @@ fn sidecar_failure_reports_partial_save_and_keeps_pending_recovery() {
             .contains("data saved")
     );
     assert!(session.recovery_root().join("pending-save.json").exists());
-    assert!(std::fs::read_to_string(file).unwrap().contains("ATGT"));
+    assert!(std::fs::read_to_string(&file).unwrap().contains("ATGT"));
+    std::fs::remove_file(bundle.join("artifacts")).unwrap();
+    session.save(doc, None).unwrap();
+    assert!(!session.recovery_root().join("pending-save.json").exists());
 }
 
 #[test]
@@ -223,13 +223,10 @@ fn save_as_does_not_disable_original_conflict_detection() {
     session.save(doc, Some(&copy)).unwrap();
     session.apply(doc, edit()).unwrap();
     std::fs::write(&original, ">external\nAAAA\n").unwrap();
-    assert!(
-        session
-            .save(doc, None)
-            .unwrap_err()
-            .to_string()
-            .contains("source changed")
-    );
+    assert!(matches!(
+        session.save(doc, None),
+        Err(basecraft_ops::Error::ChangedOnDisk { .. })
+    ));
     assert_eq!(
         std::fs::read_to_string(original).unwrap(),
         ">external\nAAAA\n"
@@ -740,4 +737,28 @@ fn methods_use_frozen_plugin_metadata_and_reject_unmatched_contribution() {
     assert_eq!(report.citations, vec!["A recorded citation"]);
     record.effective[0].id = "missing".into();
     assert!(record.report().is_err());
+}
+
+#[test]
+fn partial_save_as_can_retry_its_verified_output() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("gene.fasta");
+    std::fs::write(&file, ">gene\nACGT\n").unwrap();
+    let target = dir.path().join("copy.fasta");
+    let mut session = Session::recoverable_with_paths(dir.path(), &paths(dir.path())).unwrap();
+    let id = session.open(&file).unwrap();
+    session.apply(id, edit()).unwrap();
+    let bundle = provenance::companion(&target);
+    std::fs::create_dir(&bundle).unwrap();
+    std::fs::write(bundle.join("artifacts"), b"blocked").unwrap();
+    assert!(
+        session
+            .save_new(id, Some(&target))
+            .unwrap_err()
+            .to_string()
+            .contains("data saved")
+    );
+    std::fs::remove_file(bundle.join("artifacts")).unwrap();
+    session.save_new(id, Some(&target)).unwrap();
+    assert!(std::fs::read_to_string(target).unwrap().contains("ATGT"));
 }

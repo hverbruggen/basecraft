@@ -63,7 +63,7 @@ struct Job {
 
 #[derive(Default)]
 pub struct JobManager {
-    captured_inputs: Vec<basecraft_ops::input_evidence::CapturedInput>,
+    captured_inputs: Vec<basecraft_ops::sanger_review::CapturedInput>,
     jobs: BTreeMap<String, Arc<Job>>,
     requests: BTreeMap<String, (String, String)>,
     skip_known_features: bool,
@@ -150,7 +150,7 @@ impl JobManager {
     #[must_use]
     pub fn with_captured_inputs(
         mut self,
-        inputs: Vec<basecraft_ops::input_evidence::CapturedInput>,
+        inputs: Vec<basecraft_ops::sanger_review::CapturedInput>,
     ) -> Self {
         self.captured_inputs = inputs;
         self
@@ -386,7 +386,9 @@ impl JobManager {
             outcome.warnings.push(format!(
                 "Proposals attached to session document {} at generation {}",
                 target.doc.0,
-                session.generation(target.doc)
+                session
+                    .generation(target.doc)
+                    .map_or_else(|_| "unavailable".into(), |value| value.to_string())
             ));
             let snapshot_path = job.prepared.run.artifact("snapshot.arrow-pair");
             let activity = snapshot_path.and_then(|path| {
@@ -857,7 +859,9 @@ fn execute(job: &Job) {
 fn same_document(session: &basecraft_ops::Session, target: &crate::runner::DocumentTarget) -> bool {
     session.id() == target.session
         && session.is_open(target.doc)
-        && session.root().join(session.doc_key(target.doc)) == target.path
+        && session
+            .doc_key(target.doc)
+            .is_ok_and(|key| session.root().join(key) == target.path)
 }
 
 /// Owner-thread continuation used by both execution and publication repair.
@@ -903,15 +907,15 @@ fn finalize_document(
     session.complete_operation_publication(target.doc, &snapshot, &job.prepared.run)?;
     if !progress.applied {
         let unchanged = if let Some(revision) = progress.expected_revision {
-            session.revision(target.doc) == revision
+            session.revision(target.doc)? == revision
         } else {
-            session.generation(target.doc) == target.generation
-                && session.revision(target.doc) == target.revision
+            session.generation(target.doc)? == target.generation
+                && session.revision(target.doc)? == target.revision
         };
         let warning = apply_target_results(job, target, outcome, session, &mut progress)?;
         progress.applied = true;
         if unchanged {
-            progress.generation = Some(session.generation(target.doc));
+            progress.generation = Some(session.generation(target.doc)?);
         }
         if let Some(warning) = warning {
             job.outcome
@@ -923,7 +927,7 @@ fn finalize_document(
     }
     if target.save && !progress.saved {
         if let Some(generation) = progress.generation {
-            if session.generation(target.doc) != generation {
+            if session.generation(target.doc)? != generation {
                 return Err(Error::Protocol("stale_revision: target changed after result attachment; save remains incomplete".into()));
             }
             session.save(target.doc, None)?;
@@ -943,7 +947,7 @@ fn finalize_document(
         && progress.generation.is_some()
         && progress.terminal_history != TerminalHistory::Published
     {
-        if progress.generation != Some(session.generation(target.doc)) {
+        if progress.generation != Some(session.generation(target.doc)?) {
             return Err(Error::Protocol(
                 "stale_revision: target changed before terminal history publication".into(),
             ));
@@ -1008,7 +1012,7 @@ fn apply_target_results(
         "basecraft.delimitation" | "basecraft.host"
     );
     if species && session.is_delimitation(target.doc) {
-        if session.revision(target.doc) == progress.expected_revision.unwrap_or(target.revision) {
+        if session.revision(target.doc)? == progress.expected_revision.unwrap_or(target.revision) {
             let name = job.prepared.species_result_name();
             if let Some(result) = outcome
                 .artifacts
@@ -1039,7 +1043,7 @@ fn apply_target_results(
                                 },
                             )?;
                             progress.next_edit += 1;
-                            progress.expected_revision = Some(session.revision(target.doc));
+                            progress.expected_revision = Some(session.revision(target.doc)?);
                         }
                         Ok(())
                     })();

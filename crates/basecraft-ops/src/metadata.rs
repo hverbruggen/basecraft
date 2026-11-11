@@ -1355,7 +1355,7 @@ pub fn consumer_plan(
             let mut checked = meta.clone();
             model::apply(&mut checked, &edit).map_err(|e| invalid(e.0))?;
             return Ok(
-                serde_json::json!({"target":session.doc_key(doc), "operation": Op::MetadataEdit { edit: Box::new(edit) }, "metadata_hash": metadata_hash}),
+                serde_json::json!({"target":session.doc_key(doc)?, "operation": Op::MetadataEdit { edit: Box::new(edit) }, "metadata_hash": metadata_hash}),
             );
         }
         ConsumerRequest::Labels {
@@ -1440,7 +1440,7 @@ pub fn consumer_plan(
                 .map_err(|e| invalid(e.to_string()))?,
         );
         (
-            session.doc_key(doc).to_string(),
+            session.doc_key(doc)?.to_string(),
             Op::MetadataEdit {
                 edit: Box::new(MetadataEdit::PutPartition {
                     partition: Box::new(partition),
@@ -1465,7 +1465,7 @@ pub fn consumer_source(
     let (_, stamp, hash) = session
         .saved_source(doc)?
         .ok_or_else(|| invalid("Save the specimen metadata before binding consumers"))?;
-    let path = session.root().join(session.doc_key(doc));
+    let path = session.root().join(session.doc_key(doc)?);
     let publication = crate::provenance::inspect(&path).map_err(|_| invalid("Metadata owner evidence is unavailable; save its document history before binding consumers"))?;
     let event = publication
         .events
@@ -1475,7 +1475,7 @@ pub fn consumer_source(
             invalid("Metadata owner Open activity is unavailable; restore its provenance")
         })?;
     Ok(basecraft_protocol::provenance::InputReference {
-        path: session.doc_key(doc).into(),
+        path: session.doc_key(doc)?.into(),
         stamp,
         hash,
         extra: BTreeMap::from([("owner_event".into(), serde_json::json!(event.id))]),

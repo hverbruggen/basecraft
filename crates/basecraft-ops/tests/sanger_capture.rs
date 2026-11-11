@@ -1,6 +1,7 @@
 #![cfg(feature = "test-counters")]
 use basecraft_ops::{
-    input_evidence::{CapturedInput, Mutation},
+    input_evidence::Mutation,
+    sanger_review::CapturedInput,
     sanger_review::{SangerRun, instrument_review},
 };
 #[path = "support/isolated_profile.rs"]

@@ -159,16 +159,25 @@ fn directory(outcome: &OperationOutcome) -> Result<&Path, String> {
         .map(Path::new)
         .ok_or_else(|| "Operation receipt has no evidence directory".into())
 }
+fn edit_analysis(review: &mut SangerReview, edit: ReviewOp) -> Result<(), String> {
+    let mut owner = ReviewDocument::new(review.clone())?;
+    owner.apply(edit)?;
+    *review = owner.review().ok_or("No review is open")?.clone();
+    Ok(())
+}
 fn evaluate(session: &mut SangerReview, view: &mut SangerReviewView) -> Result<(), String> {
     view.review_settings = session.settings.clone();
-    session.apply(ReviewOp::Evaluate {
-        version: 2,
-        settings: session.settings.clone(),
-        calls: (0..view.draft.columns.len())
-            .map(|i| view.assessment(i).call)
-            .collect(),
-        reference: view.frozen_reference(),
-    })
+    edit_analysis(
+        session,
+        ReviewOp::Evaluate {
+            version: 2,
+            settings: session.settings.clone(),
+            calls: (0..view.draft.columns.len())
+                .map(|i| view.assessment(i).call)
+                .collect(),
+            reference: view.frozen_reference(),
+        },
+    )
 }
 
 pub(super) fn start(request: Request, session: Option<SangerReview>) -> Result<Stage, String> {
@@ -207,7 +216,7 @@ fn execute(
             let captures = paths
                 .iter()
                 .map(|path| {
-                    basecraft_ops::input_evidence::CapturedInput::open(path)
+                    basecraft_ops::sanger_review::CapturedInput::open(path)
                         .map_err(|e| e.to_string())
                 })
                 .collect::<Result<Vec<_>, _>>()?;
@@ -321,7 +330,7 @@ fn execute(
                         let mut settings = session.mask.clone();
                         settings.start = start;
                         settings.end = end;
-                        session.apply(ReviewOp::Mask { settings })?;
+                        edit_analysis(&mut session, ReviewOp::Mask { settings })?;
                     }
                 }
                 Request::Primers(mut parameters) => {
@@ -429,7 +438,7 @@ mod tests {
         // A replacement source between stages must not change the request.
         std::fs::write(&reference, ">replacement\nAAAA\n").unwrap();
         assert_eq!(basecraft_io::hash_file(&frozen).unwrap(), original_hash);
-        let mut placed = execute(
+        let placed = execute(
             Request::Place(frozen.clone()),
             Some(oriented.session),
             &flag,
@@ -444,7 +453,10 @@ mod tests {
             std::fs::remove_file(source).unwrap();
         }
         let saved = temp.path().join("saved-review.json");
-        placed.session.save(&saved).unwrap();
+        ReviewDocument::new(placed.session.clone())
+            .unwrap()
+            .save(&saved)
+            .unwrap();
         let reopened = SangerReview::load(&saved).unwrap();
         let view = session_view(&reopened).unwrap();
         assert_eq!(view.draft.consensus, placed.view.draft.consensus);
@@ -487,30 +499,15 @@ impl ReviewDocument {
         session.sanger_review(id).map_err(|e| e.to_string())?;
         Ok(Self { session, id })
     }
-    pub fn report(&self, dirty: bool) -> Result<basecraft_ops::document_record::Report, String> {
-        let mut report = self
-            .review()
+    pub fn report(&self, _dirty: bool) -> Result<basecraft_ops::document_record::Report, String> {
+        self.review()
             .ok_or("No review is open")?
-            .document_report(dirty)?;
-        let shared = self
-            .session
-            .document_record(self.id)
-            .and_then(|mut record| {
-                record
-                    .events
-                    .retain(|event| !matches!(event.op, basecraft_protocol::Op::Open { .. }));
-                record.report()
-            })
-            .map_err(|e| e.to_string())?;
-        report.warnings.extend(shared.warnings);
-        report.history.extend(shared.history);
-        report.history_text = report
-            .history
-            .iter()
-            .map(|row| row.summary.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        Ok(report)
+            .report_with_history(
+                &self
+                    .session
+                    .document_record(self.id)
+                    .map_err(|e| e.to_string())?,
+            )
     }
     pub fn review(&self) -> Option<&SangerReview> {
         self.session.sanger_review(self.id).ok()
@@ -545,33 +542,25 @@ impl ReviewDocument {
             .map_err(|e| e.to_string())
     }
     pub fn select_call_set(&mut self, id: &str) -> Result<(), String> {
-        let mut review = self
-            .review()
-            .ok_or("No review is open")?
-            .fork_for_operation();
-        review.select_call_set(id)?;
-        self.update(&review)
+        self.session
+            .apply(
+                self.id,
+                basecraft_protocol::Op::SangerSelect {
+                    call_set: id.into(),
+                },
+            )
+            .map(|_| ())
+            .map_err(|e| e.to_string())
     }
     pub fn export_consensus(&mut self, path: &Path, label: &str) -> Result<(), String> {
-        let mut review = self
-            .review()
-            .ok_or("No review is open")?
-            .fork_for_operation();
-        let before = review.events().len();
-        let result = review.export_consensus(path, label);
-        if result.is_ok() || review.events().len() != before {
-            self.update(&review)?;
-        }
-        result
+        self.session
+            .export_sanger_consensus(self.id, path, label)
+            .map_err(|e| e.to_string())
     }
     pub fn addition_evidence(&mut self) -> Result<String, String> {
-        let mut review = self
-            .review()
+        self.review()
             .ok_or("No review is open")?
-            .fork_for_operation();
-        let evidence = review.addition_evidence()?;
-        self.update(&review)?;
-        Ok(evidence)
+            .addition_evidence()
     }
 }
 
@@ -583,12 +572,15 @@ pub(super) fn load_draft_review(path: &Path) -> Result<(SangerReviewView, Sanger
     let calls = (0..view.draft.columns.len())
         .map(|i| view.assessment(i).call)
         .collect();
-    session.apply(ReviewOp::Evaluate {
-        version: 2,
-        settings: view.review_settings.clone(),
-        calls,
-        reference: None,
-    })?;
+    edit_analysis(
+        &mut session,
+        ReviewOp::Evaluate {
+            version: 2,
+            settings: view.review_settings.clone(),
+            calls,
+            reference: None,
+        },
+    )?;
     if let Some(i) = (0..view.draft.columns.len()).find(|&i| view.requires_review(i)) {
         view.select_column(i);
     }

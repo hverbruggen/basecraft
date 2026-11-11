@@ -2,7 +2,9 @@
 //! The source draft and AB1 files remain immutable; no reference base is
 //! inferred or substituted by these operations.
 
+mod captured;
 mod edit;
+pub use captured::CapturedInput;
 mod storage;
 pub use storage::{SangerRun, record_addition};
 pub(crate) use storage::{is_review, relocate_package};
@@ -20,7 +22,16 @@ pub enum EvidenceKind {
 
 /// Inspect JSON without creating records or treating arbitrary JSON as a trace.
 pub fn evidence_kind(path: &Path) -> Option<EvidenceKind> {
-    if !path.extension()?.eq_ignore_ascii_case("json") {
+    use std::io::Read;
+    let file = std::fs::File::open(path).ok()?;
+    if std::io::BufReader::new(file)
+        .bytes()
+        .find_map(|byte| match byte {
+            Ok(byte) if byte.is_ascii_whitespace() => None,
+            other => Some(other.ok()),
+        })??
+        != b'{'
+    {
         return None;
     }
     let bytes = crate::provenance::read_record(path).ok()?;
@@ -36,43 +47,9 @@ pub fn evidence_kind(path: &Path) -> Option<EvidenceKind> {
     Some(EvidenceKind::Draft)
 }
 
-/// Read a saved review for headless inspection, recognised by content as in
-/// [`evidence_kind`]. Any other `.json` file is refused with the reason, so a
-/// damaged, unknown or future review is never mistaken for another format.
-/// `None`: not JSON, so not Sanger evidence. Creates no records.
+/// Read a validated saved review recognised by content. Other files return None.
 pub fn saved_review(path: &Path) -> Option<Result<SangerReview, String>> {
-    if !path
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("json"))
-    {
-        return None;
-    }
-    let name = path.display();
-    let unreadable =
-        |error: String| format!("{name} is not a readable saved Sanger review: {error}");
-    let read = || -> Result<SangerReview, String> {
-        // Keep the acquired bytes through classification, decoding and acceptance.
-        // The accepted-revision check still verifies the current file; a second
-        // classification/load pass must not select different bytes after a race.
-        let bytes =
-            crate::provenance::read_record(path).map_err(|error| unreadable(error.to_string()))?;
-        let value: serde_json::Value =
-            serde_json::from_slice(&bytes).map_err(|error| unreadable(error.to_string()))?;
-        if value.get("version").is_none() {
-            if let Ok(draft) = serde_json::from_value::<SangerDraft>(value)
-                && draft.validate().is_ok()
-            {
-                return Err(format!(
-                    "{name} is an unreviewed Sanger draft, not a saved Sanger review; start its review in Basecraft"
-                ));
-            }
-            return Err(unreadable("Unsupported Sanger review version".into()));
-        }
-        SangerReview::decode_value(value, path)
-            .and_then(|review| review.accept_loaded(path, &bytes))
-            .map_err(unreadable)
-    };
-    Some(read())
+    (evidence_kind(path) == Some(EvidenceKind::Review)).then(|| SangerReview::load(path))
 }
 
 pub use basecraft_protocol::sanger::{MaskSettings, ReviewChoice, ReviewOp};
@@ -100,10 +77,7 @@ pub struct SangerReview {
     events: Vec<ReviewOp>,
     evidence: storage::ReviewEvidence,
     anchor: PathBuf,
-    accepted: Option<crate::save_guard::Revision>,
-    captures: std::sync::Arc<
-        std::sync::Mutex<std::collections::BTreeMap<PathBuf, crate::input_evidence::CapturedInput>>,
-    >,
+    captures: std::sync::Arc<std::sync::Mutex<std::collections::BTreeMap<PathBuf, CapturedInput>>>,
 }
 
 impl SangerReview {
@@ -117,6 +91,47 @@ impl SangerReview {
             error_percent: 25,
             evidence: String::new(),
         }
+    }
+    /// Combine baseline scientific decisions with chronological shared history once.
+    pub fn report_with_history(
+        &self,
+        record: &crate::document_record::DocumentRecord,
+    ) -> Result<crate::document_record::Report, String> {
+        let mut report = self.document_report(record.unsaved)?;
+        let mut represented = std::collections::HashSet::new();
+        let mut duplicate_rows = std::collections::HashSet::new();
+        for set in std::iter::once(self).chain(self.retained.iter()) {
+            for (index, edit) in set.events.iter().enumerate() {
+                if let Some(entry) = record.events.iter().find(|entry| !represented.contains(&entry.id) && matches!(&entry.op,basecraft_protocol::Op::SangerReview {call_set,edit:logged} if call_set == &set.draft_sha256 && logged.as_ref()==edit)) {
+                    represented.insert(entry.id.clone());
+                    duplicate_rows.insert(format!("review:{}:{index}",set.draft_sha256));
+                }
+            }
+        }
+        report
+            .history
+            .retain(|row| !duplicate_rows.contains(&row.id));
+        let open_ids: std::collections::HashSet<_> = record
+            .events
+            .iter()
+            .filter(|entry| matches!(entry.op, basecraft_protocol::Op::Open { .. }))
+            .map(|entry| entry.id.as_str())
+            .collect();
+        let shared = record.report().map_err(|e| e.to_string())?;
+        report.warnings.extend(shared.warnings);
+        report.history.extend(
+            shared
+                .history
+                .into_iter()
+                .filter(|row| !open_ids.contains(row.id.as_str())),
+        );
+        report.history_text = report
+            .history
+            .iter()
+            .map(|row| row.summary.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        Ok(report)
     }
     /// Describe the actual review state, retaining the complete decision audit separately.
     pub fn document_report(&self, unsaved: bool) -> Result<crate::document_record::Report, String> {
@@ -147,25 +162,9 @@ impl SangerReview {
         let mut report = record.report().map_err(|e| e.to_string())?;
         report.raw = raw;
         for (index, event) in self.events.iter().enumerate() {
-            let summary = match event {
-                ReviewOp::AutoAccept { columns } => {
-                    format!("Automatically accepted {} review columns", columns.len())
-                }
-                ReviewOp::Evaluate { .. } => {
-                    "Evaluated automatic calls with recorded review settings".into()
-                }
-                ReviewOp::Set { columns, choice } => {
-                    format!("Set {} review columns to {choice:?}", columns.len())
-                }
-                ReviewOp::Mask { settings } => format!(
-                    "Retained review columns {}–{}",
-                    settings.start.saturating_add(1),
-                    settings.end
-                ),
-                ReviewOp::Export { .. } => "Exported reviewed consensus".into(),
-            };
+            let summary = describe(event);
             report.history.push(HistoryRow {
-                id: format!("review:{index}"),
+                id: format!("review:{}:{index}", self.draft_sha256),
                 time: String::new(),
                 summary,
                 status: "Review audit".into(),
@@ -174,6 +173,8 @@ impl SangerReview {
             });
         }
         for (set, details) in self.retained.iter().zip(&retained) {
+            report.history.extend(set.document_report(unsaved)?.history);
+
             report.history.push(HistoryRow {
                 id: format!("review:call-set:{}", set.draft_sha256),
                 time: String::new(),
@@ -265,7 +266,6 @@ impl SangerReview {
             events: Vec::new(),
             evidence: storage::ReviewEvidence::default(),
             anchor: std::path::absolute(draft_path).map_err(|e| e.to_string())?,
-            accepted: None,
             captures: std::sync::Arc::default(),
         })
     }
@@ -275,13 +275,7 @@ impl SangerReview {
         if bytes.len() > 64 * 1024 * 1024 {
             return Err("Sanger review exceeds 64 MiB".into());
         }
-        Self::decode(&bytes, path)?.accept_loaded(path, &bytes)
-    }
-
-    fn accept_loaded(mut self, path: &Path, bytes: &[u8]) -> Result<Self, String> {
-        self.accepted =
-            Some(crate::save_guard::Revision::accepted(path, bytes).map_err(|e| e.to_string())?);
-        Ok(self)
+        Self::decode(&bytes, path)
     }
 
     fn decode(bytes: &[u8], path: &Path) -> Result<Self, String> {
@@ -359,7 +353,6 @@ impl SangerReview {
             events: Vec::new(),
             evidence,
             anchor: std::path::absolute(path).map_err(|e| e.to_string())?,
-            accepted: None,
             captures: std::sync::Arc::default(),
         };
         for event in stored.events {
@@ -372,7 +365,7 @@ impl SangerReview {
                 }
                 session.events.push(event);
             } else {
-                session.apply(event)?;
+                session.replay_decision(event)?;
             }
         }
         Ok(session)
@@ -423,54 +416,11 @@ impl SangerReview {
             .position(|set| set.draft_sha256 == id)
             .ok_or("Unknown Sanger call set")?;
         let mut retained = std::mem::take(&mut self.retained);
-        let mut selected = retained.remove(index);
-        std::mem::swap(self, &mut selected);
-        // Recovery and save destination belong to the whole review document.
-        std::mem::swap(&mut self.anchor, &mut selected.anchor);
-        std::mem::swap(&mut self.accepted, &mut selected.accepted);
-        retained.push(selected);
+        std::mem::swap(self, &mut retained[index]);
+        // Selection swaps the same two positions; inverse selection restores exact ordering.
+        std::mem::swap(&mut self.anchor, &mut retained[index].anchor);
         self.retained = retained;
         Ok(())
-    }
-
-    pub fn save(&mut self, path: &Path) -> Result<(), String> {
-        self.save_with_evidence(path, crate::input_evidence::SavePolicy::Cancel)
-    }
-
-    /// Explicit referenced-input policy, shared with ordinary document saves.
-    pub fn save_with_evidence(
-        &mut self,
-        path: &Path,
-        policy: crate::input_evidence::SavePolicy,
-    ) -> Result<(), String> {
-        // Convenience for headless payload callers. Session owns the write.
-        (|| -> crate::Result<()> {
-            let mut session = crate::Session::recoverable(
-                path.parent()
-                    .filter(|p| !p.as_os_str().is_empty())
-                    .unwrap_or(Path::new(".")),
-            )?;
-            crate::save_guard::Revision::check(self.accepted.as_ref(), path)?;
-            let id = if path.exists() {
-                let id = session.open(path)?;
-                crate::save_guard::Revision::check(self.accepted.as_ref(), path)?;
-                session.update_sanger_review(id, self)?;
-                id
-            } else {
-                crate::save_guard::Revision::check(self.accepted.as_ref(), path)?;
-                session.create_sanger_review(self)?
-            };
-            let expected = session.save_hashes_at(id, path)?;
-            let result = session.save_with_evidence(id, Some(path), policy);
-            if result.is_ok() || basecraft_io::hash_file(path).ok().as_ref() == expected.first() {
-                *self = Self::load(path).map_err(|detail| crate::Error::Damaged {
-                    path: path.into(),
-                    detail,
-                })?;
-            }
-            result
-        })()
-        .map_err(|e| e.to_string())
     }
 
     pub fn decision(&self, column: usize) -> Option<&ReviewChoice> {
@@ -511,7 +461,7 @@ impl SangerReview {
         )
     }
 
-    pub fn apply(&mut self, op: ReviewOp) -> Result<(), String> {
+    fn replay_decision(&mut self, op: ReviewOp) -> Result<(), String> {
         if let ReviewOp::Export { path, sha256 } = &op {
             let actual = basecraft_io::sha256_file(path).map_err(|e| e.to_string())?;
             if actual != *sha256 {
@@ -527,7 +477,7 @@ impl SangerReview {
 
     /// Export only a fully resolved specimen sequence. The output hash is a
     /// replayable operation; source AB1 and draft paths can never be replaced.
-    pub fn export_consensus(&mut self, path: &Path, label: &str) -> Result<(), String> {
+    pub(crate) fn write_consensus(&self, path: &Path, label: &str) -> Result<String, String> {
         let sequence = self
             .resolved_sequence()
             .ok_or("Resolve every review column before export")?;
@@ -566,11 +516,7 @@ impl SangerReview {
         staged.as_file().sync_all().map_err(|e| e.to_string())?;
         staged.persist_noclobber(path).map_err(|e| e.to_string())?;
         let sha256 = basecraft_io::sha256_file(path).map_err(|e| e.to_string())?;
-        self.apply(ReviewOp::Export {
-            path: path.to_path_buf(),
-            sha256,
-        })?;
-        self.publish_consensus(path).map_err(|e| format!("Consensus written to {}; supporting publication failed: {e}. Review decisions remain recoverable.",path.display()))
+        Ok(sha256)
     }
 
     /// Initial automatic triage can be regenerated when orienting a fresh draft.
@@ -588,11 +534,33 @@ impl SangerReview {
     }
 }
 
+pub(crate) fn read_journal_record(
+    record: &basecraft_protocol::sanger_records::ReviewRecord,
+) -> crate::Result<StoredCallSets> {
+    if record.hash.len() != 67
+        || !record.hash.starts_with("b3:")
+        || !record.hash[3..].bytes().all(|b| b.is_ascii_hexdigit())
+    {
+        return Err(crate::Error::Damaged {
+            path: record.path.clone(),
+            detail: "Invalid review record digest".into(),
+        });
+    }
+    let bytes = crate::provenance::read_record(&record.path)?;
+    if basecraft_io::hash_bytes(&bytes) != record.hash {
+        return Err(crate::Error::Damaged {
+            path: record.path.clone(),
+            detail: "Sanger analysis record changed".into(),
+        });
+    }
+    Ok(serde_json::from_slice(&bytes)?)
+}
+
 pub fn instrument_review(path: &Path) -> Result<SangerReview, String> {
     use basecraft_docs::sanger::{
         DraftColumn, InputRead, Orientation, ReadSupport, SupportKind, TraceCalls,
     };
-    let capture = crate::input_evidence::CapturedInput::open(path).map_err(|e| e.to_string())?;
+    let capture = CapturedInput::open(path).map_err(|e| e.to_string())?;
     let path = capture.path().to_path_buf();
     let trace = basecraft_io::abif::parse(capture.bytes()).map_err(|e| e.to_string())?;
     let calls = trace.display_calls();
@@ -623,10 +591,15 @@ pub fn instrument_review(path: &Path) -> Result<SangerReview, String> {
 }
 
 #[cfg(test)]
+mod test_session;
+#[cfg(test)]
+use test_session::ReviewSession;
+
+#[cfg(test)]
 mod call_set_tests {
     use super::*;
 
-    fn instrument(folder: &Path) -> SangerReview {
+    fn instrument(folder: &Path) -> ReviewSession {
         let path = folder.join("trace.ab1");
         std::fs::copy(
             Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -634,16 +607,16 @@ mod call_set_tests {
             &path,
         )
         .unwrap();
-        instrument_review(&path).unwrap()
+        ReviewSession::new(instrument_review(&path).unwrap())
     }
 
-    fn alternative(session: &SangerReview, version: &str) -> SangerReview {
+    fn alternative(session: &SangerReview, version: &str) -> ReviewSession {
         let mut draft = session.draft.clone();
         draft.engine = "Tracy".into();
         draft.mode = "basecall".into();
         draft.version_output = version.into();
         draft.engine_sha256 = "a".repeat(64);
-        SangerReview::from_draft(draft, &session.draft_path).unwrap()
+        ReviewSession::new(SangerReview::from_draft(draft, &session.draft_path).unwrap())
     }
 
     #[test]
@@ -683,7 +656,7 @@ mod call_set_tests {
             "an individual call set is not a saved envelope"
         );
         assert_eq!(evidence_kind(&saved), Some(EvidenceKind::Review));
-        let mut reopened = SangerReview::load(&saved).unwrap();
+        let mut reopened = ReviewSession::load(&saved).unwrap();
         assert_eq!(reopened.call_sets().len(), 3);
         assert_eq!(reopened.draft_sha256, computed_id);
         assert_eq!(reopened.mask.start, 1);
@@ -696,7 +669,7 @@ mod call_set_tests {
         let package = tmp.path().join("package");
         crate::provenance::package(&saved, &package).unwrap();
         std::fs::remove_file(&session.draft_path).unwrap();
-        let packaged = SangerReview::load(&package.join("review.json")).unwrap();
+        let packaged = ReviewSession::load(&package.join("review.json")).unwrap();
         assert!(packaged.working_draft().is_ok());
         assert!(
             packaged
@@ -712,7 +685,7 @@ mod call_set_tests {
         let mut session = instrument(tmp.path());
         let single = tmp.path().join("single.json");
         session.save(&single).unwrap();
-        assert!(SangerReview::load(&single).is_ok());
+        assert!(ReviewSession::load(&single).is_ok());
         assert_eq!(
             serde_json::from_slice::<serde_json::Value>(&std::fs::read(&single).unwrap()).unwrap()
                 ["version"],
@@ -727,11 +700,11 @@ mod call_set_tests {
             serde_json::from_slice(&std::fs::read(&saved).unwrap()).unwrap();
         raw["sets"][1]["draft_sha256"] = "b".repeat(64).into();
         std::fs::write(&saved, serde_json::to_vec(&raw).unwrap()).unwrap();
-        assert!(SangerReview::load(&saved).is_err());
+        assert!(ReviewSession::load(&saved).is_err());
         assert_eq!(evidence_kind(&saved), None);
         raw["version"] = 99.into();
         std::fs::write(&saved, serde_json::to_vec(&raw).unwrap()).unwrap();
-        assert!(SangerReview::load(&saved).is_err());
+        assert!(ReviewSession::load(&saved).is_err());
         let unknown = tmp.path().join("unrelated.sanger-review.json");
         std::fs::write(&unknown, b"{\"other\":true}").unwrap();
         assert_eq!(evidence_kind(&unknown), None);
@@ -740,8 +713,8 @@ mod call_set_tests {
     #[test]
     fn unavailable_storage_does_not_prevent_instrument_review_or_lose_edits() {
         let tmp = tempfile::tempdir().unwrap();
-        let mut session = instrument(tmp.path());
         std::fs::write(tmp.path().join(".basecraft"), "foreign file").unwrap();
+        let mut session = instrument(tmp.path());
         session
             .apply(ReviewOp::Set {
                 columns: vec![0],
@@ -775,14 +748,14 @@ mod readonly_tests {
             &path,
         )
         .unwrap();
-        let mut review = instrument_review(&path).unwrap();
+        let mut review = ReviewSession::new(instrument_review(&path).unwrap());
         let saved = tmp.path().join("review.json");
         review.save(&saved).unwrap();
         let previous = std::fs::read(&saved).unwrap();
         let original = std::fs::read(&path).unwrap();
         let _restore = Restore(tmp.path().into());
         std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
-        let mut fresh = instrument_review(&path).unwrap();
+        let mut fresh = ReviewSession::new(instrument_review(&path).unwrap());
         fresh
             .apply(ReviewOp::Set {
                 columns: vec![0],
@@ -806,7 +779,7 @@ mod readonly_tests {
 #[cfg(test)]
 mod moved_and_failed_recovery_tests {
     use super::*;
-    pub(super) fn pair(folder: &Path) -> SangerReview {
+    pub(super) fn pair(folder: &Path) -> ReviewSession {
         std::fs::create_dir(folder).unwrap();
         let source = folder.join("source.ab1");
         std::fs::copy(
@@ -815,12 +788,12 @@ mod moved_and_failed_recovery_tests {
             &source,
         )
         .unwrap();
-        let mut review = instrument_review(&source).unwrap();
+        let mut review = ReviewSession::new(instrument_review(&source).unwrap());
         let mut draft = review.draft.clone();
         draft.engine = "Tracy".into();
         draft.mode = "basecall".into();
         draft.version_output = "caller".into();
-        let mut alternative = SangerReview::from_draft(draft, &source).unwrap();
+        let mut alternative = ReviewSession::new(SangerReview::from_draft(draft, &source).unwrap());
         alternative
             .apply(ReviewOp::Set {
                 columns: vec![0],
@@ -848,7 +821,7 @@ mod moved_and_failed_recovery_tests {
             let path = folder.join("review.json");
             review.save(&path).unwrap();
             let accepted = std::fs::read(&path).unwrap();
-            let mut loaded = SangerReview::load(&path).unwrap();
+            let mut loaded = ReviewSession::load(&path).unwrap();
             let other = loaded.retained[0].draft_sha256.clone();
             loaded.select_call_set(&other).unwrap();
             loaded
@@ -880,7 +853,7 @@ mod moved_and_failed_recovery_tests {
             assert_eq!(std::fs::read(&unknown).unwrap(), b"unrelated");
             let new = folder.join("new.json");
             loaded.save(&new).unwrap();
-            let reopened = SangerReview::load(&new).unwrap();
+            let reopened = ReviewSession::load(&new).unwrap();
             assert_eq!(reopened.decision(1), Some(&ReviewChoice::Edit('T')));
             assert_eq!(
                 reopened.retained[0].decision(0),
@@ -912,7 +885,7 @@ mod moved_and_failed_recovery_tests {
         review
             .save(&folder.join("../source/./review.json"))
             .unwrap();
-        let reopened = SangerReview::load(&path).unwrap();
+        let reopened = ReviewSession::load(&path).unwrap();
         assert_eq!(reopened.call_sets().len(), 2);
     }
 
@@ -969,7 +942,7 @@ mod moved_and_failed_recovery_tests {
                 assert_eq!(input.state, "broken");
             }
             assert_eq!(
-                SangerReview::load(&path).unwrap().decision(1),
+                ReviewSession::load(&path).unwrap().decision(1),
                 Some(&ReviewChoice::Edit('T'))
             );
             fixtures.push(tmp);
@@ -1028,7 +1001,7 @@ mod moved_and_failed_recovery_tests {
         // writers loaded before either is allowed to publish.
         if let Some(target) = std::env::var_os("BASECRAFT_SANGER_WRITER_TARGET") {
             let path = PathBuf::from(target);
-            let mut session = SangerReview::load(&path).unwrap();
+            let mut session = ReviewSession::load(&path).unwrap();
             session
                 .apply(ReviewOp::Set {
                     columns: vec![1],
@@ -1050,7 +1023,7 @@ mod moved_and_failed_recovery_tests {
         let mut review = pair(&folder);
         let path = folder.join("review.json");
         review.save(&path).unwrap();
-        let mut parent = SangerReview::load(&path).unwrap();
+        let mut parent = ReviewSession::load(&path).unwrap();
         parent
             .apply(ReviewOp::Set {
                 columns: vec![1],
@@ -1068,7 +1041,7 @@ mod moved_and_failed_recovery_tests {
         let child_saved =
             std::fs::read_to_string(path.with_extension("result")).unwrap() == "saved";
         assert_ne!(parent_saved, child_saved);
-        let loaded = SangerReview::load(&path).unwrap();
+        let loaded = ReviewSession::load(&path).unwrap();
         assert_eq!(
             loaded.decision(1),
             Some(&ReviewChoice::Edit(if parent_saved { 'T' } else { 'A' }))
@@ -1088,12 +1061,41 @@ mod moved_and_failed_recovery_tests {
         review.save(&original.join("review.json")).unwrap();
         let moved = tmp.path().join("moved");
         std::fs::rename(original, &moved).unwrap();
-        let mut reopened = SangerReview::load(&moved.join("review.json")).unwrap();
+        let mut reopened = ReviewSession::load(&moved.join("review.json")).unwrap();
         assert!(reopened.working_draft().is_ok());
         let other = reopened.retained[0].draft_sha256.clone();
         reopened.select_call_set(&other).unwrap();
         assert!(reopened.working_draft().is_ok());
         assert_eq!(reopened.decision(0), Some(&ReviewChoice::Edit('C')));
         reopened.save(&moved.join("saved-again.json")).unwrap();
+    }
+}
+
+pub(crate) fn describe(event: &ReviewOp) -> String {
+    match event {
+        ReviewOp::AutoAccept { columns } => {
+            format!("Automatically accepted {} review columns", columns.len())
+        }
+        ReviewOp::Evaluate { .. } => {
+            "Evaluated automatic calls with recorded review settings".into()
+        }
+        ReviewOp::Set { columns, choice } => {
+            format!(
+                "Set {} review columns to {}",
+                columns.len(),
+                match choice {
+                    ReviewChoice::Accept => "accepted".into(),
+                    ReviewChoice::Reject => "rejected".into(),
+                    ReviewChoice::Pending => "pending".into(),
+                    ReviewChoice::Edit(base) | ReviewChoice::Auto(base) => base.to_string(),
+                }
+            )
+        }
+        ReviewOp::Mask { settings } => format!(
+            "Retained review columns {}–{}",
+            settings.start.saturating_add(1),
+            settings.end
+        ),
+        ReviewOp::Export { .. } => "Exported reviewed consensus".into(),
     }
 }

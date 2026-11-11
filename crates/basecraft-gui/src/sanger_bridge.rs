@@ -356,6 +356,13 @@ impl Default for SangerRust {
 }
 
 impl qobject::SangerController {
+    fn review_payload(&self) -> Option<&SangerReview> {
+        self.rust()
+            .review_session
+            .as_ref()
+            .and_then(work::ReviewDocument::review)
+    }
+
     fn call_error(mut self: std::pin::Pin<&mut Self>, error: &str) {
         self.as_mut().set_calling(false);
         self.as_mut().set_message_kind(QString::from("fail"));
@@ -389,12 +396,7 @@ impl qobject::SangerController {
         self.as_mut().rust_mut().pending_calls = false;
         let single = request.name() == "single";
         let message = request.message();
-        let session = self
-            .rust()
-            .review_session
-            .as_ref()
-            .and_then(work::ReviewDocument::review)
-            .map(SangerReview::fork_for_operation);
+        let session = self.review_payload().map(SangerReview::fork_for_operation);
         match work::start(request, session) {
             Ok(stage) => {
                 self.as_mut().rust_mut().stage = Some(stage);
@@ -689,21 +691,13 @@ impl qobject::SangerController {
             .set_signal_threshold(i32::try_from(threshold).unwrap_or(20));
         self.as_mut()
             .set_input_paths(QString::from(serde_json::to_string(&paths).unwrap()));
-        let names: Vec<_> = self
-            .rust()
-            .review_session
-            .as_ref()
-            .and_then(work::ReviewDocument::review)
-            .map_or_else(
-                || paths.clone(),
-                |s| s.draft.inputs.iter().map(|r| r.path.clone()).collect(),
-            );
+        let names: Vec<_> = self.review_payload().map_or_else(
+            || paths.clone(),
+            |s| s.draft.inputs.iter().map(|r| r.path.clone()).collect(),
+        );
         let name = basecraft_viewmodel::sanger_review::suggested_name(&names);
         let anchor = self
-            .rust()
-            .review_session
-            .as_ref()
-            .and_then(work::ReviewDocument::review)
+            .review_payload()
             .map(|s| s.storage_anchor().to_path_buf());
         let export = anchor
             .as_deref()
@@ -718,10 +712,7 @@ impl qobject::SangerController {
         self.as_mut()
             .set_trace_lanes(QString::from(serde_json::to_string(&lanes).unwrap()));
         let mask = self
-            .rust()
-            .review_session
-            .as_ref()
-            .and_then(work::ReviewDocument::review)
+            .review_payload()
             .map(|s| &s.mask)
             .map_or_else(|| "{}".into(), |m| serde_json::to_string(m).unwrap());
         let selected = self
@@ -735,10 +726,7 @@ impl qobject::SangerController {
             .as_ref()
             .map_or(1, |v| i32::try_from(v.consensus.len()).unwrap_or(i32::MAX));
         let settings = self
-            .rust()
-            .review_session
-            .as_ref()
-            .and_then(work::ReviewDocument::review)
+            .review_payload()
             .map_or_else(basecraft_docs::sanger::ReviewSettings::default, |s| {
                 s.settings.clone()
             });
@@ -807,7 +795,7 @@ impl qobject::SangerController {
             .as_ref()
             .map_or_else(String::new, SangerReviewView::selected_text);
         self.as_mut().set_review_details(QString::from(details));
-        let (sets, selected) = self.rust().review_session.as_ref().and_then(work::ReviewDocument::review).map_or_else(
+        let (sets, selected) = self.review_payload().map_or_else(
             || (serde_json::json!([]), String::new()), |session| {
                 (serde_json::json!(session.call_sets().iter().enumerate().map(|(i, (id, engine))|
                     serde_json::json!({"id":id,"label":format!("{} calls · {}", if *engine == "ABI" { "Instrument" } else { "Computed" }, i + 1)})).collect::<Vec<_>>()),
@@ -853,10 +841,7 @@ impl qobject::SangerController {
 
     pub fn reviewed_sequence(mut self: std::pin::Pin<&mut Self>) -> QString {
         match self
-            .rust()
-            .review_session
-            .as_ref()
-            .and_then(work::ReviewDocument::review)
+            .review_payload()
             .and_then(SangerReview::resolved_sequence)
         {
             Some(sequence) if !sequence.is_empty() => QString::from(sequence),
@@ -873,10 +858,7 @@ impl qobject::SangerController {
         let name = name.to_string();
         let name = name.trim();
         let sequence = self
-            .rust()
-            .review_session
-            .as_ref()
-            .and_then(work::ReviewDocument::review)
+            .review_payload()
             .and_then(SangerReview::resolved_sequence);
         if name.is_empty() || name.chars().any(char::is_whitespace) {
             self.as_mut()
@@ -900,7 +882,16 @@ impl qobject::SangerController {
         self.as_mut().rust_mut().stage = None;
         self.as_mut().set_busy(false);
         self.as_mut().set_calling(false);
-        match basecraft_ops::sanger_review::evidence_kind(Path::new(&path.to_string())) {
+        let input = PathBuf::from(path.to_string());
+        let instrument = input
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("ab1") || ext.eq_ignore_ascii_case("abi"));
+        match if instrument {
+            None
+        } else {
+            basecraft_ops::sanger_review::evidence_kind(&input)
+        } {
             Some(basecraft_ops::sanger_review::EvidenceKind::Review) => {
                 return self.open_review(path);
             }
@@ -909,7 +900,7 @@ impl qobject::SangerController {
             }
             None => {}
         }
-        let path = PathBuf::from(path.to_string());
+        let path = input;
         let loaded = basecraft_ops::sanger_review::instrument_review(&path).and_then(|review| {
             let view = session_view(&review)?;
             Ok((work::ReviewDocument::new(review)?, view))
@@ -1055,10 +1046,7 @@ impl qobject::SangerController {
         }
         let paths = (|| -> Result<Vec<String>, String> {
             let source = self
-                .rust()
-                .review_session
-                .as_ref()
-                .and_then(work::ReviewDocument::review)
+                .review_payload()
                 .filter(|session| session.draft.inputs.len() == 1)
                 .ok_or("Open one AB1 trace before drafting a consensus")?
                 .working_draft()?
@@ -1238,10 +1226,7 @@ impl qobject::SangerController {
             return false;
         }
         let before_view = self
-            .rust()
-            .review_session
-            .as_ref()
-            .and_then(work::ReviewDocument::review)
+            .review_payload()
             .map(|review| (review.draft_sha256.clone(), review.evidence_runs().to_vec()));
         let result = self
             .as_mut()
@@ -1255,10 +1240,7 @@ impl qobject::SangerController {
         }
         let result = result.and_then(|()| {
             let after_view = self
-                .rust()
-                .review_session
-                .as_ref()
-                .and_then(work::ReviewDocument::review)
+                .review_payload()
                 .map(|review| (review.draft_sha256.clone(), review.evidence_runs().to_vec()));
             if before_view != after_view {
                 let mut r = self.as_mut().rust_mut();
@@ -1345,12 +1327,7 @@ impl qobject::SangerController {
         if self.rust().stage.is_some() {
             return false;
         }
-        let Some(session) = self
-            .rust()
-            .review_session
-            .as_ref()
-            .and_then(work::ReviewDocument::review)
-        else {
+        let Some(session) = self.review_payload() else {
             return false;
         };
         let mut settings = session.mask.clone();
@@ -1426,12 +1403,7 @@ impl qobject::SangerController {
             let value: serde_json::Value =
                 serde_json::from_str(&proposal.to_string()).map_err(|e| e.to_string())?;
             let review = self.rust().review.as_ref().ok_or("No review open")?;
-            let session = self
-                .rust()
-                .review_session
-                .as_ref()
-                .and_then(work::ReviewDocument::review)
-                .ok_or("No review open")?;
+            let session = self.review_payload().ok_or("No review open")?;
             let kept: Vec<_> = review
                 .consensus
                 .iter()
@@ -1546,10 +1518,7 @@ impl qobject::SangerController {
         let review_path = self.rust().review_path.clone();
         let output = PathBuf::from(path.to_string());
         let events_before = self
-            .rust()
-            .review_session
-            .as_ref()
-            .and_then(work::ReviewDocument::review)
+            .review_payload()
             .map_or(0, |session| session.events().len());
         let result = self
             .as_mut()
@@ -1574,10 +1543,7 @@ impl qobject::SangerController {
             }
             Err(error) => {
                 let export_was_recorded = self
-                    .rust()
-                    .review_session
-                    .as_ref()
-                    .and_then(work::ReviewDocument::review)
+                    .review_payload()
                     .is_some_and(|session| session.events().len() > events_before);
                 if export_was_recorded {
                     self.as_mut().set_dirty(true);

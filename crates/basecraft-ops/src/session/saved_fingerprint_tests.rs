@@ -213,7 +213,7 @@ fn equivalent_edits_features_merges_groups_and_branching() {
     check(&s, id, 1);
     s.apply(id, replace("A")).unwrap();
     check(&s, id, 1);
-    assert!(!s.can_redo(id));
+    assert!(!s.can_redo(id).unwrap());
 }
 
 #[test]
@@ -228,7 +228,7 @@ fn live_journal_rollback_and_staged_proposals() {
     let baseline = check(&s, id, 0);
     s.log.as_mut().unwrap().faults.sync = true;
     assert!(s.apply(id, replace("T")).is_err());
-    assert_eq!(s.generation(id), 0);
+    assert_eq!(s.generation(id).unwrap(), 0);
     assert_eq!(check(&s, id, 1), baseline);
     let feature = Feature {
         kind: "gene".into(),
@@ -241,23 +241,23 @@ fn live_journal_rollback_and_staged_proposals() {
         .feature
         .unwrap();
     let edited = check(&s, id, 1);
-    let generation = s.generation(id);
+    let generation = s.generation(id).unwrap();
     s.log.as_mut().unwrap().faults.sync = true;
     assert!(s.undo(id).is_err());
-    assert_eq!(s.generation(id), generation);
+    assert_eq!(s.generation(id).unwrap(), generation);
     assert_eq!(check(&s, id, 1), edited);
     assert!(s.doc(id).unwrap().feature(fid).is_some());
     s.undo(id).unwrap();
     assert_eq!(check(&s, id, 1), baseline);
-    let generation = s.generation(id);
+    let generation = s.generation(id).unwrap();
     s.log.as_mut().unwrap().faults.sync = true;
     assert!(s.redo(id).is_err());
-    assert_eq!(s.generation(id), generation);
+    assert_eq!(s.generation(id).unwrap(), generation);
     assert_eq!(check(&s, id, 1), baseline);
     let actor = Actor::Agent {
         model: "fingerprint-test".into(),
     };
-    let revision = s.revision(id);
+    let revision = s.revision(id).unwrap();
     assert!(
         s.apply_sequence_proposals(
             id,

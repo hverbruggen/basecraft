@@ -161,9 +161,15 @@ impl ReviewState<'_> {
                     mask: None,
                 })
             }
-            ReviewOp::Export { .. } => {
-                Err("History and export are owned by the review session".into())
-            }
+            ReviewOp::Export { .. } => Ok(ReviewChange {
+                columns: vec![],
+                before: vec![],
+                after: vec![],
+                manual_before: vec![],
+                manual_after: vec![],
+                triage: None,
+                mask: None,
+            }),
         }
     }
 }

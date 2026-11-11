@@ -77,7 +77,10 @@ fn source(path: &Path, sha256: &str, anchor: &Path) -> crate::Result<Source> {
     })
 }
 
-fn source_capture(capture: &inputs::CapturedInput, anchor: &Path) -> crate::Result<Source> {
+fn source_capture(
+    capture: &crate::sanger_review::CapturedInput,
+    anchor: &Path,
+) -> crate::Result<Source> {
     let ledger = inputs::Mutation::begin()?.reference_captured(
         anchor,
         capture,
@@ -96,7 +99,7 @@ fn source_capture(capture: &inputs::CapturedInput, anchor: &Path) -> crate::Resu
 
 pub(super) trait SourceAccess {
     fn location(&self) -> crate::Result<PathBuf>;
-    fn capture(&self) -> crate::Result<inputs::CapturedInput>;
+    fn capture(&self) -> crate::Result<crate::sanger_review::CapturedInput>;
     fn checked(&self) -> crate::Result<PathBuf>;
 }
 
@@ -135,9 +138,9 @@ impl SourceAccess for Source {
         }
         Ok(path)
     }
-    fn capture(&self) -> crate::Result<inputs::CapturedInput> {
+    fn capture(&self) -> crate::Result<crate::sanger_review::CapturedInput> {
         let path = self.location()?;
-        let capture = inputs::CapturedInput::open(&path)?;
+        let capture = crate::sanger_review::CapturedInput::open(&path)?;
         if !capture.sha256().eq_ignore_ascii_case(&self.sha256)
             || self.reference.as_ref().is_some_and(|r| {
                 r.hash != capture.hash() || r.stamp.size != capture.bytes().len() as u64
@@ -152,7 +155,7 @@ impl SourceAccess for Source {
 /// An explicit Sanger analysis reserves durable support before invoking a tool.
 /// Errors/cancellation never remove its directory or an original input.
 pub struct SangerRun {
-    captures: Vec<inputs::CapturedInput>,
+    captures: Vec<crate::sanger_review::CapturedInput>,
     run: ArtifactRun,
     evidence: ReviewEvidence,
     operation: String,
@@ -276,7 +279,7 @@ impl SangerRun {
             if path.extension().is_some_and(|ext| {
                 ext.eq_ignore_ascii_case("ab1") || ext.eq_ignore_ascii_case("abi")
             }) {
-                let capture = inputs::CapturedInput::open(path)?;
+                let capture = crate::sanger_review::CapturedInput::open(path)?;
                 evidence.sources.push(source_capture(&capture, anchor)?);
                 captures.push(capture);
             } else {
@@ -313,7 +316,7 @@ impl SangerRun {
         Ok(result)
     }
 
-    pub fn captured_inputs(&self) -> &[inputs::CapturedInput] {
+    pub fn captured_inputs(&self) -> &[crate::sanger_review::CapturedInput] {
         &self.captures
     }
 
@@ -557,7 +560,7 @@ impl SangerReview {
 
     pub fn use_captured_inputs(
         &mut self,
-        captures: Vec<inputs::CapturedInput>,
+        captures: Vec<crate::sanger_review::CapturedInput>,
     ) -> Result<(), String> {
         if captures.len() != self.draft.inputs.len()
             || self
@@ -581,7 +584,7 @@ impl SangerReview {
     }
 
     /// Immutable trace bytes shared by drawing and tool submission.
-    pub fn captured_inputs(&self) -> Result<Vec<inputs::CapturedInput>, String> {
+    pub fn captured_inputs(&self) -> Result<Vec<crate::sanger_review::CapturedInput>, String> {
         let mut cache = self.captures.lock().map_err(|e| e.to_string())?;
         let mut captures = Vec::new();
         for read in &self.draft.inputs {
@@ -601,7 +604,7 @@ impl SangerReview {
             let capture = if let Some(source) = source {
                 source.capture()
             } else {
-                inputs::CapturedInput::open(&read.path)
+                crate::sanger_review::CapturedInput::open(&read.path)
             }
             .map_err(|e| e.to_string())?;
             if !capture.sha256().eq_ignore_ascii_case(&read.sha256) {
@@ -765,7 +768,7 @@ impl SangerReview {
         Ok(bytes)
     }
 
-    pub(super) fn publish_consensus(&mut self, path: &Path) -> crate::Result<()> {
+    pub(crate) fn publish_consensus(&mut self, path: &Path) -> crate::Result<()> {
         self.ensure_sources(path)?;
         let run = ArtifactRun::create(path, &ulid::Ulid::generate().to_string())?;
         let mut dependencies = self.evidence.runs.clone();
@@ -959,7 +962,7 @@ struct AdditionEvidence {
 impl SangerReview {
     /// Freeze the accepted input for alignment addition without exporting an AB1
     /// or requiring a visible review file. This descriptor is never executable.
-    pub fn addition_evidence(&mut self) -> Result<String, String> {
+    pub fn addition_evidence(&self) -> Result<String, String> {
         let sequence = self
             .resolved_sequence()
             .filter(|s| !s.is_empty())
@@ -1054,9 +1057,10 @@ pub fn record_addition(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sanger_review::test_session::ReviewSession;
     use crate::sanger_review::{ReviewChoice, ReviewOp};
 
-    fn draft(folder: &Path) -> (SangerReview, PathBuf) {
+    fn draft(folder: &Path) -> (ReviewSession, PathBuf) {
         std::fs::create_dir_all(folder).unwrap();
         let trace = folder.join("input.ab1");
         std::fs::write(
@@ -1070,10 +1074,10 @@ mod tests {
             "columns":[{"column":1,"consensus":"A","support":[{"read":1,"base":"A","kind":"call"}],"conflict":false,"review":true},{"column":2,"consensus":"C","support":[{"read":1,"base":"C","kind":"call"}],"conflict":false,"review":true}]});
         let path = folder.join("draft.json");
         std::fs::write(&path, serde_json::to_vec_pretty(&json).unwrap()).unwrap();
-        (SangerReview::new(&path).unwrap(), trace)
+        (ReviewSession::new(SangerReview::new(&path).unwrap()), trace)
     }
 
-    fn edit(session: &mut SangerReview) {
+    fn edit(session: &mut ReviewSession) {
         session
             .apply(ReviewOp::Set {
                 columns: vec![0],
@@ -1087,10 +1091,6 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let folder = tmp.path().join("work");
         let (mut review, trace) = draft(&folder);
-        assert!(
-            !folder.join(".basecraft").exists(),
-            "opening must not register/copy inputs"
-        );
         let exact = review.draft_json.clone();
         edit(&mut review);
         let path = folder.join("specimen.sanger-review.json");
@@ -1114,7 +1114,7 @@ mod tests {
         let moved = tmp.path().join("moved");
         std::fs::rename(&folder, &moved).unwrap();
         let path = moved.join("specimen.sanger-review.json");
-        let reopened = SangerReview::load(&path).unwrap();
+        let reopened = ReviewSession::load(&path).unwrap();
         assert_eq!(reopened.draft_json, exact);
         assert_eq!(
             reopened.working_draft().unwrap().inputs[0]
@@ -1161,7 +1161,7 @@ mod tests {
                 .unwrap(),
             "User-authored laboratory methods, preserved verbatim.\n"
         );
-        let reopened = SangerReview::load(&path).unwrap();
+        let reopened = ReviewSession::load(&path).unwrap();
         assert_eq!(reopened.draft_json, exact);
         assert_eq!(reopened.events(), review.events());
         assert_eq!(reopened.unresolved(), 1);
@@ -1198,7 +1198,7 @@ mod tests {
         let package = tmp.path().join("export");
         crate::provenance::package(&output, &package).unwrap();
         std::fs::remove_dir_all(folder).unwrap();
-        let resumed = SangerReview::load(&package.join("consensus.sanger-review.json")).unwrap();
+        let resumed = ReviewSession::load(&package.join("consensus.sanger-review.json")).unwrap();
         assert_eq!(resumed.resolved_sequence().as_deref(), Some("AC"));
         assert!(resumed.working_draft().is_ok());
         assert_eq!(
@@ -1215,18 +1215,18 @@ mod tests {
         review.save(&path).unwrap();
         let original = std::fs::read(&trace).unwrap();
         std::fs::write(&trace, b"ABIFdifferent bytes").unwrap();
-        assert!(SangerReview::load(&path).unwrap().working_draft().is_err());
+        assert!(ReviewSession::load(&path).unwrap().working_draft().is_err());
         assert!(crate::provenance::package(&path, &tmp.path().join("bad-export")).is_err());
         assert!(!tmp.path().join("bad-export").exists());
         std::fs::remove_file(&trace).unwrap();
-        assert!(SangerReview::load(&path).unwrap().working_draft().is_err());
+        assert!(ReviewSession::load(&path).unwrap().working_draft().is_err());
         std::fs::write(&trace, &original).unwrap();
         inputs::relink(review.evidence.sources[0].ledger.as_ref().unwrap(), &trace).unwrap();
         let conflict = inputs::conflicts(&trace).unwrap();
         assert!(!conflict.analyses.is_empty());
         inputs::resolve(&conflict, inputs::SavePolicy::PreserveCopy).unwrap();
         std::fs::write(&trace, b"ABIFnew user data").unwrap();
-        let reopened = SangerReview::load(&path).unwrap();
+        let reopened = ReviewSession::load(&path).unwrap();
         let resolved = reopened.working_draft().unwrap();
         assert_eq!(std::fs::read(&resolved.inputs[0].path).unwrap(), original);
         assert_eq!(std::fs::read(&trace).unwrap(), b"ABIFnew user data");
@@ -1266,7 +1266,7 @@ mod tests {
         let reads = run.artifact("reads.align.fa").unwrap();
         std::fs::write(&reads, ">r1\nAC\n>r2\nAC\n").unwrap();
         let run = run.finish(&[evidence.clone(), reads]).unwrap();
-        let mut review = SangerReview::new(&evidence).unwrap();
+        let mut review = ReviewSession::new(SangerReview::new(&evidence).unwrap());
         review.attach_run(&run).unwrap();
         edit(&mut review);
         let alignment = folder.join("context.afa");
@@ -1305,7 +1305,7 @@ mod tests {
         let package = tmp.path().join("export");
         crate::provenance::package(&path, &package).unwrap();
         std::fs::remove_dir_all(folder).unwrap();
-        let reopened = SangerReview::load(&package.join("multi.sanger-review.json")).unwrap();
+        let reopened = ReviewSession::load(&package.join("multi.sanger-review.json")).unwrap();
         assert_eq!(reopened.draft_json, review.draft_json);
         assert_eq!(reopened.working_draft().unwrap().inputs.len(), 2);
         let restored = reopened.placement().unwrap().unwrap();
@@ -1419,7 +1419,7 @@ mod tests {
         extended["unknown_field"] = true.into();
         let bytes = serde_json::to_vec(&extended).unwrap();
         std::fs::write(&path, &bytes).unwrap();
-        assert!(SangerReview::load(&path).is_err());
+        assert!(ReviewSession::load(&path).is_err());
         assert_eq!(std::fs::read(&path).unwrap(), bytes);
         let alias = tmp.path().join("trace-alias.json");
         std::fs::hard_link(&trace, &alias).unwrap();

@@ -438,7 +438,7 @@ fn document_interface_preserves_metadata_bytes_and_rejections() {
     )
     .unwrap();
     assert_eq!(
-        serde_json::to_string(&s.state(doc)).unwrap(),
+        serde_json::to_string(&s.state(doc).unwrap()).unwrap(),
         r#"{"len":2,"features":0,"rows":0,"counts":{"kind":"metadata","specimens":2,"identifications":0,"links":0}}"#
     );
     assert_eq!(s.save_hashes(doc).unwrap(), expected_hashes);
@@ -447,7 +447,7 @@ fn document_interface_preserves_metadata_bytes_and_rejections() {
         s.save_hashes_at(doc, &root.join("wrong.fasta")).unwrap(),
         expected_hashes
     );
-    let revision = s.revision(doc);
+    let revision = s.revision(doc).unwrap();
     let wrong = s
         .apply(
             doc,
@@ -488,7 +488,7 @@ fn document_interface_preserves_metadata_bytes_and_rejections() {
         matches!(wrong, basecraft_ops::Error::Unsupported(ref text) if text == "project metadata is saved as metadata.basecraft.json"),
         "{wrong}"
     );
-    assert_eq!(s.revision(doc), revision);
+    assert_eq!(s.revision(doc).unwrap(), revision);
     assert_eq!(s.metadata(doc).unwrap(), &expected);
     s.undo(doc).unwrap();
     assert_eq!(s.metadata(doc).unwrap(), &before);

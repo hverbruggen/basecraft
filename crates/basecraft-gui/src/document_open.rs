@@ -88,8 +88,8 @@ impl Candidate {
         root: PathBuf,
     ) -> Result<Self, OpenError> {
         validate(&session, doc, kind)?;
-        let generation = session.generation(doc);
-        let revision = session.revision(doc);
+        let generation = session.generation(doc)?;
+        let revision = session.revision(doc)?;
         let title_file = path
             .file_name()
             .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
@@ -113,8 +113,8 @@ impl Candidate {
             return Err(OpenError::RouteMismatch);
         }
         validate(&self.session, self.doc, expected)?;
-        if self.session.generation(self.doc) != self.generation
-            || self.session.revision(self.doc) != self.revision
+        if self.session.generation(self.doc)? != self.generation
+            || self.session.revision(self.doc)? != self.revision
         {
             return Err(OpenError::StaleIdentity);
         }

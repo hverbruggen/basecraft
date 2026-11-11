@@ -12,7 +12,20 @@ use crate::session::{Inverse, normalise};
 
 impl Document for OpenedAlignment {
     fn accepts(&self, op: &Op) -> bool {
-        op.name().starts_with("aln.")
+        matches!(
+            op,
+            Op::AlnReplace { .. }
+                | Op::AlnInsert { .. }
+                | Op::AlnFill { .. }
+                | Op::AlnInsertGaps { .. }
+                | Op::AlnDelete { .. }
+                | Op::AlnShift { .. }
+                | Op::AlnRemoveGapColumns {}
+                | Op::AlnMoveRows { .. }
+                | Op::AlnRenameRow { .. }
+                | Op::AlnRemoveRows { .. }
+                | Op::AlnAddSequences { .. }
+        )
     }
 
     fn kind(&self) -> crate::files::Kind {

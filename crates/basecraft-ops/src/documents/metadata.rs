@@ -12,7 +12,7 @@ use crate::session::Inverse;
 
 impl Document for OpenedMetadata {
     fn accepts(&self, op: &Op) -> bool {
-        op.name().starts_with("metadata.")
+        matches!(op, Op::MetadataEdit { .. })
     }
 
     fn kind(&self) -> crate::files::Kind {

@@ -13,7 +13,20 @@ use crate::session::Inverse;
 
 impl Document for OpenedTree {
     fn accepts(&self, op: &Op) -> bool {
-        op.name().starts_with("tree.")
+        matches!(
+            op,
+            Op::TreeReroot { .. }
+                | Op::TreeMidpointRoot {}
+                | Op::TreeMinimumVarianceRoot {}
+                | Op::TreeRootPosition { .. }
+                | Op::TreeRotate { .. }
+                | Op::TreeLadderize { .. }
+                | Op::TreeRenameTip { .. }
+                | Op::TreeAnnotate { .. }
+                | Op::TreeAddSupport { .. }
+                | Op::TreeRemoveSupport { .. }
+                | Op::TreeStyle { .. }
+        )
     }
 
     fn kind(&self) -> crate::files::Kind {
@@ -35,62 +48,6 @@ impl Document for OpenedTree {
             tips: self.doc.tip_count() as u64,
             annotations: self.doc.annotations().len() as u64,
         })
-    }
-
-    fn prepare_edit(
-        &self,
-        op: &Op,
-        _root: &Path,
-        _live: bool,
-    ) -> Result<Option<super::PreparedEdit>> {
-        match op {
-            Op::TreeStyle {
-                style,
-                remove_supports,
-            } => {
-                self.doc
-                    .check_style(Some(style), remove_supports)
-                    .map_err(|e| Error::Unsupported(e.0))?;
-            }
-            Op::TreeRemoveSupport { name } => {
-                self.doc
-                    .check_style(None, std::slice::from_ref(name))
-                    .map_err(|e| Error::Unsupported(e.0))?;
-            }
-            _ => {}
-        }
-        if matches!(op, Op::TreeMidpointRoot {} | Op::TreeMinimumVarianceRoot {}) {
-            let mut candidate = self.doc.clone();
-            match op {
-                Op::TreeMidpointRoot {} => candidate.midpoint_root(),
-                _ => candidate.minimum_variance_root(),
-            }
-            .map_err(|error| Error::Unsupported(error.0))?;
-            Ok(Some(Box::new(candidate)))
-        } else {
-            Ok(None)
-        }
-    }
-
-    fn apply_prepared(
-        &mut self,
-        op: &Op,
-        prepared: Option<super::PreparedEdit>,
-    ) -> Result<(Inverse, Option<FeatureId>)> {
-        if let Some(candidate) = prepared {
-            let candidate = candidate.downcast::<TreeDoc>().map_err(|_| {
-                crate::Error::Unsupported("prepared edit has the wrong document kind".into())
-            })?;
-            Ok((
-                Inverse::Tree(basecraft_docs::tree::TreeUndo::whole(std::mem::replace(
-                    &mut self.doc,
-                    *candidate,
-                ))),
-                None,
-            ))
-        } else {
-            self.apply(op)
-        }
     }
 
     fn apply(&mut self, op: &Op) -> Result<(Inverse, Option<FeatureId>)> {

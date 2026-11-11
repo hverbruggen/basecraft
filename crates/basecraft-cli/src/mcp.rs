@@ -81,7 +81,7 @@ impl Server {
             .ok_or_else(|| basecraft_ops::Error::UnknownDocument { id: DocId(id) }.into())
     }
 
-    fn state(&self, doc: DocId) -> Value {
+    fn state(&self, doc: DocId) -> Result<Value> {
         let kind = if self.session.sanger_review(doc).is_ok() {
             "sanger_review"
         } else if self.session.is_alignment(doc) {
@@ -97,9 +97,9 @@ impl Server {
         } else {
             "sequence"
         };
-        let version = self.session.revision(doc);
-        let mut state = json!({"document":doc.0,"path":self.session.doc_key(doc),"kind":kind,"version":version,"generation":self.session.generation(doc),
-            "state":self.session.state(doc),"can_undo":self.session.can_undo(doc),"can_redo":self.session.can_redo(doc)});
+        let version = self.session.revision(doc)?;
+        let mut state = json!({"document":doc.0,"path":self.session.doc_key(doc)?,"kind":kind,"version":version,"generation":self.session.generation(doc)?,
+            "state":self.session.state(doc)?,"can_undo":self.session.can_undo(doc)?,"can_redo":self.session.can_redo(doc)?});
         if let Ok(review) = self.session.sanger_review(doc) {
             state["call_sets"] = json!(review.call_sets());
             state["selected_call_set"] = json!(review.draft_sha256);
@@ -109,7 +109,7 @@ impl Server {
                     .collect::<Vec<_>>()
             );
         }
-        state
+        Ok(state)
     }
 
     fn call(&mut self, name: &str, args: &Value) -> Result<Value> {
@@ -151,23 +151,25 @@ impl Server {
                 let path = self.path(text(args, "path")?)?;
                 let doc = self.session.open(&path)?;
                 self.documents.insert(doc.0, doc);
-                Ok(self.state(doc))
+                self.state(doc)
             }
             "sequence_create" => {
                 let doc = self
                     .session
                     .create_sequence(text(args, "name")?, text(args, "sequence")?)?;
                 self.documents.insert(doc.0, doc);
-                Ok(self.state(doc))
+                self.state(doc)
             }
             "documents" => {
                 let mut docs: Vec<_> = self.documents.values().copied().collect();
                 docs.sort_by_key(|d| d.0);
                 Ok(json!(
-                    docs.into_iter().map(|d| self.state(d)).collect::<Vec<_>>()
+                    docs.into_iter()
+                        .map(|d| self.state(d))
+                        .collect::<Result<Vec<_>>>()?
                 ))
             }
-            "state" => Ok(self.state(self.doc(args)?)),
+            "state" => self.state(self.doc(args)?),
             "document_record" => Ok(serde_json::to_value(
                 self.session.document_record(self.doc(args)?)?.report()?,
             )?),
@@ -213,7 +215,7 @@ impl Server {
                 let end = args["end"]
                     .as_u64()
                     .ok_or("Provide an exclusive end coordinate")?;
-                if end < start || end - start > 1_000_000 || end > self.session.state(doc).len {
+                if end < start || end - start > 1_000_000 || end > self.session.state(doc)?.len {
                     return Err("Invalid range or more than one million residues requested".into());
                 }
                 let residues = if self.session.is_alignment(doc) {
@@ -235,32 +237,23 @@ impl Server {
                 let version = args["version"]
                     .as_u64()
                     .ok_or("Provide the document version you inspected")?;
-                if self.state(doc)["version"] != version {
+                if self.state(doc)?["version"] != version {
                     return Err(
                         "stale_revision: Document version changed; inspect it again before editing"
                             .into(),
                     );
                 }
                 let op: Op = serde_json::from_value(args["operation"].clone())?;
-                if matches!(op, Op::SangerReview { .. }) {
-                    self.session.apply_proposals(
-                        doc,
-                        self.session.generation(doc),
-                        version,
-                        &[op],
-                    )?;
-                } else {
-                    self.session.apply(doc, op)?;
-                }
+                self.session.apply(doc, op)?;
                 self.session.flush()?;
-                Ok(self.state(doc))
+                self.state(doc)
             }
             "extract" => {
                 let doc = self.doc(args)?;
                 let version = args["version"]
                     .as_u64()
                     .ok_or("Provide the document version you inspected")?;
-                if version != self.session.revision(doc) {
+                if version != self.session.revision(doc)? {
                     return Err("stale_revision: Document version changed; inspect it again before extraction".into());
                 }
                 let target = self.path(text(args, "path")?)?;
@@ -340,7 +333,7 @@ impl Server {
                 let name = args.get("name").and_then(Value::as_str).unwrap_or("");
                 let imported = self.session.import_support(doc, &source, name)?;
                 self.session.flush()?;
-                let mut state = self.state(doc);
+                let mut state = self.state(doc)?;
                 state["added"] = json!(imported.added);
                 state["matched"] = json!(imported.matched);
                 Ok(state)
@@ -352,7 +345,7 @@ impl Server {
                 } else {
                     self.session.redo(doc)?;
                 }
-                Ok(self.state(doc))
+                self.state(doc)
             }
             "save" | "save_check" => {
                 let doc = self.doc(args)?;
@@ -388,7 +381,7 @@ impl Server {
                     self.session.save_new(doc, path.as_deref())?;
                     Vec::new()
                 };
-                let mut state = self.state(doc);
+                let mut state = self.state(doc)?;
                 state["warnings"] = json!(warnings);
                 Ok(state)
             }
@@ -401,13 +394,13 @@ impl Server {
                     .copied()
                     .find(|d| self.session.is_metadata(*d))
                 {
-                    return Ok(self.state(doc));
+                    return self.state(doc);
                 }
                 let doc = basecraft_ops::metadata::open(&mut self.session, create)?.ok_or(
                     "no_metadata: This project has no metadata yet; call metadata_open with create",
                 )?;
                 self.documents.insert(doc.0, doc);
-                let mut state = self.state(doc);
+                let mut state = self.state(doc)?;
                 state["notices"] = json!(self.session.metadata_notices(doc)?);
                 Ok(state)
             }
@@ -474,7 +467,7 @@ impl Server {
                 let alignment = self.path(text(args, "alignment")?)?;
                 let doc = basecraft_ops::submission::create(&mut self.session, &path, &alignment)?;
                 self.documents.insert(doc.0, doc);
-                Ok(self.state(doc))
+                self.state(doc)
             }
             "submission_inclusion_preview" => {
                 let doc = self.doc(args)?;

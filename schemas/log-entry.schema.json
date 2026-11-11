@@ -1263,7 +1263,7 @@
       ]
     },
     {
-      "description": "Initial review, retaining exact draft bytes and all older biological events.",
+      "description": "Initial review referencing an immutable record of drafts and biological events.",
       "type": "object",
       "properties": {
         "op": {
@@ -1274,7 +1274,7 @@
           "type": "object",
           "properties": {
             "review": {
-              "$ref": "#/$defs/SavedCallSets"
+              "$ref": "#/$defs/ReviewRecord"
             }
           },
           "required": [
@@ -1288,7 +1288,7 @@
       ]
     },
     {
-      "description": "An explicit analysis continuation or selected call set. Decisions use `SangerReview`.",
+      "description": "An explicit analysis continuation. Selection and decisions have their own operations.",
       "type": "object",
       "properties": {
         "op": {
@@ -1299,11 +1299,36 @@
           "type": "object",
           "properties": {
             "review": {
-              "$ref": "#/$defs/SavedCallSets"
+              "$ref": "#/$defs/ReviewRecord"
             }
           },
           "required": [
             "review"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ]
+    },
+    {
+      "description": "Select a retained call set without copying its evidence.",
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "sanger.select"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "call_set": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_set"
           ]
         }
       },
@@ -3975,44 +4000,6 @@
         }
       ]
     },
-    "ReviewEvidence": {
-      "type": "object",
-      "properties": {
-        "placement": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ReviewSupport"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "runs": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "schema_version": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0
-        },
-        "sources": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/ReviewSource"
-          }
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "schema_version",
-        "runs",
-        "sources"
-      ]
-    },
     "ReviewOp": {
       "oneOf": [
         {
@@ -4145,6 +4132,23 @@
         }
       ]
     },
+    "ReviewRecord": {
+      "description": "Immutable analysis data stored separately from edit-sized journal entries.",
+      "type": "object",
+      "properties": {
+        "hash": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "hash"
+      ]
+    },
     "ReviewReference": {
       "description": "Frozen whole-alignment counts used by a recorded triage operation.",
       "type": "object",
@@ -4229,58 +4233,6 @@
         }
       }
     },
-    "ReviewSource": {
-      "type": "object",
-      "properties": {
-        "ledger": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "original": {
-          "type": "string"
-        },
-        "path": {
-          "type": "string"
-        },
-        "reference": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/InputReference"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "sha256": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "original",
-        "sha256",
-        "path"
-      ]
-    },
-    "ReviewSupport": {
-      "type": "object",
-      "properties": {
-        "hash": {
-          "type": "string"
-        },
-        "path": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "path",
-        "hash"
-      ]
-    },
     "RowDecision": {
       "description": "What to do with a row.",
       "type": "object",
@@ -4337,62 +4289,6 @@
       ],
       "required": [
         "record"
-      ]
-    },
-    "SavedCallSets": {
-      "type": "object",
-      "properties": {
-        "selected": {
-          "type": "string"
-        },
-        "sets": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/SavedReview"
-          }
-        },
-        "version": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "version",
-        "selected",
-        "sets"
-      ]
-    },
-    "SavedReview": {
-      "type": "object",
-      "properties": {
-        "draft_json": {
-          "type": "string"
-        },
-        "draft_path": {
-          "type": "string"
-        },
-        "draft_sha256": {
-          "type": "string"
-        },
-        "events": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/ReviewOp"
-          }
-        },
-        "evidence": {
-          "$ref": "#/$defs/ReviewEvidence"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "draft_path",
-        "draft_sha256",
-        "draft_json",
-        "events",
-        "evidence"
       ]
     },
     "Score": {

@@ -16,7 +16,7 @@ pub(crate) fn companions(_target: &Path) -> Vec<PathBuf> {
 
 impl Document for Submission {
     fn accepts(&self, op: &Op) -> bool {
-        op.name().starts_with("submission.")
+        matches!(op, Op::SubmissionEdit { .. })
     }
 
     fn kind(&self) -> crate::files::Kind {
@@ -38,12 +38,7 @@ impl Document for Submission {
         })
     }
 
-    fn prepare_edit(
-        &self,
-        op: &Op,
-        root: &Path,
-        live: bool,
-    ) -> Result<Option<super::PreparedEdit>> {
+    fn validate(&self, op: &Op, root: &Path, live: bool) -> Result<()> {
         if live
             && let Op::SubmissionEdit { edit } = op
             && let basecraft_protocol::submission::SubmissionEdit::ApplyInclusion { plan } =
@@ -51,7 +46,7 @@ impl Document for Submission {
         {
             crate::submission::verify_inclusion(root, self, plan)?;
         }
-        Ok(None)
+        Ok(())
     }
 
     fn apply(&mut self, op: &Op) -> Result<(Inverse, Option<FeatureId>)> {
