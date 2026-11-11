@@ -11,30 +11,38 @@ pub struct Source(std::sync::Arc<Vec<u8>>);
 
 impl Source {
     pub fn open(path: &Path) -> Result<Self> {
-        // User-owned files may be truncated by another process. Never map them:
-        // a read-only mmap can still raise SIGBUS and cannot yield a Rust error.
-        // Fallible reservation also reports oversized inputs instead of aborting.
+        Self::read(path, |_| {})
+    }
+
+    /// Hash each block as it arrives, without a second pass over the full file.
+    pub fn open_hashed(path: &Path) -> Result<(Self, String)> {
+        let mut hasher = crate::Hasher::new();
+        let source = Self::read(path, |bytes| hasher.update(bytes))?;
+        Ok((source, hasher.finish()))
+    }
+
+    fn read(path: &Path, mut consume: impl FnMut(&[u8])) -> Result<Self> {
         use std::io::Read;
         let mut file = File::open(path)?;
         let len = usize::try_from(file.metadata()?.len())
             .map_err(|_| std::io::Error::other("input is too large for this platform"))?;
         let mut bytes = Vec::new();
-        bytes
-            .try_reserve_exact(len)
-            .map_err(|e| std::io::Error::other(format!("cannot allocate input buffer: {e}")))?;
-        file.read_to_end(&mut bytes)?;
+        bytes.try_reserve_exact(len).map_err(std::io::Error::other)?;
+        let mut block = [0; 64 * 1024];
+        loop {
+            let count = match file.read(&mut block) {
+                Ok(0) => break,
+                Ok(count) => count,
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) => return Err(error.into()),
+            };
+            bytes.try_reserve_exact(count).map_err(std::io::Error::other)?;
+            consume(&block[..count]);
+            bytes.extend_from_slice(&block[..count]);
+        }
         #[cfg(feature = "test-counters")]
         crate::counters::record_read(path, bytes.len() as u64);
-        Ok(Source(std::sync::Arc::new(bytes)))
-    }
-
-    /// Read once and hash the exact owned bytes returned to the caller.
-    pub fn open_hashed(path: &Path) -> Result<(Self, String)> {
-        let source = Self::open(path)?;
-        let mut hasher = crate::Hasher::new();
-        hasher.update(source.bytes());
-        let hash = hasher.finish();
-        Ok((source, hash))
+        Ok(Self(std::sync::Arc::new(bytes)))
     }
 
     pub fn from_vec(bytes: Vec<u8>) -> Self {
