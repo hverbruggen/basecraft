@@ -318,7 +318,7 @@ fn alignment_interface_rejections_normalization_and_hashes() {
     session.save(doc, None).unwrap();
     assert_eq!(std::fs::read(&source).unwrap(), expected.as_bytes());
     drop(session);
-    let report = basecraft_ops::replay::replay(dir.path()).unwrap();
+    let report = basecraft_ops::records::replay(dir.path()).unwrap();
     assert!(report.ok(), "{:?}", report.problems);
 }
 
@@ -381,6 +381,6 @@ fn alignment_bursts_respect_actor_group_and_nonadjacent_boundaries() {
     assert_eq!(edits.len(), 5);
     assert_eq!(edits[0].actor, first);
     assert_eq!(edits[1].actor, second);
-    let report = basecraft_ops::replay::replay(dir.path()).unwrap();
+    let report = basecraft_ops::records::replay(dir.path()).unwrap();
     assert!(report.ok(), "{:?}", report.problems);
 }

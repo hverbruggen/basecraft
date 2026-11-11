@@ -376,7 +376,7 @@ fn atomic_json(path: &Path, value: &impl serde::Serialize) -> Result<()> {
 // Processed events stay listed under the original `sanger_input_events` key.
 fn link_selected_inputs(bundle: &Path, publication: &Publication) -> Result<()> {
     let mut effective = publication.effective_edits.clone();
-    crate::contributions::project(&publication.events, &mut effective);
+    crate::records::contributions::project(&publication.events, &mut effective);
     let retained: std::collections::HashSet<_> = effective.iter().map(|e| e.id.as_str()).collect();
     let dependencies: Vec<_> = publication
         .events
@@ -573,7 +573,8 @@ pub(crate) fn publish(bundle: &Path, publication: &Publication) -> Result<()> {
 /// Deterministic evidence-based reports. User-authored methods.md is untouched.
 pub fn write_reports(output: &Path, publication: &Publication) -> Result<()> {
     std::fs::create_dir_all(output.join("reports"))?;
-    let report = crate::document_record::DocumentRecord::from_publication(publication).report()?;
+    let report =
+        crate::records::document_record::DocumentRecord::from_publication(publication).report()?;
     let history = report.history_text;
     let methods = report.methods;
     let mut params = String::from("activity\toperation\tparameters_json\n");

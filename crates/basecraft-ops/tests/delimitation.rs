@@ -1,4 +1,4 @@
-use basecraft_ops::{Session, replay};
+use basecraft_ops::{Session, records};
 use basecraft_protocol::{
     Op,
     delimitation::{DelimitationEdit as Edit, HypothesisOrigin, JobRecord, JobStatus},
@@ -161,7 +161,7 @@ fn edits_undo_save_reopen_and_replay_preserve_lineage() {
     let copy = reopened.open(&path).unwrap();
     assert_eq!(reopened.delimitation(copy).unwrap(), &expected);
     drop(session);
-    let report = replay::replay(dir.path()).unwrap();
+    let report = records::replay(dir.path()).unwrap();
     assert!(report.ok(), "{:?}", report.problems);
 }
 
@@ -240,7 +240,7 @@ fn save_as_xml_replays_the_selected_exchange_format() {
         session.delimitation(doc).unwrap()
     );
     drop(session);
-    let report = replay::replay(dir.path()).unwrap();
+    let report = records::replay(dir.path()).unwrap();
     assert!(report.ok(), "{:?}", report.problems);
 }
 
@@ -318,7 +318,7 @@ fn combine_keeps_only_selected_hypotheses_and_remove_guards_lineage() {
     );
     assert!(!work.view.visible.contains(&ids[0]));
     drop(session);
-    let report = replay::replay(dir.path()).unwrap();
+    let report = records::replay(dir.path()).unwrap();
     assert!(report.ok(), "{:?}", report.problems);
 }
 
@@ -364,7 +364,7 @@ fn combine_is_atomic_undoable_and_replayable() {
     );
     assert_eq!(std::fs::read_to_string(&first).unwrap(), SPART);
     drop(session);
-    assert!(replay::replay(dir.path()).unwrap().ok());
+    assert!(records::replay(dir.path()).unwrap().ok());
 }
 
 #[test]
@@ -474,7 +474,7 @@ fn hidden_workspace_moves_with_its_folder_and_passive_open_writes_nothing() {
     assert_eq!(session.delimitation(doc).unwrap().view.display_tree, None);
     session.redo(doc).unwrap();
     drop(session);
-    let replay = replay::replay(&root).unwrap();
+    let replay = records::replay(&root).unwrap();
     assert!(replay.ok(), "{:?}", replay.problems);
     let moved = parent.path().join("moved");
     std::fs::rename(&root, &moved).unwrap();
@@ -618,17 +618,17 @@ fn application_state_replay_handles_hidden_baseline_and_missing_original_folder(
     let recovery = edited.recovery_root().to_path_buf();
     edited.flush().unwrap();
     std::fs::rename(&root, parent.path().join("unavailable")).unwrap();
-    let report = replay::replay(&recovery).unwrap();
+    let report = records::replay(&recovery).unwrap();
     assert!(report.ok(), "{:?}", report.problems);
     let recovered = parent.path().join("recovered");
     assert!(matches!(
-        replay::recover(&recovery, &recovered),
+        records::recover(&recovery, &recovered),
         Err(basecraft_ops::Error::SaveCheckRequired(_))
     ));
     assert!(!recovered.exists());
     let journal_before = basecraft_ops::log::read_all(&recovery).unwrap();
     let mut attempt =
-        replay::prepare_recovery(&recovery, &recovered, replay::RecoveryMode::Strict).unwrap();
+        records::prepare_recovery(&recovery, &recovered, records::RecoveryMode::Strict).unwrap();
     let check = attempt.check(0).unwrap();
     assert_ne!(
         check.evidence().issues,
@@ -701,12 +701,12 @@ fn combined_workspace_move_and_complete_export_keep_declared_source_evidence() {
             .is_empty()
     );
     let package = parent.path().join("package");
-    basecraft_ops::provenance::package(&canonical, &package).unwrap();
+    basecraft_ops::records::package(&canonical, &package).unwrap();
     drop(session);
     std::fs::rename(&root, parent.path().join("moved")).unwrap();
     let exported = package.join("combined.spart");
     assert_eq!(
-        basecraft_ops::provenance::verify(&exported).unwrap(),
+        basecraft_ops::records::verify(&exported).unwrap(),
         Vec::<String>::new()
     );
     let work = basecraft_ops::files::load_delimitation(&exported).unwrap();

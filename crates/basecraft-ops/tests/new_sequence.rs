@@ -1,4 +1,4 @@
-use basecraft_ops::{Session, replay};
+use basecraft_ops::{Session, records};
 use basecraft_protocol::{Feature, Location, Op, Strand};
 
 #[test]
@@ -60,11 +60,11 @@ fn new_sequence_validates_before_creating_and_replays_unsaved_edits() {
     session.flush().unwrap();
     let recovery = session.recovery_root().to_owned();
     assert_eq!(
-        replay::replay(&recovery).unwrap().problems,
+        records::replay(&recovery).unwrap().problems,
         Vec::<String>::new()
     );
     let restored = root.path().join("restored");
-    let outputs = replay::recover(&recovery, &restored).unwrap();
+    let outputs = records::recover(&recovery, &restored).unwrap();
     let mut recovered = Session::unlogged(&restored);
     let copy = recovered.open(&outputs[0]).unwrap();
     assert_eq!(

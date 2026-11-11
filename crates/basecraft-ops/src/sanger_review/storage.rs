@@ -348,7 +348,7 @@ impl SangerRun {
         for source in &self.evidence.sources {
             source.checked()?;
         }
-        crate::provenance::publish(
+        crate::records::provenance::publish(
             self.directory(),
             &publication(
                 &self.run,
@@ -884,7 +884,7 @@ impl SangerReviewSession {
             retained: None,
             reference: None,
         });
-        crate::provenance::publish(run.directory(), &record)?;
+        crate::records::provenance::publish(run.directory(), &record)?;
         run.bind(path)?;
         self.evidence.runs = vec![run.directory().into()];
         self.checkpoint().map_err(invalid)
@@ -899,7 +899,7 @@ pub(crate) fn relocate_package(
     bundle: &Path,
     paths: &BTreeMap<PathBuf, String>,
 ) -> crate::Result<()> {
-    let bytes = crate::provenance::read_record(copied)?;
+    let bytes = crate::records::provenance::read_record(copied)?;
     let value: serde_json::Value = serde_json::from_slice(&bytes)?;
     let value = match value["version"].as_u64() {
         Some(1) => {
@@ -1064,7 +1064,7 @@ impl SangerReviewSession {
         let run = run
             .finish(std::slice::from_ref(&review))
             .map_err(|e| e.to_string())?;
-        let bytes = crate::provenance::read_record(&run.directory().join("manifest.json"))
+        let bytes = crate::records::provenance::read_record(&run.directory().join("manifest.json"))
             .map_err(|e| e.to_string())?;
         let evidence = AdditionEvidence {
             schema_version: 1,
@@ -1095,7 +1095,7 @@ pub fn record_addition(
             "Reviewed sequence differs from its Sanger evidence",
         ));
     }
-    let bytes = crate::provenance::read_record(&evidence.bundle.join("manifest.json"))?;
+    let bytes = crate::records::provenance::read_record(&evidence.bundle.join("manifest.json"))?;
     let publication: Publication = serde_json::from_slice(&bytes)?;
     if publication.id != evidence.id
         || basecraft_io::hash_bytes(&bytes) != evidence.hash
@@ -1122,7 +1122,7 @@ pub fn record_addition(
             "Sanger review is unresolved or describes another sequence",
         ));
     }
-    let mut issues = crate::provenance::verify_records(&evidence.bundle, &publication)?;
+    let mut issues = crate::records::provenance::verify_records(&evidence.bundle, &publication)?;
     issues.extend(inputs::verify_ancestors(&evidence.bundle)?);
     if !issues.is_empty() {
         return Err(invalid(issues.join("; ")));
@@ -1179,7 +1179,7 @@ mod tests {
         let path = folder.join("specimen.sanger-review.json");
         review.save(&path).unwrap();
         assert_eq!(
-            crate::provenance::verify(&path).unwrap(),
+            crate::records::provenance::verify(&path).unwrap(),
             Vec::<String>::new()
         );
         assert_eq!(review.evidence.sources.len(), 1);
@@ -1218,7 +1218,7 @@ mod tests {
         reopened.apply(ReviewOp::Redo).unwrap();
         assert_eq!(reopened.decision(0), Some(&ReviewChoice::Edit('G')));
         assert_eq!(
-            crate::provenance::verify(&path).unwrap(),
+            crate::records::provenance::verify(&path).unwrap(),
             Vec::<String>::new()
         );
     }
@@ -1232,7 +1232,8 @@ mod tests {
         let exact = review.draft_json.clone();
         let path = folder.join("specimen.sanger-review.json");
         review.save(&path).unwrap();
-        let authored = crate::provenance::bundle_for_result(&path).join("reports/methods.md");
+        let authored =
+            crate::records::provenance::bundle_for_result(&path).join("reports/methods.md");
         std::fs::write(
             &authored,
             "User-authored laboratory methods, preserved verbatim.\n",
@@ -1240,14 +1241,16 @@ mod tests {
         .unwrap();
         review.save(&path).unwrap();
         let package = tmp.path().join("package");
-        crate::provenance::package(&path, &package).unwrap();
+        crate::records::provenance::package(&path, &package).unwrap();
         std::fs::remove_dir_all(folder).unwrap();
         let moved = tmp.path().join("moved-export");
         std::fs::rename(&package, &moved).unwrap();
         let path = moved.join("specimen.sanger-review.json");
         assert_eq!(
-            std::fs::read_to_string(crate::provenance::companion(&path).join("reports/methods.md"))
-                .unwrap(),
+            std::fs::read_to_string(
+                crate::records::provenance::companion(&path).join("reports/methods.md")
+            )
+            .unwrap(),
             "User-authored laboratory methods, preserved verbatim.\n"
         );
         let reopened = SangerReviewSession::load(&path).unwrap();
@@ -1256,7 +1259,7 @@ mod tests {
         assert_eq!(reopened.unresolved(), 1);
         assert!(reopened.working_draft().unwrap().inputs[0].path.is_file());
         assert_eq!(
-            crate::provenance::verify(&path).unwrap(),
+            crate::records::provenance::verify(&path).unwrap(),
             Vec::<String>::new()
         );
         let mut saved_again = reopened;
@@ -1281,18 +1284,18 @@ mod tests {
             .unwrap();
         review.export_consensus(&output, "sample").unwrap();
         assert_eq!(
-            crate::provenance::verify(&output).unwrap(),
+            crate::records::provenance::verify(&output).unwrap(),
             Vec::<String>::new()
         );
         let package = tmp.path().join("export");
-        crate::provenance::package(&output, &package).unwrap();
+        crate::records::provenance::package(&output, &package).unwrap();
         std::fs::remove_dir_all(folder).unwrap();
         let resumed =
             SangerReviewSession::load(&package.join("consensus.sanger-review.json")).unwrap();
         assert_eq!(resumed.resolved_sequence().as_deref(), Some("AC"));
         assert!(resumed.working_draft().is_ok());
         assert_eq!(
-            crate::provenance::verify(&package.join("consensus.fa")).unwrap(),
+            crate::records::provenance::verify(&package.join("consensus.fa")).unwrap(),
             Vec::<String>::new()
         );
     }
@@ -1311,7 +1314,9 @@ mod tests {
                 .working_draft()
                 .is_err()
         );
-        assert!(crate::provenance::package(&path, &tmp.path().join("bad-export")).is_err());
+        assert!(
+            crate::records::provenance::package(&path, &tmp.path().join("bad-export")).is_err()
+        );
         assert!(!tmp.path().join("bad-export").exists());
         std::fs::remove_file(&trace).unwrap();
         assert!(
@@ -1330,7 +1335,7 @@ mod tests {
         let resolved = reopened.working_draft().unwrap();
         assert_eq!(std::fs::read(&resolved.inputs[0].path).unwrap(), original);
         assert_eq!(std::fs::read(&trace).unwrap(), b"ABIFnew user data");
-        crate::provenance::package(&path, &tmp.path().join("preserved-export")).unwrap();
+        crate::records::provenance::package(&path, &tmp.path().join("preserved-export")).unwrap();
     }
 
     #[test]
@@ -1434,7 +1439,7 @@ mod tests {
         let path = folder.join("multi.sanger-review.json");
         review.save(&path).unwrap();
         let package = tmp.path().join("export");
-        crate::provenance::package(&path, &package).unwrap();
+        crate::records::provenance::package(&path, &package).unwrap();
         std::fs::remove_dir_all(folder).unwrap();
         let reopened =
             SangerReviewSession::load(&package.join("multi.sanger-review.json")).unwrap();
@@ -1479,16 +1484,16 @@ mod tests {
         let result = folder.join("added.afa");
         session.save(doc, Some(&result)).unwrap();
         assert_eq!(
-            crate::provenance::verify(&result).unwrap(),
+            crate::records::provenance::verify(&result).unwrap(),
             Vec::<String>::new()
         );
         let package = tmp.path().join("export");
-        crate::provenance::package(&result, &package).unwrap();
+        crate::records::provenance::package(&result, &package).unwrap();
         drop(session);
         std::fs::remove_dir_all(&folder).unwrap();
         let result = package.join("added.afa");
         assert_eq!(
-            crate::provenance::verify(&result).unwrap(),
+            crate::records::provenance::verify(&result).unwrap(),
             Vec::<String>::new()
         );
         let mut session = crate::Session::recoverable(&package).unwrap();
@@ -1535,7 +1540,7 @@ mod tests {
         ));
         assert_eq!(std::fs::read(&saved_again).unwrap(), packaged_bytes);
         assert_eq!(
-            crate::provenance::verify(&saved_again).unwrap(),
+            crate::records::provenance::verify(&saved_again).unwrap(),
             Vec::<String>::new()
         );
     }

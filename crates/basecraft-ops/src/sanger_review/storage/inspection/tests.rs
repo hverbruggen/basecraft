@@ -289,7 +289,7 @@ fn legacy_registration_rechecks_and_stops_after_prior_real_effects() {
     let mut second = first.clone();
     second.path = root.join("other/second.ab1");
     fs::copy(&first.path, &second.path).unwrap();
-    let provenance = crate::provenance::companion(&second.path);
+    let provenance = crate::records::provenance::companion(&second.path);
     fs::create_dir_all(&provenance).unwrap();
     fs::write(provenance.join("manifest.json"), "{").unwrap();
     other.draft.inputs.push(second);
@@ -403,7 +403,7 @@ fn direct_manifest_membership_and_recovery_roles_are_observations() {
         let mut reads = BTreeMap::new();
         let r = inspect_with_manifest_reader(&s, &target, |path| {
             *reads.entry(path.to_path_buf()).or_insert(0usize) += 1;
-            crate::provenance::read_record(path)
+            crate::records::provenance::read_record(path)
         });
         let counts = basecraft_io::counters::snapshot();
         for dep in &r.dependencies {

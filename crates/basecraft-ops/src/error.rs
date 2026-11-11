@@ -46,7 +46,7 @@ pub enum Error {
     #[error("save_decision_stale: review the refreshed save check")]
     SaveDecisionStale(Box<crate::session::SaveCheck>),
     #[error(transparent)]
-    PublishedWithFailure(Box<crate::replay::PublishedWithFailure>),
+    PublishedWithFailure(Box<crate::records::replay::PublishedWithFailure>),
     #[error("nothing to {0}")]
     NothingTo(&'static str),
 }

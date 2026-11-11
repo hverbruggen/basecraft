@@ -83,7 +83,7 @@ impl RecoveryAttempt {
 #[test]
 fn actual_recovery_four_states() {
     let Some(root) = crate::isolated_profile::enter(
-        "replay::attempt_boundary_tests::actual_recovery_four_states",
+        "records::replay::attempt_boundary_tests::actual_recovery_four_states",
     ) else {
         return;
     };
@@ -164,7 +164,7 @@ fn actual_recovery_four_states() {
 #[test]
 fn distinct_artifact_and_precomputed_observation_errors() {
     let Some(root) = crate::isolated_profile::enter(
-        "replay::attempt_boundary_tests::distinct_artifact_and_precomputed_observation_errors",
+        "records::replay::attempt_boundary_tests::distinct_artifact_and_precomputed_observation_errors",
     ) else {
         return;
     };
@@ -219,7 +219,7 @@ fn distinct_artifact_and_precomputed_observation_errors() {
 #[test]
 fn same_bytes_new_identity_reaches_recovery() {
     let Some(root) = crate::isolated_profile::enter(
-        "replay::attempt_boundary_tests::same_bytes_new_identity_reaches_recovery",
+        "records::replay::attempt_boundary_tests::same_bytes_new_identity_reaches_recovery",
     ) else {
         return;
     };
@@ -251,7 +251,7 @@ fn same_bytes_new_identity_reaches_recovery() {
 #[test]
 fn pre_session_refusal_discards_actual_consent() {
     let Some(root) = crate::isolated_profile::enter(
-        "replay::attempt_boundary_tests::pre_session_refusal_discards_actual_consent",
+        "records::replay::attempt_boundary_tests::pre_session_refusal_discards_actual_consent",
     ) else {
         return;
     };

@@ -189,7 +189,7 @@ print(json.dumps(run(sys.argv[1], method='gmyc_multiple', workspace=sys.argv[2],
     visible.sort();
     assert_eq!(visible, ["source.nwk", "species.spart"]);
     assert_eq!(
-        basecraft_ops::provenance::verify(&canonical).unwrap(),
+        basecraft_ops::records::verify(&canonical).unwrap(),
         Vec::<String>::new()
     );
 }
@@ -228,7 +228,7 @@ fn distance_matrix_keeps_only_the_table_visible() {
     names.sort();
     assert_eq!(names, [".basecraft", "matrix.tsv", "source.afa"]);
     assert_eq!(
-        basecraft_ops::provenance::verify(&output).unwrap(),
+        basecraft_ops::records::verify(&output).unwrap(),
         Vec::<String>::new()
     );
 }

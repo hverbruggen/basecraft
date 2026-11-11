@@ -74,7 +74,7 @@ impl Session {
             absent_sidecars: vec![],
             origin: None,
             origin_issue: None,
-            origin_bundle: crate::provenance::bundle_for_result(&self.resolve(key)),
+            origin_bundle: crate::records::provenance::bundle_for_result(&self.resolve(key)),
             disk_stamp: basecraft_protocol::provenance::FileStamp {
                 size: 0,
                 modified_seconds: 0,

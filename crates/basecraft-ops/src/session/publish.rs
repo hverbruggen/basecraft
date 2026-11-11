@@ -37,7 +37,7 @@ impl Session {
         id: DocId,
         target: &Path,
         inputs: &[(String, String)],
-        snapshot: &crate::document_record::DocumentRecord,
+        snapshot: &crate::records::document_record::DocumentRecord,
     ) -> Result<()> {
         if !self.tracked
             || self.provenance_policy == basecraft_platform::settings::ProvenancePolicy::None
@@ -65,7 +65,7 @@ impl Session {
         target: &Path,
         save: &LogEntry,
         analysis_inputs: &[(String, String)],
-        snapshot: Option<&crate::document_record::DocumentRecord>,
+        snapshot: Option<&crate::records::document_record::DocumentRecord>,
     ) -> Result<()> {
         use basecraft_protocol::provenance::{
             ArtifactRevision, Completeness, EditActivity, Publication,
@@ -80,7 +80,7 @@ impl Session {
                             .trim_start_matches("b3:"),
                     )
                 } else {
-                    crate::provenance::companion(target)
+                    crate::records::provenance::companion(target)
                 }
             }
             basecraft_platform::settings::ProvenancePolicy::LocalOnly => {
@@ -107,7 +107,7 @@ impl Session {
                 .map(|(_, p)| p.clone())
         } else if previous_bundle.join("manifest.json").is_file() {
             let publication: Publication = serde_json::from_slice(
-                &crate::provenance::read_record(&previous_bundle.join("manifest.json"))?,
+                &crate::records::provenance::read_record(&previous_bundle.join("manifest.json"))?,
             )?;
             if publication.schema_version != 1 {
                 return Err(invalid("unsupported parent provenance version"));
@@ -147,8 +147,9 @@ impl Session {
                 // in the new bundle; clean source references remain references.
                 for entry in std::fs::read_dir(previous_bundle.join("records"))? {
                     let entry = entry?;
-                    let record: Publication =
-                        serde_json::from_slice(&crate::provenance::read_record(&entry.path())?)?;
+                    let record: Publication = serde_json::from_slice(
+                        &crate::records::provenance::read_record(&entry.path())?,
+                    )?;
                     for output in record.outputs {
                         let Some(name) = output.retained else {
                             continue;
@@ -472,7 +473,7 @@ impl Session {
             let path = bundle.join("records").join(format!("{parent}.json"));
             parent_hashes.insert(parent.clone(), basecraft_io::hash_file(&path)?);
         }
-        crate::contributions::project(&events, &mut effective_edits);
+        crate::records::contributions::project(&events, &mut effective_edits);
         let publication = Publication {
             schema_version: 1,
             id: save.id.clone(),
@@ -493,7 +494,7 @@ impl Session {
             },
             report_template_version: 2,
         };
-        crate::provenance::publish(&bundle, &publication)
+        crate::records::provenance::publish(&bundle, &publication)
     }
 
     /// Add a captured input revision and its recorded producing activity to an
@@ -501,7 +502,7 @@ impl Session {
     pub fn complete_operation_publication(
         &self,
         id: DocId,
-        snapshot: &crate::document_record::DocumentRecord,
+        snapshot: &crate::records::document_record::DocumentRecord,
         run: &crate::analysis_store::ArtifactRun,
     ) -> Result<()> {
         let activity = self
@@ -525,7 +526,7 @@ impl Session {
         id: DocId,
         target: &Path,
         outputs: &[PathBuf],
-        snapshot: &crate::document_record::DocumentRecord,
+        snapshot: &crate::records::document_record::DocumentRecord,
         run: &crate::analysis_store::ArtifactRun,
     ) -> Result<()> {
         use basecraft_protocol::provenance::{ArtifactRevision, Completeness, Publication};
@@ -655,7 +656,7 @@ impl Session {
         };
         match self.provenance_policy {
             basecraft_platform::settings::ProvenancePolicy::Portable => {
-                crate::provenance::publish(run.directory(), &publication)?;
+                crate::records::provenance::publish(run.directory(), &publication)?;
             }
             basecraft_platform::settings::ProvenancePolicy::LocalOnly => {
                 let bundle = self.local_provenance_root.join(
@@ -693,7 +694,7 @@ impl Session {
                         })?;
                     }
                 }
-                crate::provenance::publish(&bundle, &publication)?;
+                crate::records::provenance::publish(&bundle, &publication)?;
             }
             basecraft_platform::settings::ProvenancePolicy::None => {}
         }

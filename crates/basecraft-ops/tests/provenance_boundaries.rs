@@ -157,7 +157,7 @@ fn hidden_binding_errors_never_fall_back_to_adjacent_metadata() {
 
 #[test]
 fn imported_support_partial_removal_undo_save_reopen_and_redo() {
-    use basecraft_ops::provenance;
+    use basecraft_ops::records;
     let dir = tempfile::tempdir().unwrap();
     let target = dir.path().join("tree.nwk");
     let source = dir.path().join("source.nwk");
@@ -204,7 +204,7 @@ fn imported_support_partial_removal_undo_save_reopen_and_redo() {
             .contains("import_support")
     );
     let input =
-        basecraft_ops::input_evidence::read_input(&provenance::bundle_for_result(&target)).unwrap();
+        basecraft_ops::input_evidence::read_input(&records::bundle_for_result(&target)).unwrap();
     assert_eq!(
         serde_json::to_value(&input.upstream)
             .unwrap()
@@ -240,7 +240,7 @@ fn imported_support_partial_removal_undo_save_reopen_and_redo() {
     );
     std::fs::write(&source, "((a,b)0/0,c);\n").unwrap();
     assert!(
-        provenance::verify(&target).unwrap().is_empty(),
+        records::verify(&target).unwrap().is_empty(),
         "removed source still linked"
     );
 }
@@ -381,7 +381,7 @@ fn generic_no_output_activity_does_not_own_unrelated_manual_edits() {
 
 #[test]
 fn extraction_is_reference_first_and_packages_exact_source_and_mapping() {
-    use basecraft_ops::provenance;
+    use basecraft_ops::records;
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("gene.fasta");
     let result = dir.path().join("extract.gb");
@@ -391,7 +391,7 @@ fn extraction_is_reference_first_and_packages_exact_source_and_mapping() {
     session
         .extract(doc, (1, 7), &[(1, 3), (5, 7)], true, &result)
         .unwrap();
-    let publication = provenance::inspect(&result).unwrap();
+    let publication = records::inspect(&result).unwrap();
     let conflicts = basecraft_ops::input_evidence::conflicts(&source).unwrap();
     assert!(
         !conflicts.analyses.is_empty(),
@@ -405,20 +405,20 @@ fn extraction_is_reference_first_and_packages_exact_source_and_mapping() {
     );
     assert!(publication.inputs[0].retained.is_none());
     assert!(publication.inputs[0].reference.is_some());
-    let issues = provenance::verify(&result).unwrap();
+    let issues = records::verify(&result).unwrap();
     assert!(issues.is_empty(), "{issues:?}");
     let input =
-        basecraft_ops::input_evidence::read_input(&provenance::bundle_for_result(&result)).unwrap();
+        basecraft_ops::input_evidence::read_input(&records::bundle_for_result(&result)).unwrap();
     assert_eq!(
         input.extra["extraction"]["selection"]["params"]["segments"],
         serde_json::json!([[1, 3], [5, 7]])
     );
     let package = dir.path().join("package");
-    provenance::package(&result, &package).unwrap();
+    records::package(&result, &package).unwrap();
     std::fs::write(&source, ">gene\nTTTTTTTT\n").unwrap();
-    assert_ne!(provenance::verify(&result).unwrap(), Vec::<String>::new());
+    assert_ne!(records::verify(&result).unwrap(), Vec::<String>::new());
     assert_eq!(
-        provenance::verify(&package.join("extract.gb")).unwrap(),
+        records::verify(&package.join("extract.gb")).unwrap(),
         Vec::<String>::new()
     );
 }

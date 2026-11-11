@@ -344,7 +344,7 @@ pub(crate) mod tests {
                     Site::Provenance,
                     Box::new(|session| {
                         let target = session.resolve(&session.docs[0].key);
-                        let bundle = crate::provenance::companion(&target);
+                        let bundle = crate::records::provenance::companion(&target);
                         fs::write(bundle, b"blocked provenance bundle")?;
                         Ok(())
                     }),

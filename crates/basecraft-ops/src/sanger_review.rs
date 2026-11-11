@@ -25,7 +25,7 @@ pub fn evidence_kind(path: &Path) -> Option<EvidenceKind> {
     if !path.extension()?.eq_ignore_ascii_case("json") {
         return None;
     }
-    let bytes = crate::provenance::read_record(path).ok()?;
+    let bytes = crate::records::provenance::read_record(path).ok()?;
     if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes)
         && value.get("version").is_some()
     {
@@ -56,8 +56,8 @@ pub fn saved_review(path: &Path) -> Option<Result<SangerReviewSession, String>> 
         // Keep the acquired bytes through classification, decoding and acceptance.
         // The accepted-revision check still verifies the current file; a second
         // classification/load pass must not select different bytes after a race.
-        let bytes =
-            crate::provenance::read_record(path).map_err(|error| unreadable(error.to_string()))?;
+        let bytes = crate::records::provenance::read_record(path)
+            .map_err(|error| unreadable(error.to_string()))?;
         let value: serde_json::Value =
             serde_json::from_slice(&bytes).map_err(|error| unreadable(error.to_string()))?;
         if value.get("version").is_none() {
@@ -158,8 +158,11 @@ impl SangerReviewSession {
         }
     }
     /// Describe the actual review state, retaining the complete decision audit separately.
-    pub fn document_report(&self, unsaved: bool) -> Result<crate::document_record::Report, String> {
-        use crate::document_record::{DocumentRecord, HistoryRow, MethodsParagraph};
+    pub fn document_report(
+        &self,
+        unsaved: bool,
+    ) -> Result<crate::records::document_record::Report, String> {
+        use crate::records::document_record::{DocumentRecord, HistoryRow, MethodsParagraph};
         let mut state = serde_json::json!({
             "draft": self.draft, "draft_sha256": self.draft_sha256, "events": self.events,
             "settings": self.settings, "reference": self.reference, "mask": self.mask,
@@ -407,7 +410,7 @@ impl SangerReviewSession {
         evidence
             .map_paths(|p| Ok(parent.join(p)))
             .map_err(|e| e.to_string())?;
-        let bundle = crate::provenance::bundle_for_result(path);
+        let bundle = crate::records::provenance::bundle_for_result(path);
         if bundle.join("manifest.json").is_file() && !evidence.runs.contains(&bundle) {
             evidence.runs.push(bundle);
         }
@@ -1078,7 +1081,7 @@ mod call_set_tests {
         assert_eq!(reopened.decision(0), Some(&ReviewChoice::Edit('C')));
         assert_eq!(std::fs::read(&session.draft_path).unwrap(), original);
         let package = tmp.path().join("package");
-        crate::provenance::package(&saved, &package).unwrap();
+        crate::records::provenance::package(&saved, &package).unwrap();
         std::fs::remove_file(&session.draft_path).unwrap();
         let packaged = SangerReviewSession::load(&package.join("review.json")).unwrap();
         assert!(packaged.working_draft().is_ok());

@@ -340,11 +340,11 @@ mod live_tests {
         };
         // Shared host verification, not Sanger, owns common receipt/input/artifact rules.
         let receipt: basecraft_protocol::operation::OperationOutcome = serde_json::from_slice(
-            &basecraft_ops::provenance::read_record(&called.run.join("runtime.json")).unwrap(),
+            &basecraft_ops::records::read_record(&called.run.join("runtime.json")).unwrap(),
         )
         .unwrap();
         let execution: serde_json::Value = serde_json::from_slice(
-            &basecraft_ops::provenance::read_record(&called.run.join("execution.json")).unwrap(),
+            &basecraft_ops::records::read_record(&called.run.join("execution.json")).unwrap(),
         )
         .unwrap();
         let context: basecraft_protocol::operation::InvocationContext =

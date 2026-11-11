@@ -88,15 +88,15 @@ fn installed_multi_input_job_uses_common_storage_and_frozen_identity() {
         json!({"include_newlines":true,"mode":"normal"})
     );
     let output = temp.path().join("report.json");
-    let publication = basecraft_ops::provenance::inspect(&output).unwrap();
+    let publication = basecraft_ops::records::inspect(&output).unwrap();
     assert_eq!(publication.inputs.len(), 2);
     assert_eq!(
-        basecraft_ops::provenance::verify(&output).unwrap(),
+        basecraft_ops::records::verify(&output).unwrap(),
         Vec::<String>::new()
     );
     std::fs::write(temp.path().join("b.txt"), b"changed").unwrap();
     assert_ne!(
-        basecraft_ops::provenance::verify(&output).unwrap(),
+        basecraft_ops::records::verify(&output).unwrap(),
         Vec::<String>::new()
     );
     let execution: serde_json::Value = serde_json::from_slice(
@@ -149,7 +149,7 @@ fn registered_newick_inputs_keep_verifiable_identity_evidence() {
     let outcome = wait(&jobs, &accepted.run_id);
     assert_eq!(outcome.state, RuntimeState::Completed, "{outcome:?}");
     assert_eq!(
-        basecraft_ops::provenance::verify(&temp.path().join("report.json")).unwrap(),
+        basecraft_ops::records::verify(&temp.path().join("report.json")).unwrap(),
         Vec::<String>::new()
     );
     for name in ["a.txt", "b.txt"] {
@@ -400,7 +400,7 @@ fn submitted_views_remain_frozen_when_both_originals_change_during_execution() {
     assert_eq!(outcome.state, RuntimeState::Completed, "{outcome:?}");
     assert_eq!(outcome.data, Some(json!({"bytes":7})));
     assert_ne!(
-        basecraft_ops::provenance::verify(&temp.path().join("report.json")).unwrap(),
+        basecraft_ops::records::verify(&temp.path().join("report.json")).unwrap(),
         Vec::<String>::new()
     );
 }
@@ -658,7 +658,7 @@ fn document_inputs_read_the_session_revision_and_record_history() {
     let clean = run_in_session(&mut manager, &registry, &mut session, request);
     assert_eq!(clean.state, RuntimeState::Completed, "{clean:?}");
     assert_eq!(
-        basecraft_ops::provenance::verify(&temp.path().join("clean.json")).unwrap(),
+        basecraft_ops::records::verify(&temp.path().join("clean.json")).unwrap(),
         Vec::<String>::new()
     );
     // Unsaved edits are submitted as a generated snapshot; the file is untouched.
@@ -692,7 +692,7 @@ fn document_inputs_read_the_session_revision_and_record_history() {
         ">a\nAC-T\n>b\nACGT\n"
     );
     // The result carries the submitted revision and producing activity, too.
-    let publication = basecraft_ops::provenance::inspect(&temp.path().join("edited.json")).unwrap();
+    let publication = basecraft_ops::records::inspect(&temp.path().join("edited.json")).unwrap();
     assert!(publication.events.iter().any(|event| matches!(&event.op,
         basecraft_protocol::Op::ToolRun { params, .. } if params["run_id"] == edited.run_id)));
     assert!(
@@ -737,7 +737,7 @@ fn document_inputs_read_the_session_revision_and_record_history() {
         ]
     );
     // The Tasks view lists registered runs and points at their own record.
-    let tasks = basecraft_ops::document_record::jobs(true).unwrap();
+    let tasks = basecraft_ops::records::jobs(true).unwrap();
     let listed = tasks["jobs"]
         .as_array()
         .unwrap()
@@ -825,7 +825,7 @@ fn document_repair_waits_for_owner_history_and_does_not_repeat_activity() {
             .count(),
         1
     );
-    let publication = basecraft_ops::provenance::inspect(&output).unwrap();
+    let publication = basecraft_ops::records::inspect(&output).unwrap();
     assert!(publication.events.iter().any(|event| matches!(&event.op,
         basecraft_protocol::Op::ToolRun { params, .. } if params["run_id"] == accepted.run_id)));
 }
@@ -884,7 +884,7 @@ fn canonical_alignment_evidence_preserves_order_headers_and_residues() {
     );
     assert_eq!(outcome.data, Some(json!({"bytes":canonical.len()})));
     assert_eq!(std::fs::read_to_string(&source).unwrap(), original);
-    let publication = basecraft_ops::provenance::inspect(&root.path().join("result.json")).unwrap();
+    let publication = basecraft_ops::records::inspect(&root.path().join("result.json")).unwrap();
     assert!(publication.events.iter().any(|event| matches!(&event.op,
         basecraft_protocol::Op::ToolRun { params, .. } if params["run_id"] == outcome.run_id)));
 }
@@ -1196,11 +1196,11 @@ fn retained_inputs_survive_job_drop_and_temporary_source_removal() {
     std::fs::remove_file(temp.path().join("b.txt")).unwrap();
     assert_eq!(std::fs::read(&inputs[0]).unwrap(), b"abc\n");
     assert_eq!(std::fs::read(&inputs[1]).unwrap(), b"xy\n");
-    let issues = basecraft_ops::provenance::verify(&temp.path().join("report.json")).unwrap();
+    let issues = basecraft_ops::records::verify(&temp.path().join("report.json")).unwrap();
     assert!(issues.is_empty(), "{issues:?}");
     std::fs::write(&inputs[0], b"damaged").unwrap();
     assert_ne!(
-        basecraft_ops::provenance::verify(&temp.path().join("report.json")).unwrap(),
+        basecraft_ops::records::verify(&temp.path().join("report.json")).unwrap(),
         Vec::<String>::new()
     );
 }
@@ -1320,7 +1320,7 @@ fn equal_content_retention_keeps_exact_primary_owner_and_leaf_lifecycles() {
                     original
                 );
                 assert_eq!(
-                    basecraft_ops::provenance::verify(&temp.path().join("report.json")).unwrap(),
+                    basecraft_ops::records::verify(&temp.path().join("report.json")).unwrap(),
                     Vec::<String>::new()
                 );
                 drop(jobs);

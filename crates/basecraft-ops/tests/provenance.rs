@@ -1,5 +1,5 @@
-use basecraft_ops::document_record::ReportExt;
-use basecraft_ops::{Session, provenance};
+use basecraft_ops::records::ReportExt;
+use basecraft_ops::{Session, records};
 use basecraft_protocol::Op;
 use std::path::Path;
 
@@ -33,7 +33,7 @@ fn passive_open_close_and_unchanged_save_create_no_records() {
     assert!(!paths.cache.exists());
     assert!(!paths.config.exists());
     assert!(!dir.path().join(".basecraft").exists());
-    assert!(!provenance::companion(&file).exists());
+    assert!(!records::companion(&file).exists());
 }
 
 #[test]
@@ -54,8 +54,8 @@ fn edit_undo_redo_save_move_verify_and_report() {
         session.undo(doc).unwrap();
         session.redo(doc).unwrap();
         session.save(doc, None).unwrap();
-        assert_eq!(provenance::verify(&file).unwrap(), Vec::<String>::new());
-        let publication = provenance::inspect(&file).unwrap();
+        assert_eq!(records::verify(&file).unwrap(), Vec::<String>::new());
+        let publication = records::inspect(&file).unwrap();
         assert_eq!(publication.effective_edits.len(), 1);
         assert_eq!(publication.inputs.len(), 1);
         assert!(!publication.completeness.ancestry_known);
@@ -69,21 +69,21 @@ fn edit_undo_redo_save_move_verify_and_report() {
     }
     assert!(!recovery.exists(), "clean close removes published recovery");
     let exported = dir.path().join("package");
-    provenance::package(&file, &exported).unwrap();
+    records::package(&file, &exported).unwrap();
     let moved = exported.join("gene.fasta");
     std::fs::remove_file(&file).unwrap();
-    std::fs::remove_dir_all(provenance::companion(&file)).unwrap();
-    assert_eq!(provenance::verify(&moved).unwrap(), Vec::<String>::new());
-    let reports = provenance::companion(&moved).join("reports");
+    std::fs::remove_dir_all(records::companion(&file)).unwrap();
+    assert_eq!(records::verify(&moved).unwrap(), Vec::<String>::new());
+    let reports = records::companion(&moved).join("reports");
     assert!(
         std::fs::read_to_string(reports.join("methods.generated.md"))
             .unwrap()
             .contains("Replaced")
     );
     std::fs::write(reports.join("methods.md"), "My reviewed prose").unwrap();
-    provenance::write_reports(
-        &provenance::companion(&moved),
-        &provenance::inspect(&moved).unwrap(),
+    records::write_reports(
+        &records::companion(&moved),
+        &records::inspect(&moved).unwrap(),
     )
     .unwrap();
     assert_eq!(
@@ -107,7 +107,7 @@ fn completely_undone_edit_publishes_nothing_and_cleans_recovery() {
         session.undo(doc).unwrap();
         session.save(doc, None).unwrap();
     }
-    assert!(!provenance::companion(&file).exists());
+    assert!(!records::companion(&file).exists());
     assert!(!recovery.exists());
 }
 
@@ -150,19 +150,19 @@ fn tampered_retained_original_and_path_escape_are_detected() {
     let doc = session.open(&file).unwrap();
     session.apply(doc, edit()).unwrap();
     session.save(doc, None).unwrap();
-    let publication = provenance::inspect(&file).unwrap();
+    let publication = records::inspect(&file).unwrap();
     let retained = publication.inputs[0].retained.as_ref().unwrap();
-    std::fs::write(provenance::companion(&file).join(retained), b"changed").unwrap();
-    assert_ne!(provenance::verify(&file).unwrap(), Vec::<String>::new());
+    std::fs::write(records::companion(&file).join(retained), b"changed").unwrap();
+    assert_ne!(records::verify(&file).unwrap(), Vec::<String>::new());
     let mut publication = publication;
     publication.inputs[0].retained = Some("../gene.fasta".into());
     std::fs::write(
-        provenance::companion(&file).join("manifest.json"),
+        records::companion(&file).join("manifest.json"),
         serde_json::to_vec(&publication).unwrap(),
     )
     .unwrap();
     assert!(
-        provenance::verify(&file)
+        records::verify(&file)
             .unwrap()
             .iter()
             .any(|e| e.contains("unsafe"))
@@ -178,7 +178,7 @@ fn sidecar_failure_reports_partial_save_and_keeps_pending_recovery() {
     let doc = session.open(&file).unwrap();
     session.apply(doc, edit()).unwrap();
     // A directory at the companion location injects a publication write error.
-    let bundle = provenance::companion(&file);
+    let bundle = records::companion(&file);
     std::fs::create_dir(&bundle).unwrap();
     std::fs::write(bundle.join("artifacts"), "blocked").unwrap();
     assert!(
@@ -210,7 +210,7 @@ fn no_recovery_and_no_provenance_policy_leave_no_durable_lineage() {
     session.save(doc, None).unwrap();
     assert!(!paths.state.join("recovery").exists());
     assert!(!paths.state.join("provenance").exists());
-    assert!(!provenance::companion(&file).exists());
+    assert!(!records::companion(&file).exists());
 }
 
 #[test]
@@ -253,14 +253,14 @@ fn live_annotation_sidecar_is_verified_and_packaged() {
         )
         .unwrap();
     session.save(doc, None).unwrap();
-    let published = provenance::inspect(&file).unwrap();
+    let published = records::inspect(&file).unwrap();
     assert_eq!(published.outputs.len(), 2);
     let package = dir.path().join("package");
-    provenance::package(&file, &package).unwrap();
+    records::package(&file, &package).unwrap();
     assert!(package.join(&published.outputs[1].logical_name).is_file());
     let sidecar = dir.path().join(&published.outputs[1].logical_name);
     std::fs::write(sidecar, "{}").unwrap();
-    assert_ne!(provenance::verify(&file).unwrap(), Vec::<String>::new());
+    assert_ne!(records::verify(&file).unwrap(), Vec::<String>::new());
 }
 
 #[test]
@@ -331,14 +331,14 @@ fn unsaved_recovery_reconstructs_exact_state_without_source_or_cache() {
     assert!(recovery.is_dir());
     std::fs::remove_file(&file).unwrap();
     let destination = dir.path().join("restored");
-    let restored = basecraft_ops::replay::recover(&recovery, &destination).unwrap();
+    let restored = basecraft_ops::records::recover(&recovery, &destination).unwrap();
     assert_eq!(restored, vec![destination.join("gene.fasta")]);
     assert_eq!(
         std::fs::read_to_string(&restored[0]).unwrap(),
         ">gene\nATGT\n"
     );
     assert!(!file.exists());
-    assert!(basecraft_ops::replay::recover(&recovery, &destination).is_err());
+    assert!(basecraft_ops::records::recover(&recovery, &destination).is_err());
 }
 
 #[test]
@@ -352,7 +352,7 @@ fn reopen_and_save_as_preserve_contributing_ancestry() {
         session.apply(doc, edit()).unwrap();
         session.save(doc, None).unwrap();
     }
-    let first = provenance::inspect(&file).unwrap();
+    let first = records::inspect(&file).unwrap();
     let copy = dir.path().join("copy.fasta");
     {
         let mut session = Session::recoverable_with_paths(dir.path(), &paths(dir.path())).unwrap();
@@ -369,11 +369,11 @@ fn reopen_and_save_as_preserve_contributing_ancestry() {
             .unwrap();
         session.save(doc, Some(&copy)).unwrap();
     }
-    let publication = provenance::inspect(&copy).unwrap();
+    let publication = records::inspect(&copy).unwrap();
     assert_eq!(publication.parents, vec![first.id]);
     assert_eq!(publication.effective_edits.len(), 2);
-    std::fs::remove_dir_all(provenance::companion(&file)).unwrap();
-    assert_eq!(provenance::verify(&copy).unwrap(), Vec::<String>::new());
+    std::fs::remove_dir_all(records::companion(&file)).unwrap();
+    assert_eq!(records::verify(&copy).unwrap(), Vec::<String>::new());
 }
 
 #[test]
@@ -422,7 +422,7 @@ fn recovery_rejects_checked_traversal_and_corrupt_retained_baseline() {
             .collect::<String>();
         std::fs::write(&journal, mutated).unwrap();
         assert!(
-            basecraft_ops::replay::recover(recovery, &dir.path().join("output"))
+            basecraft_ops::records::recover(recovery, &dir.path().join("output"))
                 .unwrap_err()
                 .to_string()
                 .contains("unsafe")
@@ -438,7 +438,7 @@ fn recovery_rejects_checked_traversal_and_corrupt_retained_baseline() {
     )
     .unwrap();
     assert!(
-        basecraft_ops::replay::recover(recovery, &dir.path().join("output"))
+        basecraft_ops::records::recover(recovery, &dir.path().join("output"))
             .unwrap_err()
             .to_string()
             .contains("hash differs")
@@ -454,7 +454,7 @@ fn ancestor_only_artifacts_and_duplicate_parent_references_are_checked() {
     let doc = session.open(&file).unwrap();
     session.apply(doc, edit()).unwrap();
     session.save(doc, None).unwrap();
-    let ancestor = provenance::inspect(&file).unwrap();
+    let ancestor = records::inspect(&file).unwrap();
     session
         .apply(
             doc,
@@ -466,18 +466,18 @@ fn ancestor_only_artifacts_and_duplicate_parent_references_are_checked() {
         )
         .unwrap();
     session.save(doc, None).unwrap();
-    let bundle = provenance::companion(&file);
+    let bundle = records::companion(&file);
     let old_output = bundle.join(ancestor.outputs[0].retained.as_ref().unwrap());
     let original_bytes = std::fs::read(&old_output).unwrap();
     std::fs::write(&old_output, "corrupt ancestor-only output").unwrap();
     assert!(
-        provenance::verify(&file)
+        records::verify(&file)
             .unwrap()
             .iter()
             .any(|issue| issue.contains("ancestor retained"))
     );
     std::fs::write(old_output, original_bytes).unwrap();
-    let mut current = provenance::inspect(&file).unwrap();
+    let mut current = records::inspect(&file).unwrap();
     current.parents.push(current.parents[0].clone());
     let bytes = serde_json::to_vec(&current).unwrap();
     std::fs::write(bundle.join("manifest.json"), &bytes).unwrap();
@@ -487,7 +487,7 @@ fn ancestor_only_artifacts_and_duplicate_parent_references_are_checked() {
     )
     .unwrap();
     assert!(
-        provenance::verify(&file)
+        records::verify(&file)
             .unwrap_err()
             .to_string()
             .contains("duplicate parent")
@@ -505,7 +505,7 @@ fn current_record_tracks_unsaved_undo_redo_and_is_read_only() {
     let imported = session.document_record(doc).unwrap().report().unwrap();
     assert!(imported.methods.contains("No contributing"));
     assert!(!paths.state.exists());
-    assert!(!provenance::companion(&file).exists());
+    assert!(!records::companion(&file).exists());
     session.apply(doc, edit()).unwrap();
     let edited = session.document_record(doc).unwrap();
     assert!(edited.unsaved);
@@ -562,14 +562,10 @@ fn reopened_ancestry_survives_multiple_saves_and_changed_disk_records() {
     )
     .unwrap();
     next.save(doc, None).unwrap();
-    assert_eq!(provenance::inspect(&file).unwrap().effective_edits.len(), 3);
-    assert_eq!(provenance::verify(&file).unwrap(), Vec::<String>::new());
+    assert_eq!(records::inspect(&file).unwrap().effective_edits.len(), 3);
+    assert_eq!(records::verify(&file).unwrap(), Vec::<String>::new());
     let record = next.document_record(doc).unwrap();
-    std::fs::write(
-        provenance::companion(&file).join("manifest.json"),
-        "damaged",
-    )
-    .unwrap();
+    std::fs::write(records::companion(&file).join("manifest.json"), "damaged").unwrap();
     assert_eq!(
         record.report().unwrap().methods,
         next.document_record(doc).unwrap().report().unwrap().methods
@@ -618,15 +614,15 @@ fn analysis_uses_submission_record_even_after_source_undo() {
     session
         .publish_analysis_snapshot(doc, &output, &inputs, &frozen)
         .unwrap();
-    let publication = provenance::inspect(&output).unwrap();
+    let publication = records::inspect(&output).unwrap();
     assert_eq!(publication.effective_edits.len(), 2);
-    assert_eq!(provenance::verify(&output).unwrap(), Vec::<String>::new());
+    assert_eq!(records::verify(&output).unwrap(), Vec::<String>::new());
     assert!(session.document_record(doc).unwrap().effective.is_empty());
 }
 
 #[test]
 fn two_input_records_preserve_distinct_origins_and_export_frozen_evidence() {
-    use basecraft_ops::document_record::DocumentRecord;
+    use basecraft_ops::records::DocumentRecord;
     let dir = tempfile::tempdir().unwrap();
     let paths = paths(dir.path());
     let mut records = Vec::new();
@@ -663,10 +659,10 @@ fn two_input_records_preserve_distinct_origins_and_export_frozen_evidence() {
     session
         .publish_analysis_snapshot(doc, &output, &inputs, &record)
         .unwrap();
-    let publication = provenance::inspect(&output).unwrap();
+    let publication = records::inspect(&output).unwrap();
     assert_eq!(publication.parents.len(), 2);
     assert_eq!(publication.effective_edits.len(), 3);
-    assert_eq!(provenance::verify(&output).unwrap(), Vec::<String>::new());
+    assert_eq!(records::verify(&output).unwrap(), Vec::<String>::new());
     let report = record.report().unwrap();
     let export = dir.path().join("reports");
     std::fs::create_dir(&export).unwrap();
@@ -713,7 +709,7 @@ fn provenance_works_with_recovery_disabled_and_preserves_frozen_reports() {
     );
     session.redo(doc).unwrap();
     session.save(doc, None).unwrap();
-    assert_eq!(provenance::verify(&file).unwrap(), Vec::<String>::new());
+    assert_eq!(records::verify(&file).unwrap(), Vec::<String>::new());
     assert!(!paths.state.join("recovery").exists());
 }
 
@@ -733,8 +729,8 @@ fn methods_use_frozen_plugin_metadata_and_reject_unmatched_contribution() {
     session
         .publish_analysis_snapshot(doc, &output, &inputs, &snapshot)
         .unwrap();
-    let publication = provenance::inspect(&output).unwrap();
-    let mut record = basecraft_ops::document_record::DocumentRecord::from_publication(&publication);
+    let publication = records::inspect(&output).unwrap();
+    let mut record = basecraft_ops::records::DocumentRecord::from_publication(&publication);
     let report = record.report().unwrap();
     assert!(report.methods.contains("RecordedTool (version 1.2)"));
     assert!(report.methods.contains("seed = 42"));

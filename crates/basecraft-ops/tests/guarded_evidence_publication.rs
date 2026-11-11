@@ -244,7 +244,7 @@ fn publication_worker() {
             }
         }
         let recovered =
-            basecraft_ops::replay::recover(session.recovery_root(), &root.join("recovered"))
+            basecraft_ops::records::recover(session.recovery_root(), &root.join("recovered"))
                 .unwrap();
         assert_eq!(std::fs::read(&recovered[0]).unwrap(), b">gene\nATGT\n");
         session
@@ -478,7 +478,7 @@ fn retention_worker(root: &Path, role: &str, mode: &str, barrier: &mut Barrier) 
             }
         }
         let recovered =
-            basecraft_ops::replay::recover(session.recovery_root(), &root.join("recovered"))
+            basecraft_ops::records::recover(session.recovery_root(), &root.join("recovered"))
                 .unwrap();
         assert_eq!(std::fs::read(&recovered[0]).unwrap(), b">gene\nATGT\n");
         session

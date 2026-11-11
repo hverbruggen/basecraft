@@ -1,6 +1,6 @@
 //! Support formatting is presentation; scientific strings and inference input survive edits.
-use basecraft_ops::links::AlignmentLinkExt;
-use basecraft_ops::{Session, files, links::AlignmentLink};
+use basecraft_ops::records::AlignmentLinkExt;
+use basecraft_ops::{Session, files, records::AlignmentLink};
 use basecraft_protocol::{Op, SupportKind};
 use serde_json::json;
 
@@ -69,7 +69,7 @@ fn support_precision_scale_unknown_settings_save_undo_and_replay() {
     assert_eq!(reopened.style(), &style);
     assert_eq!(reopened.to_newick(), original);
     session.flush().unwrap();
-    assert!(basecraft_ops::replay::replay(dir.path()).unwrap().ok());
+    assert!(basecraft_ops::records::replay(dir.path()).unwrap().ok());
 }
 
 #[test]
@@ -116,7 +116,7 @@ fn changing_view_link_preserves_origin_and_save_as_rebases_both_links() {
     let mut session = Session::new(root);
     let doc = session.open(&tree_path).unwrap();
     AlignmentLink::create(&tree_path, &source, &source, 7, true, None).unwrap();
-    let origin_bytes = std::fs::read(basecraft_ops::links::sidecar(&tree_path)).unwrap();
+    let origin_bytes = std::fs::read(basecraft_ops::records::sidecar(&tree_path)).unwrap();
     let origin = AlignmentLink::read(&tree_path).unwrap();
     let snapshot = origin
         .checked_snapshot(&tree_path, session.tree(doc).unwrap())
@@ -128,7 +128,7 @@ fn changing_view_link_preserves_origin_and_save_as_rebases_both_links() {
     assert!(!view.inferred);
     assert_eq!(
         origin_bytes,
-        std::fs::read(basecraft_ops::links::sidecar(&tree_path)).unwrap()
+        std::fs::read(basecraft_ops::records::sidecar(&tree_path)).unwrap()
     );
     assert_eq!(snapshot_bytes, std::fs::read(&snapshot).unwrap());
     let invalid = root.join("invalid.afa");
@@ -173,7 +173,7 @@ fn changing_view_link_preserves_origin_and_save_as_rebases_both_links() {
     );
     assert_eq!(std::fs::read(&snapshot).unwrap(), snapshot_bytes);
     session.flush().unwrap();
-    assert!(basecraft_ops::replay::replay(root).unwrap().ok());
+    assert!(basecraft_ops::records::replay(root).unwrap().ok());
 }
 
 #[test]
@@ -187,9 +187,10 @@ fn portable_links_and_corrupt_view_never_fall_back_to_scientific_input() {
     std::fs::write(&tree_path, "(a,b);").unwrap();
     let tree = files::load_tree(&tree_path).unwrap().doc;
     AlignmentLink::create(&tree_path, &source, &source, 0, true, None).unwrap();
-    let value: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(basecraft_ops::links::sidecar(&tree_path)).unwrap())
-            .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(basecraft_ops::records::sidecar(&tree_path)).unwrap(),
+    )
+    .unwrap();
     assert_eq!(value["source"], "source.afa");
     let moved = dir.path().join("moved");
     std::fs::rename(folder, &moved).unwrap();
@@ -198,7 +199,7 @@ fn portable_links_and_corrupt_view_never_fall_back_to_scientific_input() {
     assert_eq!(link.source, moved.join("source.afa"));
     assert!(!link.source_changed());
     assert!(link.checked_snapshot(&tree_path, &tree).is_ok());
-    std::fs::write(basecraft_ops::links::view_sidecar(&tree_path), "damaged").unwrap();
+    std::fs::write(basecraft_ops::records::view_sidecar(&tree_path), "damaged").unwrap();
     assert!(AlignmentLink::read_view(&tree_path).is_err());
     assert!(AlignmentLink::read(&tree_path).is_ok());
 }
@@ -242,7 +243,7 @@ fn staged_support_removal_and_style_are_one_reversible_replayable_edit() {
     assert_eq!(reopened.supports()[0].name, "Support 2");
     assert_eq!(reopened.style(), &style);
     session.flush().unwrap();
-    assert!(basecraft_ops::replay::replay(dir.path()).unwrap().ok());
+    assert!(basecraft_ops::records::replay(dir.path()).unwrap().ok());
 }
 
 #[test]

@@ -106,7 +106,7 @@ impl ReviewWrite {
             retained: None,
             reference: None,
         });
-        crate::provenance::publish(run.directory(), &record)?;
+        crate::records::provenance::publish(run.directory(), &record)?;
         Ok(PreparedReviewWrite {
             target: self.target.clone(),
             run: run.clone(),

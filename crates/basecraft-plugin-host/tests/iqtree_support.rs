@@ -119,7 +119,7 @@ fn run_cases(root: &Path) {
         }
         check_tree(&moved_tree, label, multi);
         assert_eq!(
-            basecraft_ops::provenance::verify(&retained).unwrap(),
+            basecraft_ops::records::verify(&retained).unwrap(),
             Vec::<String>::new()
         );
     }

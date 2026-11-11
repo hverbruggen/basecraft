@@ -1,6 +1,6 @@
 //! End to end: infer a tree from an alignment with the registered `FastTree`
 //! operation, open it, and record the run. Skips when `FastTree` isn't available.
-use basecraft_ops::links::AlignmentLinkExt;
+use basecraft_ops::records::AlignmentLinkExt;
 mod common;
 
 use std::fmt::Write as _;
@@ -75,7 +75,7 @@ fn builds_a_tree_with_fasttree_and_logs_the_run() {
         basecraft_protocol::SupportKind::Probability
     );
     assert_eq!(t.supports()[0].decimals(t.style()), 2);
-    let link = basecraft_ops::links::AlignmentLink::read(&output).unwrap();
+    let link = basecraft_ops::records::AlignmentLink::read(&output).unwrap();
     assert!(link.inferred);
     assert_eq!(link.source, file);
     assert!(link.checked_snapshot(&output, t).is_ok());

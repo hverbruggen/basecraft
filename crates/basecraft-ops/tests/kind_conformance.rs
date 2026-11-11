@@ -9,7 +9,7 @@ use std::{
     process::Command,
 };
 
-use basecraft_ops::{DocId, Session, log, metadata, replay, submission};
+use basecraft_ops::{DocId, Session, log, metadata, records, submission};
 use basecraft_protocol::delimitation::DelimitationEdit;
 use basecraft_protocol::metadata::{ChangeSet, MetadataEdit, Row};
 use basecraft_protocol::submission::{Decision, Publication, RowDecision, SubmissionEdit};
@@ -124,7 +124,7 @@ fn scenario<T: Debug + PartialEq>(
     let copy = reopened.open(&path).unwrap();
     assert_eq!(snapshot(&reopened, copy), expected[2]);
     assert_eq!(reopened.state(copy), fingerprint);
-    let report = replay::replay(dir.path()).unwrap();
+    let report = records::replay(dir.path()).unwrap();
     assert!(report.ok(), "{:#?}", report.problems);
     assert_eq!(report.sessions, 1);
     assert_eq!(report.entries, entries.len());
@@ -148,7 +148,7 @@ fn scenario<T: Debug + PartialEq>(
     );
     replace_fixture_log(dir.path(), &wrong_kind);
     assert!(
-        !replay::replay(dir.path()).unwrap().ok(),
+        !records::replay(dir.path()).unwrap().ok(),
         "{name}: wrong kind accepted"
     );
 }

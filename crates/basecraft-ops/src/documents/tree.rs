@@ -84,14 +84,16 @@ impl Document for OpenedTree {
         original: &Path,
         target: &Path,
         format: Format,
-    ) -> Result<Option<crate::links::PreparedLinks>> {
+    ) -> Result<Option<crate::records::links::PreparedLinks>> {
         if format != Format::Tree {
             return Err(invalid("a tree can only be saved as a tree file"));
         }
-        if crate::links::document_entry(original)? == crate::links::document_entry(target)? {
+        if crate::records::links::document_entry(original)?
+            == crate::records::links::document_entry(target)?
+        {
             Ok(None)
         } else {
-            crate::links::PreparedLinks::prepare(original, target).map(Some)
+            crate::records::links::PreparedLinks::prepare(original, target).map(Some)
         }
     }
 

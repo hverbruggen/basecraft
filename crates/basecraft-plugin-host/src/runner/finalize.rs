@@ -356,7 +356,7 @@ impl PreparedOperation {
             {
                 for companion in [
                     basecraft_ops::files::tree_sidecar(&path),
-                    basecraft_ops::links::sidecar(&path),
+                    basecraft_ops::records::sidecar(&path),
                 ] {
                     if companion.is_file() && companion.starts_with(self.run.directory()) {
                         exported.push(ArtifactRevision {
@@ -414,7 +414,7 @@ impl PreparedOperation {
             },
             report_template_version: 2,
         };
-        basecraft_ops::provenance::publish_operation(self.run.directory(), &publication)?;
+        basecraft_ops::records::publish_operation(self.run.directory(), &publication)?;
         if self.document.is_none() && self.sequence.is_none() {
             let (actor, params) = self.tool_activity(outcome)?;
             let activity = basecraft_protocol::LogEntry {

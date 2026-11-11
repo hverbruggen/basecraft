@@ -1,6 +1,6 @@
 //! The GUI annotation route: a registered sequence operation run against an
 //! open document through the shared job runner, skipping known features.
-use basecraft_ops::{Session, provenance};
+use basecraft_ops::{Session, records};
 use basecraft_plugin_host::{
     jobs::JobManager,
     policy::SessionPolicy,
@@ -107,18 +107,18 @@ fn gui_annotation_keeps_its_invocation_in_the_hidden_store_and_skips_known_featu
     // FASTA keeps its visible scientific GFF3 pair.
     assert!(basecraft_ops::files::gff_sidecar(&file).is_file());
     drop(session);
-    let publication = provenance::inspect(&file).unwrap();
+    let publication = records::inspect(&file).unwrap();
     assert!(publication.events.iter().any(|event| matches!(&event.op,
         Op::ToolRun { params, .. }
             if params["effective"]["min_codons"] == 100 && params["initiator"] == "GUI"
                 && params["run_id"] == first.run_id.as_str())));
-    assert_eq!(provenance::verify(&file).unwrap(), Vec::<String>::new());
+    assert_eq!(records::verify(&file).unwrap(), Vec::<String>::new());
 
     // Moving the whole folder keeps the run and the saved record together.
     let moved = temp.path().join("moved");
     std::fs::rename(&project, &moved).unwrap();
     let file = moved.join("orf.fasta");
-    assert_eq!(provenance::verify(&file).unwrap(), Vec::<String>::new());
+    assert_eq!(records::verify(&file).unwrap(), Vec::<String>::new());
     let reopened = basecraft_ops::files::load(&file).unwrap();
     let basecraft_ops::files::Loaded::Sequence(reopened) = reopened else {
         panic!("not a sequence")

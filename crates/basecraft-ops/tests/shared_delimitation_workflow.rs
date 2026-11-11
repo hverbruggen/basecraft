@@ -98,7 +98,7 @@ fn selected_combination_preserves_sources_actor_lineage_and_replay() {
     for path in &paths {
         assert_eq!(std::fs::read_to_string(path).unwrap(), SPART);
     }
-    let record = basecraft_ops::provenance::inspect(&output).unwrap();
+    let record = basecraft_ops::records::inspect(&output).unwrap();
     assert!(
         record
             .events
@@ -114,7 +114,7 @@ fn selected_combination_preserves_sources_actor_lineage_and_replay() {
     );
     session.redo(doc).unwrap();
     assert_eq!(session.delimitation(doc).unwrap(), &reopened);
-    let replay = basecraft_ops::replay::replay(dir.path()).unwrap();
+    let replay = basecraft_ops::records::replay(dir.path()).unwrap();
     assert!(replay.problems.is_empty(), "{:?}", replay.problems);
 }
 
@@ -180,7 +180,7 @@ fn omitted_selection_keeps_every_hypothesis_and_replays() {
     let output = dir.path().join("all.spart");
     let doc = workflow::combine_to(&mut session, &paths, &output, None).unwrap();
     assert_eq!(session.delimitation(doc).unwrap().hypotheses.len(), 6);
-    let replay = basecraft_ops::replay::replay(dir.path()).unwrap();
+    let replay = basecraft_ops::records::replay(dir.path()).unwrap();
     assert!(replay.problems.is_empty(), "{:?}", replay.problems);
 }
 
@@ -193,7 +193,7 @@ fn refused_save_keeps_the_unsaved_batch_replayable() {
     // retains the realistic success/success/refusal journey in ONE session.
     let output = dir.path().join("failed.fa");
     assert!(workflow::combine_to(&mut session, &paths, &output, None).is_err());
-    let replay = basecraft_ops::replay::replay(dir.path()).unwrap();
+    let replay = basecraft_ops::records::replay(dir.path()).unwrap();
     assert!(replay.entries >= 2);
     assert!(replay.problems.is_empty(), "{:?}", replay.problems);
     for path in paths {
@@ -298,10 +298,10 @@ fn repeated_combine_and_refused_save_preserve_retained_objects_and_recover() {
             .collect::<std::collections::BTreeMap<_, _>>()
     };
     let objects = snapshot();
-    let replay = basecraft_ops::replay::replay(dir.path()).unwrap();
+    let replay = basecraft_ops::records::replay(dir.path()).unwrap();
     assert_eq!(snapshot(), objects, "replay changed retained input bytes");
     assert!(replay.problems.is_empty(), "{:?}", replay.problems);
-    assert!(basecraft_ops::replay::replay(dir.path()).unwrap().ok());
+    assert!(basecraft_ops::records::replay(dir.path()).unwrap().ok());
     assert_eq!(
         snapshot(),
         objects,
@@ -309,7 +309,7 @@ fn repeated_combine_and_refused_save_preserve_retained_objects_and_recover() {
     );
     let recovered = tempfile::tempdir().unwrap();
     let destination = recovered.path().join("recovered");
-    let outputs = basecraft_ops::replay::recover(dir.path(), &destination).unwrap();
+    let outputs = basecraft_ops::records::recover(dir.path(), &destination).unwrap();
     assert_ne!(
         outputs,
         Vec::<PathBuf>::new(),
@@ -516,7 +516,7 @@ fn linked_alignment_observation_preserves_unsaved_undo_redo_journal_and_replay()
             session.can_redo(doc),
             serde_json::to_value(session.document_record(doc).unwrap()).unwrap(),
         );
-        let replay_before = basecraft_ops::replay::replay(dir.path()).unwrap();
+        let replay_before = basecraft_ops::records::replay(dir.path()).unwrap();
         let before_files = hint_files(dir.path());
         let _hint = workflow::linked_alignment(&session, doc).unwrap();
         assert_eq!(
@@ -531,7 +531,7 @@ fn linked_alignment_observation_preserves_unsaved_undo_redo_journal_and_replay()
             before
         );
         assert_eq!(hint_files(dir.path()), before_files);
-        let replay_after = basecraft_ops::replay::replay(dir.path()).unwrap();
+        let replay_after = basecraft_ops::records::replay(dir.path()).unwrap();
         assert!(replay_before.ok(), "{:?}", replay_before.problems);
         assert_eq!(
             (

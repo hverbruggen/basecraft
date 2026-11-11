@@ -593,11 +593,9 @@ impl qobject::SangerController {
         let result = if let Some(review) = &self.rust().review_session {
             review.document_report(self.rust().dirty)
         } else {
-            basecraft_ops::document_record::DocumentRecord::empty(
-                &self.rust().file_path.to_string(),
-            )
-            .report()
-            .map_err(|e| e.to_string())
+            basecraft_ops::records::DocumentRecord::empty(&self.rust().file_path.to_string())
+                .report()
+                .map_err(|e| e.to_string())
         };
         crate::provenance_bridge::report_json(
             result.and_then(|r| serde_json::to_string(&r).map_err(|e| e.to_string())),

@@ -1,5 +1,5 @@
 //! Referenced-input lifecycle. Only known stores are inspected, never filesystem trees.
-use crate::links::AlignmentLinkExt;
+use crate::records::links::AlignmentLinkExt;
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
@@ -140,12 +140,12 @@ fn reference_input_locked(
         upstream: Vec::new(),
         extra: BTreeMap::new(),
     };
-    let source_bundle = crate::provenance::bundle_for_result(&source);
+    let source_bundle = crate::records::provenance::bundle_for_result(&source);
     let mut upstream = Vec::new();
     for dependency in dependencies.iter().chain(std::iter::once(&source_bundle)) {
         let manifest = dependency.join("manifest.json");
         if manifest.is_file() {
-            let bytes = crate::provenance::read_record(&manifest)?;
+            let bytes = crate::records::provenance::read_record(&manifest)?;
             let record: Publication = serde_json::from_slice(&bytes)?;
             upstream.push(basecraft_protocol::input_records::UpstreamLink {
                 bundle: (crate::input_evidence::relative(run.directory(), dependency)?).into(),
@@ -204,7 +204,7 @@ fn reference_input_locked(
         },
         report_template_version: 2,
     };
-    crate::provenance::publish(run.directory(), &publication)?;
+    crate::records::provenance::publish(run.directory(), &publication)?;
     Ok(run)
 }
 
@@ -323,7 +323,7 @@ impl Inspection {
     }
 
     fn record_bounded(&mut self, path: &Path, mut limit: u64) -> Result<Vec<u8>> {
-        let result = crate::provenance::read_record_with_budget(path, &mut limit);
+        let result = crate::records::provenance::read_record_with_budget(path, &mut limit);
         self.observe(path, &result);
         result
     }
@@ -449,7 +449,7 @@ pub fn relative(base: &Path, target: &Path) -> Result<String> {
 }
 
 pub fn read_input(run: &Path) -> Result<SubmittedInput> {
-    let bytes = crate::provenance::read_record(&run.join("input.json"))?;
+    let bytes = crate::records::provenance::read_record(&run.join("input.json"))?;
     validate_input(run, &bytes)
 }
 
@@ -546,12 +546,12 @@ fn store_registry() -> Result<StoreRegistry> {
     match std::fs::File::open(registry()?) {
         Ok(file) => {
             let length = file.metadata()?.len();
-            let bytes = crate::provenance::read_record_from_open(
+            let bytes = crate::records::provenance::read_record_from_open(
                 file,
                 length,
                 &mut (1 << 20),
                 1 << 20,
-                crate::provenance::RecordLimit::Registry,
+                crate::records::provenance::RecordLimit::Registry,
             )?;
             parse_store_registry(&bytes)
         }
@@ -568,7 +568,9 @@ mod service_registry {
         Inspection, PathBuf, Result, StoreRegistry, empty_registry, parse_store_registry,
         validate_store_paths,
     };
-    use crate::{access::Access, provenance::RecordLimit, service_reads::ServiceReadContext};
+    use crate::{
+        access::Access, records::provenance::RecordLimit, service_reads::ServiceReadContext,
+    };
     use basecraft_platform::files::CheckedRead;
 
     enum RegistryBytes {
@@ -591,7 +593,7 @@ mod service_registry {
             .and_then(|input| match input {
                 CheckedRead::File(file) => {
                     let length = file.metadata()?.len();
-                    let result = crate::provenance::read_record_from_open(
+                    let result = crate::records::provenance::read_record_from_open(
                         file,
                         length,
                         remaining,
@@ -948,7 +950,7 @@ mod service_registry {
             }
             let source = std::sync::Arc::new(());
             let mut budget = 100;
-            let outcome = crate::provenance::read_record_from_open(
+            let outcome = crate::records::provenance::read_record_from_open(
                 Failing {
                     first: true,
                     error: Some(io::Error::new(
@@ -1832,7 +1834,7 @@ pub fn relink(bundle: &Path, original: &Path) -> Result<()> {
 
 /// Explicit portable export materializes referenced dependencies; ordinary analysis does not.
 pub fn package(result: &Path, destination: &Path) -> Result<()> {
-    let issues = crate::provenance::verify(result)?;
+    let issues = crate::records::provenance::verify(result)?;
     if !issues.is_empty() {
         return Err(invalid(issues.join("; ")));
     }
@@ -1847,8 +1849,8 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
     let staging = tempfile::Builder::new()
         .prefix(".basecraft-package-")
         .tempdir_in(parent)?;
-    let bundle = crate::provenance::bundle_for_result(result);
-    let mut publication = crate::provenance::inspect(result)?;
+    let bundle = crate::records::provenance::bundle_for_result(result);
+    let mut publication = crate::records::provenance::inspect(result)?;
     if let Some(index) = publication
         .outputs
         .iter()
@@ -1861,7 +1863,7 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
             .file_name()
             .ok_or_else(|| invalid("result has no filename"))?,
     );
-    let target_bundle = crate::provenance::companion(&copied);
+    let target_bundle = crate::records::provenance::companion(&copied);
     std::fs::create_dir_all(target_bundle.join("artifacts"))?;
     // Rebase the whole immutable record graph, not only today's inputs.
     // Original record bytes are retained as checked artifacts; relocated records
@@ -1965,7 +1967,7 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
                 .file_name()
                 .ok_or_else(|| invalid("package destination has no name"))?,
         );
-        let final_bundle = crate::provenance::companion(
+        let final_bundle = crate::records::provenance::companion(
             &final_folder.join(copied.file_name().unwrap_or_default()),
         );
         // Resolve declared paths to the checked, materialized dependency closure.
@@ -2065,9 +2067,9 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
     // Complete tree exports deliberately materialize the legacy exchange
     // association, so extraction still works with the original store absent.
     if let Ok(tree) = crate::files::load_tree(result)
-        && crate::links::metadata_present(&crate::links::sidecar(result))?
+        && crate::records::links::metadata_present(&crate::records::links::sidecar(result))?
     {
-        let link = crate::links::AlignmentLink::read(result)?;
+        let link = crate::records::links::AlignmentLink::read(result)?;
         let input_path = link.checked_snapshot(result, &tree.doc)?;
         let indexed = std::sync::Arc::new(basecraft_io::cache::open_fasta(&input_path)?);
         let alignment = basecraft_docs::AlignmentDoc::from_fasta("Exported input", &indexed);
@@ -2086,7 +2088,7 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
                 .as_ref()
                 .ok_or_else(|| invalid("exported source is not retained"))?,
         );
-        let paths = crate::links::AlignmentLink::create(
+        let paths = crate::records::links::AlignmentLink::create(
             &copied,
             &source_path,
             canonical.path(),
@@ -2119,12 +2121,12 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
         "Portable export of revision {}. {}",
         original_id, publication.origin
     );
-    crate::provenance::publish(&target_bundle, &publication)?;
+    crate::records::provenance::publish(&target_bundle, &publication)?;
     let authored = bundle.join("reports/methods.md");
     if authored.is_file() {
         copy(&authored, &target_bundle.join("reports/methods.md"))?;
     }
-    if !crate::provenance::verify(&copied)?.is_empty() {
+    if !crate::records::provenance::verify(&copied)?.is_empty() {
         return Err(invalid(
             "export verification failed; original source and records preserved",
         ));
@@ -2224,8 +2226,9 @@ fn export_history(
         {
             return Err(invalid("unsafe publication identity"));
         }
-        let bytes =
-            crate::provenance::read_record(&key.0.join("records").join(format!("{}.json", key.1)))?;
+        let bytes = crate::records::provenance::read_record(
+            &key.0.join("records").join(format!("{}.json", key.1)),
+        )?;
         record_bytes = record_bytes.saturating_add(bytes.len());
         if record_bytes > 128 << 20 || scheduled > 10_000 {
             return Err(invalid("export history exceeds bounded record limit"));
@@ -2391,7 +2394,7 @@ pub(crate) fn ancestors(
                 if !seen_records.insert((directory.clone(), id.to_owned())) {
                     continue;
                 }
-                let bytes = crate::provenance::read_record(
+                let bytes = crate::records::provenance::read_record(
                     &directory.join("records").join(format!("{id}.json")),
                 )?;
                 bytes_read = bytes_read.saturating_add(bytes.len());
@@ -2417,7 +2420,10 @@ pub(crate) fn ancestors(
 pub fn verify_ancestors(bundle: &Path) -> Result<Vec<String>> {
     let mut issues = Vec::new();
     for (directory, publication) in ancestors(bundle)? {
-        issues.extend(crate::provenance::verify_records(&directory, &publication)?);
+        issues.extend(crate::records::provenance::verify_records(
+            &directory,
+            &publication,
+        )?);
     }
     Ok(issues)
 }
@@ -2450,7 +2456,7 @@ pub(crate) fn link_generated_input_locked(
 ) -> Result<()> {
     let mut upstream = Vec::new();
     for dependency in dependencies {
-        let bytes = crate::provenance::read_record(&dependency.join("manifest.json"))?;
+        let bytes = crate::records::provenance::read_record(&dependency.join("manifest.json"))?;
         let publication: basecraft_protocol::provenance::Publication =
             serde_json::from_slice(&bytes)?;
         upstream.push(basecraft_protocol::input_records::UpstreamLink {

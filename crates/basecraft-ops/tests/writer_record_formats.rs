@@ -1,10 +1,10 @@
 use basecraft_ops::{files, metadata, submission};
+use basecraft_protocol::metadata::{
+    Cell, Column, ColumnKind, Identification, ProjectMetadata, RecordLink, Row, Table, Taxon,
+};
 use basecraft_protocol::submission::{
     AccessionEntry, Author, Decision, FrameChoice, Publication, RowDecision, SourceAlignment,
     Submission,
-};
-use basecraft_protocol::metadata::{
-    Cell, Column, ColumnKind, Identification, ProjectMetadata, RecordLink, Row, Table, Taxon,
 };
 use std::path::Path;
 
@@ -86,14 +86,14 @@ fn document_writer_bytes_require_a_version_bump() {
         golden("delimitation-sidecar", "current", &path, bytes);
     }
     {
-        use basecraft_ops::links::{AlignmentLink, AlignmentLinkExt};
+        use basecraft_ops::records::{AlignmentLink, AlignmentLinkExt};
         let root = tempfile::tempdir().unwrap();
         let source = root.path().join("source.afa");
         let tree = root.path().join("tree.nwk");
         std::fs::write(&source, ">a\nAC\n>b\nAT\n").unwrap();
         std::fs::write(&tree, "(a,b);\n").unwrap();
         AlignmentLink::create(&tree, &source, &source, 7, true, None).unwrap();
-        let bytes = std::fs::read_to_string(basecraft_ops::links::sidecar(&tree)).unwrap();
+        let bytes = std::fs::read_to_string(basecraft_ops::records::sidecar(&tree)).unwrap();
         let link: AlignmentLink = serde_json::from_str(&bytes).unwrap();
         // Allocation chooses a random unused snapshot name. Freeze only that
         // name; retain the writer's ordering, whitespace and all other bytes.
@@ -210,7 +210,7 @@ fn document_writer_bytes_require_a_version_bump() {
 
 #[test]
 fn replay_checks_saved_bytes_and_document_fingerprints() {
-    use basecraft_ops::{Session, log, replay};
+    use basecraft_ops::{Session, log, records};
     use basecraft_protocol::Op;
     let root = tempfile::tempdir().unwrap();
     let mut session = Session::new(root.path());
@@ -233,7 +233,7 @@ fn replay_checks_saved_bytes_and_document_fingerprints() {
             log.append(&entry).unwrap();
         }
         drop(log);
-        let report = replay::replay(replay_root.path()).unwrap();
+        let report = records::replay(replay_root.path()).unwrap();
         assert!(!report.ok(), "{report:?}");
         assert!(
             report

@@ -15,21 +15,21 @@ use crate::session::{DocId, Session, objects_dir};
 use crate::{Error, Result, log};
 
 #[derive(Debug, Default)]
-pub struct Report {
+pub struct ReplayReport {
     pub sessions: usize,
     pub entries: usize,
     pub problems: Vec<String>,
 }
 
-impl Report {
+impl ReplayReport {
     pub fn ok(&self) -> bool {
         self.problems.is_empty()
     }
 }
 
-pub fn replay(root: &Path) -> Result<Report> {
+pub fn replay(root: &Path) -> Result<ReplayReport> {
     let entries = log::read_all(root)?;
-    let mut report = Report::default();
+    let mut report = ReplayReport::default();
     let mut order: Vec<&str> = Vec::new();
     let mut by_session: HashMap<&str, Vec<&LogEntry>> = HashMap::new();
     for e in &entries {
@@ -46,7 +46,7 @@ pub fn replay(root: &Path) -> Result<Report> {
     Ok(report)
 }
 
-fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut Report) -> Result<()> {
+fn replay_session(root: &Path, entries: &[&LogEntry], report: &mut ReplayReport) -> Result<()> {
     let work = tempfile::tempdir()?;
     let mut session = Session::replay_session(work.path());
     let source_root = recorded_source_root(root)?;
@@ -175,7 +175,7 @@ fn recorded_source_root(root: &Path) -> Result<std::path::PathBuf> {
         return Ok(root.to_path_buf());
     }
     let value: serde_json::Value =
-        serde_json::from_slice(&crate::provenance::read_record(&manifest)?)?;
+        serde_json::from_slice(&crate::records::provenance::read_record(&manifest)?)?;
     if value["schema_version"] != 1 {
         return Err(crate::Error::Unsupported(
             "Unsupported recovery metadata".into(),
@@ -971,7 +971,7 @@ impl RecoveryAttempt {
 }
 
 #[cfg(all(test, windows))]
-#[path = "../tests/support/recovery_windows.rs"]
+#[path = "../../tests/support/recovery_windows.rs"]
 mod recovery_windows;
 
 #[cfg(test)]
@@ -986,7 +986,7 @@ mod tests {
         std::fs::create_dir_all(&source).unwrap();
         let path = source.join(if spart { "a.spart" } else { "a.fasta" });
         let bytes = if spart {
-            include_str!("../../../testdata/fixtures/delimitation/manual.spart")
+            include_str!("../../../../testdata/fixtures/delimitation/manual.spart")
         } else {
             ">gene\nACGT\n"
         };
@@ -1028,7 +1028,7 @@ mod tests {
     fn status_retains_written_after_real_post_write_observation_error() {
         use std::os::unix::fs::PermissionsExt;
         let Some(root) = isolated_recovery_profile::enter(
-            "replay::tests::status_retains_written_after_real_post_write_observation_error",
+            "records::replay::tests::status_retains_written_after_real_post_write_observation_error",
         ) else {
             return;
         };
@@ -1077,7 +1077,7 @@ mod tests {
     #[test]
     fn final_noreplace_barrier_preserves_competitors() {
         let Some(root) = isolated_recovery_profile::enter(
-            "replay::tests::final_noreplace_barrier_preserves_competitors",
+            "records::replay::tests::final_noreplace_barrier_preserves_competitors",
         ) else {
             return;
         };
@@ -1112,7 +1112,7 @@ mod tests {
     #[test]
     fn final_noreplace_barrier_preserves_unix_dangling_link() {
         let Some(root) = isolated_recovery_profile::enter(
-            "replay::tests::final_noreplace_barrier_preserves_unix_dangling_link",
+            "records::replay::tests::final_noreplace_barrier_preserves_unix_dangling_link",
         ) else {
             return;
         };
@@ -1139,7 +1139,7 @@ mod tests {
     #[ignore = "requires native Windows NTFS, cmd.exe junction creation and symlink privilege/Developer Mode; run with --ignored"]
     fn final_noreplace_barrier_preserves_windows_reparse_competitors() {
         let Some(root) = super::recovery_windows::enter(
-            "replay::tests::final_noreplace_barrier_preserves_windows_reparse_competitors",
+            "records::replay::tests::final_noreplace_barrier_preserves_windows_reparse_competitors",
         ) else {
             return;
         };
@@ -1164,7 +1164,7 @@ mod tests {
     #[test]
     fn post_promotion_registration_failure_retains_final_files() {
         let Some(root) = isolated_recovery_profile::enter(
-            "replay::tests::post_promotion_registration_failure_retains_final_files",
+            "records::replay::tests::post_promotion_registration_failure_retains_final_files",
         ) else {
             return;
         };
@@ -1199,7 +1199,7 @@ mod tests {
     fn sync_permission_failures_distinguish_before_and_after_promotion() {
         use std::os::unix::fs::PermissionsExt;
         let Some(root) = isolated_recovery_profile::enter(
-            "replay::tests::sync_permission_failures_distinguish_before_and_after_promotion",
+            "records::replay::tests::sync_permission_failures_distinguish_before_and_after_promotion",
         ) else {
             return;
         };
@@ -1364,7 +1364,7 @@ mod tests {
         };
         attempts.push(divergent_create);
         for attempt in attempts {
-            let mut report = Report::default();
+            let mut report = ReplayReport::default();
             replay_session(root.path(), &[baseline, &attempt, edit], &mut report).unwrap();
             assert_eq!(report.problems.len(), 2, "{report:#?}");
             assert!(

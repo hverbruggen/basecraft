@@ -1,7 +1,7 @@
 //! Public link behavior; the protocol registry checks the serialized goldens.
 use basecraft_ops::{
     files, input_evidence,
-    links::{self, AlignmentLink, AlignmentLinkExt},
+    records::{self, AlignmentLink, AlignmentLinkExt},
 };
 
 #[test]
@@ -58,7 +58,7 @@ fn reader_keeps_extensions_and_existing_version_and_missing_field_checks() {
     let root = tempfile::tempdir().unwrap();
     let tree = root.path().join("tree.nwk");
     std::fs::write(&tree, "(a,b);").unwrap();
-    let metadata = links::sidecar(&tree);
+    let metadata = records::sidecar(&tree);
     let bytes = include_bytes!("../../../testdata/fixtures/records-v1/link-snapshot-extra.json");
     let mut value: serde_json::Value = serde_json::from_slice(bytes).unwrap();
     // Reader retains extras and tolerates missing source; evidence use checks it later.

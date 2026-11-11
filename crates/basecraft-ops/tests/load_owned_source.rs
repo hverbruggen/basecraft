@@ -577,7 +577,7 @@ fn captured_multirecord_writer_and_retained_replay_inputs_match_legacy() {
     // Replay must use the exact retained source and companion after both vanish.
     std::fs::remove_file(&path).unwrap();
     std::fs::remove_file(&sidecar).unwrap();
-    let report = basecraft_ops::replay::replay(dir.path()).unwrap();
+    let report = basecraft_ops::records::replay(dir.path()).unwrap();
     assert!(report.ok(), "{report:#?}");
     for bytes in [main.as_slice(), gff.as_slice()] {
         assert_eq!(
@@ -666,7 +666,7 @@ fn cold_recoverable_retention_reads_each_raw_input_once_and_recovers_without_sou
     std::fs::remove_file(&sidecar).unwrap();
     drop(session);
     let destination = dir.path().join("recovered");
-    basecraft_ops::replay::recover(&recovery, &destination).unwrap();
+    basecraft_ops::records::recover(&recovery, &destination).unwrap();
     let restored = files::open(&destination.join("séquences.fasta")).unwrap();
     assert_eq!(restored.doc.to_genbank(), expected);
     assert_eq!(restored.fasta.unwrap().index.records.len(), 2);

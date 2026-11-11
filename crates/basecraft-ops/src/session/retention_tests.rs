@@ -236,7 +236,7 @@ fn real_write_failures_preserve_baseline_and_retry_once() {
         session.flush().unwrap();
         assert_eq!(session.docs[id.0].undo.len(), 1);
         assert!(session.docs[id.0].baseline.is_none());
-        assert!(crate::replay::replay(&dir).unwrap().ok());
+        assert!(crate::records::replay::replay(&dir).unwrap().ok());
     }
 }
 

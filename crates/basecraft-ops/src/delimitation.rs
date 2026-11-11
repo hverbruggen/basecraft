@@ -165,7 +165,7 @@ pub fn checked_alignment(
     }
     // Workspaces written before the owning field was introduced still have a
     // bound input ledger (or its Save As delegation / contributing ancestry).
-    let bundle = crate::provenance::bundle_for_result(workspace_path);
+    let bundle = crate::records::provenance::bundle_for_result(workspace_path);
     if bundle.join("input.json").is_file() {
         let mut candidates = vec![bundle.clone()];
         candidates.extend(
@@ -385,9 +385,7 @@ fn combined_hypotheses(
                 None
             }) != side_hash
         {
-            return Err(crate::Error::ChangedOnDisk {
-                path: path.clone(),
-            });
+            return Err(crate::Error::ChangedOnDisk { path: path.clone() });
         }
         if let Some(wanted) = keep.and_then(|keep| keep.get(path)) {
             let available = work.hypotheses.iter().map(|h| h.id.clone()).collect();

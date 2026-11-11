@@ -1,6 +1,6 @@
 //! Failure and overwrite coverage supplementing the unchanged REV-0004 probes.
-use basecraft_ops::links::AlignmentLinkExt;
-use basecraft_ops::{Session, files, links, links::AlignmentLink};
+use basecraft_ops::records::AlignmentLinkExt;
+use basecraft_ops::{Session, files, records, records::AlignmentLink};
 use std::path::{Path, PathBuf};
 
 fn alignment(path: &Path, bases: &str) {
@@ -41,7 +41,7 @@ fn failed_relink_retains_old_bytes_without_the_old_source_and_supports_legacy_sn
     // Emulate an existing fixed-name snapshot from the earlier writer.
     let legacy = root.join("tree.nwk.view.alignment.afa");
     std::fs::rename(old_path, &legacy).unwrap();
-    let metadata = links::view_sidecar(&path);
+    let metadata = records::view_sidecar(&path);
     let mut value: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&metadata).unwrap()).unwrap();
     value["snapshot"] = "tree.nwk.view.alignment.afa".into();
@@ -85,14 +85,14 @@ fn save_as_unlinked_document_clears_both_destination_associations_and_keeps_evid
     let mut session = Session::new(root);
     let doc = session.open(&input).unwrap();
     session.save(doc, Some(&output)).unwrap();
-    assert!(!links::metadata_present(&links::sidecar(&output)).unwrap());
-    assert!(!links::metadata_present(&links::view_sidecar(&output)).unwrap());
+    assert!(!records::metadata_present(&records::sidecar(&output)).unwrap());
+    assert!(!records::metadata_present(&records::view_sidecar(&output)).unwrap());
     assert!(AlignmentLink::read_view(&output).is_err());
     for (path, bytes) in previous {
         assert_eq!(std::fs::read(path).unwrap(), bytes);
     }
     session.flush().unwrap();
-    assert!(basecraft_ops::replay::replay(root).unwrap().ok());
+    assert!(basecraft_ops::records::replay(root).unwrap().ok());
 }
 
 #[test]
@@ -113,7 +113,7 @@ fn publication_error_after_main_write_disables_extraction_and_keeps_previous_ass
         .checked_snapshot(&output, session.tree(doc).unwrap())
         .unwrap();
     let old_bytes = std::fs::read(&old_snapshot).unwrap();
-    let old_metadata = std::fs::read(links::view_sidecar(&output)).unwrap();
+    let old_metadata = std::fs::read(records::view_sidecar(&output)).unwrap();
     // Tree replacement succeeds, then presentation-sidecar replacement fails.
     std::fs::create_dir(files::tree_sidecar(&output)).unwrap();
     let error = session.save(doc, Some(&output)).unwrap_err().to_string();
@@ -160,17 +160,17 @@ fn damaged_explicit_view_is_checked_before_overwriting_an_existing_destination()
     )
     .unwrap();
     let previous_tree = std::fs::read(&output).unwrap();
-    let previous_metadata = std::fs::read(links::sidecar(&output)).unwrap();
+    let previous_metadata = std::fs::read(records::sidecar(&output)).unwrap();
     let before = snapshots(root).len();
     assert!(session.save(doc, Some(&output)).is_err());
     assert_eq!(std::fs::read(&output).unwrap(), previous_tree);
     assert_eq!(
-        std::fs::read(links::sidecar(&output)).unwrap(),
+        std::fs::read(records::sidecar(&output)).unwrap(),
         previous_metadata
     );
     assert_eq!(snapshots(root).len(), before);
     assert_eq!(AlignmentLink::read_view(&output).unwrap().source, other);
-    assert!(!links::metadata_present(&links::view_sidecar(&output)).unwrap());
+    assert!(!records::metadata_present(&records::view_sidecar(&output)).unwrap());
 }
 
 #[cfg(unix)]
@@ -182,11 +182,11 @@ fn dangling_explicit_metadata_blocks_save_as_and_is_reported_without_changes() {
     alignment(&source, "AA");
     let input = inferred(root, "input", &source);
     let output = root.join("output.nwk");
-    let metadata = links::view_sidecar(&input);
+    let metadata = records::view_sidecar(&input);
     std::os::unix::fs::symlink("missing.json", &metadata).unwrap();
     let mut session = Session::new(root);
     let doc = session.open(&input).unwrap();
-    assert!(links::metadata_present(&metadata).unwrap());
+    assert!(records::metadata_present(&metadata).unwrap());
     assert!(session.save(doc, Some(&output)).is_err());
     assert!(!output.exists());
     assert_eq!(
@@ -211,15 +211,15 @@ fn save_as_with_explicit_view_remains_portable_and_preserves_source_hashes() {
     let doc = session.open(&input).unwrap();
     AlignmentLink::associate(&input, session.tree(doc).unwrap(), &other).unwrap();
     let original = AlignmentLink::read(&input).unwrap();
-    let original_metadata = std::fs::read(links::sidecar(&input)).unwrap();
+    let original_metadata = std::fs::read(records::sidecar(&input)).unwrap();
     let output = folder.join("copy.nwk");
     session.save(doc, Some(&output)).unwrap();
     session.flush().unwrap();
     assert_eq!(
-        std::fs::read(links::sidecar(&input)).unwrap(),
+        std::fs::read(records::sidecar(&input)).unwrap(),
         original_metadata
     );
-    assert!(basecraft_ops::replay::replay(&folder).unwrap().ok());
+    assert!(basecraft_ops::records::replay(&folder).unwrap().ok());
     drop(session);
     let moved = root.join("moved");
     std::fs::rename(folder, &moved).unwrap();
@@ -252,7 +252,7 @@ fn save_as_over_symlink_to_original_replaces_alias_associations() {
     let mut session = Session::new(root);
     let doc = session.open(&input).unwrap();
     AlignmentLink::associate(&output, session.tree(doc).unwrap(), &other).unwrap();
-    let previous_origin = std::fs::read(links::sidecar(&input)).unwrap();
+    let previous_origin = std::fs::read(records::sidecar(&input)).unwrap();
     session.save(doc, Some(&output)).unwrap();
     assert!(
         !std::fs::symlink_metadata(&output)
@@ -267,9 +267,9 @@ fn save_as_over_symlink_to_original_replaces_alias_associations() {
             .is_ok()
     );
     assert_eq!(
-        std::fs::read(links::sidecar(&input)).unwrap(),
+        std::fs::read(records::sidecar(&input)).unwrap(),
         previous_origin
     );
     session.flush().unwrap();
-    assert!(basecraft_ops::replay::replay(root).unwrap().ok());
+    assert!(basecraft_ops::records::replay(root).unwrap().ok());
 }

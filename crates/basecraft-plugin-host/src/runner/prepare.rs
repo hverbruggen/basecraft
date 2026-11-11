@@ -50,7 +50,7 @@ fn document_view(
 struct PreparationInputs {
     sequence: Option<SequenceTarget>,
     document: Option<DocumentTarget>,
-    input_record: basecraft_ops::document_record::DocumentRecord,
+    input_record: basecraft_ops::records::DocumentRecord,
     generated: BTreeMap<String, Vec<GeneratedInput>>,
     accepted_hashes: BTreeMap<PathBuf, String>,
     bindings: crate::policy::ResolvedBindings,
@@ -66,7 +66,7 @@ fn prepare_inputs(
 ) -> Result<PreparationInputs> {
     let mut sequence = None;
     let mut document = None;
-    let mut input_record = basecraft_ops::document_record::DocumentRecord::empty("Inputs");
+    let mut input_record = basecraft_ops::records::DocumentRecord::empty("Inputs");
     let mut generated: BTreeMap<String, Vec<GeneratedInput>> = BTreeMap::new();
     let mut accepted_hashes: BTreeMap<PathBuf, String> = BTreeMap::new();
     let bindings = if operation.descriptor.family == ExecutionFamily::SequenceProposal {
@@ -487,7 +487,7 @@ fn freeze_inputs(
                 .as_ref()
                 .is_some_and(|host| host.verify_inputs.contains(&name))
             {
-                let issues = basecraft_ops::provenance::verify(&source)?;
+                let issues = basecraft_ops::records::verify(&source)?;
                 if !issues.is_empty() {
                     return Err(Error::Protocol(format!(
                         "input evidence is not reusable: {}",
@@ -544,8 +544,7 @@ fn freeze_inputs(
                 }
             };
             if !accepted_hashes.contains_key(&source)
-                && let Ok(record) =
-                    basecraft_ops::document_record::DocumentRecord::from_file(&source)
+                && let Ok(record) = basecraft_ops::records::DocumentRecord::from_file(&source)
             {
                 input_record.include_input(&record);
                 if basecraft_io::hash_file(&source)? != original_hash {

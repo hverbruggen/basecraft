@@ -481,7 +481,7 @@ mod tests {
             })
             .collect();
         assert_eq!(replacements, vec!["aTG"]);
-        let report = crate::replay::replay(root.path()).unwrap();
+        let report = crate::records::replay::replay(root.path()).unwrap();
         assert!(report.ok(), "{:?}", report.problems);
     }
 }

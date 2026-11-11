@@ -85,8 +85,8 @@ impl Lifecycle {
         }
         let mut diagnostics = basecraft_ops::input_evidence::verify_ancestors(run)?;
         if run.join("manifest.json").is_file() {
-            diagnostics.extend(basecraft_ops::provenance::verify(receipt)?);
-            let publication = basecraft_ops::provenance::inspect(receipt)?;
+            diagnostics.extend(basecraft_ops::records::verify(receipt)?);
+            let publication = basecraft_ops::records::inspect(receipt)?;
             let hash = basecraft_io::hash_file(receipt)?;
             if !publication.outputs.iter().any(|output| output.hash == hash) {
                 return Err(Error::Protocol(
@@ -218,8 +218,7 @@ impl Lifecycle {
             .data
             .as_deref()
             .ok_or_else(|| Error::Protocol("external submission missing data".into()))?;
-        let stored: Value =
-            serde_json::from_slice(&basecraft_ops::provenance::read_record(receipt)?)?;
+        let stored: Value = serde_json::from_slice(&basecraft_ops::records::read_record(receipt)?)?;
         if &stored != data
             || data["query_hash"] != plan["query_hash"]
             || data["approval_hash"] != plan["approval_hash"]

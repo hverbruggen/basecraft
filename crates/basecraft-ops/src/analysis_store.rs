@@ -352,7 +352,7 @@ impl ArtifactRun {
                     return Err(invalid("unsafe result binding"));
                 }
                 let value: serde_json::Value =
-                    serde_json::from_slice(&crate::provenance::read_record(&binding)?)?;
+                    serde_json::from_slice(&crate::records::provenance::read_record(&binding)?)?;
                 if value["schema_version"] != 1 || value["result"].as_str() != relative.to_str() {
                     return Err(invalid("unsupported or mismatched result binding"));
                 }
@@ -579,7 +579,7 @@ pub(crate) fn publish_delimitation(
             if dependency == run {
                 continue;
             }
-            let bytes = crate::provenance::read_record(&dependency.join("manifest.json"))?;
+            let bytes = crate::records::provenance::read_record(&dependency.join("manifest.json"))?;
             let publication: basecraft_protocol::provenance::Publication =
                 serde_json::from_slice(&bytes)?;
             let reference = basecraft_protocol::input_records::UpstreamLink {

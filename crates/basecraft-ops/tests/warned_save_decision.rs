@@ -3,7 +3,7 @@ use basecraft_ops::{
     DocId, Error, Session,
     analysis_store::ArtifactRun,
     input_evidence::{self, SavePolicy},
-    replay,
+    records,
     session::{SaveCheck, SaveWarning},
 };
 use basecraft_platform::paths::AppPaths;
@@ -92,7 +92,7 @@ fn assert_recovery(session: &mut Session, root: &Path) {
     // consent for its private staging destination, or claim recovery succeeded
     // while the same global inspection remains incomplete.
     assert!(matches!(
-        replay::recover(session.recovery_root(), &root.join("recovered")),
+        records::recover(session.recovery_root(), &root.join("recovered")),
         Err(Error::SaveCheckRequired(_))
     ));
     assert!(!root.join("recovered").exists());
@@ -112,7 +112,7 @@ fn assert_recovery(session: &mut Session, root: &Path) {
         )
         .unwrap();
     }
-    let outputs = replay::recover(session.recovery_root(), &root.join("recovered")).unwrap();
+    let outputs = records::recover(session.recovery_root(), &root.join("recovered")).unwrap();
     assert_eq!(std::fs::read(&outputs[0]).unwrap(), b">gene\nATGT\n");
 }
 

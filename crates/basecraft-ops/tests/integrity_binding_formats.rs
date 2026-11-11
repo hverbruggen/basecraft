@@ -80,8 +80,8 @@ fn poison_presence_refuses_both_recovery_routes_without_parsing() {
     for bytes in [b"".as_slice(), b"{broken", b"{\"schema_version\":999}"] {
         std::fs::write(root.path().join("recovery-integrity-error.json"), bytes).unwrap();
         for error in [
-            basecraft_ops::replay::recover(root.path(), &destination).unwrap_err(),
-            basecraft_ops::replay::recover_verified_prefix(root.path(), &destination).unwrap_err(),
+            basecraft_ops::records::recover(root.path(), &destination).unwrap_err(),
+            basecraft_ops::records::recover_verified_prefix(root.path(), &destination).unwrap_err(),
         ] {
             assert!(
                 error

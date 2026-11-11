@@ -1458,7 +1458,7 @@ pub fn consumer_source(
         .saved_source(doc)?
         .ok_or_else(|| invalid("Save the specimen metadata before binding consumers"))?;
     let path = session.root().join(session.doc_key(doc));
-    let publication = crate::provenance::inspect(&path).map_err(|_| invalid("Metadata owner evidence is unavailable; save its document history before binding consumers"))?;
+    let publication = crate::records::provenance::inspect(&path).map_err(|_| invalid("Metadata owner evidence is unavailable; save its document history before binding consumers"))?;
     let event = publication
         .events
         .iter()

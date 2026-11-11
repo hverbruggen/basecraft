@@ -138,7 +138,7 @@ struct PathRole<'a> {
 }
 
 fn inspect<'a>(root: &'a SangerReviewSession, target: &'a Path) -> Inspection<'a> {
-    inspect_with_manifest_reader(root, target, crate::provenance::read_record)
+    inspect_with_manifest_reader(root, target, crate::records::provenance::read_record)
 }
 
 // Narrow observation seam: tests count calls while delegating to the real reader.

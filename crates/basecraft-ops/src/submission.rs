@@ -1292,9 +1292,9 @@ fn verified_reports(
     outcome: &Value,
 ) -> Result<Option<PathBuf>> {
     let read = |path: &Path| -> Result<Value> {
-        Ok(serde_json::from_slice(&crate::provenance::read_record(
-            path,
-        )?)?)
+        Ok(serde_json::from_slice(
+            &crate::records::provenance::read_record(path)?,
+        )?)
     };
     let run = Path::new(
         outcome["evidence"]
@@ -1385,13 +1385,14 @@ fn verified_reports(
         );
         if artifact["role"] != "reports"
             || basecraft_io::hash_file(&path)? != artifact["digest"].as_str().unwrap_or_default()
-            || crate::provenance::bundle_for_result(&path).canonicalize()? != run.canonicalize()?
+            || crate::records::provenance::bundle_for_result(&path).canonicalize()?
+                != run.canonicalize()?
         {
             return Err(invalid(
                 "validation artifact or publication evidence differs",
             ));
         }
-        let issues = crate::provenance::verify(&path)?;
+        let issues = crate::records::provenance::verify(&path)?;
         if !issues.is_empty() {
             return Err(crate::Error::Damaged {
                 path: path.clone(),

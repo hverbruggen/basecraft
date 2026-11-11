@@ -390,7 +390,7 @@ fn trees(project: &Path) -> (PathBuf, PathBuf) {
 }
 
 fn import_event(target: &Path) -> Value {
-    let publication = basecraft_ops::provenance::inspect(target).unwrap();
+    let publication = basecraft_ops::records::inspect(target).unwrap();
     let params = publication
         .events
         .iter()
@@ -488,7 +488,7 @@ fn support_import_runs_headlessly_with_the_same_reference_evidence() {
     let params = import_event(&target);
     assert_eq!(params["sets"], json!(["Bootstrap"]));
     assert_eq!(
-        basecraft_ops::provenance::verify(&target).unwrap(),
+        basecraft_ops::records::verify(&target).unwrap(),
         Vec::<String>::new()
     );
 }
@@ -550,10 +550,10 @@ fn sequence_extraction_cli_mcp_and_python_share_source_and_mapping_semantics() {
     readonly.close();
     for name in ["cli.gb", "mcp.gb"] {
         let result = project.join(name);
-        let publication = basecraft_ops::provenance::inspect(&result).unwrap();
+        let publication = basecraft_ops::records::inspect(&result).unwrap();
         assert!(publication.inputs[0].reference.is_some());
         let input = basecraft_ops::input_evidence::read_input(
-            &basecraft_ops::provenance::bundle_for_result(&result),
+            &basecraft_ops::records::bundle_for_result(&result),
         )
         .unwrap();
         assert_eq!(

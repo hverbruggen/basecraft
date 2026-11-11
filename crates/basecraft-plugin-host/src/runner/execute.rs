@@ -70,7 +70,7 @@ impl PreparedOperation {
                         ));
                     }
                     let data =
-                        serde_json::from_slice(&basecraft_ops::provenance::read_record(receipt)?)?;
+                        serde_json::from_slice(&basecraft_ops::records::read_record(receipt)?)?;
                     Ok(InvokeResult {
                         data: Some(Box::new(data)),
                         artifacts: vec![PluginArtifact {
@@ -167,7 +167,7 @@ impl PreparedOperation {
         }
         contract::BoundedSchema::compile(&self.operation.descriptor.result)?
             .validate(result.data.as_deref().unwrap_or(&Value::Null))?;
-        let plan: Value = serde_json::from_slice(&basecraft_ops::provenance::read_record(
+        let plan: Value = serde_json::from_slice(&basecraft_ops::records::read_record(
             &self.run.artifact("query-preparation.json")?,
         )?)?;
         let receipt = Path::new(&self.context.outputs["receipt"]);

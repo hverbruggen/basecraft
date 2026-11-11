@@ -1,7 +1,7 @@
 //! Repeated baselines must never mutate retained inputs or original sources.
 use std::{collections::BTreeMap, path::Path};
 
-use basecraft_ops::{Session, delimitation, replay};
+use basecraft_ops::{Session, delimitation, records};
 use basecraft_protocol::{Op, delimitation::DelimitationEdit};
 
 const SPART: &str = include_str!("../../../testdata/fixtures/delimitation/manual.spart");
@@ -31,11 +31,11 @@ fn qualify(root: &Path, recovered: &Path) {
     assert!(!before.is_empty());
     println!("retained objects before replay/recovery: {before:?}");
     for _ in 0..2 {
-        let report = replay::replay(root).unwrap();
+        let report = records::replay(root).unwrap();
         assert!(report.ok(), "{report:#?}");
         assert_eq!(objects(root), before);
     }
-    let outputs = replay::recover(root, recovered).unwrap();
+    let outputs = records::recover(root, recovered).unwrap();
     assert_eq!(outputs, vec![recovered.join("a.spart")]);
     assert_eq!(objects(root), before);
     println!(
