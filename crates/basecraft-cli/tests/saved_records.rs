@@ -330,7 +330,7 @@ fn trees(project: &Path) -> (PathBuf, PathBuf) {
 fn import_event(target: &Path) -> Value {
     let project = basecraft_ops::project::Project::new(target.parent().unwrap()).unwrap();
     let publication = basecraft_ops::records::inspect(target, Some(&project)).unwrap();
-    let params = publication
+    publication
         .events
         .iter()
         .find_map(|event| match &event.op {
@@ -346,8 +346,7 @@ fn import_event(target: &Path) -> Value {
             }
             _ => None,
         })
-        .expect("import activity");
-    params
+        .expect("import activity")
 }
 
 #[test]

@@ -41,7 +41,10 @@ fn files_inside_and_outside_the_chosen_project() {
     assert!(in_project.join("manifest.json").is_file());
     assert!(!records::companion(&inside).exists());
     assert!(records::companion(&outside).join("manifest.json").is_file());
-    assert!(records::verify(&inside, Some(&project)).unwrap().is_empty());
+    assert_eq!(
+        records::verify(&inside, Some(&project)).unwrap(),
+        Vec::<String>::new()
+    );
 
     // An analysis folder in a subfolder makes no new project.
     records::ArtifactRun::create(&chosen.join("data/result.txt"), "analysis").unwrap();
@@ -75,7 +78,10 @@ fn a_project_file_packages_with_its_history() {
     let package = root.path().join("package");
     records::package(&file, &package, Some(&project)).unwrap();
     let copied = package.join("gene.fasta");
-    assert!(records::verify(&copied, None).unwrap().is_empty());
+    assert_eq!(
+        records::verify(&copied, None).unwrap(),
+        Vec::<String>::new()
+    );
     // Without the project, the reader says where else to look.
     let error = records::inspect(&file, None).unwrap_err().to_string();
     assert!(error.contains("--project"), "{error}");
@@ -101,8 +107,11 @@ fn local_only_history_of_a_project_file_is_found() {
     edit_and_save(&mut session, &file);
     assert!(!project.provenance_bundle(&file).unwrap().exists());
     let publication = records::inspect(&file, Some(&project)).unwrap();
-    assert!(!publication.events.is_empty());
-    assert!(records::verify(&file, Some(&project)).unwrap().is_empty());
+    assert_ne!(publication.events.len(), 0);
+    assert_eq!(
+        records::verify(&file, Some(&project)).unwrap(),
+        Vec::<String>::new()
+    );
 }
 
 #[test]

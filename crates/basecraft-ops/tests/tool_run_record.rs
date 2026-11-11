@@ -38,5 +38,8 @@ fn support_import_records_typed_contributions_and_input_run() {
     assert!(params.get("contributions").is_none() && params.get("input_run").is_none());
     let report = records::replay(dir.path()).unwrap();
     assert!(report.ok(), "{:?}", report.problems);
-    assert!(records::verify(&target, None).unwrap().is_empty());
+    assert_eq!(
+        records::verify(&target, None).unwrap(),
+        Vec::<String>::new()
+    );
 }
