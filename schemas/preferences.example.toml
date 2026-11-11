@@ -17,8 +17,6 @@ alignment_insert = true
 [files]
 provenance = "portable"
 recovery = true
-remember_workspace = false
-persistent_browsing_indexes = false
 
 [compute]
 local_cpu_threads = 4
@@ -28,9 +26,6 @@ ribbon_hidden = []
 
 [customization.shortcuts]
 "file.save" = "Ctrl+S"
-
-[migration]
-qsettings_imported = false
 
 # Contact details for GenBank submission templates (.sbt). Empty is unset.
 [submitter]

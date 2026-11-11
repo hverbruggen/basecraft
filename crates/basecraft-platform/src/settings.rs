@@ -31,7 +31,6 @@ pub struct Preferences {
     pub files: Files,
     pub compute: Compute,
     pub customization: Customization,
-    pub migration: Migration,
     /// Contact details written to archive submission templates.
     pub submitter: Submitter,
 }
@@ -88,16 +87,12 @@ pub enum ProvenancePolicy {
 pub struct Files {
     pub provenance: ProvenancePolicy,
     pub recovery: bool,
-    pub remember_workspace: bool,
-    pub persistent_browsing_indexes: bool,
 }
 impl Default for Files {
     fn default() -> Self {
         Self {
             provenance: ProvenancePolicy::Portable,
             recovery: true,
-            remember_workspace: false,
-            persistent_browsing_indexes: false,
         }
     }
 }
@@ -186,11 +181,6 @@ impl Submitter {
         Ok(())
     }
 }
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-#[serde(default)]
-pub struct Migration {
-    pub qsettings_imported: bool,
-}
 impl Default for Preferences {
     fn default() -> Self {
         Self {
@@ -200,7 +190,6 @@ impl Default for Preferences {
             files: Files::default(),
             compute: Compute::default(),
             customization: Customization::default(),
-            migration: Migration::default(),
             submitter: Submitter::default(),
         }
     }
@@ -453,8 +442,6 @@ pub enum Change {
     CpuThreads(u32),
     Provenance(ProvenancePolicy),
     Recovery(bool),
-    RememberWorkspace(bool),
-    PersistentBrowsingIndexes(bool),
     Shortcut { id: String, value: Option<String> },
     KeyHint { id: String, value: Option<String> },
     RibbonHidden(Vec<String>),
@@ -487,8 +474,6 @@ impl Change {
             Self::CpuThreads(v) => prefs.compute.local_cpu_threads = v,
             Self::Provenance(v) => prefs.files.provenance = v,
             Self::Recovery(v) => prefs.files.recovery = v,
-            Self::RememberWorkspace(v) => prefs.files.remember_workspace = v,
-            Self::PersistentBrowsingIndexes(v) => prefs.files.persistent_browsing_indexes = v,
             Self::Shortcut { id, value } => {
                 if let Some(v) = value {
                     prefs.customization.shortcuts.insert(id, v);
@@ -634,22 +619,6 @@ impl SettingsStore {
         staged.as_file().sync_all()?;
         staged.persist(&self.path).map_err(|error| error.error)?;
         Ok(prefs)
-    }
-    /// Import only known legacy UI preferences once; never alter the old store.
-    /// The caller reads platform-specific `QSettings` and passes validated values.
-    pub fn import_qsettings(&self, changes: Vec<Change>) -> Result<Preferences, Error> {
-        self.modify(|prefs| {
-            if !prefs.migration.qsettings_imported {
-                // This check runs under the same lock as reload and write. A
-                // hand-authored file may legitimately have no revision field.
-                if !self.path.exists() {
-                    for change in changes {
-                        change.apply(prefs);
-                    }
-                }
-                prefs.migration.qsettings_imported = true;
-            }
-        })
     }
 }
 fn merge(destination: &mut toml::Value, source: toml::Value) {
@@ -966,38 +935,6 @@ mod tests {
         assert!(prefs.resolve_session(&[Change::CpuThreads(0)]).is_err());
     }
     #[test]
-    fn import_never_replaces_explicit_new_preferences() {
-        let temp = tempfile::tempdir().unwrap();
-        let store = store(&temp);
-        store.update(Change::OrfMinCodons(123)).unwrap();
-        let prefs = store
-            .import_qsettings(vec![Change::OrfMinCodons(456)])
-            .unwrap();
-        assert_eq!(prefs.ui.orf_min_codons, 123);
-        assert!(prefs.migration.qsettings_imported);
-    }
-    #[test]
-    fn hand_authored_toml_without_revision_takes_precedence_over_legacy() {
-        let temp = tempfile::tempdir().unwrap();
-        let store = store(&temp);
-        std::fs::create_dir_all(store.path.parent().unwrap()).unwrap();
-        for revision in ["", "revision = 0\n"] {
-            std::fs::write(
-                &store.path,
-                format!(
-                    "schema_version = 1\n{revision}[ui]\norf_min_codons = 123\nshow_gc = false\n"
-                ),
-            )
-            .unwrap();
-            let prefs = store
-                .import_qsettings(vec![Change::OrfMinCodons(456), Change::ShowGc(true)])
-                .unwrap();
-            assert_eq!(prefs.ui.orf_min_codons, 123);
-            assert!(!prefs.ui.show_gc);
-            assert!(prefs.migration.qsettings_imported);
-        }
-    }
-    #[test]
     fn public_example_is_valid() {
         let prefs: Preferences =
             toml::from_str(include_str!("../../../schemas/preferences.example.toml")).unwrap();
@@ -1058,37 +995,6 @@ mod tests {
             assert!(store.update(Change::ShowGc(true)).is_err());
             assert_eq!(std::fs::read_to_string(&store.path).unwrap(), text);
         }
-    }
-    #[test]
-    fn migration_is_once_and_original_legacy_values_remain_independent() {
-        let temp = tempfile::tempdir().unwrap();
-        let store = store(&temp);
-        let imported = store
-            .import_qsettings(vec![Change::OrfMinCodons(321)])
-            .unwrap();
-        assert!(imported.migration.qsettings_imported);
-        store.update(Change::OrfMinCodons(222)).unwrap();
-        assert_eq!(
-            store
-                .import_qsettings(vec![Change::OrfMinCodons(321)])
-                .unwrap()
-                .ui
-                .orf_min_codons,
-            222
-        );
-        std::fs::write(&store.path, "schema_version = 0\n[ui]\nshow_gc = false\n").unwrap();
-        assert!(!store.load().unwrap().ui.show_gc);
-        assert!(
-            std::fs::read_to_string(&store.path)
-                .unwrap()
-                .contains("schema_version = 0")
-        );
-        store.update(Change::SidebarOpen(false)).unwrap();
-        assert!(
-            std::fs::read_to_string(&store.path)
-                .unwrap()
-                .contains("schema_version = 1")
-        );
     }
     fn retry_update(store: &SettingsStore, change: &Change) {
         for _ in 0..1000 {
