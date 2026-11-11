@@ -341,7 +341,7 @@ fn normalised_request(
         .chain(&mut recorded.target)
     {
         if let InputReference::File { path } = reference {
-            *path = input_evidence::relative(run, &project.join(&*path))?;
+            *path = records::relative(run, &project.join(&*path))?;
         }
     }
     Ok(recorded)
