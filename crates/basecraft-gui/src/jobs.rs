@@ -147,17 +147,18 @@ pub(crate) struct Entry {
     work: Work,
 }
 
-type Watcher = Box<dyn Fn() -> bool + Send>;
 struct Board {
     next: u64,
     entries: Vec<Entry>,
-    watchers: Vec<Watcher>,
 }
 static BOARD: Mutex<Board> = Mutex::new(Board {
     next: 0,
     entries: Vec::new(),
-    watchers: Vec::new(),
 });
+/// Kept apart from the list: a watcher queues onto the window thread, whose
+/// queued calls read the list, so the list lock is never held while queueing.
+type Watcher = Box<dyn Fn() -> bool + Send>;
+static WATCHERS: Mutex<Vec<Watcher>> = Mutex::new(Vec::new());
 
 fn board() -> std::sync::MutexGuard<'static, Board> {
     BOARD.lock().unwrap_or_else(PoisonError::into_inner)
@@ -165,16 +166,21 @@ fn board() -> std::sync::MutexGuard<'static, Board> {
 
 /// Call `notify` whenever the job list changes, until it returns false.
 pub(crate) fn watch(notify: impl Fn() -> bool + Send + 'static) {
-    board().watchers.push(Box::new(notify));
+    WATCHERS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push(Box::new(notify));
 }
 
 /// Change the entry `id` and tell the watchers.
 fn update(id: u64, change: impl FnOnce(&mut Entry)) {
-    let mut board = board();
-    if let Some(entry) = board.entries.iter_mut().find(|e| e.id == id) {
+    if let Some(entry) = board().entries.iter_mut().find(|e| e.id == id) {
         change(entry);
     }
-    board.watchers.retain(|notify| notify());
+    WATCHERS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .retain(|notify| notify());
 }
 
 impl Entry {

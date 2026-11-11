@@ -92,13 +92,12 @@ impl Appearance {
 }
 
 type Follower = Box<dyn Fn(&Arc<Appearance>) -> bool + Send>;
-struct State {
-    current: Arc<Appearance>,
-    followers: Vec<Follower>,
-}
+/// Followers queue onto window threads, whose queued calls may read the
+/// current appearance, so the two never share a lock.
+static FOLLOWERS: Mutex<Vec<Follower>> = Mutex::new(Vec::new());
 
-fn state() -> &'static Mutex<State> {
-    static STATE: OnceLock<Mutex<State>> = OnceLock::new();
+fn state() -> &'static Mutex<Arc<Appearance>> {
+    static STATE: OnceLock<Mutex<Arc<Appearance>>> = OnceLock::new();
     STATE.get_or_init(|| {
         let desktop = Desktop::discover();
         // The font comes from a slow external command; the watcher reads it.
@@ -108,10 +107,7 @@ fn state() -> &'static Mutex<State> {
             "monospace".into(),
         );
         let _ = crate::jobs::spawn("appearance", move || watch(&desktop));
-        Mutex::new(State {
-            current: Arc::new(first),
-            followers: Vec::new(),
-        })
+        Mutex::new(Arc::new(first))
     })
 }
 
@@ -119,7 +115,6 @@ pub(crate) fn current() -> Arc<Appearance> {
     state()
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
-        .current
         .clone()
 }
 
@@ -135,27 +130,31 @@ pub(crate) fn follow<T: cxx_qt::Threading + 'static>(
     apply: fn(Pin<&mut T>, &Appearance, bool),
 ) {
     let thread = object.qt_thread();
-    let now = {
-        let mut state = state().lock().unwrap_or_else(PoisonError::into_inner);
-        state.followers.push(Box::new(move |look| {
+    FOLLOWERS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push(Box::new(move |look| {
             let look = look.clone();
             thread
                 .queue(move |object| apply(object, &look, true))
                 .is_ok()
         }));
-        state.current.clone()
-    };
-    apply(object, &now, false);
+    apply(object, &current(), false);
 }
 
 fn replace(next: Appearance) {
-    let mut state = state().lock().unwrap_or_else(PoisonError::into_inner);
-    if *state.current == next {
-        return;
-    }
     let next = Arc::new(next);
-    state.current = next.clone();
-    state.followers.retain(|follower| follower(&next));
+    {
+        let mut current = state().lock().unwrap_or_else(PoisonError::into_inner);
+        if **current == *next {
+            return;
+        }
+        *current = next.clone();
+    }
+    FOLLOWERS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .retain(|follower| follower(&next));
 }
 
 /// Held from reading the files to publishing the result, so a reload that

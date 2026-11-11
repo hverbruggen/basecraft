@@ -1,6 +1,7 @@
 //! Real QML-created editor controllers follow the app-wide appearance: a
 //! preference change reaches every open editor through the window thread, and
 //! a Find scan finishes without polling. Document state stays as it was.
+use basecraft_platform::settings::{Change, DataColorScheme, SettingsStore};
 use cxx_qt::casting::Downcast;
 use cxx_qt_lib::{QByteArray, QQmlApplicationEngine, QString, QUrl};
 use cxx_qt_lib_extras::QApplication;
@@ -57,7 +58,8 @@ pub(crate) fn run(app: &QApplication) {
     let profile = std::env::var_os("BASECRAFT_PROFILE_DIR").expect("isolated bootstrap profile");
     let paths = basecraft_platform::paths::AppPaths::discover().unwrap();
     assert!(paths.preferences().starts_with(&profile));
-    assert!(!appearance::current().color_blind);
+    // Flip whichever data palette the profile has now.
+    let want = !appearance::current().color_blind;
 
     let created = Arc::new(Mutex::new(Vec::new()));
     let sink = created.clone();
@@ -176,14 +178,16 @@ pub(crate) fn run(app: &QApplication) {
             c.set_frame(placeholder.clone());
         }
     }
-    basecraft_platform::settings::SettingsStore::new(paths.preferences())
-        .update(basecraft_platform::settings::Change::DataColorScheme(
-            basecraft_platform::settings::DataColorScheme::ColorBlindFriendly,
-        ))
+    SettingsStore::new(paths.preferences())
+        .update(Change::DataColorScheme(if want {
+            DataColorScheme::ColorBlindFriendly
+        } else {
+            DataColorScheme::DesktopTheme
+        }))
         .unwrap();
     appearance::preferences_changed();
-    settle(app, "the colour-blind palette", || {
-        appearance::current().color_blind
+    settle(app, "the new data palette", || {
+        appearance::current().color_blind == want
     });
     let look = appearance::current();
     macro_rules! restyled {
