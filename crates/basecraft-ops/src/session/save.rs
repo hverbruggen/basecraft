@@ -115,8 +115,9 @@ impl Session {
         );
 
         // 1. Find and reserve the analyses that may use the target.
+        let written = Self::written_stores(&target.path)?;
         let mut evidence_lock =
-            crate::input_evidence::lock_save(&target.path, policy != SavePolicy::Cancel)?;
+            crate::input_evidence::lock_save(&target.path, policy != SavePolicy::Cancel, &written)?;
         let evidence = evidence_lock.check(&target.path)?;
         let (stamps, revision) = self.observe_sources(id, &target)?;
         let before = revision.as_ref().map(|r| r.hash.clone());
@@ -675,7 +676,7 @@ impl Session {
     /// open document's own file would discard its accepted revision.
     /// Known-input conflicts are resolved first, under both locks.
     pub(super) fn derived_target(&self, path: &Path) -> Result<DerivedTarget> {
-        let mut evidence = crate::input_evidence::lock_save(path, false)?;
+        let mut evidence = crate::input_evidence::lock_save(path, false, &[])?;
         let check = evidence.check(path)?;
         if !check.is_complete() {
             return Err(Error::EvidenceCheckIncomplete(Box::new(check)));
@@ -735,6 +736,23 @@ impl Session {
             self.docs[id.0].disk_stamp = files[0].stamp.clone();
             self.docs[id.0].absent_sidecars.clear();
         }
+    }
+
+    /// Stores this save may write after the data: the store of a bound result
+    /// (binding, history) and the target folder's store (new hidden runs).
+    /// They are reserved exclusively up front, never upgraded later.
+    fn written_stores(target: &Path) -> Result<Vec<std::path::PathBuf>> {
+        let mut stores: Vec<_> = crate::analysis_store::ArtifactRun::for_result(target)?
+            .and_then(|run| run.parent().and_then(Path::parent).map(Path::to_path_buf))
+            .into_iter()
+            .collect();
+        if let Some(folder) = target.parent() {
+            let store = folder.join(".basecraft/analyses-v1");
+            if store.is_dir() {
+                stores.push(store);
+            }
+        }
+        Ok(stores)
     }
 
     fn save_format(&self, id: DocId, target: &Path) -> Result<files::Format> {

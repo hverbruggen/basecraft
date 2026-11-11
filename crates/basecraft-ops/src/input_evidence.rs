@@ -438,7 +438,7 @@ pub fn relative(base: &Path, target: &Path) -> Result<String> {
 
 pub fn read_input(run: &Path) -> Result<SubmittedInput> {
     if let Some(held) = HELD_LOCKS.with(|slot| slot.borrow().upgrade()) {
-        Locks(held).record(run, false)?;
+        Locks(held).record(run)?;
     }
     let bytes = crate::records::provenance::read_record(&run.join("input.json"))?;
     validate_input(run, &bytes)
@@ -539,22 +539,23 @@ fn open_lock(path: &Path) -> Result<std::fs::File> {
         .open(path)?)
 }
 
-/// Reserved keys, each with whether it is held exclusively. A save scope waits
-/// briefly for a reservation; other scopes return Busy at once.
+/// Reserved keys, each with whether it is held exclusively. Ledgers (run
+/// folders) are always reserved exclusively, reads included, since a read is
+/// often followed by a write. Store keys are only taken for store-level
+/// changes and by saves, up front.
 #[derive(Default)]
 struct Scope {
     held: std::cell::RefCell<BTreeMap<PathBuf, (std::fs::File, bool)>>,
-    wait: std::cell::Cell<bool>,
 }
 type HeldLocks = std::rc::Rc<Scope>;
 thread_local! {
     static HELD_LOCKS: std::cell::RefCell<std::rc::Weak<Scope>> = const { std::cell::RefCell::new(std::rc::Weak::new()) };
 }
-const SAVE_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+const RESERVATION_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// A thread-confined mutation scope. Readers reserve shared, writers exclusive;
-/// nested operations reuse the scope. Waits are bounded, so contention ends in
-/// Busy, never deadlock.
+/// nested operations reuse the scope. Cooperating writers hold keys briefly, so
+/// a reservation waits up to 2 s; contention then ends in Busy, never deadlock.
 pub struct Locks(HeldLocks);
 
 pub fn lock() -> Result<Locks> {
@@ -567,17 +568,9 @@ pub fn lock() -> Result<Locks> {
 }
 
 impl Locks {
-    fn record(&self, directory: &Path, exclusive: bool) -> Result<()> {
+    fn record(&self, directory: &Path) -> Result<()> {
         let directory = lexical(&std::path::absolute(directory)?);
-        self.reserve(
-            std::iter::once(directory.clone()).chain(
-                directory
-                    .ancestors()
-                    .find(|p| p.file_name().is_some_and(|n| n == "analyses-v1"))
-                    .map(Path::to_path_buf),
-            ),
-            exclusive,
-        )
+        self.reserve([directory], true)
     }
     fn input(
         &self,
@@ -586,7 +579,7 @@ impl Locks {
         seen: &mut std::collections::BTreeSet<PathBuf>,
         sources: &mut Option<std::collections::BTreeSet<PathBuf>>,
     ) -> Result<()> {
-        self.record(directory, true)?;
+        self.record(directory)?;
         if !seen.insert(directory.into()) {
             return Ok(());
         }
@@ -596,13 +589,6 @@ impl Locks {
                 limit: 32,
             });
         }
-        self.reserve(
-            directory
-                .ancestors()
-                .find(|p| p.file_name().is_some_and(|n| n == "analyses-v1"))
-                .map(Path::to_path_buf),
-            true,
-        )?;
         if let Some(source) = &input.source {
             let path = lexical(&directory.join(&source.path));
             self.source(&path)?;
@@ -625,12 +611,6 @@ impl Locks {
         dependencies.extend(input.upstream.iter().map(|link| link.bundle.as_path()));
         for relative in dependencies {
             let path = lexical(&directory.join(relative));
-            self.reserve(
-                path.ancestors()
-                    .find(|p| p.file_name().is_some_and(|n| n == "analyses-v1"))
-                    .map(Path::to_path_buf),
-                true,
-            )?;
             match read_input(&path) {
                 Ok(input) => self.input(&path, &input, seen, sources)?,
                 Err(error @ crate::Error::Busy(_)) => return Err(error),
@@ -647,10 +627,14 @@ impl Locks {
             } else {
                 path
             };
-            if let Some((file, held_exclusive)) = held.get_mut(&path) {
+            if let Some((_, held_exclusive)) = held.get(&path) {
+                // flock conversion is not atomic: never upgrade a shared hold.
+                // A scope that will write reserves exclusively up front.
                 if exclusive && !*held_exclusive {
-                    self.acquire(file, true)?;
-                    *held_exclusive = true;
+                    return Err(crate::Error::Busy(format!(
+                        "this save did not reserve {} before changing it",
+                        path.display()
+                    )));
                 }
                 continue;
             }
@@ -660,12 +644,12 @@ impl Locks {
                     .with_file_name("analysis-locks")
                     .join(key.trim_start_matches("b3:")),
             )?;
-            self.acquire(&file, exclusive)?;
+            Self::acquire(&file, exclusive, &path)?;
             held.insert(path, (file, exclusive));
         }
         Ok(())
     }
-    fn acquire(&self, file: &std::fs::File, exclusive: bool) -> Result<()> {
+    fn acquire(file: &std::fs::File, exclusive: bool, path: &Path) -> Result<()> {
         let started = std::time::Instant::now();
         loop {
             let acquired = if exclusive {
@@ -676,10 +660,11 @@ impl Locks {
             if acquired {
                 return Ok(());
             }
-            if !self.0.wait.get() || started.elapsed() > SAVE_WAIT {
-                return Err(crate::Error::Busy(
-                    "an analysis or save is using this input; retry shortly".into(),
-                ));
+            if started.elapsed() > RESERVATION_WAIT {
+                return Err(crate::Error::Busy(format!(
+                    "an analysis or save is using {}; retry shortly",
+                    path.display()
+                )));
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
@@ -719,16 +704,26 @@ impl SaveLock {
 
 /// Select and reserve under the short catalogue lock, then retain only resources
 /// belonging to this target. A lookup is carried into the save unchanged.
-pub(crate) fn lock_save(target: &Path, changes_stores: bool) -> Result<SaveLock> {
+/// `writes` are stores this save will change (its history bundle's store);
+/// they are reserved exclusively first. Other selected stores are reserved
+/// shared unless `changes_stores` (a policy that edits ledgers) is set.
+pub(crate) fn lock_save(
+    target: &Path,
+    changes_stores: bool,
+    writes: &[PathBuf],
+) -> Result<SaveLock> {
     let locks = lock()?;
-    locks.0.wait.set(true);
-    // Lookups share the catalogue; only index changes take it exclusively.
-    let catalogue = open_lock(&registry()?.with_file_name("analysis-registry.lock"))?;
-    FileExt::lock_shared(&catalogue).map_err(|e| crate::Error::Busy(e.to_string()))?;
+    // Lock order: reservations first, then the catalogue, which is never held
+    // while waiting. Holding the target's keys stops any new reference to it,
+    // so stores selected under the shared catalogue stay the right set.
+    locks.reserve(writes.iter().cloned(), true)?;
     locks.source(target)?;
-    let (canonical, selected, inspection) = selection(target)?;
+    let (canonical, selected, inspection) = {
+        let catalogue = open_lock(&registry()?.with_file_name("analysis-registry.lock"))?;
+        FileExt::lock_shared(&catalogue).map_err(|e| crate::Error::Busy(e.to_string()))?;
+        selection(target)?
+    };
     locks.reserve(selected.iter().cloned(), changes_stores)?;
-    drop(catalogue);
     let check = inspect_in(&canonical, &selected, inspection)?;
     Ok(SaveLock {
         _locks: locks,
@@ -823,13 +818,14 @@ pub(crate) fn registered_run(id: &str, expected: &str) -> Result<PathBuf> {
 /// Caller holds `lock`. Only explicit analysis execution registers a store.
 pub fn register(run: &ArtifactRun) -> Result<()> {
     let locks = lock()?;
-    let registry_guard = registry_lock()?;
     let store = run
         .directory()
         .parent()
         .and_then(Path::parent)
         .ok_or_else(|| invalid("run has no store"))?;
+    // Same lock order as every writer: the store first, then the catalogue.
     locks.reserve([store.to_path_buf()], true)?;
+    let registry_guard = registry_lock()?;
     let mut all = stores()?;
     if !all.iter().any(|p| p == store) {
         if all.len() >= 4096 {

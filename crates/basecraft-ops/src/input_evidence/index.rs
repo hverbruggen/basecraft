@@ -464,7 +464,10 @@ mod tests {
         )
         .unwrap();
         let locks = super::super::lock().unwrap();
-        locks.record(run.directory(), true).unwrap();
+        // A ledger writer reserves the ledger and every input it names.
+        locks.record(run.directory()).unwrap();
+        locks.source(&source).unwrap();
+        locks.source(&introduced).unwrap();
         super::changing(
             &run.directory().join("input.json"),
             Some([introduced.clone()].into()),
@@ -519,7 +522,7 @@ mod tests {
         std::fs::write(&target, b">a\nACGT\n").unwrap();
         std::fs::write(&other, b">b\nACGT\n").unwrap();
         std::fs::hard_link(&target, &alias).unwrap();
-        let _first = super::super::lock_save(&target, false).unwrap();
+        let _first = super::super::lock_save(&target, false, &[]).unwrap();
         std::thread::spawn(move || {
             let mut session = crate::Session::new(other.parent().unwrap());
             let id = session.open(&other).unwrap();
@@ -602,6 +605,61 @@ mod tests {
         }
         writer.join().unwrap();
         for name in ["a/a.fasta", "b/b.fasta"] {
+            assert_eq!(
+                std::fs::read(root.path().join(name)).unwrap(),
+                b">a\nTCGT\n"
+            );
+        }
+    }
+
+    #[test]
+    fn a_shared_hold_is_never_upgraded() {
+        crate::isolated_profile::isolate!();
+        let root = tempfile::tempdir().unwrap();
+        let locks = super::super::lock().unwrap();
+        locks.reserve([root.path().to_path_buf()], false).unwrap();
+        assert!(matches!(
+            locks.reserve([root.path().to_path_buf()], true),
+            Err(crate::Error::Busy(_))
+        ));
+    }
+
+    #[test]
+    fn results_with_history_in_one_store_save_concurrently() {
+        crate::isolated_profile::isolate!();
+        let root = tempfile::tempdir().unwrap();
+        // Two analysis results whose history bundles are runs of one store.
+        for name in ["a.fasta", "b.fasta"] {
+            let output = root.path().join(name);
+            std::fs::write(&output, b">a\nACGT\n").unwrap();
+            let run = crate::analysis_store::ArtifactRun::create(&output, &name[..1]).unwrap();
+            run.bind(&output).unwrap();
+        }
+        let savers: Vec<_> = ["a.fasta", "b.fasta"]
+            .into_iter()
+            .map(|name| {
+                let root = root.path().to_path_buf();
+                std::thread::spawn(move || {
+                    let mut session = crate::Session::recoverable(&root).unwrap();
+                    let doc = session.open(&root.join(name)).unwrap();
+                    session
+                        .apply(
+                            doc,
+                            basecraft_protocol::Op::SeqReplace {
+                                start: 0,
+                                end: 1,
+                                residues: "T".into(),
+                            },
+                        )
+                        .unwrap();
+                    session.save(doc, None)
+                })
+            })
+            .collect();
+        for saver in savers {
+            saver.join().unwrap().unwrap();
+        }
+        for name in ["a.fasta", "b.fasta"] {
             assert_eq!(
                 std::fs::read(root.path().join(name)).unwrap(),
                 b">a\nTCGT\n"
