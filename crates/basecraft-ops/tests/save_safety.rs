@@ -60,8 +60,11 @@ fn save_as_alias_of_own_file_keeps_stale_source_protection() {
         aliases.push(dir.path().join("folder-link/gene.fasta"));
     }
     for alias in aliases {
-        let error = session.save(doc, Some(&alias)).unwrap_err().to_string();
-        assert!(error.contains("source changed"), "{alias:?}: {error}");
+        let error = session.save(doc, Some(&alias)).unwrap_err();
+        assert!(
+            matches!(error, basecraft_ops::Error::ChangedOnDisk { .. }),
+            "{alias:?}: {error}"
+        );
         assert_eq!(
             std::fs::read_to_string(&file).unwrap(),
             ">external\nAAAA\n",
