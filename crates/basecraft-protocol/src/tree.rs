@@ -39,12 +39,11 @@ pub struct CladeAnnotation {
     #[serde(default = "default_opacity")]
     pub opacity_right: u8,
     /// Every tip the clade held when the label was made. The tree fills this
-    /// in; a reroot that changes the set leaves the label on another group.
-    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    /// in when it is empty; a reroot that changes the set leaves the label on
+    /// another group.
     pub tips: BTreeSet<String>,
     /// Whether the tree was rooted when the label was made. Unless it was, a
     /// clade is one side of a branch, so its complement is the same group.
-    #[serde(default)]
     pub rooting: crate::facts::Rooting,
 }
 

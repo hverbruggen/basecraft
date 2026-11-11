@@ -58,13 +58,25 @@ fn document_writer_bytes_require_a_version_bump() {
     files::write_alignment(&opened.doc, &mut bytes).unwrap();
     golden("fasta", "alignment", &path, bytes);
     let path = root.join("tree-inference/unrooted.nwk");
-    let opened = files::load_tree(&path).unwrap();
+    let mut opened = files::load_tree(&path).unwrap();
+    opened
+        .doc
+        .annotate(
+            1,
+            Some(basecraft_protocol::CladeAnnotation::new(
+                vec!["a".into(), "b".into()],
+                "ab",
+            )),
+        )
+        .unwrap();
     let mut bytes = Vec::new();
     files::write_tree(&opened, &mut bytes).unwrap();
     let hash = basecraft_io::hash_bytes(&bytes);
     golden("newick", "tree", &path, bytes);
     let mut bytes = Vec::new();
-    files::write_companion(&files::tree_companion(&opened.doc, &hash), &mut bytes).unwrap();
+    files::tree_companion(&opened.doc, &hash)
+        .write(&mut bytes)
+        .unwrap();
     golden("companion", "tree", &path, bytes);
     let path = root.join("species-delimitation/hypotheses.spart");
     let workspace = files::load_delimitation(&path).unwrap();
@@ -76,12 +88,10 @@ fn document_writer_bytes_require_a_version_bump() {
     #[cfg(unix)]
     {
         let mut bytes = Vec::new();
-        files::write_companion(
-            &files::delimitation_companion(&workspace, "b3:fixture", Path::new("/fixture.spart"))
-                .unwrap(),
-            &mut bytes,
-        )
-        .unwrap();
+        files::delimitation_companion(&workspace, "b3:fixture", Path::new("/fixture.spart"))
+            .unwrap()
+            .write(&mut bytes)
+            .unwrap();
         golden("companion", "delimitation", &path, bytes);
     }
     {
@@ -287,4 +297,48 @@ fn writer_versions(path: &Path) -> std::collections::BTreeMap<String, u32> {
         .iter()
         .map(|(name, version)| ((*name).to_owned(), *version))
         .collect()
+}
+
+#[test]
+fn companions_read_and_written_again_keep_their_bytes() {
+    crate::isolated_profile::isolate!();
+    let dir = tempfile::tempdir().unwrap();
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/fixtures/compact");
+    let tree = dir.path().join("tree.nwk");
+    let spart = dir.path().join("species.spart");
+    std::fs::copy(fixtures.join("tree-inference/unrooted.nwk"), &tree).unwrap();
+    let fixture = dir.path().join("fixture.spart");
+    std::fs::copy(
+        fixtures.join("species-delimitation/hypotheses.spart"),
+        &fixture,
+    )
+    .unwrap();
+    let mut session = basecraft_ops::Session::new(dir.path());
+    let doc = session.open(&tree).unwrap();
+    session
+        .apply(
+            doc,
+            basecraft_protocol::Op::TreeAnnotate {
+                id: 1,
+                annotation: Some(basecraft_protocol::CladeAnnotation::new(
+                    vec!["a".into(), "b".into()],
+                    "ab",
+                )),
+            },
+        )
+        .unwrap();
+    session.save(doc, None).unwrap();
+    // Saving under a new name writes the workspace and its companion.
+    let work = session.open(&fixture).unwrap();
+    session.save(work, Some(&spart)).unwrap();
+    // A fresh session reads both companions and saves copies beside them.
+    let mut again = basecraft_ops::Session::new(dir.path());
+    for (from, to) in [(&tree, "copy.nwk"), (&spart, "copy.spart")] {
+        let saved = std::fs::read(files::tree_sidecar(from)).unwrap();
+        let doc = again.open(from).unwrap();
+        let copy = dir.path().join(to);
+        again.save(doc, Some(&copy)).unwrap();
+        let copied = std::fs::read(files::tree_sidecar(&copy)).unwrap();
+        assert_eq!(String::from_utf8(copied), String::from_utf8(saved), "{to}");
+    }
 }

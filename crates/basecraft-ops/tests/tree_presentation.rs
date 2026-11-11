@@ -343,7 +343,9 @@ fn unreadable_metadata_never_blocks_the_exchange_tree() {
     let tree = files::load_tree(&path).unwrap().doc;
     let mut bytes = Vec::new();
     let hash = basecraft_io::hash_bytes(original);
-    files::write_companion(&files::tree_companion(&tree, &hash), &mut bytes).unwrap();
+    files::tree_companion(&tree, &hash)
+        .write(&mut bytes)
+        .unwrap();
     let mut side: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     let sidecar = files::tree_sidecar(&path);
     for version in [0, 99] {

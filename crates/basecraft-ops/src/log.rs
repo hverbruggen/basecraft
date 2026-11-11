@@ -404,10 +404,15 @@ pub fn activity_text(roots: &[PathBuf], since: &str, utc_offset_min: i32) -> Res
     for e in &entries {
         let _ = writeln!(
             out,
-            "{}  {}  {}{}",
+            "{}  {}  {}{}{}",
             local_time(&e.t, utc_offset_min),
             e.doc,
             describe(&e.op),
+            e.result
+                .notes
+                .iter()
+                .map(|n| [". ", n.as_str()].concat())
+                .collect::<String>(),
             actor_note(&e.actor)
         );
     }

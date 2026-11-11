@@ -77,6 +77,7 @@ impl Session {
             self.actor.clone(),
             Op::CreateSequence { name, residues },
             OpResult {
+                notes: Vec::new(),
                 hashes: vec![],
                 feature: None,
             },

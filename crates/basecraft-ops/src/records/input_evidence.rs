@@ -1778,7 +1778,7 @@ pub fn package(result: &Path, destination: &Path) -> Result<()> {
         let target = final_folder.join(copied.file_name().unwrap_or_default());
         let companion =
             crate::files::delimitation_companion(&work, &publication.outputs[0].hash, &target)?;
-        basecraft_io::write_atomic(&sidecar, |w| crate::files::write_companion(&companion, w))?;
+        basecraft_io::write_atomic(&sidecar, |w| companion.write(w))?;
         let side_hash = basecraft_io::hash_file(&sidecar)?;
         if let Some(artifact) = publication
             .outputs

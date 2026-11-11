@@ -103,7 +103,7 @@ impl Document for OpenedTree {
         let sidecar = files::tree_sidecar(target);
         let hash = prepared.push(target, |w| files::write_tree(self, w))?;
         prepared.push(&sidecar, |w| {
-            files::write_companion(&files::tree_companion(&self.doc, &hash), w)
+            files::tree_companion(&self.doc, &hash).write(w)
         })?;
         Ok(prepared)
     }
@@ -126,9 +126,35 @@ impl Document for OpenedTree {
         let mut hw = HashingWriter::new(std::io::sink());
         files::write_tree(self, &mut hw)?;
         let mut side = HashingWriter::new(std::io::sink());
-        files::write_companion(&files::tree_companion(&self.doc, &hw.hash()), &mut side)?;
+        files::tree_companion(&self.doc, &hw.hash()).write(&mut side)?;
         Ok(vec![hw.hash(), side.hash()])
     }
+}
+
+/// Labels the tree in `content` marks on a group other than the one they
+/// were made for.
+pub(crate) fn displaced(content: &files::Loaded) -> Vec<u32> {
+    content
+        .tree()
+        .map_or_else(Vec::new, |tree| tree.doc.displaced_annotations())
+}
+
+/// A note for each label an edit moved onto another group, such as by a reroot.
+pub(crate) fn moved_labels(content: &files::Loaded, before: &[u32]) -> Vec<String> {
+    let Some(tree) = content.tree() else {
+        return Vec::new();
+    };
+    tree.doc
+        .displaced_annotations()
+        .into_iter()
+        .filter(|id| !before.contains(id))
+        .map(|id| {
+            format!(
+                "Label {:?} no longer marks the group it was made for",
+                tree.doc.annotations()[&id].label
+            )
+        })
+        .collect()
 }
 
 pub(crate) fn execute_tree(doc: &mut TreeDoc, op: &Op) -> Result<basecraft_docs::tree::TreeUndo> {

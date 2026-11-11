@@ -635,7 +635,7 @@ impl PreparedOperation {
 
     /// Publish the species workspace in a validated run's result as a new
     /// SPART file in the project.
-    fn publish_workspace(&self, destination: &str) -> Result<PathBuf> {
+    fn publish_workspace(&self, destination: &str) -> Result<(PathBuf, Option<String>)> {
         let validated: Vec<(String, PathBuf, String)> = serde_json::from_slice(
             &basecraft_ops::records::read_record(&self.run.artifact("validated-artifacts.json")?)?,
         )?;
@@ -666,10 +666,11 @@ impl PreparedOperation {
             return Err(Error::Protocol("result holds no species workspace".into()));
         }
         let mut work = serde_json::from_value(value["workspace"].clone())?;
-        basecraft_ops::delimitation::link_roster(&self.policy.root, &self.run, &mut work);
+        let roster =
+            basecraft_ops::delimitation::link_roster(&self.policy.root, &self.run, &mut work)?;
         let target = self.policy.path(destination, true)?;
         basecraft_ops::delimitation::publish_workspace_to(&target, &work, &self.run)?;
-        Ok(target)
+        Ok((target, roster.summary()))
     }
 
     /// The file holding a delimitation run's result: the descriptor's primary

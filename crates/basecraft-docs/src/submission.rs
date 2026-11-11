@@ -424,6 +424,15 @@ pub fn apply(sub: &mut Submission, edit: &SubmissionEdit) -> Result<(), EditErro
             });
         }
         SubmissionEdit::RenameRecord { from, to } => {
+            if next.rows.iter().any(|r| r.record == *to)
+                || next.frames.iter().any(|f| f.record == *to)
+                || next.accessions.iter().any(|a| a.record == *to)
+                || next.row_rules.contains_key(to)
+            {
+                return Err(err(format!(
+                    "the submission already has a row named {to}; remove it first"
+                )));
+            }
             let records = next.rows.iter_mut().map(|r| &mut r.record);
             let records = records.chain(next.frames.iter_mut().map(|f| &mut f.record));
             for record in records.chain(next.accessions.iter_mut().map(|a| &mut a.record)) {

@@ -316,16 +316,19 @@ impl Session {
         if checkpoints {
             self.track(doc)?;
         }
+        let displaced = crate::documents::tree::displaced(&self.docs[doc.0].content);
         let (inverse, feature) = self.docs[doc.0]
             .content_mut()
             .as_document_mut()
             .apply(&op)?;
+        let notes = crate::documents::tree::moved_labels(&self.docs[doc.0].content, &displaced);
         if !checkpoints && let Err(error) = self.track(doc) {
             restore_inverse(self.docs[doc.0].content_mut(), &inverse)?;
             return Err(error);
         }
         self.docs[doc.0].generation += 1;
         let result = OpResult {
+            notes: notes.clone(),
             hashes: Vec::new(),
             feature: feature.map(|f| f.0),
         };
@@ -343,6 +346,9 @@ impl Session {
             group: group.unwrap_or_default(),
             last: Instant::now(),
         });
+        if let Some(group) = group {
+            self.group_docs.entry(group).or_default().insert(doc.0);
+        }
         let slot = &mut self.docs[doc.0];
         slot.redo.clear();
         slot.undo.push(Applied {
@@ -351,7 +357,11 @@ impl Session {
             inverse,
             group,
         });
-        Ok(Outcome { entry_id, feature })
+        Ok(Outcome {
+            entry_id,
+            feature,
+            notes,
+        })
     }
 
     /// Undo the last operation on a document; returns the undone entry's id.
@@ -389,45 +399,81 @@ impl Session {
     /// Undo the last step on a document (one operation, or a whole group);
     /// returns the id of the last entry undone.
     pub fn undo(&mut self, id: DocId) -> Result<String> {
-        self.docs.get(id.0).ok_or(Error::UnknownDocument { id })?;
-        let group = self.docs[id.0].undo.last().and_then(|a| a.group);
-        let mut last = self.undo_one(id)?;
-        while group.is_some() && self.docs[id.0].undo.last().and_then(|a| a.group) == group {
-            last = self.undo_one(id)?;
-        }
-        // A group can span documents, as a rename and its links do.
-        for other in self.group_members(group, |slot| slot.undo.last()) {
-            while self.docs[other].undo.last().and_then(|a| a.group) == group {
-                self.undo_one(DocId(other))?;
-            }
-        }
-        Ok(last)
-    }
-
-    fn group_members(
-        &self,
-        group: Option<u64>,
-        top: impl Fn(&super::Slot) -> Option<&Applied>,
-    ) -> Vec<usize> {
-        (0..self.docs.len())
-            .filter(|&i| group.is_some() && top(&self.docs[i]).and_then(|a| a.group) == group)
-            .collect()
+        self.step_group(id, false)
     }
 
     /// Redo the last undone step (one operation, or a whole group).
     pub fn redo(&mut self, id: DocId) -> Result<String> {
-        self.docs.get(id.0).ok_or(Error::UnknownDocument { id })?;
-        let group = self.docs[id.0].redo.last().and_then(|a| a.group);
-        let mut last = self.redo_one(id)?;
-        while group.is_some() && self.docs[id.0].redo.last().and_then(|a| a.group) == group {
-            last = self.redo_one(id)?;
+        self.step_group(id, true)
+    }
+
+    /// Undo or redo the top step of `id`, and the rest of its group in every
+    /// document the group changed. Refused when any of them has a later step
+    /// on top, so a rename never ends up half undone.
+    fn step_group(&mut self, id: DocId, redo: bool) -> Result<String> {
+        let slot = self.docs.get(id.0).ok_or(Error::UnknownDocument { id })?;
+        let top = |slot: &super::Slot| {
+            if redo { &slot.redo } else { &slot.undo }
+                .last()
+                .and_then(|a| a.group)
+        };
+        let Some(group) = top(slot) else {
+            return if redo {
+                self.redo_one(id)
+            } else {
+                self.undo_one(id)
+            };
+        };
+        let mut members = vec![id.0];
+        members.extend(
+            self.group_docs
+                .get(&group)
+                .into_iter()
+                .flatten()
+                .filter(|&&d| d != id.0),
+        );
+        for &member in &members {
+            if top(&self.docs[member]) != Some(group) {
+                let file = &self.docs[member].key;
+                return Err(invalid(if redo {
+                    format!("{file} was edited after this step was undone, so it can't be redone")
+                } else {
+                    format!("undo the later edit in {file} first")
+                }));
+            }
         }
-        for other in self.group_members(group, |slot| slot.redo.last()) {
-            while self.docs[other].redo.last().and_then(|a| a.group) == group {
-                self.redo_one(DocId(other))?;
+        let mut last = String::new();
+        for member in members {
+            while top(&self.docs[member]) == Some(group) {
+                let entry = if redo {
+                    self.redo_one(DocId(member))?
+                } else {
+                    self.undo_one(DocId(member))?
+                };
+                if member == id.0 {
+                    last = entry;
+                }
             }
         }
         Ok(last)
+    }
+
+    /// Other documents changed by the newest step of `id` that are not
+    /// saved, such as the metadata of a rename. Saving `id` alone leaves
+    /// them behind.
+    pub fn unsaved_partners(&self, id: DocId) -> Vec<DocId> {
+        let group = self
+            .docs
+            .get(id.0)
+            .and_then(|slot| slot.undo.last())
+            .and_then(|a| a.group);
+        group
+            .and_then(|g| self.group_docs.get(&g))
+            .into_iter()
+            .flatten()
+            .filter(|&&d| d != id.0 && !self.docs[d].is_clean())
+            .map(|&d| DocId(d))
+            .collect()
     }
 
     /// Verify an explicitly named history target before changing anything. An empty

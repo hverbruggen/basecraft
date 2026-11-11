@@ -372,6 +372,7 @@ impl Session {
                 path: self.relative(target),
             },
             OpResult {
+                notes: Vec::new(),
                 hashes,
                 feature: None,
             },
@@ -623,6 +624,7 @@ impl Session {
             self.actor.clone(),
             Op::Save { path: key },
             OpResult {
+                notes: Vec::new(),
                 hashes,
                 feature: None,
             },

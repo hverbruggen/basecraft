@@ -88,16 +88,10 @@ fn rereview_legacy_sidecar_break_and_remove_reach_combined_workspace() {
         std::fs::write(&source, original).unwrap();
         let work = files::load_delimitation(&source).unwrap();
         let mut bytes = Vec::new();
-        files::write_companion(
-            &files::delimitation_companion(
-                &work,
-                &basecraft_io::hash_file(&source).unwrap(),
-                &source,
-            )
-            .unwrap(),
-            &mut bytes,
-        )
-        .unwrap();
+        files::delimitation_companion(&work, &basecraft_io::hash_file(&source).unwrap(), &source)
+            .unwrap()
+            .write(&mut bytes)
+            .unwrap();
         let sidecar = files::tree_sidecar(&source);
         std::fs::write(&sidecar, &bytes).unwrap();
         let target = root.path().join("combined.spart");
@@ -446,16 +440,10 @@ fn combine_complete_export_includes_legacy_sidecar_evidence() {
         json!("Sidecar-only scientific context"),
     );
     let mut bytes = Vec::new();
-    files::write_companion(
-        &files::delimitation_companion(
-            &legacy,
-            &basecraft_io::hash_file(&source).unwrap(),
-            &source,
-        )
-        .unwrap(),
-        &mut bytes,
-    )
-    .unwrap();
+    files::delimitation_companion(&legacy, &basecraft_io::hash_file(&source).unwrap(), &source)
+        .unwrap()
+        .write(&mut bytes)
+        .unwrap();
     std::fs::write(files::tree_sidecar(&source), &bytes).unwrap();
     let side_hash = basecraft_io::hash_bytes(&bytes);
     let mut session = Session::recoverable(&root).unwrap();

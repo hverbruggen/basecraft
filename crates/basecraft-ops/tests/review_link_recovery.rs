@@ -87,11 +87,9 @@ fn guarded_partial_save_supports_retry_and_manual_intended_recovery() {
                 // Restoring previous links alone would be wrong after main-file replacement.
                 let mut bytes = Vec::new();
                 let hash = basecraft_io::hash_file(&output).unwrap();
-                files::write_companion(
-                    &files::tree_companion(session.tree(doc).unwrap(), &hash),
-                    &mut bytes,
-                )
-                .unwrap();
+                files::tree_companion(session.tree(doc).unwrap(), &hash)
+                    .write(&mut bytes)
+                    .unwrap();
                 std::fs::write(&presentation, bytes).unwrap();
                 for (key, path) in [
                     ("intended_origin", records::sidecar(&output)),

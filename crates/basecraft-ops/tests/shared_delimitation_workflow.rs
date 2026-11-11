@@ -39,11 +39,10 @@ fn inspection_and_naming_are_read_only_and_keep_stable_order() {
         .attributes
         .insert("asap_rank".into(), "1".into());
     let hash = basecraft_io::hash_file(&paths[0]).unwrap();
-    files::write_companion(
-        &files::delimitation_companion(&work, &hash, &paths[0]).unwrap(),
-        &mut std::fs::File::create(files::tree_sidecar(&paths[0])).unwrap(),
-    )
-    .unwrap();
+    files::delimitation_companion(&work, &hash, &paths[0])
+        .unwrap()
+        .write(&mut std::fs::File::create(files::tree_sidecar(&paths[0])).unwrap())
+        .unwrap();
     let before = std::fs::read_dir(dir.path()).unwrap().count();
     let files = workflow::combine_candidates(&paths).unwrap();
     let ids: Vec<_> = files[0]
@@ -364,12 +363,10 @@ fn hint_workspace(
     std::fs::write(&path, SPART).unwrap();
     let mut work = files::load_delimitation(&path).unwrap();
     change(&mut work);
-    files::write_companion(
-        &files::delimitation_companion(&work, &basecraft_io::hash_file(&path).unwrap(), &path)
-            .unwrap(),
-        &mut std::fs::File::create(files::tree_sidecar(&path)).unwrap(),
-    )
-    .unwrap();
+    files::delimitation_companion(&work, &basecraft_io::hash_file(&path).unwrap(), &path)
+        .unwrap()
+        .write(&mut std::fs::File::create(files::tree_sidecar(&path)).unwrap())
+        .unwrap();
     path
 }
 

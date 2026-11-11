@@ -118,7 +118,7 @@ mod metadata;
 mod sanger;
 mod sequence;
 mod submission;
-mod tree;
+pub(crate) mod tree;
 
 pub(crate) trait Document {
     fn kind(&self) -> crate::files::Kind;

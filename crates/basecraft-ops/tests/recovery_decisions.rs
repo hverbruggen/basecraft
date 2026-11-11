@@ -421,14 +421,12 @@ fn nested_delimitation_registers_only_final_stores_and_reopens() {
         .unwrap();
         let sidecar = basecraft_ops::files::tree_sidecar(&path);
         basecraft_io::write_atomic(&sidecar, |w| {
-            basecraft_ops::files::write_companion(
-                &basecraft_ops::files::delimitation_companion(
-                    &work,
-                    &basecraft_io::hash_file(&path).map_err(std::io::Error::other)?,
-                    &path,
-                )?,
-                w,
-            )
+            basecraft_ops::files::delimitation_companion(
+                &work,
+                &basecraft_io::hash_file(&path).map_err(std::io::Error::other)?,
+                &path,
+            )?
+            .write(w)
         })
         .unwrap();
         assert_eq!(

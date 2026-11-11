@@ -86,11 +86,9 @@ fn hidden_binding_errors_never_fall_back_to_adjacent_metadata() {
     std::fs::write(&path, "((a,b)90,c);\n(a,b,c);\n").unwrap();
     let tree = files::load_tree(&path).unwrap().doc;
     let mut metadata = Vec::new();
-    files::write_companion(
-        &files::tree_companion(&tree, &basecraft_io::hash_file(&path).unwrap()),
-        &mut metadata,
-    )
-    .unwrap();
+    files::tree_companion(&tree, &basecraft_io::hash_file(&path).unwrap())
+        .write(&mut metadata)
+        .unwrap();
     std::fs::write(files::tree_sidecar(&path), &metadata).unwrap();
     let run = ArtifactRun::create(&path, "metadata-test").unwrap();
     std::fs::write(
@@ -417,11 +415,9 @@ fn saving_a_forest_preserves_other_members_and_refreshes_bound_identity() {
     let run = ArtifactRun::create(&file, "forest-save").unwrap();
     let tree = files::load_tree(&file).unwrap().doc;
     let mut metadata = Vec::new();
-    files::write_companion(
-        &files::tree_companion(&tree, &basecraft_io::hash_file(&file).unwrap()),
-        &mut metadata,
-    )
-    .unwrap();
+    files::tree_companion(&tree, &basecraft_io::hash_file(&file).unwrap())
+        .write(&mut metadata)
+        .unwrap();
     std::fs::write(run.artifact("forest.nwk.basecraft.json").unwrap(), metadata).unwrap();
     run.bind(&file).unwrap();
     let mut session = Session::new(dir.path());

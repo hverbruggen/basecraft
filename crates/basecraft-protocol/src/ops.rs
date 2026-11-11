@@ -427,6 +427,9 @@ pub struct OpResult {
     /// Id assigned to a new feature.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub feature: Option<u32>,
+    /// What the edit did that the user should hear about, shown in History.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
 }
 
 /// Original files described by an open journal record.

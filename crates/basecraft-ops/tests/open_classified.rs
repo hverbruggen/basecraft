@@ -296,7 +296,9 @@ fn bound_tree_errors_warn_and_preserve_the_standard_tree() {
     let tree = basecraft_docs::TreeDoc::from_newick("bound", "(a,b);").unwrap();
     let mut sidecar = Vec::new();
     let hash = basecraft_io::hash_bytes(b"(a,b);\n");
-    files::write_companion(&files::tree_companion(&tree, &hash), &mut sidecar).unwrap();
+    files::tree_companion(&tree, &hash)
+        .write(&mut sidecar)
+        .unwrap();
     std::fs::write(dir.path().join("bound.nwk.basecraft.json"), sidecar).unwrap();
     std::fs::write(&path, b"(other,tree);\n").unwrap();
     let mut session = Session::unlogged(dir.path());

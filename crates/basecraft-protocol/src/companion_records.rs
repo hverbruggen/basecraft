@@ -22,6 +22,13 @@ pub struct Companion {
 }
 
 impl Companion {
+    /// Write the companion as basecraft keeps it: indented JSON and a final
+    /// newline. Every `*.basecraft.json` is written through here.
+    pub fn write(&self, w: &mut dyn std::io::Write) -> std::io::Result<()> {
+        serde_json::to_writer_pretty(&mut *w, self)?;
+        writeln!(w)
+    }
+
     pub fn new(exchange_hash: impl Into<String>) -> Self {
         Self {
             version: COMPANION_VERSION,

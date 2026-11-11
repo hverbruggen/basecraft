@@ -17,11 +17,37 @@ struct Args {
     request: Option<PathBuf>,
     #[arg(long)]
     hash: Option<PathBuf>,
+    /// Write the companion of this SPART file for the workspace JSON on stdin.
+    #[arg(long)]
+    companion: Option<PathBuf>,
+}
+
+/// Write the companion beside `spart` for `workspace`; returns its path.
+fn write_companion(
+    spart: &Path,
+    workspace: &basecraft_protocol::delimitation::DelimitationWorkspace,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    use basecraft_protocol::companion_records::{Companion, DelimitationCompanion};
+    let companion = Companion {
+        delimitation: Some(DelimitationCompanion {
+            path_base: None,
+            workspace: workspace.clone(),
+        }),
+        ..Companion::new(basecraft_io::hash_file(spart)?)
+    };
+    let path = PathBuf::from(format!("{}.basecraft.json", spart.display()));
+    basecraft_io::write_atomic(&path, |w| companion.write(w))?;
+    Ok(path)
 }
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
     if let Some(path) = args.hash {
         println!("{}", basecraft_io::hash_file(&path)?);
+        return Ok(());
+    }
+    if let Some(spart) = args.companion {
+        let workspace = serde_json::from_reader(std::io::stdin())?;
+        write_companion(&spart, &workspace)?;
         return Ok(());
     }
     let request: DelimitationRequest = serde_json::from_slice(&std::fs::read(
@@ -86,25 +112,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(workspace) = &result.workspace {
         basecraft_docs::delimitation::validate(workspace)?;
         let spart = PathBuf::from(format!("{}.spart", request.output));
-        let sidecar = PathBuf::from(format!("{}.basecraft.json", spart.display()));
         basecraft_io::write_atomic(&spart, |w| {
             w.write_all(basecraft_io::spart::write_text(workspace).0.as_bytes())
         })?;
         let spart_hash = basecraft_io::hash_file(&spart)?;
-        basecraft_io::write_atomic(&sidecar, |w| {
-            use basecraft_protocol::companion_records::{Companion, DelimitationCompanion};
-            serde_json::to_writer_pretty(
-                w,
-                &Companion {
-                    delimitation: Some(DelimitationCompanion {
-                        path_base: None,
-                        workspace: workspace.clone(),
-                    }),
-                    ..Companion::new(spart_hash.clone())
-                },
-            )?;
-            Ok(())
-        })?;
+        let sidecar = write_companion(&spart, workspace)?;
         result
             .job
             .outputs

@@ -94,14 +94,12 @@ impl Document for DelimitationWorkspace {
             files::tree_sidecar(target)
         };
         prepared.push(&sidecar, |w| {
-            files::write_companion(
-                &files::delimitation_companion(
-                    self,
-                    &main_hash,
-                    &publication.logical(target).map_err(std::io::Error::other)?,
-                )?,
-                w,
-            )?;
+            files::delimitation_companion(
+                self,
+                &main_hash,
+                &publication.logical(target).map_err(std::io::Error::other)?,
+            )?
+            .write(w)?;
             Ok(())
         })?;
         prepared.run = new_run;
@@ -131,10 +129,8 @@ impl Document for DelimitationWorkspace {
         files::write_delimitation(self, files::delimitation_xml(target), &mut main)?;
         let hash = main.hash();
         let mut side = HashingWriter::new(std::io::sink());
-        files::write_companion(
-            &files::delimitation_companion(self, &hash, &publication.logical(target)?)?,
-            &mut side,
-        )?;
+        files::delimitation_companion(self, &hash, &publication.logical(target)?)?
+            .write(&mut side)?;
         Ok(vec![hash, side.hash()])
     }
 }
@@ -230,11 +226,10 @@ mod tests {
                 .unwrap();
             let hash = basecraft_io::hash_bytes(&main);
             let mut side = Vec::new();
-            files::write_companion(
-                &files::delimitation_companion(&initial, &hash, &target).unwrap(),
-                &mut side,
-            )
-            .unwrap();
+            files::delimitation_companion(&initial, &hash, &target)
+                .unwrap()
+                .write(&mut side)
+                .unwrap();
             let expected = vec![hash.clone(), basecraft_io::hash_bytes(&side)];
             assert_eq!(
                 doc.saved_hashes(&target, &super::super::WritePublication::Immediate)

@@ -440,8 +440,7 @@ impl TreeDoc {
     }
 
     /// Labels whose tip pair now names a different group of tips than the
-    /// one they were made for, as after a reroot. Labels kept in older
-    /// companions without a tip set are never reported.
+    /// one they were made for, as after a reroot.
     pub fn displaced_annotations(&self) -> Vec<u32> {
         let all: BTreeSet<String> = self
             .nodes
@@ -451,7 +450,6 @@ impl TreeDoc {
             .collect();
         self.annotations
             .iter()
-            .filter(|(_, a)| !a.tips.is_empty())
             .filter(|(_, a)| {
                 self.clade_tips(&a.clade).map_or(true, |now| {
                     now != a.tips

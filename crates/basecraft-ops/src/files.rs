@@ -573,12 +573,6 @@ use basecraft_protocol::companion_records::{
     COMPANION_VERSION, Companion, DelimitationCompanion, SupportName, TreeCompanion,
 };
 
-/// Write a document's companion. Every `*.basecraft.json` goes through here.
-pub fn write_companion(companion: &Companion, w: &mut dyn Write) -> io::Result<()> {
-    serde_json::to_writer_pretty(&mut *w, companion)?;
-    writeln!(w)
-}
-
 /// Read a document's companion. Refuses another layout, and a companion
 /// written for different bytes than the document's.
 fn read_companion(path: &Path, bytes: &[u8], exchange_hash: &str) -> Result<Companion> {
@@ -757,7 +751,7 @@ pub fn tree_companion(doc: &TreeDoc, exchange_hash: &str) -> Companion {
 pub fn save_tree_companion(tree: &Path, doc: &TreeDoc) -> Result<PathBuf> {
     let companion = tree_companion(doc, &basecraft_io::hash_file(tree)?);
     let path = tree_sidecar(tree);
-    basecraft_io::write_atomic(&path, |w| write_companion(&companion, w))?;
+    basecraft_io::write_atomic(&path, |w| companion.write(w))?;
     Ok(path)
 }
 

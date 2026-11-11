@@ -96,11 +96,10 @@
         },
         "rooting": {
           "description": "Whether the tree was rooted when the label was made. Unless it was, a\nclade is one side of a branch, so its complement is the same group.",
-          "$ref": "#/$defs/Rooting",
-          "default": "unknown"
+          "$ref": "#/$defs/Rooting"
         },
         "tips": {
-          "description": "Every tip the clade held when the label was made. The tree fills this\nin; a reroot that changes the set leaves the label on another group.",
+          "description": "Every tip the clade held when the label was made. The tree fills this\nin when it is empty; a reroot that changes the set leaves the label on\nanother group.",
           "type": "array",
           "items": {
             "type": "string"
@@ -109,7 +108,9 @@
         }
       },
       "required": [
-        "clade"
+        "clade",
+        "tips",
+        "rooting"
       ]
     },
     "ColumnStyle": {

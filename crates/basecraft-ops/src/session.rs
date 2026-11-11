@@ -99,6 +99,8 @@ struct Typing {
 pub struct Outcome {
     pub entry_id: String,
     pub feature: Option<FeatureId>,
+    /// Things the user should hear about, such as a label a reroot moved.
+    pub notes: Vec<String>,
 }
 
 /// Target-save and evidence locks held while writing an export or extract.
@@ -132,6 +134,9 @@ pub struct Session {
     /// The open undo group, if any, and the next group number.
     group: Option<u64>,
     next_group: u64,
+    /// The documents each undo group changed, so a group spanning several
+    /// documents is undone and redone in all of them or refused.
+    group_docs: std::collections::BTreeMap<u64, std::collections::BTreeSet<usize>>,
     /// Monotonic, so entries made within one millisecond still sort in order.
     ids: Mutex<ulid::Generator>,
 }
@@ -164,6 +169,7 @@ impl Session {
             store_objects: true,
             group: None,
             next_group: 1,
+            group_docs: std::collections::BTreeMap::new(),
             ids: Mutex::new(ulid::Generator::new()),
         }
     }
