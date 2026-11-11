@@ -62,10 +62,9 @@ pub(crate) fn producer_support<'a>(
 ) -> Option<(&'a str, basecraft_protocol::SupportKind)> {
     use basecraft_protocol::operation::ParameterCondition;
     descriptor
-        .host
-        .as_ref()?
-        .tree_support
-        .iter()
+        .outputs
+        .values()
+        .flat_map(|output| &output.tree_support)
         .find(|rule| match &rule.when {
             None => true,
             Some(ParameterCondition::Equals { parameter, value }) => {

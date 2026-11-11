@@ -115,7 +115,7 @@ fn runtime_is_frozen_updates_preserve_disabled_and_failed_solve_preserves_active
     )
     .unwrap();
     assert_eq!(
-        evidence["environment"]["lock_digest"],
+        evidence["runtime"]["lock_digest"],
         runtime.lock_digest.as_str()
     );
     assert!(

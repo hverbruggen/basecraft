@@ -22,6 +22,19 @@ pub const MAX_VALIDATION_WORK: usize = 8_000_000;
 pub struct OperationContract {
     pub schema: u32,
     pub operations: Vec<OperationDescriptor>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub queries: Vec<QueryDescriptor>,
+}
+
+/// A question the plugin answers without inputs, outputs or a run, such as
+/// which external engines are installed. The host refuses undeclared names
+/// and checks the answer against `result`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct QueryDescriptor {
+    pub name: String,
+    pub description: String,
+    pub result: Value,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -80,26 +93,40 @@ impl Needs {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct HostServices {
+    /// The result holds species hypotheses for the target workspace.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub species_workspace: bool,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub bootstrap_exports: bool,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub verify_inputs: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tree_support: Vec<TreeSupportRule>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub caller: Option<String>,
-    /// Program a caller service runs. The host finds it through
-    /// `BASECRAFT_<PROGRAM>`, the plugin runtime, then PATH, and pins its hash.
+    pub caller: Option<Caller>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub caller_engine: Option<String>,
-    /// Cooperative cancellation and receipt rules for a bundled remote service.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub lifecycle: Option<LifecyclePolicy>,
+    pub remote: Option<RemoteService>,
+}
+
+/// A base caller the Sanger review asks for alternative calls.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Caller {
+    pub kind: CallerKind,
+    /// Program the caller runs. The host finds it through `BASECRAFT_<PROGRAM>`,
+    /// the plugin runtime, then PATH, and pins its hash.
+    pub engine: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CallerKind {
+    SingleTrace,
+}
+
+/// A bundled service that sends data elsewhere: how the host cancels it,
+/// retains its receipt and freezes what it submits.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RemoteService {
+    pub lifecycle: LifecyclePolicy,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub query_preparation: Option<QueryPreparation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -164,13 +191,17 @@ pub struct InputBinding {
     /// refuses other alignments before launch.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub alphabets: Vec<Alphabet>,
+    /// Check the input's retained evidence before the run, as for a reused
+    /// distance cache.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub verify: bool,
     /// Preserve original and submitted bytes when results refer to input paths.
     /// Applied by the shared runner equally for GUI, CLI, Python and MCP.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub retain: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct OutputBinding {
     pub media_type: String,
@@ -183,7 +214,14 @@ pub struct OutputBinding {
     /// The collection member that holds the main result, such as `tree.nwk`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub primary: Option<String>,
-    /// Facts the host writes into the result's companion file.
+    /// What the support values on trees in this output mean.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tree_support: Vec<TreeSupportRule>,
+    /// Bootstrap trees named `bootstrap-<run>.nex` may be exported beside the
+    /// exported primary tree when `bootstrap_destination` is `working`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub bootstrap_exports: bool,
+    /// Facts about the primary member, for its companion file.
     #[serde(default, skip_serializing_if = "OutputFacts::is_empty")]
     pub facts: OutputFacts,
 }
@@ -205,8 +243,8 @@ pub enum BranchLengths {
     Time,
 }
 
-/// Facts an output declares about itself. The host writes them into the
-/// result's companion file (lane facts' writer, once it exists).
+/// Facts an output declares about its primary member. The companion writer
+/// records them once document facts exist (merge task for piece 2B).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct OutputFacts {
@@ -295,7 +333,9 @@ pub struct InvocationContext {
     pub input_evidence: BTreeMap<String, Vec<InvocationInputEvidence>>,
 }
 
-/// Where a submitted input came from. Paths are relative to the run folder.
+/// Where a submitted input came from. In the invocation context its paths
+/// follow the context's rule; in the run record they are relative to the run
+/// folder.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct InvocationInputEvidence {

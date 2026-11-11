@@ -77,7 +77,7 @@ def quote(name: str) -> str:
 
 
 @plugin.operation("tree")
-def tree(snapshot, params, context):
+def tree(params, context):
     """Infer a tree from the alignment and write it to `artifacts/tree.nwk`."""
     source = Path(context.input("alignment"))
     target = Path(context.output("artifacts", "tree.nwk"))

@@ -4,7 +4,6 @@ import os
 import shutil
 import subprocess
 import tempfile
-import uuid
 from pathlib import Path
 
 from basecraft.plugin import Plugin
@@ -14,68 +13,66 @@ METHODS = ("workspace_tree", "workspace_alignment", "haplotypes", "validate_time
            "gmyc_single", "gmyc_multiple", "gmyc_exhaustive", "inspect_tree", "ptp", "mptp", "asap", "asap_import", "group_statistics")
 
 
-def executable(params):
-    found = params.get("executable") or os.environ.get("BASECRAFT_DELIMITATION") or shutil.which("basecraft-delimitation")
+def executable():
+    found = os.environ.get("BASECRAFT_DELIMITATION") or shutil.which("basecraft-delimitation")
     if not found:
         raise FileNotFoundError("Install basecraft-delimitation or set BASECRAFT_DELIMITATION")
     return str(found)
 
 
-def invoke(method, params):
-    source = Path(params["input"]).resolve()
-    target = Path(params["output"]).resolve()
+def primary_input(context):
+    """The tree, imported partitions or alignment the method works on."""
+    return next(name for name in ("tree", "partitions", "alignment") if context.input(name))
+
+
+def provenance(method, context, source):
+    """Evidence for the primary input, and for the full alignment behind a
+    representative input: what the result names as its sources."""
+    primary = primary_input(context)
+    evidence = context.source(primary)
+    evidence = evidence if evidence.get("path") else {}
+    full = "full_alignment" if primary == "alignment" else "alignment"
+    derived, alignment = {}, {}
+    if snapshot := context.input(full):
+        derived["alignment_snapshot"] = snapshot
+        if records := context.evidence.get(full):
+            derived["alignment_input_hash"] = records[0]["submitted_hash"]
+            alignment = dict(records[0], path=records[0].get("original_path") or snapshot)
+    elif method == "asap":
+        derived = {"alignment_snapshot": str(source), "alignment_input_hash": evidence.get("submitted_hash")}
+        alignment = evidence
+    return evidence, alignment, derived
+
+
+def invoke(method, params, context, source=None, target=None):
+    """Run the native engine on `source` (the primary input) and write its
+    result to `target` (the allocated `result.json`)."""
+    source = Path(source or context.input(primary_input(context)))
+    target = Path(target or context.output("artifacts", "result.json"))
     report = Path(str(target) + ".run.json")
-    job_id = params.get("job_id") or str(uuid.uuid4())
-    if not isinstance(job_id, str) or len(job_id) > 100 or not all(c.isascii() and (c.isalnum() or c in "-_") for c in job_id):
-        raise ValueError("job_id must contain only 1-100 ASCII letters, digits, '-' or '_'")
-    allocation = params.get("analysis_artifacts")
-    if method == "asap" and allocation and "alignment_snapshot" not in params:
-        params = dict(params, alignment_snapshot=str(source),
-                      alignment_input_hash=params.get("input_evidence", {}).get("submitted_hash"),
-                      alignment_evidence=params.get("input_evidence", {}))
-    snapshot = source if allocation else Path(str(target) + ".input." + job_id + source.suffix)
+    job_id = context.run_id
+    evidence, alignment_evidence, derived = provenance(method, context, source)
+    snapshot = source
     spart = Path(str(target) + ".spart")
     sidecar = Path(str(spart) + ".basecraft.json")
-    paths = [source, target, report, spart, sidecar] + ([] if allocation else [snapshot])
-    for name in ("progress", "cancel_file"):
-        if name in params:
-            paths.append(Path(params[name]).resolve())
-    if len(set(paths)) != len(paths):
-        raise ValueError("Input, output artifacts, progress and cancellation paths must differ")
     if method not in METHODS:
         raise ValueError("Unknown delimitation method")
     workers = params.get("workers", 1)
     if not isinstance(workers, int) or isinstance(workers, bool) or not 1 <= workers <= 256:
         raise ValueError("Workers must be between 1 and 256")
-    engine = executable(params)
+    engine = executable()
     target.parent.mkdir(parents=True, exist_ok=True)
-    # Host allocation owns input evidence. Clean originals are referenced, and
-    # the host retains exact generated submissions once. Execution uses scratch.
-    if not allocation:
-        # Destination-local snapshot survives worker completion and belongs in the manifest.
-        with tempfile.NamedTemporaryFile(dir=target.parent, prefix=".delimitation-input-", delete=False) as staged:
-            staged_path = Path(staged.name)
-            try:
-                with source.open("rb") as original:
-                    shutil.copyfileobj(original, staged)
-                staged.flush()
-                os.fsync(staged.fileno())
-                os.replace(staged_path, snapshot)
-            finally:
-                staged_path.unlink(missing_ok=True)
     input_hash = subprocess.check_output([engine, "--hash", str(snapshot)], text=True).strip()
     request = {"version": 1, "job_id": job_id, "generation": params.get("generation", 0),
                    "method": method, "input": str(snapshot), "input_hash": input_hash, "output": str(target.parent / (".delimitation-job-" + job_id) / "result.json"),
                    "rooted": params.get("rooted", False), "tree_index": params.get("tree_index", 0),
                    "seed": params.get("seed", 1), "workers": workers,
-                   "parameters": {k: v for k, v in params.items() if k in ("threshold", "candidate_budget", "reference_version", "reference_age_clamp", "groups", "log_likelihood", "fitted_log_likelihood", "null_log_likelihood", "lrt_passed", "mptp_version", "command", "min_branch", "units", "diagnostics", "replicates", "partitions", "stream", "haplotypes", "haplotype_policy", "mapping_hash", "upstream", "tree_inference", "sequence_sampling", "alignment_input_hash", "alignment_snapshot", "deduplicate", "model", "min_overlap", "original_count", "retained_count", "progress_job_id")},
-                   "progress": params.get("progress"), "cancel_file": params.get("cancel_file")}
+                   "parameters": {k: v for k, v in {**params, **derived}.items() if k in ("threshold", "candidate_budget", "reference_version", "reference_age_clamp", "groups", "log_likelihood", "fitted_log_likelihood", "null_log_likelihood", "lrt_passed", "mptp_version", "command", "min_branch", "units", "diagnostics", "replicates", "partitions", "stream", "haplotypes", "haplotype_policy", "mapping_hash", "upstream", "tree_inference", "sequence_sampling", "alignment_input_hash", "alignment_snapshot", "deduplicate", "model", "min_overlap", "original_count", "retained_count", "progress_job_id")},
+                   "progress": context.progress_file, "cancel_file": context.cancel_file}
     mapping_snapshot = None
-    if params.get("mapping"):
-        mapping_source=Path(params["mapping"]).resolve()
+    if context.input("mapping"):
+        mapping_source = Path(context.input("mapping"))
         mapping_snapshot=Path(str(target)+".mapping."+job_id+".json")
-        if mapping_source in set(paths) or mapping_snapshot == mapping_source:
-            raise ValueError("Mapping input must differ from output artifacts")
         shutil.copyfile(mapping_source,mapping_snapshot)
         mapping=json.loads(mapping_snapshot.read_text())
         if mapping.get("policy") != "aligned-dna-case-u-to-t-literal-gap-ambiguity-v1":
@@ -84,7 +81,7 @@ def invoke(method, params):
         if params.get("mapping_hash") and mapping_hash != params["mapping_hash"]:
             raise ValueError("Retained haplotype mapping changed; repeat preparation")
         request["parameters"].update(haplotypes=mapping["members"],haplotype_policy=mapping["policy"],mapping_hash=mapping_hash)
-    request["parameters"]["original_source"] = params.get("original_source", str(source))
+    request["parameters"]["original_source"] = evidence.get("path", str(source))
     staged_output = Path(request["output"])
     staged_output.parent.mkdir()
     with tempfile.TemporaryDirectory(prefix="basecraft-delimitation-") as work:
@@ -113,20 +110,15 @@ def invoke(method, params):
             suffix = artifact_path.name.removeprefix(staged_output.name)
             destination = Path(str(target) + suffix)
             # A unique allocated run must never adopt/replace an earlier artifact.
-            if allocation:
-                os.link(artifact_path, destination)
-                artifact_path.unlink()
-            else:
-                os.replace(artifact_path, destination)
+            os.link(artifact_path, destination)
+            artifact_path.unlink()
             relocations[str(artifact_path)] = str(destination)
             published[str(destination)] = digest
-        evidence = params.get("input_evidence", {})
         same_submission = input_hash == evidence.get("submitted_hash")
-        if allocation and same_submission and evidence.get("path"):
+        if same_submission and evidence.get("path"):
             relocations[str(snapshot)] = evidence["path"]
-        alignment_evidence = params.get("alignment_evidence", {})
-        if alignment_evidence.get("path") and params.get("alignment_snapshot"):
-            relocations[params["alignment_snapshot"]] = alignment_evidence["path"]
+        if alignment_evidence.get("path") and derived.get("alignment_snapshot"):
+            relocations[derived["alignment_snapshot"]] = alignment_evidence["path"]
         def relocate(value):
             if isinstance(value, dict):
                 return {relocations.get(k, k): relocate(v) for k, v in value.items()}
@@ -135,7 +127,7 @@ def invoke(method, params):
             return relocations.get(value, value) if isinstance(value, str) else value
         metadata = relocate(metadata)
         workspace = metadata.get("workspace")
-        if workspace and allocation:
+        if workspace:
             fields = workspace.get("exchange_fields", {})
             if fields.get("basecraft_alignment_snapshot") == evidence.get("path"):
                 fields["basecraft_alignment_hash"] = evidence.get("source_hash") or input_hash
@@ -185,21 +177,16 @@ def invoke(method, params):
     os.replace(report_path, report)
     if process.returncode or metadata["job"]["status"] != "completed":
         raise RuntimeError("; ".join(metadata["job"]["diagnostics"]) or "Delimitation failed")
-    outputs = [str(target), str(report)] + ([] if allocation else [str(snapshot)])
-    outputs += list(metadata["job"]["outputs"])
-    if mapping_snapshot:
-        outputs.append(str(mapping_snapshot))
-    return {"ops": [], "message": "Completed " + method.replace("_", " "), "outputs": outputs,
+    return {"ops": [], "message": "Completed " + method.replace("_", " "),
             "tool": {"name": "basecraft-delimitation", "version": "0.1.0"}}
 
 
-def failure_report(method, params, error, artifacts=()):
-    target = Path(params["output"]).resolve()
-    target.parent.mkdir(parents=True, exist_ok=True)
+def failure_report(method, params, context, error, artifacts=()):
+    target = Path(context.output("artifacts", "result.json"))
     engine = None
     hashing_errors = []
     try:
-        engine = executable(params)
+        engine = executable()
     except FileNotFoundError as engine_error:
         hashing_errors.append(str(engine_error))
     hashes = {}
@@ -209,8 +196,8 @@ def failure_report(method, params, error, artifacts=()):
                 hashes[str(artifact)] = subprocess.check_output([engine, "--hash", str(artifact)], text=True).strip()
             except (OSError, subprocess.CalledProcessError) as hash_error:
                 hashing_errors.append(str(hash_error))
-    job = {"id": params.get("job_id", str(uuid.uuid4())), "generation": params.get("generation", 0),
-               "method": method, "status": "cancelled" if params.get("cancel_file") and Path(params["cancel_file"]).exists() else "failed",
+    job = {"id": context.run_id, "generation": params.get("generation", 0),
+               "method": method, "status": "cancelled" if context.cancelled() else "failed",
                "inputs": {}, "outputs": hashes, "diagnostics": [str(error), *hashing_errors], "elapsed_seconds": 0.0}
     with tempfile.NamedTemporaryFile(mode="w", dir=target.parent, prefix=".delimitation-failed-", delete=False) as stream:
         json.dump({"version": 1, "job": job, "workspace": None}, stream, indent=2)
@@ -219,65 +206,35 @@ def failure_report(method, params, error, artifacts=()):
     os.replace(temporary, str(target) + ".run.json")
 
 
-def file_parameters(params, context):
-    """The engine's file parameters from the host's allocation. The primary
-    input is the tree, imported partitions or alignment; a second alignment,
-    when bound, is the full alignment behind a representative input."""
-    primary = next(name for name in ("tree", "partitions", "alignment") if context.input(name))
-    artifacts = context.output("artifacts")
-    values = dict(params, input=context.input(primary), output=context.output("artifacts", "result.json"),
-                  job_id=context.run_id, cancel_file=context.cancel_file, progress=context.progress_file,
-                  analysis_artifacts={"metadata_directory": artifacts, "working_directory": artifacts,
-                                      "run_id": context.run_id})
-    for binding in ("mapping", "groups"):
-        if path := context.input(binding):
-            values[binding] = path
-    source = context.source(primary)
-    if source.get("path"):
-        values.update(original_source=source["path"], input_evidence=source)
-    full = "full_alignment" if primary == "alignment" else "alignment"
-    if snapshot := context.input(full):
-        values["alignment_snapshot"] = snapshot
-        if records := context.evidence.get(full):
-            values["alignment_input_hash"] = records[0]["submitted_hash"]
-            values["alignment_evidence"] = dict(records[0], path=records[0].get("original_path") or snapshot)
-    return values
-
-
 for _method in METHODS:
     def register(method):
         @plugin.operation(method)
-        def operation(snapshot, params, context):
-            params = file_parameters(params, context)
+        def operation(params, context):
             try:
-                if method in ("gmyc_single", "gmyc_multiple", "gmyc_exhaustive", "ptp", "mptp") and params.get("deduplicate") and not params.get("alignment_snapshot"):
+                if method in ("gmyc_single", "gmyc_multiple", "gmyc_exhaustive", "ptp", "mptp") and params.get("deduplicate") and not context.input("alignment"):
                     raise ValueError("Tree-only deduplication requires verified alignment evidence and a representative tree; use alignment GMYC/ASAP or prepare a representative tree and mapping first. No tips were removed.")
-                if method == "asap" and params.get("deduplicate") and not params.get("mapping"):
+                if method == "asap" and params.get("deduplicate") and not context.input("mapping"):
                     raise ValueError("Deduplicated ASAP requires exact haplotype preparation and a retained mapping")
                 if method == "group_statistics":
                     import sys
                     sys.path.insert(0,str(Path(__file__).resolve().parent.parent / "distance"))
                     from distance_plugin import invoke as invoke_distance
-                    if params.get("cache") and Path(params["cache"]).is_file():
-                        cache=json.loads(Path(params["cache"]).read_text())
-                        params=dict(params,model=cache["model"],min_overlap=cache["min_overlap"])
-                    return invoke_distance("groups", params)
+                    return invoke_distance("groups", params, context, context.output("artifacts", "result.json"))
                 if method in ("ptp", "mptp"):
                     from mptp_adapter import invoke as invoke_mptp
-                    return invoke_mptp(method, params, executable(params), invoke)
-                return invoke(method, params)
+                    return invoke_mptp(method, params, context, invoke)
+                return invoke(method, params, context)
             except Exception as error:
-                report = Path(str(params["output"]) + ".run.json")
+                target = context.output("artifacts", "result.json")
                 try:
-                    current = json.loads(report.read_text())
+                    current = json.loads(Path(target + ".run.json").read_text())
                 except (OSError, ValueError):
                     current = {}
-                if current.get("job", {}).get("id") != params["job_id"]:
-                    artifacts = Path(str(params["output"]) + ".mptp-" + params["job_id"])
-                    failure_report(method, params, error, artifacts.rglob("*") if artifacts.is_dir() else ())
+                if current.get("job", {}).get("id") != context.run_id:
+                    artifacts = Path(target + ".mptp-" + context.run_id)
+                    failure_report(method, params, context, error, artifacts.rglob("*") if artifacts.is_dir() else ())
                 raise
     register(_method)
-
 
 
 @plugin.query("engines")

@@ -155,15 +155,7 @@ impl PreparedOperation {
                     }
                 }
             }
-            if role == "artifacts"
-                && self
-                    .operation
-                    .descriptor
-                    .host
-                    .as_ref()
-                    .is_some_and(|host| host.bootstrap_exports)
-                && self.parameters["bootstrap_destination"] == "working"
-            {
+            if binding.bootstrap_exports && self.parameters["bootstrap_destination"] == "working" {
                 for (member, hash) in &expected {
                     let name = member.to_string_lossy();
                     if name.starts_with(&format!("bootstrap-{}", self.run.id()))

@@ -419,10 +419,11 @@ impl PreparedOperation {
         let mut inputs = prepare_inputs(&operation, &request, &policy, &mut session)?;
         let target = prepare_target(&request, &policy, &mut session)?;
         let services = operation.descriptor.host.as_ref();
-        let query_preparation = services.and_then(|host| host.query_preparation);
+        let remote = services.and_then(|host| host.remote.as_ref());
+        let query_preparation = remote.and_then(|remote| remote.query_preparation);
         let input_diagnostics = lifecycle.verify_retained(
             &inputs.bindings.inputs,
-            services.and_then(|host| host.retained_query_transformation.as_deref()),
+            remote.and_then(|remote| remote.retained_query_transformation.as_deref()),
         )?;
         let mut supplied_parameters = request.parameters.clone();
         if let Some(parameter) = &operation.descriptor.needs.contact_email
@@ -545,9 +546,9 @@ impl PreparedOperation {
         if prepared
             .operation
             .descriptor
-            .host
-            .as_ref()
-            .is_some_and(|host| host.bootstrap_exports)
+            .outputs
+            .get("artifacts")
+            .is_some_and(|output| output.bootstrap_exports)
             && prepared.parameters["bootstrap_destination"] == "working"
             && prepared.parameters["bootstrap"].as_u64().unwrap_or(0) > 0
         {
@@ -616,12 +617,7 @@ fn freeze_inputs(
                 captured,
                 (!accepted_hashes.contains_key(&source)).then_some(&mut *input_record),
             )?;
-            if operation
-                .descriptor
-                .host
-                .as_ref()
-                .is_some_and(|host| host.verify_inputs.contains(&name))
-            {
+            if binding.verify {
                 let issues = basecraft_ops::records::verify(&source)?;
                 if !issues.is_empty() {
                     return Err(Error::Protocol(format!(

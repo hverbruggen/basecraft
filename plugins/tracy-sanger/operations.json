@@ -59,8 +59,10 @@
         "artifact_write": true
       },
       "host": {
-        "caller": "single_trace",
-        "caller_engine": "tracy"
+        "caller": {
+          "kind": "single_trace",
+          "engine": "tracy"
+        }
       }
     },
     {

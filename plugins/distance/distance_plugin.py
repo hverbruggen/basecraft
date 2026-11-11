@@ -8,7 +8,6 @@ import tempfile
 from pathlib import Path
 
 from basecraft.plugin import Plugin
-from basecraft.tools import bootstrap_collection_path as collection_path
 from basecraft.tools import write_atomic
 
 CACHE_MAGIC = b"BASECRAFT-DISTANCES-1\n"
@@ -16,8 +15,11 @@ CACHE_MAGIC = b"BASECRAFT-DISTANCES-1\n"
 plugin = Plugin("basecraft.distance", "0.1.0")
 
 
-def executable(params):
-    path = params.get("executable") or os.environ.get("BASECRAFT_DISTANCE")
+MEMBERS = {"tree": "tree.nwk", "matrix": "distances.tsv", "groups": "groups.tsv"}
+
+
+def executable():
+    path = os.environ.get("BASECRAFT_DISTANCE")
     if path:
         return str(path)
     found = shutil.which("basecraft-distance")
@@ -158,11 +160,10 @@ def cache_identity(path):
     return saved.get("basecraft_identity")
 
 
-def invoke(kind, params):
-    target = Path(params["output"]).resolve()
-    source = Path(params["input"]).resolve()
-    if target == source:
-        raise ValueError("Output must differ from input")
+def invoke(kind, params, context, target=None):
+    """Run the engine on the allocated alignment; results go to `artifacts`."""
+    target = Path(target or context.output("artifacts", MEMBERS[kind]))
+    source = Path(context.input("alignment"))
     model = params.get("model", "k2p")
     method = params.get("method", "sorted" if params.get("bootstrap", 0) else "njstar")
     if model not in ("p", "jc69", "k2p"):
@@ -174,15 +175,15 @@ def invoke(kind, params):
         raise ValueError("Bootstrap must be a nonnegative integer")
     if bootstrap and method not in ("sorted", "upgma"):
         raise ValueError("Bootstrap supports only sorted NJ and UPGMA")
-    collection = collection_path(params) if bootstrap else None
-    cache = Path(params.get("cache", str(target) + ".distances.bin")).resolve()
-    producer = Path(executable(params)).resolve()
+    collection = Path(context.output("artifacts", f"bootstrap-{context.run_id}.nex")) if bootstrap else None
+    cache = target.with_name(target.name + ".distances.bin")
+    producer = Path(executable()).resolve()
     def digest(path):
         with Path(path).open("rb") as stream:
             return hashlib.file_digest(stream, "sha256").hexdigest()
     identity = {"schema": 1, "input_sha256": digest(source), "engine_sha256": digest(producer),
                 "model": model, "min_overlap": params.get("min_overlap", 1)}
-    supplied_cache = params.get("cache_input")
+    supplied_cache = context.input("cache")
     if supplied_cache:
         supplied = Path(supplied_cache)
         if cache_identity(supplied) != identity:
@@ -191,16 +192,9 @@ def invoke(kind, params):
             raise ValueError("Allocated distance cache already exists")
         shutil.copyfile(supplied, cache)
     report = Path(str(target) + ".run.json")
-    if len({target, source, cache, report}) != 4:
-        raise ValueError("Input, output, cache, and report paths must differ")
-    if collection:
-        reserved = {target, source, cache, report}
-        reserved.update(Path(params[key]).resolve() for key in ("original_source", "progress", "cancel_file") if key in params)
-        if {collection, collection.with_suffix(".partial.nex")} & reserved:
-            raise ValueError("Bootstrap collection paths must differ from all inputs and other outputs")
     with tempfile.TemporaryDirectory(prefix="basecraft-distance-") as work:
         staged = Path(work) / "result"
-        args = [executable(params), "--cache", str(cache), "--cache-identity", json.dumps(identity), "--model", model,
+        args = [str(producer), "--cache", str(cache), "--cache-identity", json.dumps(identity), "--model", model,
                 "--method", method, "--min-overlap", str(params.get("min_overlap", 1))]
         if kind == "groups":
             # input is the alignment; assignments are separate and the cache is reusable.
@@ -208,7 +202,7 @@ def invoke(kind, params):
             if "groups_data" in params:
                 assignments.write_text(json.dumps(params["groups_data"]))
             else:
-                shutil.copyfile(params["groups"], assignments)
+                shutil.copyfile(context.input("groups"), assignments)
             args += ["--input", str(source), "--groups", str(assignments),
                      "--summary", str(staged)]
         else:
@@ -216,9 +210,7 @@ def invoke(kind, params):
         if bootstrap:
             args += ["--bootstrap", str(bootstrap), "--seed", str(params.get("seed", 1)),
                      "--bootstrap-trees", str(collection)]
-            for name in ("progress", "cancel_file"):
-                if name in params:
-                    args += ["--" + name.replace("_", "-"), str(params[name])]
+            args += ["--progress", context.progress_file, "--cancel-file", context.cancel_file]
         for name in ("threads", "tree_threads"):
             if name in params:
                 args += ["--" + name.replace("_", "-"), str(params[name])]
@@ -277,42 +269,26 @@ def invoke(kind, params):
         else:
             message += f"; {bootstrap_report['completed']} bootstrap replicates (seed {bootstrap_report['seed']})"
         message += f"; bootstrap trees: {retained[0]}"
-    return {"ops": [], "message": message, "outputs": [str(target), str(cache), str(report), *extra_trees, *retained],
+    return {"ops": [], "message": message,
             "tool": {"name": "basecraft-distance", "version": metadata["version"]},
             "execution": {"argv": args, "resolved_parameters": resolved_parameters(kind, model, method, params, bootstrap),
                           "preprocessing": ["Gaps and ambiguous sites excluded pairwise"], "environment": {},
                           "methods_template": f"basecraft.distance.{kind}.v1", "methods": methods(kind, model, method, params.get("min_overlap", 1), bootstrap, used_dynamic_search(metadata), bootstrap_report)}}
 
 
-def file_parameters(params, context, member):
-    """The engine's file parameters from the host's allocation."""
-    artifacts = context.output("artifacts")
-    values = dict(params, input=context.input("alignment"), output=context.output("artifacts", member),
-                  job_id=context.run_id, cancel_file=context.cancel_file, progress=context.progress_file,
-                  analysis_artifacts={"metadata_directory": artifacts, "working_directory": artifacts,
-                                      "run_id": context.run_id})
-    for binding, parameter in (("cache", "cache_input"), ("groups", "groups")):
-        if path := context.input(binding):
-            values[parameter] = path
-    source = context.source("alignment")
-    if source.get("path"):
-        values.update(original_source=source["path"], input_evidence=source)
-    return values
-
-
 @plugin.operation("tree")
-def tree(snapshot, params, context):
-    return invoke("tree", file_parameters(params, context, "tree.nwk"))
+def tree(params, context):
+    return invoke("tree", params, context)
 
 
 @plugin.operation("matrix")
-def matrix(snapshot, params, context):
-    return invoke("matrix", file_parameters(params, context, "distances.tsv"))
+def matrix(params, context):
+    return invoke("matrix", params, context)
 
 
 @plugin.operation("groups")
-def groups(snapshot, params, context):
-    return invoke("groups", file_parameters(params, context, "groups.tsv"))
+def groups(params, context):
+    return invoke("groups", params, context)
 
 
 if __name__ == "__main__":

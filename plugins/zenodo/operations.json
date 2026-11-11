@@ -345,7 +345,9 @@
         }
       },
       "host": {
-        "lifecycle": "remote_draft"
+        "remote": {
+          "lifecycle": "remote_draft"
+        }
       }
     }
   ]

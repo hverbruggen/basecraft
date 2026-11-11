@@ -29,6 +29,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 
 pub struct PluginProcess {
     pub info: PluginInfo,
+    queries: Vec<basecraft_protocol::operation::QueryDescriptor>,
     /// Time from spawning to the `initialize` reply.
     pub startup: Duration,
     child: OwnedProcess,
@@ -251,6 +252,7 @@ impl PluginProcess {
         stream.set_read_timeout(Some(Duration::from_millis(100)))?;
         stream.set_write_timeout(Some(Duration::from_millis(500)))?;
         let mut p = Self {
+            queries: manifest.operation_contract()?.queries,
             info: PluginInfo {
                 protocol: 0,
                 id: manifest.id.clone(),
@@ -444,11 +446,20 @@ impl PluginProcess {
         Ok(serde_json::from_value(result)?)
     }
 
-    /// A named metadata query, such as which engines are installed. It takes
-    /// no inputs and allocates nothing.
+    /// Ask one of the questions the contract declares, such as which engines
+    /// are installed. It takes no inputs and allocates nothing; the answer is
+    /// checked against the declared result schema.
     pub fn query(&mut self, name: &str) -> Result<Value> {
+        let schema = self
+            .queries
+            .iter()
+            .find(|query| query.name == name)
+            .map(|query| query.result.clone())
+            .ok_or_else(|| Error::Protocol(format!("the plugin declares no query {name}")))?;
         let query = basecraft_protocol::plugin::Query { name: name.into() };
-        Ok(self.call("query", serde_json::to_value(query)?, &[])?.0)
+        let answer = self.call("query", serde_json::to_value(query)?, &[])?.0;
+        crate::contract::BoundedSchema::compile(&schema)?.validate(&answer)?;
+        Ok(answer)
     }
 }
 

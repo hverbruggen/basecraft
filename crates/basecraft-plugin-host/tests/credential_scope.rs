@@ -17,7 +17,7 @@ from pathlib import Path
 from basecraft.plugin import Plugin
 plugin = Plugin('org.example.credentials', '1.0.0')
 print('initialize=' + os.environ.get('BASECRAFT_ZENODO_TOKEN', 'absent'), flush=True)
-def inspect(snapshot, parameters, context):
+def inspect(parameters, context):
     token = os.environ.get('BASECRAFT_ZENODO_TOKEN', '')
     assert os.environ.get('BASECRAFT_UNRELATED_SETTING') == 'preserved'
     print('stdout=' + token, flush=True)
@@ -229,6 +229,7 @@ fn reserved_ipc_credential_is_rejected() {
     let mut descriptor = OperationContract {
         schema: 2,
         operations: vec![operation.descriptor.clone()],
+        queries: vec![],
     };
     // The regular service token declaration and explicit pinned grant remain valid.
     assert!(contract::validate_contract(&operation.package.manifest.id, &descriptor).is_ok());

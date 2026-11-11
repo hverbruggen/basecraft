@@ -8,7 +8,7 @@ from basecraft.plugin import Plugin
 plugin = Plugin("basecraft.host", "1.0.0")
 
 
-def refuse(_snapshot, _parameters, _context):
+def refuse(_parameters, _context):
     raise ValueError("Application workflow requires the Basecraft registry host")
 
 

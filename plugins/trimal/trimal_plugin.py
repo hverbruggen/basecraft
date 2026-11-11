@@ -11,7 +11,7 @@ plugin = Plugin("basecraft.trimal", "0.1.0")
 
 
 @plugin.operation("trim")
-def trim(snapshot, params, context):
+def trim(params, context):
     source, target = Path(context.input("alignment")), Path(context.output("artifacts", "trimmed.afa"))
     method = params.get("method", "automated1")
     if method not in ("automated1", "gappyout", "strict", "strictplus", "nogaps"):

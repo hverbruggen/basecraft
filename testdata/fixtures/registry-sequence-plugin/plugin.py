@@ -7,7 +7,8 @@ plugin = Plugin("org.example.registry-sequence", "1.0.0")
 
 
 @plugin.operation("annotate")
-def annotate(snapshot, parameters, _context):
+def annotate(parameters, context):
+    snapshot = context.snapshot
     if parameters["slow"]:
         time.sleep(0.2)
     if len(snapshot.residues) != snapshot.length:

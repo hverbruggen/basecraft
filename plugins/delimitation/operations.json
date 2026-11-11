@@ -1406,5 +1406,40 @@
         "species_workspace": true
       }
     }
+  ],
+  "queries": [
+    {
+      "name": "engines",
+      "description": "External delimitation engines this installation can run: null when ready, otherwise why not.",
+      "result": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "asap": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ptp": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mptp": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "asap",
+          "ptp",
+          "mptp"
+        ]
+      }
+    }
   ]
 }

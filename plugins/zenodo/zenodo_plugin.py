@@ -303,12 +303,12 @@ def upload(parameters, context, transport=request, token=None):
 
 
 @plugin.operation("prepare")
-def prepare_operation(_snapshot, _parameters, context):
+def prepare_operation(_parameters, context):
     return prepare(context)
 
 
 @plugin.operation("draft")
-def draft_operation(_snapshot, parameters, context):
+def draft_operation(parameters, context):
     return upload(parameters, context)
 
 

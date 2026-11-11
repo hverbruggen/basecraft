@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "InvokeResult",
-  "description": "`invoke` result: proposed operations against the snapshot's version,\nand for operations that write files, what they wrote and with which tool.\nUnknown keys, such as a plugin's own file list, are ignored.",
+  "description": "`invoke` result: proposed operations against the snapshot's version,\nand for operations that write files, what they wrote and with which tool.",
   "type": "object",
   "properties": {
     "artifacts": {

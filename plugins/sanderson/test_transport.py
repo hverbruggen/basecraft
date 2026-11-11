@@ -49,7 +49,7 @@ class TransportTests(unittest.TestCase):
                       "observation_convention": "continuous test"}
             with patch("plugin._binary", return_value=(Path("/mock/binary"), "abc")), \
                  patch("plugin._run", return_value=result):
-                response = date_tree(None, parameters, context)
+                response = date_tree(parameters, context)
             self.assertEqual(len(response["artifacts"]), 2)
             self.assertIn("'A B'", chrono.read_text())
             evidence = json.loads(report.read_text())
@@ -71,7 +71,7 @@ class TransportTests(unittest.TestCase):
                          "lambda": 1, "objective": 1}
             with patch("plugin._binary", return_value=(Path("/mock/binary"), "abc")), \
                  patch("plugin._run", return_value=truncated), self.assertRaises(ValueError):
-                date_tree(None, parameters, context)
+                date_tree(parameters, context)
             self.assertFalse(chrono.exists())
             self.assertFalse(report.exists())
 

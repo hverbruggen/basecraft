@@ -1,6 +1,8 @@
 //! Host services are declared by any package, not granted by package identity.
 use basecraft_plugin_host::registry::{self, Registry, RegistryConfig};
-use basecraft_protocol::operation::{HostServices, QueryPreparation};
+use basecraft_protocol::operation::{
+    Caller, CallerKind, HostServices, LifecyclePolicy, QueryPreparation, RemoteService,
+};
 use serde_json::json;
 use std::path::Path;
 
@@ -28,15 +30,14 @@ fn load(root: &Path, host: &HostServices) -> basecraft_plugin_host::Result<Regis
 
 #[test]
 fn installed_packages_declare_the_services_built_in_plugins_use() {
-    let names = |names: &[&str]| names.iter().map(|&name| name.to_owned()).collect();
+    let caller = |engine: &str| Caller {
+        kind: CallerKind::SingleTrace,
+        engine: engine.into(),
+    };
     let host = HostServices {
         species_workspace: true,
-        bootstrap_exports: true,
-        verify_inputs: names(&["reads"]),
-        caller: Some("single_trace".into()),
-        caller_engine: Some("example-caller".into()),
-        query_preparation: Some(QueryPreparation::Blast),
-        ..HostServices::default()
+        caller: Some(caller("example-caller")),
+        remote: None,
     };
     let temp = tempfile::tempdir().unwrap();
     let registry = load(temp.path(), &host).unwrap();
@@ -46,18 +47,18 @@ fn installed_packages_declare_the_services_built_in_plugins_use() {
     assert_eq!(operation.descriptor.host.as_ref(), Some(&host));
 
     // The same contract checks refuse invalid declarations on installation.
-    let caller = HostServices {
-        caller: Some("single_trace".into()),
-        ..HostServices::default()
-    };
     for invalid in [
-        caller.clone(),
         HostServices {
-            caller_engine: Some("Bad Name".into()),
-            ..caller
+            caller: Some(caller("Bad Name")),
+            ..HostServices::default()
         },
+        // A submission needs one receipt output and a query transform.
         HostServices {
-            verify_inputs: names(&["missing"]),
+            remote: Some(RemoteService {
+                lifecycle: LifecyclePolicy::ExternalSubmission,
+                query_preparation: Some(QueryPreparation::Blast),
+                retained_query_transformation: None,
+            }),
             ..HostServices::default()
         },
     ] {

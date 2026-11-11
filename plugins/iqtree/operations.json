@@ -90,7 +90,30 @@
           "max": 1024,
           "visibility": "result",
           "collection": true,
-          "primary": "tree.nwk"
+          "primary": "tree.nwk",
+          "tree_support": [
+            {
+              "name": "Ultrafast bootstrap (UFBoot)",
+              "kind": "bootstrap",
+              "when": {
+                "test": "equals",
+                "parameter": "support",
+                "value": "ufboot"
+              }
+            },
+            {
+              "name": "Standard bootstrap",
+              "kind": "bootstrap",
+              "when": {
+                "test": "equals",
+                "parameter": "support",
+                "value": "bootstrap"
+              }
+            }
+          ],
+          "facts": {
+            "branch_lengths": "substitutions"
+          }
         }
       },
       "effects": {
@@ -100,28 +123,6 @@
       "needs": {
         "cpu_parameters": [
           "threads"
-        ]
-      },
-      "host": {
-        "tree_support": [
-          {
-            "name": "Ultrafast bootstrap (UFBoot)",
-            "kind": "bootstrap",
-            "when": {
-              "test": "equals",
-              "parameter": "support",
-              "value": "ufboot"
-            }
-          },
-          {
-            "name": "Standard bootstrap",
-            "kind": "bootstrap",
-            "when": {
-              "test": "equals",
-              "parameter": "support",
-              "value": "bootstrap"
-            }
-          }
         ]
       }
     }

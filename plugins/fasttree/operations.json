@@ -54,20 +54,21 @@
           "max": 1024,
           "visibility": "result",
           "collection": true,
-          "primary": "tree.nwk"
+          "primary": "tree.nwk",
+          "tree_support": [
+            {
+              "name": "SH-like local support",
+              "kind": "probability"
+            }
+          ],
+          "facts": {
+            "branch_lengths": "substitutions"
+          }
         }
       },
       "effects": {
         "document_write": false,
         "artifact_write": true
-      },
-      "host": {
-        "tree_support": [
-          {
-            "name": "SH-like local support",
-            "kind": "probability"
-          }
-        ]
       }
     }
   ]

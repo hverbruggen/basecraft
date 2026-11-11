@@ -175,7 +175,7 @@ def submit_prepared(parameters, context, transport=post):
 
 
 @plugin.operation("submit")
-def submit(_snapshot, parameters, context):
+def submit(parameters, context):
     return submit_prepared(parameters, context)
 
 
@@ -197,7 +197,7 @@ def inspect_retained(receipt, plan):
 
 
 @plugin.operation("receipt")
-def receipt(_snapshot, _parameters, context):
+def receipt(_parameters, context):
     data = inspect_retained(json.loads(Path(context.inputs["receipt"][0]).read_text()),
                             json.loads(Path(context.inputs["query"][0]).read_text()))
     return {"ops": [], "data": data}

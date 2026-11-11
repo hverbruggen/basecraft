@@ -36,7 +36,7 @@ def mafft_version(exe: str) -> str:
 
 
 @plugin.operation("align")
-def align(snapshot, params, context):
+def align(params, context):
     source = Path(context.input("alignment"))
     target = Path(context.output("artifacts", "alignment.afa"))
     count = sum(1 for line in source.open("rb") if line.startswith(b">"))
@@ -64,7 +64,7 @@ def align(snapshot, params, context):
 
 
 @plugin.operation("place_sanger")
-def place_sanger(snapshot, params, context):
+def place_sanger(params, context):
     """Map a draft Sanger fragment to columns in a frozen source MSA."""
     from sanger_place import place
 
@@ -78,7 +78,7 @@ def place_sanger(snapshot, params, context):
 
 
 @plugin.operation("add_sequences")
-def add_sequences(snapshot, params, context):
+def add_sequences(params, context):
     from add_sequences import run_add
 
     result = run_add(Path(context.input("alignment")), params["rows"],

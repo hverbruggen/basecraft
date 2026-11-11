@@ -23,8 +23,8 @@ class PluginContextTests(unittest.TestCase):
             external = Path(elsewhere) / "input.fa"
 
             @plugin.operation("run")
-            def run(snapshot, parameters, ctx):
-                self.assertIsNone(snapshot)
+            def run(parameters, ctx):
+                self.assertIsNone(ctx.snapshot)
                 self.assertEqual(parameters, {"count": True})
                 self.assertEqual(ctx.threads, 3)
                 self.assertEqual(ctx.input("source"), str(external))
@@ -47,12 +47,14 @@ class PluginContextTests(unittest.TestCase):
 
     def test_a_call_without_a_schema_two_context_is_refused(self):
         plugin = Plugin("org.example.sdk", "1.0.0")
-        plugin.operation("run")(lambda _snapshot, _parameters, _context: None)
+        plugin.operation("run")(lambda _parameters, _context: None)
         for request in ({"operation": "run"}, {"operation": "run", "context": {"schema": 1}}):
             with self.subTest(request=request), self.assertRaises((KeyError, ValueError)):
                 plugin._dispatch("invoke", request, [])
         with self.assertRaises(ValueError):
-            plugin.operation("run")(lambda _snapshot, _parameters, _context: None)
+            plugin.operation("run")(lambda _parameters, _context: None)
+        with tempfile.TemporaryDirectory() as directory, self.assertRaises(TypeError):
+            plugin._dispatch("invoke", {"operation": "run", "context": context(directory)}, [])
 
     def test_queries_take_no_inputs(self):
         plugin = Plugin("org.example.sdk", "1.0.0")

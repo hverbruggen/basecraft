@@ -7,16 +7,16 @@ A plugin is a script that registers operations and calls ``run()``::
     plugin = Plugin("me.example", "0.1.0")
 
     @plugin.operation("count_gc")
-    def count_gc(snapshot, params, context):
-        seq = snapshot.residues          # numpy uint8 array, no copy
+    def count_gc(params, context):
+        seq = context.snapshot.residues  # numpy uint8 array, no copy
         ...
-        return [feature("misc_feature", 10, 20, note="here")]
+        return {"ops": [feature("misc_feature", 10, 20, note="here")]}
 
     plugin.run()
 
 Each operation is declared in the package's ``operations.json``. A handler
-receives the document snapshot (sequence operations only), its validated
-parameters and a ``Context`` naming the files the host allocated.
+receives its validated parameters and a ``Context`` naming the files the host
+allocated and, for sequence operations, the document snapshot.
 Sequence operations return proposed operations.
 Basecraft applies them, maps them onto newer versions if the document
 changed in the meantime, logs them and makes them undoable.
@@ -37,7 +37,7 @@ PROTOCOL_VERSION = 2
 MAX_FDS = 16
 MAX_FRAME_BYTES = 8 * 1024 * 1024
 
-Handler = Callable[["Snapshot | None", dict, "Context"], "list[dict] | dict | None"]
+Handler = Callable[[dict, "Context"], dict]
 
 
 class Snapshot:
@@ -108,11 +108,13 @@ class Context:
     outside it. Every path here is absolute.
     """
 
-    def __init__(self, raw: dict):
+    def __init__(self, raw: dict, snapshot: Snapshot | None = None):
         if raw.get("schema") != PROTOCOL_VERSION:
             raise ValueError("operation requires a schema-2 host context")
         root = Path(raw["run_root"])
         self.root = root
+        #: The sequence a sequence operation proposes edits to; None otherwise.
+        self.snapshot = snapshot
         self.operation: str = raw["operation"]
         self.run_id: str = raw["run_id"]
         self.threads: int = raw["cpu_threads"]
@@ -159,13 +161,13 @@ class Context:
         return dict(record, path=stable) if stable else dict(record)
 
 
-def local_context(root, inputs: dict, outputs: dict, run_id: str = "local") -> Context:
+def local_context(root, inputs: dict, outputs: dict, run_id: str = "local", snapshot=None) -> Context:
     """A context for calling a handler directly, as a plugin's own tests do.
     ``inputs`` maps bindings to lists of paths; ``outputs`` maps roles to
     paths relative to ``root``."""
     return Context({"schema": PROTOCOL_VERSION, "operation": "local", "run_id": run_id, "run_root": str(root),
                     "inputs": inputs, "outputs": outputs, "cpu_threads": 1,
-                    "cancel_file": "cancel", "progress_file": "progress"})
+                    "cancel_file": "cancel", "progress_file": "progress"}, snapshot)
 
 
 def _artifacts(context: Context) -> list[dict]:
@@ -192,7 +194,9 @@ class Plugin:
         self._queries: dict[str, Callable[[], Any]] = {}
 
     def operation(self, name: str) -> Callable[[Handler], Handler]:
-        """Register a handler ``(snapshot, parameters, context)`` for a declared operation."""
+        """Register a handler ``(parameters, context)`` for a declared operation.
+        It returns a dict: ``data``, ``ops`` (sequence operations), ``message``,
+        ``tool``, ``execution`` and, optionally, ``artifacts``."""
         def register(fn: Handler) -> Handler:
             if name in self._ops:
                 raise ValueError(f"duplicate operation {name!r}")
@@ -283,17 +287,15 @@ class Plugin:
             name = params["operation"]
             if name not in self._ops:
                 raise KeyError(f"no operation {name!r}")
-            context = Context(params["context"])
             snap = Snapshot(params["snapshot"], fds) if params.get("snapshot") else None
             try:
-                out = self._ops[name](snap, params.get("params") or {}, context)
+                context = Context(params["context"], snap)
+                out = self._ops[name](params.get("params") or {}, context)
             finally:
                 if snap is not None:
                     snap.close()
-            if out is None:
-                out = {}
-            elif isinstance(out, list):
-                out = {"ops": out}
+            if not isinstance(out, dict):
+                raise TypeError(f"operation {name!r} must return a dict")
             if "artifacts" not in out:
                 out = dict(out, artifacts=_artifacts(context))
             return out

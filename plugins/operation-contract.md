@@ -97,13 +97,19 @@ freezes the input. An alignment input may list the `alphabets` it accepts
 (`nucleotide`, `protein`). The host refuses any other alignment before the
 plugin starts, for example "Distance tree needs a nucleotide alignment, and
 proteins.fasta holds protein sequences". `retain: true` keeps the submitted
-bytes with the run.
+bytes with the run. `verify: true` checks the input's retained evidence before
+the run, as for a reused distance cache.
 
 Outputs. A single-file role has `max: 1`. A collection role is one folder;
 `primary` names the member that holds the main result, which the GUI opens and
-history reports. `facts` declares what is known about the result (`alphabet`,
-`branch_lengths`: `substitutions` or `time`). The host validates the
-declaration; writing it into the result's companion file is not wired yet. Output roles need `artifact_write`. File
+history reports. `facts` declares what is known about the primary member
+(`alphabet`, `branch_lengths`: `substitutions` or `time`); the IQ-TREE,
+FastTree and distance trees declare substitution lengths. The host checks the
+declaration; recording it in the result's companion file comes with document
+facts. `tree_support` says what support values on output trees mean, optionally
+only when a parameter has a value. `bootstrap_exports` lets a run export its
+`bootstrap-<run>.nex` trees beside the exported tree when
+`bootstrap_destination` is `working`. Output roles need `artifact_write`. File
 analyses never write documents.
 
 Sequence proposals have `family: "sequence_proposal"`, exactly one
@@ -133,7 +139,7 @@ from basecraft.plugin import Plugin
 plugin = Plugin("org.example.seqtools", "1.0.0")
 
 @plugin.operation("count")
-def count(snapshot, parameters, context):
+def count(parameters, context):
     source = Path(context.input("alignment"))
     Path(context.output("artifacts", "count.txt")).write_text(str(source.stat().st_size))
     return {"data": {"bytes": source.stat().st_size}}
@@ -141,13 +147,14 @@ def count(snapshot, parameters, context):
 plugin.run()
 ```
 
-`snapshot` is the sequence for sequence proposals and `None` otherwise.
-`context` holds what the host allocated, with absolute paths:
+A handler returns a dict. `context` holds what the host allocated, with
+absolute paths:
 
 - `input(name)` is the one file bound to `name`; `inputs[name]` lists them all.
 - `output(role, member=".")` is the allocated file, or a member inside a
   collection (its parent folders are created).
 - `run_id`, `threads`, `cancel_file`, `progress_file`, `cancelled()`.
+- `snapshot`: the sequence a sequence proposal edits; `None` otherwise.
 - `evidence[name]` lists where each submitted input came from;
   `source(name)` adds `path`, a stable copy for provenance.
 
@@ -157,9 +164,16 @@ matching the result schema; `message`, `tool` and `execution` are optional.
 `basecraft.plugin.local_context(root, inputs, outputs)` builds a context for
 calling a handler directly in a plugin's own tests.
 
-`@plugin.query(name)` registers a function with no arguments for a metadata
-question, such as which external engines are installed. Queries take no inputs
-and allocate nothing.
+A contract may also declare `queries`: questions the plugin answers without
+inputs, outputs or a run, such as which external engines are installed.
+
+```json
+"queries": [{"name": "engines", "description": "Engines this installation can run.",
+             "result": {"type": "object"}}]
+```
+
+`@plugin.query(name)` registers a function with no arguments that answers one.
+The host refuses an undeclared name and checks the answer against `result`.
 
 ## Invocation context
 
@@ -189,8 +203,8 @@ Each run keeps:
   run folder.
 - `descriptor.json`: the descriptor it ran under.
 - `execution.json`: the run record (`RunRecord`): operation, package version
-  and digests, the managed environment by content (lock and manifest digests,
-  tool versions, executable digests), caller, effective parameters, CPU
+  and digests, `runtime` (the managed runtime by content: lock and manifest
+  digests, tool versions, executable digests), caller, effective parameters, CPU
   threads, the submitted inputs with hashes and paths relative to the folder,
   captured stdout and stderr, and the tool and command the plugin reported.
 - `runtime.json`: the outcome callers see.
@@ -248,12 +262,15 @@ record. No secret belongs in parameters, settings or provenance.
 
 ## Host services
 
-`host` names services the host runs around an operation: `species_workspace`
-(publish a delimitation workspace), `bootstrap_exports` (export
-`bootstrap-<run>.nex` next to an exported tree), `verify_inputs` (inputs whose
-retained evidence must verify), `tree_support` (support kinds of output
-trees), `caller` and `caller_engine` (the single-trace Sanger caller and the
-program it runs), and the remote-service rules `lifecycle`,
-`query_preparation` and `retained_query_transformation` used by BLAST and
-Zenodo. `host_workflow` names a workflow the host runs from
-`needs.workflow_stages`.
+`host` names services the host runs around an operation:
+
+- `species_workspace`: the result holds species hypotheses for a workspace.
+- `caller`: `{"kind": "single_trace", "engine": "<program>"}`, the base caller
+  the Sanger review asks for alternative calls. The host finds the program
+  through `BASECRAFT_<PROGRAM>`, the plugin runtime, then PATH.
+- `remote`: a service that sends data elsewhere. `lifecycle` is
+  `external_submission`, `retained_receipt` or `remote_draft`; submissions name
+  a `query_preparation` and receipts a `retained_query_transformation`. Only
+  bundled packages get the remote lifecycle.
+
+`host_workflow` names a workflow the host runs from `needs.workflow_stages`.

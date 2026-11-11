@@ -153,14 +153,20 @@ impl SangerCaller {
         let sha256 = capture.sha256().to_owned();
         let registry = Registry::load(&RegistryConfig::discover().map_err(|e| e.to_string())?)
             .map_err(|e| e.to_string())?;
-        let mut callers = registry.operations.values().filter(|operation| {
+        let caller_of = |operation: &crate::registry::RegisteredOperation| {
             operation
                 .descriptor
                 .host
                 .as_ref()
-                .and_then(|host| host.caller.as_deref())
-                == Some("single_trace")
-        });
+                .and_then(|host| host.caller.clone())
+                .filter(|caller| {
+                    caller.kind == basecraft_protocol::operation::CallerKind::SingleTrace
+                })
+        };
+        let mut callers = registry
+            .operations
+            .values()
+            .filter(|operation| caller_of(operation).is_some());
         let operation = callers
             .next()
             .ok_or("Install a single-trace caller plugin to compute alternative calls")?;
@@ -176,12 +182,9 @@ impl SangerCaller {
             .interpreter
             .as_ref()
             .ok_or_else(|| format!("{name} Python runtime is unavailable"))?;
-        let program = operation
-            .descriptor
-            .host
-            .as_ref()
-            .and_then(|host| host.caller_engine.clone())
-            .ok_or("Caller declares no engine program")?;
+        let program = caller_of(operation)
+            .ok_or("Caller declares no engine program")?
+            .engine;
         let caller = engine(interpreter, &program)?;
         let parameters = json!({"engine_sha256":basecraft_io::sha256_file(&caller).map_err(|e| e.to_string())?,
             "minimum_overlap":50,"minimum_identity":0.8,"signal_threshold":signal_threshold});

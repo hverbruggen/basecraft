@@ -119,7 +119,7 @@ def validate_files(paths, output, discrepancy=False, cancel_file=None, exe=None)
 
 
 @plugin.operation("validate")
-def validate(_snapshot, parameters, context):
+def validate(parameters, context):
     paths = {role: context.inputs[role][0] for role in INPUTS}
     data, files = validate_files(paths, context.outputs["reports"],
                                  bool(parameters.get("discrepancy_report", False)),

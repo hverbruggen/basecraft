@@ -144,7 +144,7 @@ def _validate_result(root, nodes, result, settings):
 
 
 @plugin.operation("date_tree")
-def date_tree(_snapshot, parameters, context):
+def date_tree(parameters, context):
     source = Path(context.inputs["tree"][0])
     raw = source.read_bytes()
     root = parse(raw.decode("utf-8"))

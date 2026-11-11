@@ -8,7 +8,7 @@ plugin = Plugin("basecraft.clade-alignment", "0.1.0")
 
 
 @plugin.operation("extract")
-def extract(snapshot, params, context):
+def extract(params, context):
     source, target = Path(context.input("alignment")), Path(context.output("artifacts", "clade.afa"))
     names = params.get("taxa", [])
     if not names or not all(isinstance(n, str) for n in names) or len(set(names)) != len(names):

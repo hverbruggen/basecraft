@@ -167,8 +167,10 @@
         "contact_email": "contact_email"
       },
       "host": {
-        "lifecycle": "external_submission",
-        "query_preparation": "blast"
+        "remote": {
+          "lifecycle": "external_submission",
+          "query_preparation": "blast"
+        }
       }
     },
     {
@@ -284,8 +286,10 @@
         "artifact_write": false
       },
       "host": {
-        "lifecycle": "retained_receipt",
-        "retained_query_transformation": "blast-query-preparation-v1"
+        "remote": {
+          "lifecycle": "retained_receipt",
+          "retained_query_transformation": "blast-query-preparation-v1"
+        }
       }
     }
   ]

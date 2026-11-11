@@ -45,14 +45,14 @@ def cds(start, end, strand, partial_start, partial_end, code, label):
 
 
 @plugin.operation("predict_genes")
-def predict_genes(snapshot, params, context):
+def predict_genes(params, context):
     """Genes on both strands with genetic code `translation_table`,
     optionally only within `start`..`end` (0-based, end exclusive).
     Training uses the whole sequence."""
     code = int(params.get("translation_table", 11))
     if code not in pyrodigal.TRANSLATION_TABLES:
         raise ValueError(f"Prodigal doesn't support genetic code {code}")
-    full = bytes(snapshot.residues)
+    full = bytes(context.snapshot.residues)
     lo = max(0, int(params.get("start", 0)))
     hi = min(len(full), int(params.get("end", len(full))))
     if len(full) >= pyrodigal.MIN_SINGLE_GENOME:

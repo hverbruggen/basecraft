@@ -106,7 +106,6 @@ pub struct Query {
 
 /// `invoke` result: proposed operations against the snapshot's version,
 /// and for operations that write files, what they wrote and with which tool.
-/// Unknown keys, such as a plugin's own file list, are ignored.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct InvokeResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]

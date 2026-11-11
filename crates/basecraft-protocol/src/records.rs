@@ -74,9 +74,9 @@ pub struct RunRecord {
     pub package_version: String,
     pub package_digest: String,
     pub descriptor_digest: String,
-    /// The managed environment the plugin ran in; null for the system Python
-    /// and for host workflows.
-    pub environment: Option<RunEnvironment>,
+    /// The managed runtime the plugin ran in; null for the system Python and
+    /// for host workflows.
+    pub runtime: Option<RunRuntime>,
     /// Caller label, such as `gui` or `mcp`.
     pub initiator: String,
     pub executor: String,
@@ -93,10 +93,10 @@ pub struct RunRecord {
 
 pub const RUN_RECORD_SCHEMA: u32 = 2;
 
-/// A managed plugin environment, by content. No paths.
+/// A managed plugin runtime, by content. No paths.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct RunEnvironment {
+pub struct RunRuntime {
     pub lock_digest: String,
     pub manifest_digest: String,
     pub reported_versions: BTreeMap<String, String>,

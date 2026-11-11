@@ -285,6 +285,13 @@ pub fn validate_contract(plugin: &str, contract: &OperationContract) -> Result<(
     {
         return Err(invalid("unsupported contract version or operation count"));
     }
+    let mut queries = BTreeSet::new();
+    for query in &contract.queries {
+        if !valid_name(&query.name) || !queries.insert(&query.name) {
+            return Err(invalid("invalid or duplicate query name"));
+        }
+        BoundedSchema::compile(&query.result)?;
+    }
     let mut ids = BTreeSet::new();
     for descriptor in &contract.operations {
         if !ids.insert(operation_id(plugin, descriptor)?) {
@@ -393,66 +400,59 @@ pub fn validate_contract(plugin: &str, contract: &OperationContract) -> Result<(
         {
             return Err(invalid("unsupported host workflow"));
         }
-        if let Some(host) = &descriptor.host {
+        let remote = descriptor
+            .host
+            .as_ref()
+            .and_then(|host| host.remote.as_ref());
+        if let Some(remote) = remote {
             use basecraft_protocol::operation::LifecyclePolicy;
-            match host.lifecycle {
-                Some(LifecyclePolicy::RetainedReceipt)
-                    if ["receipt", "query"].iter().any(|role| {
-                        descriptor
-                            .inputs
-                            .get(*role)
-                            .is_none_or(|binding| binding.min != 1 || binding.max != 1)
-                    }) =>
-                {
-                    return Err(invalid(
-                        "retained receipt requires one receipt and query input",
-                    ));
+            let one = |binding: Option<&basecraft_protocol::operation::InputBinding>| {
+                binding.is_some_and(|binding| binding.min == 1 && binding.max == 1)
+            };
+            let valid = match remote.lifecycle {
+                LifecyclePolicy::RetainedReceipt => {
+                    one(descriptor.inputs.get("receipt"))
+                        && one(descriptor.inputs.get("query"))
+                        && remote.retained_query_transformation.is_some()
                 }
-                Some(LifecyclePolicy::ExternalSubmission | LifecyclePolicy::RemoteDraft)
-                    if descriptor.outputs.get("receipt").is_none_or(|binding| {
-                        binding.collection || binding.min != 1 || binding.max != 1
-                    }) =>
-                {
-                    return Err(invalid("remote lifecycle requires one receipt output"));
+                LifecyclePolicy::ExternalSubmission | LifecyclePolicy::RemoteDraft => {
+                    descriptor.outputs.get("receipt").is_some_and(|binding| {
+                        !binding.collection && binding.min == 1 && binding.max == 1
+                    }) && (remote.lifecycle == LifecyclePolicy::RemoteDraft
+                        || remote.query_preparation.is_some())
                 }
-                _ => {}
+            };
+            if !valid {
+                return Err(invalid(
+                    "a remote service needs one receipt, and submissions and receipts a query transform",
+                ));
             }
-            if host
-                .verify_inputs
-                .iter()
-                .any(|name| !descriptor.inputs.contains_key(name))
+        }
+        if let Some(caller) = descriptor
+            .host
+            .as_ref()
+            .and_then(|host| host.caller.as_ref())
+            && (caller.engine.is_empty()
+                || !caller
+                    .engine
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'))
+        {
+            return Err(invalid("a caller names one engine program"));
+        }
+        for rule in descriptor
+            .outputs
+            .values()
+            .flat_map(|output| &output.tree_support)
+        {
+            use basecraft_protocol::operation::ParameterCondition;
+            if let Some(
+                ParameterCondition::Equals { parameter, .. }
+                | ParameterCondition::Positive { parameter },
+            ) = &rule.when
+                && !properties.contains_key(parameter)
             {
-                return Err(invalid("verified input is not a declared binding"));
-            }
-            if host
-                .caller
-                .as_deref()
-                .is_some_and(|caller| caller != "single_trace")
-            {
-                return Err(invalid("unsupported caller service"));
-            }
-            if host.caller.is_some()
-                != host.caller_engine.as_deref().is_some_and(|program| {
-                    !program.is_empty()
-                        && program
-                            .bytes()
-                            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-                })
-            {
-                return Err(invalid("a caller service needs one engine program name"));
-            }
-            for rule in &host.tree_support {
-                use basecraft_protocol::operation::ParameterCondition;
-                let parameter = match &rule.when {
-                    None => continue,
-                    Some(
-                        ParameterCondition::Equals { parameter, .. }
-                        | ParameterCondition::Positive { parameter },
-                    ) => parameter,
-                };
-                if !properties.contains_key(parameter) {
-                    return Err(invalid("tree support condition is not a parameter"));
-                }
+                return Err(invalid("tree support condition is not a parameter"));
             }
         }
         if let Some(workflow) = &descriptor.host_workflow {
@@ -488,18 +488,6 @@ pub fn validate_contract(plugin: &str, contract: &OperationContract) -> Result<(
         {
             return Err(invalid(
                 "the contact email need names an undeclared parameter",
-            ));
-        }
-        if let Some(host) = &descriptor.host
-            && ((host.lifecycle
-                == Some(basecraft_protocol::operation::LifecyclePolicy::ExternalSubmission)
-                && host.query_preparation.is_none())
-                || (host.lifecycle
-                    == Some(basecraft_protocol::operation::LifecyclePolicy::RetainedReceipt)
-                    && host.retained_query_transformation.is_none()))
-        {
-            return Err(invalid(
-                "submission and retained receipt services require a query preparation transform",
             ));
         }
         BoundedSchema::compile(&descriptor.parameters)?;

@@ -9,6 +9,12 @@
         "$ref": "#/$defs/OperationDescriptor"
       }
     },
+    "queries": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/QueryDescriptor"
+      }
+    },
     "schema": {
       "type": "integer",
       "format": "uint32",
@@ -42,6 +48,30 @@
         "time"
       ]
     },
+    "Caller": {
+      "description": "A base caller the Sanger review asks for alternative calls.",
+      "type": "object",
+      "properties": {
+        "engine": {
+          "description": "Program the caller runs. The host finds it through `BASECRAFT_<PROGRAM>`,\nthe plugin runtime, then PATH, and pins its hash.",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/CallerKind"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "engine"
+      ]
+    },
+    "CallerKind": {
+      "type": "string",
+      "enum": [
+        "single_trace"
+      ]
+    },
     "Effects": {
       "type": "object",
       "properties": {
@@ -68,63 +98,29 @@
     "HostServices": {
       "type": "object",
       "properties": {
-        "bootstrap_exports": {
-          "type": "boolean"
-        },
         "caller": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "caller_engine": {
-          "description": "Program a caller service runs. The host finds it through\n`BASECRAFT_<PROGRAM>`, the plugin runtime, then PATH, and pins its hash.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "lifecycle": {
-          "description": "Cooperative cancellation and receipt rules for a bundled remote service.",
           "anyOf": [
             {
-              "$ref": "#/$defs/LifecyclePolicy"
+              "$ref": "#/$defs/Caller"
             },
             {
               "type": "null"
             }
           ]
         },
-        "query_preparation": {
+        "remote": {
           "anyOf": [
             {
-              "$ref": "#/$defs/QueryPreparation"
+              "$ref": "#/$defs/RemoteService"
             },
             {
               "type": "null"
             }
-          ]
-        },
-        "retained_query_transformation": {
-          "type": [
-            "string",
-            "null"
           ]
         },
         "species_workspace": {
+          "description": "The result holds species hypotheses for the target workspace.",
           "type": "boolean"
-        },
-        "tree_support": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/TreeSupportRule"
-          }
-        },
-        "verify_inputs": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
         }
       },
       "additionalProperties": false
@@ -154,6 +150,10 @@
         },
         "retain": {
           "description": "Preserve original and submitted bytes when results refer to input paths.\nApplied by the shared runner equally for GUI, CLI, Python and MCP.",
+          "type": "boolean"
+        },
+        "verify": {
+          "description": "Check the input's retained evidence before the run, as for a reused\ndistance cache.",
           "type": "boolean"
         },
         "view": {
@@ -306,13 +306,17 @@
     "OutputBinding": {
       "type": "object",
       "properties": {
+        "bootstrap_exports": {
+          "description": "Bootstrap trees named `bootstrap-<run>.nex` may be exported beside the\nexported primary tree when `bootstrap_destination` is `working`.",
+          "type": "boolean"
+        },
         "collection": {
           "description": "A collection is allocated one directory; members remain relative to it.",
           "type": "boolean",
           "default": false
         },
         "facts": {
-          "description": "Facts the host writes into the result's companion file.",
+          "description": "Facts about the primary member, for its companion file.",
           "$ref": "#/$defs/OutputFacts"
         },
         "max": {
@@ -335,6 +339,13 @@
             "null"
           ]
         },
+        "tree_support": {
+          "description": "What the support values on trees in this output mean.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TreeSupportRule"
+          }
+        },
         "visibility": {
           "$ref": "#/$defs/ArtifactVisibility"
         }
@@ -348,7 +359,7 @@
       ]
     },
     "OutputFacts": {
-      "description": "Facts an output declares about itself. The host writes them into the\nresult's companion file (lane facts' writer, once it exists).",
+      "description": "Facts an output declares about its primary member. The companion writer\nrecords them once document facts exist (merge task for piece 2B).",
       "type": "object",
       "properties": {
         "alphabet": {
@@ -414,10 +425,58 @@
         }
       ]
     },
+    "QueryDescriptor": {
+      "description": "A question the plugin answers without inputs, outputs or a run, such as\nwhich external engines are installed. The host refuses undeclared names\nand checks the answer against `result`.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "result": true
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "description",
+        "result"
+      ]
+    },
     "QueryPreparation": {
       "type": "string",
       "enum": [
         "blast"
+      ]
+    },
+    "RemoteService": {
+      "description": "A bundled service that sends data elsewhere: how the host cancels it,\nretains its receipt and freezes what it submits.",
+      "type": "object",
+      "properties": {
+        "lifecycle": {
+          "$ref": "#/$defs/LifecyclePolicy"
+        },
+        "query_preparation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/QueryPreparation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "retained_query_transformation": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "lifecycle"
       ]
     },
     "SupportKind": {

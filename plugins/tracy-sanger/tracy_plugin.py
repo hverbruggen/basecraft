@@ -10,7 +10,7 @@ plugin = Plugin("basecraft.tracy-sanger", "0.2.0")
 
 
 @plugin.operation("consensus")
-def consensus(snapshot, params, context):
+def consensus(params, context):
     reads = [Path(value) for value in context.inputs["reads"]]
     if len(reads) not in (1, 2, 3):
         raise ValueError(
@@ -48,7 +48,7 @@ def consensus(snapshot, params, context):
 
 
 @plugin.operation("calls")
-def calls(snapshot, params, context):
+def calls(params, context):
     import json
 
     target = Path(context.output("artifacts", "calls.json"))
@@ -69,7 +69,7 @@ def calls(snapshot, params, context):
 
 
 @plugin.operation("primers")
-def primers(snapshot, params, context):
+def primers(params, context):
     import json
 
     from primers import detect

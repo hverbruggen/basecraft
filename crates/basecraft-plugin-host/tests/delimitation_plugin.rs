@@ -848,7 +848,7 @@ fn parent_cancellation_interrupts_registered_fit_and_retains_every_stage_receipt
         r"
 from pathlib import Path
 import delimitation_plugin as adapter
-adapter.executable = lambda params: str(Path(__file__).with_name('engine.py'))
+adapter.executable = lambda: str(Path(__file__).with_name('engine.py'))
 adapter.plugin.run()
 ",
     );

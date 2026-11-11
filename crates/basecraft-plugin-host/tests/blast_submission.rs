@@ -17,7 +17,7 @@ from pathlib import Path
 from basecraft.plugin import Plugin
 plugin = Plugin('basecraft.blast','0.1.0')
 @plugin.operation('submit')
-def submit(snapshot,params,context):
+def submit(params,context):
     plan=json.loads(Path(context.inputs['queries'][0]).read_text())
     mode=plan['records'][0]['name']
     receipt=dict(schema=1,status='accepted',rid='ABCD1234567',url='https://blast.ncbi.nlm.nih.gov/Blast.cgi?CMD=Get&RID=ABCD1234567&FORMAT_TYPE=HTML',query_hash=plan['query_hash'],approval_hash=plan['approval_hash'],program=plan['program'],database=plan['database'],submitted_residues=plan['submitted_residues'],plan={k:v for k,v in plan.items() if k!='fasta'},request_fields={},submitted_at='synthetic',message='Submitted (mock)')
@@ -32,7 +32,7 @@ def submit(snapshot,params,context):
     if mode=='bad_identity': receipt['query_hash']='changed'; output.write_text(json.dumps(receipt))
     return dict(ops=[],data=receipt,artifacts=[dict(role='receipt',path='.')])
 @plugin.operation('receipt')
-def receipt(snapshot,params,context): return dict(ops=[],data=None)
+def receipt(params,context): return dict(ops=[],data=None)
 plugin.run()
 ";
 

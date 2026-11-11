@@ -2,7 +2,6 @@
 
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -105,33 +104,3 @@ def write_atomic(path, text):
 
 def quote_newick(name):
     return "'" + name.replace("'", "''") + "'"
-
-
-def bootstrap_collection_path(params):
-    """Where to write a run's bootstrap trees: the host-allocated metadata or
-    working directory chosen by `bootstrap_destination`, or an explicit
-    absolute `bootstrap_trees` path. Never creates or guesses a namespace."""
-    destination = params.get("bootstrap_destination", "metadata")
-    if destination not in ("metadata", "working"):
-        raise ValueError("Bootstrap destination must be metadata or working")
-    if "bootstrap_trees" in params:
-        if "analysis_artifacts" in params:
-            raise ValueError("bootstrap_trees and analysis_artifacts are ambiguous together")
-        path = Path(params["bootstrap_trees"])
-        if not path.is_absolute() or path.is_symlink():
-            raise ValueError("bootstrap_trees must be an absolute, non-symlink output path")
-        return path.parent.resolve(strict=True) / path.name
-    allocation = params.get("analysis_artifacts")
-    if not isinstance(allocation, dict):
-        raise TypeError("Bootstrap retention requires host analysis_artifacts allocation or an explicit absolute bootstrap_trees path")
-    run_id = allocation.get("run_id")
-    if not isinstance(run_id, str) or not re.fullmatch(r"[A-Za-z0-9-]+", run_id):
-        raise ValueError("Invalid bootstrap artifact run_id")
-    key = "metadata_directory" if destination == "metadata" else "working_directory"
-    value = allocation.get(key)
-    if not isinstance(value, str):
-        raise TypeError(f"Missing allocated {key}")
-    directory = Path(value)
-    if not directory.is_absolute() or not directory.is_dir() or directory.resolve() != directory:
-        raise ValueError(f"Allocated {key} must be an existing absolute directory without symlinks")
-    return directory / f"bootstrap-{run_id}.nex"

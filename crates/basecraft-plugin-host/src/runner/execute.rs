@@ -3,7 +3,7 @@ use super::{
     Arc, AtomicBool, Error, InvokeResult, Ordering, PluginArtifact, PluginProcess,
     PreparedOperation, Result, Value, contract, input_evidence, link_count,
 };
-use basecraft_protocol::records::{RUN_RECORD_SCHEMA, RunEnvironment, RunRecord};
+use basecraft_protocol::records::{RUN_RECORD_SCHEMA, RunRecord, RunRuntime};
 
 impl PreparedOperation {
     pub fn execute(&self, cancelled: Arc<AtomicBool>) -> Result<InvokeResult> {
@@ -89,13 +89,13 @@ impl PreparedOperation {
         }
         let (stdout, stderr) = process.captured_output();
         let mut record = self.run_record(effective, context.cpu_threads)?;
-        record.environment = self
+        record.runtime = self
             .operation
             .package
             .manifest
             .managed_runtime
             .as_ref()
-            .map(|runtime| RunEnvironment {
+            .map(|runtime| RunRuntime {
                 lock_digest: runtime.0.lock_digest.clone(),
                 manifest_digest: runtime.0.manifest_digest.clone(),
                 reported_versions: runtime.0.reported_versions.clone(),
@@ -228,7 +228,7 @@ impl PreparedOperation {
             package_version: self.operation.package.manifest.version.clone(),
             package_digest: self.operation.package.digest.clone(),
             descriptor_digest: self.operation.descriptor_digest.clone(),
-            environment: None,
+            runtime: None,
             initiator: self.initiator.clone(),
             executor: self.operation.package.manifest.id.clone(),
             process_instance: basecraft_platform::process_instance().into(),

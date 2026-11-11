@@ -34,7 +34,8 @@ impl Lifecycle {
                 .descriptor
                 .host
                 .as_ref()
-                .and_then(|host| host.lifecycle)
+                .and_then(|host| host.remote.as_ref())
+                .map(|remote| remote.lifecycle)
             {
                 Some(LifecyclePolicy::ExternalSubmission) => Self::ExternalSubmission,
                 Some(LifecyclePolicy::RetainedReceipt) => Self::RetainedReceipt,
@@ -266,7 +267,7 @@ mod tests {
             op.descriptor
                 .host
                 .as_ref()
-                .is_some_and(|host| host.lifecycle.is_some())
+                .is_some_and(|host| host.remote.is_some())
         }) {
             let expected = Lifecycle::for_operation(original).unwrap();
             assert_ne!(expected, Lifecycle::Ordinary);
@@ -274,7 +275,7 @@ mod tests {
             renamed.id = "example.renamed/operation@1".into();
             assert_eq!(Lifecycle::for_operation(&renamed).unwrap(), expected);
             let mut undeclared = original.clone();
-            undeclared.descriptor.host.as_mut().unwrap().lifecycle = None;
+            undeclared.descriptor.host.as_mut().unwrap().remote = None;
             assert_eq!(
                 Lifecycle::for_operation(&undeclared).unwrap(),
                 Lifecycle::Ordinary

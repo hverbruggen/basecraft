@@ -13,7 +13,7 @@ plugin = Plugin("org.example.registry-fixture", "1.0.0")
 
 
 @plugin.operation("count")
-def count(_snapshot, parameters, context):
+def count(parameters, context):
     mode = parameters["mode"]
     if mode == "delayed":
         time.sleep(0.3)

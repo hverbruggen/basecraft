@@ -32,7 +32,7 @@ def transport(method, url, token, context, **kwargs):
         return dict(key='source.fa',size=f['size'],checksum='md5:'+f['md5'])
     raise ValueError('unexpected request')
 
-def draft(snapshot, params, context):
+def draft(params, context):
     global PARAMETERS
     PARAMETERS=params
     return z.upload(params, context, transport)

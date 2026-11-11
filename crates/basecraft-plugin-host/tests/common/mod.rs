@@ -259,7 +259,7 @@ from pathlib import Path
 from basecraft.plugin import Plugin
 plugin = Plugin('basecraft.mafft', 'test')
 @plugin.operation('align')
-def align(snapshot, params, context):
+def align(params, context):
     root = Path(context.output('artifacts'))
     assert root.is_absolute() and root.is_dir()
     source = Path(context.input('alignment'))

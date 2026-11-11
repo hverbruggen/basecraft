@@ -202,6 +202,37 @@ fn every_bundled_plugin_declares_a_valid_schema_two_contract() {
     assert!(checked >= 15);
 }
 
+/// Each bundled plugin starts, registers every declared implementation and
+/// answers its declared queries with the declared shape. A plugin with its own
+/// managed runtime is provisioned on install and is started by its own tests.
+#[test]
+fn every_bundled_plugin_starts_and_offers_what_it_declares() {
+    let python = basecraft_plugin_host::process::python_interpreter();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins");
+    let mut started = 0;
+    for entry in std::fs::read_dir(root).unwrap() {
+        let path = entry.unwrap().path();
+        if !path.join("plugin.toml").is_file() {
+            continue;
+        }
+        let manifest = Manifest::load(&path).unwrap();
+        if manifest.runtime.is_some() {
+            continue;
+        }
+        let mut process = basecraft_plugin_host::PluginProcess::spawn_with(&manifest, &python)
+            .unwrap_or_else(|e| panic!("{}: {e}", manifest.id));
+        for query in manifest.operation_contract().unwrap().queries {
+            process
+                .query(&query.name)
+                .unwrap_or_else(|e| panic!("{} {}: {e}", manifest.id, query.name));
+        }
+        assert!(process.query("undeclared").is_err());
+        process.finish().unwrap();
+        started += 1;
+    }
+    assert!(started >= 13, "{started}");
+}
+
 #[test]
 fn embedding_distinguishes_property_names_and_literal_data_from_schema_keywords() {
     let schema = json!({
