@@ -56,9 +56,6 @@ FocusScope {
     property var treeTaxa: []
     // Edits change only manual hypotheses and edited copies.
     readonly property bool activeEditable: activeHypothesis !== null && !["imported", "inferred"].includes(activeHypothesis.origin)
-    property var pendingDisplay: null
-    // PTP on an IQ-TREE tree built here: the fit waits for inference.
-    property var pendingFit: null
     // Created by an analysis request; discarded on close if nothing came of it.
     property bool draft: false
     property bool ribbonInitialized: false
@@ -114,63 +111,9 @@ FocusScope {
         if (fresh) tree.fit()
     }
 
-    function startAnalysis(method, input, rooted, settings, displayMethod) {
-        if (ctl.busy) return
-        if (method === "manual" || method === "view") {
-            if (method === "manual") {
-                act("create", {name: "Manual species hypothesis"})
-                const created = JSON.parse(ctl.workspace_json).hypotheses || []
-                if (created.length) ctl.activate(created[created.length - 1].id)
-            }
-            if (["upgma", "nj", "iqtree"].includes(displayMethod)) {
-                showGroups = false
-                ctl.run_analysis("display_" + displayMethod, input, false, settings)
-            } else if (displayMethod === "existing") { ctl.attach_tree(input, rooted); showGroups = false }
-            else showGroups = true
-            return
-        }
-        // Both PTP inputs share rooting and failure gating. Inference is the
-        // only asynchronous extra step for an alignment input.
-        if (method === "ptp" || method === "mptp") {
-            const fitSettings = JSON.parse(settings)
-            const rooting = fitSettings.rooting || (displayMethod === "iqtree" ? "midpoint" : "keep")
-            delete fitSettings.rooting
-            delete fitSettings.iqtree_model
-            const fit = {method: method, settings: JSON.stringify(fitSettings), rooting: rooting}
-            if (displayMethod === "iqtree") {
-                pendingFit = fit
-                ctl.run_analysis("display_iqtree", input, false, settings)
-            } else if ((rooting !== "keep" || rooted) && ctl.attach_tree(input, false)) {
-                fitPtpTree(fit)
-            }
-            return
-        }
-        // The display tree only illustrates ASAP's result, so build it after
-        // ASAP succeeds; a failed run then leaves no tree behind.
-        if (method === "asap" && (["upgma", "nj", "iqtree"].includes(displayMethod)))
-            pendingDisplay = {method: "display_" + displayMethod, input: input, settings: settings}
-        else
-            showGroups = displayMethod === "none"
-        ctl.run_analysis(method, input, rooted, settings)
-    }
-    function fitPtpTree(fit) {
-        if (fit.rooting !== "keep" && !ctl.root_display_tree(fit.rooting)) return
-        showGroups = false
-        ctl.run_analysis(fit.method, ctl.display_path, true, fit.settings)
-    }
     Connections {
         target: ctl
-        function onDisplayTreeReady(success) {
-            if (success) doc.showGroups = false
-            const fit = doc.pendingFit
-            doc.pendingFit = null
-            if (success && fit) doc.fitPtpTree(fit)
-        }
-        function onAnalysisFinished(success) {
-            const pending = doc.pendingDisplay
-            doc.pendingDisplay = null
-            if (success && pending) ctl.run_analysis(pending.method, pending.input, false, pending.settings)
-        }
+        function onGroupsShown(show) { doc.showGroups = show }
     }
     // Hidden menu items take no space.
     component TreeMenuItem: MenuItem { height: visible ? implicitHeight : 0 }

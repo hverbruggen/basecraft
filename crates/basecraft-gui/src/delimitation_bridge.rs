@@ -161,6 +161,20 @@ pub mod qobject {
         #[qsignal]
         #[cxx_name = "analysisFinished"]
         fn analysis_finished(self: Pin<&mut DelimitationController>, success: bool);
+        /// Run a species analysis with the steps `species_analysis::plan` gives.
+        #[qinvokable]
+        fn start_analysis(
+            self: Pin<&mut DelimitationController>,
+            method: &QString,
+            input: &QString,
+            rooted: bool,
+            settings: &QString,
+            display: &QString,
+        );
+        /// Show the groups list (true) or the tree (false).
+        #[qsignal]
+        #[cxx_name = "groupsShown"]
+        fn groups_shown(self: Pin<&mut DelimitationController>, show: bool);
         #[qinvokable]
         fn discard_empty_workspace(self: Pin<&mut DelimitationController>) -> bool;
         #[qinvokable]
@@ -178,6 +192,7 @@ use basecraft_protocol::{
     },
 };
 use basecraft_viewmodel::delimitation::{self, Selection};
+use basecraft_viewmodel::species_analysis::{self, First};
 
 use crate::document_jobs::{
     DocumentJob, Finished, bundled, declared_parameters, failure, input_role, primary_member,
@@ -250,6 +265,10 @@ pub struct DelimitationRust {
     time_tree: Option<(TreeDoc, basecraft_delimitation::time_tree::TimeTree, String)>,
     preview: Vec<BTreeSet<String>>,
     analysis: Option<RunningAnalysis>,
+    /// A fit waiting for the display tree being inferred.
+    pending_fit: Option<species_analysis::Fit>,
+    /// A display tree to build once the analysis succeeds.
+    pending_display: Option<species_analysis::Run>,
 }
 impl Default for DelimitationRust {
     fn default() -> Self {
@@ -293,6 +312,8 @@ impl Default for DelimitationRust {
             time_tree: None,
             preview: vec![],
             analysis: None,
+            pending_fit: None,
+            pending_display: None,
         }
     }
 }
@@ -1849,9 +1870,9 @@ impl qobject::DelimitationController {
                 Err(e) => {
                     self.as_mut().fail(&e);
                     if display_job {
-                        self.display_tree_ready(false);
+                        self.display_done(false);
                     } else {
-                        self.analysis_finished(false);
+                        self.analysis_done(false);
                     }
                     return;
                 }
@@ -1889,9 +1910,9 @@ impl qobject::DelimitationController {
             Err(e) => {
                 self.as_mut().fail(&e);
                 if display_job {
-                    self.display_tree_ready(false);
+                    self.display_done(false);
                 } else {
-                    self.analysis_finished(false);
+                    self.analysis_done(false);
                 }
                 return;
             }
@@ -1929,9 +1950,9 @@ impl qobject::DelimitationController {
                 self.as_mut().set_busy(false);
                 self.as_mut().fail(&error);
                 if display_job {
-                    self.display_tree_ready(false);
+                    self.display_done(false);
                 } else {
-                    self.analysis_finished(false);
+                    self.analysis_done(false);
                 }
                 return;
             }
@@ -1990,7 +2011,7 @@ impl qobject::DelimitationController {
                         let success = self
                             .as_mut()
                             .attach_tree(&QString::from(path), analysis.display_rooted);
-                        self.as_mut().display_tree_ready(success);
+                        self.as_mut().display_done(success);
                     }
                     return;
                 }
@@ -2049,14 +2070,14 @@ impl qobject::DelimitationController {
                 self.as_mut()
                     .set_message(QString::from("Analysis completed"));
                 self.as_mut().refresh();
-                self.analysis_finished(true);
+                self.analysis_done(true);
             }
             Err(error) => {
                 self.as_mut().fail(&error);
                 if display_job {
-                    self.display_tree_ready(false);
+                    self.display_done(false);
                 } else {
-                    self.analysis_finished(false);
+                    self.analysis_done(false);
                 }
             }
         }
@@ -2100,6 +2121,106 @@ impl qobject::DelimitationController {
         r.doc = None;
         true
     }
+    pub fn start_analysis(
+        mut self: Pin<&mut Self>,
+        method: &QString,
+        input: &QString,
+        rooted: bool,
+        settings: &QString,
+        display: &QString,
+    ) {
+        if self.rust().busy {
+            return;
+        }
+        let plan = species_analysis::plan(
+            &method.to_string(),
+            &input.to_string(),
+            rooted,
+            &settings.to_string(),
+            &display.to_string(),
+        );
+        if plan.create_manual {
+            self.as_mut().action(
+                &QString::from("create"),
+                &QString::from(r#"{"name":"Manual species hypothesis"}"#),
+            );
+            let workspace: Value =
+                serde_json::from_str(&self.rust().workspace_json.to_string()).unwrap_or_default();
+            if let Some(id) = workspace["hypotheses"]
+                .as_array()
+                .and_then(|all| all.last())
+                .and_then(|last| last["id"].as_str())
+            {
+                self.as_mut().activate(&QString::from(id));
+            }
+        }
+        if let Some(show) = plan.show_groups {
+            self.as_mut().groups_shown(show);
+        }
+        {
+            let mut state = self.as_mut().rust_mut();
+            state.pending_fit = plan.fit_after_display;
+            state.pending_display = plan.display_after;
+        }
+        match plan.first {
+            First::Nothing => {}
+            First::Run(run) => self.run(&run),
+            First::Attach { input, rooted } => {
+                self.attach_tree(&QString::from(&input), rooted);
+            }
+            First::AttachThenFit { input, fit } => {
+                if self.as_mut().attach_tree(&QString::from(&input), false) {
+                    self.fit(&fit);
+                }
+            }
+        }
+    }
+    fn run(self: Pin<&mut Self>, run: &species_analysis::Run) {
+        self.run_analysis(
+            &QString::from(&run.method),
+            &QString::from(&run.input),
+            run.rooted,
+            &QString::from(&run.settings),
+        );
+    }
+    /// Fit PTP on the display tree, rooting it first unless asked to keep it.
+    fn fit(mut self: Pin<&mut Self>, fit: &species_analysis::Fit) {
+        if fit.rooting != "keep"
+            && !self
+                .as_mut()
+                .root_display_tree(&QString::from(&fit.rooting))
+        {
+            return;
+        }
+        self.as_mut().groups_shown(false);
+        let tree = self.rust().display_path.clone();
+        self.run_analysis(
+            &QString::from(&fit.method),
+            &tree,
+            true,
+            &QString::from(&fit.settings),
+        );
+    }
+    /// The display tree job ended; a waiting fit runs on the new tree.
+    fn display_done(mut self: Pin<&mut Self>, success: bool) {
+        self.as_mut().display_tree_ready(success);
+        if success {
+            self.as_mut().groups_shown(false);
+        }
+        let fit = self.as_mut().rust_mut().pending_fit.take();
+        if let (true, Some(fit)) = (success, fit) {
+            self.fit(&fit);
+        }
+    }
+    /// The analysis ended; a waiting display tree is built after a success.
+    fn analysis_done(mut self: Pin<&mut Self>, success: bool) {
+        self.as_mut().analysis_finished(success);
+        let display = self.as_mut().rust_mut().pending_display.take();
+        if let (true, Some(display)) = (success, display) {
+            self.run(&display);
+        }
+    }
+
     pub fn cancel_job(self: Pin<&mut Self>) {
         if let Some(analysis) = &self.rust().analysis {
             analysis.work.cancel();

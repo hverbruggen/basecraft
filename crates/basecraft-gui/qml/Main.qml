@@ -360,8 +360,7 @@ ApplicationWindow {
     // decide whether its request runs, and open the workspace it creates.
     property var delimitationSource: null
     function beginDelimitation(method) {
-        if (!current || current.busy || !(alignmentOpen || treeOpen || delimitationOpen)
-                || (method === "asap" && !alignmentOpen && !(delimitationOpen && current.linked_alignment.length))) return
+        if (!current || !documentOpens.species_request_allowed(currentKind, current.busy, method, !!current.linked_alignment)) return
         delimitationSource = current
         documentOpens.begin_delimitation(tabs.currentIndex)
         speciesDialog.engineProblems = method === "ptp" ? JSON.parse(shell.delimitation_engines()) : ({})
@@ -373,7 +372,7 @@ ApplicationWindow {
         const step = documentOpens.request_delimitation(source ? source.file_path : "", !source || source.busy,
             JSON.stringify({method: method, input: input, rooted: rooted, settings: settings, display: displayMethod}))
         if (step === "create") { if (!source.create_delimitation(method)) documentOpens.creation_refused() }
-        else if (step.length) documentAt(documentOpens.index_of(step)).startAnalysis(method, input, rooted, settings, displayMethod)
+        else if (step.length) documentAt(documentOpens.index_of(step)).controller.start_analysis(method, input, rooted, settings, displayMethod)
     }
     Connections {
         target: window.delimitationSource
@@ -384,7 +383,7 @@ ApplicationWindow {
             const run = JSON.parse(reply)
             Qt.callLater(() => {
                 const document = window.documentAt(documentOpens.index_of(run.token))
-                if (document) document.startAnalysis(run.method, run.uses_open_alignment ? document.controller.linked_alignment : run.input,
+                if (document) document.controller.start_analysis(run.method, run.uses_open_alignment ? document.controller.linked_alignment : run.input,
                     run.rooted, run.settings, run.display)
             })
         }
@@ -445,20 +444,13 @@ ApplicationWindow {
     }
 
     function startTraceReview(paths, reference, target, cutoff = 20, forceNew = false) {
-        let preserve = forceNew
-        for (let i = 0; i < documentOpens.count; i++) {
-            const existing = window.documentAt(i)
-            if (documentOpens.path_at(i) !== paths[0] || !existing) continue
-            if (existing.kind === "trace" && existing.working) { tabs.currentIndex = i; return }
-            if (existing.controller.dirty) preserve = true
-        }
-        if (preserve) tabs.currentIndex = documentOpens.add_tab(paths[0], "trace")
+        const tab = documentOpens.trace_review(paths[0], forceNew)
+        if (tab >= 0) { tabs.currentIndex = tab; return }
+        if (tab === -1) tabs.currentIndex = documentOpens.add_tab(paths[0], "trace")
         else window.openPath(paths[0])
+        // The review starts in this tab's document even if the user moves on.
         const traceDocument = window.documentAt(tabs.currentIndex)
-        Qt.callLater(() => {
-            if (!traceDocument) return
-            traceDocument.startReview(paths, reference, target, cutoff)
-        })
+        Qt.callLater(() => { if (traceDocument) traceDocument.startReview(paths, reference, target, cutoff) })
     }
 
     Connections {
@@ -514,7 +506,6 @@ ApplicationWindow {
         onTriggered: editor.openNew()
     }
     property var pendingSequence: null
-    property int nextSequence: 0
     AddSequenceDialog {
         id: newSequenceDialog
         controller: shell
@@ -532,9 +523,8 @@ ApplicationWindow {
             if (window.pendingSequence) return
             const error = shell.new_sequence_error(name, sequence)
             if (error.length) { validationMessage = error; return }
-            const path = "untitled:" + (++window.nextSequence) + "/" + name.trim() + ".gb"
-            const index = documentOpens.add_tab(path, "sequence")
-            window.pendingSequence = {path: path, name: name, sequence: sequence, previous: tabs.currentIndex, token: documentOpens.token_at(index)}
+            const index = documentOpens.new_sequence(name)
+            window.pendingSequence = {path: documentOpens.path_at(index), name: name, sequence: sequence, previous: tabs.currentIndex, token: documentOpens.token_at(index)}
             tabs.currentIndex = index
         }
     }
@@ -866,11 +856,11 @@ ApplicationWindow {
         required property string commandSuffix
         title: "Species delimitation"
         readonly property bool canRun: (window.alignmentOpen || window.treeOpen || window.delimitationOpen) && window.current !== null && !window.current.busy
-        RibbonButton { commandId: "species.gmyc-" + speciesMethods.commandSuffix; text: "GMYC"; iconName: "tree-gmyc"; enabled: speciesMethods.canRun; onInvoked: window.beginDelimitation("gmyc") }
-        RibbonButton { commandId: "species.asap-" + speciesMethods.commandSuffix; text: "ASAP"; iconName: "matrix-asap"; enabled: (window.alignmentOpen || (window.delimitationOpen && window.current && window.current.linked_alignment.length > 0)) && speciesMethods.canRun; onInvoked: window.beginDelimitation("asap") }
-        RibbonButton { commandId: "species.ptp-" + speciesMethods.commandSuffix; text: "PTP"; iconName: "phylogram-ptp"; enabled: speciesMethods.canRun; onInvoked: window.beginDelimitation("ptp") }
-        RibbonButton { commandId: "species.manual-" + speciesMethods.commandSuffix; text: "Manual"; iconName: "hypothesis-manual"; enabled: speciesMethods.canRun; onInvoked: window.beginDelimitation("manual") }
-        RibbonButton { commandId: "species.combine-" + speciesMethods.commandSuffix; text: "Combine"; iconName: "hypothesis-combine"; onInvoked: combinePicker.open() }
+        RibbonButton { commandId: "species.gmyc-" + speciesMethods.commandSuffix; iconName: "tree-gmyc"; enabled: speciesMethods.canRun; onInvoked: window.beginDelimitation("gmyc") }
+        RibbonButton { commandId: "species.asap-" + speciesMethods.commandSuffix; iconName: "matrix-asap"; enabled: (window.alignmentOpen || (window.delimitationOpen && window.current && window.current.linked_alignment.length > 0)) && speciesMethods.canRun; onInvoked: window.beginDelimitation("asap") }
+        RibbonButton { commandId: "species.ptp-" + speciesMethods.commandSuffix; iconName: "phylogram-ptp"; enabled: speciesMethods.canRun; onInvoked: window.beginDelimitation("ptp") }
+        RibbonButton { commandId: "species.manual-" + speciesMethods.commandSuffix; iconName: "hypothesis-manual"; enabled: speciesMethods.canRun; onInvoked: window.beginDelimitation("manual") }
+        RibbonButton { commandId: "species.combine-" + speciesMethods.commandSuffix; iconName: "hypothesis-combine"; onInvoked: combinePicker.open() }
     }
     component HelpGroup: RibbonHelpGroup {
         methodsAction: methodsCommand
@@ -1252,6 +1242,7 @@ ApplicationWindow {
                     spacing: 6 * window.ribbonSizeFactor
                     TreeRootingGroup {
                         controller: window.treeOpen ? window.current : null
+                        captions: commandList
                         treeOpen: window.treeOpen
                         customization: window.customization
                         Component.onCompleted: commands.forEach(command => window.registerRibbonCommand(command))
@@ -1271,6 +1262,7 @@ ApplicationWindow {
                     ToolSeparator { Layout.fillHeight: true }
                     TreeCladeGroup {
                         controller: window.treeOpen ? window.current : null
+                        captions: commandList
                         customization: window.customization
                         onAnnotateRequested: cladeEditor.openSelected()
                         Component.onCompleted: commands.forEach(command => window.registerRibbonCommand(command))
@@ -1307,6 +1299,7 @@ ApplicationWindow {
                     ToolSeparator { Layout.fillHeight: true }
                     TreeAlignmentGroup {
                         controller: window.treeOpen ? window.current : null
+                        captions: commandList
                         customization: window.customization
                         onLinkRequested: (target) => linkAlignmentFile.ask(target)
                         Component.onCompleted: commands.forEach(command => window.registerRibbonCommand(command))
@@ -1838,7 +1831,8 @@ ApplicationWindow {
         evidenceSave.request = {owner: owner, continuation: continuation}
         evidenceSave.owner = null
         evidenceSave.target = path || ""
-        if (!path && owner && owner.path.startsWith("untitled:")) evidenceSave.chooseDestination()
+        const step = owner ? documentOpens.save_step(documentOpens.target_index(owner.token, owner.path), false) : ""
+        if (!path && step === "destination") evidenceSave.chooseDestination()
         else evidenceSave.inspect(true)
     }
     AutoSaveEvidence {
@@ -1865,7 +1859,8 @@ ApplicationWindow {
     // Save the active tab under a new name; the tab then shows the new file.
     function saveAs(owner = documentTarget(tabs.currentIndex), continuation = null) {
         if (!owner) return
-        if (owner.controller === window.current && window.traceOpen) { window.traceDocument.saveReview(); return }
+        const index = documentOpens.target_index(owner.token, owner.path)
+        if (documentOpens.save_step(index, true) === "trace") { window.documentAt(index).saveReview(); return }
         saveDialog.target = owner
         saveDialog.continuation = continuation
         saveDialog.selectedFile = shell.local_file_url(owner.path.startsWith("untitled:") ? window.fileName(owner.path) : owner.path)
@@ -2162,6 +2157,7 @@ ApplicationWindow {
                                 onCopyText: (text) => clipboard.put(text)
                                 onRedraft: (paths, reference, target, cutoff) => window.startTraceReview(paths, reference, target, cutoff, true)
                                 onDirtyChanged: documentOpens.set_dirty(index, dirty)
+                                onWorkingChanged: documentOpens.set_working(index, working)
                             }
                         }
                         DelegateChoice {
@@ -2294,7 +2290,7 @@ ApplicationWindow {
     BlastDialog { id: blastDialog; backend: blastBackend; onCopyText: text => clipboard.put(text) }
     function beginBlast(mode, feature) {
         const controller = window.current
-        if (!window.alignmentOpen && mode === "whole" && controller.has_selection()) mode = "selection"
+        mode = commandList.blast_source(window.alignmentOpen, mode, !window.alignmentOpen && controller.has_selection())
         const annotation = window.alignmentOpen ? -1 : (feature === undefined ? controller.selected_feature() : feature)
         blastDialog.show(source => controller.blast_queries(source, annotation), mode, window.alignmentOpen)
     }
@@ -2521,6 +2517,7 @@ ApplicationWindow {
     }
     AppContentDialog {
         id: svgOptions
+        objectName: "figureExportOptions"
         initialFocusItem: svgScope
         property string format: "svg"
         property bool alignment: false

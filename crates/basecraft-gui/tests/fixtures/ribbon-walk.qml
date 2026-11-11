@@ -85,6 +85,15 @@ Main {
             check(find(page, i => i.commandId === id), "Export lost " + id)
         check(named("ribbonFigureExport"), "utility figure export missing")
     }
+    function command(id) {
+        const found = applicationCommands.find(c => c.commandId === id)
+        check(found, "no command " + id)
+        return found
+    }
+    function dialog(name) {
+        for (const item of walk.contentData) if (item && item.objectName === name) return item
+        fail("no dialog " + name)
+    }
     function hint(key) {
         const target = ribbonNavigation.targets.find(t => t.key === key)
         check(target, "no key hint " + key + " at level " + ribbonNavigation.level)
@@ -117,6 +126,55 @@ Main {
                 check(ribbonNavigation.explanation.length > 0, "disabled command has no explanation")
             }
             ribbonNavigation.stop(false)
+        })
+        // Sequence commands: defaults, a remapped shortcut, document context.
+        list.push(() => {
+            show(0)
+            check(command("file.new-sequence").shortcut === "Ctrl+N", "new sequence lost Ctrl+N")
+            const annotate = command("ribbon.annotate-the-selection")
+            check(annotate.shortcut === "Ctrl+Shift+N" && annotate.enabled, "annotate not ready on a sequence")
+            persistPreference("shortcut", {id: "ribbon.annotate-the-selection", value: "Ctrl+J"})
+        })
+        list.push(() => {
+            check(command("ribbon.annotate-the-selection").shortcut === "Ctrl+J", "remapped shortcut not applied")
+            persistPreference("shortcut", {id: "ribbon.annotate-the-selection", value: null})
+            show(1)
+        })
+        list.push(() => {
+            const annotate = command("ribbon.annotate-the-selection")
+            check(annotate.shortcut === "Ctrl+Shift+N" && !annotate.enabled, "annotate active outside sequences")
+            const methods = command("provenance.methods")
+            check(methods.enabled && methods.text === "Methods", "methods unavailable with a document")
+            methods.trigger()
+        })
+        list.push(() => {
+            const record = dialog("documentRecordDialog")
+            check(record.opened && record.page === 1 && !record.savedRevision, "methods did not open the current record")
+            record.close()
+            // A missing project folder changes nothing; an existing one is chosen.
+            selectProject(folder + "/missing")
+            check(recentProjectsError.includes("/missing") && metadataProject !== folder + "/missing", "missing project accepted")
+            selectProject(folder)
+            check(metadataProject === folder && recentProjects.includes(folder) && recentProjectsError === "", "project not chosen")
+        })
+        // Figure export options: PNG width, selection for alignments only.
+        list.push(() => { show(1); exportSvg("png") })
+        list.push(() => {
+            const options = dialog("figureExportOptions")
+            const width = find(options.contentItem, i => i.objectName === "pngWidth")
+            const selection = find(options.contentItem, i => i.objectName === "svgSelection")
+            check(options.opened && width.visible && width.value === 1500, "PNG export lost its width")
+            check(selection.visible && !selection.checked, "alignment export lost the selection option")
+            options.reject()
+            show(2)
+            exportSvg("svg")
+        })
+        list.push(() => {
+            const options = dialog("figureExportOptions")
+            check(options.opened, "SVG export options did not open")
+            check(!find(options.contentItem, i => i.objectName === "pngWidth").visible, "SVG export shows a PNG width")
+            check(!find(options.contentItem, i => i.objectName === "svgSelection").visible, "tree export offers selection")
+            options.reject()
         })
         list.push(() => { console.log("RIBBON_WALK passed"); Qt.quit() })
         return list

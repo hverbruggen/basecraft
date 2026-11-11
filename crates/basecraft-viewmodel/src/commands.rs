@@ -19,6 +19,46 @@ pub struct Command {
 
 pub static COMMANDS: &[Command] = &[
     Command {
+        id: "species.combine-",
+        caption: "Combine",
+        tip: "",
+        key: "",
+        scope: "",
+        icon: "",
+    },
+    Command {
+        id: "species.manual-",
+        caption: "Manual",
+        tip: "",
+        key: "",
+        scope: "",
+        icon: "",
+    },
+    Command {
+        id: "species.ptp-",
+        caption: "PTP",
+        tip: "",
+        key: "",
+        scope: "",
+        icon: "",
+    },
+    Command {
+        id: "species.asap-",
+        caption: "ASAP",
+        tip: "",
+        key: "",
+        scope: "",
+        icon: "",
+    },
+    Command {
+        id: "species.gmyc-",
+        caption: "GMYC",
+        tip: "",
+        key: "",
+        scope: "",
+        icon: "",
+    },
+    Command {
         id: "alignment.blast",
         caption: "BLAST",
         tip: "Submit selected or all FASTA rows to NCBI",
@@ -284,8 +324,8 @@ pub static COMMANDS: &[Command] = &[
     },
     Command {
         id: "ribbon.associate-an-imported-tree-with-an-alignment-after-validating",
-        caption: "",
-        tip: "",
+        caption: "Link",
+        tip: "Choose an alignment for viewing and selection. Identifiers are validated; the original analysis source is retained.",
         key: "LI",
         scope: "Tree",
         icon: "",
@@ -388,8 +428,8 @@ pub static COMMANDS: &[Command] = &[
     },
     Command {
         id: "ribbon.extract-aligned-rows-without-realigning-ctrl-click-to-select",
-        caption: "",
-        tip: "",
+        caption: "Clade",
+        tip: "Create clade alignment from selected clades without realigning; Ctrl-click to select multiple clades",
         key: "C",
         scope: "Tree",
         icon: "",
@@ -444,8 +484,8 @@ pub static COMMANDS: &[Command] = &[
     },
     Command {
         id: "ribbon.name-the-selected-clade-with-a-bar-or-a",
-        caption: "",
-        tip: "",
+        caption: "Annotate",
+        tip: "Name the selected clade, with a bar or a coloured field",
         key: "AA",
         scope: "Tree",
         icon: "",
@@ -508,8 +548,8 @@ pub static COMMANDS: &[Command] = &[
     },
     Command {
         id: "ribbon.reverse-the-order-of-the-branches-in-the-selected",
-        caption: "",
-        tip: "",
+        caption: "Flip",
+        tip: "Reverse the order of the branches in the selected subtree (for a tip, its parent's)",
         key: "F",
         scope: "Tree",
         icon: "",
@@ -524,8 +564,8 @@ pub static COMMANDS: &[Command] = &[
     },
     Command {
         id: "ribbon.root-the-tree-on-the-branch-above-the-selection",
-        caption: "",
-        tip: "",
+        caption: "Reroot",
+        tip: "Root the tree on the branch above the selection",
         key: "R",
         scope: "Tree",
         icon: "",
@@ -892,16 +932,16 @@ pub static COMMANDS: &[Command] = &[
     },
     Command {
         id: "tree.midpoint_root",
-        caption: "",
-        tip: "",
+        caption: "Midpoint",
+        tip: "Root halfway along a longest tip-to-tip branch-length path over the whole tree. Requires complete nonnegative lengths and unique tip names; does not infer dates or make the tree ultrametric.",
         key: "MM",
         scope: "Tree",
         icon: "",
     },
     Command {
         id: "tree.minimum_variance_root",
-        caption: "",
-        tip: "",
+        caption: "MRTTV",
+        tip: "Minimize unweighted root-to-tip path length variance over ALL tips, globally across branch interiors and nodes. Requires complete nonnegative lengths and unique tip names; does not infer dates or make the tree ultrametric.",
         key: "MR",
         scope: "Tree",
         icon: "",
@@ -960,12 +1000,25 @@ fn find(id: &str) -> Option<&'static Command> {
     COMMANDS.iter().find(|command| command.id == id)
 }
 
+/// A field of command `id`; an entry whose id ends in "-" supplies it for
+/// every id it begins, such as the species methods offered per document kind.
+fn field(id: &str, get: fn(&Command) -> &'static str) -> &'static str {
+    let own = find(id).map_or("", get);
+    if !own.is_empty() {
+        return own;
+    }
+    COMMANDS
+        .iter()
+        .find(|command| command.id.ends_with('-') && id.starts_with(command.id))
+        .map_or("", get)
+}
+
 pub fn caption(id: &str) -> &'static str {
-    find(id).map_or("", |command| command.caption)
+    field(id, |command| command.caption)
 }
 
 pub fn tip(id: &str) -> &'static str {
-    find(id).map_or("", |command| command.tip)
+    field(id, |command| command.tip)
 }
 
 pub fn key(id: &str) -> &'static str {
@@ -1154,6 +1207,16 @@ pub fn disabled_reason(id: &str, context: &Context) -> &'static str {
     "Open a compatible document to use this command"
 }
 
+/// What a BLAST search starts from: asking for the whole sequence while a
+/// region is selected searches the selection; alignments keep their choice.
+pub fn blast_source(alignment: bool, asked: &str, has_selection: bool) -> &str {
+    if !alignment && asked == "whole" && has_selection {
+        "selection"
+    } else {
+        asked
+    }
+}
+
 /// The ribbon tabs for the active document's kind ("" with none open).
 pub fn ribbon_tabs(kind: &str) -> Vec<&'static str> {
     let middle: &[&'static str] = match kind {
@@ -1201,6 +1264,8 @@ mod tests {
             ("Save", "Save the current file or trace review")
         );
         assert_eq!(key("no.such.command"), "");
+        assert_eq!(caption("species.gmyc-workspace"), "GMYC");
+        assert_eq!(caption("tree.midpoint_root"), "Midpoint");
     }
 
     #[test]
@@ -1285,6 +1350,15 @@ mod tests {
             disabled_reason("file.export", &raw_trace),
             "Open a Sanger review to edit or export its reviewed consensus"
         );
+    }
+
+    #[test]
+    fn blast_searches_a_selection_instead_of_the_whole_sequence() {
+        assert_eq!(blast_source(false, "whole", true), "selection");
+        assert_eq!(blast_source(false, "whole", false), "whole");
+        assert_eq!(blast_source(false, "annotation", true), "annotation");
+        assert_eq!(blast_source(true, "all", true), "all");
+        assert_eq!(blast_source(true, "whole", true), "whole");
     }
 
     #[test]

@@ -6,16 +6,18 @@ RibbonGroup {
     property var controller: null
     property bool treeOpen: false
     property var customization: ({shortcuts: {}, ribbon_hidden: []})
+    // The window's command list (AppCommands): captions and tips.
+    property var captions: null
     readonly property var commands: [manual.commandAction, midpoint.commandAction, variance.commandAction]
     AppCommandButton {
         id: manual
         objectName: "manualRoot"
         commandId: "ribbon.root-the-tree-on-the-branch-above-the-selection"
         customization: group.customization
-        text: "Reroot"
+        text: group.captions ? group.captions.caption(commandId) : ""
         iconName: "left"
         symbolSize: 10.4
-        tip: "Root the tree on the branch above the selection"
+        tip: group.captions ? group.captions.tip(commandId) : ""
         disabledReason: !group.treeOpen || !group.controller ? "Open a tree to change its root" : group.controller.busy ? "Wait for the tree operation to finish" : commandId === "ribbon.root-the-tree-on-the-branch-above-the-selection" ? "Select a clade or branch to reroot the tree" : "Use a tree with complete nonnegative branch lengths and unique tip names for automatic rooting"
         enabled: group.treeOpen && group.controller !== null && group.controller.has_selection === true
         onInvoked: group.controller.reroot()
@@ -25,9 +27,9 @@ RibbonGroup {
         objectName: "midpointRoot"
         commandId: "tree.midpoint_root"
         customization: group.customization
-        text: "Midpoint"
+        text: group.captions ? group.captions.caption(commandId) : ""
         iconName: "tree-midpoint"
-        tip: "Root halfway along a longest tip-to-tip branch-length path over the whole tree. Requires complete nonnegative lengths and unique tip names; does not infer dates or make the tree ultrametric."
+        tip: group.captions ? group.captions.tip(commandId) : ""
         disabledReason: !group.treeOpen || !group.controller ? "Open a tree to change its root" : group.controller.busy ? "Wait for the tree operation to finish" : commandId === "ribbon.root-the-tree-on-the-branch-above-the-selection" ? "Select a clade or branch to reroot the tree" : "Use a tree with complete nonnegative branch lengths and unique tip names for automatic rooting"
         enabled: group.treeOpen && group.controller !== null && group.controller.can_auto_root === true && !group.controller.busy
         onInvoked: group.controller.midpoint_root()
@@ -37,9 +39,9 @@ RibbonGroup {
         objectName: "minimumVarianceRoot"
         commandId: "tree.minimum_variance_root"
         customization: group.customization
-        text: "MRTTV"
+        text: group.captions ? group.captions.caption(commandId) : ""
         iconName: "tree-variance"
-        tip: "Minimize unweighted root-to-tip path length variance over ALL tips, globally across branch interiors and nodes. Requires complete nonnegative lengths and unique tip names; does not infer dates or make the tree ultrametric."
+        tip: group.captions ? group.captions.tip(commandId) : ""
         disabledReason: !group.treeOpen || !group.controller ? "Open a tree to change its root" : group.controller.busy ? "Wait for the tree operation to finish" : commandId === "ribbon.root-the-tree-on-the-branch-above-the-selection" ? "Select a clade or branch to reroot the tree" : "Use a tree with complete nonnegative branch lengths and unique tip names for automatic rooting"
         enabled: group.treeOpen && group.controller !== null && group.controller.can_auto_root === true && !group.controller.busy
         onInvoked: group.controller.minimum_variance_root()

@@ -202,44 +202,6 @@ Item {
             verify(!scene.working)
             scene.destroy()
         }
-        function test_deferred_start_keeps_document_identity() {
-            const request = new XMLHttpRequest()
-            request.open("GET", Qt.resolvedUrl("../../qml/Main.qml"), false)
-            request.send()
-            const originalSource = host.source
-            host.source = request.responseText
-            const routing = host.block("function startTraceReview(")
-            host.source = originalSource
-            const scene = Qt.createQmlObject(`
-                import QtQuick
-                Item {
-                    id: window
-                    property string ribbonTabName: "File"
-                    property alias selectedIndex: tabs.currentIndex
-                    property alias firstStarts: first.starts
-                    property alias secondStarts: second.starts
-                    QtObject { id: tabs; property int currentIndex: 0 }
-                    QtObject { id: documentOpens; property int count: 2; function path_at(i) { return i === 0 ? "one" : "two" } function add_tab(path, kind) { return 1 } }
-                    function documentAt(i) { return i === 0 ? first : second }
-                    QtObject {
-                        id: first
-                        property string kind: "trace"
-                        property bool working: false
-                        property var controller: ({dirty: false})
-                        property int starts: 0
-                        function startReview(paths, reference, target, cutoff) { starts++ }
-                    }
-                    QtObject { id: second; property int starts: 0; function startReview(paths, reference, target, cutoff) { starts++ } }
-                    function openPath(path) { tabs.currentIndex = 0 }
-                    ${routing}
-                }`, host, Qt.resolvedUrl("traceStartHarness.qml"))
-            scene.startTraceReview(["one"], "", null)
-            scene.selectedIndex = 1 // User switches tabs before deferred submission.
-            tryCompare(scene, "firstStarts", 1)
-            compare(scene.secondStarts, 0)
-            compare(scene.selectedIndex, 1)
-            scene.destroy()
-        }
         function test_primer_payload_is_only_applied_to_pending_search() {
             const scene = harness()
             scene.reviewStageFinished("primers", true, "stale")

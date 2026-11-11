@@ -56,37 +56,5 @@ Item {
                 compare(canvas.forwardedKey, 0)
             } finally { canvas.destroy() }
         }
-        function test_blast_defaults_selection_only_for_whole_sequence_entry() {
-            const beginBlast = host.productionBlock("Main.qml", "function beginBlast(")
-            const window = Qt.createQmlObject(`
-                import QtQuick
-                Item {
-                    id: window
-                    property bool alignmentOpen: false
-                    property bool selection: true
-                    property string shownMode: ""
-                    property var current: controller
-                    QtObject {
-                        id: controller
-                        function has_selection() { return window.selection }
-                        function selected_feature() { return 1 }
-                    }
-                    QtObject {
-                        id: blastDialog
-                        function show(provider, mode, alignment) { window.shownMode = mode }
-                    }
-                    ${beginBlast}
-                }
-            `, host)
-            try {
-                window.beginBlast("whole"); compare(window.shownMode, "selection")
-                window.selection = false
-                window.beginBlast("whole"); compare(window.shownMode, "whole")
-                window.selection = true
-                window.beginBlast("annotation", 3); compare(window.shownMode, "annotation")
-                window.alignmentOpen = true
-                window.beginBlast("all"); compare(window.shownMode, "all")
-            } finally { window.destroy() }
-        }
     }
 }

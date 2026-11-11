@@ -31,6 +31,13 @@ pub mod qobject {
         fn ribbon_tabs(self: &AppCommands, kind: &QString) -> QStringList;
         #[qinvokable]
         fn ribbon_tab(self: &AppCommands, kind: &QString, chosen: &QString) -> QString;
+        #[qinvokable]
+        fn blast_source(
+            self: &AppCommands,
+            alignment: bool,
+            asked: &QString,
+            has_selection: bool,
+        ) -> QString;
     }
 }
 
@@ -63,6 +70,13 @@ impl qobject::AppCommands {
             tabs.append(QString::from(tab));
         }
         tabs
+    }
+    fn blast_source(&self, alignment: bool, asked: &QString, has_selection: bool) -> QString {
+        QString::from(commands::blast_source(
+            alignment,
+            &asked.to_string(),
+            has_selection,
+        ))
     }
     fn ribbon_tab(&self, kind: &QString, chosen: &QString) -> QString {
         QString::from(commands::ribbon_tab(&kind.to_string(), &chosen.to_string()))

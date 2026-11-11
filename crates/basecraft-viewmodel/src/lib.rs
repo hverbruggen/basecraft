@@ -30,4 +30,5 @@ pub mod accessible;
 
 pub mod commands;
 pub mod overview;
+pub mod species_analysis;
 pub mod workspace;

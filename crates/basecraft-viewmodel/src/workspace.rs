@@ -45,6 +45,8 @@ pub struct Document {
     pub path: String,
     pub kind: Kind,
     pub dirty: bool,
+    /// A trace review busy preparing or calling.
+    pub working: bool,
     /// A species workspace created for an analysis; removed on close if the
     /// analysis left it empty.
     pub draft: bool,
@@ -58,7 +60,7 @@ pub struct Target {
     pub path: String,
 }
 
-/// Opening a path that does not open on a worker.
+/// Opening a path.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Open {
     /// The specimen table or a submission: shown in its own dialog.
@@ -67,6 +69,29 @@ pub enum Open {
     Switch(usize),
     /// Needs a new tab.
     New,
+}
+
+/// Where a new trace review of a read goes.
+#[derive(Debug, PartialEq, Eq)]
+pub enum TraceReview {
+    /// That read's review is already working in this tab.
+    Switch(usize),
+    /// A tab holds unsaved changes to that read (or a new tab was asked
+    /// for): start in a new tab and keep the old one.
+    NewTab,
+    /// Open the read the usual way, then start the review there.
+    Open,
+}
+
+/// What saving a tab does.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Save {
+    /// Ask where to save first (Save As, or a never-saved document).
+    Destination,
+    /// Write to the tab's file.
+    Write,
+    /// A trace review saves through its own review dialog.
+    TraceReview,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -131,6 +156,8 @@ struct Request {
 #[derive(Default)]
 pub struct Workspace {
     documents: Vec<Document>,
+    /// Numbers new, never-saved sequences.
+    untitled: u64,
     /// The document the species dialog was opened for.
     source: Option<Target>,
     request: Option<Request>,
@@ -171,6 +198,7 @@ impl Workspace {
             path,
             kind,
             dirty: false,
+            working: false,
             draft: false,
         });
         self.documents.len() - 1
@@ -203,6 +231,33 @@ impl Workspace {
         }
     }
 
+    pub fn set_working(&mut self, index: usize, working: bool) {
+        if let Some(d) = self.documents.get_mut(index) {
+            d.working = working;
+        }
+    }
+
+    /// Where a review of the read at `path` starts.
+    pub fn trace_review(&self, path: &str, new_tab: bool) -> TraceReview {
+        let mut keep = new_tab;
+        for (index, d) in self
+            .documents
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| d.path == path)
+        {
+            if d.kind == Kind::Trace && d.working {
+                return TraceReview::Switch(index);
+            }
+            keep |= d.dirty;
+        }
+        if keep {
+            TraceReview::NewTab
+        } else {
+            TraceReview::Open
+        }
+    }
+
     /// The tab now shows `path` (Save As, or a review saved to a file).
     pub fn set_path(&mut self, token: u64, path: String) -> Option<usize> {
         let index = self.index(token)?;
@@ -210,13 +265,33 @@ impl Workspace {
         Some(index)
     }
 
-    /// Opening a path the worker does not open. `kind` is what the file
-    /// holds: "metadata", "submission", "trace", "delimitation" or "sequence".
+    /// Opening `path`. `kind` is what the file holds: "metadata",
+    /// "submission", "trace", "delimitation", "sequence", or "canvas" for a
+    /// file opened on a worker. A path open in a tab, also one still being
+    /// opened, switches to that tab.
     pub fn open(&self, path: &str, kind: &str) -> Open {
         if kind == "metadata" || kind == "submission" {
             return Open::Project;
         }
         self.by_path(path).map_or(Open::New, Open::Switch)
+    }
+
+    /// Saving the tab at `index`; `choose_name` for Save As.
+    pub fn save(&self, index: usize, choose_name: bool) -> Option<Save> {
+        let d = self.documents.get(index)?;
+        Some(if d.kind == Kind::Trace && choose_name {
+            Save::TraceReview
+        } else if choose_name || d.path.starts_with("untitled:") {
+            Save::Destination
+        } else {
+            Save::Write
+        })
+    }
+
+    /// The path of a new, never-saved sequence named `name`.
+    pub fn untitled_path(&mut self, name: &str) -> String {
+        self.untitled += 1;
+        format!("untitled:{}/{}.gb", self.untitled, name.trim())
     }
 
     pub fn close(&self, index: usize) -> Option<Close> {
@@ -378,6 +453,21 @@ impl Workspace {
     }
 }
 
+/// Whether the species dialog may open for method `method` on the active
+/// document of `kind`: an idle alignment, tree or species workspace; ASAP
+/// needs an alignment, open or linked to the workspace.
+pub fn species_request_allowed(
+    kind: &str,
+    busy: bool,
+    method: &str,
+    linked_alignment: bool,
+) -> bool {
+    let fits = matches!(kind, "alignment" | "tree" | "delimitation");
+    let asap =
+        method != "asap" || kind == "alignment" || (kind == "delimitation" && linked_alignment);
+    fits && !busy && asap
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -414,6 +504,64 @@ mod tests {
         assert_eq!(w.open("/b.spart", "delimitation"), Open::New);
         assert_eq!(w.open("/m.csv", "metadata"), Open::Project);
         assert_eq!(w.open("/s.json", "submission"), Open::Project);
+    }
+
+    #[test]
+    fn a_path_opening_or_open_on_a_worker_switches_to_its_tab() {
+        let mut w = Workspace::default();
+        assert_eq!(w.open("/a.afa", "canvas"), Open::New);
+        // Requested again while its worker still runs.
+        w.add(7, "/a.afa".into(), Kind::Canvas);
+        assert_eq!(w.open("/a.afa", "canvas"), Open::Switch(0));
+        // Saved under another name after the worker finished.
+        w.set_path(7, "/b.afa".into());
+        assert_eq!(w.open("/b.afa", "canvas"), Open::Switch(0));
+        assert_eq!(w.open("/a.afa", "canvas"), Open::New);
+    }
+
+    #[test]
+    fn saving_asks_for_a_name_when_needed_and_traces_use_their_review() {
+        let mut w = workspace(&[("/a.gb", Kind::Canvas, true), ("/r.ab1", Kind::Trace, true)]);
+        let untitled = w.untitled_path(" ITS ");
+        assert_eq!(untitled, "untitled:1/ITS.gb");
+        assert_eq!(w.untitled_path("rbcL"), "untitled:2/rbcL.gb");
+        w.add(3, untitled, Kind::Sequence);
+        assert_eq!(w.save(0, false), Some(Save::Write));
+        assert_eq!(w.save(0, true), Some(Save::Destination));
+        assert_eq!(w.save(1, true), Some(Save::TraceReview));
+        assert_eq!(w.save(1, false), Some(Save::Write));
+        assert_eq!(w.save(2, false), Some(Save::Destination));
+        assert_eq!(w.save(9, false), None);
+    }
+
+    #[test]
+    fn a_trace_review_joins_a_working_tab_and_never_replaces_unsaved_work() {
+        let mut w = workspace(&[
+            ("/r.ab1", Kind::Trace, false),
+            ("/o.ab1", Kind::Trace, true),
+        ]);
+        assert_eq!(w.trace_review("/r.ab1", false), TraceReview::Open);
+        assert_eq!(w.trace_review("/r.ab1", true), TraceReview::NewTab);
+        assert_eq!(w.trace_review("/o.ab1", false), TraceReview::NewTab);
+        assert_eq!(w.trace_review("/new.ab1", false), TraceReview::Open);
+        w.set_working(0, true);
+        assert_eq!(w.trace_review("/r.ab1", true), TraceReview::Switch(0));
+    }
+
+    #[test]
+    fn species_requests_need_an_idle_alignment_tree_or_workspace() {
+        assert!(species_request_allowed("alignment", false, "asap", false));
+        assert!(species_request_allowed("tree", false, "gmyc", false));
+        assert!(!species_request_allowed("tree", false, "asap", false));
+        assert!(species_request_allowed("delimitation", false, "asap", true));
+        assert!(!species_request_allowed(
+            "delimitation",
+            false,
+            "asap",
+            false
+        ));
+        assert!(!species_request_allowed("alignment", true, "ptp", false));
+        assert!(!species_request_allowed("sequence", false, "ptp", false));
     }
 
     #[test]

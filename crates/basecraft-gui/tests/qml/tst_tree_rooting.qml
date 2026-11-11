@@ -3,6 +3,12 @@ import QtTest
 import "../../qml"
 
 Item {
+    QtObject {
+        id: captionSource
+        readonly property var captions: ({"ribbon.root-the-tree-on-the-branch-above-the-selection": "Reroot", "tree.midpoint_root": "Midpoint", "tree.minimum_variance_root": "MRTTV"})
+        function caption(id) { return captions[id] || "" }
+        function tip(id) { return "" }
+    }
     id: host
     width: 600; height: 140
     property real sizeFactor: 1
@@ -20,7 +26,7 @@ Item {
         width: host.width
         height: implicitHeight
         ribbonSizeFactor: host.sizeFactor
-        RibbonPage { TreeRootingGroup { id: group; controller: controller; treeOpen: true } }
+        RibbonPage { TreeRootingGroup { id: group; controller: controller; treeOpen: true; captions: captionSource } }
     }
     TestCase {
         name: "TreeRooting"

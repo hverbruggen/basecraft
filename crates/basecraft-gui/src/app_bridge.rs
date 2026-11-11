@@ -4,7 +4,7 @@
 //! sequence, alignment or tree on a worker into a new tab.
 use crate::document_open::{Candidate, OpenError, Opens, Phase};
 use basecraft_ops::files::Kind;
-use basecraft_viewmodel::workspace::{self, Close, Delimit, Open, Quit, Target, Workspace};
+use basecraft_viewmodel::workspace::{self, Close, Delimit, Open, Quit, Save, Target, Workspace};
 use cxx_qt::{CxxQtType, Threading, casting::Downcast};
 use cxx_qt_lib::{
     QByteArray, QHash, QHashPair_i32_QByteArray, QList, QModelIndex, QString, QVariant,
@@ -89,6 +89,22 @@ pub mod qobject {
         ) -> QString;
         #[qinvokable]
         fn add_tab(self: Pin<&mut DocumentOpens>, path: &QString, kind: &QString) -> i32;
+        #[qinvokable]
+        fn save_step(self: &DocumentOpens, index: i32, choose_name: bool) -> QString;
+        #[qinvokable]
+        fn species_request_allowed(
+            self: &DocumentOpens,
+            kind: &QString,
+            busy: bool,
+            method: &QString,
+            linked: bool,
+        ) -> bool;
+        #[qinvokable]
+        fn new_sequence(self: Pin<&mut DocumentOpens>, name: &QString) -> i32;
+        #[qinvokable]
+        fn set_working(self: Pin<&mut DocumentOpens>, index: i32, working: bool);
+        #[qinvokable]
+        fn trace_review(self: &DocumentOpens, path: &QString, new_tab: bool) -> i32;
         #[qinvokable]
         fn remove_tab(self: Pin<&mut DocumentOpens>, index: i32);
         #[qinvokable]
@@ -294,36 +310,88 @@ impl qobject::DocumentOpens {
     /// tab for the views that open themselves, or name the project dialog.
     fn open(mut self: Pin<&mut Self>, path: &QString, context: &QString, review: bool) -> QString {
         let text = path.to_string();
-        if crate::document_open::eligible(&text) {
-            let fresh = self
-                .as_mut()
-                .rust_mut()
-                .opens
-                .requests
-                .iter()
-                .all(|(_, r)| r.path != text);
-            let token = self.as_mut().request(path, context, review);
-            let Some(id) = self::token(&token) else {
-                return json(&serde_json::json!({"error": "Could not allocate an open request"}));
+        let worker = crate::document_open::eligible(&text);
+        let kind = if worker {
+            "canvas"
+        } else {
+            crate::bridge::file_kind(std::path::Path::new(&text))
+        };
+        let decision = self.rust().documents.open(&text, kind);
+        if !worker {
+            return match decision {
+                Open::Project => json(&serde_json::json!({"project": kind})),
+                Open::Switch(index) => {
+                    json(&serde_json::json!({"switch": index, "review": review}))
+                }
+                Open::New => {
+                    let index = self.as_mut().add_tab(path, &QString::from(kind));
+                    json(&serde_json::json!({"new": index, "review": review}))
+                }
             };
-            if !fresh && let Some(index) = self.rust().documents.index(id) {
-                return json(
-                    &serde_json::json!({"switch": index, "token": token.to_string(), "activate": true}),
-                );
-            }
-            let index = self.as_mut().insert_row(id, text, workspace::Kind::Canvas);
-            self.as_mut().start(&token);
-            return json(&serde_json::json!({"new": index}));
         }
-        let kind = crate::bridge::file_kind(std::path::Path::new(&text));
-        match self.rust().documents.open(&text, kind) {
-            Open::Project => json(&serde_json::json!({"project": kind})),
-            Open::Switch(index) => json(&serde_json::json!({"switch": index, "review": review})),
-            Open::New => {
-                let index = self.as_mut().add_tab(path, &QString::from(kind));
-                json(&serde_json::json!({"new": index, "review": review}))
+        // The worker's request carries the review flag and focus either way.
+        let token = self.as_mut().request(path, context, review);
+        let Some(id) = self::token(&token) else {
+            return json(&serde_json::json!({"error": "Could not allocate an open request"}));
+        };
+        match decision {
+            Open::Switch(index) => json(
+                &serde_json::json!({"switch": index, "token": token.to_string(), "activate": true}),
+            ),
+            Open::New | Open::Project => {
+                let index = self.as_mut().insert_row(id, text, workspace::Kind::Canvas);
+                self.as_mut().start(&token);
+                json(&serde_json::json!({"new": index}))
             }
         }
+    }
+    /// "destination" (ask for a file first), "write" or "trace" (save the
+    /// review through its own dialog) for saving tab `index`.
+    fn save_step(&self, index: i32, choose_name: bool) -> QString {
+        QString::from(
+            match row(index).and_then(|i| self.rust().documents.save(i, choose_name)) {
+                Some(Save::Destination) => "destination",
+                Some(Save::Write) => "write",
+                Some(Save::TraceReview) => "trace",
+                None => "",
+            },
+        )
+    }
+    fn species_request_allowed(
+        &self,
+        kind: &QString,
+        busy: bool,
+        method: &QString,
+        linked: bool,
+    ) -> bool {
+        workspace::species_request_allowed(&kind.to_string(), busy, &method.to_string(), linked)
+    }
+    fn set_working(mut self: Pin<&mut Self>, index: i32, working: bool) {
+        if let Some(i) = row(index) {
+            self.as_mut().rust_mut().documents.set_working(i, working);
+        }
+    }
+    /// The tab to switch to (its index), -1 to start in a new tab, or -2 to
+    /// open the read the usual way.
+    fn trace_review(&self, path: &QString, new_tab: bool) -> i32 {
+        match self
+            .rust()
+            .documents
+            .trace_review(&path.to_string(), new_tab)
+        {
+            workspace::TraceReview::Switch(index) => as_row(index),
+            workspace::TraceReview::NewTab => -1,
+            workspace::TraceReview::Open => -2,
+        }
+    }
+    /// A tab for a new, never-saved sequence called `name`; returns its index.
+    fn new_sequence(mut self: Pin<&mut Self>, name: &QString) -> i32 {
+        let path = self
+            .as_mut()
+            .rust_mut()
+            .documents
+            .untitled_path(&name.to_string());
+        self.add_tab(&QString::from(&path), &QString::from("sequence"))
     }
     /// A tab whose view opens its own file; returns its index, or -1.
     fn add_tab(mut self: Pin<&mut Self>, path: &QString, kind: &QString) -> i32 {
