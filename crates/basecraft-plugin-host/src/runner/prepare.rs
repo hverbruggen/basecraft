@@ -328,7 +328,7 @@ fn prepare_target(
 
 /// The request as the run folder records it: file inputs relative to the
 /// folder, so the folder and its project can move together.
-fn recorded_request(
+fn normalised_request(
     request: &OperationRequest,
     project: &Path,
     run: &Path,
@@ -345,6 +345,35 @@ fn recorded_request(
         }
     }
     Ok(recorded)
+}
+
+/// The request a run folder recorded, with its file inputs resolved against
+/// the folder wherever it now is, ready to run again.
+pub fn recorded_request(run: &Path) -> Result<OperationRequest> {
+    let mut request: OperationRequest = serde_json::from_slice(
+        &basecraft_ops::records::read_record(&run.join("request.json"))?,
+    )?;
+    for reference in request
+        .inputs
+        .values_mut()
+        .flatten()
+        .chain(&mut request.target)
+    {
+        if let InputReference::File { path } = reference {
+            let mut resolved = PathBuf::new();
+            for part in run.join(&*path).components() {
+                match part {
+                    std::path::Component::ParentDir => {
+                        resolved.pop();
+                    }
+                    std::path::Component::CurDir => {}
+                    part => resolved.push(part),
+                }
+            }
+            *path = resolved.display().to_string();
+        }
+    }
+    Ok(request)
 }
 
 /// Where the host finds the user's contact email for services that ask for one.
@@ -485,7 +514,7 @@ impl PreparedOperation {
         input_evidence::write_json(&run.artifact("descriptor.json")?, &operation.descriptor)?;
         input_evidence::write_json(
             &run.artifact("request.json")?,
-            &recorded_request(&request, &policy.root, &root)?,
+            &normalised_request(&request, &policy.root, &root)?,
         )?;
         let mut prepared = Self {
             lifecycle,

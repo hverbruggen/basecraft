@@ -28,10 +28,18 @@ fn plugin() -> Option<PluginProcess> {
 
 /// An empty run for sequence operations, which allocate no files.
 fn context() -> basecraft_protocol::operation::InvocationContext {
-    serde_json::from_value(json!({"schema":2,"operation":"test","run_id":"test",
-        "run_root":std::env::temp_dir(),"inputs":{},"outputs":{},"cpu_threads":1,
-        "cancel_file":"cancel","progress_file":"progress"}))
-    .unwrap()
+    basecraft_protocol::operation::InvocationContext {
+        schema: 2,
+        operation: "test".into(),
+        run_id: "test".into(),
+        run_root: std::env::temp_dir().display().to_string(),
+        inputs: std::collections::BTreeMap::new(),
+        outputs: std::collections::BTreeMap::new(),
+        cpu_threads: 1,
+        cancel_file: "cancel".into(),
+        progress_file: "progress".into(),
+        input_evidence: std::collections::BTreeMap::new(),
+    }
 }
 
 /// A GenBank record: poly-C background with one forward ORF of 121 codons

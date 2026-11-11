@@ -68,30 +68,19 @@ impl PluginProcess {
         Self::spawn_with(manifest, &python_interpreter())
     }
 
+    /// Start a plugin directly, outside the runner, with no credentials.
     pub fn spawn_with(manifest: &Manifest, python: &Path) -> Result<Self> {
-        Self::spawn_allocated(manifest, python, crate::compute::effective_allocation()?)
-    }
-
-    fn spawn_allocated(manifest: &Manifest, python: &Path, budget: usize) -> Result<Self> {
         crate::registry::require_enabled(&manifest.id)?;
-        Self::spawn_accepted(manifest, python, budget)
-    }
-
-    // Only the shared runner may use the package/policy frozen at acceptance.
-    // Subsequent disable/update/remove affects new submissions, not owned jobs.
-    pub(crate) fn spawn_accepted(
-        manifest: &Manifest,
-        python: &Path,
-        budget: usize,
-    ) -> Result<Self> {
         Self::spawn_with_credentials(
             manifest,
             python,
-            budget,
+            crate::compute::effective_allocation()?,
             &crate::policy::RuntimeCredentials::default(),
         )
     }
 
+    /// The runner's start, with the package and grants frozen at acceptance.
+    /// Later disable, update or removal affects new submissions only.
     pub(crate) fn spawn_with_credentials(
         manifest: &Manifest,
         python: &Path,

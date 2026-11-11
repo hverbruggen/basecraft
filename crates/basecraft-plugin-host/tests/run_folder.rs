@@ -6,7 +6,7 @@ use basecraft_plugin_host::{
     runner::recorded_request,
 };
 use basecraft_protocol::{
-    operation::{OperationOutcome, OperationRequest, RuntimeState},
+    operation::{InputReference, OperationOutcome, OperationRequest, RuntimeState},
     records::RunRecord,
 };
 use serde_json::{Value, json};
@@ -35,6 +35,23 @@ fn registry(root: &Path, edit: impl FnOnce(&mut Value)) -> Registry {
     };
     registry::install(&config, &package).unwrap();
     Registry::load(&config).unwrap()
+}
+
+/// A request to count the bytes of `file`, relative to the project.
+fn count(file: &str) -> OperationRequest {
+    OperationRequest {
+        operation: "org.example.registry-fixture/count@1".into(),
+        inputs: [(
+            "sources".into(),
+            vec![InputReference::File { path: file.into() }],
+        )]
+        .into(),
+        parameters: json!({"mode":"normal"}),
+        destinations: std::collections::BTreeMap::new(),
+        pins: None,
+        request_key: None,
+        target: None,
+    }
 }
 
 fn run(registry: &Registry, project: &Path, request: OperationRequest) -> OperationOutcome {
@@ -67,12 +84,7 @@ fn a_moved_run_folder_resolves_and_its_request_runs_again_to_the_same_hashes() {
     std::fs::create_dir(&project).unwrap();
     let project = project.canonicalize().unwrap();
     std::fs::write(project.join("input.txt"), b"ab\nc\n").unwrap();
-    let request = serde_json::from_value(json!({
-        "operation":"org.example.registry-fixture/count@1",
-        "inputs":{"sources":[{"kind":"file","path":"input.txt"}]},
-        "parameters":{"mode":"normal"}
-    }))
-    .unwrap();
+    let request = count("input.txt");
     let first = run(&registry, &project, request);
     let folder = PathBuf::from(first.evidence.clone().unwrap());
     let inside = folder.strip_prefix(&project).unwrap().to_path_buf();
@@ -110,12 +122,7 @@ fn an_input_with_the_wrong_alphabet_is_refused_before_launch() {
         b">a\nMKWVTFISLLFLFSSAYS\n>b\nMKWVTFISLLFLFSSAYS\n",
     )
     .unwrap();
-    let request = serde_json::from_value(json!({
-        "operation":"org.example.registry-fixture/count@1",
-        "inputs":{"sources":[{"kind":"file","path":"proteins.fasta"}]},
-        "parameters":{"mode":"normal"}
-    }))
-    .unwrap();
+    let request = count("proteins.fasta");
     let mut jobs = JobManager::default();
     let policy = SessionPolicy::new(&project, true).unwrap();
     let error = jobs

@@ -6,6 +6,8 @@ mod execute;
 mod finalize;
 mod prepare;
 
+pub use prepare::recorded_request;
+
 use basecraft_ops::records::AlignmentLinkExt;
 use basecraft_platform::files::{identity, link_count};
 use basecraft_protocol::publication_records::{
@@ -38,35 +40,6 @@ use crate::{
     Error, PluginProcess, Result, contract, file_tool, policy::SessionPolicy,
     registry::RegisteredOperation,
 };
-
-/// The request a run folder recorded, with its file inputs resolved against
-/// the folder wherever it now is, ready to run again.
-pub fn recorded_request(run: &Path) -> Result<OperationRequest> {
-    let mut request: OperationRequest = serde_json::from_slice(
-        &basecraft_ops::records::read_record(&run.join("request.json"))?,
-    )?;
-    for reference in request
-        .inputs
-        .values_mut()
-        .flatten()
-        .chain(&mut request.target)
-    {
-        if let InputReference::File { path } = reference {
-            let mut resolved = PathBuf::new();
-            for part in run.join(&*path).components() {
-                match part {
-                    Component::ParentDir => {
-                        resolved.pop();
-                    }
-                    Component::CurDir => {}
-                    part => resolved.push(part),
-                }
-            }
-            *path = resolved.display().to_string();
-        }
-    }
-    Ok(request)
-}
 
 /// Explicit, caller-supplied semantic identity for opt-in result reuse. The caller
 /// must include external producer identities (e.g. executable hashes) in parameters.
