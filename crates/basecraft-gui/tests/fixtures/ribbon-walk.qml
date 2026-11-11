@@ -176,6 +176,17 @@ Main {
             check(!find(options.contentItem, i => i.objectName === "svgSelection").visible, "tree export offers selection")
             options.reject()
         })
+        // The colour-blind palette is a View ribbon toggle that saves the preference.
+        list.push(() => { show(0); ribbonTabName = "View" })
+        list.push(() => {
+            const palette = find(ribbonItem().currentPage, i => i.objectName === "colorBlindFriendly")
+            check(palette && palette.visible, "View lost the colour-blind toggle")
+            const before = palette.checked
+            palette.toggle(); palette.toggled()
+            check((preferenceValues.ui.data_color_scheme === "color-blind-friendly") === !before, "toggle did not save the palette")
+            palette.toggle(); palette.toggled()
+            check(palette.checked === before, "toggle did not restore the palette")
+        })
         // Dialogs built on first use open from their commands.
         for (const id of ["application.preferences", "help.shortcuts", "tools.installed-operations"]) {
             list.push(() => {

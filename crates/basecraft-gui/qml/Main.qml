@@ -1079,6 +1079,19 @@ ApplicationWindow {
                             focusPolicy: Qt.StrongFocus
                             onToggled: window.showGc = checked
                         }
+                        AppCheckBox {
+                            objectName: "colorBlindFriendly"
+                            property string keyHint: "CB"
+                            text: "Colour-blind colours"
+                            HoverHandler { id: paletteTipHover }
+                            Accessible.description: ToolTip.text
+                            ToolTip.text: "Data colours that stay distinct for colour-blind readers, in the light or dark variant of the appearance. Labels still identify the data."
+                            ToolTip.visible: paletteTipHover.hovered || activeFocus
+                            ToolTip.delay: 400
+                            checked: !!window.preferenceValues.ui && window.preferenceValues.ui.data_color_scheme === "color-blind-friendly"
+                            focusPolicy: Qt.StrongFocus
+                            onToggled: window.persistPreference("colorBlindFriendly", checked)
+                        }
                     }
                     Item { Layout.fillWidth: true }
                     RibbonGroup { title: "Find and text"; actions: [findCommand, textRepresentationCommand] }
